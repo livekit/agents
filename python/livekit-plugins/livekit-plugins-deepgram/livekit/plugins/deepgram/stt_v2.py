@@ -18,7 +18,7 @@ import os
 import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal, NotRequired, TypedDict
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, assert_never
 
 from pydantic import Field
 
@@ -28,7 +28,6 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     LanguageCode,
-    http,
     stt,
 )
 from livekit.agents.types import (
@@ -326,8 +325,7 @@ class _Configure(TypedDict):
     language_hints: NotRequired[list[str]]
 
 
-class SpeechStreamv2(stt.SocketStream[_Message, _CloseStream | _Configure]):
-    goodbye = _CloseStream(type="CloseStream")
+class SpeechStreamv2(stt.WebSocketStream[_Message, _CloseStream | _Configure]):
     frame_ms = 50
     # Flux detects turns itself: StartOfTurn and EndOfTurn
     provider_vad = True
@@ -428,7 +426,7 @@ class SpeechStreamv2(stt.SocketStream[_Message, _CloseStream | _Configure]):
         if is_given(language_hint):
             configure["language_hints"] = language_hint
         if len(configure) > 1:
-            self.send_command(configure)
+            self.send_now(configure)
 
     def _live_config(self) -> dict[str, Any]:
         live_config: dict[str, Any] = {
@@ -467,59 +465,70 @@ class SpeechStreamv2(stt.SocketStream[_Message, _CloseStream | _Configure]):
 
         return live_config
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
-        return http.SocketTarget(
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
+        return stt.WebSocketTarget(
             to_deepgram_url(self._live_config(), base_url=self._opts.endpoint_url, websocket=True),
             headers={"Authorization": f"Token {self._api_key}"},
             request_id_header="dg-request-id",
         )
 
     def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[_CloseStream | _Configure]:
-        # Flux finds the turns itself: a flush only sends the partial chunk, which the base does
-        return bytes(item.data) if isinstance(item, rtc.AudioFrame) else None
+        self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio
+    ) -> bytes | _CloseStream | None:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush():
+                # Flux finds the turns itself: a flush only sends the partial chunk, which the
+                # base does
+                return None
+            case stt.EndOfAudio():
+                return _CloseStream(type="CloseStream")
+            case _:
+                assert_never(item)
 
-    def on_message(
-        self, message: _TurnInfo | _ConfigureResult | _Error
-    ) -> stt.Report | list[stt.Report] | None:
+    def on_message(self, message: _TurnInfo | _ConfigureResult | _Error) -> None:
         if message["type"] == "ConfigureSuccess":
             logger.debug("deepgram applied Configure update", extra={"lk.pii.data": message})
-            return None
-        if message["type"] == "ConfigureFailure":
+        elif message["type"] == "ConfigureFailure":
             logger.warning("deepgram rejected Configure update", extra={"lk.pii.data": message})
-            return None
-        if message["type"] == "Error":
+        elif message["type"] == "Error":
             raise APIError(
                 "deepgram returned an error",
                 kind="invalid_request",
                 detail=message.get("description"),
             )
+        elif message["type"] == "TurnInfo":
+            self._turn_info(message)
+        else:
+            assert_never(message)
 
+    def _turn_info(self, message: _TurnInfo) -> None:
         if request_id := message.get("request_id"):
             self._request_id = request_id
         event = message["event"]
         if event == "StartOfTurn":
-            return [stt.SpeechStarted(), *self._transcript(message)]
-        if event in ("Update", "TurnResumed"):
+            self.report(stt.SpeechStarted())
+            self._report_transcript(message)
+        elif event in ("Update", "TurnResumed"):
             # an interim also aborts an eager end of turn
-            return self._transcript(message)
-        if event == "EagerEndOfTurn":
+            self._report_transcript(message)
+        elif event == "EagerEndOfTurn":
             # a pause: preflight for preemptive generation, the turn still open
-            return self._transcript(message, preflight=True)
-        if event == "EndOfTurn":
-            return [*self._transcript(message, final=True), stt.SpeechEnded()]
-        return None
+            self._report_transcript(message, preflight=True)
+        elif event == "EndOfTurn":
+            self._report_transcript(message, final=True)
+            self.report(stt.SpeechEnded())
 
-    def _transcript(
+    def _report_transcript(
         self, message: _TurnInfo, *, final: bool = False, preflight: bool = False
-    ) -> list[stt.Report]:
+    ) -> None:
         words = message.get("words", [])
         if not words:
-            return []
+            return
         offset = self.start_time_offset
         languages = message.get("languages", [])
-        return [
+        self.report(
             stt.Transcript(
                 message.get("transcript", ""),
                 LanguageCode(languages[0] if languages else self._opts.language),
@@ -541,7 +550,7 @@ class SpeechStreamv2(stt.SocketStream[_Message, _CloseStream | _Configure]):
                     for w in words
                 ],
             )
-        ]
+        )
 
 
 def _validate_tags(tags: list[str]) -> list[str]:

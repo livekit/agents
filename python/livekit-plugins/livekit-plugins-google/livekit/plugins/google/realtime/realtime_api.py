@@ -13,7 +13,8 @@ from typing import Any, Literal
 import google.auth.credentials
 from google.genai import types
 from livekit import rtc
-from livekit.agents import APIError, LanguageCode, TokenUsage, http, llm, utils
+from livekit.agents import APIError, LanguageCode, TokenUsage, llm, utils
+from livekit.agents.llm import realtime as llm_realtime
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -198,7 +199,7 @@ class _ResponseGeneration:
         self.text_ch.send_nowait(text)
 
 
-class RealtimeModel(llm.RealtimeModel):
+class RealtimeModel(llm.RealtimeSessionModel):
     def __init__(
         self,
         *,
@@ -470,7 +471,7 @@ def _by_modality(details: list[ModalityTokenCount] | None) -> dict[str, int]:
     return counts
 
 
-class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
+class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]):
     """A Gemini Live session. Each connection opens with its setup; the conversation follows
     once Gemini completed it, resumed from the last resumption handle when there is one, else
     replayed from the chat context."""
@@ -547,7 +548,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
 
     awaits_ready = True
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> llm_realtime.WebSocketTarget:
         self._history_due = True
         self._connect_started = time.perf_counter()
         target, model = await self._endpoint.target(self._opts.model)
@@ -573,9 +574,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
     def setup(self) -> ClientMessage:
         return {"setup": self._setup}
 
-    def encode(self, item: rtc.AudioFrame | http.EndOfInput) -> http.Encoded[ClientMessage]:
-        if not isinstance(item, rtc.AudioFrame):
-            return None
+    def encode(self, item: rtc.AudioFrame) -> ClientMessage:
         blob = types.Blob(data=bytes(item.data), mime_type=f"audio/pcm;rate={item.sample_rate}")
         return {"realtimeInput": {"audio": dump(blob)}}
 
@@ -585,11 +584,11 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
         """Sends ``message``, which carries the chat items ``item_ids``."""
         if item_ids:
             self._unsent[id(message)] = (message, item_ids)
-        self.send_command(message, first=first)
+        self.send_now(message, first=first)
 
-    def command_sent(self, command: bytes | str | ClientMessage) -> None:
-        entry = self._unsent.pop(id(command), None)
-        if entry is not None and isinstance(command, dict) and "toolResponse" in command:
+    def sent_now(self, message: bytes | ClientMessage) -> None:
+        entry = self._unsent.pop(id(message), None)
+        if entry is not None and isinstance(message, dict) and "toolResponse" in message:
             self._delivered_outputs |= entry[1]
 
     def _rotate(self, reason: str) -> None:
@@ -911,7 +910,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
                 self._video_frame = None
             if encoded is not None:
                 blob = types.Blob(data=encoded, mime_type=f"image/{options.format.lower()}")
-                self.send_command({"realtimeInput": {"video": dump(blob)}})
+                self.send_now({"realtimeInput": {"video": dump(blob)}})
 
     def generate_reply(
         self,
@@ -1019,17 +1018,18 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
 
     # server messages
 
-    def on_message(self, message: ServerMessage) -> http.Ready | None:
+    def on_message(self, message: ServerMessage) -> None:
         if "setupComplete" in message:
             self._report_connection_acquired(time.perf_counter() - self._connect_started)
-            return http.READY
+            self.report(llm_realtime.Ready())
+            return
 
         tool_call = message.get("toolCall")
         if tool_call and self._opts.tool_choice == "none":
             # reject without opening a generation, so the pending generate_reply stays bound to
             # the model's eventual reply and tools stay suppressed for the whole turn.
             self._reject_tool_calls(tool_call)
-            return None
+            return
 
         server_content = message.get("serverContent")
         if not self._current_generation or self._current_generation.done:
@@ -1071,7 +1071,6 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
                 f"Gemini server indicates disconnection soon. Time left: {go_away.get('timeLeft')}"
             )
             self._rotate("go_away")
-        return None
 
     def _is_new_generation(self, tool_call: ToolCall | None, sc: ServerContent | None) -> bool:
         if tool_call:
@@ -1171,7 +1170,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
                 try:
                     data = base64.b64decode(inline_data["data"], validate=True)
                 except binascii.Error as e:
-                    raise http.protocol_error(self, f"inlineData is not base64: {e}") from e
+                    raise llm_realtime.protocol_error(self, f"inlineData is not base64: {e}") from e
                 current_gen.audio_ch.send_nowait(
                     rtc.AudioFrame(
                         data=data,
@@ -1313,7 +1312,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
         gen = self._current_generation
         for call in tool_call.get("functionCalls", []):
             if not (name := call.get("name")):
-                raise http.protocol_error(self, f"a function call without a name: {call}")
+                raise llm_realtime.protocol_error(self, f"a function call without a name: {call}")
             call_id = call.get("id")
             if not call_id:
                 call_id = utils.shortuuid("fnc-call-")

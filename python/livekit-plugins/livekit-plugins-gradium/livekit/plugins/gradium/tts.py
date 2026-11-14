@@ -19,7 +19,7 @@ import json
 import os
 from collections import deque
 from dataclasses import dataclass, replace
-from typing import Annotated, Literal, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
 
 from pydantic import Field, JsonValue
 
@@ -178,7 +178,7 @@ class TTS(tts.TTS):
         return self._synthesize_with_stream(chunk, conn_options=conn_options)
 
 
-class SynthesizeStream(tts.SocketStream[_Message, _Command]):
+class SynthesizeStream(tts.WebSocketStream[_Message, _Command]):
     """Stream-based text-to-speech synthesis using Gradium WebSocket API."""
 
     def __init__(self, *, tts: TTS, opts: _TTSOptions, conn_options: APIConnectOptions) -> None:
@@ -187,24 +187,28 @@ class SynthesizeStream(tts.SocketStream[_Message, _Command]):
         self._opts = opts
         self._open = deque[str]()
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
         self._open.clear()
-        return http.SocketTarget(
+        return tts.WebSocketTarget(
             self._gradium._model_endpoint.replace("http", "ws", 1),
             headers={"x-api-key": self._gradium._api_key, "x-api-source": "livekit"},
         )
 
-    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> _Command | None:
-        if isinstance(item, tts.SegmentStart):
-            self._open.append(item.segment_id)
-            return self._setup(item.segment_id)
-        if isinstance(item, tts.SegmentText):
-            return _Text(type="text", text=f"{item.chunk.text} ", client_req_id=item.segment_id)
-        if isinstance(item, tts.SegmentEnd):
-            return _End(type="end_of_stream", client_req_id=item.segment_id)
-        return None
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Command | None:
+        match item:
+            case tts.SegmentStart():
+                self._open.append(item.segment_id)
+                return self._setup(item.segment_id)
+            case tts.SegmentText():
+                return _Text(type="text", text=f"{item.chunk.text} ", client_req_id=item.segment_id)
+            case tts.SegmentEnd():
+                return _End(type="end_of_stream", client_req_id=item.segment_id)
+            case tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Audio | _EndOfStream | _Error) -> tts.SegmentOutput | None:
+    def on_message(self, message: _Audio | _EndOfStream | _Error) -> None:
         if message["type"] == "error":
             raise APIStatusError(
                 "Gradium TTS returned an error",
@@ -215,10 +219,13 @@ class SynthesizeStream(tts.SocketStream[_Message, _Command]):
         # a request on its own may go unnamed: it is the oldest one open
         segment_id = message.get("client_req_id") or (self._open[0] if self._open else "")
         if message["type"] == "audio":
-            return tts.SegmentAudio(segment_id, base64.b64decode(message["audio"]))
-        if segment_id in self._open:
-            self._open.remove(segment_id)
-        return tts.SegmentDone(segment_id)
+            self.report(tts.SegmentAudio(segment_id, base64.b64decode(message["audio"])))
+        elif message["type"] == "end_of_stream":
+            if segment_id in self._open:
+                self._open.remove(segment_id)
+            self.report(tts.SegmentDone(segment_id))
+        else:
+            assert_never(message)
 
     def _setup(self, segment_id: str) -> _Setup:
         setup = _Setup(

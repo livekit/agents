@@ -14,7 +14,7 @@ macro_rules! serialize_as_wire {
 /// The OpenAI realtime models.
 #[crate::host(record(
     module = "realtime_options",
-    path = "livekit.agents.llm._realtime",
+    path = "livekit.agents.llm.openai_protocol",
     name = "RealtimeModels"
 ))]
 pub enum OpenAiRealtimeModel {
@@ -31,7 +31,11 @@ pub enum OpenAiRealtimeModel {
 }
 
 /// Transcription of the caller's audio.
-#[crate::host(record(module = "realtime_options", path = "livekit.agents.llm._realtime", extract))]
+#[crate::host(record(
+    module = "realtime_options",
+    path = "livekit.agents.llm.openai_protocol",
+    extract
+))]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AudioTranscription {
     /// The transcription model, e.g. ``"gpt-4o-mini-transcribe"``, ``"whisper-1"``, or Voice
@@ -52,7 +56,7 @@ pub struct AudioTranscription {
 /// OpenAI's input noise reduction: a close-talking or a far-field microphone.
 #[crate::host(record(
     module = "realtime_options",
-    path = "livekit.agents.llm._realtime",
+    path = "livekit.agents.llm.openai_protocol",
     name = "NoiseReductionType",
     extract
 ))]
@@ -64,7 +68,11 @@ pub enum NoiseReductionType {
 }
 
 /// Azure Voice Live's deep noise suppression of the caller's audio.
-#[crate::host(record(module = "realtime_options", path = "livekit.agents.llm._realtime", extract))]
+#[crate::host(record(
+    module = "realtime_options",
+    path = "livekit.agents.llm.openai_protocol",
+    extract
+))]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename = "azure_deep_noise_suppression")]
 pub struct AzureDeepNoiseSuppression {}
@@ -72,7 +80,7 @@ pub struct AzureDeepNoiseSuppression {}
 /// Input noise reduction: OpenAI's by microphone type, or Voice Live's.
 #[crate::host(record(
     module = "realtime_options",
-    path = "livekit.agents.llm._realtime",
+    path = "livekit.agents.llm.openai_protocol",
     name = "NoiseReduction",
     extract,
     transparent
@@ -97,7 +105,11 @@ impl Serialize for NoiseReduction {
 }
 
 /// Server turn detection on the input's volume.
-#[crate::host(record(module = "realtime_options", path = "livekit.agents.llm._realtime", extract))]
+#[crate::host(record(
+    module = "realtime_options",
+    path = "livekit.agents.llm.openai_protocol",
+    extract
+))]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename = "server_vad")]
 pub struct ServerVad {
@@ -130,7 +142,7 @@ pub struct ServerVad {
 /// How readily semantic turn detection ends the caller's turn.
 #[crate::host(record(
     module = "realtime_options",
-    path = "livekit.agents.llm._realtime",
+    path = "livekit.agents.llm.openai_protocol",
     name = "Eagerness",
     extract
 ))]
@@ -144,7 +156,11 @@ pub enum Eagerness {
 }
 
 /// Server turn detection on what the caller says.
-#[crate::host(record(module = "realtime_options", path = "livekit.agents.llm._realtime", extract))]
+#[crate::host(record(
+    module = "realtime_options",
+    path = "livekit.agents.llm.openai_protocol",
+    extract
+))]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename = "semantic_vad")]
 pub struct SemanticVad {
@@ -163,7 +179,7 @@ pub struct SemanticVad {
 /// Azure Voice Live's semantic turn detection models.
 #[crate::host(record(
     module = "realtime_options",
-    path = "livekit.agents.llm._realtime",
+    path = "livekit.agents.llm.openai_protocol",
     name = "AzureSemanticVadType",
     extract
 ))]
@@ -176,7 +192,11 @@ pub enum AzureSemanticVadType {
 }
 
 /// Azure Voice Live's semantic turn detection.
-#[crate::host(record(module = "realtime_options", path = "livekit.agents.llm._realtime", extract))]
+#[crate::host(record(
+    module = "realtime_options",
+    path = "livekit.agents.llm.openai_protocol",
+    extract
+))]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AzureSemanticVad {
     #[host(default = "azure_semantic_vad")]
@@ -209,7 +229,7 @@ pub struct AzureSemanticVad {
 /// Server turn detection.
 #[crate::host(record(
     module = "realtime_options",
-    path = "livekit.agents.llm._realtime",
+    path = "livekit.agents.llm.openai_protocol",
     name = "TurnDetection",
     extract,
     transparent
@@ -243,7 +263,11 @@ impl TurnDetection {
 }
 
 /// An OpenAI custom voice.
-#[crate::host(record(module = "realtime_options", path = "livekit.agents.llm._realtime", extract))]
+#[crate::host(record(
+    module = "realtime_options",
+    path = "livekit.agents.llm.openai_protocol",
+    extract
+))]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CustomVoice {
     pub id: String,
@@ -251,7 +275,7 @@ pub struct CustomVoice {
 
 #[crate::host(record(
     module = "realtime_options",
-    path = "livekit.agents.llm._realtime",
+    path = "livekit.agents.llm.openai_protocol",
     name = "AzureVoiceType",
     extract
 ))]
@@ -265,7 +289,11 @@ pub enum AzureVoiceType {
 }
 
 /// An Azure Voice Live voice.
-#[crate::host(record(module = "realtime_options", path = "livekit.agents.llm._realtime", extract))]
+#[crate::host(record(
+    module = "realtime_options",
+    path = "livekit.agents.llm.openai_protocol",
+    extract
+))]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AzureVoice {
     /// The voice, e.g. ``"en-US-AvaMultilingualNeural"``.
@@ -288,7 +316,7 @@ pub struct AzureVoice {
 /// The voice of the model's audio: a name, or a voice object.
 #[crate::host(record(
     module = "realtime_options",
-    path = "livekit.agents.llm._realtime",
+    path = "livekit.agents.llm.openai_protocol",
     name = "Voice",
     extract,
     transparent
@@ -305,7 +333,11 @@ pub enum Voice {
 const TRACING_AUTO: &str = "auto";
 
 /// OpenAI's traces of the session. Nothing set is the server's defaults (``"auto"``).
-#[crate::host(record(module = "realtime_options", path = "livekit.agents.llm._realtime", extract))]
+#[crate::host(record(
+    module = "realtime_options",
+    path = "livekit.agents.llm.openai_protocol",
+    extract
+))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tracing {
     /// The trace's name in the Traces Dashboard.
@@ -339,7 +371,7 @@ impl Serialize for Tracing {
 /// How the server drops conversation over the input token limit: ``"auto"``, or never.
 #[crate::host(record(
     module = "realtime_options",
-    path = "livekit.agents.llm._realtime",
+    path = "livekit.agents.llm.openai_protocol",
     name = "TruncationStrategy",
     extract
 ))]
@@ -351,7 +383,11 @@ pub enum TruncationStrategy {
 }
 
 /// Truncation that keeps a fraction of the conversation, amortizing truncations over turns.
-#[crate::host(record(module = "realtime_options", path = "livekit.agents.llm._realtime", extract))]
+#[crate::host(record(
+    module = "realtime_options",
+    path = "livekit.agents.llm.openai_protocol",
+    extract
+))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetentionRatio {
     /// The fraction of the post-instruction conversation kept, 0.0 to 1.0.
@@ -387,7 +423,7 @@ impl Serialize for RetentionRatio {
 /// Conversation truncation over the input token limit.
 #[crate::host(record(
     module = "realtime_options",
-    path = "livekit.agents.llm._realtime",
+    path = "livekit.agents.llm.openai_protocol",
     name = "Truncation",
     extract,
     transparent
@@ -401,7 +437,7 @@ pub enum Truncation {
 
 #[crate::host(record(
     module = "realtime_options",
-    path = "livekit.agents.llm._realtime",
+    path = "livekit.agents.llm.openai_protocol",
     name = "ReasoningEffort",
     extract
 ))]
@@ -416,7 +452,11 @@ pub enum ReasoningEffort {
 }
 
 /// Reasoning of a reasoning model such as ``gpt-realtime-2``.
-#[crate::host(record(module = "realtime_options", path = "livekit.agents.llm._realtime", extract))]
+#[crate::host(record(
+    module = "realtime_options",
+    path = "livekit.agents.llm.openai_protocol",
+    extract
+))]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Reasoning {
     #[host(default = None)]

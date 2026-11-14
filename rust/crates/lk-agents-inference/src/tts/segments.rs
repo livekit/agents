@@ -13,6 +13,7 @@ use lk_agents_abi::tts::segments::{
 use lk_agents_abi::tts::stream_pacer::PushedAudio;
 use lk_agents_abi::tts::types::SpeechChunk;
 use lk_agents_abi::types::provider::ReadDeadline;
+use lk_agents_abi::usage::TokenUsage;
 use lk_agents_net::signal;
 use parking_lot::Mutex;
 
@@ -23,16 +24,18 @@ pub(crate) enum SegmentEffect {
     EndSegment,
     Push(Vec<u8>),
     Words(Vec<TranscriptChunk>),
+    Usage(Option<TokenUsage>, Option<u64>),
     ExpectResponse,
     Progress,
     CompleteResponse,
 }
 
-/// Audio or words a segment received before it played.
+/// Audio, words or usage a segment received before it played.
 #[derive(Debug)]
 enum Held {
     Audio(Vec<u8>),
     Words(Vec<TranscriptChunk>),
+    Usage(Option<TokenUsage>, Option<u64>),
 }
 
 #[derive(Debug)]
@@ -121,6 +124,9 @@ impl SegmentMachine {
         let (segment_id, held) = match output {
             SegmentOutput::Audio(audio) => (audio.segment_id, Held::Audio(audio.data)),
             SegmentOutput::Words(words) => (words.segment_id, Held::Words(words.words)),
+            SegmentOutput::Usage(usage) => {
+                (usage.segment_id, Held::Usage(usage.usage, usage.characters_count))
+            }
             SegmentOutput::Done(done) => return self.done(&done.segment_id, effects),
         };
         let head = self.playing.front().is_some_and(|s| s.id == segment_id);
@@ -131,6 +137,15 @@ impl SegmentMachine {
             false => segment.held.push(held),
         }
         Ok(())
+    }
+
+    /// The provider finished the session the ended segments went on: each one not yet done is.
+    pub(crate) fn complete_ended(&mut self, effects: &mut Vec<SegmentEffect>) {
+        let ended: Vec<String> =
+            self.playing.iter().filter(|s| s.ended && !s.done).map(|s| s.id.clone()).collect();
+        for segment_id in ended {
+            let _ = self.done(&segment_id, effects);
+        }
     }
 
     pub(crate) fn holds(&self, segment_id: &str) -> bool {
@@ -175,6 +190,7 @@ fn played(held: Held) -> SegmentEffect {
     match held {
         Held::Audio(data) => SegmentEffect::Push(data),
         Held::Words(words) => SegmentEffect::Words(words),
+        Held::Usage(usage, characters) => SegmentEffect::Usage(usage, characters),
     }
 }
 
@@ -206,6 +222,9 @@ impl TtsSegments {
                 SegmentEffect::EndSegment => self.emitter.end_segment()?,
                 SegmentEffect::Push(data) => self.emitter.push(&data)?,
                 SegmentEffect::Words(words) => self.emitter.push_timed_transcript(words)?,
+                SegmentEffect::Usage(usage, characters) => {
+                    self.emitter.report_usage(usage, characters)?;
+                }
                 SegmentEffect::ExpectResponse => self.deadline.expect_response(),
                 SegmentEffect::Progress => self.deadline.progress(),
                 SegmentEffect::CompleteResponse => self.deadline.complete_response(),
@@ -252,6 +271,10 @@ impl abi::TtsSegments for TtsSegments {
                 Err(SegmentError::Protocol(error.into()))
             }
         }
+    }
+
+    fn complete_ended(&self) -> Result<(), SegmentError> {
+        self.run(SegmentMachine::complete_ended)
     }
 
     fn holds(&self, segment_id: String) -> bool {

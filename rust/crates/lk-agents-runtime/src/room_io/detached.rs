@@ -62,9 +62,11 @@ impl room_owner::RoomIo for DetachedRoomIo {
         &'a self,
         _: &'a str,
         _: bool,
+        _: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move { Ok(()) })
     }
+    fn on_user_input_corrected(&self, _: &str, _: &str) {}
     fn aclose(self: Arc<Self>) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
         Box::pin(async move { lk_agents_abi::Closed::Clean })
     }

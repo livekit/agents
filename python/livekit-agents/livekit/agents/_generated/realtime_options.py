@@ -178,16 +178,16 @@ Truncation: TypeAlias = TruncationStrategy | RetentionRatio
 """Conversation truncation over the input token limit."""
 
 
-AudioTranscription.__module__ = "livekit.agents.llm._realtime"
-AzureDeepNoiseSuppression.__module__ = "livekit.agents.llm._realtime"
-ServerVad.__module__ = "livekit.agents.llm._realtime"
-SemanticVad.__module__ = "livekit.agents.llm._realtime"
-AzureSemanticVad.__module__ = "livekit.agents.llm._realtime"
-CustomVoice.__module__ = "livekit.agents.llm._realtime"
-AzureVoice.__module__ = "livekit.agents.llm._realtime"
-Tracing.__module__ = "livekit.agents.llm._realtime"
-RetentionRatio.__module__ = "livekit.agents.llm._realtime"
-Reasoning.__module__ = "livekit.agents.llm._realtime"
+AudioTranscription.__module__ = "livekit.agents.llm.openai_protocol"
+AzureDeepNoiseSuppression.__module__ = "livekit.agents.llm.openai_protocol"
+ServerVad.__module__ = "livekit.agents.llm.openai_protocol"
+SemanticVad.__module__ = "livekit.agents.llm.openai_protocol"
+AzureSemanticVad.__module__ = "livekit.agents.llm.openai_protocol"
+CustomVoice.__module__ = "livekit.agents.llm.openai_protocol"
+AzureVoice.__module__ = "livekit.agents.llm.openai_protocol"
+Tracing.__module__ = "livekit.agents.llm.openai_protocol"
+RetentionRatio.__module__ = "livekit.agents.llm.openai_protocol"
+Reasoning.__module__ = "livekit.agents.llm.openai_protocol"
 
 
 SAMPLE_RATE: Final = 24000

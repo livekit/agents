@@ -1024,9 +1024,13 @@ impl SessionRunner {
             }
             VoiceHostEvent::Session(SessionEvent::UserInputTranscribed(t)) => {
                 let text = t.ev.best_alternative().map(|a| a.text.as_str()).unwrap_or_default();
-                if let Err(error) = self.room_io.on_user_input_transcribed(text, t.is_final).await {
+                let shown = self.room_io.on_user_input_transcribed(text, t.is_final, &t.segment);
+                if let Err(error) = shown.await {
                     log::warn!(target: lk_agents_abi::LOG_TARGET, "user transcript not published: {error}");
                 }
+            }
+            VoiceHostEvent::Session(SessionEvent::UserInputCorrected { segment, text, .. }) => {
+                self.room_io.on_user_input_corrected(segment, text)
             }
             // Every event naming it was wired before this one.
             VoiceHostEvent::SpeechRetired(speech) => self.speeches.retire(*speech),

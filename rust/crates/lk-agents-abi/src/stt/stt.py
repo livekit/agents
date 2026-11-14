@@ -7,7 +7,7 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from types import TracebackType
 from typing import ClassVar, Generic, Literal, Never, Protocol, Self
 
@@ -222,12 +222,17 @@ class STT(
         return out
 
 
+@dataclass
 class SpeechStarted:
     """The provider heard speech start: reported only by a provider that detects speech itself."""
 
+    speech_start_time: float | None = None
+    """Wall-clock time the provider heard the speech start, when it says."""
+
 
 class SpeechEnded:
-    """The provider heard speech end: reported only by a provider that detects speech itself."""
+    """The provider heard speech end: reported only by a provider that detects speech itself.
+    An end that comes before the final of the words heard waits for that final."""
 
 
 class RecognizeStream(ABC):
@@ -470,7 +475,7 @@ class RecognizeStream(ABC):
         if isinstance(report, Transcript):
             events = self._core_speech.transcript(report)
         elif isinstance(report, SpeechStarted):
-            events = self._core_speech.started()
+            events = self._core_speech.started(report.speech_start_time)
         else:
             events = self._core_speech.ended()
         for event in events:

@@ -9,17 +9,26 @@ from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 import httpx as httpx1
+import numpy as np
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 from mistralai.client import Mistral
 
 from livekit import rtc
-from livekit.agents import Agent, APIConnectOptions, APIError, APIStatusError, RunContext, llm
+from livekit.agents import (
+    Agent,
+    APIConnectOptions,
+    APIError,
+    APIStatusError,
+    RunContext,
+    llm,
+    stt,
+)
 from livekit.agents.llm import ChatContext
 from livekit.plugins.mistralai import STT, TTS
 from livekit.plugins.mistralai.llm import LLM, ApiMode
-from tests.fakes import until
+from tests.fakes import FakeVAD, until
 
 RETRIES = APIConnectOptions(max_retry=3, retry_interval=0.0)
 
@@ -393,6 +402,58 @@ async def test_realtime_transcription_handshake_carries_client_headers() -> None
     assert len(handshakes) == 1
     assert handshakes[0].get("X-Proxy-Token") == "proxy-secret"
     assert handshakes[0].get("Authorization") == "Bearer test"
+
+
+def _square_wave(seconds: float, *, level: float = 0.3) -> rtc.AudioFrame:
+    n = round(16000 * seconds)
+    samples = np.where(np.arange(n) % 2 == 0, 1, -1) * int(level * 32767)
+    return rtc.AudioFrame(samples.astype(np.int16).tobytes(), 16000, 1, n)
+
+
+async def test_realtime_words_finalized_after_the_vad_ended_the_speech_stay_in_it() -> None:
+    """The VAD's end flushes the audio: the final that answers it, after the speech ended, is
+    that speech's, never a second one starting when the transcript arrives."""
+
+    async def realtime(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        session = {
+            "request_id": "req_1",
+            "model": "voxtral-mini-transcribe-realtime-2602",
+            "audio_format": {"encoding": "pcm_s16le", "sample_rate": 16000},
+        }
+        await ws.send_json({"type": "session.created", "session": session})
+        async for message in ws:
+            if json.loads(message.data)["type"] == "input_audio.flush":
+                await ws.send_json({"type": "transcription.done", "text": "yes"})
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/v1/audio/transcriptions/realtime", realtime)
+    events: list[stt.SpeechEvent] = []
+    async with TestServer(app) as server:
+        client = Mistral(api_key="test", server_url=str(server.make_url("")).rstrip("/"))
+        model = STT(client=client, model="voxtral-mini-transcribe-realtime-2602", vad=FakeVAD())
+        try:
+            async with model.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+                # at the provider's rate: the fake VAD hears a square wave resampling would smooth
+                stream.push_frame(_square_wave(0.2))
+                stream.push_frame(_square_wave(0.3, level=0))
+                async for event in stream:
+                    events.append(event)
+                    if event.type == stt.SpeechEventType.END_OF_SPEECH:
+                        break
+        finally:
+            await model.aclose()
+            await client.__aexit__(None, None, None)
+            client.__exit__(None, None, None)
+
+    assert [e.type for e in events if e.type != stt.SpeechEventType.RECOGNITION_USAGE] == [
+        stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
+        stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    assert events[-1].utterance == events[0].utterance
 
 
 @pytest.mark.parametrize("provider", [LLM, STT, TTS])

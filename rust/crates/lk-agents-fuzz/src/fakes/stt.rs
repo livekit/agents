@@ -224,6 +224,14 @@ pub(super) fn deliver(
         _ => return false,
     };
     let mut ev = SpeechEvent::new(kind);
+    // The recogniser numbers its utterances: a late final is known as its utterance's.
+    if let Input::SttInterim { utterance, .. }
+    | Input::SttPreflight { utterance, .. }
+    | Input::SttFinal { utterance, .. }
+    | Input::SttEnd { utterance } = what
+    {
+        ev.utterance = Some(u64::from(utterance.nth));
+    }
     if kind == T::RecognitionUsage {
         // The audio the stream has heard so far, as the providers bill it.
         ev.recognition_usage = Some(Box::new(lk_agents_abi::RecognitionUsage {

@@ -22,6 +22,8 @@ pub struct Authored {
     recording: Recording,
     seq: u64,
     later_ms: u64,
+    /// The instant of the last stamp: what `journal_at_once` stamps again.
+    last_ms: u64,
 }
 
 impl Authored {
@@ -31,7 +33,8 @@ impl Authored {
 
     fn next(&mut self) -> Observed {
         self.seq += 1;
-        Observed::at(self.seq, self.seq + self.later_ms)
+        self.last_ms = self.seq + self.later_ms;
+        Observed::at(self.seq, self.last_ms)
     }
 
     pub fn host(mut self, event: Host) -> Self {
@@ -101,7 +104,7 @@ impl Authored {
     /// As [`Self::journal`], in the same instant as the fact before it.
     pub fn journal_at_once(mut self, step: Step) -> Self {
         self.seq += 1;
-        let at = Observed::at(self.seq, self.seq - 1 + self.later_ms);
+        let at = Observed::at(self.seq, self.last_ms);
         self.recording.record_journal(at, step);
         self
     }

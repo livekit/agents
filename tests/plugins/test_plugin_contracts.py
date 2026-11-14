@@ -208,6 +208,7 @@ AVATARS: dict[str, Avatar] = {
 
 Reply = tuple[int, object] | None  # None holds the answer until the test ends
 
+
 async def _start(
     provider: str,
     replies: list[Reply],

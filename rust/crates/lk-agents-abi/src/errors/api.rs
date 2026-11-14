@@ -169,7 +169,7 @@ pub enum Timeout {
     cause = cause,
     attrs(retryable),
     kinds(
-        Api(class = "livekit.agents._bindings.APIError", kwargs(kind = error_kind)),
+        Api(class = "livekit.agents._bindings.APIError", kwargs(kind = error_kind, request_id)),
         Status(
             class = "livekit.agents._bindings.APIStatusError",
             kwargs(kind = error_kind, status_code, request_id)
@@ -179,8 +179,11 @@ pub enum Timeout {
             class = "livekit.agents._bindings.APIStatusError",
             kwargs(kind = error_kind, status_code, request_id)
         ),
-        Connection(class = "livekit.agents._bindings.APIConnectionError", kwargs(kind = error_kind)),
-        Timeout(class = "livekit.agents._bindings.APITimeoutError", kwargs(timeout)),
+        Connection(
+            class = "livekit.agents._bindings.APIConnectionError",
+            kwargs(kind = error_kind, request_id)
+        ),
+        Timeout(class = "livekit.agents._bindings.APITimeoutError", kwargs(timeout, request_id)),
     )
 ))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

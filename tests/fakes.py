@@ -648,7 +648,7 @@ class FakeTranscriptionOutput(TranscriptionOutput):
 # -- realtime, duplex and avatar
 
 
-class FakeRealtime(llm.RealtimeModel):
+class FakeRealtime(llm.RealtimeSessionModel):
     """Answers each reply request with one spoken message; keeps its sessions, each
     ``configured`` once the session sent it its tools (the end of its frame). With
     ``dies="at_open"`` each session it opens fails at once with an unrecoverable error; with

@@ -63,12 +63,25 @@ pub struct SegmentDone {
     pub segment_id: String,
 }
 
-/// What a socket TTS stream's `on_message` returns for a segment.
+/// What the provider billed for a segment: its tokens, its characters, or both. Each report is
+/// one provider request's share; it rides on the segment's final audio into its metrics.
+#[crate::host(record(module = "tts_segments", path = "livekit.agents.tts", dataclass, extract))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct SegmentUsage {
+    pub segment_id: String,
+    #[host(default = None)]
+    pub usage: Option<crate::usage::TokenUsage>,
+    #[host(default = None)]
+    pub characters_count: Option<u64>,
+}
+
+/// What a WebSocket TTS stream's `on_message` returns for a segment.
 #[crate::host(record(module = "tts_segments", path = "livekit.agents.tts", extract, transparent))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum SegmentOutput {
     Audio(SegmentAudio),
     Words(SegmentWords),
+    Usage(SegmentUsage),
     Done(SegmentDone),
 }
 
@@ -93,6 +106,10 @@ pub trait TtsSegments: Send + Sync + Sized + 'static {
     /// What `on_message` returned for a segment.
     #[host(call)]
     fn deliver(&self, output: SegmentOutput) -> Result<(), SegmentError>;
+    /// The provider finished the session the segments whose text ended were sent on: each is
+    /// done.
+    #[host(call)]
+    fn complete_ended(&self) -> Result<(), SegmentError>;
     /// Whether `segment_id` is a segment not yet done: a multiplexed stream's context.
     #[host(call)]
     fn holds(&self, segment_id: String) -> bool;

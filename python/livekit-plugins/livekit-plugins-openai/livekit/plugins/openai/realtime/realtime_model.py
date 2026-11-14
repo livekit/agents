@@ -1,6 +1,6 @@
 """OpenAI options over the shared OpenAI realtime protocol."""
 
-from livekit.agents.llm._realtime import (
+from livekit.agents.llm.openai_protocol import (
     DEFAULT_VOICE as DEFAULT_VOICE,
     NUM_CHANNELS as NUM_CHANNELS,
     OPENAI_BASE_URL as OPENAI_BASE_URL,
@@ -10,9 +10,8 @@ from livekit.agents.llm._realtime import (
     Eagerness as Eagerness,
     NoiseReduction as NoiseReduction,
     NoiseReductionType as NoiseReductionType,
-    RealtimeModel as RealtimeModel,
+    OpenAIRealtimeModel as RealtimeModel,
     RealtimeModels as RealtimeModels,
-    RealtimeSession as RealtimeSession,
     Reasoning as Reasoning,
     ReasoningEffort as ReasoningEffort,
     RetentionRatio as RetentionRatio,
@@ -24,3 +23,27 @@ from livekit.agents.llm._realtime import (
     TurnDetection as TurnDetection,
     Voice as Voice,
 )
+
+__all__ = [
+    "DEFAULT_VOICE",
+    "NUM_CHANNELS",
+    "OPENAI_BASE_URL",
+    "SAMPLE_RATE",
+    "AudioTranscription",
+    "CustomVoice",
+    "Eagerness",
+    "NoiseReduction",
+    "NoiseReductionType",
+    "RealtimeModel",
+    "RealtimeModels",
+    "Reasoning",
+    "ReasoningEffort",
+    "RetentionRatio",
+    "SemanticVad",
+    "ServerVad",
+    "Tracing",
+    "Truncation",
+    "TruncationStrategy",
+    "TurnDetection",
+    "Voice",
+]

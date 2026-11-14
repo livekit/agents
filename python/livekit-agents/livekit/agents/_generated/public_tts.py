@@ -26,6 +26,7 @@ from .tts_segments import (
     SegmentOutput as SegmentOutput,
     SegmentStart as SegmentStart,
     SegmentText as SegmentText,
+    SegmentUsage as SegmentUsage,
     SegmentWords as SegmentWords,
 )
 
@@ -38,6 +39,7 @@ __all__: list[str] = [
     "SegmentAudio",
     "SegmentWords",
     "SegmentDone",
+    "SegmentUsage",
     "SegmentOutput",
     "SentenceStreamPacer",
     "TTSCapabilities",

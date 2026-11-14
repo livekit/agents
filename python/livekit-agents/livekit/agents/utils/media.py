@@ -62,6 +62,30 @@ async def audio_frames_from_file(
         raise error
 
 
+class AudioChunker:
+    """Audio re-cut into frames of ``frame_ms`` milliseconds, each given as soon as it is full, in
+    the first frame's format; ``None`` passes frames as they come."""
+
+    def __init__(self, frame_ms: int | None) -> None:
+        self._frame_ms = frame_ms
+        self._chunks: AudioByteStream | None = None
+
+    def push(self, frame: rtc.AudioFrame) -> list[rtc.AudioFrame]:
+        """The full frames ``frame`` completes."""
+        if self._frame_ms is None:
+            return [frame]
+        if self._chunks is None:
+            samples = frame.sample_rate * self._frame_ms // 1000
+            self._chunks = AudioByteStream(
+                frame.sample_rate, frame.num_channels, samples_per_channel=samples
+            )
+        return list(self._chunks.push(frame.data))
+
+    def flush(self) -> list[rtc.AudioFrame]:
+        """What is held, as a last, shorter frame."""
+        return list(self._chunks.flush()) if self._chunks is not None else []
+
+
 async def encode(frame: rtc.VideoFrame, options: EncodeOptions) -> bytes:
     """Encode a frame on an admitted worker, keeping the caller's event loop serviceable."""
     resize = options.resize_options
@@ -75,5 +99,5 @@ async def encode(frame: rtc.VideoFrame, options: EncodeOptions) -> bytes:
     )
 
 
-__all__ = ["encode"]
+__all__ = ["AudioChunker", "encode"]
 __all__ += _public.__all__

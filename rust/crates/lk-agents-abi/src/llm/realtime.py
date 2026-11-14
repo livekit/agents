@@ -34,7 +34,8 @@ TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 class RealtimeModel(ABC, rtc.EventEmitter[TEvent], Generic[TEvent]):
     """A realtime model: speech in, speech out, over one live session.
 
-    Plugins implement ``session()``, returning a ``RealtimeSession``.
+    A plugin whose sessions run in Python subclasses ``RealtimeSessionModel``; the OpenAI-protocol
+    models and the fallback and duplex adapters run theirs in the core.
     """
 
     def __init__(self, *, capabilities: RealtimeCapabilities) -> None:
@@ -67,17 +68,6 @@ class RealtimeModel(ABC, rtc.EventEmitter[TEvent], Generic[TEvent]):
         """The model and provider labelling this instance's turn metrics."""
         return {"model_name": self.model, "model_provider": self.provider}
 
-    @abstractmethod
-    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
-        """Create a new session, optionally with server-side turn detection disabled.
-
-        The model itself is left unchanged and reusable.
-
-        Args:
-            turn_detection_disabled: Hand turn-taking to the framework; honored only by plugins
-                reporting ``can_disable_turn_detection``.
-        """
-
     async def aclose(self) -> None:  # noqa: B027
         """Close the provider and everything it opened."""
 
@@ -91,6 +81,23 @@ class RealtimeModel(ABC, rtc.EventEmitter[TEvent], Generic[TEvent]):
         exc_tb: TracebackType | None,
     ) -> None:
         await self.aclose()
+
+
+class RealtimeSessionModel(RealtimeModel[TEvent], Generic[TEvent]):
+    """A realtime model whose sessions run in Python: plugins implement ``session()``, returning
+    a ``RealtimeSession``.
+    """
+
+    @abstractmethod
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        """Create a new session, optionally with server-side turn detection disabled.
+
+        The model itself is left unchanged and reusable.
+
+        Args:
+            turn_detection_disabled: Hand turn-taking to the framework; honored only by plugins
+                reporting ``can_disable_turn_detection``.
+        """
 
     def _core_instance_id(self) -> int | None:
         return id(self)

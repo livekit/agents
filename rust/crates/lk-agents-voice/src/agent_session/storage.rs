@@ -40,8 +40,9 @@ enum Save {
     Running { checkpoints: Checkpoints },
     /// The reply reported how its turn ends; the save is asked once its checkpoints are answered.
     Reported { end: TurnEnd, checkpoints: Checkpoints },
-    /// The commit or abort is asked: its answer ends the turn.
-    Asked { end: TurnEnd },
+    /// The commit or abort is asked, carrying the record's edits up to `edits`: its answer ends
+    /// the turn.
+    Asked { end: TurnEnd, edits: u64 },
 }
 
 /// How a turn ends in the thread, and what its answer tells the speech.
@@ -61,15 +62,15 @@ enum TurnSave {
 }
 
 impl Save {
-    /// A reported turn whose checkpoints are all answered asks its save.
-    fn ask(self) -> (Save, Option<TurnSave>) {
+    /// A reported turn whose checkpoints are all answered asks its save, carrying `edits`.
+    fn ask(self, edits: u64) -> (Save, Option<TurnSave>) {
         match self {
             Save::Reported { end, checkpoints } if checkpoints.is_empty() => {
                 let save = match end {
                     TurnEnd::Commit { .. } => TurnSave::Commit,
                     TurnEnd::Abort { .. } | TurnEnd::AbortEnded => TurnSave::Abort,
                 };
-                (Save::Asked { end }, Some(save))
+                (Save::Asked { end, edits }, Some(save))
             }
             save => (save, None),
         }
@@ -295,7 +296,11 @@ impl VoiceDriver {
             }
             StorageRequest::Commit | StorageRequest::Abort => {
                 let turn = self.session.storage.remove(n).expect("the turn is held");
-                if let Save::Asked { end } = turn.save {
+                if let Save::Asked { end, edits } = turn.save {
+                    // The thread holds what the commit carried.
+                    if request == StorageRequest::Commit {
+                        self.session.chat_ctx.saved(edits);
+                    }
                     self.speech_end_saved(now, speech, end);
                 }
             }
@@ -327,7 +332,7 @@ impl VoiceDriver {
     fn turn_failed(&mut self, now: Ts, n: u64, error: StorageError) {
         let turn = self.session.storage.remove(n).expect("the turn is held");
         let told = match &turn.save {
-            Save::Reported { end, .. } | Save::Asked { end } => end.told(),
+            Save::Reported { end, .. } | Save::Asked { end, .. } => end.told(),
             Save::Taking { .. } | Save::Running { .. } => false,
         };
         if !told {
@@ -344,7 +349,7 @@ impl VoiceDriver {
         for n in numbers {
             let turns = &mut self.session.storage.turns;
             let Some(Turn { speech, save }) = turns.remove(&n) else { continue };
-            let (save, asked) = save.ask();
+            let (save, asked) = save.ask(self.session.chat_ctx.saving());
             turns.insert(n, Turn { speech, save });
             match asked {
                 Some(TurnSave::Commit) => {

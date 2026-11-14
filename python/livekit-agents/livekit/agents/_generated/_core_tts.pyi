@@ -74,6 +74,10 @@ class TtsSegments:
         """The next input `encode` takes; `None` while none is queued."""
     def deliver(self, output: SegmentOutput) -> None:
         """What `on_message` returned for a segment."""
+    def complete_ended(self) -> None:
+        """The provider finished the session the segments whose text ended were sent on: each is
+        done.
+        """
     def holds(self, segment_id: str) -> bool:
         """Whether `segment_id` is a segment not yet done: a multiplexed stream's context."""
     @property

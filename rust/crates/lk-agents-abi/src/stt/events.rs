@@ -153,6 +153,10 @@ pub struct SpeechEvent {
     /// Wall-clock time when the recognized speech ended, when known.
     #[host(default = None)]
     pub speech_end_time: Option<f64>,
+    /// The utterance the event belongs to, numbered by its stream: a final that comes after the
+    /// session committed the utterance's interim corrects those words.
+    #[host(default = None)]
+    pub utterance: Option<u64>,
 }
 
 impl SpeechEvent {
@@ -165,6 +169,7 @@ impl SpeechEvent {
             speech_start_time: None,
             created_at: None,
             speech_end_time: None,
+            utterance: None,
         }
     }
 
@@ -203,6 +208,15 @@ pub struct Transcript {
     pub words: Option<Vec<TranscriptChunk>>,
     #[host(annotation = "list[.language.LanguageCode] | None", default = None)]
     pub source_languages: Option<Vec<LanguageCode>>,
+    /// When translating: the original text, one entry per `source_languages` entry.
+    #[host(default = None)]
+    pub source_texts: Option<Vec<String>>,
+    /// When translating: the target language of each `target_texts` entry.
+    #[host(annotation = "list[.language.LanguageCode] | None", default = None)]
+    pub target_languages: Option<Vec<LanguageCode>>,
+    /// When translating: the translated text, one entry per `target_languages` entry.
+    #[host(default = None)]
+    pub target_texts: Option<Vec<String>>,
     #[host(default = None)]
     pub metadata: Option<Extra>,
 }
@@ -221,6 +235,9 @@ impl Transcript {
             speaker_id: None,
             words: None,
             source_languages: None,
+            source_texts: None,
+            target_languages: None,
+            target_texts: None,
             metadata: None,
         }
     }
@@ -248,15 +265,20 @@ pub trait SpeechState: Send + Sized + 'static {
     #[host(call)]
     fn transcript(&mut self, transcript: Transcript) -> Vec<SpeechEvent>;
 
-    /// The provider heard speech start.
+    /// The provider heard speech start, at `speech_start_time` (wall clock) when it says.
     #[host(call)]
-    fn started(&mut self) -> Vec<SpeechEvent>;
+    fn started(
+        &mut self,
+        #[host(default = None)] speech_start_time: Option<f64>,
+    ) -> Vec<SpeechEvent>;
 
-    /// The provider heard speech end.
+    /// The provider heard speech end: before the final of its words, the speech stays open until
+    /// that final, a new speech or the connection's end.
     #[host(call)]
     fn ended(&mut self) -> Vec<SpeechEvent>;
 
-    /// A connection ended: the open speech ends before the next connection's events.
+    /// A connection ended: its pending interim becomes final and the open speech ends, before
+    /// the next connection's events.
     #[host(call)]
     fn boundary(&mut self) -> Vec<SpeechEvent>;
 }

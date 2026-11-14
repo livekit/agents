@@ -20,7 +20,7 @@ import weakref
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, Literal, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
 
 from pydantic import Field
 
@@ -468,14 +468,13 @@ class _UtteranceEnd(TypedDict):
 _Message = Annotated[_Results | _SpeechStarted | _UtteranceEnd, Field(discriminator="type")]
 
 
-class _Command(TypedDict):
+class _Out(TypedDict):
     type: Literal["KeepAlive", "CloseStream", "Finalize"]
 
 
-class SpeechStream(stt.SocketStream[_Message, _Command]):
+class SpeechStream(stt.WebSocketStream[_Message, _Out]):
     # https://developers.deepgram.com/reference/listen-live#stream-keepalive
-    keepalive = http.Keepalive(5.0, _Command(type="KeepAlive"))
-    goodbye = _Command(type="CloseStream")
+    keepalive = stt.Keepalive(every=5.0, frame=_Out(type="KeepAlive"))
     frame_ms = 50
     # SpeechStarted, speech_final and UtteranceEnd are Deepgram's own speech boundaries
     provider_vad = True
@@ -592,7 +591,7 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
         if self._pending_keyterm is not None and not self.speaking:
             self.update_options(keyterm=self._pending_keyterm)
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         live_config: dict[str, object] = {
             "model": self._opts.model,
             "punctuate": self._opts.punctuate,
@@ -628,7 +627,7 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
 
-        return http.SocketTarget(
+        return stt.WebSocketTarget(
             to_deepgram_url(
                 live_config,
                 base_url=self._opts.endpoint_url,
@@ -640,14 +639,16 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
             request_id_header="dg-request-id",
         )
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[_Command]:
-        if isinstance(item, rtc.AudioFrame):
-            return bytes(item.data)
-        if isinstance(item, stt.RecognizeStream.Flush):
-            return _Command(type="Finalize")
-        return None
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | _Out:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush():
+                return _Out(type="Finalize")
+            case stt.EndOfAudio():
+                return _Out(type="CloseStream")
+            case _:
+                assert_never(item)
 
     # see https://developers.deepgram.com/docs/understand-endpointing-interim-results for the
     # message types and how speech_final and UtteranceEnd end the speech
@@ -657,10 +658,12 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
         elif message["type"] == "UtteranceEnd":
             # sent once utterance_end_ms of silence followed the last word
             self.report(stt.SpeechEnded())
-        else:
+        elif message["type"] == "Results":
             self.report(self._transcript(message))
             if message.get("speech_final", False):
                 self.report(stt.SpeechEnded())
+        else:
+            assert_never(message)
         self._apply_pending_keyterm()
 
     def _transcript(self, message: _Results) -> stt.Transcript:

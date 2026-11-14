@@ -5,13 +5,14 @@
 
 from __future__ import annotations
 
-from typing import Self
+from typing import Any, Self
 
-from livekit.agents.http import Multiplexer, SocketProtocol
+from livekit.agents._websocket import WebSocketHost, WebSocketMultiplexer
 
 from ..types import NotGivenOr
 from .connect import APIConnectOptions
 from .rtc_frames import AudioFrame
+from .websocket import WebSocketMuxOptions
 
 class AudioByteStream:
     """Buffers bytes and emits whole frames: fixed-size, or progressive (20 ms first, doubling to
@@ -105,43 +106,59 @@ class AudioConverter:
     def flush(self) -> list[AudioFrame]:
         """The audio still held by the resampler, at the end of a segment or stream."""
 
-class SocketSession:
-    """`_core.SocketSession`: one provider socket stream. `run()` connects through the protocol,
-    sends its input, hands it each received frame, keeps the connection alive and rotates it;
+class WebSocketSession:
+    """`_core.WebSocketSession`: one provider socket stream. `run()` connects through the protocol,
+    sends its input, hands it each received frame, keeps the connection alive and replaces it;
     failures retry under `conn_options`.
     """
     def __new__(
         cls,
-        host: SocketProtocol,
+        host: WebSocketHost,
         conn_options: APIConnectOptions,
         label: str,
         *,
-        mux: SocketMux | None = None,
+        mux: WebSocketMux | None = None,
         context_id: str | None = None,
+        pacing: WebSocketPacing | None = None,
     ) -> Self:
         """`label` names the provider in retries. With `mux`, the stream is the context
-        `context_id` on one of its shared sockets.
+        `context_id` on one of its shared sockets. With `pacing`, its frames go no faster than
+        the pacing allows.
         """
     def reconnect(self, reason: str) -> None:
-        """Rotate the connection now: goodbye, drain, close, connect again. No retry is spent."""
-    def ready(self) -> None:
-        """The provider is ready for input on the current connection (see `awaits_ready`)."""
+        """Replace the connection now, once the item being written went: close it, connect again.
+        No retry is spent.
+        """
+    def end_session(self) -> None:
+        """The provider's session is finished, as the stream read it: the connection closes before
+        the next input item, which goes on a new connection.
+        """
     async def run(self) -> None:
         """Run until the input ended and the provider finished, or the failure that ended it."""
     async def aclose(self) -> None:
         """Stop: the socket is closed, bounded, and `run()` returns."""
 
-class SocketMux:
-    """`_core.SocketMux`: the shared sockets of a multiplexing provider, opened on demand, each
+class WebSocketMux:
+    """`_core.WebSocketMux`: the shared sockets of a multiplexing provider, opened on demand, each
     carrying up to `max_contexts` streams and replaced after `max_session_duration`.
     """
-    def __new__(cls, host: Multiplexer, *, max_contexts: int | None = None) -> Self: ...
+    def __new__(
+        cls,
+        host: WebSocketMultiplexer[Any, Any],
+        options: WebSocketMuxOptions,
+    ) -> Self: ...
     def prewarm(self) -> None:
         """Open a shared socket now, unless one has room: the first stream then finds it open."""
     def invalidate(self) -> None:
         """Options changed: idle sockets close, busy ones close once their streams end."""
     async def aclose(self) -> None:
         """Close every socket, bounded."""
+
+class WebSocketPacing:
+    """`_core.WebSocketPacing`: how fast the streams that share it send. `min_interval`: seconds between
+    two frames. `real_time`: frames go no faster than the duration their stream gives them.
+    """
+    def __new__(cls, *, min_interval: float | None = None, real_time: bool = False) -> Self: ...
 
 class StaleHandle(RuntimeError):
     """A handle whose originating host no longer owns a live entry."""

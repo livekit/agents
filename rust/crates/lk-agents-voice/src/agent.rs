@@ -110,6 +110,11 @@ pub struct SessionChatCtx {
     version: u64,
     /// Includes view-only changes that do not invalidate a preemptive request.
     view_revision: u64,
+    /// Items rewritten here, each with the edit that last rewrote it, until a save that carried
+    /// that edit is answered: a reload keeps them as they are here.
+    unsaved: BTreeMap<String, u64>,
+    /// The number of the last edit.
+    edits: u64,
 }
 
 impl SessionChatCtx {
@@ -157,6 +162,24 @@ impl SessionChatCtx {
 
     pub fn version(&self) -> u64 {
         self.version
+    }
+
+    /// `id` was rewritten here (a provider's correction): the thread still holds it as it was.
+    pub(crate) fn edited(&mut self, id: &str) {
+        self.edits += 1;
+        self.unsaved.insert(id.to_owned(), self.edits);
+    }
+
+    /// A save carries the record as it is now: the edits it carries, for its answer.
+    pub(crate) fn saving(&self) -> u64 {
+        self.edits
+    }
+
+    /// The save that carried the edits up to `edits` was answered: the thread holds them. Items
+    /// gone from the record are forgotten.
+    pub(crate) fn saved(&mut self, edits: u64) {
+        let ids = &self.ids;
+        self.unsaved.retain(|id, edit| *edit > edits && ids.contains(id));
     }
 
     pub(crate) fn view_revision(&self) -> u64 {
@@ -257,12 +280,13 @@ impl SessionChatCtx {
         let mut take = |id: &str| {
             partition.iter_mut().find(|row| row.as_ref().is_some_and(|row| row.id() == id))?.take()
         };
+        let unsaved = &self.unsaved;
         self.items.retain_mut(|entry| {
             let id = entry.item.id().to_owned();
             match (take(&id), read.get(id.as_str())) {
                 // An unread row is not the partition's to change; a read one given back as read is
-                // the turn's own rendering.
-                (Some(row), Some(read)) if *read != &row => {
+                // the turn's own rendering, and one rewritten here no save carried yet is ours.
+                (Some(row), Some(read)) if *read != &row && !unsaved.contains_key(&id) => {
                     entry.item = row;
                     true
                 }
@@ -271,6 +295,8 @@ impl SessionChatCtx {
             }
         });
         self.ids = self.items.iter().map(|entry| entry.item.id().to_owned()).collect();
+        let ids = &self.ids;
+        self.unsaved.retain(|id, _| ids.contains(id));
         // A row the turn read that the record does not hold is the request's own (its prompt, its
         // new message): never the partition's to add.
         for row in partition.into_iter().flatten().filter(|row| !read.contains_key(row.id())) {
@@ -372,6 +398,14 @@ impl SessionChatCtx {
         self.items.iter().map(|c| &c.item)
     }
 
+    /// The user message `turn` committed.
+    pub(crate) fn user_turn_message(&self, turn: TurnId) -> Option<&lk_agents_abi::ChatMessage> {
+        self.items.iter().find_map(|c| match (&c.item, &c.source) {
+            (ChatItem::Message(m), Source::UserTurn { turn: t }) if *t == turn => Some(m),
+            _ => None,
+        })
+    }
+
     pub fn entry(&self, id: &str) -> Option<&Committed> {
         self.contains(id).then(|| self.items.iter().find(|c| c.item.id() == id)).flatten()
     }
@@ -467,6 +501,37 @@ mod tests {
     use super::*;
     use lk_agents_abi::{ChatMessage, FunctionCall, FunctionCallOutput, Role};
     use std::time::{Duration, SystemTime};
+
+    // Catches: a provider's correction reverted by the next turn's reload once a save was only
+    // asked (and then failed), or kept against the thread after the save that carried it was
+    // answered.
+    #[test]
+    fn a_reload_keeps_a_correction_until_its_save_is_answered() {
+        let said = |text: &str| {
+            ChatItem::Message(ChatMessage::text("u", Role::User, text, SystemTime::UNIX_EPOCH))
+        };
+        let reload = |ctx: &mut SessionChatCtx| {
+            // The turn read the corrected record; the thread still holds the words it replaced.
+            ctx.reload_transport(
+                &[said("book a table for two")],
+                vec![said("book a table")],
+                "agent",
+            )
+        };
+        let mut ctx = SessionChatCtx::new("agent");
+        let _ = ctx.commit(said("book a table"), Source::HostCtx, Visibility::Both, "agent");
+        ctx.edited("u");
+        let _ =
+            ctx.commit(said("book a table for two"), Source::HostCtx, Visibility::Both, "agent");
+        // A save asked, never answered (it failed): the thread may still hold the old words.
+        let asked = ctx.saving();
+        assert!(!reload(&mut ctx));
+        let kept = ctx.history().next().and_then(|item| item.as_message()?.raw_text_content());
+        assert_eq!(kept.as_deref(), Some("book a table for two"));
+        // An answered save carried it: the thread's row is the partition's again.
+        ctx.saved(asked);
+        assert!(reload(&mut ctx));
+    }
 
     #[test]
     fn a_handoff_leaves_calls_to_tools_the_new_agent_lacks() {

@@ -57,7 +57,7 @@ pub fn parse(path: &str, text: &str, proxies: &[&Proxy]) -> Result<Bases, String
         let class = p.host.rsplit('.').next().unwrap_or(&p.host);
         let block = class_block(body, class)
             .ok_or_else(|| format!("{path}: no `class {class}`, {}'s host class", p.rust_name))?;
-        if p.generic && !header(block).contains("Generic[") {
+        if p.generic > 0 && !header(block).contains("Generic[") {
             return Err(format!("{path}: `{class}` is `generic` but not `Generic[..]`"));
         }
         // A base class answers its declared methods; getters and functions are read elsewhere.

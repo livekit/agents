@@ -245,6 +245,28 @@ impl ParticipantTranscriptionOutput {
         }
     }
 
+    /// The session names the segment the next text goes to.
+    pub(crate) fn name_segment(&self, segment: &str) {
+        self.write(|core| core.name_segment(segment));
+    }
+
+    /// `segment`, already ended, reads `text`: it is published again.
+    pub(crate) fn rewrite(&self, segment: &str, text: &str) {
+        self.write(|core| core.rewrite(segment, text));
+    }
+
+    /// Changes the writer and submits what it queued; a refusal is latched after the guard.
+    fn write(&self, change: impl FnOnce(&mut RoomTranscriptionWriter)) {
+        let refused = {
+            let mut writer = self.writer.lock();
+            change(&mut writer.core);
+            self.submit(&mut writer)
+        };
+        if let Some(error) = refused {
+            self.latched(error);
+        }
+    }
+
     fn disconnected(&self) {
         let refused = {
             let mut writer = self.writer.lock();

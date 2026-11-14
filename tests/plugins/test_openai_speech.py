@@ -329,6 +329,49 @@ async def test_realtime_keeps_turn_boundaries_and_late_final_transcripts(local_v
     assert [u.audio_duration for u in usage] == pytest.approx([0.6, 0.3, 0.4])
 
 
+async def test_realtime_words_transcribed_after_the_speech_ended_stay_in_that_speech() -> None:
+    """The realtime API transcribes a speech once it ended: its words, which come after its
+    end, are that speech's, never a second one starting when the transcript arrives."""
+    peer = _RealtimePeer()
+    async with _serve(("GET", "/v1/realtime", peer.handle)) as base_url:
+        model = openai_stt.STT(api_key="test", base_url=base_url, use_realtime=True, vad=None)
+        stream = model.stream(conn_options=NO_RETRY)
+        events: list[stt.SpeechEvent] = []
+        try:
+            await peer.configured()
+            for frame in [
+                {"type": "input_audio_buffer.speech_started", "item_id": "one"},
+                {"type": "input_audio_buffer.speech_stopped", "item_id": "one"},
+                {
+                    "type": "conversation.item.input_audio_transcription.delta",
+                    "item_id": "one",
+                    "delta": "hello",
+                },
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "item_id": "one",
+                    "transcript": "hello there",
+                },
+            ]:
+                await peer.sockets[0].send_json(frame)
+            async with asyncio.timeout(3):
+                async for event in stream:
+                    events.append(event)
+                    if event.type == stt.SpeechEventType.RECOGNITION_USAGE:
+                        break
+        finally:
+            await stream.aclose()
+            await model.aclose()
+
+    assert [e.type for e in events if e.type != stt.SpeechEventType.RECOGNITION_USAGE] == [
+        stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.INTERIM_TRANSCRIPT,
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
+        stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    assert len({e.utterance for e in events if e.utterance is not None}) == 1
+
+
 async def test_closing_a_stream_and_its_model_leaves_no_realtime_socket_open() -> None:
     """A closed stream's socket is closed, never left with the pool after the model closes.
 

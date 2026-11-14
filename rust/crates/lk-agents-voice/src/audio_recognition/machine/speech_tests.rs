@@ -90,7 +90,7 @@ impl Turns {
 
     fn stt(&mut self, at: Ts, ev: SpeechEvent) {
         self.at(at);
-        let eff = self.r.on_stt_event(at, &ev);
+        let eff = self.r.on_stt_event(at, lk_agents_abi::resources::ResourceId(0), &ev);
         self.apply(eff);
     }
 
@@ -241,4 +241,27 @@ fn a_committed_turn_owns_its_words() {
     t.give_verdicts();
     t.at(ms(9_000));
     assert_eq!(t.committed(), ["okay thanks bye", "can you hear me"]);
+}
+
+// Catches: a commit leaving the interim out of its turn (its words then land in the next one),
+// or naming the words by their text rather than where the turn holds them, so a final that
+// corrects them would find the same words earlier in the turn.
+#[test]
+fn a_commit_takes_the_interim_at_its_span() {
+    let mut t = Turns::stt_only(Ts::ZERO);
+    t.start(ms(100), None);
+    t.final_(ms(500), "book a table", 0.4);
+    let mut interim = SpeechEvent::new(SpeechEventType::InterimTranscript);
+    interim.alternatives.push(SpeechData::new("en", "book a table"));
+    interim.utterance = Some(2);
+    t.stt(ms(800), interim);
+    let eff = t.r.commit_user_turn(ms(900), None, false);
+    t.apply(eff);
+    t.at(ms(900).saturating_add(t.r.min_delay()));
+
+    let [turn] = t.ended.as_slice() else { panic!("{:?}", t.committed()) };
+    assert_eq!(turn.new_transcript, "book a table book a table");
+    let promoted = turn.promoted.as_ref().expect("the interim joined the turn");
+    assert_eq!(promoted.utterance.n, 2);
+    assert_eq!(promoted.span, 13..25);
 }

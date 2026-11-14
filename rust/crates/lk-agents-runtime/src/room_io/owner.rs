@@ -897,15 +897,23 @@ impl room_owner::RoomIo for RoomIo {
         &'a self,
         transcript: &'a str,
         is_final: bool,
+        segment: &'a str,
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let Some(user_tr) = &self.user_tr else { return Ok(()) };
+            user_tr.name_segment(segment);
             user_tr.capture_text(&telemetry::Cx::NONE, transcript).await?;
             if is_final {
                 user_tr.flush();
             }
             Ok(())
         })
+    }
+
+    fn on_user_input_corrected(&self, segment: &str, text: &str) {
+        if let Some(user_tr) = &self.user_tr {
+            user_tr.rewrite(segment, text);
+        }
     }
 
     fn aclose(self: Arc<Self>) -> BoxFuture<'static, Closed> {

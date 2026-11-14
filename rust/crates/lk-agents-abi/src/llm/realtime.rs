@@ -14,15 +14,15 @@ use super::realtime_options::{
 const _: () = ();
 
 /// The OpenAI Realtime protocol's audio rate, in and out.
-#[crate::host(constant(path = "livekit.agents.llm._realtime"))]
+#[crate::host(constant(path = "livekit.agents.llm.openai_protocol"))]
 pub const SAMPLE_RATE: u32 = 24_000;
-#[crate::host(constant(path = "livekit.agents.llm._realtime"))]
+#[crate::host(constant(path = "livekit.agents.llm.openai_protocol"))]
 pub const NUM_CHANNELS: u16 = 1;
 /// The OpenAI API's base URL, the realtime model's default.
-#[crate::host(constant(path = "livekit.agents.llm._realtime"))]
+#[crate::host(constant(path = "livekit.agents.llm.openai_protocol"))]
 pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 /// The OpenAI realtime model's default voice.
-#[crate::host(constant(path = "livekit.agents.llm._realtime"))]
+#[crate::host(constant(path = "livekit.agents.llm.openai_protocol"))]
 pub const DEFAULT_VOICE: &str = "marin";
 
 /// The reports a plugin's realtime or duplex session emits as `metrics_collected`.
@@ -639,13 +639,14 @@ pub struct Truncate {
     pub audio_transcript: Option<String>,
 }
 
-// A host `RealtimeModel`, as a session binds it to its tools: the model half, through the
+// A host `RealtimeSessionModel`, as a session binds it to its tools: the model half, through the
 // `_core_*` surface of its hand-written base class (`realtime.py`).
-/// A realtime model: speech in, speech out, over one live session.
+/// A realtime model whose sessions run in Python.
 ///
 /// Plugins implement `session()`, returning a `RealtimeSession`.
 #[crate::host(proxy(
-    host = "livekit.agents.llm.realtime.RealtimeModel",
+    host = "livekit.agents.llm.realtime.RealtimeSessionModel",
+    annotation = "livekit.agents.llm.realtime.RealtimeModel",
     base = "realtime.py",
     owns
 ))]
@@ -898,17 +899,15 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
     );
 }
 
-/// `RealtimeModel` over the OpenAI Realtime protocol: OpenAI, Azure OpenAI and every provider
-/// speaking it. A provider subclass sets `_dialect`, `_provider_label` (the name logs and metrics
-/// give it) and, for LiveKit Inference, `_gateway`.
+/// A realtime model over the OpenAI Realtime protocol, whose sessions run in the core: OpenAI,
+/// Azure OpenAI and every provider speaking it. A provider subclass sets `_dialect`,
+/// `_provider_label` (the name logs and metrics give it) and, for LiveKit Inference, `_gateway`.
 #[crate::host(facade(
-    path = "livekit.agents.llm._realtime",
+    path = "livekit.agents.llm.openai_protocol",
     extended,
-    name = "RealtimeModel",
+    name = "OpenAIProtocolModel",
     base = "llm.realtime.RealtimeModel",
     native = OpenAIRealtimeModel,
-    refuse(session),
-    node = "session.llm_node",
     base_args(capabilities),
     host_args(dialect = "self._dialect", label = "self._provider_label", gateway = "self._gateway")
 ))]

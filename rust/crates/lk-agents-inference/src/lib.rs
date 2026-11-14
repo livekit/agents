@@ -43,14 +43,14 @@ pub mod llm;
 // `_core`'s inference lookups, declared in ABI.
 pub mod local_models;
 pub mod models;
-// A plugin's provider socket: the plugin encodes and decodes, the executor runs it.
-pub mod socket;
+// A plugin's provider WebSocket: the plugin encodes and decodes, the executor runs it.
 pub mod stt;
 pub mod telemetry;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod tts;
 pub mod vad;
+pub mod websocket;
 
 pub use ids::{RequestKind, create_inference_request_id, shortuuid};
 

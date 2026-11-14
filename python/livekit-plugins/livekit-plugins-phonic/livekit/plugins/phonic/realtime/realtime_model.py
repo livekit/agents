@@ -11,12 +11,13 @@ import time
 import weakref
 from collections.abc import AsyncIterable, Mapping
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal, NotRequired, Required, TypedDict
+from typing import Annotated, Any, Literal, NotRequired, Required, TypedDict, assert_never
 
 from pydantic import Field, JsonValue
 
 from livekit import rtc
-from livekit.agents import APIError, http, llm, utils
+from livekit.agents import APIError, llm, utils
+from livekit.agents.llm import realtime as llm_realtime
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -187,7 +188,7 @@ class _ResponseGeneration:
         self.text_ch.send_nowait(text)
 
 
-class RealtimeModel(llm.RealtimeModel):
+class RealtimeModel(llm.RealtimeSessionModel):
     def __init__(
         self,
         *,
@@ -583,7 +584,7 @@ ClientMessage = (
 )
 
 
-class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
+class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]):
     """One Phonic conversation per connection. Its config goes out once the instructions and the
     tools are known; every other command waits for ``ready_to_start_conversation``."""
 
@@ -616,9 +617,9 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
 
     awaits_ready = True
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> llm_realtime.WebSocketTarget:
         await self._configured.wait()
-        return http.SocketTarget(
+        return llm_realtime.WebSocketTarget(
             f"{self._opts.base_url.rstrip('/')}/v1/sts/ws",
             headers={
                 "Authorization": f"Bearer {self._opts.api_key}",
@@ -626,15 +627,13 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
             },
         )
 
-    def encode(self, item: rtc.AudioFrame | http.EndOfInput) -> http.Encoded[ClientMessage]:
-        if not isinstance(item, rtc.AudioFrame):
-            return None
+    def encode(self, item: rtc.AudioFrame) -> ClientMessage:
         return _SendAudio(type="audio_chunk", audio=base64.b64encode(item.data).decode())
 
-    def on_message(self, message: ServerMessage) -> http.Ready | None:
+    def on_message(self, message: ServerMessage) -> None:
         if message["type"] == "ready_to_start_conversation":
-            return http.READY
-        if message["type"] == "conversation_created":
+            self.report(llm_realtime.Ready())
+        elif message["type"] == "conversation_created":
             self._conversation_id = message["conversation_id"]
             logger.info(f"Phonic conversation began with ID: {self._conversation_id}")
         elif message["type"] == "assistant_started_speaking":
@@ -674,8 +673,8 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
                 "Phonic ended the conversation, which LiveKit Agents does not support",
                 kind="invalid_request",
             )
-
-        return None
+        else:
+            assert_never(message)
 
     def _update_configured(self) -> None:
         if is_given(self._opts.instructions) and self._tools_set:
@@ -755,7 +754,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
                 and item.call_id in self._pending_tool_call_ids
             ):
                 self._pending_tool_call_ids.remove(item.call_id)
-                self.send_command(
+                self.send_now(
                     _ToolCallOutput(
                         type="tool_call_output", tool_call_id=item.call_id, output=item.output
                     )
@@ -770,9 +769,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
 
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
                 if text := item.raw_text_content:
-                    self.send_command(
-                        _AddSystemMessage(type="add_system_message", system_message=text)
-                    )
+                    self.send_now(_AddSystemMessage(type="add_system_message", system_message=text))
                     sent_system_message = True
 
             # only a user message appended at the tail of the context is text input
@@ -830,7 +827,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
         config = self._build_config_options(
             system_prompt=system_prompt, tools_payload=self._build_tools_payload()
         )
-        self.send_command(_Reset(type="reset", config=config))
+        self.send_now(_Reset(type="reset", config=config))
 
     def _serialize_tools(self) -> list[dict[str, object]]:
         tool_definitions: list[dict[str, object]] = []
@@ -1089,7 +1086,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
             old.cancel()
         self._close_current_generation(interrupted=False)
         if command is not None:
-            self.send_command(command)
+            self.send_now(command)
 
         fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.get_running_loop().create_future()
         self._pending_reply = fut
@@ -1148,7 +1145,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
                 fut.set_exception(e)
             return
         if self._pending_reply is fut:
-            self.send_command(_Say(type="say", text=collected))
+            self.send_now(_Say(type="say", text=collected))
 
     def commit_audio(self) -> None:
         logger.warning("commit_audio is not supported by the Phonic realtime model.")
@@ -1249,7 +1246,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
         try:
             audio = base64.b64decode(message["audio"], validate=True)
         except binascii.Error as e:
-            raise http.protocol_error(self, f"audio_chunk audio is not base64: {e}") from e
+            raise llm_realtime.protocol_error(self, f"audio_chunk audio is not base64: {e}") from e
         # the text and its audio come in one chunk: the text is stamped with the audio's span
         samples = len(audio) // (2 * PHONIC_NUM_CHANNELS)
         duration = samples / PHONIC_OUTPUT_SAMPLE_RATE

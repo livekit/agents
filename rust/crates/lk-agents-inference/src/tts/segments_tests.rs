@@ -103,3 +103,66 @@ fn a_flush_with_no_text_opens_no_segment() {
     assert!(effects.is_empty());
     assert!(machine.settled());
 }
+
+// Catches: a provider that finishes each segment by ending its session (closing, or saying it
+// finished) leaving the segment open until the read deadline fails it, or a segment whose text
+// had not ended completed with it.
+#[test]
+fn a_finished_session_completes_the_segments_whose_text_ended() {
+    let mut machine = SegmentMachine::default();
+    let mut effects = Vec::new();
+    machine.push(chunk("one"), || "a".into(), &mut effects);
+    machine.flush();
+    machine.push(chunk("two"), || "b".into(), &mut effects);
+    send_all(&mut machine, &mut effects);
+    machine.deliver(audio("a", 1), &mut effects).unwrap();
+    effects.clear();
+
+    machine.complete_ended(&mut effects);
+    assert_eq!(
+        effects,
+        [
+            SegmentEffect::EndSegment,
+            SegmentEffect::StartSegment("b".into()),
+            SegmentEffect::CompleteResponse,
+        ]
+    );
+    assert_eq!(machine.open(), ["b"], "b's text has not ended");
+}
+
+// Catches: a provider's billed characters for a later segment reported while an earlier one
+// plays, so they ride on the wrong segment's final audio and metrics.
+#[test]
+fn a_segments_usage_is_reported_while_it_plays() {
+    use lk_agents_abi::tts::segments::SegmentUsage;
+    let mut machine = SegmentMachine::default();
+    let mut effects = Vec::new();
+    machine.push(chunk("one"), || "a".into(), &mut effects);
+    machine.flush();
+    machine.push(chunk("two"), || "b".into(), &mut effects);
+    machine.flush();
+    send_all(&mut machine, &mut effects);
+    effects.clear();
+
+    let usage = |id: &str, n| {
+        SegmentOutput::Usage(SegmentUsage {
+            segment_id: id.into(),
+            usage: None,
+            characters_count: Some(n),
+        })
+    };
+    machine.deliver(usage("b", 3), &mut effects).unwrap();
+    machine.deliver(done("b"), &mut effects).unwrap();
+    effects.clear();
+    machine.deliver(usage("a", 2), &mut effects).unwrap();
+    machine.deliver(done("a"), &mut effects).unwrap();
+    let reported: Vec<_> = effects
+        .iter()
+        .filter_map(|e| match e {
+            SegmentEffect::Usage(_, n) => Some(*n),
+            SegmentEffect::EndSegment => Some(None),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reported, [Some(2), None, Some(3), None], "each before its own segment's end");
+}

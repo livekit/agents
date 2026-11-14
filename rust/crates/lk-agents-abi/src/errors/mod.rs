@@ -32,12 +32,13 @@ impl From<JobLost> for std::io::Error {
 #[crate::host(exceptions(module = "api_errors", path = "livekit.agents._bindings", classes(
     UnexpectedModelBehavior(base = "RuntimeError", doc = "The model exhausted its recovery attempts."),
     AssignmentTimeoutError(base = "Exception", doc = "The job was accepted but no assignment arrived in time."),
-    APIError(base = "Exception", doc = "An API request failed: `kind` says what failed and decides `retryable`. `detail` holds the provider's own message, logged once under an `lk.pii.*` key and never shown in the text.",
+    APIError(base = "Exception", doc = "An API request failed: `kind` says what failed and decides `retryable`. `detail` holds the provider's own message, logged once under an `lk.pii.*` key and never shown in the text. `request_id` is the provider's id for the failed request, when known.",
         fields(
             message(ty = "str", positional),
             kind(ty = "livekit.agents._generated.types.ErrorKind"),
             body(ty = "object | None", default = None),
             detail(ty = "str | None", default = None),
+            request_id(ty = "str | None", default = None),
             retryable(ty = "bool", hidden, default = false, class_default = false)
         ), base_args(message), normalize(retryable(call = "_core.error_kind_retryable", args(kind))),
         str = "message", repr(message, kind, body)),
@@ -46,26 +47,28 @@ impl From<JobLost> for std::io::Error {
             message(ty = "str", positional, inherited),
             status_code(ty = "int"),
             kind(ty = "livekit.agents._generated.types.ErrorKind | None", default = None, inherited),
-            request_id(ty = "str | None", default = None),
+            request_id(ty = "str | None", default = None, inherited),
             body(ty = "object | None", default = None, inherited),
             detail(ty = "str | None", default = None, inherited),
             retry_after(ty = "float | None", default = None)
-        ), base_args(message, kind, body, detail), normalize(kind(call = "_core.error_kind_for_status", args(status_code, kind))),
+        ), base_args(message, kind, body, detail, request_id), normalize(kind(call = "_core.error_kind_for_status", args(status_code, kind))),
         str = "_status_error_str", repr(message, status_code, kind, request_id, body)),
     APIConnectionError(base = "APIError", doc = "An API request failed due to a connection error, or the connection was closed for the reason `kind` names.",
         fields(
             message(ty = "str", positional, default = "Connection error.", inherited),
             kind(ty = "livekit.agents._generated.types.ErrorKind", default = "connection", inherited),
             body(ty = "object | None", default = None, hidden, inherited),
-            detail(ty = "str | None", default = None, inherited)
-        ), base_args(message, kind, body, detail), str = "_connection_error_str"),
+            detail(ty = "str | None", default = None, inherited),
+            request_id(ty = "str | None", default = None, inherited)
+        ), base_args(message, kind, body, detail, request_id), str = "_connection_error_str"),
     APITimeoutError(base = "APIConnectionError", doc = "An API request timed out; timeout names the expired connection limit.",
         fields(
             message(ty = "str", positional, default = "Request timed out.", inherited),
             kind(ty = "livekit.agents._generated.types.ErrorKind", default = "timeout", hidden, inherited),
             timeout(ty = "livekit.agents._generated.types.Timeout | None", default = None),
-            detail(ty = "str | None", default = None, inherited)
-        ), base_args(message, kind, detail)),
+            detail(ty = "str | None", default = None, inherited),
+            request_id(ty = "str | None", default = None, inherited)
+        ), base_args(message, kind, detail, request_id)),
     StreamStateError(base = "RuntimeError", doc = "A stream was pulled while another pull was still in flight."),
     CLIError(base = "Exception"),
     RedactedCause(base = "Exception", doc = "A provider cause with its type and traceback, without sensitive message text.")

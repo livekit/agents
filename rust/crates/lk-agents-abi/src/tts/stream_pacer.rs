@@ -39,6 +39,8 @@ pub trait PushedAudio: Send + Sync {
         usage: Option<crate::usage::TokenUsage>,
         characters_count: Option<u64>,
     ) -> Result<(), EmitterError>;
+    /// The provider's id for what the next frames carry.
+    fn note_provider_request_id(&self, request_id: String) -> Result<(), EmitterError>;
 }
 
 /// Paces the text sent to a TTS: the first chunk goes at once; each later batch once the audio

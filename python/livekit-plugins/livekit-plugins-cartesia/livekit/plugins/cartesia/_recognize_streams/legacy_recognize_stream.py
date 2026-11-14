@@ -14,13 +14,13 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode
 
 from pydantic import Field
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError, LanguageCode, http, stt, utils
+from livekit.agents import APIConnectOptions, APIStatusError, LanguageCode, stt, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 
 from ..constants import API_AUTH_HEADER, API_VERSION, API_VERSION_HEADER, AUDIO_ENCODING, USER_AGENT
@@ -78,14 +78,12 @@ def _get_api_language_param_from_language_code(language_code: LanguageCode) -> s
     return language_code.language
 
 
-class LegacyRecognizeStream(stt.SocketStream[STTEventMessage, None]):
+class LegacyRecognizeStream(stt.WebSocketStream[STTEventMessage, str]):
     """Cartesia STT stream implementation for ``ink-whisper``.
 
     See also:
         https://docs.cartesia.ai/api-reference/stt/stt
     """
-
-    goodbye = "close"
 
     def __init__(
         self,
@@ -109,7 +107,7 @@ class LegacyRecognizeStream(stt.SocketStream[STTEventMessage, None]):
         self._request_id = ""
         self._last_speech_end_time: float = 0
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         self._last_speech_end_time = 0
         params = {
             "model": self._model,
@@ -122,7 +120,7 @@ class LegacyRecognizeStream(stt.SocketStream[STTEventMessage, None]):
                 language_code=self._language
             )
 
-        return http.SocketTarget(
+        return stt.WebSocketTarget(
             f"{self._ws_base_url}/stt/websocket?{urlencode(params)}",
             headers={
                 API_VERSION_HEADER: API_VERSION,
@@ -131,16 +129,18 @@ class LegacyRecognizeStream(stt.SocketStream[STTEventMessage, None]):
             },
         )
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[None]:
-        if isinstance(item, rtc.AudioFrame):
-            return bytes(item.data)
-        if isinstance(item, stt.RecognizeStream.Flush):
-            return "finalize"
-        return None
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | str:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush():
+                return "finalize"
+            case stt.EndOfAudio():
+                return "close"
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: STTEventMessage) -> stt.Report | None:
+    def on_message(self, message: STTEventMessage) -> None:
         """Process incoming WebSocket messages.
 
         See https://docs.cartesia.ai/api-reference/stt/stt.
@@ -150,10 +150,11 @@ class LegacyRecognizeStream(stt.SocketStream[STTEventMessage, None]):
 
         if message["type"] == "flush_done":
             logger.debug("Received flush_done acknowledgment from Cartesia STT")
-            return None
+            return
         if message["type"] == "done":
-            logger.debug("Received done acknowledgment from Cartesia STT - session closing")
-            return None
+            # the answer to "close": every transcript came before it
+            self.report(stt.SessionFinished())
+            return
         if message["type"] == "error":
             # an HTTP-style status: a 5xx is retried, a rejected request is not
             raise APIStatusError(
@@ -171,22 +172,24 @@ class LegacyRecognizeStream(stt.SocketStream[STTEventMessage, None]):
         end_time = start_time + message.get("duration", 0)
         self._last_speech_end_time = end_time
 
-        return stt.Transcript(
-            message["text"],
-            self._language or LanguageCode("en"),
-            final=message["is_final"],
-            request_id=self._request_id,
-            start_time=start_time,
-            end_time=end_time,
-            words=[
-                TranscriptChunk(
-                    text=word.get("word", ""),
-                    start_time=word.get("start", 0) + offset,
-                    end_time=word.get("end", 0) + offset,
-                    start_time_offset=offset,
-                )
-                for word in message.get("words", [])
-            ],
+        self.report(
+            stt.Transcript(
+                message["text"],
+                self._language or LanguageCode("en"),
+                final=message["is_final"],
+                request_id=self._request_id,
+                start_time=start_time,
+                end_time=end_time,
+                words=[
+                    TranscriptChunk(
+                        text=word.get("word", ""),
+                        start_time=word.get("start", 0) + offset,
+                        end_time=word.get("end", 0) + offset,
+                        start_time_offset=offset,
+                    )
+                    for word in message.get("words", [])
+                ],
+            )
         )
 
     def update_options(

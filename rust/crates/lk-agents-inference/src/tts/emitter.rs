@@ -451,6 +451,9 @@ impl lk_agents_abi::tts::stream_pacer::PushedAudio for AudioEmitter {
     ) -> Result<(), EmitterError> {
         lk_agents_abi::media::emitter::AudioEmitter::report_usage(self, usage, characters_count)
     }
+    fn note_provider_request_id(&self, request_id: String) -> Result<(), EmitterError> {
+        lk_agents_abi::media::emitter::AudioEmitter::provider_request_id(self, request_id)
+    }
 }
 
 impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
@@ -597,9 +600,9 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
         locked(&self.0.machine).num_segments()
     }
 
-    fn _note_provider_request_id(&self, context_id: String) -> Result<(), EmitterError> {
+    fn provider_request_id(&self, request_id: String) -> Result<(), EmitterError> {
         self.0.run(|m, _, _| {
-            m.note_provider_request_id(&context_id);
+            m.note_provider_request_id(&request_id);
             Ok(())
         })
     }

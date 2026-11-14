@@ -464,14 +464,16 @@ impl AudioEmitter {
         ::pyo3::PyResult::Ok(out)
     }
 
-    #[pyo3(signature = (context_id))]
-    fn _note_provider_request_id(
+    /// The provider named its id for the audio that follows: it reaches that audio and its
+    /// metrics.
+    #[pyo3(signature = (request_id))]
+    fn provider_request_id(
         &self,
         py: Python<'_>,
-        context_id: ::std::string::String,
+        request_id: ::std::string::String,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::_note_provider_request_id(&self.0, context_id)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as crate::py_errors::HostException>::to_py_err(&e))?;
+        py.detach(|| <AudioEmitterImpl as ::lk_agents_abi::media::emitter::AudioEmitter>::provider_request_id(&self.0, request_id)).map_err(|e: ::lk_agents_abi::EmitterError| <::lk_agents_abi::EmitterError as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
     }
 

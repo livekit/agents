@@ -15,11 +15,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import assert_never
 
 from rime_api import text_to_speech_pb2 as proto
 
-from livekit.agents import APIConnectionError, APIConnectOptions, APIError, http, tts
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError, tts
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -27,9 +27,6 @@ from . import _websocket_v1 as v1
 from ._stream_tts import StreamTTS
 
 _Response = proto.WebSocketResponse
-# decode() reads protobuf envelopes: the generic Inbound, which the base validates with
-# pydantic, stays Any
-_Inbound = Any
 _Frame = bytes | str
 
 
@@ -47,7 +44,7 @@ class V1SynthesisOptions:
     phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN
 
 
-class WebSocketV1Adapter(http.Multiplexer[_Inbound, _Frame]):
+class WebSocketV1Adapter(tts.WebSocketMultiplexer[_Response, _Frame]):
     """Rime WebSocket v1 sockets, one stream at a time each: every segment is one Rime context,
     started with its first text and ended with its last."""
 
@@ -69,8 +66,8 @@ class WebSocketV1Adapter(http.Multiplexer[_Inbound, _Frame]):
         self._api_key = api_key
         self._allow_custom_endpoint = allow_custom_endpoint
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
-        return http.SocketTarget(
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        return tts.WebSocketTarget(
             self._websocket_v1_url,
             headers={"Authorization": f"Bearer {self._api_key}"},
             protocols=[self._subprotocol],
@@ -140,7 +137,7 @@ class WebSocketV1Adapter(http.Multiplexer[_Inbound, _Frame]):
         self.invalidate()
 
 
-class _WebSocketV1SynthesizeStream(tts.SocketStream[_Inbound, _Frame]):
+class _WebSocketV1SynthesizeStream(tts.WebSocketStream[_Response, _Frame]):
     """One LiveKit stream on a Rime WebSocket v1 socket, each segment its own Rime context."""
 
     def __init__(
@@ -156,36 +153,38 @@ class _WebSocketV1SynthesizeStream(tts.SocketStream[_Inbound, _Frame]):
         )
         self.multiplexer = mux
         self.mime_type = v1.emitter_mime_type(options.audio_format)
-        self._protocol = mux.protocol
+        self._protocol: v1.WebSocketProtocol = mux.protocol
         self._start = v1.start_payload(options)
-        self._request_ids: dict[str, str] = {}
 
-    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> list[_Frame] | _Frame | None:
-        if isinstance(item, tts.SegmentStart):
-            return self._frame(item.segment_id, "start", self._start)
-        if isinstance(item, tts.SegmentText):
-            return self._frame(item.segment_id, "text", item.chunk.text + " ")
-        if isinstance(item, tts.SegmentEnd):
-            return self._frame(item.segment_id, "end")
-        return None
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Frame | None:
+        match item:
+            case tts.SegmentStart():
+                return self._frame(item.segment_id, "start", self._start)
+            case tts.SegmentText():
+                return self._frame(item.segment_id, "text", item.chunk.text + " ")
+            case tts.SegmentEnd():
+                return self._frame(item.segment_id, "end")
+            case tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Response) -> tts.SegmentOutput | None:
+    def on_message(self, message: _Response) -> None:
         context_id = message.context_id
         payload = message.WhichOneof("payload")
         if payload == "audio":
-            return tts.SegmentAudio(context_id, message.audio)
-        if payload == "done":
-            self._request_ids.pop(context_id, None)
-            return tts.SegmentDone(context_id)
-        if payload == "error":
-            request_id = self._request_ids.get(context_id)
-            raise v1.rime_error(message.error, fallback_request_id=request_id)
-        if payload == "cancelled":
+            self.report(tts.SegmentAudio(context_id, message.audio))
+        elif payload == "done":
+            self.report(tts.SegmentDone(context_id))
+        elif payload == "error":
+            raise v1.rime_error(message.error, fallback_request_id=self.request_id)
+        elif payload == "cancelled":
             raise APIConnectionError("Rime v1 cancelled an active context unexpectedly")
-        if payload != "started" or not message.started.request_id:
+        elif payload != "started" or not message.started.request_id:
             raise v1.protocol_error(f"Unexpected Rime v1 event {payload!r}")
-        self._request_ids[context_id] = message.started.request_id
-        return None
+        else:
+            # Rime's id for the context: on the audio, the metrics and a later error
+            self.report(tts.ProviderRequestId(message.started.request_id))
 
     def _frame(self, context_id: str, payload: str, value: object = None) -> _Frame:
         return v1.encode(self._protocol, v1.request(context_id, payload, value))

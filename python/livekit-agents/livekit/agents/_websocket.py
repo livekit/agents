@@ -1,0 +1,700 @@
+"""The provider WebSocket plumbing the kind bases share, run by ``_core.WebSocketSession``:
+connection, decoding, control messages, readiness, pacing and request ids. It speaks no kind's
+vocabulary: each kind base gives its stream a ``WebSocketHost`` built from its own
+``WebSocketKind``, and re-exports the names its plugins write. Plugins never import it."""
+
+from __future__ import annotations
+
+import asyncio
+import collections
+import json
+import types
+import typing
+import weakref
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Annotated, Any, ClassVar, Generic, Literal, NamedTuple, TypeVar, Union
+
+import pydantic_core
+from pydantic import TypeAdapter, ValidationError
+
+from . import _core, utils
+from ._bindings import APIError
+from ._core import WebSocketPacing
+from ._generated.websocket import (
+    WebSocketConnection,
+    WebSocketInput,
+    WebSocketKeepaliveFrame,
+    WebSocketMuxOptions,
+    WebSocketMuxRoute,
+    WebSocketRead,
+    WebSocketTarget,
+    WsFrame,
+)
+from .log import logger
+from .types import APIConnectOptions
+
+__all__ = [
+    "Keepalive",
+    "WebSocketMultiplexer",
+    "WebSocketPacing",
+    "WebSocketTarget",
+    "protocol_error",
+]
+
+ItemT = TypeVar("ItemT")
+InboundT = TypeVar("InboundT")
+OutboundT = TypeVar("OutboundT")
+
+Signal = Literal["ready", "session_finished"]
+
+
+@dataclass(frozen=True, kw_only=True)
+class Keepalive(Generic[OutboundT]):
+    """``frame``, sent once nothing else was sent for ``every`` seconds."""
+
+    every: float
+    frame: bytes | str | OutboundT
+
+
+def _frame(value: object) -> WsFrame:
+    if isinstance(value, bytes | str):
+        return value
+    if isinstance(value, dict):
+        return json.dumps(value)
+    raise TypeError(f"a socket frame is bytes, str or a message dict, not {type(value).__name__}")
+
+
+def frames_of(value: object) -> list[WsFrame]:
+    """The frame a hook's value sends (``bytes`` binary, ``str`` text, a message as JSON);
+    ``None`` sends none."""
+    return [] if value is None else [_frame(value)]
+
+
+class _Decoder:
+    """Reads a frame as the declared ``Inbound`` type. A raw ``bytes`` or ``str`` member takes
+    its frames as they are; every other member is a message read from JSON, once.
+
+    Lenient where the plugin does not read: a message's undeclared keys are ignored, and a
+    message whose tag (the union's discriminator) names no declared type is skipped, since
+    providers add event types. Strict where it reads: a declared message missing a required
+    field or holding a wrong-typed one fails with ``protocol``.
+    """
+
+    def __init__(self, inbound: Any) -> None:
+        discriminator: str | None = None
+        if typing.get_origin(inbound) is Annotated:
+            inbound, *metadata = typing.get_args(inbound)
+            discriminator = next(
+                (
+                    m.discriminator
+                    for m in metadata
+                    if isinstance(getattr(m, "discriminator", None), str)
+                ),
+                None,
+            )
+        union = typing.get_origin(inbound) in (Union, types.UnionType)
+        members = typing.get_args(inbound) if union else (inbound,)
+        self.raw_bytes = bytes in members
+        self.raw_text = str in members
+        parsed = [member for member in members if member not in (bytes, str)]
+        if discriminator is None:
+            discriminator = _common_tag(parsed)
+        self._discriminator = discriminator
+        # by tag when the union names its discriminator, else one adapter for all of them
+        self._by_tag: dict[object, TypeAdapter[Any]] = {}
+        self._adapter: TypeAdapter[Any] | None = None
+        if discriminator is not None:
+            for member in parsed:
+                tag = typing.get_type_hints(member)[discriminator]
+                adapter: TypeAdapter[Any] = TypeAdapter(member)
+                for value in typing.get_args(tag):
+                    self._by_tag[value] = adapter
+        elif parsed:
+            body: Any = parsed[0] if len(parsed) == 1 else Union[tuple(parsed)]  # noqa: UP007
+            self._adapter = TypeAdapter(body)
+        self._skipped: set[object] = set()
+
+    def decode(self, frame: WsFrame, label: str) -> Any:
+        """The message, or ``None`` for one of a type the protocol does not read."""
+        if isinstance(frame, bytes) and self.raw_bytes:
+            return frame
+        if isinstance(frame, str) and self.raw_text:
+            return frame
+        if self._adapter is None and not self._by_tag:
+            raise _protocol_error(label, f"an unexpected {type(frame).__name__} frame")
+        try:
+            if self._adapter is not None:
+                return self._adapter.validate_json(frame)
+            value = pydantic_core.from_json(frame)
+            tag = value.get(self._discriminator) if isinstance(value, dict) else None
+            adapter = self._by_tag.get(tag)
+            if adapter is None:
+                if tag not in self._skipped:
+                    self._skipped.add(tag)
+                    logger.debug("%s: skipping a message type it does not read: %r", label, tag)
+                return None
+            return adapter.validate_python(value)
+        except (ValidationError, ValueError) as e:
+            raise _protocol_error(label, f"{e}; frame: {_shown(frame)}") from e
+
+
+def _common_tag(members: list[Any]) -> str | None:
+    """The one key every member declares as a ``Literal``: the messages' tag, when the union
+    names none."""
+    if not members or not all(typing.is_typeddict(member) for member in members):
+        return None
+    keys = [
+        {
+            key
+            for key, hint in typing.get_type_hints(member).items()
+            if typing.get_origin(hint) is Literal
+        }
+        for member in members
+    ]
+    common = set.intersection(*keys)
+    return common.pop() if len(common) == 1 else None
+
+
+def _shown(frame: WsFrame) -> str:
+    return frame if isinstance(frame, str) else frame.decode("utf-8", errors="replace")
+
+
+def _protocol_error(label: str, detail: str) -> APIError:
+    # the provider broke its contract: a new connection would read the same message
+    return APIError(
+        f"{label} sent a message that breaks its protocol", kind="protocol", detail=detail
+    )
+
+
+def protocol_error(
+    protocol: WebSocketProtocol[Any, Any, Any] | WebSocketMultiplexer[Any, Any], detail: str
+) -> APIError:
+    """The error a decoder or ``on_message`` raises for a message that breaks the protocol
+    (``kind="protocol"``, final); ``detail`` is the provider's own text, logged once and never
+    shown."""
+    label = (
+        protocol._websocket.label
+        if isinstance(protocol, WebSocketProtocol)
+        else type(protocol).__name__
+    )
+    return _protocol_error(label, detail)
+
+
+def _inbound(cls: type, base: type) -> Any | None:
+    """The ``Inbound`` type ``cls`` declared on a generic subclass of ``base``."""
+    for klass in cls.__mro__:
+        for orig in getattr(klass, "__orig_bases__", ()):
+            origin = typing.get_origin(orig)
+            if not (isinstance(origin, type) and issubclass(origin, base)):
+                continue
+            params = getattr(origin, "__parameters__", ())
+            args = typing.get_args(orig)
+            if InboundT in params and len(args) == len(params):
+                found = args[params.index(InboundT)]
+                if not isinstance(found, TypeVar):
+                    return found
+    return None
+
+
+_decoders: weakref.WeakKeyDictionary[type, _Decoder] = weakref.WeakKeyDictionary()
+
+
+def _class_decoder(cls: type, base: type) -> _Decoder:
+    """The validator of the ``Inbound`` ``cls`` declared, built when a frame first needs it: a
+    protocol that decodes its own frames, or whose multiplexer does, never builds one."""
+    if (decoder := _decoders.get(cls)) is None:
+        if (inbound := _inbound(cls, base)) is None:
+            raise TypeError(f"{cls.__name__} declares no Inbound type and no decode()")
+        decoder = _decoders[cls] = _Decoder(inbound)
+    return decoder
+
+
+class WebSocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
+    """A provider's WebSocket protocol. A kind's base fixes the items; the plugin declares
+    ``Inbound`` (its provider's messages: TypedDicts as one union on their tag, plus ``bytes`` for
+    binary frames) and ``Outbound`` (its messages, sent as JSON), sets a few class attributes and
+    writes ``connect``, ``encode`` and ``on_message``.
+
+    The framework connects through ``connect`` (or a ``multiplexer``), sends each input item as
+    ``encode`` frames it, decodes each received frame once and hands it to ``on_message``, sends
+    the keepalive and replaces the connection; a failure, from the socket or a hook, fails the
+    stream and carries the provider's ``request_id``.
+    """
+
+    keepalive: Keepalive[OutboundT] | None = None
+    max_session_duration: float | None = None
+    """Seconds after which the connection is replaced, once the stream has nothing in progress a
+    new connection would cut."""
+    ping_interval: float | None = 30.0
+    """Seconds between websocket pings; a ping unanswered for half of it fails the connection
+    as lost. ``None`` sends none."""
+    multiplexer: WebSocketMultiplexer[InboundT, OutboundT] | None = None
+    """Set to share one provider socket across streams; ``connect`` then is not called."""
+    pacing: WebSocketPacing | None = None
+    """How fast frames go: a minimum interval between two, or no faster than the input plays.
+    One ``WebSocketPacing`` set on several streams (one the model holds) paces them together."""
+    awaits_ready: ClassVar[bool] = False
+    """Each connection opens a provider session that says when it is ready: nothing but the
+    ``setup`` goes until ``on_message`` reports it, within the connect limit."""
+
+    _websocket: WebSocketHost
+    """The stream's side of the session, which its kind base builds."""
+
+    async def connect(self, conn_options: APIConnectOptions) -> WebSocketTarget:
+        """One connection, from the current options: called again at each connection, so a signed
+        URL or a token is fresh. It may run HTTP requests first (a session-create call)."""
+        raise NotImplementedError("a socket protocol implements connect() or sets a multiplexer")
+
+    @abstractmethod
+    def encode(self, item: ItemT) -> bytes | OutboundT | None:
+        """The frame that carries an input item, the kind's end item included (the provider's
+        goodbye); ``None`` where the item sends nothing."""
+
+    @abstractmethod
+    def on_message(self, message: InboundT) -> None:
+        """One received message, decoded, reported through the kind's ``report``. Raising fails
+        the stream: an ``APIError`` by its kind, anything else as it is."""
+
+    def decode(self, frame: bytes | str) -> InboundT | None:
+        """A received frame as ``Inbound``, or ``None`` for a message the protocol does not
+        read (skipped). Override for a binary codec or a framing the declared types do not
+        cover; raise ``protocol_error`` for a frame that breaks the protocol."""
+        decoder = _class_decoder(type(self), WebSocketProtocol)
+        decoded: InboundT | None = decoder.decode(frame, self._websocket.label)
+        return decoded
+
+    def setup(self) -> bytes | OutboundT | None:
+        """The frame each connection sends first, ahead of every other: the provider session's
+        setup, built after ``connect``."""
+        return None
+
+    def send_now(self, message: bytes | OutboundT, *, first: bool = False) -> None:
+        """Send ``message`` on the open connection, ahead of the input not yet sent: a control
+        message, or an answer to a protocol-level frame (a ping). One sent while no connection is
+        open goes on the next only if sent from its ``connect``: ``connect`` rebuilds the session's
+        state. ``first`` puts it ahead of the ones not yet sent."""
+        self._websocket.send_now(message, first=first)
+
+    def sent_now(self, message: bytes | OutboundT) -> None:
+        """``message``, given to ``send_now``, went to the open connection."""
+
+    def reconnect(self, reason: str) -> None:
+        """Replace the connection now: close it and connect again; no retry is spent."""
+        self._websocket.reconnect(reason)
+
+    @property
+    def context_id(self) -> str | None:
+        """This stream's context on its multiplexer's socket."""
+        return self._websocket.context_id
+
+    @property
+    def request_id(self) -> str | None:
+        """The provider's id for what the stream carries now: the last one a message named, else
+        its connection's (``WebSocketTarget.request_id_header``)."""
+        return self._websocket.request_id
+
+
+class Batch(NamedTuple):
+    """What one input item gives ``encode``, in order, and the seconds it plays for, which
+    real-time pacing spaces its frames by."""
+
+    items: list[Any]
+    pace: float = 0.0
+
+
+class WebSocketKind(ABC, Generic[ItemT]):
+    """A kind's terms, as the shared layer asks for them: its input, what it owes the provider,
+    and when its connection can be replaced. Each kind base gives its stream's
+    ``WebSocketHost`` one; the host sets ``host``."""
+
+    host: WebSocketHost
+
+    @property
+    @abstractmethod
+    def label(self) -> str:
+        """The provider's label, in retries, logs and protocol errors."""
+
+    @abstractmethod
+    async def take(self) -> Batch | None:
+        """The next input item for ``encode``, waiting while there is none: the kind's end item
+        once the input ended, then ``None``."""
+
+    @abstractmethod
+    def owes_reply(self) -> bool:
+        """The input ended: whether the provider owes a reply to what the stream sent."""
+
+    @abstractmethod
+    def can_reconnect(self) -> bool:
+        """Whether the stream has nothing in progress a new connection would cut."""
+
+    @abstractmethod
+    def retrying(self, error: Exception) -> None:
+        """A failed attempt the session retries: the provider's recoverable error event."""
+
+    def nothing_pending(self) -> bool:
+        """The wait for the provider's reply ran out with it silent: whether nothing it was sent
+        is left unanswered. A kind that cannot tell owes its answer."""
+        return False
+
+    def expects_close(self) -> bool:
+        """The provider closed cleanly: whether the stream asked it to end its session (its end
+        item went, or an item that ends the session)."""
+        return False
+
+    def connecting(self, first: bool) -> None:
+        """A connection opens; ``first``: the first of the session's run."""
+
+    def opened(self, request_id: str | None) -> None:
+        """A connection opened; ``request_id`` is the provider's id from its handshake."""
+
+    def session_finished(self) -> None:
+        """The provider finished a session; the next connection opens for the next input."""
+
+    def contexts(self) -> list[str] | None:
+        """The stream's open contexts on its multiplexer's socket; ``None``: its own."""
+        return None
+
+    def input_idle_after(self) -> float | None:
+        """Seconds without input after which ``input_idle`` frames go, once per silence."""
+        return None
+
+    def input_idle(self) -> list[WsFrame]:
+        """The frames sent once the input stayed silent, which are not input."""
+        return []
+
+
+@dataclass
+class _Queued:
+    message: object
+    connection: int
+    """The connection it was sent for."""
+
+
+class WebSocketHost:
+    """One stream's side of ``_core.WebSocketSession``: the plugin's protocol hooks and its
+    kind's terms, behind an object of their own, so the session's host interface never shares
+    names with the stream's own."""
+
+    def __init__(
+        self, protocol: WebSocketProtocol[Any, Any, Any], kind: WebSocketKind[Any]
+    ) -> None:
+        self._protocol = protocol
+        self._kind = kind
+        kind.host = self
+        self.request_id: str | None = None
+        self.context_id: str | None = None
+        self.reading = False
+        """Whether a received message is being handled: what the stream reports now answers it."""
+        self._session: _core.WebSocketSession | None = None
+        self._controls: collections.deque[_Queued] = collections.deque()
+        self._control_sent = asyncio.Event()
+        self._control_taken = asyncio.Event()
+        # connections opened by the stream, and by the current run
+        self._connections = 0
+        self._run_connections = 0
+        # what the message being handled signals
+        self._signal: Signal | None = None
+        self._named_request: str | None = None
+
+    @property
+    def label(self) -> str:
+        return self._kind.label
+
+    def send_now(self, message: object, *, first: bool) -> None:
+        queued = _Queued(message, max(self._connections, 1))
+        if first:
+            self._controls.appendleft(queued)
+        else:
+            self._controls.append(queued)
+        self._control_sent.set()
+
+    def signal(self, signal: Signal) -> None:
+        """What the provider's message tells the connection, reported while it is handled."""
+        self._signal = signal
+
+    def name_request(self, request_id: str) -> None:
+        """The provider named its id for what the stream carries now."""
+        self._named_request = request_id
+
+    def reconnect(self, reason: str) -> None:
+        if (session := self._session) is not None:
+            session.reconnect(reason)
+
+    def end_session(self) -> None:
+        """The provider's session is over, as the stream read it: the next item goes on a new
+        connection."""
+        if (session := self._session) is not None:
+            session.end_session()
+
+    async def run(self, conn_options: APIConnectOptions) -> None:
+        """Runs the socket to the end of the stream, its failure raised."""
+        mux = self._protocol.multiplexer
+        context = self.context_id = utils.shortuuid() if mux is not None else None
+        self._run_connections = 0
+        session = self._session = _core.WebSocketSession(
+            self,
+            conn_options,
+            self._kind.label,
+            mux=mux._native() if mux is not None else None,
+            context_id=context,
+            pacing=self._protocol.pacing,
+        )
+        if mux is not None and context is not None:
+            mux._streams[context] = self
+        try:
+            await session.run()
+        finally:
+            await session.aclose()
+            if mux is not None and context is not None:
+                mux._streams.pop(context, None)
+
+    async def aclose(self) -> None:
+        if (session := self._session) is not None:
+            await session.aclose()
+
+    def contexts(self) -> list[str]:
+        """The stream's open contexts on its multiplexer's socket."""
+        contexts = self._kind.contexts()
+        if contexts is not None:
+            return contexts
+        return [self.context_id] if self.context_id is not None else []
+
+    # the session's host interface
+
+    async def _core_connect(self, conn_options: APIConnectOptions) -> WebSocketConnection:
+        self._kind.connecting(first=self._run_connections == 0)
+        self._connections += 1
+        self._run_connections += 1
+        protocol = self._protocol
+        target = await protocol.connect(conn_options)
+        keepalive = protocol.keepalive
+        return WebSocketConnection(
+            target=target,
+            keepalive=(
+                WebSocketKeepaliveFrame(interval=keepalive.every, frame=_frame(keepalive.frame))
+                if keepalive is not None
+                else None
+            ),
+            max_session_duration=protocol.max_session_duration,
+            ping_interval=protocol.ping_interval,
+            setup=frames_of(protocol.setup()),
+            awaits_ready=protocol.awaits_ready,
+            input_idle=self._kind.input_idle_after(),
+            context_keepalive=None,
+        )
+
+    async def _core_next_input(self) -> WebSocketInput | None:
+        while (batch := await self._kind.take()) is not None:
+            frames = [f for item in batch.items for f in frames_of(self._protocol.encode(item))]
+            # a control message ``encode`` sent goes ahead of the frames it returned
+            while self._controls:
+                self._control_taken.clear()
+                await self._control_taken.wait()
+            if frames:
+                return WebSocketInput(frames=frames, pace=batch.pace)
+        return None
+
+    async def _core_next_control(self) -> list[WsFrame]:
+        while True:
+            while self._controls:
+                queued = self._controls.popleft()
+                self._control_taken.set()
+                # one sent for an earlier connection: ``connect`` rebuilt the session since
+                if queued.connection < self._connections:
+                    continue
+                self._protocol.sent_now(queued.message)
+                return frames_of(queued.message)
+            self._control_sent.clear()
+            await self._control_sent.wait()
+
+    async def _core_input_idle(self) -> list[WsFrame]:
+        return self._kind.input_idle()
+
+    async def _core_on_message(self, frame: WsFrame, message: object) -> WebSocketRead:
+        self._signal = self._named_request = None
+        self.reading = True
+        try:
+            if message is None:
+                message = self._protocol.decode(frame)
+            if message is not None:
+                self._protocol.on_message(message)
+        except APIError as error:
+            if error.request_id is None:
+                error.request_id = self.request_id
+            raise
+        finally:
+            self.reading = False
+        if self._named_request is not None:
+            self.request_id = self._named_request
+        return WebSocketRead(signal=self._signal, request_id=self._named_request)
+
+    def _core_opened(self, request_id: str | None) -> None:
+        self.request_id = request_id
+        self._kind.opened(request_id)
+
+    def _core_session_finished(self) -> None:
+        self._kind.session_finished()
+
+    async def _core_close_context(self) -> list[WsFrame]:
+        mux = self._protocol.multiplexer
+        if mux is None:
+            return []
+        return [frame for c in self.contexts() for frame in frames_of(mux.close_context(c))]
+
+    async def _core_keep_context(self) -> list[WsFrame]:
+        mux = self._protocol.multiplexer
+        if mux is None:
+            return []
+        return [frame for c in self.contexts() for frame in frames_of(mux.keep_context(c))]
+
+    def _core_retrying(self, error: Exception) -> None:
+        self._kind.retrying(error)
+
+    def _core_owes_reply(self) -> bool:
+        return self._kind.owes_reply()
+
+    def _core_nothing_pending(self) -> bool:
+        return self._kind.nothing_pending()
+
+    def _core_expects_close(self) -> bool:
+        return self._kind.expects_close()
+
+    def _core_can_reconnect(self) -> bool:
+        return self._kind.can_reconnect()
+
+
+class WebSocketMultiplexer(ABC, Generic[InboundT, OutboundT]):
+    """The provider sockets streams share, opened on demand: several streams on one socket, each
+    its own context that ``route`` sends each received message to, or a pool (``routed =
+    False``) of sockets carrying one stream each, a socket reused by the next stream once the
+    one before ended cleanly."""
+
+    keepalive: Keepalive[OutboundT] | None = None
+    max_session_duration: float | None = None
+    """Seconds after which a socket takes no new stream; it closes once its streams ended."""
+    ping_interval: float | None = 30.0
+    """Seconds between websocket pings; a ping unanswered for half of it fails the socket and
+    every stream on it as lost. ``None`` sends none."""
+    max_contexts: int | None = None
+    """Streams one socket carries at most; another socket opens for the next."""
+    max_sockets: int | None = None
+    """Sockets open at most; a stream finding none with room waits for one, within
+    ``conn_options.pool_timeout``."""
+    idle_timeout: float | None = None
+    """Seconds a socket no stream holds stays open."""
+    keep_warm: bool = False
+    """An idle socket the provider closed is opened again, so the next stream finds one open."""
+    context_keepalive: float | None = None
+    """Seconds without a send on a stream after which a ``keep_context`` frame goes for each of
+    its open contexts."""
+    routed: ClassVar[bool] = True
+    """Each received message goes to the context ``route`` names. A pool (``False``) carries
+    one stream a socket and hands it every frame once the socket is ready; ``route`` then sees
+    only the socket's own frames (before it is ready, or with no stream on it)."""
+    awaits_ready: ClassVar[bool] = False
+    """Each socket opens a provider session that says when it is ready: no stream takes it until
+    ``ready`` reads a message saying so, within the connect limit."""
+
+    @abstractmethod
+    async def connect(self, conn_options: APIConnectOptions) -> WebSocketTarget:
+        """One shared socket, from the current options."""
+
+    def setup(self) -> bytes | OutboundT | None:
+        """The frame each socket sends first: the provider session's setup."""
+        return None
+
+    def route(self, message: InboundT) -> str | None:
+        """The context ``message`` belongs to (one of a stream's contexts); ``None`` for a
+        socket-level message. Raising fails the socket and every stream on it."""
+        return None
+
+    def ready(self, message: InboundT) -> bool:
+        """Whether ``message`` says the socket's provider session is ready (with
+        ``awaits_ready``)."""
+        return False
+
+    def open_context(self, context_id: str) -> bytes | OutboundT | None:
+        """The frame that opens a context, if the provider needs one."""
+        return None
+
+    def close_context(self, context_id: str) -> bytes | OutboundT | None:
+        """The frame that ends a context its stream left before the provider finished it."""
+        return None
+
+    def keep_context(self, context_id: str) -> bytes | OutboundT | None:
+        """The frame that keeps an open context alive (see ``context_keepalive``)."""
+        return None
+
+    def decode(self, frame: bytes | str) -> InboundT | None:
+        """A received frame as ``Inbound``, ``None`` to skip it; see ``WebSocketProtocol.decode``."""
+        decoder = _class_decoder(type(self), WebSocketMultiplexer)
+        decoded: InboundT | None = decoder.decode(frame, type(self).__name__)
+        return decoded
+
+    def prewarm(self) -> None:
+        """Open a shared socket now, unless one has room: the first stream finds it open."""
+        self._native().prewarm()
+
+    def invalidate(self) -> None:
+        """Options changed: idle sockets close now, busy ones once their streams ended."""
+        if (native := getattr(self, "_mux", None)) is not None:
+            native.invalidate()
+
+    async def aclose(self) -> None:
+        if (native := getattr(self, "_mux", None)) is not None:
+            await native.aclose()
+
+    def _native(self) -> _core.WebSocketMux:
+        native: _core.WebSocketMux | None = getattr(self, "_mux", None)
+        if native is None:
+            options = WebSocketMuxOptions(
+                max_contexts=self.max_contexts,
+                max_sockets=self.max_sockets,
+                idle_timeout=self.idle_timeout,
+                keep_warm=self.keep_warm,
+                routed=self.routed,
+            )
+            native = self._mux = _core.WebSocketMux(self, options)
+            self._streams: dict[str, WebSocketHost] = {}
+        return native
+
+    def _stream(self, context: str) -> WebSocketHost | None:
+        """The stream holding a context."""
+        if (stream := self._streams.get(context)) is not None:
+            return stream
+        return next((s for s in self._streams.values() if context in s.contexts()), None)
+
+    async def _core_connect(self, conn_options: APIConnectOptions) -> WebSocketConnection:
+        target = await self.connect(conn_options)
+        keepalive = self.keepalive
+        return WebSocketConnection(
+            target=target,
+            keepalive=(
+                WebSocketKeepaliveFrame(interval=keepalive.every, frame=_frame(keepalive.frame))
+                if keepalive is not None
+                else None
+            ),
+            max_session_duration=self.max_session_duration,
+            ping_interval=self.ping_interval,
+            setup=frames_of(self.setup()),
+            awaits_ready=self.awaits_ready,
+            input_idle=None,
+            context_keepalive=self.context_keepalive,
+        )
+
+    async def _core_route(self, frame: WsFrame) -> WebSocketMuxRoute:
+        message = self.decode(frame)
+        if message is None:
+            return WebSocketMuxRoute(context=None, message=None, ready=False)
+        if self.awaits_ready and self.ready(message):
+            return WebSocketMuxRoute(context=None, message=None, ready=True)
+        context = self.route(message)
+        # a frame no stream reads (a late one of a closed context) goes nowhere
+        if context is None or (stream := self._stream(context)) is None:
+            return WebSocketMuxRoute(context=None, message=None, ready=False)
+        # the stream reads the message as decoded here: no second decode
+        return WebSocketMuxRoute(context=stream.context_id, message=message, ready=False)
+
+    async def _core_open_context(self, context_id: str) -> list[WsFrame]:
+        return frames_of(self.open_context(context_id))

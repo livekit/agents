@@ -456,7 +456,7 @@ async fn a_transcript_burst_leaves_the_room_audio_output_open() {
     io.clone().start(lk_agents_abi::telemetry::Cx::NONE);
     io.wait_for_ready().await.unwrap();
     for n in 0..8 {
-        io.on_user_input_transcribed(&format!("word {n}"), n % 2 == 1)
+        io.on_user_input_transcribed(&format!("word {n}"), n % 2 == 1, &format!("SG_{}", n / 2))
             .await
             .expect("a transcript backlog is not the caller's error");
     }
@@ -472,6 +472,41 @@ async fn a_transcript_burst_leaves_the_room_audio_output_open() {
         Some("word 7".into()),
         "the backlog delivers the latest transcript"
     );
+}
+
+// Catches: a correction of words the room already showed appended as a segment of its own, never
+// reaching the room, or landing on another segment that shows the same words: the frontend must
+// show the full words in the segment it had, by its id.
+#[tokio::test(start_paused = true)]
+async fn a_corrected_user_transcript_replaces_its_segment() {
+    let (room, clock) = fake_room("corrected-transcript");
+    room.add_participant("person", ParticipantKind::Standard);
+    let config = RoomIoConfig {
+        transcription_output: Some(TranscriptionOutputConfig::default()),
+        ..config()
+    };
+    let io = room_io(room.clone(), clock, config);
+    io.clone().start(lk_agents_abi::telemetry::Cx::NONE);
+    io.wait_for_ready().await.unwrap();
+    io.on_user_input_transcribed("book a table", true, "SG_first").await.unwrap();
+    io.on_user_input_transcribed("book a table", true, "SG_again").await.unwrap();
+    io.on_user_input_corrected("SG_first", "book a table for two");
+    yields(8).await;
+    io.clone().aclose().await;
+    let segment = |stream: &lk_agents_fuzz::fakes::room::RecordedTextStream| {
+        stream.opts.attributes.get(lk_agents_abi::ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID).cloned()
+    };
+    let streams = room.local_participant().text_streams();
+    let mut last: Vec<(String, String)> = Vec::new();
+    for stream in &streams {
+        let Some(id) = segment(stream) else { continue };
+        match last.iter_mut().find(|(seen, _)| *seen == id) {
+            Some((_, text)) => *text = stream.text(),
+            None => last.push((id, stream.text())),
+        }
+    }
+    let shown: Vec<&str> = last.iter().map(|(_, text)| text.as_str()).collect();
+    assert_eq!(shown, ["book a table for two", "book a table"], "each segment as it reads last");
 }
 
 /// A microphone whose SDK processing the test controls.

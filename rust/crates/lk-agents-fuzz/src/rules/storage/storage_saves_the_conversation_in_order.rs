@@ -63,7 +63,7 @@ impl Rule for StorageSavesTheConversationInOrder {
                 matches!(step, StorageStep::PartitionSettled { faulted: true, .. })
             });
         for (_, step) in r.host_view().storage() {
-            let StorageStep::Saved { items } = step else { continue };
+            let StorageStep::Saved { items, .. } = step else { continue };
             // Only this call's rows, from a store that met no fault: their order is the call's.
             if faulted || items.iter().any(|id| !stored.contains(&id.as_str())) {
                 continue;
@@ -177,7 +177,10 @@ fn held() -> Authored {
 }
 
 fn saved(items: &[&str]) -> StorageStep {
-    StorageStep::Saved { items: items.iter().map(|id| (*id).to_owned()).collect() }
+    StorageStep::Saved {
+        items: items.iter().map(|id| (*id).to_owned()).collect(),
+        user_texts: Vec::new(),
+    }
 }
 
 fn saved_as_held() -> Recording {

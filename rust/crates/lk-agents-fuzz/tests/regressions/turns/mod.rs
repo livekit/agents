@@ -1,3 +1,4 @@
+mod correction;
 mod end_of_turn;
 mod input;
 mod interruption;

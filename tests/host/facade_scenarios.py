@@ -25,7 +25,7 @@ from livekit.agents import (
     tts,
 )
 from livekit.agents.a2a import Credentials
-from livekit.agents.llm import _realtime
+from livekit.agents.llm import openai_protocol
 from livekit.agents.llm.mcp import MCPServerHTTP, MCPServerStdio
 from livekit.agents.storage import SQLiteStorage, Thread
 from livekit.agents.storage.context import ContextStore, persisted
@@ -170,7 +170,7 @@ async def _talked(model: llm.RealtimeModel | llm.LLM) -> None:
 
 
 async def openai_realtime() -> object:
-    model = _realtime.RealtimeModel(base_url=UNREACHABLE, api_key="k")
+    model = openai_protocol.OpenAIRealtimeModel(base_url=UNREACHABLE, api_key="k")
     await model.aclose()
     return model
 
@@ -409,7 +409,7 @@ SCENARIOS: dict[str, Scenario] = {
     "livekit.agents.inference.tts.TTS": inference_tts,
     "livekit.agents.llm.FallbackAdapter": llm_fallback,
     "livekit.agents.llm.FallbackLLMStream": llm_fallback_stream,
-    "livekit.agents.llm._realtime.RealtimeModel": openai_realtime,
+    "livekit.agents.llm.openai_protocol.OpenAIProtocolModel": openai_realtime,
     "livekit.agents.llm.duplex.DuplexRealtimeAdapter": duplex_adapter,
     "livekit.agents.llm.mcp.MCPServerHTTP": mcp_http,
     "livekit.agents.llm.mcp.MCPServerStdio": mcp_stdio,

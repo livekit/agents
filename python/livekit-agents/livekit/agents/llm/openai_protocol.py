@@ -1,35 +1,31 @@
+"""Realtime models over the OpenAI Realtime protocol, their sessions run in the core: OpenAI's
+own and every provider speaking the protocol, with the session options they take."""
+
 from __future__ import annotations
 
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
-from .._generated import facades_llm__realtime as _facades, public_llm__realtime as _public
-from .._generated.public_llm__realtime import *  # noqa: F403
+from .._generated import (
+    facades_llm_openai_protocol as _facades,
+    public_llm_openai_protocol as _public,
+)
+from .._generated.public_llm_openai_protocol import *  # noqa: F403
 from ..types import NOT_GIVEN, NotGivenOr
-from . import realtime as llm_realtime
 
 if TYPE_CHECKING:
     from .._generated.realtime_wire import Modalities
     from .tool_context import ToolChoice
 
-# kept for plugins that subclass it
-RealtimeSession = llm_realtime.RealtimeSession
 
-
-class _OpenAIProtocolModel(_facades.RealtimeModel):
-    """A model speaking the OpenAI realtime protocol. Each provider's model subclasses it and
+class OpenAIProtocolModel(_facades.OpenAIProtocolModel):
+    """A realtime model over the OpenAI Realtime protocol. Each provider's model subclasses it and
     declares ``update_options`` with the options its session carries."""
 
-    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
-        raise NotImplementedError(
-            f"{type(self).__name__} sessions run in the core; give the model to a VoiceSession"
-        )
 
-    async def aclose(self) -> None:
-        pass
+class OpenAIRealtimeModel(OpenAIProtocolModel):
+    """OpenAI's realtime model, and Azure OpenAI's through ``with_azure``."""
 
-
-class RealtimeModel(_OpenAIProtocolModel):
     _provider_label = "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
 
     @classmethod
@@ -53,8 +49,8 @@ class RealtimeModel(_OpenAIProtocolModel):
         reasoning: NotGivenOr[Reasoning | None] = NOT_GIVEN,
         max_response_output_tokens: NotGivenOr[int | None] = NOT_GIVEN,
         max_session_duration: NotGivenOr[timedelta | None] = NOT_GIVEN,
-    ) -> RealtimeModel:
-        """Create a RealtimeModel configured for Azure OpenAI.
+    ) -> OpenAIRealtimeModel:
+        """Create a model configured for Azure OpenAI.
 
         Args:
             azure_deployment: Azure OpenAI deployment name.
@@ -129,5 +125,5 @@ class RealtimeModel(_OpenAIProtocolModel):
         )
 
 
-__all__ = ["RealtimeModel", "RealtimeSession"]
+__all__ = ["OpenAIProtocolModel", "OpenAIRealtimeModel"]
 __all__ += _public.__all__

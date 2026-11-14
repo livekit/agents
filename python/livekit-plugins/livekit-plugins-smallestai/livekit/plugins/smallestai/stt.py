@@ -39,7 +39,7 @@ import re
 import weakref
 from collections import Counter
 from dataclasses import dataclass, replace
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, assert_never
 from urllib.parse import urlencode
 
 from pydantic import JsonValue, TypeAdapter
@@ -57,6 +57,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents.stt import Keepalive
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 from livekit.agents.utils import is_given
 
@@ -481,8 +482,7 @@ def _apply_updates(
     )
 
 
-class SpeechStream(stt.SocketStream[_Message, _Command]):
-    goodbye = _Command(type="close_stream")
+class SpeechStream(stt.WebSocketStream[_Message, _Command]):
     # 50 ms packets, the cadence the Pulse docs recommend
     frame_ms = 50
     # speech_started and speech_ended come from the server's acoustic VAD; without them each
@@ -495,7 +495,9 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
         self._session_id = ""
         if opts.keepalive_interval:
             # resets the public API's inactivity timer while no audio flows
-            self.keepalive = http.Keepalive(opts.keepalive_interval, _Command(type="keepalive"))
+            self.keepalive = Keepalive(
+                every=opts.keepalive_interval, frame=_Command(type="keepalive")
+            )
 
     def update_options(
         self,
@@ -568,9 +570,9 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
             params["keywords"] = ",".join(f"{kw}:{boost:g}" for kw, boost in o.keywords)
         return params
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         base = self._opts.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
-        return http.SocketTarget(
+        return stt.WebSocketTarget(
             f"{base.rstrip('/')}{self._opts.stream_path}?{urlencode(self._stream_params())}",
             headers={
                 "Authorization": f"Bearer {self._opts.api_key}",
@@ -579,17 +581,19 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
             },
         )
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[_Command]:
-        if isinstance(item, rtc.AudioFrame):
-            return bytes(item.data)
-        if isinstance(item, stt.RecognizeStream.Flush) and self._opts.finalize_on_flush:
-            # return the buffered tail as a final now instead of at the server's endpointing
-            return _Command(type="finalize")
-        return None
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | _Command | None:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush():
+                # return the buffered tail as a final now instead of at the server's endpointing
+                return _Command(type="finalize") if self._opts.finalize_on_flush else None
+            case stt.EndOfAudio():
+                return _Command(type="close_stream")
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Message) -> http.Done | None:
+    def on_message(self, message: _Message) -> None:
         # errors: {"type": "error", "status", "message"} from the public API, {"error": "..."}
         # from a server reached directly
         if message.get("type") == "error" or (
@@ -613,10 +617,10 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
         kind = message.get("type")
         if kind == "speech_started":
             self.report(stt.SpeechStarted())
-            return None
+            return
         if kind == "speech_ended":
             self.report(stt.SpeechEnded())
-            return None
+            return
 
         # the gateway duplicates the server's `transcript` into `transcription`
         text = message.get("transcript") or message.get("transcription", "")
@@ -645,8 +649,9 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
             or not self._opts.vad_events
         ):
             self.report(stt.SpeechEnded())
-        # the session is fully flushed: nothing else arrives
-        return http.DONE if last else None
+        if last:
+            # the session is fully flushed: nothing else arrives
+            self.report(stt.SessionFinished())
 
 
 def _aggregate_confidence(words: list[_Word]) -> float:

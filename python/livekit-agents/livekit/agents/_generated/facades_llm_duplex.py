@@ -21,10 +21,6 @@ class DuplexRealtimeAdapter(_core.DuplexRealtimeModel, RealtimeModel):
     the model never transcribes still plays, it just has no chat item.
     """
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        _bindings.refuse_overrides(cls, ("session",), "session.llm_node")
-
     def __init__(
         self,
         duplex_model: DuplexModel,

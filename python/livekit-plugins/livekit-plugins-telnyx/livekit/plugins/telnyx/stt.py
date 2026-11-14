@@ -8,11 +8,11 @@ from __future__ import annotations
 import struct
 import weakref
 from dataclasses import dataclass
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, LanguageCode, http, stt
+from livekit.agents import APIConnectOptions, LanguageCode, stt
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -156,7 +156,7 @@ class _Transcript(TypedDict):
     confidence: NotRequired[float]
 
 
-class SpeechStream(stt.SocketStream[_Transcript, None]):
+class SpeechStream(stt.WebSocketStream[_Transcript, None]):
     frame_ms = 50
 
     def __init__(
@@ -171,7 +171,7 @@ class SpeechStream(stt.SocketStream[_Transcript, None]):
         self._opts = opts
         self._language = language
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         opts = self._opts
         params = {
             "transcription_engine": opts.transcription_engine,
@@ -181,7 +181,7 @@ class SpeechStream(stt.SocketStream[_Transcript, None]):
         base_url = opts.base_url
         if base_url.startswith("http"):
             base_url = base_url.replace("http", "ws", 1)
-        return http.SocketTarget(
+        return stt.WebSocketTarget(
             f"{base_url}?{urlencode(params)}",
             headers={"Authorization": f"Bearer {opts.api_key}"},
         )
@@ -189,17 +189,22 @@ class SpeechStream(stt.SocketStream[_Transcript, None]):
     def setup(self) -> bytes:
         return _create_streaming_wav_header(self._opts.sample_rate, NUM_CHANNELS)
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[None]:
-        return bytes(item.data) if isinstance(item, rtc.AudioFrame) else None
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | None:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush() | stt.EndOfAudio():
+                return None
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Transcript) -> stt.Transcript | None:
-        if not (text := message.get("transcript", "")):
-            return None
-        return stt.Transcript(
-            text,
-            self._language,
-            final=message.get("is_final", False),
-            confidence=message.get("confidence", 0.0),
-        )
+    def on_message(self, message: _Transcript) -> None:
+        if text := message.get("transcript", ""):
+            self.report(
+                stt.Transcript(
+                    text,
+                    self._language,
+                    final=message.get("is_final", False),
+                    confidence=message.get("confidence", 0.0),
+                )
+            )

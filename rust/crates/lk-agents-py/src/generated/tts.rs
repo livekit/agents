@@ -228,6 +228,14 @@ impl TtsSegments {
         Ok(())
     }
 
+    /// The provider finished the session the segments whose text ended were sent on: each is
+    /// done.
+    fn complete_ended(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| <TtsSegmentsImpl as ::lk_agents_abi::tts::segments::TtsSegments>::complete_ended(&self.0)).map_err(|e: ::lk_agents_abi::tts::segments::SegmentError| <::lk_agents_abi::tts::segments::SegmentError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
     /// Whether `segment_id` is a segment not yet done: a multiplexed stream's context.
     #[pyo3(signature = (segment_id))]
     fn holds(&self, py: Python<'_>, segment_id: ::std::string::String) -> PyResult<bool> {

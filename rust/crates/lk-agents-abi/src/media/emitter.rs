@@ -94,8 +94,10 @@ pub trait AudioEmitter: Send + Sync + Sized + 'static {
     fn pushed_duration(&self, #[host(default = -1)] idx: i64) -> f64;
     #[host(getter)]
     fn num_segments(&self) -> usize;
+    /// The provider named its id for the audio that follows: it reaches that audio and its
+    /// metrics.
     #[host(call)]
-    fn _note_provider_request_id(&self, context_id: String) -> Result<(), EmitterError>;
+    fn provider_request_id(&self, request_id: String) -> Result<(), EmitterError>;
     #[host(getter)]
     fn output_closed(&self) -> Result<bool, EmitterError>;
 }

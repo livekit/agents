@@ -16,7 +16,7 @@ from .._generated.public_llm_duplex import *  # noqa: F403
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .chat_context import ChatContext, ChatItem
-from .realtime import RealtimeError, RealtimeSession
+from .realtime import RealtimeError
 from .tool_context import Tool, ToolChoice, ToolContext, Toolset
 
 DuplexEventTypes = Literal[
@@ -208,8 +208,3 @@ class DuplexRealtimeAdapter(_facades.DuplexRealtimeAdapter):
     @property
     def duplex_model(self) -> DuplexModel:
         return self._duplex_model
-
-    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
-        raise NotImplementedError(
-            "DuplexRealtimeAdapter sessions run inside a VoiceSession (the core segments them)"
-        )

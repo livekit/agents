@@ -46,7 +46,7 @@ impl TranscriptMachine {
     /// The connection ended: its open speech ends with it.
     pub fn boundary(&mut self) -> Vec<SpeechEvent> {
         let mut events = Vec::new();
-        self.speech.ended(&mut events);
+        self.speech.boundary(&mut events);
         events
     }
 
@@ -59,7 +59,7 @@ impl TranscriptMachine {
         match msg {
             Incoming::StartOfSpeech => {
                 let mut out = Processed::default();
-                self.speech.started(&mut out.events);
+                self.speech.started(None, &mut out.events);
                 out
             }
             Incoming::PreflightTranscript(data) => self.transcript(&data, false, true),

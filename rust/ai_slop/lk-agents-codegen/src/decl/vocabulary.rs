@@ -23,6 +23,8 @@ use super::Literal;
 // | class method | `init` | the constructor of a class built in two steps: `__new__` (any arguments) makes an empty object and `__init__` builds the implementation once, refusing a second call; every method, and the class's native registration, refuses an object whose `__init__` never ran; the class is `subclass` and `weakref`. Its `#[host(label)] label: String` parameter is the object's host class path, a `proxy(.., self_events)` parameter the object's events; neither crosses |
 // | trait | `native` | accepts only the registered native class (`class(native = Trait)` or legacy `object(as_dyn(Trait = method))`); the reader and type error are generated in Python bindings, with no ABI proxy; `native(class = "X")`: `_core.X`, a class the registration shell registers itself |
 // | trait | `proxy(host = "module.Class")` | the core calling a host object of that class, an SDK class (`livekit.rtc.TextStreamWriter`) as well as a framework one; `view = "module.Class"`: the proxy calls that class's instance over the host object (state the host class does not carry); `sdk`: a `wire_enum` the host returns is its SDK number (`TryFrom<i32>`), an unknown one its `Default` and dropped from a list |
+// | proxy trait | `proxy(.., annotation = "module.Class")` | what a value taking the proxy is annotated with, when not its host class: a common base of the host class and the native classes taken as themselves |
+// | proxy trait | `proxy(.., generic)`, `proxy(.., generic = N)` | the host class is generic over one (or `N`) type parameters: an annotation names it `Class[Any, ..]`; a plugin base class (`base = ".."`) must be `Generic[..]` |
 // | proxy trait | `proxy(.., owns)` | the core owns a host object taken from the host's argument, and whatever holds it releases it at its close. Without `owns` the core retains it as a back-reference, through a weak reference: the object owns what holds the proxy. Once it is gone, a `call` or `await` fails with `ReferenceError` and a `notify` does nothing. A host object a host call returns is always owned; a proxy with a `view` owns the view |
 // | proxy trait | `proxy(.., self_events)` | the events of the object an `init` constructor builds, filled from it (`XProxy::weak`) through a weak reference: every method is a `notify` |
 // | proxy trait | `proxy(.., events(module = "..", on = "a.b", entries = Trait, pass(p = "self.x"), name(args(a, b), p = "a.x", when(a = "module.Class")), ..))` | the SDK events the emitter `on` delivers, written to `_generated/<module>.py`'s `subscribe`: each to the `entries` function of its name, a parameter taking the argument of its name, `pass`'s value read once from the host object, or its attribute path from an argument (an optional one `None` with its owner); a proxy parameter is its host class over the host object and the argument; `when` delivers only an instance |
@@ -201,6 +203,19 @@ pub fn text(at: &str, entries: &[Entry], key: &str) -> Result<Option<String>, St
         None => Ok(None),
         Some(Some(Value::Text(t))) => Ok(Some(t.clone())),
         Some(_) => Err(format!("{at}: `{key}` takes host text, quoted")),
+    }
+}
+
+/// `proxy(.., generic)` or `proxy(.., generic = N)`: the host class's type parameter count (none
+/// is 0, a bare marker one), each `Any` where an annotation names the class.
+pub fn generic(at: &str, entries: &[Entry]) -> Result<usize, String> {
+    match find(entries, "generic").map(|entry| &entry.value) {
+        None => Ok(0),
+        Some(None) => Ok(1),
+        Some(Some(Value::Literal(Literal::Int(n)))) if *n > 0 => {
+            usize::try_from(*n).map_err(|e| format!("{at}: `generic = {n}`: {e}"))
+        }
+        Some(_) => Err(format!("{at}: `generic` takes a positive type parameter count")),
     }
 }
 

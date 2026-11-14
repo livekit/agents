@@ -279,8 +279,6 @@ pub trait RealtimeFallbackModel: Send + Sync + Sized + 'static {
     name = "RealtimeModelFallbackAdapter",
     base = "llm.realtime.RealtimeModel",
     native = RealtimeFallbackModel,
-    refuse(session),
-    node = "session.llm_node",
     base_args(capabilities),
     availability(
         observer = "observer",

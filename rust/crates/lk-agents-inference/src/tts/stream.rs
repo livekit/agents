@@ -176,6 +176,10 @@ impl lk_agents_abi::tts::streams::TtsStream for TtsStream {
                 emitter.start_segment(id.clone())?;
                 segment = Some(id);
             }
+            // the provider's own ids, kept on the audio the reader gets
+            for request_id in audio.provider_request_ids {
+                emitter.note_provider_request_id(request_id)?;
+            }
             emitter.push_timed_transcript(audio.timed_transcript)?;
             emitter.push_frame(audio.frame)?;
             if audio.usage.is_some() || audio.characters_count.is_some() {

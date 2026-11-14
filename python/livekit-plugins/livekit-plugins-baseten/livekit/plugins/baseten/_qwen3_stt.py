@@ -33,10 +33,9 @@ the deployment; without them the server ignores the request.
 from __future__ import annotations
 
 import base64
-import json
 import os
 from dataclasses import dataclass, replace
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, assert_never
 
 from pydantic import JsonValue
 
@@ -70,6 +69,12 @@ def _language_code(name: str | None) -> LanguageCode:
     return LanguageCode(_LANGUAGE_OVERRIDES.get(key, key))
 
 
+class _Handshake(TypedDict):
+    whisper_params: dict[str, JsonValue]
+    streaming_params: dict[str, JsonValue]
+    streaming_vad_config: dict[str, JsonValue]
+
+
 @dataclass
 class _STTOptions:
     audio_language: str
@@ -81,7 +86,7 @@ class _STTOptions:
     vad_speech_pad_ms: int
     word_timestamps: bool
 
-    def handshake(self) -> dict[str, JsonValue]:
+    def handshake(self) -> _Handshake:
         return {
             "whisper_params": {
                 "audio_language": self.audio_language,
@@ -254,7 +259,9 @@ class _Commit(TypedDict):
     type: Literal["input_audio_buffer.commit"]
 
 
-class Qwen3SpeechStream(stt_module.SocketStream[TranscriptResponse, _Append | _Commit]):
+class Qwen3SpeechStream(
+    stt_module.WebSocketStream[TranscriptResponse, _Handshake | _Append | _Commit]
+):
     """A single recognition session: audio frames in, speech events out."""
 
     # LiveKit resamples to SAMPLE_RATE; this only re-chunks into the ~100ms frames the server
@@ -278,28 +285,32 @@ class Qwen3SpeechStream(stt_module.SocketStream[TranscriptResponse, _Append | _C
         # the end's own commit a duplicate, which the server answers with an extra, empty turn
         self._committed = False
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
-        return http.SocketTarget(
+    async def connect(self, conn_options: APIConnectOptions) -> stt_module.WebSocketTarget:
+        return stt_module.WebSocketTarget(
             self._model_endpoint, headers={"Authorization": f"Api-Key {self._api_key}"}
         )
 
-    def setup(self) -> http.Encoded[_Append | _Commit]:
-        return json.dumps(self._opts.handshake())
+    def setup(self) -> _Handshake:
+        return self._opts.handshake()
 
     def encode(
-        self, item: rtc.AudioFrame | stt_module.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[_Append | _Commit]:
-        if isinstance(item, rtc.AudioFrame):
-            self._committed = False
-            return _Append(
-                type="input_audio_buffer.append", audio=base64.b64encode(item.data).decode()
-            )
-        if isinstance(item, http.EndOfInput) and self._committed:
-            return None
-        self._committed = True
-        return _Commit(type="input_audio_buffer.commit")
+        self, item: rtc.AudioFrame | stt_module.Flush | stt_module.EndOfAudio
+    ) -> _Append | _Commit | None:
+        match item:
+            case rtc.AudioFrame():
+                self._committed = False
+                return _Append(
+                    type="input_audio_buffer.append", audio=base64.b64encode(item.data).decode()
+                )
+            case stt_module.EndOfAudio() if self._committed:
+                return None
+            case stt_module.Flush() | stt_module.EndOfAudio():
+                self._committed = True
+                return _Commit(type="input_audio_buffer.commit")
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: TranscriptResponse) -> stt_module.Transcript | http.Done | None:
+    def on_message(self, message: TranscriptResponse) -> None:
         msg_type = message.get("type", "transcription")
         if msg_type == "error":
             raise APIError(
@@ -309,7 +320,7 @@ class Qwen3SpeechStream(stt_module.SocketStream[TranscriptResponse, _Append | _C
                 detail=message.get("message", "unknown STT error"),
             )
         if msg_type != "transcription":
-            return None
+            return
 
         segments = message.get("segments") or []
         text = " ".join(s.get("text", "") for s in segments).strip()
@@ -321,8 +332,7 @@ class Qwen3SpeechStream(stt_module.SocketStream[TranscriptResponse, _Append | _C
         # Only the commit-triggered final ends the session; VAD finals just close a turn and
         # the stream keeps going.
         if is_final and message.get("is_end_of_audio_flush", False) and self.input.closed:
-            return http.DONE
-        return None
+            self.report(stt_module.SessionFinished())
 
     def _transcript(
         self, event: TranscriptResponse, text: str, *, final: bool

@@ -20,7 +20,7 @@ import weakref
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Annotated, Any, Literal, NotRequired, TypedDict, cast
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, assert_never, cast
 
 from pydantic import Field
 
@@ -419,7 +419,7 @@ class ChunkedStream(tts.ChunkedStream):
             output_emitter.flush()
 
 
-class _Mux(http.Multiplexer[_Message, _Speak | _Cancel]):
+class _Mux(tts.WebSocketMultiplexer[_Message, _Speak | _Cancel]):
     """One Cartesia socket carries every stream's segments, each its own context."""
 
     max_session_duration = 300
@@ -427,8 +427,8 @@ class _Mux(http.Multiplexer[_Message, _Speak | _Cancel]):
     def __init__(self, opts: _TTSOptions) -> None:
         self._opts = opts
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
-        return http.SocketTarget(
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        return tts.WebSocketTarget(
             self._opts.get_ws_url("/tts/websocket"),
             headers={"User-Agent": USER_AGENT, API_AUTH_HEADER: self._opts.api_key},
             params={"cartesia_version": self._opts.api_version},
@@ -445,36 +445,44 @@ class _Mux(http.Multiplexer[_Message, _Speak | _Cancel]):
         return _Cancel(context_id=context_id, cancel=True)
 
 
-class SynthesizeStream(tts.SocketStream[_Message, _Speak | _Cancel]):
+class SynthesizeStream(tts.WebSocketStream[_Message, _Speak | _Cancel]):
     def __init__(self, *, opts: _TTSOptions, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self.multiplexer = tts._mux
         self._options = _to_cartesia_options(opts, streaming=True)
         self._aligned: dict[str, _Alignment] = {}
 
-    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> _Speak | None:
-        if isinstance(item, tts.SegmentStart):
-            self._aligned[item.segment_id] = _Alignment()
-            return None
-        if isinstance(item, tts.SegmentText):
-            self._aligned[item.segment_id].sent.append(item.chunk.said + " ")
-            return self._speak(item.segment_id, item.chunk.text + " ", more=True)
-        if isinstance(item, tts.SegmentEnd):
-            self._aligned[item.segment_id].sent.append(" ")
-            return self._speak(item.segment_id, " ", more=False)
-        return None
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Speak | None:
+        match item:
+            case tts.SegmentStart():
+                self._aligned[item.segment_id] = _Alignment()
+                return None
+            case tts.SegmentText():
+                self._aligned[item.segment_id].sent.append(item.chunk.said + " ")
+                return self._speak(item.segment_id, item.chunk.text + " ", more=True)
+            case tts.SegmentEnd():
+                self._aligned[item.segment_id].sent.append(" ")
+                return self._speak(item.segment_id, " ", more=False)
+            case tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Chunk | _Timestamps | _Done | _Error) -> tts.SegmentOutput:
+    def on_message(self, message: _Chunk | _Timestamps | _Done | _Error) -> None:
         if message["type"] == "chunk":
-            return tts.SegmentAudio(message["context_id"], base64.b64decode(message["data"]))
-        if message["type"] == "timestamps":
+            audio = base64.b64decode(message["data"])
+            self.report(tts.SegmentAudio(message["context_id"], audio))
+        elif message["type"] == "timestamps":
             context_id, words = message["context_id"], message.get("word_timestamps")
             aligned = self._aligned.setdefault(context_id, _Alignment())
-            return tts.SegmentWords(context_id, aligned.words(words) if words else [])
-        if message["type"] == "done":
+            self.report(tts.SegmentWords(context_id, aligned.words(words) if words else []))
+        elif message["type"] == "done":
             self._aligned.pop(message["context_id"], None)
-            return tts.SegmentDone(message["context_id"])
-        raise _error(message)
+            self.report(tts.SegmentDone(message["context_id"]))
+        elif message["type"] == "error":
+            raise _error(message)
+        else:
+            assert_never(message)
 
     def _speak(self, context_id: str, transcript: str, *, more: bool) -> _Speak:
         return {

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, replace
-from typing import Annotated, Literal, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode
 
 from aiobotocore.session import AioSession
@@ -29,7 +29,6 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     LanguageCode,
-    http,
     stt,
 )
 from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
@@ -292,7 +291,7 @@ _EVENT: TypeAdapter[_TranscriptEvent | _Exception] = TypeAdapter(_Event)
 _JSON = TypeAdapter(dict[str, JsonValue])
 
 
-class SpeechStream(stt.SocketStream[_Event, bytes]):
+class SpeechStream(stt.WebSocketStream[_Event, bytes]):
     frame_ms = 50
 
     def __init__(self, *, stt: STT, opts: STTOptions, conn_options: APIConnectOptions) -> None:
@@ -300,7 +299,7 @@ class SpeechStream(stt.SocketStream[_Event, bytes]):
         self._transcribe = stt
         self._opts = opts
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         credentials = await self._transcribe._signing_credentials()
         request = AWSRequest(
             method="GET",
@@ -309,21 +308,24 @@ class SpeechStream(stt.SocketStream[_Event, bytes]):
         )
         SigV4QueryAuth(credentials, "transcribe", self._opts.region, _URL_EXPIRES).add_auth(request)
         assert request.url is not None, "signing keeps the URL"
-        return http.SocketTarget(request.url, request_id_header="x-amzn-request-id")
+        return stt.WebSocketTarget(request.url, request_id_header="x-amzn-request-id")
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[bytes]:
-        if isinstance(item, rtc.AudioFrame):
-            return _eventstream.encode(_AUDIO_HEADERS, bytes(item.data))
-        if isinstance(item, http.EndOfInput):
-            # an empty audio event ends the stream: Transcribe sends its last results and closes
-            return _eventstream.encode(_AUDIO_HEADERS, b"")
-        return None
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | None:
+        match item:
+            case rtc.AudioFrame():
+                return _eventstream.encode(_AUDIO_HEADERS, bytes(item.data))
+            case stt.Flush():
+                return None
+            case stt.EndOfAudio():
+                # an empty audio event ends the stream: Transcribe sends its last results and
+                # closes
+                return _eventstream.encode(_AUDIO_HEADERS, b"")
+            case _:
+                assert_never(item)
 
     def decode(self, frame: bytes | str) -> _TranscriptEvent | _Exception | None:
         if isinstance(frame, str):
-            raise http.protocol_error(self, f"an unexpected text frame: {frame}")
+            raise stt.protocol_error(self, f"an unexpected text frame: {frame}")
         try:
             headers, payload = _eventstream.decode(frame)
             match headers.get(":message-type"), headers.get(":event-type"):
@@ -346,25 +348,26 @@ class SpeechStream(stt.SocketStream[_Event, bytes]):
                     return None
             return _EVENT.validate_python(body)
         except (ValueError, ValidationError) as e:
-            raise http.protocol_error(self, f"{e}; frame: {frame!r}") from e
+            raise stt.protocol_error(self, f"{e}; frame: {frame!r}") from e
 
-    def on_message(self, message: _TranscriptEvent | _Exception) -> list[stt.Transcript] | None:
+    def on_message(self, message: _TranscriptEvent | _Exception) -> None:
         if message["type"] == "exception":
             text = message.get("Message", "")
             if message["name"] == "BadRequestException" and text.startswith(_IDLE_TIMEOUT):
                 # no audio reached Transcribe for 15 s: a new stream waits for the next audio
                 self.reconnect("Transcribe idle timeout")
-                return None
+                return
             raise APIError(
                 f"Amazon Transcribe {message['name']}",
                 kind=_EXCEPTION_KINDS.get(message["name"], "server"),
                 detail=text or None,
             )
-        return [
-            self._transcript(result)
-            for result in message["Transcript"]["Results"]
-            if result["Alternatives"]
-        ]
+        elif message["type"] == "TranscriptEvent":
+            for result in message["Transcript"]["Results"]:
+                if result["Alternatives"]:
+                    self.report(self._transcript(result))
+        else:
+            assert_never(message)
 
     def _transcript(self, result: _Result) -> stt.Transcript:
         alternative = result["Alternatives"][0]

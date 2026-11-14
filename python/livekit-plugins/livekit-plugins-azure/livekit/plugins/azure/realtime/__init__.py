@@ -1,6 +1,6 @@
 """Azure Voice Live realtime support for LiveKit Agents."""
 
-from livekit.agents.llm._realtime import (
+from livekit.agents.llm.openai_protocol import (
     AudioTranscription,
     AzureDeepNoiseSuppression,
     AzureSemanticVad,
@@ -11,7 +11,7 @@ from livekit.agents.llm._realtime import (
     Tracing,
 )
 
-from .realtime_model import RealtimeModel, RealtimeSession
+from .realtime_model import RealtimeModel
 
 __all__ = [
     "AudioTranscription",
@@ -21,7 +21,6 @@ __all__ = [
     "AzureVoice",
     "AzureVoiceType",
     "RealtimeModel",
-    "RealtimeSession",
     "ServerVad",
     "Tracing",
 ]

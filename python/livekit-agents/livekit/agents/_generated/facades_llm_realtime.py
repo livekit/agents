@@ -28,10 +28,6 @@ class RealtimeModelFallbackAdapter(_core.RealtimeFallbackModel, RealtimeModel[Li
 
         def _core_failed(self, error: BaseException, recoverable: bool) -> None: ...
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        _bindings.refuse_overrides(cls, ("session",), "session.llm_node")
-
     def __init__(
         self,
         models: Sequence[RealtimeModel],

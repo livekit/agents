@@ -21,7 +21,7 @@ import os
 import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, Literal, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import quote
 
 from pydantic import BaseModel, Field
@@ -37,7 +37,7 @@ from livekit.agents import (
     http,
     stt,
 )
-from livekit.agents.stt import SpeechEventType, STTCapabilities
+from livekit.agents.stt import Keepalive, SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
@@ -479,7 +479,7 @@ class _AudioChunk(TypedDict):
     previous_text: NotRequired[str]
 
 
-class SpeechStream(stt.SocketStream[_Message, _AudioChunk]):
+class SpeechStream(stt.WebSocketStream[_Message, _AudioChunk]):
     """Streaming speech recognition using ElevenLabs Scribe v2 realtime API"""
 
     # the plugin ends the speech: on the empty commit, or on each commit with server VAD
@@ -499,7 +499,7 @@ class SpeechStream(stt.SocketStream[_Message, _AudioChunk]):
         self._last_partial_text = ""
         self.frame_ms = opts.audio_chunk_duration_ms
         # scribe_v2_realtime takes an empty chunk as its keepalive, not a ping
-        self.keepalive = http.Keepalive(10.0, self._chunk(""))
+        self.keepalive = Keepalive(every=10.0, frame=self._chunk(""))
 
     def update_options(
         self,
@@ -558,7 +558,7 @@ class SpeechStream(stt.SocketStream[_Message, _AudioChunk]):
             sample_rate=self._opts.sample_rate,
         )
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         """Establish WebSocket connection to ElevenLabs Scribe v2 API"""
         self._last_partial_text = ""
         commit_strategy = "vad" if self._server_vad is not None else "manual"
@@ -608,13 +608,13 @@ class SpeechStream(stt.SocketStream[_Message, _AudioChunk]):
 
         # Convert HTTPS URL to WSS
         base_url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
-        return http.SocketTarget(
+        return stt.WebSocketTarget(
             f"{base_url}/speech-to-text/realtime?{query_string}",
             headers={AUTHORIZATION_HEADER: self._opts.api_key},
             request_id_header=TRACE_ID_HEADER,
         )
 
-    def setup(self) -> http.Encoded[_AudioChunk]:
+    def setup(self) -> _AudioChunk | None:
         if not self._opts.previous_text:
             return None
         # must be the first input_audio_chunk on the connection
@@ -622,51 +622,61 @@ class SpeechStream(stt.SocketStream[_Message, _AudioChunk]):
         chunk["previous_text"] = self._opts.previous_text
         return chunk
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[_AudioChunk]:
-        if isinstance(item, rtc.AudioFrame):
-            return self._chunk(base64.b64encode(item.data).decode("utf-8"))
-        if isinstance(item, stt.RecognizeStream.Flush):
-            return self._chunk("", commit=True)
-        return None
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> _AudioChunk | None:
+        match item:
+            case rtc.AudioFrame():
+                return self._chunk(base64.b64encode(item.data).decode("utf-8"))
+            case stt.Flush():
+                return self._chunk("", commit=True)
+            case stt.EndOfAudio():
+                return None
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Message) -> stt.Report | list[stt.Report] | None:
+    def on_message(self, message: _Message) -> None:
         """Process incoming WebSocket messages from ElevenLabs"""
         if message["message_type"] == "session_started":
             logger.debug("Session started with ID: %s", message.get("session_id"))
-            return None
-        if message["message_type"] == "partial_transcript":
+        elif message["message_type"] == "partial_transcript":
             logger.debug("Received message type partial_transcript", extra={"lk.pii.data": message})
             text = message.get("text", "")
-            if not text or text == self._last_partial_text:
-                return None
-            self._last_partial_text = text
-            return self._transcript(message, final=False)
-        if message["message_type"] in (
-            "committed_transcript",
-            "committed_transcript_with_timestamps",
+            if text and text != self._last_partial_text:
+                self._last_partial_text = text
+                self.report(self._transcript(message, final=False))
+        elif (
+            message["message_type"] == "committed_transcript"
+            or message["message_type"] == "committed_transcript_with_timestamps"
         ):
-            return self._committed(message)
-        details = message.get("details")
-        raise APIError(
-            f"ElevenLabs STT {message['message_type']}",
-            kind=_ERROR_KINDS[message["message_type"]],
-            body=dict(message),
-            detail=f"{message.get('message', 'Unknown error')}"
-            + (f" - {details}" if details else ""),
-        )
+            self._committed(message)
+        elif (
+            message["message_type"] == "auth_error"
+            or message["message_type"] == "quota_exceeded"
+            or message["message_type"] == "transcriber_error"
+            or message["message_type"] == "input_error"
+            or message["message_type"] == "error"
+        ):
+            details = message.get("details")
+            raise APIError(
+                f"ElevenLabs STT {message['message_type']}",
+                kind=_ERROR_KINDS[message["message_type"]],
+                body=dict(message),
+                detail=f"{message.get('message', 'Unknown error')}"
+                + (f" - {details}" if details else ""),
+            )
+        else:
+            assert_never(message)
 
-    def _committed(self, message: _Transcript) -> stt.Report | list[stt.Report] | None:
+    def _committed(self, message: _Transcript) -> None:
         # 11labs sends every commit twice; _final_message_type picks the copy this session reads
         if message["message_type"] != self._final_message_type:
-            return None
+            return
         self._last_partial_text = ""
-        if not message.get("text"):
-            # the empty commit ends the speech its commits grouped
-            return stt.SpeechEnded()
-        final = self._transcript(message, final=True)
-        return [final, stt.SpeechEnded()] if self._server_vad is not None else final
+        if message.get("text"):
+            self.report(self._transcript(message, final=True))
+            if self._server_vad is None:
+                return
+        # the empty commit ends the speech its commits grouped; with server VAD, each commit does
+        self.report(stt.SpeechEnded())
 
     def _transcript(self, message: _Transcript, *, final: bool) -> stt.Transcript:
         words = message.get("words") or []

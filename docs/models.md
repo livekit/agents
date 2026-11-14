@@ -177,8 +177,8 @@ plugin's classes, not these bases.
 
 | Module | Names |
 | --- | --- |
-| `livekit.agents.llm` | `LLM`, `LLMStream`, `ChatChunk` (its `usage` is a `TokenUsage`), `ChoiceDelta`, `FunctionToolCall`, `LLMError`; realtime: `RealtimeModel`, `RealtimeSession`, `RealtimeCapabilities`, `RealtimeError`, `RealtimeModelError` and its events (`llm.realtime.EventTypes`: `InputSpeechStartedEvent`, `InputSpeechStoppedEvent`, `InputTranscriptionCompleted`, `GenerationCreatedEvent` with its `MessageGeneration`s, `RemoteItemAddedEvent`, `RealtimeSessionReconnectedEvent`); duplex (`llm.duplex`): `DuplexModel`, `DuplexSession`, `DuplexCapabilities`, `DuplexRealtimeAdapter` (a duplex model as a realtime model), `DuplexAudioFrame`, `DuplexOutputTranscriptDelta`, `DuplexInputGap`/`DuplexInputMute`, `AudioGate`/`FixedGate`; tools as providers read them: `Tool`, `ToolContext`, `ToolChoice`, `FunctionTool`, `RawFunctionTool`, `ProviderTool`, `is_function_tool`, `is_raw_function_tool` |
-| `livekit.agents.stt`, `livekit.agents.tts` | `STT`, `RecognizeStream`, `SpeechEvent` (`SpeechEventType`, `SpeechData` alternatives, `RecognitionUsage`), `STTCapabilities`, `STTError`; `TTS`, `ChunkedStream`, `SynthesizeStream`, `SynthesizedAudio`, `AudioEmitter`, `TTSCapabilities`, `TTSError`, `SentenceStreamPacer`, `split_expr_markup`; each module's `FallbackAdapter` and `StreamAdapter` |
+| `livekit.agents.llm` | `LLM`, `LLMStream`, `ChatChunk` (its `usage` is a `TokenUsage`), `ChoiceDelta`, `FunctionToolCall`, `LLMError`; realtime: `RealtimeModel`, `RealtimeSessionModel` (a plugin model whose `session()` opens a Python `RealtimeSession`), `RealtimeSession`, `RealtimeCapabilities`, `RealtimeError`, `RealtimeModelError` and its events (`llm.realtime.EventTypes`: `InputSpeechStartedEvent`, `InputSpeechStoppedEvent`, `InputTranscriptionCompleted`, `GenerationCreatedEvent` with its `MessageGeneration`s, `RemoteItemAddedEvent`, `RealtimeSessionReconnectedEvent`); duplex (`llm.duplex`): `DuplexModel`, `DuplexSession`, `DuplexCapabilities`, `DuplexRealtimeAdapter` (a duplex model as a realtime model), `DuplexAudioFrame`, `DuplexOutputTranscriptDelta`, `DuplexInputGap`/`DuplexInputMute`, `AudioGate`/`FixedGate`; tools as providers read them: `Tool`, `ToolContext`, `ToolChoice`, `FunctionTool`, `RawFunctionTool`, `ProviderTool`, `is_function_tool`, `is_raw_function_tool` |
+| `livekit.agents.stt`, `livekit.agents.tts` | `STT`, `RecognizeStream`, `SpeechEvent` (`SpeechEventType`, `SpeechData` alternatives, `RecognitionUsage`), `STTCapabilities`, `STTError`; `TTS`, `ChunkedStream`, `SynthesizeStream`, `SynthesizedAudio`, `AudioEmitter`, `TTSCapabilities`, `TTSError`, `SentenceStreamPacer`, `split_expr_markup`; each module's `FallbackAdapter` and `StreamAdapter`; a socket provider's `WebSocketStream` and its names (see [Provider sockets](#provider-sockets)) |
 | `livekit.agents` | `Plugin`, `VAD`, `VADStream`, `VADEvent`, `VADEventType`, `VADCapabilities`, `LanguageCode`, `get_job_context`, `NOT_GIVEN`/`NotGivenOr`/`NotGiven`, `DEFAULT_API_CONNECT_OPTIONS`, `create_api_error_from_http`, `redacted_cause`, `ProviderAttempts` (a stream's `_core_attempts`, see [provider attempts](#provider-attempts)) |
 | `livekit.agents.tokenize` | `SentenceTokenizer` and `WordTokenizer` (the built-in splitters; subclass one and override `tokenize` for a custom one), `SentenceStream`, `WordStream`, `TokenData`, `TokenSpan`, `BufferedSentenceStream`, `BufferedWordStream`, `split_words`, `replace_words` |
 | `livekit.agents.utils` | `ConnectionPool`, `shortuuid`, `is_given`, `log_exceptions`, `EventEmitter`; `aio`: `Chan`, `ChanClosed`, `ChanEmpty`, `Interval`, `interval`, `cancel_and_wait`; `media`: `AudioByteStream`, `AudioStreamDecoder`, `encode` with `EncodeOptions`/`ResizeOptions` |
@@ -202,7 +202,9 @@ Usage follows one rule: a figure the provider reports wins over one the framewor
 measures. An LLM's tokens come only from the provider, on `ChatChunk.usage`.
 
 A TTS plugin whose provider reports what it billed passes it on with
-`output_emitter.report_usage(usage, characters_count=...)`: tokens as a
+`output_emitter.report_usage(usage, characters_count=...)` (a WebSocket stream reports
+`tts.SegmentUsage(segment_id, usage=, characters_count=)` from `on_message` instead); a provider's
+request id reaches the audio with `output_emitter.provider_request_id(request_id)`: tokens as a
 `TokenUsage`, billed characters as a count, each report one provider request's
 share of the open segment. It rides on the segment's final `SynthesizedAudio`
 (`usage`, `characters_count`) into `TTSMetrics` and the usage totals, the billed
@@ -232,6 +234,54 @@ error's type and traceback without its message, which can carry credentials or
 provider data. The provider's own message goes on the error's `detail=`: the
 framework logs it once under `lk.pii.provider_detail` and never shows it in the
 error's text, so a plugin never logs it before raising.
+
+### Provider sockets
+
+The bases speak WebSocket only; a provider over gRPC, HTTP/2 or its own SDK writes its stream
+directly. A provider reached over a WebSocket subclasses its kind's socket base, sets a few class
+attributes and writes three methods: `connect` (a `WebSocketTarget`, called again at each
+connection), `encode` (one frame per input item: `bytes`, or an `Outbound` TypedDict sent as
+JSON; `None` only where an item sends nothing) and `on_message` (each received message, decoded
+once from the `Inbound` TypedDicts the class declares, reported through the kind's `report`; it
+returns nothing). `decode` overrides the decoding for a binary codec; `protocol_error` is the
+error for a frame that breaks the protocol. Plugins branch on items with `match` and
+`assert_never`, and on tagged messages with `if message["type"] == ...` and `assert_never`.
+
+The end of the input is the kind's end item, which `encode` turns into the provider's goodbye
+(`case stt.EndOfAudio(): return _Out(type="CloseStream")`). The base then waits for the
+provider's reply only when the connection sent input the kind says is owed an answer (STT: its
+transcripts; TTS: a segment still open), bounded by the read limit. The framework runs the socket
+in the core: the job's proxy, pings, the `keepalive=Keepalive(every=, frame=)` frame, the `setup`
+frame and `awaits_ready` (nothing else goes until `on_message` reports the kind's `Ready`, within
+the connect limit), close codes, `reconnect(reason)`, retries and the bounded close.
+`max_session_duration` replaces the connection at the first moment the stream has nothing in
+progress (STT: no open speech; TTS: no open segment; realtime: no reply being generated). A
+provider that ends its session (the kind's `SessionFinished`, a segment's `SegmentDone` with
+`connection_per_segment`, or a clean close after the stream asked for it) gets a new connection
+when more input comes. `send_now(message, first=False)` sends a control message on the open
+connection, ahead of input not yet sent; one sent while no connection is open is dropped unless
+sent from that connection's `connect`. The provider's request id, read from the handshake
+(`WebSocketTarget.request_id_header`) or reported, is the stream's `request_id`, and every error
+the stream raises carries it. `pacing=WebSocketPacing(min_interval=, real_time=)` spaces the
+frames (real time by the duration the kind computes); one instance on several streams paces them
+together. Each kind's module exports the shared names its plugins write: `WebSocketTarget`,
+`Keepalive`, `protocol_error`, and `WebSocketMultiplexer` and `WebSocketPacing` for STT and TTS.
+
+| Base | `encode` takes | `report` takes | Its own class attributes |
+| --- | --- | --- | --- |
+| `stt.WebSocketStream` | `rtc.AudioFrame` (re-chunked to `frame_ms`), `stt.Flush`, `stt.EndOfAudio` | `Transcript`, `SpeechStarted`, `SpeechEnded`, `stt.Ready`, `stt.SessionFinished` | `frame_ms`; `provider_vad`; `new_session_per_flush`: the provider ends its session at each flush, the audio after it waits for that, then goes on a new connection; `audio_idle` with `on_audio_idle()`: a frame sent once the audio stayed silent. A transcript naming no request id carries the stream's |
+| `tts.WebSocketStream` | `SegmentStart`, `SegmentText`, `SegmentEnd`, `tts.EndOfText` | `SegmentAudio`, `SegmentWords`, `SegmentUsage` (what the provider billed for the segment), `SegmentDone` (also from `encode`, for a provider that answers each text on its own), `tts.Ready`, `tts.ProviderRequestId` | `connection_per_segment`: each segment its own session, ended by its `SegmentDone` or the provider's close; `text_idle` with `on_text_idle()`; `mime_type` |
+| `llm.RealtimeWebSocketSession` | `rtc.AudioFrame` from `push_audio` (no end item) | `llm.realtime.Ready` (its events it emits itself) | `frame_ms`. A due replacement waits until no reply it requested or the provider started is still generating |
+
+`stt.WebSocketMultiplexer` and `tts.WebSocketMultiplexer` (one class) share sockets across streams:
+`connect`, `route` (a received message's context), `ready` (whether a message says the socket's
+session is ready, with `awaits_ready`), `setup`, `open_context`, `close_context` (the contexts a
+stream left early), `max_contexts`, `max_session_duration`, `prewarm()` and `invalidate()`. A
+message `route` decoded reaches its stream as decoded. A pool (`routed = False`) carries one
+stream a socket, hands it every frame, and gives the socket to the next stream only after one that
+ended cleanly; `max_sockets` caps the sockets (a stream waits for room within `pool_timeout`),
+`idle_timeout` closes a socket no stream holds, `keep_warm` opens again an idle socket the provider
+closed, and `context_keepalive` with `keep_context(id)` keeps each open context alive.
 
 ### HTTP and WebSockets
 
@@ -333,10 +383,11 @@ failure. `await pool.aclose()` releases the pool's connections.
 
 ## Realtime options over the OpenAI protocol
 
-`openai.realtime.RealtimeModel` and the providers speaking its protocol (`with_azure()`,
+`openai.realtime.RealtimeModel` (`OpenAIRealtimeModel` in `livekit.agents.llm.openai_protocol`)
+and the providers speaking its protocol (each a subclass of `OpenAIProtocolModel`) (`with_azure()`,
 `xai.realtime.RealtimeModel`, `azure.realtime.RealtimeModel` for Voice Live and
 `inference.RealtimeModel`) take their session options as records from
-`livekit.agents.llm._realtime`, re-exported by each plugin's `realtime` module; plain dicts
+`livekit.agents.llm.openai_protocol`, re-exported by each plugin's `realtime` module; plain dicts
 and OpenAI SDK objects are refused. An option not given is the provider's default; `None`
 turns it off. Every entry point takes every option its provider supports; an option a
 provider does not offer is absent from its model rather than ignored. `update_options()` takes

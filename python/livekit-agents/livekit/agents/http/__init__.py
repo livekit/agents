@@ -13,31 +13,9 @@ from .client import (
     retry_request,
 )
 from .server import AgentRoutes
-from .socket import (
-    DONE,
-    READY,
-    Done,
-    Encoded,
-    EndOfInput,
-    Keepalive,
-    Multiplexer,
-    Ready,
-    SocketProtocol,
-    protocol_error,
-)
 
 __all__ = [
     "AgentRoutes",
-    "DONE",
-    "Done",
-    "Encoded",
-    "EndOfInput",
-    "Keepalive",
-    "Multiplexer",
-    "READY",
-    "Ready",
-    "SocketProtocol",
-    "protocol_error",
     "FormData",
     "HttpResponse",
     "HttpSession",

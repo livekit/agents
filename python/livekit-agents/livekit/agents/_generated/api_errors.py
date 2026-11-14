@@ -16,15 +16,16 @@ class AssignmentTimeoutError(Exception):
 
 
 class APIError(Exception):
-    "An API request failed: `kind` says what failed and decides `retryable`. `detail` holds the provider's own message, logged once under an `lk.pii.*` key and never shown in the text."
+    "An API request failed: `kind` says what failed and decides `retryable`. `detail` holds the provider's own message, logged once under an `lk.pii.*` key and never shown in the text. `request_id` is the provider's id for the failed request, when known."
     __module__ = "livekit.agents._bindings"
     message: str
     kind: ErrorKind
     body: object | None
     detail: str | None
+    request_id: str | None
     retryable: bool = False
 
-    def __init__(self, message: str, *, kind: ErrorKind, body: object | None = None, detail: str | None = None) -> None:
+    def __init__(self, message: str, *, kind: ErrorKind, body: object | None = None, detail: str | None = None, request_id: str | None = None) -> None:
         from livekit.agents._core import error_kind_retryable
 
         retryable = error_kind_retryable(kind)
@@ -33,6 +34,7 @@ class APIError(Exception):
         self.kind = kind
         self.body = body
         self.detail = detail
+        self.request_id = request_id
         self.retryable = retryable
 
     def __reduce__(self) -> tuple[object, ...]:
@@ -49,16 +51,14 @@ class APIStatusError(APIError):
     "An API response has an error status code; its kind is the status's unless the provider's meaning says otherwise. `retry_after` is the seconds the provider asked to wait."
     __module__ = "livekit.agents._bindings"
     status_code: int
-    request_id: str | None
     retry_after: float | None
 
     def __init__(self, message: str, *, status_code: int, kind: ErrorKind | None = None, request_id: str | None = None, body: object | None = None, detail: str | None = None, retry_after: float | None = None) -> None:
         from livekit.agents._core import error_kind_for_status
 
         kind = error_kind_for_status(status_code, kind)
-        super().__init__(message, kind=kind, body=body, detail=detail)
+        super().__init__(message, kind=kind, body=body, detail=detail, request_id=request_id)
         self.status_code = status_code
-        self.request_id = request_id
         self.retry_after = retry_after
 
     def __str__(self) -> str:
@@ -74,8 +74,8 @@ class APIConnectionError(APIError):
     "An API request failed due to a connection error, or the connection was closed for the reason `kind` names."
     __module__ = "livekit.agents._bindings"
 
-    def __init__(self, message: str = "Connection error.", *, kind: ErrorKind = "connection", detail: str | None = None) -> None:
-        super().__init__(message, kind=kind, body=None, detail=detail)
+    def __init__(self, message: str = "Connection error.", *, kind: ErrorKind = "connection", detail: str | None = None, request_id: str | None = None) -> None:
+        super().__init__(message, kind=kind, body=None, detail=detail, request_id=request_id)
 
     def __str__(self) -> str:
         from livekit.agents._bindings import _connection_error_str
@@ -88,8 +88,8 @@ class APITimeoutError(APIConnectionError):
     __module__ = "livekit.agents._bindings"
     timeout: Timeout | None
 
-    def __init__(self, message: str = "Request timed out.", *, timeout: Timeout | None = None, detail: str | None = None) -> None:
-        super().__init__(message, kind="timeout", detail=detail)
+    def __init__(self, message: str = "Request timed out.", *, timeout: Timeout | None = None, detail: str | None = None, request_id: str | None = None) -> None:
+        super().__init__(message, kind="timeout", detail=detail, request_id=request_id)
         self.timeout = timeout
 
 

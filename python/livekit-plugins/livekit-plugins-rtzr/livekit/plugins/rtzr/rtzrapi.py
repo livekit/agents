@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
-from livekit.agents import APIConnectOptions, APIError, http
+from livekit.agents import APIConnectOptions, APIError, http, stt
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 logger = logging.getLogger(__name__)
@@ -169,11 +169,11 @@ class RTZROpenAPIClient:
         config: dict[str, str],
         *,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> http.SocketTarget:
+    ) -> stt.WebSocketTarget:
         """Where the streaming WebSocket connects, with a fresh token."""
         query_string = "&".join(f"{k}={v}" for k, v in config.items())
         token = await self.get_token(conn_options=conn_options)
-        return http.SocketTarget(
+        return stt.WebSocketTarget(
             f"{self._ws_base}/v1/transcribe:streaming?{query_string}",
             headers={"Authorization": f"bearer {token}"},
         )

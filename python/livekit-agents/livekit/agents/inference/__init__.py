@@ -24,7 +24,7 @@ from ..version import __version__
 
 if TYPE_CHECKING:
     from .avatar import AvatarSession, LemonSliceOptions
-    from .realtime import RealtimeModel, RealtimeSession
+    from .realtime import RealtimeModel
 
 
 def get_default_inference_url() -> str:
@@ -218,10 +218,10 @@ def __getattr__(name: str) -> object:
         from . import avatar
 
         return avatar.AvatarSession if name == "AvatarSession" else avatar.LemonSliceOptions
-    if name in ("RealtimeModel", "RealtimeSession"):
+    if name == "RealtimeModel":
         from . import realtime
 
-        return realtime.RealtimeModel if name == "RealtimeModel" else realtime.RealtimeSession
+        return realtime.RealtimeModel
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -241,7 +241,6 @@ __all__ = [
     "TTSModels",
     "LLMModels",
     "RealtimeModel",
-    "RealtimeSession",
     "RealtimeModels",
     "OpenAIRealtimeModels",
     "XAIRealtimeModels",

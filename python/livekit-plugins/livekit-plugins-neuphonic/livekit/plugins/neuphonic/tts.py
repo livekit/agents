@@ -20,6 +20,7 @@ import os
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from typing import assert_never
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
@@ -340,7 +341,7 @@ def _parse_sse_message(message: str) -> _Response | None:
     return message_dict
 
 
-class _Mux(http.Multiplexer[_Response, _Speak]):
+class _Mux(tts.WebSocketMultiplexer[_Response, _Speak]):
     """One NeuPhonic socket carries every stream's segments, each its own context."""
 
     max_session_duration = 300
@@ -348,7 +349,7 @@ class _Mux(http.Multiplexer[_Response, _Speak]):
     def __init__(self, opts: _TTSOptions) -> None:
         self._opts = opts
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
         opts = self._opts
         lang = opts.lang_code.language
         params = {
@@ -361,7 +362,9 @@ class _Mux(http.Multiplexer[_Response, _Speak]):
         if opts.jwt_token:
             params["jwt_token"] = opts.jwt_token
         headers = {API_AUTH_HEADER: opts.api_key} if opts.api_key else {}
-        return http.SocketTarget(opts.get_ws_url(f"/speak/{lang}"), headers=headers, params=params)
+        return tts.WebSocketTarget(
+            opts.get_ws_url(f"/speak/{lang}"), headers=headers, params=params
+        )
 
     def route(self, message: _Response) -> str | None:
         if message.get("type") == "error":
@@ -369,7 +372,7 @@ class _Mux(http.Multiplexer[_Response, _Speak]):
         return (message.get("data") or {}).get("context_id")
 
 
-class SynthesizeStream(tts.SocketStream[_Response, _Speak]):
+class SynthesizeStream(tts.WebSocketStream[_Response, _Speak]):
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions, opts: _TTSOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self.multiplexer = tts._mux
@@ -379,32 +382,36 @@ class SynthesizeStream(tts.SocketStream[_Response, _Speak]):
         self._owed: dict[str, int] = {}
         self._ended: set[str] = set()
 
-    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> _Speak | None:
-        if isinstance(item, tts.SegmentText):
-            self._owed[item.segment_id] = self._owed.get(item.segment_id, 0) + 1
-            return {"text": f"{item.chunk.text}<STOP>", "context_id": item.segment_id}
-        if isinstance(item, tts.SegmentEnd):
-            self._ended.add(item.segment_id)
-            if not self._owed.get(item.segment_id):
-                # every stop already came: nothing more will
-                self._socket_deliver(self._done(item.segment_id))
-        return None
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Speak | None:
+        match item:
+            case tts.SegmentText():
+                self._owed[item.segment_id] = self._owed.get(item.segment_id, 0) + 1
+                return {"text": f"{item.chunk.text}<STOP>", "context_id": item.segment_id}
+            case tts.SegmentEnd():
+                self._ended.add(item.segment_id)
+                if not self._owed.get(item.segment_id):
+                    # every stop already came: nothing more will
+                    self._forget(item.segment_id)
+                    self.report(tts.SegmentDone(item.segment_id))
+                return None
+            case tts.SegmentStart() | tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Response) -> list[tts.SegmentOutput]:
+    def on_message(self, message: _Response) -> None:
         data = message.get("data") or {}
         context_id = data.get("context_id")
         if context_id is None:
-            return []
-        outputs: list[tts.SegmentOutput] = []
+            return
         if audio := data.get("audio"):
-            outputs.append(tts.SegmentAudio(context_id, _decode_audio(audio)))
+            self.report(tts.SegmentAudio(context_id, _decode_audio(audio)))
         if data.get("stop"):
             self._owed[context_id] = self._owed.get(context_id, 0) - 1
             if self._owed[context_id] <= 0 and context_id in self._ended:
-                outputs.append(self._done(context_id))
-        return outputs
+                self._forget(context_id)
+                self.report(tts.SegmentDone(context_id))
 
-    def _done(self, context_id: str) -> tts.SegmentDone:
+    def _forget(self, context_id: str) -> None:
         self._owed.pop(context_id, None)
         self._ended.discard(context_id)
-        return tts.SegmentDone(context_id)

@@ -497,6 +497,15 @@ async def test_gemini_stt_emits_the_finalized_transcript_on_arrival(gemini_live:
     stream = GeminiSTT(api_key="test", http_options=gemini_live.http_options).stream()
     stream.push_frame(rtc.AudioFrame(bytes(320), 16000, 1, 160))
     stream.end_input()
+    # Gemini answers the end of the audio with the last turn: a turn complete before it is one
+    # mid-stream, and the session goes on
+    await until(
+        lambda: (
+            bool(gemini_live.received)
+            and any("audioStreamEnd" in m for m in gemini_live.sent("realtimeInput"))
+        ),
+        "the audio ends",
+    )
 
     await gemini_live.send(serverContent={"interimInputTranscription": {"text": "Greetings."}})
     await gemini_live.send(

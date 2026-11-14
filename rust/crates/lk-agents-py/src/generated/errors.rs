@@ -128,6 +128,14 @@ impl crate::py_errors::HostException for ::lk_agents_abi::errors::ApiError {
                                     ::std::clone::Clone::clone(&self.error_kind),
                                 )?,
                             )?;
+                            ::pyo3::types::PyDictMethods::set_item(
+                                kwargs,
+                                "request_id",
+                                match ::std::clone::Clone::clone(&self.request_id) {
+                                    None => py.None().into_bound(py),
+                                    Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+                                },
+                            )?;
                             ::std::result::Result::Ok(())
                         },
                     )
@@ -217,6 +225,14 @@ impl crate::py_errors::HostException for ::lk_agents_abi::errors::ApiError {
                                     ::std::clone::Clone::clone(&self.error_kind),
                                 )?,
                             )?;
+                            ::pyo3::types::PyDictMethods::set_item(
+                                kwargs,
+                                "request_id",
+                                match ::std::clone::Clone::clone(&self.request_id) {
+                                    None => py.None().into_bound(py),
+                                    Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+                                },
+                            )?;
                             ::std::result::Result::Ok(())
                         },
                     )
@@ -236,6 +252,14 @@ impl crate::py_errors::HostException for ::lk_agents_abi::errors::ApiError {
                                     Some(x) => {
                                         crate::generated::records::types::timeout_to_py(py, x)?
                                     }
+                                },
+                            )?;
+                            ::pyo3::types::PyDictMethods::set_item(
+                                kwargs,
+                                "request_id",
+                                match ::std::clone::Clone::clone(&self.request_id) {
+                                    None => py.None().into_bound(py),
+                                    Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
                                 },
                             )?;
                             ::std::result::Result::Ok(())

@@ -118,6 +118,11 @@ impl ApiConnectOptions {
             && self.connect_timeout.is_some_and(|limit| lasted_seconds > limit)
     }
 
+    /// When a wait for pool capacity begun at `start` runs out of `pool_timeout`.
+    pub fn pool_deadline(&self, start: Ts) -> Option<Ts> {
+        after(start, self.pool_timeout)
+    }
+
     /// When a connection opened at `start` runs out of `connect_timeout`.
     pub fn connect_deadline(&self, start: Ts) -> Option<Ts> {
         after(start, self.connect_timeout)

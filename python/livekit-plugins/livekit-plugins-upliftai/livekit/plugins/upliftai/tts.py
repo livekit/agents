@@ -9,7 +9,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal, NotRequired, TypedDict
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, assert_never
 
 from pydantic import Field, TypeAdapter
 
@@ -17,7 +17,6 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
-    http,
     tokenize,
     tts,
 )
@@ -253,7 +252,7 @@ _MESSAGE: TypeAdapter[_Audio | _AudioEnd | _Error] = TypeAdapter(_Message)
 _Inbound = _Ping | _Connected | _Refused | _Disconnected | _Audio | _AudioEnd | _Error
 
 
-class SynthesizeStream(tts.SocketStream[_Inbound, str]):
+class SynthesizeStream(tts.WebSocketStream[_Inbound, str]):
     """Each segment is one synthesis request, its id the segment's."""
 
     awaits_ready = True
@@ -264,33 +263,39 @@ class SynthesizeStream(tts.SocketStream[_Inbound, str]):
         self.mime_type = get_content_type_from_output_format(opts.voice_settings.output_format)
         self._text: dict[str, list[str]] = {}
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
         url = self._opts.base_url.replace("http", "ws", 1).rstrip("/")
-        return http.SocketTarget(f"{url}/socket.io/", params={"EIO": "4", "transport": "websocket"})
+        return tts.WebSocketTarget(
+            f"{url}/socket.io/", params={"EIO": "4", "transport": "websocket"}
+        )
 
     def setup(self) -> str:
         return _event(_SIO_CONNECT, {"token": self._opts.api_key})
 
-    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> str | None:
-        if isinstance(item, tts.SegmentText):
-            self._text.setdefault(item.segment_id, []).append(item.chunk.text)
-            return None
-        if not isinstance(item, tts.SegmentEnd):
-            return None
-        request: dict[str, object] = {
-            "type": "synthesize",
-            "requestId": item.segment_id,
-            "text": " ".join(self._text.pop(item.segment_id, [])),
-            "voiceId": self._opts.voice_settings.voice_id,
-            "outputFormat": self._opts.voice_settings.output_format,
-        }
-        if self._opts.phrase_replacement_config_id:
-            request["phraseReplacementConfigId"] = self._opts.phrase_replacement_config_id
-        return _event(_SIO_EVENT, ["synthesize", request])
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> str | None:
+        match item:
+            case tts.SegmentText():
+                self._text.setdefault(item.segment_id, []).append(item.chunk.text)
+                return None
+            case tts.SegmentEnd():
+                request: dict[str, object] = {
+                    "type": "synthesize",
+                    "requestId": item.segment_id,
+                    "text": " ".join(self._text.pop(item.segment_id, [])),
+                    "voiceId": self._opts.voice_settings.voice_id,
+                    "outputFormat": self._opts.voice_settings.output_format,
+                }
+                if self._opts.phrase_replacement_config_id:
+                    request["phraseReplacementConfigId"] = self._opts.phrase_replacement_config_id
+                return _event(_SIO_EVENT, ["synthesize", request])
+            case tts.SegmentStart() | tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
     def decode(self, frame: bytes | str) -> _Inbound | None:
         if not isinstance(frame, str):
-            raise http.protocol_error(self, "a binary frame")
+            raise tts.protocol_error(self, "a binary frame")
         if frame == _EIO_PING:
             return {"type": "ping"}
         prefix = f"{_EIO_MESSAGE}{{}}{WEBSOCKET_NAMESPACE},"
@@ -311,14 +316,13 @@ class SynthesizeStream(tts.SocketStream[_Inbound, str]):
                 return None
             return _MESSAGE.validate_python(message)
         except (ValueError, TypeError, AttributeError) as e:
-            raise http.protocol_error(self, f"{e}; frame: {frame}") from e
+            raise tts.protocol_error(self, f"{e}; frame: {frame}") from e
 
-    # Any: a segment's output, or READY once the namespace connected
-    def on_message(self, message: _Inbound) -> Any:
+    def on_message(self, message: _Inbound) -> None:
         if message["type"] == "ping":
-            self.send_command(_EIO_PONG)
+            self.send_now(_EIO_PONG)
         elif message["type"] == "connected":
-            return http.READY
+            self.report(tts.Ready())
         elif message["type"] == "refused":
             raise APIError(
                 "Uplift refused the connection", kind="invalid_request", body=message["data"]
@@ -326,17 +330,16 @@ class SynthesizeStream(tts.SocketStream[_Inbound, str]):
         elif message["type"] == "disconnected":
             raise APIConnectionError("Uplift disconnected before synthesis completed")
         elif message["type"] == "audio":
-            audio = message.get("audio")
-            return (
-                tts.SegmentAudio(message["requestId"], base64.b64decode(audio)) if audio else None
-            )
+            if audio := message.get("audio"):
+                self.report(tts.SegmentAudio(message["requestId"], base64.b64decode(audio)))
         elif message["type"] == "audio_end":
-            return tts.SegmentDone(message["requestId"])
-        else:
+            self.report(tts.SegmentDone(message["requestId"]))
+        elif message["type"] == "error":
             raise APIError(
                 "Uplift rejected the synthesis request", kind="invalid_request", body=message
             )
-        return None
+        else:
+            assert_never(message)
 
 
 def _event(packet: str, data: object) -> str:

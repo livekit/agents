@@ -11,8 +11,8 @@ use crate::agent_session::options::ConfigLayer;
 use crate::agent_session::{Answer, CommitSuperseded, RequestId, TurnCommand, VoiceDriver};
 use crate::audio::{AudioChannel, Tagged};
 use crate::audio_recognition::{
-    CommitInputs, CommitSpeech, EndOfTurnInfo, PendingCommit, Phase, TurnEdits,
-    UserTurnCommitVerdict, decide_commit,
+    CommitInputs, CommitSpeech, EndOfTurnInfo, PendingCommit, Phase, TurnEdits, TurnId,
+    UserTurnCommitVerdict, Utterance, decide_commit,
 };
 use crate::generation::ReplySource;
 use crate::telemetry;
@@ -34,6 +34,27 @@ pub(crate) struct PendingTurn {
     pub(crate) issued_at: Ts,
     /// `None` when no host runs hooks.
     pub(crate) hook: Option<crate::agent_session::HookId>,
+}
+
+/// What a committed turn took of an interim, by identity: its utterance's final replaces exactly
+/// these words, in the turn's words and the room segment that showed them.
+pub(crate) struct PromotedWords {
+    utterance: Utterance,
+    turn: TurnId,
+    segment: String,
+    span: std::ops::Range<usize>,
+    words: String,
+}
+
+impl PromotedWords {
+    /// `text` in place of the words at their span, when `said` still has them there.
+    fn replace(&self, said: &mut String, text: &str) -> bool {
+        if said.get(self.span.clone()) != Some(self.words.as_str()) {
+            return false;
+        }
+        said.replace_range(self.span.clone(), text);
+        true
+    }
 }
 
 impl PendingTurn {
@@ -184,7 +205,10 @@ impl VoiceDriver {
         self.record_effect(crate::agent_session::effects::VoiceEffect::Tap(
             crate::agent_session::SystemTap::Stt(ev.clone()),
         ));
-        let eff = self.activity.audio_recognition.on_stt_event(now, &ev);
+        if self.hear_promoted(now, stream, &ev) {
+            return;
+        }
+        let eff = self.activity.audio_recognition.on_stt_event(now, stream, &ev);
         self.apply_recognition_effects(eff);
         // A waiting commit follows this final.
         if ev.kind == SpeechEventType::FinalTranscript
@@ -226,6 +250,103 @@ impl VoiceDriver {
             | SpeechEventType::RecognitionUsage
             | SpeechEventType::EndOfSpeech => {}
         }
+    }
+
+    /// A transcript of the utterance whose interim the last turn committed with: those words are
+    /// that turn's, so it is not heard as the next one's, and its final corrects them. An empty
+    /// final takes back nothing a turn already took. Whether it was taken.
+    fn hear_promoted(
+        &mut self,
+        now: Ts,
+        stream: lk_agents_abi::resources::ResourceId,
+        ev: &SpeechEvent,
+    ) -> bool {
+        let transcript = matches!(
+            ev.kind,
+            SpeechEventType::InterimTranscript
+                | SpeechEventType::PreflightTranscript
+                | SpeechEventType::FinalTranscript
+        );
+        let Some(promoted) = &self.activity.promoted else { return false };
+        if !transcript || promoted.utterance.stream != stream {
+            return false;
+        }
+        // A newer utterance: the promoted one's final can no longer come.
+        if ev.utterance != Some(promoted.utterance.n) {
+            self.activity.promoted = None;
+            return false;
+        }
+        if ev.kind == SpeechEventType::FinalTranscript
+            && let Some(promoted) = self.activity.promoted.take()
+        {
+            let text = ev.best_alternative().map_or("", |a| a.text.trim());
+            if !text.is_empty() {
+                self.correct_user_words(now, &promoted, text);
+            }
+        }
+        true
+    }
+
+    /// The final of words a turn committed as an interim: they read `text` where they are, never
+    /// as a new turn. A turn still deciding carries it; a committed one's message is rewritten,
+    /// and its reply, while none of it was heard, is made again from the corrected record. A
+    /// reply partly heard stays: the next turn reads the corrected record.
+    fn correct_user_words(&mut self, now: Ts, promoted: &PromotedWords, text: &str) {
+        let turn = promoted.turn;
+        let a = &mut self.activity;
+        let deciding = (a.pending_turn.iter_mut().map(|t| &mut t.info))
+            .chain(a.waiting_turns.iter_mut().map(|t| &mut t.info))
+            .find(|info| info.turn_id == turn);
+        let mut item_id = None;
+        if let Some(info) = deciding {
+            promoted.replace(&mut info.new_transcript, text);
+        } else if let Some(mut message) = self.session.chat_ctx.user_turn_message(turn).cloned() {
+            let corrected = message.content.iter_mut().any(|part| match part {
+                lk_agents_abi::ChatContent::Text(said) => promoted.replace(said, text),
+                _ => false,
+            });
+            if corrected {
+                item_id = Some(message.id.clone());
+                // The thread holds the words it replaced until a save carries them: a reload
+                // keeps these.
+                self.session.chat_ctx.edited(&message.id);
+                self.replace_items([lk_agents_abi::ChatItem::Message(message)]);
+            }
+        }
+        self.publish_event(crate::events::SessionEvent::UserInputCorrected {
+            segment: promoted.segment.clone(),
+            item_id: item_id.clone(),
+            text: text.to_owned(),
+        });
+        // A realtime model answers what it heard, not the recogniser's words.
+        if item_id.is_some()
+            && self.activity.last_turn == Some(turn)
+            && self.activity.realtime().is_none()
+        {
+            self.reply_again_unheard(now, turn);
+        }
+    }
+
+    /// The newest reply, while none of it was heard, is cancelled and made again from the record.
+    fn reply_again_unheard(&mut self, now: Ts, turn: TurnId) {
+        let scheduling = &self.activity.speech_scheduler;
+        let reply = scheduling.speeches().rev().find_map(|(id, handle)| {
+            // A preemptive generation not yet adopted guesses a newer turn.
+            let reply =
+                matches!(scheduling.kind(id)?, SpeechKind::TurnReply | SpeechKind::Preemptive)
+                    && scheduling.status(id)? != Status::Preemptive;
+            (reply && !handle.interrupted() && !handle.done()).then_some(id)
+        });
+        let Some(reply) = reply.filter(|id| !self.activity.spoke.contains(id)) else { return };
+        self.force_interrupt_speech(now, reply, InterruptCause::Superseded);
+        let interruptible = self.session.config.effective.turn.interruption.enabled();
+        self.start_speech(
+            now,
+            SpeechSpec {
+                turn: Some(turn),
+                ..SpeechSpec::new(SpeechKind::TurnReply, ReplySource::Llm, interruptible)
+            },
+        );
     }
 
     /// `StartOfSpeech` pauses playout at once; only `InferenceDone` may stop the agent, gated on
@@ -388,6 +509,16 @@ impl VoiceDriver {
     }
 
     pub(crate) fn on_end_of_turn(&mut self, now: Ts, mut info: EndOfTurnInfo) {
+        // The interim this turn committed with, published just before as the last final.
+        self.activity.promoted = info.promoted.as_ref().and_then(|p| {
+            Some(PromotedWords {
+                utterance: p.utterance,
+                turn: info.turn_id,
+                segment: self.activity.last_final_segment.clone()?,
+                span: p.span.clone(),
+                words: info.new_transcript.get(p.span.clone())?.to_owned(),
+            })
+        });
         // The commit resets recognition's anchors: a realtime reply measures from this speech.
         let last = self.unanswered_user_speech();
         if let Some(rt) = self.activity.realtime_activity_mut() {

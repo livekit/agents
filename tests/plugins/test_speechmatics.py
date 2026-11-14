@@ -148,7 +148,8 @@ async def test_segments_become_transcripts_with_provider_timing(
     )
     stream.start_time_offset = 2.0
 
-    events = await transcribe(stream)
+    # audio went out: the stream says goodbye and reads the provider's answers to the end
+    events = await transcribe(stream, seconds=0.2)
 
     interim, final = [event for event in events if event.alternatives]
     assert final.type == stt.SpeechEventType.FINAL_TRANSCRIPT

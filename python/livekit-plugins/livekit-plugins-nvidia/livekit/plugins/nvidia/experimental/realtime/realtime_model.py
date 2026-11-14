@@ -10,13 +10,14 @@ import asyncio
 import os
 import time
 from dataclasses import dataclass, field, replace
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, assert_never
 
 import numpy as np
 import sphn
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, http, llm, utils
+from livekit.agents import APIConnectOptions, llm, utils
+from livekit.agents.llm import realtime as llm_realtime
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 
@@ -65,7 +66,7 @@ class _ResponseGeneration:
     output_text: str = ""
 
 
-class RealtimeModel(llm.RealtimeModel):
+class RealtimeModel(llm.RealtimeSessionModel):
     """Real-time language model using NVIDIA PersonaPlex.
 
     Connects to a PersonaPlex WebSocket server for full-duplex
@@ -165,7 +166,7 @@ class Text(TypedDict):
 ServerMessage = Handshake | Audio | Text
 
 
-class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, bytes]):
+class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, bytes]):
     """A full-duplex PersonaPlex conversation: Opus audio both ways, text tokens from the server.
     The persona is fixed per connection, so new instructions open a new one."""
 
@@ -190,7 +191,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, bytes]):
         self._opus_reader = sphn.OpusStreamReader(SAMPLE_RATE)
         self._connect_started = 0.0
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> llm_realtime.WebSocketTarget:
         self._connect_started = time.perf_counter()
         self._opus_writer = sphn.OpusStreamWriter(SAMPLE_RATE)
         self._opus_reader = sphn.OpusStreamReader(SAMPLE_RATE)
@@ -199,11 +200,13 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, bytes]):
         if self._opts.seed is not None:
             params["seed"] = str(self._opts.seed)
         scheme = "wss" if self._opts.use_ssl else "ws"
-        return http.SocketTarget(f"{scheme}://{self._opts.base_url}/api/chat", params=params)
+        return llm_realtime.WebSocketTarget(
+            f"{scheme}://{self._opts.base_url}/api/chat", params=params
+        )
 
     def decode(self, frame: bytes | str) -> ServerMessage | None:
         if isinstance(frame, str):
-            raise http.protocol_error(self, f"a text frame: {frame}")
+            raise llm_realtime.protocol_error(self, f"a text frame: {frame}")
         if not frame:
             return None
         kind, payload = frame[0], frame[1:]
@@ -218,11 +221,13 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, bytes]):
             try:
                 return Text(type="text", text=payload.decode("utf-8"))
             except UnicodeDecodeError as e:
-                raise http.protocol_error(self, f"a text token that is not UTF-8: {e}") from e
+                raise llm_realtime.protocol_error(
+                    self, f"a text token that is not UTF-8: {e}"
+                ) from e
         return None
 
-    def encode(self, item: rtc.AudioFrame | http.EndOfInput) -> http.Encoded[bytes]:
-        if not isinstance(item, rtc.AudioFrame) or not item.data:
+    def encode(self, item: rtc.AudioFrame) -> bytes | None:
+        if not item.data:
             return None
         pcm = np.frombuffer(item.data, dtype=np.int16).astype(np.float32) / 32768.0
         opus = self._opus_writer.append_pcm(pcm)
@@ -230,17 +235,19 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, bytes]):
             return None
         return bytes([MSG_AUDIO]) + opus
 
-    def on_message(self, message: ServerMessage) -> http.Ready | None:
+    def on_message(self, message: ServerMessage) -> None:
         if message["type"] == "handshake":
             self._report_connection_acquired(time.perf_counter() - self._connect_started)
-            return http.READY
-        if message["type"] == "audio":
+            self.report(llm_realtime.Ready())
+        elif message["type"] == "audio":
             self._handle_audio_data(message["opus"])
-        elif message["type"] == "text" and message["text"]:
-            gen = self._active_generation()
-            gen.text_ch.send_nowait(message["text"])
-            gen.output_text += message["text"]
-        return None
+        elif message["type"] == "text":
+            if message["text"]:
+                gen = self._active_generation()
+                gen.text_ch.send_nowait(message["text"])
+                gen.output_text += message["text"]
+        else:
+            assert_never(message)
 
     @property
     def chat_ctx(self) -> llm.ChatContext:

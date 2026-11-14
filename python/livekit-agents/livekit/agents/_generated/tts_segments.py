@@ -15,6 +15,7 @@ from typing import TypeAlias
 
 from .transcript import TranscriptChunk
 from .tts import SpeechChunk
+from .usage import TokenUsage
 
 
 @dataclass
@@ -62,12 +63,23 @@ class SegmentDone:
     segment_id: str
 
 
+@dataclass
+class SegmentUsage:
+    """What the provider billed for a segment: its tokens, its characters, or both. Each report is
+    one provider request's share; it rides on the segment's final audio into its metrics.
+    """
+
+    segment_id: str
+    usage: TokenUsage | None = None
+    characters_count: int | None = None
+
+
 SegmentInput: TypeAlias = SegmentStart | SegmentText | SegmentEnd
 """What a socket TTS stream's `encode` receives for its segments."""
 
 
-SegmentOutput: TypeAlias = SegmentAudio | SegmentWords | SegmentDone
-"""What a socket TTS stream's `on_message` returns for a segment."""
+SegmentOutput: TypeAlias = SegmentAudio | SegmentWords | SegmentUsage | SegmentDone
+"""What a WebSocket TTS stream's `on_message` returns for a segment."""
 
 
 SegmentStart.__annotations__ = get_annotations(SegmentStart, eval_str=True)
@@ -82,3 +94,5 @@ SegmentWords.__annotations__ = get_annotations(SegmentWords, eval_str=True)
 SegmentWords.__module__ = "livekit.agents.tts"
 SegmentDone.__annotations__ = get_annotations(SegmentDone, eval_str=True)
 SegmentDone.__module__ = "livekit.agents.tts"
+SegmentUsage.__annotations__ = get_annotations(SegmentUsage, eval_str=True)
+SegmentUsage.__module__ = "livekit.agents.tts"

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from .. import _bindings, _core
 from ..types import NOT_GIVEN
-from .realtime import RealtimeModel as BaseRealtimeModel
+from .realtime import RealtimeModel
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -32,19 +32,15 @@ if TYPE_CHECKING:
     from .realtime_wire import Modalities
 
 
-class RealtimeModel(_core.OpenAIRealtimeModel, BaseRealtimeModel):
-    """`RealtimeModel` over the OpenAI Realtime protocol: OpenAI, Azure OpenAI and every provider
-    speaking it. A provider subclass sets `_dialect`, `_provider_label` (the name logs and metrics
-    give it) and, for LiveKit Inference, `_gateway`.
+class OpenAIProtocolModel(_core.OpenAIRealtimeModel, RealtimeModel):
+    """A realtime model over the OpenAI Realtime protocol, whose sessions run in the core: OpenAI,
+    Azure OpenAI and every provider speaking it. A provider subclass sets `_dialect`,
+    `_provider_label` (the name logs and metrics give it) and, for LiveKit Inference, `_gateway`.
     """
 
     _dialect: RealtimeProvider | None = None
     _provider_label: str | None = None
     _gateway: InferenceGateway | None = None
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        _bindings.refuse_overrides(cls, ("session",), "session.llm_node")
 
     def __init__(
         self,
@@ -124,7 +120,7 @@ class RealtimeModel(_core.OpenAIRealtimeModel, BaseRealtimeModel):
             label=self._provider_label,
             gateway=self._gateway,
         )
-        BaseRealtimeModel.__init__(self, capabilities=self.capabilities)
+        RealtimeModel.__init__(self, capabilities=self.capabilities)
 
     def _update_options(
         self,

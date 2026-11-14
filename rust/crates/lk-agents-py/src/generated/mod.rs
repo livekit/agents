@@ -173,8 +173,9 @@ pub trait Implementations: 'static {
     type ExpFilter: ::lk_agents_abi::utils::filters::ExpFilter;
     type MovingAverage: ::lk_agents_abi::utils::filters::MovingAverage;
     type AudioConverter: ::lk_agents_abi::utils::resample::AudioConverter;
-    type SocketSession: ::lk_agents_abi::utils::socket::SocketSession;
-    type SocketMux: ::lk_agents_abi::utils::socket::SocketMux;
+    type WebSocketSession: ::lk_agents_abi::utils::websocket::WebSocketSession;
+    type WebSocketMux: ::lk_agents_abi::utils::websocket::WebSocketMux;
+    type WebSocketPacing: ::lk_agents_abi::utils::websocket::WebSocketPacing;
     type InferenceVad: ::lk_agents_abi::vad::inference::InferenceVad;
     type AmdFunctions: ::lk_agents_abi::voice::amd::AmdFunctions;
     type HostAudioReceiver: ::lk_agents_abi::voice::avatar::HostAudioReceiver;
@@ -454,8 +455,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<utils::ExpFilter>()?;
     m.add_class::<utils::MovingAverage>()?;
     m.add_class::<utils::AudioConverter>()?;
-    m.add_class::<utils::SocketSession>()?;
-    m.add_class::<utils::SocketMux>()?;
+    m.add_class::<utils::WebSocketSession>()?;
+    m.add_class::<utils::WebSocketMux>()?;
+    m.add_class::<utils::WebSocketPacing>()?;
     m.add_class::<vad::InferenceVad>()?;
     m.add_class::<vad::InferenceVadStream>()?;
     m.add_function(wrap_pyfunction!(voice::amd_resolve_max_endpointing_delay, m)?)?;

@@ -20,7 +20,7 @@ This module provides an STT implementation that uses the SimpliSmart API.
 import base64
 import os
 import weakref
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict, assert_never, cast
 from urllib.parse import urlparse
 
 from pydantic import BaseModel
@@ -282,7 +282,7 @@ class _Config(TypedDict):
     language: str | None
 
 
-class SpeechStream(stt.SocketStream[bytes, _Config]):
+class SpeechStream(stt.WebSocketStream[bytes, _Config]):
     """Simplismart streaming speech-to-text implementation: each binary message is a final
     transcript."""
 
@@ -304,25 +304,31 @@ class SpeechStream(stt.SocketStream[bytes, _Config]):
         self._request_id = str(id(self))
         self._url = url
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
-        return http.SocketTarget(self._url, headers={"Authorization": f"Bearer {self._api_key}"})
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
+        return stt.WebSocketTarget(self._url, headers={"Authorization": f"Bearer {self._api_key}"})
 
     def setup(self) -> _Config:
         return _Config(language=self._opts.language)
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[_Config]:
-        return bytes(item.data) if isinstance(item, rtc.AudioFrame) else None
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | None:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush() | stt.EndOfAudio():
+                return None
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: bytes) -> stt.Transcript:
+    def on_message(self, message: bytes) -> None:
         try:
             text = message.decode("utf-8")
         except UnicodeDecodeError as e:
-            raise http.protocol_error(self, repr(message)) from e
-        return stt.Transcript(
-            text,
-            LanguageCode(self._opts.language or "en"),
-            final=True,
-            request_id=self._request_id,
+            raise stt.protocol_error(self, repr(message)) from e
+        self.report(
+            stt.Transcript(
+                text,
+                LanguageCode(self._opts.language or "en"),
+                final=True,
+                request_id=self._request_id,
+            )
         )

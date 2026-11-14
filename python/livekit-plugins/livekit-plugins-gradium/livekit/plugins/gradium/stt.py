@@ -20,7 +20,7 @@ import dataclasses
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal, NotRequired, TypedDict
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, assert_never
 
 from pydantic import Field
 
@@ -233,8 +233,7 @@ class _Command(TypedDict):
     type: Literal["end_of_stream"]
 
 
-class SpeechStream(stt.SocketStream[_Message, _Setup | _Audio | _Command]):
-    goodbye = _Command(type="end_of_stream")
+class SpeechStream(stt.WebSocketStream[_Message, _Setup | _Audio | _Command]):
     frame_ms = 80
     # the plugin ends the speech from the inactivity the provider's steps report
     provider_vad = True
@@ -281,14 +280,14 @@ class SpeechStream(stt.SocketStream[_Message, _Setup | _Audio | _Command]):
 
         self.reconnect("options changed")
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         self._buffered_text = []
         self._remaining_vad_steps = None
-        return http.SocketTarget(
+        return stt.WebSocketTarget(
             self._model_endpoint, headers={"x-api-key": self._api_key, "x-api-source": "livekit"}
         )
 
-    def setup(self) -> http.Encoded[_Setup | _Audio | _Command]:
+    def setup(self) -> _Setup:
         json_config: dict[str, Any] = {"language": self._opts.language.language}
         if self._opts.temperature is not None:
             json_config["temp"] = self._opts.temperature
@@ -296,22 +295,27 @@ class SpeechStream(stt.SocketStream[_Message, _Setup | _Audio | _Command]):
             type="setup", model_name=self._model_name, input_format="pcm", json_config=json_config
         )
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[_Setup | _Audio | _Command]:
-        return self._audio(bytes(item.data)) if isinstance(item, rtc.AudioFrame) else None
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> _Audio | _Command | None:
+        match item:
+            case rtc.AudioFrame():
+                return self._audio(bytes(item.data))
+            case stt.Flush():
+                return None
+            case stt.EndOfAudio():
+                return _Command(type="end_of_stream")
+            case _:
+                assert_never(item)
 
     @staticmethod
     def _audio(pcm: bytes) -> _Audio:
         return _Audio(type="audio", audio=base64.b64encode(pcm).decode("utf-8"))
 
-    def on_message(self, message: _Message) -> stt.Report | list[stt.Report] | http.Done | None:
+    def on_message(self, message: _Message) -> None:
         if message["type"] == "ready":
             self._ready_msg = message
-            return None
-        if message["type"] == "end_of_stream":
-            return http.DONE
-        if message["type"] == "error":
+        elif message["type"] == "end_of_stream":
+            self.report(stt.SessionFinished())
+        elif message["type"] == "error":
             # the code is an HTTP status: 429 is retried, a rejected request is not
             raise APIStatusError(
                 "Gradium error",
@@ -319,28 +323,37 @@ class SpeechStream(stt.SocketStream[_Message, _Setup | _Audio | _Command]):
                 body=dict(message),
                 detail=message.get("message"),
             )
-        if message["type"] == "text":
+        elif message["type"] == "text":
             self._buffered_text.append(message["text"])
-            return stt.Transcript(
-                message["text"],
-                self._opts.language,
-                start_time=message["start_s"] + self.start_time_offset,
+            self.report(
+                stt.Transcript(
+                    message["text"],
+                    self._opts.language,
+                    start_time=message["start_s"] + self.start_time_offset,
+                )
             )
+        elif message["type"] == "step":
+            self._step(message)
+        else:
+            assert_never(message)
+
+    def _step(self, message: _Step) -> None:
         if not self.speaking or not (vad_bucket := self._opts.vad_bucket):
-            return None
+            return
         if message["vad"][vad_bucket]["inactivity_prob"] <= self._opts.vad_threshold:
             self._remaining_vad_steps = None
-            return None
+            return
         if self._remaining_vad_steps is None:
             self._remaining_vad_steps = self.delay_in_tokens
             if self._opts.vad_flush:
                 # silence pushes out the text the model still holds
                 silence = bytes(2 * self.frame_size * self.delay_in_tokens)
-                self.send_command(self._audio(silence))
-            return None
+                self.send_now(self._audio(silence))
+            return
         self._remaining_vad_steps -= 1
         if self._remaining_vad_steps > 0:
-            return None
+            return
         self._remaining_vad_steps = None
         text, self._buffered_text = " ".join(self._buffered_text), []
-        return [stt.Transcript(text, self._opts.language, final=True), stt.SpeechEnded()]
+        self.report(stt.Transcript(text, self._opts.language, final=True))
+        self.report(stt.SpeechEnded())

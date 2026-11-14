@@ -19,7 +19,7 @@ import os
 import uuid
 import weakref
 from dataclasses import dataclass
-from typing import Annotated, Literal, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode
 
 from pydantic import Field, TypeAdapter, ValidationError
@@ -290,8 +290,7 @@ class _AudioDone(TypedDict):
     type: Literal["audio.done"]
 
 
-class SpeechStream(stt.SocketStream[_Message, _AudioDone]):
-    goodbye = _AudioDone(type="audio.done")
+class SpeechStream(stt.WebSocketStream[_Message, _AudioDone]):
     frame_ms = 50
     # audio waits for transcript.created
     awaits_ready = True
@@ -350,7 +349,7 @@ class SpeechStream(stt.SocketStream[_Message, _AudioDone]):
 
         self.reconnect("options changed")
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         self._emitted_chunk_final = False
         # keyterm may repeat, so params is a list of pairs rather than a dict
         params = [
@@ -370,46 +369,56 @@ class SpeechStream(stt.SocketStream[_Message, _AudioDone]):
         if is_given(self._opts.keyterm):
             params.extend(("keyterm", term) for term in self._opts.keyterm)
         url = XAI_WEBSOCKET_URL.replace("http", "ws", 1)
-        return http.SocketTarget(
+        return stt.WebSocketTarget(
             f"{url}?{urlencode(params)}",
             headers={"Authorization": f"Bearer {self._api_key}"},
         )
 
     def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[_AudioDone]:
-        return bytes(item.data) if isinstance(item, rtc.AudioFrame) else None
+        self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio
+    ) -> bytes | _AudioDone | None:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush():
+                return None
+            case stt.EndOfAudio():
+                return _AudioDone(type="audio.done")
+            case _:
+                assert_never(item)
 
-    def on_message(
-        self, message: _Created | _Partial | _Error
-    ) -> stt.Report | list[stt.Report] | http.Ready | http.Done | None:
+    def on_message(self, message: _Created | _Partial | _Error) -> None:
         if message["type"] == "transcript.created":
-            return http.READY
-        if message["type"] == "error":
+            self.report(stt.Ready())
+        elif message["type"] == "error":
             raise APIError("xAI STT error", kind="invalid_request", detail=message.get("message"))
-
-        text = message.get("text", "")
-        if message["type"] == "transcript.done":
+        elif message["type"] == "transcript.done":
             # the whole stream is transcribed
-            if text:
+            if message.get("text", ""):
                 self.report(self._transcript(message, final=True))
             self.report(stt.SpeechEnded())
-            return http.DONE
+            self.report(stt.SessionFinished())
+        elif message["type"] == "transcript.partial":
+            self._partial(message)
+        else:
+            assert_never(message)
 
-        if not text:
-            return None
+    def _partial(self, message: _Partial) -> None:
+        if not (text := message.get("text", "")):
+            return
         if not message.get("is_final", False):
-            if not self._opts.enable_interim_results:
-                return None
-            return stt.Transcript(text, self._language(message), request_id=self._request_id)
-        if not message.get("speech_final", False):
+            if self._opts.enable_interim_results:
+                self.report(
+                    stt.Transcript(text, self._language(message), request_id=self._request_id)
+                )
+        elif not message.get("speech_final", False):
             self._emitted_chunk_final = True
-            return self._transcript(message, final=True)
-        reports: list[stt.Report] = []
-        if not self._emitted_chunk_final:
-            reports.append(self._transcript(message, final=True))
-        self._emitted_chunk_final = False
-        return [*reports, stt.SpeechEnded()]
+            self.report(self._transcript(message, final=True))
+        else:
+            if not self._emitted_chunk_final:
+                self.report(self._transcript(message, final=True))
+            self._emitted_chunk_final = False
+            self.report(stt.SpeechEnded())
 
     def _language(self, message: _Partial) -> LanguageCode:
         return LanguageCode(message.get("language") or self._opts.language)

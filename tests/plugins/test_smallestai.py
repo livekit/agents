@@ -7,6 +7,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
+from livekit import rtc
 from livekit.agents import APIConnectOptions, http, stt
 from livekit.plugins.smallestai import STT, TTS
 
@@ -39,6 +40,8 @@ async def test_a_final_between_vad_boundaries_reports_its_words_and_utterances()
         provider = STT(api_key="key", base_url=str(server.make_url("")), http_session=session)
         try:
             async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+                # audio the provider answers: an input with none owes no reply
+                stream.push_frame(rtc.AudioFrame(bytes(3200), 16000, 1, 1600))
                 stream.end_input()
                 async with asyncio.timeout(1):
                     events = [event async for event in stream]

@@ -75,6 +75,8 @@ class TtsCase:
     loop_deadline: str | None = None
     """Why the plugin times a read out on the event loop's clock, which only real time moves;
     None when its read deadline is the core's, which ``_core.skip_host_time`` moves."""
+    segments: bool = True
+    """A flush's answer ends a segment, with its metrics; otherwise the first audio settles it."""
 
 
 def _cartesia(_: Connection, message: str | bytes) -> list[Frame]:
@@ -358,12 +360,17 @@ CASES: dict[str, TtsCase] = {
     ),
     # -- asyncai .. palabra
     "asyncai": TtsCase(
-        make=lambda peer: asyncai.TTS(api_key="key", base_url=peer.url), answer=_asyncai
+        segments=False,
+        make=lambda peer: asyncai.TTS(api_key="key", base_url=peer.url),
+        answer=_asyncai,
     ),
     "baseten": TtsCase(
-        make=lambda peer: baseten.TTS(api_key="key", model_endpoint=peer.ws_url), answer=_baseten
+        segments=False,
+        make=lambda peer: baseten.TTS(api_key="key", model_endpoint=peer.ws_url),
+        answer=_baseten,
     ),
     "baseten_qwen3": TtsCase(
+        segments=False,
         make=lambda peer: baseten.TTS(
             model="qwen3-tts", api_key="key", model_endpoint=peer.ws_url, voice="voice"
         ),
@@ -371,14 +378,19 @@ CASES: dict[str, TtsCase] = {
         loop_deadline="a flushed segment is read under asyncio.timeout(read_timeout)",
     ),
     "bland": TtsCase(
-        make=lambda peer: bland.TTS(api_key="key", base_url=peer.url), answer=_bland, setup=1
+        segments=False,
+        make=lambda peer: bland.TTS(api_key="key", base_url=peer.url),
+        answer=_bland,
+        setup=1,
     ),
     "elevenlabs": TtsCase(
+        segments=False,
         make=lambda peer: elevenlabs.TTS(api_key="key", encoding="pcm_24000", base_url=peer.url),
         answer=_elevenlabs,
         loop_deadline="a context's timeout is a loop.call_later(read_timeout) timer",
     ),
     "fishaudio": TtsCase(
+        segments=False,
         make=lambda peer: fishaudio.TTS(api_key="key", output_format="pcm", base_url=peer.url),
         answer=_fishaudio,
     ),
@@ -401,6 +413,7 @@ CASES: dict[str, TtsCase] = {
         answer=_inworld,
     ),
     "minimax": TtsCase(
+        segments=False,
         make=lambda peer: minimax.TTS(api_key="key", audio_format="pcm", base_url=peer.url),
         answer=_minimax,
     ),
@@ -451,7 +464,9 @@ CASES: dict[str, TtsCase] = {
         make=lambda peer: smallestai.TTS(api_key="key", ws_url=peer.ws_url), answer=_smallestai
     ),
     "soniox": TtsCase(
-        make=lambda peer: soniox.TTS(api_key="key", websocket_url=peer.ws_url), answer=_soniox
+        segments=False,
+        make=lambda peer: soniox.TTS(api_key="key", websocket_url=peer.ws_url),
+        answer=_soniox,
     ),
     "speechify": TtsCase(
         make=lambda peer: speechify.TTS(api_key="key", base_url=peer.url),
@@ -539,9 +554,13 @@ async def test_an_open_input_waiting_for_text_never_times_out(name: str, ws_peer
     read_timeout = 0.05 if loop_deadline else 5.0
     run = _Run(name, ws_peer, APIConnectOptions(max_retry=0, read_timeout=read_timeout))
     try:
+        metrics: list[object] = []
+        run.model.on("metrics_collected", metrics.append)
         run.stream.push_text("Hello there.")
         run.stream.flush()
-        await until(lambda: run.audio or run.failure(), "the first sentence is spoken")
+        # its whole answer, not its first audio: the read limit runs until the sentence is done
+        spoken = metrics if CASES[name].segments else run.audio
+        await until(lambda: spoken or run.failure(), "the first sentence is spoken")
         assert run.failure() is None
 
         if loop_deadline:

@@ -17,7 +17,6 @@ if TYPE_CHECKING:
         NoiseReduction,
         NoiseReductionType,
         RealtimeModel,
-        RealtimeSession,
         Reasoning,
         ReasoningEffort,
         RetentionRatio,
@@ -34,7 +33,6 @@ if TYPE_CHECKING:
 _EXPORTS = {
     "gpt_live_types": ("gpt_live_types", None),
     "RealtimeModel": ("realtime_model", "RealtimeModel"),
-    "RealtimeSession": ("realtime_model", "RealtimeSession"),
     **{
         name: ("realtime_model", name)
         for name in (
@@ -84,7 +82,6 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
-    "RealtimeSession",
     "RealtimeModel",
     "AudioTranscription",
     "CustomVoice",

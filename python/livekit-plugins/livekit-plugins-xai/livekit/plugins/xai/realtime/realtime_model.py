@@ -4,20 +4,19 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from livekit.agents.llm._realtime import (
+from livekit.agents.llm.openai_protocol import (
     AudioTranscription,
-    RealtimeSession as RealtimeSession,
+    OpenAIProtocolModel,
     Reasoning,
     SemanticVad,
     ServerVad,
-    _OpenAIProtocolModel,
 )
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 
 from ..types import GrokRealtimeModels, GrokVoices
 
 
-class RealtimeModel(_OpenAIProtocolModel):
+class RealtimeModel(OpenAIProtocolModel):
     _dialect = "xai"
     _provider_label = "livekit.plugins.xai.realtime.realtime_model.RealtimeModel"
 

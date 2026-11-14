@@ -21,7 +21,7 @@ import time
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal, NotRequired, TypedDict
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode, urlparse
 
 import httpx2 as httpx
@@ -41,7 +41,6 @@ from livekit.agents import (
     TokenUsage,
     VADEventType,
     VADStream,
-    http,
     inference,
     stt,
     utils,
@@ -705,7 +704,7 @@ class _SessionUpdate(TypedDict):
 _Command = _Append | _Commit | _SessionUpdate
 
 
-class SpeechStream(stt.SocketStream[_Message, _Command]):
+class SpeechStream(stt.WebSocketStream[_Message, _Command]):
     # forward audio to OAI in chunks of 50ms
     frame_ms = 50
     # the Realtime API ends a session after 15 minutes: rotate before
@@ -730,9 +729,8 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
         self._language = _transcript_language(opts.languages)
         self._vad = vad_instance
         self._vad_stream: VADStream | None = None
-        # whether the server's or the local VAD's speech is open. The transcript of a speech
-        # comes after its end, so the end waits for it: the final, or the next speech's start,
-        # ends the speech
+        # whether the server's or the local VAD's speech is open: a final after its end ends it,
+        # a transcript outside it is a speech of its own
         self._provider_speaking = False
         self._text = ""
         self._item_id = ""
@@ -759,7 +757,7 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
         if rebuild:
             self.reconnect("options changed")
         else:
-            self.send_command(self.setup())
+            self.send_now(self.setup())
 
     async def _run(self) -> None:
         if self._vad is None:
@@ -781,15 +779,17 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
                 self._provider_speech(started=False)
                 # a server-endpointed model closes the segment itself; this would cut it twice
                 if _is_realtime_only(self._opts.model):
-                    self.send_command(_Commit(type="input_audio_buffer.commit"))
+                    self.send_now(_Commit(type="input_audio_buffer.commit"))
 
     def _provider_speech(self, *, started: bool) -> None:
+        # a speech is transcribed once its audio is committed, at its end: its words come after
+        # it, so its final (or the next speech's start) ends it
         self._provider_speaking = started
         if started:
             self.report(stt.SpeechEnded())
             self.report(stt.SpeechStarted())
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         self._text = ""
         self._item_id = ""
         self._interim_at = 0.0
@@ -805,7 +805,7 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
         url = f"{str(client.base_url).rstrip('/')}/realtime?{urlencode(query_params)}"
         if url.startswith("http"):
             url = url.replace("http", "ws", 1)
-        return http.SocketTarget(
+        return stt.WebSocketTarget(
             url,
             headers={
                 "User-Agent": "LiveKit Agents",
@@ -820,21 +820,23 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
             session=event.session.model_dump(by_alias=True, exclude_unset=True),
         )
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[_Command]:
-        if not isinstance(item, rtc.AudioFrame):
-            return None
-        if self._vad_stream is not None:
-            self._vad_stream.push_frame(item)
-        return _Append(
-            type="input_audio_buffer.append",
-            audio=base64.b64encode(item.data.tobytes()).decode("utf-8"),
-        )
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> _Command | None:
+        match item:
+            case rtc.AudioFrame():
+                if self._vad_stream is not None:
+                    self._vad_stream.push_frame(item)
+                return _Append(
+                    type="input_audio_buffer.append",
+                    audio=base64.b64encode(item.data.tobytes()).decode("utf-8"),
+                )
+            case stt.Flush() | stt.EndOfAudio():
+                return None
+            case _:
+                assert_never(item)
 
     def on_message(
         self, message: _SpeechStarted | _SpeechStopped | _Delta | _Completed | _Error
-    ) -> stt.Report | list[stt.Report] | None:
+    ) -> None:
         if message["type"] == "input_audio_buffer.speech_started":
             item_id = self._item_id = message.get("item_id", "")
             self._item_timing[item_id] = (message.get("audio_start_ms", 0), None)
@@ -853,11 +855,13 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
                 # interims at most every _delta_transcript_interval
                 if time.time() - self._interim_at > _delta_transcript_interval:
                     self._interim_at = time.time()
-                    return stt.Transcript(self._text, self._language, request_id=self._item_id)
+                    self.report(
+                        stt.Transcript(self._text, self._language, request_id=self._item_id)
+                    )
         elif message["type"] == "conversation.item.input_audio_transcription.completed":
             self._text = ""
             self._completed(message)
-        else:
+        elif message["type"] == "error":
             error = message.get("error", {})
             raise APIError(
                 "OpenAI Realtime STT error",
@@ -865,25 +869,25 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
                 body=error,
                 detail=error.get("message"),
             )
-        return None
+        else:
+            assert_never(message)
 
     def _completed(self, message: _Completed) -> None:
         item_id = message.get("item_id", "")
-        if transcript := message.get("transcript"):
-            # what the model detected beats the hint that was sent
-            detected = [
-                LanguageCode(code)
-                for lang in message.get("languages") or []
-                if (code := lang.get("code"))
-            ]
-            self.report(
-                stt.Transcript(
-                    transcript,
-                    detected[0] if detected else self._language,
-                    final=True,
-                    request_id=item_id,
-                )
+        # what the model detected beats the hint that was sent
+        detected = [
+            LanguageCode(code)
+            for lang in message.get("languages") or []
+            if (code := lang.get("code"))
+        ]
+        self.report(
+            stt.Transcript(
+                message.get("transcript") or "",
+                detected[0] if detected else self._language,
+                final=True,
+                request_id=item_id,
             )
+        )
         if not self._provider_speaking:
             self.report(stt.SpeechEnded())
 

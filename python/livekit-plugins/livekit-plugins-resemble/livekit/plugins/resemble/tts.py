@@ -20,7 +20,7 @@ import os
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Annotated, Literal, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -279,7 +279,7 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
 
 
-class _Mux(http.Multiplexer[_Message, _Speak]):
+class _Mux(tts.WebSocketMultiplexer[_Message, _Speak]):
     """Resemble sockets, one stream at a time each; every text is its own request, routed by a
     request id unique across the sockets."""
 
@@ -297,14 +297,14 @@ class _Mux(http.Multiplexer[_Message, _Speak]):
         self.requests[request_id] = segment_id
         return request_id
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
-        return http.SocketTarget(self._url, headers={"Authorization": f"Bearer {self._api_key}"})
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        return tts.WebSocketTarget(self._url, headers={"Authorization": f"Bearer {self._api_key}"})
 
     def route(self, message: _Audio | _AudioEnd) -> str | None:
         return self.requests.get(message["request_id"])
 
 
-class SynthesizeStream(tts.SocketStream[_Message, _Speak]):
+class SynthesizeStream(tts.WebSocketStream[_Message, _Speak]):
     """Stream-based text-to-speech synthesis using Resemble AI WebSocket API.
 
     This implementation connects to Resemble's WebSocket API for real-time streaming
@@ -321,41 +321,49 @@ class SynthesizeStream(tts.SocketStream[_Message, _Speak]):
         self._owed: dict[str, int] = {}
         self._ended: set[str] = set()
 
-    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> _Speak | None:
-        if isinstance(item, tts.SegmentText):
-            self._owed[item.segment_id] = self._owed.get(item.segment_id, 0) + 1
-            speak: _Speak = {
-                "voice_uuid": self._opts.voice_uuid,
-                "data": item.chunk.text,
-                "request_id": self._mux.request(item.segment_id),
-                "sample_rate": self._opts.sample_rate,
-                "precision": "PCM_16",
-                "output_format": "mp3",
-            }
-            if self._opts.model is not None:
-                speak["model"] = self._opts.model
-            return speak
-        if isinstance(item, tts.SegmentEnd):
-            self._ended.add(item.segment_id)
-            if not self._owed.get(item.segment_id):
-                # every request already ended: nothing more will
-                self._socket_deliver(self._done(item.segment_id))
-        return None
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Speak | None:
+        match item:
+            case tts.SegmentText():
+                self._owed[item.segment_id] = self._owed.get(item.segment_id, 0) + 1
+                speak: _Speak = {
+                    "voice_uuid": self._opts.voice_uuid,
+                    "data": item.chunk.text,
+                    "request_id": self._mux.request(item.segment_id),
+                    "sample_rate": self._opts.sample_rate,
+                    "precision": "PCM_16",
+                    "output_format": "mp3",
+                }
+                if self._opts.model is not None:
+                    speak["model"] = self._opts.model
+                return speak
+            case tts.SegmentEnd():
+                self._ended.add(item.segment_id)
+                if not self._owed.get(item.segment_id):
+                    # every request already ended: nothing more will
+                    self._forget(item.segment_id)
+                    self.report(tts.SegmentDone(item.segment_id))
+                return None
+            case tts.SegmentStart() | tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Audio | _AudioEnd) -> list[tts.SegmentOutput]:
+    def on_message(self, message: _Audio | _AudioEnd) -> None:
         segment_id = self._mux.requests.get(message["request_id"])
         if segment_id is None:
-            return []
+            return
         if message["type"] == "audio":
-            audio = message.get("audio_content")
-            return [tts.SegmentAudio(segment_id, base64.b64decode(audio))] if audio else []
-        del self._mux.requests[message["request_id"]]
-        self._owed[segment_id] -= 1
-        if self._owed[segment_id] <= 0 and segment_id in self._ended:
-            return [self._done(segment_id)]
-        return []
+            if audio := message.get("audio_content"):
+                self.report(tts.SegmentAudio(segment_id, base64.b64decode(audio)))
+        elif message["type"] == "audio_end":
+            del self._mux.requests[message["request_id"]]
+            self._owed[segment_id] -= 1
+            if self._owed[segment_id] <= 0 and segment_id in self._ended:
+                self._forget(segment_id)
+                self.report(tts.SegmentDone(segment_id))
+        else:
+            assert_never(message)
 
-    def _done(self, segment_id: str) -> tts.SegmentDone:
+    def _forget(self, segment_id: str) -> None:
         self._owed.pop(segment_id, None)
         self._ended.discard(segment_id)
-        return tts.SegmentDone(segment_id)

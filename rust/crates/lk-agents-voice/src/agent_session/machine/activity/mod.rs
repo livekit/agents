@@ -143,6 +143,10 @@ pub(crate) struct AgentActivity {
     /// What the activity's input streams keep running under.
     running_activity: Option<crate::telemetry::SpanContext>,
     last_turn: Option<crate::audio_recognition::TurnId>,
+    /// The interim the last turn committed with, while its utterance's final may still come.
+    promoted: Option<recognition::PromotedWords>,
+    /// The room segment the last final user transcript showed in.
+    pub(crate) last_final_segment: Option<String>,
     /// A final arrived while the current speech was uninterrupted: this cycle's preemptive
     /// generation must still see the speech as live.
     live_speech_at_final: bool,
@@ -724,6 +728,8 @@ impl AgentActivity {
             arriving: None,
             running_activity: None,
             last_turn: None,
+            promoted: None,
+            last_final_segment: None,
             live_speech_at_final: false,
             preemptive: None,
             model: match initial.rt_session.take() {

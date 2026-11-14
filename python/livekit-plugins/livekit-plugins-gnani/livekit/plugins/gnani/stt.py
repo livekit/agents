@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, replace
-from typing import Annotated, Any, Literal, NotRequired, TypedDict, cast
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, assert_never, cast
 
 from pydantic import Field
 
@@ -34,7 +34,6 @@ from livekit.agents import (
     LanguageCode,
     http,
     stt,
-    utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -255,11 +254,11 @@ class _Error(TypedDict):
 _Message = Annotated[_Connected | _Transcript | _Speech | _Error, Field(discriminator="type")]
 
 
-class SpeechStream(stt.SocketStream[_Message, None]):
+class SpeechStream(stt.WebSocketStream[_Message, None]):
     """WebSocket-based streaming STT for Gnani Vachana.
 
     Connects to wss://api.vachana.ai/stt/v3/stream and sends raw PCM audio
-    in 1024-byte chunks (512 samples, 16-bit mono).
+    in chunks of about 1024 bytes (512 samples, 16-bit mono).
     """
 
     # the session says "connected" before it takes audio
@@ -277,9 +276,7 @@ class SpeechStream(stt.SocketStream[_Message, None]):
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
-        self._chunks = utils.media.AudioByteStream(
-            opts.sample_rate, 1, samples_per_channel=STREAM_CHUNK_BYTES // 2
-        )
+        self.frame_ms = STREAM_CHUNK_BYTES // 2 * 1000 // opts.sample_rate
 
     def _build_ws_url(self) -> str:
         base = self._opts.base_url
@@ -291,7 +288,7 @@ class SpeechStream(stt.SocketStream[_Message, None]):
             ws_base = "wss://" + base
         return f"{ws_base}/stt/v3/stream"
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         headers: dict[str, str] = {
             "x-api-key-id": self._opts.api_key,
             "lang_code": self._opts.language,
@@ -303,34 +300,38 @@ class SpeechStream(stt.SocketStream[_Message, None]):
             headers["preferred_language"] = self._opts.preferred_language
         if self._opts.itn_native_numerals:
             headers["itn_native_numerals"] = "true"
-        return http.SocketTarget(self._build_ws_url(), headers=headers)
+        return stt.WebSocketTarget(self._build_ws_url(), headers=headers)
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[None]:
-        frames = (
-            self._chunks.push(item.data)
-            if isinstance(item, rtc.AudioFrame)
-            else self._chunks.flush()
-        )
-        return [bytes(frame.data) for frame in frames]
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | None:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush() | stt.EndOfAudio():
+                return None
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Message) -> stt.Report | http.Ready | None:
+    def on_message(self, message: _Message) -> None:
         if message["type"] == "connected":
-            return http.READY
-        if message["type"] == "error":
+            self.report(stt.Ready())
+        elif message["type"] == "error":
             raise APIError(
                 "Gnani STT stream error", kind="invalid_request", detail=message.get("message")
             )
-        if message["type"] != "transcript":
-            starts = message["type"] in ("speech_start", "vad_start")
-            return stt.SpeechStarted() if starts else stt.SpeechEnded()
-        if not (text := message.get("text", "")):
-            return None
-        return stt.Transcript(
-            text,
-            LanguageCode(self._opts.language),
-            final=True,
-            request_id=message.get("segment_id", ""),
-            confidence=1.0,
-        )
+        elif message["type"] == "speech_start" or message["type"] == "vad_start":
+            self.report(stt.SpeechStarted())
+        elif message["type"] == "speech_end" or message["type"] == "vad_end":
+            self.report(stt.SpeechEnded())
+        elif message["type"] == "transcript":
+            if text := message.get("text", ""):
+                self.report(
+                    stt.Transcript(
+                        text,
+                        LanguageCode(self._opts.language),
+                        final=True,
+                        request_id=message.get("segment_id", ""),
+                        confidence=1.0,
+                    )
+                )
+        else:
+            assert_never(message)

@@ -18,7 +18,7 @@ import dataclasses
 import os
 import weakref
 from dataclasses import dataclass
-from typing import NotRequired, TypedDict
+from typing import NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode
 
 from pydantic import JsonValue
@@ -236,8 +236,7 @@ class STT(stt.STT):
             )
 
 
-class SpeechStream(stt.SocketStream[_StreamEvent, _Checkpoint]):
-    goodbye = _Checkpoint(checkpoint_id="final")
+class SpeechStream(stt.WebSocketStream[_StreamEvent, _Checkpoint]):
     frame_ms = 50
 
     def __init__(
@@ -288,7 +287,7 @@ class SpeechStream(stt.SocketStream[_StreamEvent, _Checkpoint]):
         # the options are read at each connection
         self.reconnect("options changed")
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         # segment ids restart with each connection
         self._transcript_state.clear()
         self._final_segments_length.clear()
@@ -310,20 +309,28 @@ class SpeechStream(stt.SocketStream[_StreamEvent, _Checkpoint]):
         }
         ws_url = str(self._opts.base_url).rstrip("/") + _STREAMING_PATH
         filtered_config = {k: v for k, v in live_config.items() if v is not None}
-        return http.SocketTarget(
+        return stt.WebSocketTarget(
             f"{ws_url}?{urlencode(filtered_config, doseq=True)}",
             headers={"User-Agent": "LiveKit Agents", "Authorization": self._api_key},
         )
 
     def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[_Checkpoint]:
-        return bytes(item.data) if isinstance(item, rtc.AudioFrame) else None
+        self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio
+    ) -> bytes | _Checkpoint | None:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush():
+                return None
+            case stt.EndOfAudio():
+                return _Checkpoint(checkpoint_id="final")
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _StreamEvent) -> stt.Transcript | None:
+    def on_message(self, message: _StreamEvent) -> None:
         segments = message.get("segments", [])
         if not segments:
-            return None
+            return
         latest_segment = max(segments, key=lambda segment: segment["id"])
         max_segment_id = latest_segment["id"]
 
@@ -352,7 +359,7 @@ class SpeechStream(stt.SocketStream[_StreamEvent, _Checkpoint]):
         sorted_segments = sorted(self._transcript_state.items(), key=lambda item: item[0])
         full_transcript = " ".join([text for _, text in sorted_segments])
         if not full_transcript:
-            return None
+            return
 
         words = latest_segment.get("words", [])
         is_final = bool(words) and words[-1].get("is_final", False)
@@ -361,6 +368,6 @@ class SpeechStream(stt.SocketStream[_StreamEvent, _Checkpoint]):
             self._last_final_segment_id = max_segment_id
             self._final_segments_length[max_segment_id] = len(words)
         # a final ends the speech: turn_detection="stt" commits on END_OF_SPEECH
-        return stt.Transcript(
-            full_transcript, LanguageCode(self._opts.language or ""), final=is_final
+        self.report(
+            stt.Transcript(full_transcript, LanguageCode(self._opts.language or ""), final=is_final)
         )

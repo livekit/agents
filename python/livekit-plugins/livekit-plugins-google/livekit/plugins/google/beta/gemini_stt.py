@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, assert_never
 
 from google.genai import types
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, LanguageCode, http, stt
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, LanguageCode, stt
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -155,7 +155,7 @@ class STT(stt.STT):
         raise NotImplementedError("Gemini STT only supports streaming recognition")
 
 
-class RecognizeStream(stt.SocketStream[ServerMessage, ClientMessage]):
+class RecognizeStream(stt.WebSocketStream[ServerMessage, ClientMessage]):
     """One Gemini Live transcription session: its setup asks for text and input transcription,
     the audio follows, and ``audioStreamEnd`` asks for the last turn's transcript."""
 
@@ -177,8 +177,9 @@ class RecognizeStream(stt.SocketStream[ServerMessage, ClientMessage]):
         self._language = self._default_language
         self._pending_interim = ""
         self._audio_ended = False
+        self._setup: ClientMessage = {}
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         target, model = await self._endpoint.target(self._opts.model)
         language_codes = self._opts.language_codes
         if language_codes is None and self._opts.language:
@@ -191,32 +192,39 @@ class RecognizeStream(stt.SocketStream[ServerMessage, ClientMessage]):
             language_codes=language_codes or [],
             custom_vocabulary=self._opts.custom_vocabulary or None,
         )
-        self.send_command(
-            {
-                "setup": {
-                    "model": model,
-                    "generationConfig": {"responseModalities": [types.Modality.TEXT.value]},
-                    "inputAudioTranscription": dump(transcription),
-                }
+        self._setup = {
+            "setup": {
+                "model": model,
+                "generationConfig": {"responseModalities": [types.Modality.TEXT.value]},
+                "inputAudioTranscription": dump(transcription),
             }
-        )
+        }
         self._pending_interim = ""
         self._language = self._default_language
         return target
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[ClientMessage]:
-        if isinstance(item, http.EndOfInput):
-            # Gemini finalizes the pending transcript rather than waiting for more audio
-            self._audio_ended = True
-            return {"realtimeInput": {"audioStreamEnd": True}}
-        if isinstance(item, stt.RecognizeStream.Flush) or not item.data:
-            return None
-        blob = types.Blob(data=bytes(item.data), mime_type=f"audio/pcm;rate={item.sample_rate}")
-        return {"realtimeInput": {"audio": dump(blob)}}
+    def setup(self) -> ClientMessage:
+        return self._setup
 
-    def on_message(self, message: ServerMessage) -> list[stt.Report] | http.Done | None:
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> ClientMessage | None:
+        match item:
+            case rtc.AudioFrame():
+                if not item.data:
+                    return None
+                blob = types.Blob(
+                    data=bytes(item.data), mime_type=f"audio/pcm;rate={item.sample_rate}"
+                )
+                return {"realtimeInput": {"audio": dump(blob)}}
+            case stt.Flush():
+                return None
+            case stt.EndOfAudio():
+                # Gemini finalizes the pending transcript rather than waiting for more audio
+                self._audio_ended = True
+                return {"realtimeInput": {"audioStreamEnd": True}}
+            case _:
+                assert_never(item)
+
+    def on_message(self, message: ServerMessage) -> None:
         # Both transcriptions carry a complete hypothesis, not deltas -- neither is accumulated:
         #   interimInputTranscription - speculative, resent in full while the user speaks
         #   inputTranscription - the finalized, authoritative transcript, emitted once the
@@ -224,8 +232,7 @@ class RecognizeStream(stt.SocketStream[ServerMessage, ClientMessage]):
         # See https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
         sc = message.get("serverContent")
         if not sc:
-            return None
-        reports: list[stt.Report] = []
+            return
 
         # interim first: when a message carries both, the final supersedes it
         if interim := sc.get("interimInputTranscription"):
@@ -233,7 +240,7 @@ class RecognizeStream(stt.SocketStream[ServerMessage, ClientMessage]):
                 self._language = LanguageCode(code)
             if text := interim.get("text", "").strip():
                 self._pending_interim = text
-                reports.append(self._transcript(text, final=False))
+                self.report(self._transcript(text, final=False))
 
         if transcription := sc.get("inputTranscription"):
             if code := transcription.get("languageCode"):
@@ -241,21 +248,18 @@ class RecognizeStream(stt.SocketStream[ServerMessage, ClientMessage]):
                 self._language = LanguageCode(code)
             if text := transcription.get("text", "").strip():
                 self._pending_interim = ""
-                reports.append(self._transcript(text, final=True))
+                self.report(self._transcript(text, final=True))
                 self._language = self._default_language
 
         # a turn that produced only interims would otherwise be dropped
         if sc.get("generationComplete") or sc.get("turnComplete"):
             if self._pending_interim:
-                reports.append(self._transcript(self._pending_interim, final=True))
+                self.report(self._transcript(self._pending_interim, final=True))
                 self._pending_interim = ""
             self._language = self._default_language
             if self._audio_ended:
                 # the last turn after the audio ended: the session is done
-                for report in reports:
-                    self.report(report)
-                return http.DONE
-        return reports
+                self.report(stt.SessionFinished())
 
     def _transcript(self, text: str, *, final: bool) -> stt.Transcript:
         return stt.Transcript(text, self._language, final=final, confidence=1.0)

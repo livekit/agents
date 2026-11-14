@@ -121,6 +121,10 @@ class SpeechEvent:
     """Wall-clock time when this event was created."""
     speech_end_time: float | None = None
     """Wall-clock time when the recognized speech ended, when known."""
+    utterance: int | None = None
+    """The utterance the event belongs to, numbered by its stream: a final that comes after the
+    session committed the utterance's interim corrects those words.
+    """
 
 
 @dataclass
@@ -143,6 +147,12 @@ class Transcript:
     speaker_id: str | None = None
     words: list[TranscriptChunk] | None = None
     source_languages: list[LanguageCode] | None = None
+    source_texts: list[str] | None = None
+    """When translating: the original text, one entry per `source_languages` entry."""
+    target_languages: list[LanguageCode] | None = None
+    """When translating: the target language of each `target_texts` entry."""
+    target_texts: list[str] | None = None
+    """When translating: the translated text, one entry per `target_languages` entry."""
     metadata: dict[str, JsonValue] | None = None
 
 
@@ -394,12 +404,17 @@ class STT(
         return out
 
 
+@dataclass
 class SpeechStarted:
     """The provider heard speech start: reported only by a provider that detects speech itself."""
 
+    speech_start_time: float | None = None
+    """Wall-clock time the provider heard the speech start, when it says."""
+
 
 class SpeechEnded:
-    """The provider heard speech end: reported only by a provider that detects speech itself."""
+    """The provider heard speech end: reported only by a provider that detects speech itself.
+    An end that comes before the final of the words heard waits for that final."""
 
 
 class RecognizeStream(ABC):
@@ -642,7 +657,7 @@ class RecognizeStream(ABC):
         if isinstance(report, Transcript):
             events = self._core_speech.transcript(report)
         elif isinstance(report, SpeechStarted):
-            events = self._core_speech.started()
+            events = self._core_speech.started(report.speech_start_time)
         else:
             events = self._core_speech.ended()
         for event in events:

@@ -12,7 +12,7 @@ from pydantic import JsonValue
 import google.auth.credentials
 import google.auth.transport.requests
 from google.genai import types
-from livekit.agents import http
+from livekit.agents.llm import realtime as llm_realtime
 
 from ..utils import auth
 from ..version import __version__
@@ -81,7 +81,7 @@ class LiveEndpoint:
     http_options: types.HttpOptions | None
     api_version: str | None = None
 
-    async def target(self, model: str) -> tuple[http.SocketTarget, str]:
+    async def target(self, model: str) -> tuple[llm_realtime.WebSocketTarget, str]:
         """The socket to open, with fresh credentials, and the model as the setup names it."""
         options = self.http_options or types.HttpOptions()
         headers = {**(options.headers or {}), "x-goog-api-client": f"livekit-agents/{__version__}"}
@@ -138,10 +138,12 @@ class LiveEndpoint:
         return await asyncio.to_thread(fresh)
 
 
-def _target(base: str, path: str, headers: dict[str, str]) -> http.SocketTarget:
+def _target(base: str, path: str, headers: dict[str, str]) -> llm_realtime.WebSocketTarget:
     scheme, sep, rest = base.partition("://")
     ws_scheme = {"https": "wss", "http": "ws"}.get(scheme, scheme)
-    return http.SocketTarget(f"{ws_scheme}{sep}{rest.rstrip('/')}/{path}", headers=headers)
+    return llm_realtime.WebSocketTarget(
+        f"{ws_scheme}{sep}{rest.rstrip('/')}/{path}", headers=headers
+    )
 
 
 def dump(value: Any) -> Any:

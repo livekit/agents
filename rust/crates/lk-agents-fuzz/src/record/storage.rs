@@ -33,9 +33,11 @@ pub enum StorageStep {
         held: bool,
         faulted: bool,
     },
-    /// What the partition saved once the store closed: its items' ids, in the thread's order.
+    /// What the partition saved once the store closed: its items' ids, in the thread's order, and
+    /// the text of each user message among them.
     Saved {
         items: Vec<String>,
+        user_texts: Vec<(String, String)>,
     },
     /// The fake database holds a request's answer this long on purpose (a slow lease take).
     Slowed {

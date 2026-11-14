@@ -4,16 +4,15 @@ import os
 from typing import Literal
 
 from livekit.agents import llm
-from livekit.agents.llm._realtime import (
+from livekit.agents.llm.openai_protocol import (
     AudioTranscription,
     AzureDeepNoiseSuppression,
     AzureSemanticVad,
     AzureVoice,
     NoiseReductionType,
-    RealtimeSession as RealtimeSession,
+    OpenAIProtocolModel,
     ServerVad,
     Tracing,
-    _OpenAIProtocolModel,
 )
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from livekit.agents.utils import is_given
@@ -24,7 +23,7 @@ DEFAULT_VOICE = "en-US-AvaMultilingualNeural"
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
 
-class RealtimeModel(_OpenAIProtocolModel):
+class RealtimeModel(OpenAIProtocolModel):
     _dialect = "voice_live"
     _provider_label = "livekit.plugins.azure.realtime.realtime_model.RealtimeModel"
 

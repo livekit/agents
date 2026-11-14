@@ -10,6 +10,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import Agent, RunContext, VoiceSession, llm
+from livekit.agents.llm.openai_protocol import OpenAIRealtimeModel
 from livekit.agents.voice import SpeechHandle
 from tests.fakes import (
     FakeAudioOutput,
@@ -191,6 +192,27 @@ async def test_a_realtime_model_replies() -> None:
         await s.generate_reply(instructions="greet the user")
 
     assert ("assistant", "Hello from the realtime model.") in said(s)
+
+
+async def test_only_a_model_whose_sessions_run_in_python_opens_one() -> None:
+    """The models whose sessions run in the core have no ``session()`` to call (and fail); a
+    plugin model whose sessions run in Python must declare one."""
+    core_run = [
+        OpenAIRealtimeModel(api_key="test"),
+        llm.RealtimeModelFallbackAdapter([FakeRealtime(), FakeRealtime()]),
+        llm.DuplexRealtimeAdapter(FakeDuplex()),
+    ]
+    try:
+        assert [type(m).__name__ for m in core_run if hasattr(m, "session")] == []
+    finally:
+        for model in core_run:
+            await model.aclose()
+
+    class Sessionless(llm.RealtimeSessionModel):
+        pass
+
+    with pytest.raises(TypeError, match="session"):
+        Sessionless(capabilities=FakeRealtime().capabilities)  # type: ignore[abstract]
 
 
 async def test_a_duplex_model_receives_its_configuration_as_one_unit() -> None:

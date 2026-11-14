@@ -3,7 +3,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ErrorKind, HostError};
-use lk_agents_abi::utils::socket::{KeepaliveFrame, SocketSend, SocketTarget};
+use lk_agents_abi::utils::websocket::{
+    WebSocketInput, WebSocketKeepaliveFrame, WebSocketMuxRoute, WebSocketRead, WebSocketSignal,
+    WebSocketTarget,
+};
 use lk_agents_abi::{BoxFuture, VirtualClock};
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
@@ -22,6 +25,8 @@ struct FakeSocket {
     peer: mpsc::UnboundedSender<Peer>,
     sent: Mutex<Vec<String>>,
     closed: AtomicBool,
+    /// While set, a write reaches the peer but does not return to the writer.
+    held_writes: Arc<AtomicBool>,
 }
 
 impl FakeSocket {
@@ -48,6 +53,11 @@ struct Provider {
     sockets: Arc<Mutex<Vec<Arc<FakeSocket>>>>,
     /// The handshake yields once its socket exists, before it is handed over.
     slow_handshake: bool,
+    /// The handshake's response headers.
+    headers: Vec<(&'static str, &'static str)>,
+    /// The handshake is refused with this status and reason.
+    refused: Option<(i64, &'static str)>,
+    held_writes: Arc<AtomicBool>,
 }
 
 impl Provider {
@@ -72,18 +82,29 @@ impl WsTransport for Provider {
         url: &str,
         _headers: Headers,
     ) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), TransportError> {
+        if let Some((status, reason)) = self.refused {
+            let message = reason.to_owned();
+            return Err(TransportError::Status {
+                status,
+                message,
+                headers: Headers::default(),
+                body: None,
+            });
+        }
         let (peer, inbound) = mpsc::unbounded_channel();
         let socket = Arc::new(FakeSocket {
             url: url.to_owned(),
             peer,
             sent: Mutex::new(Vec::new()),
             closed: AtomicBool::new(false),
+            held_writes: Arc::clone(&self.held_writes),
         });
         self.sockets.lock().push(Arc::clone(&socket));
         if self.slow_handshake {
             tokio::task::yield_now().await;
         }
-        let receiver = FakeReceiver { inbound, code: None, reason: None };
+        let headers = self.headers.clone();
+        let receiver = FakeReceiver { inbound, code: None, reason: None, headers };
         Ok((Arc::new(FakeSender(socket)), Box::new(receiver)))
     }
 }
@@ -97,6 +118,9 @@ impl WsSender for FakeSender {
             return Err(TransportError::Closed);
         }
         self.0.sent.lock().push(text);
+        while self.0.held_writes.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
         Ok(())
     }
 
@@ -121,6 +145,7 @@ struct FakeReceiver {
     inbound: mpsc::UnboundedReceiver<Peer>,
     code: Option<u16>,
     reason: Option<String>,
+    headers: Vec<(&'static str, &'static str)>,
 }
 
 #[async_trait]
@@ -144,53 +169,76 @@ impl WsReceiver for FakeReceiver {
     fn close_reason(&self) -> Option<String> {
         self.reason.clone()
     }
+
+    fn response_header(&self, name: &str) -> Option<String> {
+        self.headers.iter().find(|(key, _)| *key == name).map(|(_, value)| (*value).to_owned())
+    }
 }
 
 // A plugin's protocol: scripted input, a record of what it read.
 
 struct Protocol {
-    input: tokio::sync::Mutex<mpsc::UnboundedReceiver<SocketSend>>,
-    connection: Mutex<SocketConnection>,
+    input: tokio::sync::Mutex<mpsc::UnboundedReceiver<Option<WebSocketInput>>>,
+    controls: tokio::sync::Mutex<mpsc::UnboundedReceiver<Vec<WsFrame>>>,
+    controls_tx: mpsc::UnboundedSender<Vec<WsFrame>>,
+    connection: Mutex<WebSocketConnection>,
     read: Mutex<Vec<String>>,
     retried: Mutex<Vec<ErrorKind>>,
     connects: AtomicUsize,
-    /// Commands reported written, and returned unwritten.
-    written: Mutex<Vec<u64>>,
-    returned: Mutex<Vec<u64>>,
-    /// What `settled` answers: the provider owes nothing it was sent.
-    settled: AtomicBool,
+    /// What the stream answers: it owes the provider's reply at the input's end, nothing it sent
+    /// is pending, it asked the provider to end its session, it can be replaced now.
+    owes_reply: AtomicBool,
+    nothing_pending: AtomicBool,
+    expects_close: AtomicBool,
+    can_reconnect: AtomicBool,
+    /// The provider's ids the connections opened with, and the sessions the provider finished.
+    opened: Mutex<Vec<Option<String>>>,
+    finished_sessions: AtomicUsize,
 }
 
 impl Protocol {
-    fn new(connection: SocketConnection) -> (Arc<Self>, mpsc::UnboundedSender<SocketSend>) {
+    fn new(
+        connection: WebSocketConnection,
+    ) -> (Arc<Self>, mpsc::UnboundedSender<Option<WebSocketInput>>) {
         let (tx, rx) = mpsc::unbounded_channel();
+        let (controls_tx, controls) = mpsc::unbounded_channel();
         let protocol = Protocol {
             input: tokio::sync::Mutex::new(rx),
+            controls: tokio::sync::Mutex::new(controls),
+            controls_tx,
             connection: Mutex::new(connection),
             read: Mutex::new(Vec::new()),
             retried: Mutex::new(Vec::new()),
             connects: AtomicUsize::new(0),
-            written: Mutex::new(Vec::new()),
-            returned: Mutex::new(Vec::new()),
-            settled: AtomicBool::new(false),
+            owes_reply: AtomicBool::new(true),
+            nothing_pending: AtomicBool::new(false),
+            expects_close: AtomicBool::new(false),
+            can_reconnect: AtomicBool::new(true),
+            opened: Mutex::new(Vec::new()),
+            finished_sessions: AtomicUsize::new(0),
         };
         (Arc::new(protocol), tx)
     }
+
+    /// A control message the stream sends now.
+    fn send_now(&self, text: &str) {
+        self.controls_tx.send(frames(&[text])).unwrap();
+    }
 }
 
-impl SocketHost for Protocol {
+impl WebSocketHost for Protocol {
     fn connect(
         &self,
         _cx: &Cx,
         _conn_options: ApiConnectOptions,
-    ) -> BoxFuture<'_, Result<SocketConnection, ProviderError>> {
+    ) -> BoxFuture<'_, Result<WebSocketConnection, ProviderError>> {
         let n = self.connects.fetch_add(1, Ordering::SeqCst);
         let mut connection = self.connection.lock().clone();
         connection.target.params.insert("n".into(), n.to_string());
         Box::pin(async move { Ok(connection) })
     }
 
-    fn next(&self, _cx: &Cx) -> BoxFuture<'_, Result<SocketSend, ProviderError>> {
+    fn next_input(&self, _cx: &Cx) -> BoxFuture<'_, Result<Option<WebSocketInput>, ProviderError>> {
         Box::pin(async move {
             match self.input.lock().await.recv().await {
                 Some(item) => Ok(item),
@@ -199,7 +247,21 @@ impl SocketHost for Protocol {
         })
     }
 
-    fn on_message(&self, _cx: &Cx, frame: WsFrame) -> BoxFuture<'_, Result<bool, ProviderError>> {
+    fn next_control(&self, _cx: &Cx) -> BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>> {
+        Box::pin(async move {
+            match self.controls.lock().await.recv().await {
+                Some(frames) => Ok(frames),
+                None => std::future::pending().await,
+            }
+        })
+    }
+
+    fn on_message(
+        &self,
+        _cx: &Cx,
+        frame: WsFrame,
+        _message: Option<HostRef>,
+    ) -> BoxFuture<'_, Result<WebSocketRead, ProviderError>> {
         Box::pin(async move {
             let WsFrame::Text(text) = frame else { panic!("text frames only") };
             if text == "malformed" {
@@ -208,85 +270,122 @@ impl SocketHost for Protocol {
                 return Err(error.into());
             }
             self.read.lock().push(text.clone());
-            // a multiplexed frame leads with its context: `<context>:done`
-            Ok(text == "done" || text.ends_with(":done"))
+            // a multiplexed frame leads with its context: `<context>:finished`
+            let payload = text.rsplit(':').next().unwrap_or_default();
+            let signal = match payload {
+                "finished" => Some(WebSocketSignal::SessionFinished),
+                "ready" => Some(WebSocketSignal::Ready),
+                _ => None,
+            };
+            let request_id = payload.strip_prefix("request ").map(str::to_owned);
+            Ok(WebSocketRead { signal, request_id })
         })
+    }
+
+    fn input_idle(&self, _cx: &Cx) -> BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>> {
+        Box::pin(async move { Ok(frames(&["idle"])) })
+    }
+
+    fn close_context(&self, _cx: &Cx) -> BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>> {
+        Box::pin(async move { Ok(vec![WsFrame::Text("cancel mine".into())]) })
+    }
+
+    fn keep_context(&self, _cx: &Cx) -> BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>> {
+        Box::pin(async move { Ok(vec![WsFrame::Text("keep mine".into())]) })
+    }
+
+    fn opened(&self, request_id: Option<String>) {
+        self.opened.lock().push(request_id);
+    }
+
+    fn session_finished(&self) {
+        self.finished_sessions.fetch_add(1, Ordering::SeqCst);
     }
 
     fn retrying(&self, error: ProviderError) {
         self.retried.lock().push(error.attempt_error().error_kind);
     }
 
-    fn sent(&self, command: u64) {
-        self.written.lock().push(command);
+    fn owes_reply(&self) -> Result<bool, HostError> {
+        Ok(self.owes_reply.load(Ordering::SeqCst))
     }
 
-    fn returned(&self, command: u64) {
-        self.returned.lock().push(command);
+    fn nothing_pending(&self) -> Result<bool, HostError> {
+        Ok(self.nothing_pending.load(Ordering::SeqCst))
     }
 
-    fn settled(&self) -> Result<bool, HostError> {
-        Ok(self.settled.load(Ordering::SeqCst))
+    fn expects_close(&self) -> Result<bool, HostError> {
+        Ok(self.expects_close.load(Ordering::SeqCst))
+    }
+
+    fn can_reconnect(&self) -> Result<bool, HostError> {
+        Ok(self.can_reconnect.load(Ordering::SeqCst))
     }
 }
 
-fn connection(goodbye: bool) -> SocketConnection {
-    SocketConnection {
-        target: SocketTarget {
+fn connection() -> WebSocketConnection {
+    WebSocketConnection {
+        target: WebSocketTarget {
             url: "wss://provider.test/listen".into(),
             headers: BTreeMap::new(),
             params: BTreeMap::new(),
             protocols: Vec::new(),
             request_id_header: None,
         },
-        keepalive: Some(KeepaliveFrame { interval: 5.0, frame: WsFrame::Text("keepalive".into()) }),
-        goodbye: goodbye.then(|| WsFrame::Text("goodbye".into())),
+        keepalive: Some(WebSocketKeepaliveFrame {
+            interval: 5.0,
+            frame: WsFrame::Text("keepalive".into()),
+        }),
         max_session_duration: None,
-        proxy: None,
         ping_interval: None,
         setup: Vec::new(),
         awaits_ready: false,
+        input_idle: None,
+        context_keepalive: None,
     }
+}
+
+/// A connection with no keepalive.
+fn quiet() -> WebSocketConnection {
+    WebSocketConnection { keepalive: None, ..connection() }
 }
 
 /// A connection that opens with a setup and waits for the provider to say it is ready.
-fn setup_then_ready() -> SocketConnection {
-    SocketConnection {
-        keepalive: None,
+fn setup_then_ready() -> WebSocketConnection {
+    WebSocketConnection {
         setup: vec![WsFrame::Text("setup".into())],
         awaits_ready: true,
-        ..connection(true)
+        ..quiet()
     }
 }
 
-fn command(text: &str, id: u64) -> SocketSend {
-    SocketSend { boundary: true, input: false, command: Some(id), ..item(text) }
+fn frames(texts: &[&str]) -> Vec<WsFrame> {
+    texts.iter().map(|text| WsFrame::Text((*text).into())).collect()
 }
 
-fn item(text: &str) -> SocketSend {
-    SocketSend {
-        frames: vec![WsFrame::Text(text.into())],
-        boundary: false,
-        end: false,
-        done: false,
-        input: true,
-        command: None,
-    }
+/// One input item.
+fn item(text: &str) -> Option<WebSocketInput> {
+    Some(WebSocketInput { frames: frames(&[text]), pace: 0.0 })
 }
 
-fn end() -> SocketSend {
-    SocketSend {
-        frames: vec![WsFrame::Text("finalize".into())],
-        boundary: true,
-        end: true,
-        done: false,
-        input: false,
-        command: None,
-    }
+/// The input ended.
+fn end() -> Option<WebSocketInput> {
+    None
 }
 
 fn options(max_retry: u32) -> ApiConnectOptions {
     ApiConnectOptions { max_retry, retry_interval: 0.0, ..ApiConnectOptions::default() }
+}
+
+/// A multiplexer that routes each frame, up to `max_contexts` streams a socket.
+fn routed(max_contexts: Option<u32>) -> WebSocketMuxOptions {
+    WebSocketMuxOptions {
+        max_contexts,
+        max_sockets: None,
+        idle_timeout: None,
+        keep_warm: false,
+        routed: true,
+    }
 }
 
 fn env(clock: &Arc<VirtualClock>) -> ProcessEnv {
@@ -328,7 +427,7 @@ fn start(
     clock: &Arc<VirtualClock>,
     retries: u32,
 ) -> Run {
-    let host: Arc<dyn SocketHost> = Arc::clone(protocol) as Arc<dyn SocketHost>;
+    let host: Arc<dyn WebSocketHost> = Arc::clone(protocol) as Arc<dyn WebSocketHost>;
     Run::spawn(Session::direct(
         host,
         options(retries),
@@ -348,57 +447,58 @@ async fn until(what: &str, mut ready: impl FnMut() -> bool) {
     panic!("never happened: {what}");
 }
 
-// Catches: a stream ended at the input's end without the goodbye, or before the provider's
-// last answer (finals lost).
+// Catches: a stream ended at the input's end before the provider's last answer (finals lost).
 #[tokio::test]
-async fn the_input_end_sends_the_goodbye_and_drains_until_the_provider_finishes() {
+async fn the_input_end_waits_for_the_providers_reply_until_it_finishes() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
-    let (protocol, input) = Protocol::new(connection(true));
+    let (protocol, input) = Protocol::new(connection());
     let run = start(&protocol, &provider, &clock, 0);
     input.send(item("audio")).unwrap();
+    input.send(item("close stream")).unwrap();
     input.send(end()).unwrap();
-    until("the goodbye", || provider.count() == 1 && provider.socket(0).sent().len() == 3).await;
-    assert_eq!(provider.socket(0).sent(), ["audio", "finalize", "goodbye"]);
+    until("the end item", || provider.count() == 1 && provider.socket(0).sent().len() == 2).await;
+    crate::testkit::arm_then_advance(&clock, Duration::ZERO).await;
     assert!(!run.is_finished(), "the provider's final answer is still owed");
     provider.socket(0).text("final transcript");
-    provider.socket(0).text("done");
+    provider.socket(0).text("finished");
     run.ended().await.unwrap();
-    assert_eq!(*protocol.read.lock(), ["final transcript", "done"]);
-    assert!(provider.socket(0).closed.load(Ordering::SeqCst), "closed after the drain");
+    assert_eq!(*protocol.read.lock(), ["final transcript", "finished"]);
+    assert_eq!(provider.socket(0).sent(), ["audio", "close stream"]);
+    assert!(provider.socket(0).closed.load(Ordering::SeqCst), "closed after the reply");
 }
 
 // Catches: a stream that owes nothing at its end (every TTS segment answered) waiting out the
-// drain for an answer that never comes, then failing with a read timeout.
+// read limit for an answer that never comes, then failing with a read timeout.
 #[tokio::test]
-async fn an_end_that_owes_nothing_closes_without_a_goodbye_or_drain() {
+async fn an_end_that_owes_no_reply_closes_at_once() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
-    let (protocol, input) = Protocol::new(connection(true));
+    let (protocol, input) = Protocol::new(connection());
+    protocol.owes_reply.store(false, Ordering::SeqCst);
     let run = start(&protocol, &provider, &clock, 0);
-    input.send(SocketSend { done: true, ..end() }).unwrap();
+    input.send(item("text")).unwrap();
+    input.send(end()).unwrap();
     run.ended().await.unwrap();
-    assert_eq!(provider.socket(0).sent(), ["finalize"]);
+    assert_eq!(provider.socket(0).sent(), ["text"]);
     assert!(provider.socket(0).closed.load(Ordering::SeqCst));
 }
 
-// Catches: an end on a connection that carried no input (none at all, or only on the one before
-// a rotation) sending the goodbye and waiting out a drain the provider has nothing to answer.
+// Catches: an end on a connection that carried no input (only the one before a replacement did)
+// waiting for a reply the provider has nothing to give.
 #[tokio::test]
-async fn an_end_with_no_input_on_its_connection_closes_without_a_goodbye_or_drain() {
+async fn an_end_with_no_input_on_its_connection_closes_at_once() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
-    let (protocol, input) = Protocol::new(connection(true));
+    let (protocol, input) = Protocol::new(connection());
     let run = start(&protocol, &provider, &clock, 0);
     input.send(item("audio")).unwrap();
     until("sent", || provider.count() == 1 && provider.socket(0).sent() == ["audio"]).await;
     run.session.reconnect("options changed");
-    until("the goodbye", || provider.socket(0).sent() == ["audio", "goodbye"]).await;
-    provider.socket(0).close(Some(1000), None);
     until("the new connection", || provider.count() == 2).await;
     input.send(end()).unwrap();
     run.ended().await.unwrap();
-    assert_eq!(provider.socket(1).sent(), ["finalize"]);
+    assert!(provider.socket(1).sent().is_empty());
 }
 
 // Catches: a close nobody expected read as the stream's end (the loop that ends silently), and
@@ -407,7 +507,7 @@ async fn an_end_with_no_input_on_its_connection_closes_without_a_goodbye_or_drai
 async fn an_unexpected_close_is_retried_on_a_new_connection_and_reported() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
-    let (protocol, input) = Protocol::new(connection(true));
+    let (protocol, input) = Protocol::new(connection());
     let run = start(&protocol, &provider, &clock, 1);
     until("connected", || provider.count() == 1).await;
     provider.socket(0).close(Some(1000), None);
@@ -420,7 +520,7 @@ async fn an_unexpected_close_is_retried_on_a_new_connection_and_reported() {
     );
     input.send(item("audio")).unwrap();
     input.send(end()).unwrap();
-    until("the goodbye", || provider.socket(1).sent().len() == 3).await;
+    until("sent", || provider.socket(1).sent() == ["audio"]).await;
     provider.socket(1).close(Some(1000), None);
     run.ended().await.unwrap();
 }
@@ -430,7 +530,7 @@ async fn an_unexpected_close_is_retried_on_a_new_connection_and_reported() {
 async fn a_final_close_code_fails_at_once_with_its_kind_and_reason() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
-    let (protocol, _input) = Protocol::new(connection(true));
+    let (protocol, _input) = Protocol::new(connection());
     let run = start(&protocol, &provider, &clock, 3);
     until("connected", || provider.count() == 1).await;
     provider.socket(0).close(Some(1008), Some("invalid api key"));
@@ -446,7 +546,7 @@ async fn a_final_close_code_fails_at_once_with_its_kind_and_reason() {
 async fn a_frame_the_protocol_refuses_fails_the_stream() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
-    let (protocol, _input) = Protocol::new(connection(true));
+    let (protocol, _input) = Protocol::new(connection());
     let run = start(&protocol, &provider, &clock, 3);
     until("connected", || provider.count() == 1).await;
     provider.socket(0).text("malformed");
@@ -455,26 +555,21 @@ async fn a_frame_the_protocol_refuses_fails_the_stream() {
     assert!(provider.socket(0).closed.load(Ordering::SeqCst));
 }
 
-// Catches: a hand-written reconnect that spends a retry, drops what the old connection still
-// held, or loses the input queued meanwhile.
+// Catches: a hand-written reconnect that spends a retry, or loses the input queued meanwhile.
 #[tokio::test]
-async fn reconnect_drains_the_old_connection_and_keeps_the_input() {
+async fn reconnect_replaces_the_connection_and_keeps_the_input() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
-    let (protocol, input) = Protocol::new(connection(true));
+    let (protocol, input) = Protocol::new(connection());
     let run = start(&protocol, &provider, &clock, 0);
     input.send(item("one")).unwrap();
     until("sent", || provider.count() == 1 && provider.socket(0).sent() == ["one"]).await;
     run.session.reconnect("options changed");
-    until("the goodbye", || provider.socket(0).sent() == ["one", "goodbye"]).await;
-    input.send(item("two")).unwrap();
-    provider.socket(0).text("last of one");
-    provider.socket(0).close(Some(1000), None);
     until("the new connection", || provider.count() == 2).await;
-    until("held input sent", || provider.socket(1).sent() == ["two"]).await;
-    assert!(provider.socket(0).sent().iter().all(|frame| frame != "two"));
-    assert_eq!(*protocol.read.lock(), ["last of one"]);
-    assert!(protocol.retried.lock().is_empty(), "a rotation is not a failure");
+    assert!(provider.socket(0).closed.load(Ordering::SeqCst));
+    input.send(item("two")).unwrap();
+    until("the input on the new connection", || provider.socket(1).sent() == ["two"]).await;
+    assert!(protocol.retried.lock().is_empty(), "a replacement is not a failure");
     run.session.aclose().await;
     run.ended().await.unwrap();
 }
@@ -482,16 +577,15 @@ async fn reconnect_drains_the_old_connection_and_keeps_the_input() {
 // Catches: a reconnect asked for while the connection opens lost, so the socket keeps the options
 // it was opened with.
 #[tokio::test]
-async fn a_reconnect_while_the_connection_opens_rotates_it() {
+async fn a_reconnect_while_the_connection_opens_replaces_it() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider { slow_handshake: true, ..Provider::default() };
-    let (protocol, _input) = Protocol::new(connection(true));
+    let (protocol, _input) = Protocol::new(connection());
     let run = start(&protocol, &provider, &clock, 0);
     until("opening", || provider.count() == 1).await;
     run.session.reconnect("options changed");
-    until("the goodbye", || provider.socket(0).sent() == ["goodbye"]).await;
-    provider.socket(0).close(Some(1000), None);
     until("the new connection", || provider.count() == 2).await;
+    assert!(provider.socket(0).closed.load(Ordering::SeqCst));
     run.session.aclose().await;
     run.ended().await.unwrap();
 }
@@ -502,8 +596,7 @@ async fn a_reconnect_while_the_connection_opens_rotates_it() {
 async fn a_socket_that_stops_answering_pings_fails_the_attempt() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
-    let pinged =
-        SocketConnection { keepalive: None, ping_interval: Some(30.0), ..connection(true) };
+    let pinged = WebSocketConnection { ping_interval: Some(30.0), ..quiet() };
     let (protocol, _input) = Protocol::new(pinged);
     let run = start(&protocol, &provider, &clock, 0);
     until("connected", || provider.count() == 1).await;
@@ -519,38 +612,38 @@ async fn a_socket_that_stops_answering_pings_fails_the_attempt() {
     assert!(provider.socket(0).closed.load(Ordering::SeqCst));
 }
 
-// Catches: a keepalive on a fixed beat (or none), and a drain with no bound.
+// Catches: a keepalive on a fixed beat (or none), and a reply wait with no bound.
 #[tokio::test]
-async fn keepalive_fills_idle_time_and_a_silent_drain_times_out() {
+async fn keepalive_fills_idle_time_and_a_silent_reply_wait_times_out() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
-    let (protocol, input) = Protocol::new(connection(true));
+    let (protocol, input) = Protocol::new(connection());
     let run = start(&protocol, &provider, &clock, 0);
     until("connected", || provider.count() == 1).await;
     crate::testkit::arm_then_advance(&clock, Duration::from_secs(5)).await;
     until("keepalive", || provider.socket(0).sent() == ["keepalive"]).await;
     input.send(item("audio")).unwrap();
     input.send(end()).unwrap();
-    until("the goodbye", || provider.socket(0).sent().len() == 4).await;
-    crate::testkit::arm_then_advance(&clock, DRAIN_LIMIT).await;
+    until("the audio", || provider.socket(0).sent().len() == 2).await;
+    crate::testkit::arm_then_advance(&clock, DEFAULT_WAIT).await;
     let error = run.ended().await.unwrap_err().attempt_error();
     assert_eq!(error.timeout, Some(lk_agents_abi::errors::Timeout::Read));
-    assert_eq!(provider.socket(0).sent(), ["keepalive", "audio", "finalize", "goodbye"]);
+    assert_eq!(provider.socket(0).sent(), ["keepalive", "audio"]);
 }
 
-// Catches: a provider that answered everything it heard and then stays silent after the goodbye
-// failing the stream with a read timeout.
+// Catches: a provider that answered everything it heard and then stays silent after the input's
+// end failing the stream with a read timeout.
 #[tokio::test]
-async fn a_silent_drain_the_provider_owes_nothing_ends_cleanly_at_the_read_limit() {
+async fn a_silent_reply_wait_with_nothing_pending_ends_cleanly_at_the_read_limit() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
-    let (protocol, input) = Protocol::new(connection(true));
-    protocol.settled.store(true, Ordering::SeqCst);
+    let (protocol, input) = Protocol::new(connection());
+    protocol.nothing_pending.store(true, Ordering::SeqCst);
     let run = start(&protocol, &provider, &clock, 0);
     input.send(item("audio")).unwrap();
     input.send(end()).unwrap();
-    until("the goodbye", || provider.count() == 1 && provider.socket(0).sent().len() == 3).await;
-    crate::testkit::arm_then_advance(&clock, DRAIN_LIMIT).await;
+    until("the audio", || provider.count() == 1 && provider.socket(0).sent().len() == 1).await;
+    crate::testkit::arm_then_advance(&clock, DEFAULT_WAIT).await;
     run.ended().await.unwrap();
     assert!(provider.socket(0).closed.load(Ordering::SeqCst));
 }
@@ -560,7 +653,7 @@ async fn a_silent_drain_the_provider_owes_nothing_ends_cleanly_at_the_read_limit
 async fn aclose_ends_a_stream_waiting_for_input_and_closes_the_socket() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
-    let (protocol, _input) = Protocol::new(connection(true));
+    let (protocol, _input) = Protocol::new(connection());
     let run = start(&protocol, &provider, &clock, 0);
     until("connected", || provider.count() == 1).await;
     run.session.aclose().await;
@@ -571,15 +664,15 @@ async fn aclose_ends_a_stream_waiting_for_input_and_closes_the_socket() {
 // A multiplexer: frames `<context>:<payload>`.
 
 struct Contexts {
-    connection: SocketConnection,
+    connection: WebSocketConnection,
 }
 
-impl MuxHost for Contexts {
+impl WebSocketMuxHost for Contexts {
     fn connect(
         &self,
         _cx: &Cx,
         _conn_options: ApiConnectOptions,
-    ) -> BoxFuture<'_, Result<SocketConnection, ProviderError>> {
+    ) -> BoxFuture<'_, Result<WebSocketConnection, ProviderError>> {
         Box::pin(async move { Ok(self.connection.clone()) })
     }
 
@@ -587,10 +680,17 @@ impl MuxHost for Contexts {
         &self,
         _cx: &Cx,
         frame: WsFrame,
-    ) -> BoxFuture<'_, Result<Option<String>, ProviderError>> {
+    ) -> BoxFuture<'_, Result<WebSocketMuxRoute, ProviderError>> {
         Box::pin(async move {
-            let WsFrame::Text(text) = frame else { return Ok(None) };
-            Ok(text.split_once(':').map(|(context, _)| context.to_owned()))
+            let WsFrame::Text(text) = frame else { return Ok(WebSocketMuxRoute::default()) };
+            if text == "socket ready" {
+                return Ok(WebSocketMuxRoute { context: None, message: None, ready: true });
+            }
+            Ok(WebSocketMuxRoute {
+                context: text.split_once(':').map(|(context, _)| context.to_owned()),
+                message: None,
+                ready: false,
+            })
         })
     }
 
@@ -601,14 +701,6 @@ impl MuxHost for Contexts {
     ) -> BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>> {
         Box::pin(async move { Ok(vec![WsFrame::Text(format!("open {context_id}"))]) })
     }
-
-    fn close_context(
-        &self,
-        _cx: &Cx,
-        context_id: String,
-    ) -> BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>> {
-        Box::pin(async move { Ok(vec![WsFrame::Text(format!("cancel {context_id}"))]) })
-    }
 }
 
 // Catches: each multiplexed stream opening its own socket, a frame reaching the wrong stream,
@@ -618,16 +710,16 @@ async fn multiplexed_streams_share_one_socket_and_get_only_their_frames() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
     let mux = Arc::new(Mux::new(
-        Arc::new(Contexts { connection: connection(false) }),
-        None,
+        Arc::new(Contexts { connection: quiet() }),
+        routed(None),
         env(&clock),
         provider.transports(),
     ));
     let mut streams = Vec::new();
     for context in ["a", "b"] {
-        let (protocol, input) = Protocol::new(connection(false));
+        let (protocol, input) = Protocol::new(quiet());
         let run = Run::spawn(Session::shared(
-            Arc::clone(&protocol) as Arc<dyn SocketHost>,
+            Arc::clone(&protocol) as Arc<dyn WebSocketHost>,
             options(0),
             "fake".into(),
             env(&clock),
@@ -643,16 +735,19 @@ async fn multiplexed_streams_share_one_socket_and_get_only_their_frames() {
     assert_eq!(provider.count(), 1, "one socket for both streams");
     let socket = provider.socket(0);
     socket.text("b:hello b");
-    socket.text("a:done");
-    let (protocol_a, _, run_a) = streams.remove(0);
+    socket.text("a:hello a");
+    let (protocol_a, input_a, run_a) = streams.remove(0);
+    until("a read", || protocol_a.read.lock().len() == 1).await;
+    protocol_a.owes_reply.store(false, Ordering::SeqCst);
+    input_a.send(end()).unwrap();
     run_a.ended().await.unwrap();
-    assert_eq!(*protocol_a.read.lock(), ["a:done"]);
+    assert_eq!(*protocol_a.read.lock(), ["a:hello a"]);
     let (protocol_b, _, run_b) = streams.remove(0);
     until("b read", || protocol_b.read.lock().len() == 1).await;
     assert_eq!(*protocol_b.read.lock(), ["b:hello b"]);
     run_b.session.aclose().await;
     run_b.ended().await.unwrap();
-    assert_eq!(socket.sent(), ["open a", "open b", "cancel b"], "a finished, b was cut short");
+    assert_eq!(socket.sent(), ["open a", "open b", "cancel mine"], "a finished, b was cut short");
     assert!(!socket.closed.load(Ordering::SeqCst), "the socket stays for the next stream");
     mux.aclose().await;
     assert!(socket.closed.load(Ordering::SeqCst));
@@ -664,18 +759,18 @@ async fn multiplexed_streams_share_one_socket_and_get_only_their_frames() {
 async fn a_shared_socket_that_stops_answering_pings_fails_every_stream_on_it() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
-    let pinged = SocketConnection { ping_interval: Some(30.0), ..connection(false) };
+    let pinged = WebSocketConnection { ping_interval: Some(30.0), ..quiet() };
     let mux = Arc::new(Mux::new(
         Arc::new(Contexts { connection: pinged }),
-        None,
+        routed(None),
         env(&clock),
         provider.transports(),
     ));
     let mut runs = Vec::new();
     for context in ["a", "b"] {
-        let (protocol, input) = Protocol::new(connection(false));
+        let (protocol, input) = Protocol::new(quiet());
         let run = Run::spawn(Session::shared(
-            Arc::clone(&protocol) as Arc<dyn SocketHost>,
+            Arc::clone(&protocol) as Arc<dyn WebSocketHost>,
             options(0),
             "fake".into(),
             env(&clock),
@@ -704,17 +799,17 @@ async fn prewarm_opens_the_shared_socket_the_first_stream_then_takes() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
     let mux = Arc::new(Mux::new(
-        Arc::new(Contexts { connection: connection(false) }),
-        None,
+        Arc::new(Contexts { connection: quiet() }),
+        routed(None),
         env(&clock),
         provider.transports(),
     ));
     mux.prewarm();
     until("prewarmed", || provider.count() == 1).await;
     mux.prewarm();
-    let (protocol, _input) = Protocol::new(connection(false));
+    let (protocol, _input) = Protocol::new(quiet());
     let run = Run::spawn(Session::shared(
-        Arc::clone(&protocol) as Arc<dyn SocketHost>,
+        Arc::clone(&protocol) as Arc<dyn WebSocketHost>,
         options(0),
         "fake".into(),
         env(&clock),
@@ -751,36 +846,196 @@ async fn input_waits_for_the_provider_to_be_ready_after_the_setup() {
     let provider = Provider::default();
     let (protocol, input) = Protocol::new(setup_then_ready());
     let run = start(&protocol, &provider, &clock, 0);
-    input.send(command("hello", 1)).unwrap();
-    input.send(item("audio")).unwrap();
     until("the setup", || provider.count() == 1 && provider.socket(0).sent() == ["setup"]).await;
-    run.session.ready();
+    protocol.send_now("hello");
+    input.send(item("audio")).unwrap();
+    crate::testkit::arm_then_advance(&clock, Duration::ZERO).await;
+    assert_eq!(provider.socket(0).sent(), ["setup"], "nothing goes out before ready");
     provider.socket(0).text("ready");
     until("the input", || provider.socket(0).sent() == ["setup", "hello", "audio"]).await;
-    assert_eq!(*protocol.written.lock(), [1], "a written command is reported");
     run.session.aclose().await;
     run.ended().await.unwrap();
 }
 
-// Catches: a command taken while a rotation began carried onto the next connection (ahead of
-// what that one rebuilt), and the setup not first on the new connection.
+// Catches: a provider that finishes its session after each request (its own "finished" message)
+// failing the stream as a lost connection or ending it while input still comes, or the next input
+// sent on the finished session.
 #[tokio::test]
-async fn a_rotation_returns_a_command_it_could_not_write_and_resends_only_input() {
+async fn a_finished_session_continues_the_input_on_a_new_connection() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
-    let (protocol, input) =
-        Protocol::new(SocketConnection { awaits_ready: false, ..setup_then_ready() });
+    let (protocol, input) = Protocol::new(connection());
     let run = start(&protocol, &provider, &clock, 0);
-    until("the setup", || provider.count() == 1 && provider.socket(0).sent() == ["setup"]).await;
-    run.session.reconnect("options changed");
-    until("the goodbye", || provider.socket(0).sent() == ["setup", "goodbye"]).await;
-    input.send(command("old command", 7)).unwrap();
-    input.send(item("audio")).unwrap();
-    until("the command returned", || *protocol.returned.lock() == [7]).await;
-    provider.socket(0).close(Some(1000), None);
-    until("the new connection", || provider.count() == 2).await;
-    until("held input sent", || provider.socket(1).sent() == ["setup", "audio"]).await;
-    assert!(protocol.written.lock().is_empty());
+    input.send(item("one")).unwrap();
+    until("sent", || provider.count() == 1 && provider.socket(0).sent() == ["one"]).await;
+    provider.socket(0).text("finished");
+    input.send(item("two")).unwrap();
+    until("the next input", || provider.count() == 2 && provider.socket(1).sent() == ["two"]).await;
+    assert_eq!(provider.socket(0).sent(), ["one"]);
+    assert!(provider.socket(0).closed.load(Ordering::SeqCst));
+    assert_eq!(protocol.finished_sessions.load(Ordering::SeqCst), 1);
+    assert!(protocol.retried.lock().is_empty(), "a finished session is not a failure");
     run.session.aclose().await;
     run.ended().await.unwrap();
 }
+
+// Catches: a provider that takes one request per session (the stream asked it to end the
+// session; its last answer, then its close) read as a lost connection, or its last answer cut off.
+#[tokio::test]
+async fn a_close_the_stream_expected_finishes_the_session_and_continues_on_a_new_connection() {
+    let clock = Arc::new(VirtualClock::new());
+    let provider = Provider::default();
+    let (protocol, input) = Protocol::new(connection());
+    let run = start(&protocol, &provider, &clock, 0);
+    input.send(item("end of request")).unwrap();
+    until("sent", || provider.count() == 1 && provider.socket(0).sent() == ["end of request"])
+        .await;
+    protocol.expects_close.store(true, Ordering::SeqCst);
+    provider.socket(0).text("last answer");
+    provider.socket(0).close(Some(1000), None);
+    until("the session finished", || protocol.finished_sessions.load(Ordering::SeqCst) == 1).await;
+    protocol.expects_close.store(false, Ordering::SeqCst);
+    input.send(item("two")).unwrap();
+    until("the next input", || provider.count() == 2 && provider.socket(1).sent() == ["two"]).await;
+    assert_eq!(*protocol.read.lock(), ["last answer"]);
+    assert!(protocol.retried.lock().is_empty());
+    run.session.aclose().await;
+    run.ended().await.unwrap();
+}
+
+// Catches: a session the stream read as finished (a segment done with no message of the
+// provider's) kept for the next item, which then reaches a provider session already over.
+#[tokio::test]
+async fn an_ended_session_sends_the_next_item_on_a_new_connection() {
+    let clock = Arc::new(VirtualClock::new());
+    let provider = Provider::default();
+    let (protocol, input) = Protocol::new(connection());
+    let run = start(&protocol, &provider, &clock, 0);
+    input.send(item("one")).unwrap();
+    until("sent", || provider.count() == 1 && provider.socket(0).sent() == ["one"]).await;
+    run.session.end_session();
+    input.send(item("two")).unwrap();
+    until("the next item", || provider.count() == 2 && provider.socket(1).sent() == ["two"]).await;
+    assert_eq!(provider.socket(0).sent(), ["one"]);
+    assert_eq!(protocol.finished_sessions.load(Ordering::SeqCst), 1);
+    run.session.aclose().await;
+    run.ended().await.unwrap();
+}
+
+// Catches: a connection opened as soon as the provider finished a session, idling (and timing
+// out at the provider) until the next input, or opened only to send an end that owes nothing.
+#[tokio::test]
+async fn after_a_finished_session_the_next_connection_opens_only_for_the_next_input() {
+    let clock = Arc::new(VirtualClock::new());
+    let provider = Provider::default();
+    let (protocol, input) = Protocol::new(quiet());
+    let run = start(&protocol, &provider, &clock, 0);
+    input.send(item("one")).unwrap();
+    until("sent", || provider.count() == 1 && provider.socket(0).sent() == ["one"]).await;
+    provider.socket(0).text("finished");
+    until("the session finished", || provider.socket(0).closed.load(Ordering::SeqCst)).await;
+    crate::testkit::arm_then_advance(&clock, Duration::ZERO).await;
+    assert_eq!(provider.count(), 1, "no connection before the next input");
+    input.send(item("two")).unwrap();
+    until("the next input", || provider.count() == 2 && provider.socket(1).sent() == ["two"]).await;
+    provider.socket(1).text("finished");
+    until("closed", || provider.socket(1).closed.load(Ordering::SeqCst)).await;
+    input.send(end()).unwrap();
+    run.ended().await.unwrap();
+    assert_eq!(provider.count(), 2, "an end opens no connection of its own");
+}
+
+// Catches: a provider's inactivity rule (finalize after a silence) written as its own timer task,
+// or its frames sent again and again while the input stays silent.
+#[tokio::test]
+async fn the_input_idle_frames_go_once_per_silence() {
+    let clock = Arc::new(VirtualClock::new());
+    let provider = Provider::default();
+    let idle = WebSocketConnection { input_idle: Some(2.0), ..quiet() };
+    let (protocol, input) = Protocol::new(idle);
+    let run = start(&protocol, &provider, &clock, 0);
+    input.send(item("audio")).unwrap();
+    until("sent", || provider.count() == 1 && provider.socket(0).sent() == ["audio"]).await;
+    crate::testkit::arm_then_advance(&clock, Duration::from_secs(2)).await;
+    until("the idle frames", || provider.socket(0).sent() == ["audio", "idle"]).await;
+    crate::testkit::arm_then_advance(&clock, Duration::from_secs(2)).await;
+    crate::testkit::arm_then_advance(&clock, Duration::ZERO).await;
+    assert_eq!(provider.socket(0).sent(), ["audio", "idle"], "once per silence");
+    input.send(item("more")).unwrap();
+    until("more", || provider.socket(0).sent().len() == 3).await;
+    crate::testkit::arm_then_advance(&clock, Duration::from_secs(2)).await;
+    until("idle again", || provider.socket(0).sent() == ["audio", "idle", "more", "idle"]).await;
+    run.session.aclose().await;
+    run.ended().await.unwrap();
+}
+
+// Catches: a provider's rate limit (one frame per 60 ms per key) broken by two streams sending at
+// once, or a frame held back longer than the interval.
+#[tokio::test]
+async fn shared_pacing_spaces_the_frames_of_every_stream_using_it() {
+    let clock = Arc::new(VirtualClock::new());
+    let provider = Provider::default();
+    let pacing = Arc::new(Pacing(Mutex::new(Pacer::new(Some(Duration::from_millis(60)), false))));
+    let mut runs = Vec::new();
+    for _ in 0..2 {
+        let (protocol, input) = Protocol::new(quiet());
+        let host: Arc<dyn WebSocketHost> = Arc::clone(&protocol) as Arc<dyn WebSocketHost>;
+        let session =
+            Session::direct(host, options(0), "fake".into(), env(&clock), provider.transports())
+                .paced(Arc::clone(&pacing));
+        runs.push((input, Run::spawn(session)));
+        until("connected", || provider.count() == runs.len()).await;
+    }
+    let sent = || (0..2).map(|i| provider.socket(i).sent().len()).sum::<usize>();
+    for (input, _) in &runs {
+        input.send(item("audio")).unwrap();
+    }
+    until("the first frame", || sent() == 1).await;
+    crate::testkit::arm_then_advance(&clock, Duration::from_millis(59)).await;
+    assert_eq!(sent(), 1, "the second waits out the interval");
+    crate::testkit::arm_then_advance(&clock, Duration::from_millis(1)).await;
+    until("the second frame", || sent() == 2).await;
+    for (_, run) in runs {
+        run.session.aclose().await;
+        run.ended().await.unwrap();
+    }
+}
+
+// Catches: the provider's request id (from the handshake, or named by a message) lost, so a
+// failure cannot be traced on the provider's side.
+#[tokio::test]
+async fn failures_carry_the_providers_request_id() {
+    let clock = Arc::new(VirtualClock::new());
+    let provider = Provider { headers: vec![("x-request-id", "req-1")], ..Provider::default() };
+    let mut traced = connection();
+    traced.target.request_id_header = Some("x-request-id".into());
+    let (protocol, _input) = Protocol::new(traced);
+    let run = start(&protocol, &provider, &clock, 0);
+    until("connected", || protocol.opened.lock().len() == 1).await;
+    assert_eq!(*protocol.opened.lock(), [Some("req-1".to_owned())]);
+    provider.socket(0).text("request req-2");
+    until("read", || protocol.read.lock().len() == 1).await;
+    provider.socket(0).close(Some(1011), None);
+    let error = run.ended().await.unwrap_err().attempt_error();
+    assert_eq!((error.error_kind, error.request_id.as_deref()), (ErrorKind::Server, Some("req-2")));
+}
+
+// Catches: a rejected handshake's reason phrase or body (which can echo a key) put in the error's
+// message, where every log and trace shows it, instead of its detail.
+#[tokio::test]
+async fn a_rejected_handshake_keeps_the_providers_words_out_of_the_message() {
+    let clock = Arc::new(VirtualClock::new());
+    let provider = Provider { refused: Some((401, "secret-reason")), ..Provider::default() };
+    let (protocol, _input) = Protocol::new(connection());
+    let run = start(&protocol, &provider, &clock, 0);
+    let error = run.ended().await.unwrap_err().attempt_error();
+    assert_eq!((error.status_code, error.error_kind), (Some(401), ErrorKind::Auth));
+    assert!(!error.message.contains("secret-reason"), "{}", error.message);
+    assert_eq!(error.said.and_then(|said| said.detail).as_deref(), Some("secret-reason"));
+}
+
+#[path = "executor_tests.rs"]
+mod executor_tests;
+
+#[path = "mux_tests.rs"]
+mod mux_tests;

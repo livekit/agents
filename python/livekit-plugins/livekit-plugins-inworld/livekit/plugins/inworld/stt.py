@@ -18,7 +18,7 @@ import base64
 import os
 import weakref
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import TypedDict, assert_never
 
 from pydantic import JsonValue
 
@@ -224,8 +224,7 @@ class STT(stt.STT):
         return stream
 
 
-class SpeechStream(stt.SocketStream[_Event, _Command]):
-    goodbye = _Command(closeStream={})
+class SpeechStream(stt.WebSocketStream[_Event, _Command]):
     # speechStarted and the final transcription are Inworld's own speech boundaries
     provider_vad = True
 
@@ -273,42 +272,44 @@ class SpeechStream(stt.SocketStream[_Event, _Command]):
 
         return config
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         ws_url = self._base_url.replace("https://", "wss://").replace("http://", "ws://")
         self._request_id = utils.shortuuid()
-        return http.SocketTarget(
+        return stt.WebSocketTarget(
             ws_url.rstrip("/") + "/" + WS_ENDPOINT,
             headers={"Authorization": self._authorization},
         )
 
-    def setup(self) -> http.Encoded[_Command]:
+    def setup(self) -> _Command:
         return _Command(transcribeConfig=self._build_transcribe_config())
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[_Command]:
-        if isinstance(item, rtc.AudioFrame):
-            return _Command(audioChunk={"content": base64.b64encode(item.data).decode()})
-        if isinstance(item, stt.RecognizeStream.Flush):
-            return _Command(endTurn={})
-        return None
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> _Command:
+        match item:
+            case rtc.AudioFrame():
+                return _Command(audioChunk={"content": base64.b64encode(item.data).decode()})
+            case stt.Flush():
+                return _Command(endTurn={})
+            case stt.EndOfAudio():
+                return _Command(closeStream={})
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Event) -> stt.Report | list[stt.Report] | None:
+    def on_message(self, message: _Event) -> None:
         result = message.get("result", {})
         if "speechStarted" in result:
-            return stt.SpeechStarted()
+            self.report(stt.SpeechStarted())
+            return
         if (t := result.get("transcription")) is None:
-            return None
+            return
         text = t.get("transcript", "")
         is_final = t.get("isFinal", False)
-        reports: list[stt.Report] = []
         if text:
             metadata: dict[str, JsonValue] | None = None
             if voice_profile := t.get("voiceProfile"):
                 metadata = {"voice_profile": voice_profile}
                 if is_final:
                     logger.info(f"Inworld voice profile: {voice_profile}")
-            reports.append(
+            self.report(
                 stt.Transcript(
                     text,
                     LanguageCode(self._language),
@@ -319,5 +320,4 @@ class SpeechStream(stt.SocketStream[_Event, _Command]):
             )
         # an empty final (a false start, unrecognizable noise) still ends the speech
         if is_final:
-            reports.append(stt.SpeechEnded())
-        return reports
+            self.report(stt.SpeechEnded())

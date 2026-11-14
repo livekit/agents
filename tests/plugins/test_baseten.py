@@ -71,6 +71,8 @@ async def test_transcript_timing_is_validated_before_delivery(
         )
         async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
             stream.start_time_offset = 0.25
+            # audio the provider answers: an input with none owes no reply
+            stream.push_frame(rtc.AudioFrame(bytes(3200), 16000, 1, 1600))
             stream.end_input()
             if invalid_timing:
                 with pytest.raises(APIError) as failure:

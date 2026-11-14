@@ -89,6 +89,21 @@ impl ProcessEnv {
     }
 }
 
+/// The HTTP proxy the worker handed this process's jobs: provider sockets tunnel through it.
+static HTTP_PROXY: parking_lot::RwLock<Option<String>> = parking_lot::RwLock::new(None);
+
+/// Registers the HTTP proxy this process's jobs connect through.
+pub fn serve_http_proxy(proxy: Option<String>) {
+    *HTTP_PROXY.write() = proxy;
+}
+
+impl ProcessEnv {
+    /// The HTTP proxy this process's jobs connect through, as the worker handed it over.
+    pub fn http_proxy(&self) -> Option<String> {
+        HTTP_PROXY.read().clone()
+    }
+}
+
 /// The server's settings (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, ...) as the jobs this process runs
 /// read them: what `AgentServer` was given, else its environment. A job process inherits them as
 /// its environment; a job thread reads the ones its server registered here.

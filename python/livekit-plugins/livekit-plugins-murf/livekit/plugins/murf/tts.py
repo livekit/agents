@@ -19,7 +19,7 @@ import os
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict, assert_never
 
 from livekit.agents import (
     APIConnectionError,
@@ -306,7 +306,7 @@ class _Clear(TypedDict):
     context_id: str
 
 
-class _Mux(http.Multiplexer[_Message, _Speak | _Clear]):
+class _Mux(tts.WebSocketMultiplexer[_Message, _Speak | _Clear]):
     """One Murf socket carries every stream's segments, each its own context."""
 
     max_session_duration = 300
@@ -314,8 +314,8 @@ class _Mux(http.Multiplexer[_Message, _Speak | _Clear]):
     def __init__(self, opts: _TTSOptions) -> None:
         self._opts = opts
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
-        return http.SocketTarget(
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        return tts.WebSocketTarget(
             self._opts.get_ws_url("/v1/speech/stream-input"),
             headers={API_AUTH_HEADER: self._opts.api_key},
             params={
@@ -337,7 +337,7 @@ class _Mux(http.Multiplexer[_Message, _Speak | _Clear]):
         return _Clear(clear=True, context_id=context_id)
 
 
-class SynthesizeStream(tts.SocketStream[_Message, _Speak | _Clear]):
+class SynthesizeStream(tts.WebSocketStream[_Message, _Speak | _Clear]):
     def __init__(self, *, opts: _TTSOptions, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self.multiplexer = tts._mux
@@ -345,24 +345,27 @@ class SynthesizeStream(tts.SocketStream[_Message, _Speak | _Clear]):
         # contexts whose text ended: a final before the end is not the context's last answer
         self._ended: set[str] = set()
 
-    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> _Speak | None:
-        if isinstance(item, tts.SegmentText):
-            return self._speak(item.segment_id, item.chunk.text + " ", end=False)
-        if isinstance(item, tts.SegmentEnd):
-            self._ended.add(item.segment_id)
-            return self._speak(item.segment_id, "", end=True)
-        return None
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Speak | None:
+        match item:
+            case tts.SegmentText():
+                return self._speak(item.segment_id, item.chunk.text + " ", end=False)
+            case tts.SegmentEnd():
+                self._ended.add(item.segment_id)
+                return self._speak(item.segment_id, "", end=True)
+            case tts.SegmentStart() | tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Message) -> tts.SegmentOutput | None:
+    def on_message(self, message: _Message) -> None:
         context_id = message.get("context_id") or ""
         if "error" in message:
             raise _error(message)
         if audio := message.get("audio"):
-            return tts.SegmentAudio(context_id, base64.b64decode(audio))
-        if message.get("final") and context_id in self._ended:
+            self.report(tts.SegmentAudio(context_id, base64.b64decode(audio)))
+        elif message.get("final") and context_id in self._ended:
             self._ended.discard(context_id)
-            return tts.SegmentDone(context_id)
-        return None
+            self.report(tts.SegmentDone(context_id))
 
     def _speak(self, context_id: str, text: str, *, end: bool) -> _Speak:
         config = _to_murf_websocket_pkt(self._opts)

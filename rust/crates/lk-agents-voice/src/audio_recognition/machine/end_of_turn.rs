@@ -1,7 +1,7 @@
 use super::{
-    AudioRecognition, Detector, EndOfTurnInfo, Phase, Prediction, Run, Start, TurnId, TurnSnapshot,
-    UserTurnCommitDecision, UserTurnCommitVerdict, UserTurnTracker, compute_end_of_turn_metrics,
-    user_transcript,
+    AudioRecognition, Detector, EndOfTurnInfo, Phase, Prediction, Promoted, Run, Start, TurnId,
+    TurnSnapshot, UserTurnCommitDecision, UserTurnCommitVerdict, UserTurnTracker,
+    compute_end_of_turn_metrics, user_transcript,
 };
 use crate::agent_session::effects::{FlushReason, StreamKind, Timer};
 use crate::agent_session::machine::activity::false_interruption::TurnSettled;
@@ -289,20 +289,18 @@ impl AudioRecognition {
         eff
     }
 
-    /// A released user turn: its words commit now, with no endpointing delay. `None`: nothing
-    /// was said, and the turn is dropped with nothing committed.
+    /// A released user turn: its words, its interim included, commit now, with no endpointing
+    /// delay. `None`: nothing was said, and the turn is dropped with nothing committed.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub fn commit_release(
         &mut self,
         now: Ts,
         skip_reply: bool,
     ) -> (Option<TurnId>, Vec<AudioRecognitionEffect>) {
-        let mut eff = self.promote_interim(None);
-        if self.audio_transcript.is_empty() {
-            eff.extend(self.reset_user_turn(now));
-            return (None, eff);
+        if self.current_transcript().is_empty() {
+            return (None, self.reset_user_turn(now));
         }
-        eff.extend(self.run_eou_detection(now, Start::Released { skip_reply }));
+        let eff = self.run_eou_detection(now, Start::Released { skip_reply });
         (Some(TurnId(self.turn_seq)), eff)
     }
 
@@ -313,6 +311,7 @@ impl AudioRecognition {
         let mut eff = Vec::new();
         self.audio_transcript.clear();
         self.interim_transcript.clear();
+        self.interim_utterance = None;
         self.preflight_transcript.clear();
         self.final_confidences.clear();
         self.last_final_transcript_time = None;
@@ -406,7 +405,8 @@ impl AudioRecognition {
     }
 
     /// A manual commit, after the driver's wait. `text` stands in for STT and goes through
-    /// `promote_interim`, never as a forged final, which would double-report the words.
+    /// `host_words`, never as a forged final, which would double-report the words; without it
+    /// the interim joins the turn when it commits.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub fn commit_user_turn(
         &mut self,
@@ -416,11 +416,13 @@ impl AudioRecognition {
     ) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
         eff.extend(self.take_held_finals());
-        eff.extend(self.promote_interim(text));
+        if let Some(text) = text.filter(|t| !t.is_empty()) {
+            eff.extend(self.host_words(text));
+        }
         // Past the close's edge nothing waits: commit what the turn holds, or nothing; a manual
         // turn completes even with no words.
         let manual = self.cfg.turn_detection_mode == super::TurnDetectionMode::Manual;
-        if self.closed && self.audio_transcript.is_empty() && !manual {
+        if self.closed && self.current_transcript().is_empty() && !manual {
             return eff;
         }
         eff.extend(self.run_eou_detection(now, Start::Manual { skip_reply }));
@@ -434,15 +436,16 @@ impl AudioRecognition {
     fn take_held_finals(&mut self) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
         let held = std::mem::take(&mut self.transcript_buffer);
-        let (finals, rest): (Vec<SpeechEvent>, Vec<SpeechEvent>) =
-            held.into_iter().partition(|ev| ev.kind == SpeechEventType::FinalTranscript);
+        let (finals, rest): (Vec<_>, Vec<_>) =
+            held.into_iter().partition(|(_, ev)| ev.kind == SpeechEventType::FinalTranscript);
         self.transcript_buffer = rest.into();
-        for ev in finals {
+        for (_, ev) in finals {
             let Some(text) = ev.best_alternative().map(|a| a.text.clone()) else { continue };
             if text.is_empty() {
                 continue;
             }
             self.interim_transcript.clear();
+            self.interim_utterance = None;
             eff.push(AudioRecognitionEffect::PublishSessionEvent(user_transcript(
                 &ev,
                 true,
@@ -453,28 +456,43 @@ impl AudioRecognition {
         eff
     }
 
-    /// Held interim words become the final words (emitted first, then appended; an empty interim
-    /// does nothing). `Some(text)` replaces the interim; `Some("")` is `None`.
+    /// A host's words stand in for the recogniser's: they replace the interim and join the turn
+    /// as its final words (emitted first, then appended).
     #[must_use = "recognition effects must be applied before the next transition"]
-    fn promote_interim(&mut self, text: Option<String>) -> Vec<AudioRecognitionEffect> {
+    fn host_words(&mut self, text: String) -> Vec<AudioRecognitionEffect> {
+        self.interim_transcript = text;
+        self.interim_utterance = None;
+        self.promote().1
+    }
+
+    /// The pending interim becomes final words of the turn (emitted first, then appended), at
+    /// the span returned with its utterance when its stream numbers them.
+    #[must_use = "recognition effects must be applied before the next transition"]
+    fn promote(&mut self) -> (Option<Promoted>, Vec<AudioRecognitionEffect>) {
         let mut eff = Vec::new();
-        let held = std::mem::take(&mut self.interim_transcript);
-        let promoted = match text.filter(|t| !t.is_empty()) {
-            Some(text) => text,
-            None => held,
-        };
-        if promoted.is_empty() {
-            return eff;
+        let utterance = self.interim_utterance.take();
+        let interim = std::mem::take(&mut self.interim_transcript);
+        let words = interim.trim();
+        if words.is_empty() {
+            return (None, eff);
         }
         let mut ev = SpeechEvent::new(SpeechEventType::FinalTranscript);
-        ev.alternatives = vec![lk_agents_abi::SpeechData::new("", &promoted)];
+        ev.alternatives = vec![lk_agents_abi::SpeechData::new("", words)];
+        ev.utterance = utterance.map(|u| u.n);
         eff.push(AudioRecognitionEffect::PublishSessionEvent(user_transcript(
             &ev,
             true,
             self.speaking_hint(),
         )));
-        self.audio_transcript = format!("{} {}", self.audio_transcript, promoted).trim().to_owned();
-        eff
+        let kept = self.audio_transcript.trim_end().len();
+        self.audio_transcript.truncate(kept);
+        if !self.audio_transcript.is_empty() {
+            self.audio_transcript.push(' ');
+        }
+        let start = self.audio_transcript.len();
+        self.audio_transcript.push_str(words);
+        let span = start..self.audio_transcript.len();
+        (utterance.map(|utterance| Promoted { utterance, span }), eff)
     }
 
     /// Closing: cut a running endpointing delay short, or drop it when `commit` is off (an error
@@ -708,6 +726,7 @@ impl AudioRecognition {
             // A final with no onset since the previous commit: the turn it belongs to has ended.
             late: !manual && self.turn_seq > 0 && snapshot_turn_start.is_none(),
             declared,
+            manual,
         };
 
         // Whatever the phase held: the streaming detector's answer, and a countdown to supersede.
@@ -896,6 +915,15 @@ impl AudioRecognition {
         let mut eff = Vec::new();
         self.turn_seq += 1;
         let turn_id = TurnId(self.turn_seq);
+        // The interim joins the turn; one with no utterance to correct it later only on a host's
+        // commit, as its final would otherwise be heard twice.
+        let promoted = if run.manual || self.interim_utterance.is_some() {
+            let (promoted, promoting) = self.promote();
+            eff.extend(promoting);
+            promoted
+        } else {
+            None
+        };
         let transcript_confidence = self.average_confidence();
         let words = std::mem::take(&mut self.audio_transcript);
         let confidences = std::mem::take(&mut self.final_confidences);
@@ -916,6 +944,7 @@ impl AudioRecognition {
             backchannel_over_agent: self.overlap.backchannel_over_agent(),
             late: run.late,
             snapshot: run.snapshot,
+            promoted,
         };
         eff.extend(self.set_phase(Phase::Committed { turn_id, speaking }));
         eff.push(AudioRecognitionEffect::EndOfTurn(info));

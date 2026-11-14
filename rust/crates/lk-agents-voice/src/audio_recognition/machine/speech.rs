@@ -4,11 +4,13 @@ use super::{
     ServerSpeech, Start, TurnDetectionMode, user_transcript,
 };
 use crate::agent_session::effects::{StreamKind, Timer};
+use crate::audio_recognition::Utterance;
 use crate::audio_recognition::effects::AudioRecognitionEffect;
 use crate::audio_recognition::overlap::{In, OverlapRefusal};
 use crate::events::{
     EndOfSpeechEvent, PreemptiveGenerationEvent, SessionEvent, StartOfSpeechEvent,
 };
+use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::{SpeechEvent, SpeechEventType, Ts, VadEvent, VadEventType, secs};
@@ -16,10 +18,15 @@ use std::time::Duration;
 
 impl AudioRecognition {
     #[must_use = "recognition effects must be applied before the next transition"]
-    pub fn on_stt_event(&mut self, now: Ts, ev: &SpeechEvent) -> Vec<AudioRecognitionEffect> {
+    pub fn on_stt_event(
+        &mut self,
+        now: Ts,
+        stream: ResourceId,
+        ev: &SpeechEvent,
+    ) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
         if self.closed {
-            eff.extend(self.accumulate_closed(now, ev));
+            eff.extend(self.accumulate_closed(now, stream, ev));
             return eff;
         }
         // In manual mode a committed turn stops accepting transcripts, unless a countdown still
@@ -50,7 +57,7 @@ impl AudioRecognition {
         // `RECOGNITION_USAGE` carries no transcript, so it bypasses the hold buffer.
         if ev.kind != SpeechEventType::RecognitionUsage && self.cfg.interruption_enabled {
             if self.should_hold_stt_event(now, ev) {
-                self.transcript_buffer.push_back(ev.clone());
+                self.transcript_buffer.push_back((stream, ev.clone()));
                 return eff;
             }
             if !self.transcript_buffer.is_empty() {
@@ -71,7 +78,7 @@ impl AudioRecognition {
                 eff.extend(self.on_final_transcript(now, ev, stt_last_speaking_time))
             }
             SpeechEventType::PreflightTranscript => {
-                eff.extend(self.on_preflight_transcript(now, ev, stt_last_speaking_time))
+                eff.extend(self.on_preflight_transcript(now, stream, ev, stt_last_speaking_time))
             }
             SpeechEventType::InterimTranscript => {
                 let speaking = self.speaking_hint();
@@ -79,7 +86,7 @@ impl AudioRecognition {
                     ev, false, speaking,
                 )));
                 if let Some(a) = ev.best_alternative() {
-                    self.interim_transcript = a.text.clone();
+                    self.hear_interim(stream, ev, &a.text);
                 }
             }
             SpeechEventType::EndOfSpeech => {
@@ -99,7 +106,12 @@ impl AudioRecognition {
 
     /// Words after the close's edge: shown and kept for the trailing commit, nothing else.
     #[must_use = "recognition effects must be applied before the next transition"]
-    fn accumulate_closed(&mut self, now: Ts, ev: &SpeechEvent) -> Vec<AudioRecognitionEffect> {
+    fn accumulate_closed(
+        &mut self,
+        now: Ts,
+        stream: ResourceId,
+        ev: &SpeechEvent,
+    ) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
         match ev.kind {
             SpeechEventType::FinalTranscript => {
@@ -118,7 +130,7 @@ impl AudioRecognition {
             // Kept for the trailing commit, not shown: a late interim after the edge is dropped.
             SpeechEventType::InterimTranscript => {
                 if let Some(a) = ev.best_alternative() {
-                    self.interim_transcript = a.text.clone();
+                    self.hear_interim(stream, ev, &a.text);
                 }
             }
             SpeechEventType::PreflightTranscript
@@ -199,6 +211,7 @@ impl AudioRecognition {
     fn on_preflight_transcript(
         &mut self,
         now: Ts,
+        stream: ResourceId,
         ev: &SpeechEvent,
         stt_last_speaking_time: Ts,
     ) -> Vec<AudioRecognitionEffect> {
@@ -220,7 +233,7 @@ impl AudioRecognition {
         self.last_final_transcript_time = Some(now);
         self.preflight_transcript =
             format!("{} {}", self.audio_transcript, alt.text).trim_start().to_owned();
-        self.interim_transcript = alt.text.clone();
+        self.hear_interim(stream, ev, &alt.text);
 
         if self.stt_timing_wins() {
             self.last_speaking_time = Some(stt_last_speaking_time);
@@ -507,6 +520,7 @@ impl AudioRecognition {
                         self.speaking_hint(),
                     )));
                     self.interim_transcript = text;
+                    self.interim_utterance = None;
                 }
             }
         }
@@ -661,7 +675,7 @@ impl AudioRecognition {
         let started = self.input_started_at?;
 
         let mut emit_from: Option<usize> = None;
-        for (i, ev) in self.transcript_buffer.iter().enumerate() {
+        for (i, (_, ev)) in self.transcript_buffer.iter().enumerate() {
             let Some(alt) = ev.best_alternative() else {
                 emit_from = Some(emit_from.map_or(i, |j| j.min(i)));
                 continue;
@@ -684,15 +698,15 @@ impl AudioRecognition {
     #[must_use = "recognition effects must be applied before the next transition"]
     fn flush_held_transcripts(&mut self, now: Ts) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
-        let events: Vec<SpeechEvent> = match self.plan_flush(now) {
+        let events: Vec<(ResourceId, SpeechEvent)> = match self.plan_flush(now) {
             Some(from) => self.transcript_buffer.iter().skip(from).cloned().collect(),
             None => Vec::new(),
         };
 
         // Reset before emitting, so re-emitted events are not held again.
         self.reset_interruption_detection();
-        for ev in events {
-            eff.extend(self.on_stt_event(now, &ev));
+        for (stream, ev) in events {
+            eff.extend(self.on_stt_event(now, stream, &ev));
         }
         eff
     }
@@ -813,11 +827,18 @@ impl AudioRecognition {
         }
     }
 
+    /// The interim the turn would commit with now, and the utterance it is of.
+    fn hear_interim(&mut self, stream: ResourceId, ev: &SpeechEvent, text: &str) {
+        self.interim_transcript = text.to_owned();
+        self.interim_utterance = ev.utterance.map(|n| Utterance { stream, n });
+    }
+
     /// A final's words join the turn, space-separated; the interim goes.
     fn append_final(&mut self, text: &str) {
         self.audio_transcript =
             format!("{} {}", self.audio_transcript, text).trim_start().to_owned();
         self.interim_transcript.clear();
+        self.interim_utterance = None;
     }
 
     pub(super) fn ensure_user_turn(&mut self, now: Ts, start_time: Option<Ts>) {

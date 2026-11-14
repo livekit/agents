@@ -246,9 +246,10 @@ from ._generated._core_utils import (
     ConnectionPoolState as ConnectionPoolState,
     ExpFilter as ExpFilter,
     MovingAverage as MovingAverage,
-    SocketMux as SocketMux,
-    SocketSession as SocketSession,
     StaleHandle as StaleHandle,
+    WebSocketMux as WebSocketMux,
+    WebSocketPacing as WebSocketPacing,
+    WebSocketSession as WebSocketSession,
 )
 from ._generated._core_vad import (
     InferenceVad as InferenceVad,

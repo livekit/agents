@@ -130,7 +130,8 @@ impl SessionEvent {
         // `created_at` is stamped by the host.
         let host_stamp = 0.0;
         Some(match self {
-            SessionEvent::Telemetry(_) => return None,
+            // The room's: the host reads the corrected message in its history.
+            SessionEvent::Telemetry(_) | SessionEvent::UserInputCorrected { .. } => return None,
             SessionEvent::HistoryReloaded { items } => {
                 HostWire::HistoryReloaded(w::HistoryReloadedWire { items: items.clone() })
             }
@@ -319,7 +320,13 @@ mod tests {
         let mut alt = SpeechData::new("en", "hello");
         alt.speaker_id = Some("S1".into());
         ev.alternatives = vec![alt];
-        let t = UserTranscriptEvent { ev, is_final: true, speaking: None, item_id: None };
+        let t = UserTranscriptEvent {
+            ev,
+            is_final: true,
+            speaking: None,
+            item_id: None,
+            segment: String::new(),
+        };
         let Some(HostWire::UserTranscript(w)) =
             SessionEvent::UserInputTranscribed(Box::new(t)).wire(anchor(), &|_| unreachable!())
         else {

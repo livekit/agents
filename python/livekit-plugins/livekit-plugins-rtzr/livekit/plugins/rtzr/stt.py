@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import assert_never
 
 from typing_extensions import TypedDict
 
@@ -151,10 +152,10 @@ class STT(stt.STT):
         )
 
 
-class SpeechStream(stt.SocketStream[_Transcript, None]):
-    # ends a segment: the server sends what it holds, then closes
-    goodbye = "EOS"
+class SpeechStream(stt.WebSocketStream[_Transcript, str]):
     frame_ms = _DEFAULT_CHUNK_MS
+    # each segment is one connection: EOS, then the server sends what it holds and closes
+    new_session_per_flush = True
 
     def __init__(
         self,
@@ -167,10 +168,8 @@ class SpeechStream(stt.SocketStream[_Transcript, None]):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=params.sample_rate)
         self._params = params
         self._client = client
-        self._segment_audio = False
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
-        self._segment_audio = False
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         config = self._client.build_config(
             model_name=self._params.model_name,
             domain=self._params.domain,
@@ -184,23 +183,16 @@ class SpeechStream(stt.SocketStream[_Transcript, None]):
         )
         return await self._client.streaming_target(config, conn_options=conn_options)
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[None]:
-        if isinstance(item, rtc.AudioFrame):
-            self._segment_audio = True
-            return bytes(item.data)
-        if (
-            isinstance(item, stt.RecognizeStream.Flush)
-            and self._segment_audio
-            and not self.input.closed
-        ):
-            # each segment is one connection: EOS, then the next segment connects again (the
-            # input's end sends its own EOS)
-            self.reconnect("segment ended")
-        return None
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | str:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush() | stt.EndOfAudio():
+                return "EOS"
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Transcript) -> stt.Transcript | None:
+    def on_message(self, message: _Transcript) -> None:
         if "error" in message or message.get("type") == "error":
             raise APIStatusError(
                 "RTZR STT server error",
@@ -210,24 +202,26 @@ class SpeechStream(stt.SocketStream[_Transcript, None]):
         alternatives = message.get("alternatives")
         text = (alternatives[0].get("text") or "") if alternatives else ""
         if not text:
-            return None
+            return
         offset = self.start_time_offset
         start = (message.get("start_at") or 0) / 1000.0 + offset
         words = message.get("words") or []
-        return stt.Transcript(
-            text,
-            self._params.language,
-            final=bool(message.get("final", False)),
-            start_time=start,
-            end_time=start + (message.get("duration") or 0) / 1000.0,
-            words=[
-                TranscriptChunk(
-                    text=w.get("text") or "",
-                    start_time=(w.get("start_at") or 0) / 1000.0 + offset,
-                    end_time=((w.get("start_at") or 0) + (w.get("duration") or 0)) / 1000.0
-                    + offset,
-                )
-                for w in words
-            ]
-            or None,
+        self.report(
+            stt.Transcript(
+                text,
+                self._params.language,
+                final=bool(message.get("final", False)),
+                start_time=start,
+                end_time=start + (message.get("duration") or 0) / 1000.0,
+                words=[
+                    TranscriptChunk(
+                        text=w.get("text") or "",
+                        start_time=(w.get("start_at") or 0) / 1000.0 + offset,
+                        end_time=((w.get("start_at") or 0) + (w.get("duration") or 0)) / 1000.0
+                        + offset,
+                    )
+                    for w in words
+                ]
+                or None,
+            )
         )

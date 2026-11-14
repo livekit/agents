@@ -890,10 +890,10 @@ impl Resolver<'_> {
         }
         let proxy = voc::find(&entries, "proxy")
             .ok_or_else(|| format!("{at}: `{}` is not a #[host(proxy)] trait", tr.ident))?;
-        let host = voc::text(at, &proxy.nested, "host")?
+        let host = voc::text(at, &proxy.nested, "annotation")?
+            .or(voc::text(at, &proxy.nested, "host")?)
             .ok_or_else(|| format!("{at}: proxy `{}` names no host class", tr.ident))?;
-        // A plugin base class that is an `EventEmitter` generic over the plugin's own events.
-        let generic = voc::find(&proxy.nested, "generic").is_some();
+        let generic = voc::generic(at, &proxy.nested)?;
         let self_events = voc::find(&proxy.nested, "self_events").is_some();
         if self_events && boxed {
             return Err(format!("{at}: `self_events` are shared, never owned"));

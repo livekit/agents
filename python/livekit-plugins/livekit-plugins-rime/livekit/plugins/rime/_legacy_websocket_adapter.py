@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
-from typing import Annotated, Literal, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
 
 from pydantic import Field
 
-from livekit.agents import APIConnectOptions, APIError, http, tts
+from livekit.agents import APIConnectOptions, APIError, tts
 from livekit.agents.voice.io import TranscriptChunk
 
 from ._stream_tts import StreamTTS
@@ -77,7 +77,7 @@ class LegacySynthesisOptions:
     sample_rate: int
 
 
-class LegacyWebSocketAdapter(http.Multiplexer[_Message, _Text | _Flush]):
+class LegacyWebSocketAdapter(tts.WebSocketMultiplexer[_Message, _Text | _Flush]):
     """Rime WS3 sockets bound to one endpoint, one stream at a time each."""
 
     max_session_duration = 300
@@ -87,8 +87,8 @@ class LegacyWebSocketAdapter(http.Multiplexer[_Message, _Text | _Flush]):
         self._websocket_url = websocket_url
         self._api_key = api_key
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
-        return http.SocketTarget(
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        return tts.WebSocketTarget(
             self._websocket_url, headers={"Authorization": f"Bearer {self._api_key}"}
         )
 
@@ -117,7 +117,7 @@ class LegacyWebSocketAdapter(http.Multiplexer[_Message, _Text | _Flush]):
             self.invalidate()
 
 
-class _LegacyWebSocketSynthesizeStream(tts.SocketStream[_Message, _Text | _Flush]):
+class _LegacyWebSocketSynthesizeStream(tts.WebSocketStream[_Message, _Text | _Flush]):
     """One LiveKit stream on a Rime WS3 socket, each segment its own context."""
 
     def __init__(
@@ -133,17 +133,22 @@ class _LegacyWebSocketSynthesizeStream(tts.SocketStream[_Message, _Text | _Flush
         )
         self.multiplexer = mux
 
-    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> _Text | _Flush | None:
-        if isinstance(item, tts.SegmentText):
-            return {"text": item.chunk.text + " ", "contextId": item.segment_id}
-        if isinstance(item, tts.SegmentEnd):
-            return {"operation": "flush", "contextId": item.segment_id}
-        return None
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Text | _Flush | None:
+        match item:
+            case tts.SegmentText():
+                return {"text": item.chunk.text + " ", "contextId": item.segment_id}
+            case tts.SegmentEnd():
+                return {"operation": "flush", "contextId": item.segment_id}
+            case tts.SegmentStart() | tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Chunk | _Timestamps | _Done | _Error) -> tts.SegmentOutput:
+    def on_message(self, message: _Chunk | _Timestamps | _Done | _Error) -> None:
         if message["type"] == "chunk":
-            return tts.SegmentAudio(message["contextId"], base64.b64decode(message["data"]))
-        if message["type"] == "timestamps":
+            audio = base64.b64decode(message["data"])
+            self.report(tts.SegmentAudio(message["contextId"], audio))
+        elif message["type"] == "timestamps":
             timestamps = message.get("word_timestamps")
             words = (
                 [
@@ -155,10 +160,13 @@ class _LegacyWebSocketSynthesizeStream(tts.SocketStream[_Message, _Text | _Flush
                 if timestamps
                 else []
             )
-            return tts.SegmentWords(message["contextId"], words)
-        if message["type"] == "done":
-            return tts.SegmentDone(message["contextId"])
-        raise _error()
+            self.report(tts.SegmentWords(message["contextId"], words))
+        elif message["type"] == "done":
+            self.report(tts.SegmentDone(message["contextId"]))
+        elif message["type"] == "error":
+            raise _error()
+        else:
+            assert_never(message)
 
 
 def _error() -> APIError:

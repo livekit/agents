@@ -262,7 +262,7 @@ impl VoiceDriver {
         }
     }
 
-    fn on_session_event(&mut self, now: Ts, ev: SessionEvent) {
+    fn on_session_event(&mut self, now: Ts, mut ev: SessionEvent) {
         // Clear the realtime model's buffered audio so a "mm-hm" cannot prefix the next turn.
         if matches!(ev, SessionEvent::BackchannelConfirmed)
             && self.session.config.effective().turn.interruption.detection_enabled()
@@ -272,10 +272,10 @@ impl VoiceDriver {
                 lk_agents_abi::llm::realtime::ClearAudio {},
             ));
         }
-        // The journal names the utterance's segments by the realtime item's id, else a minted one;
-        // the event carries only the provider's.
-        if let SessionEvent::UserInputTranscribed(t) = &ev {
-            let minted = self.session.ids.user_transcript_item(t.is_final);
+        // The utterance's segments are named by the realtime item's id, else a minted one: the
+        // journal's and the room's.
+        if let SessionEvent::UserInputTranscribed(t) = &mut ev {
+            let minted = self.session.ids.user_transcript_segment(t.is_final);
             let id = t.item_id.clone().unwrap_or(minted);
             let text = t.ev.best_alternative().map(|a| a.text.clone()).unwrap_or_default();
             self.record_trace(Step::Turn(TurnStep::TranscriptSegment {
@@ -283,6 +283,10 @@ impl VoiceDriver {
                 text,
                 is_final: t.is_final,
             }));
+            if t.is_final {
+                self.activity.last_final_segment = Some(id.clone());
+            }
+            t.segment = id;
         }
         if let SessionEvent::MetricsCollected { metrics, speech, counted: false } = &ev {
             // A request the session saw start is measured by its record; others count here.
@@ -377,6 +381,7 @@ impl VoiceDriver {
             SessionEvent::UserTurnExceeded(e) => self.on_user_turn_exceeded(e),
             SessionEvent::MetricsCollected { .. }
             | SessionEvent::Telemetry(_)
+            | SessionEvent::UserInputCorrected { .. }
             | SessionEvent::Error(_)
             | SessionEvent::OverlappingSpeech(_)
             | SessionEvent::Diagnostic(_)

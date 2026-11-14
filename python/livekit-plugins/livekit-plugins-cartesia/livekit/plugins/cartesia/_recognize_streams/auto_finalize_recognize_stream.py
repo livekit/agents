@@ -14,13 +14,13 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode
 
 from pydantic import Field
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError, LanguageCode, http, stt, utils
+from livekit.agents import APIConnectOptions, APIStatusError, LanguageCode, stt, utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from ..constants import API_AUTH_HEADER, API_VERSION, API_VERSION_HEADER, AUDIO_ENCODING, USER_AGENT
@@ -66,7 +66,11 @@ STTEventMessage = Annotated[
 """Server-sent message on the ``/stt/turns/websocket`` endpoint."""
 
 
-class AutoFinalizeRecognizeStream(stt.SocketStream[STTEventMessage, None]):
+class _Close(TypedDict):
+    type: Literal["close"]
+
+
+class AutoFinalizeRecognizeStream(stt.WebSocketStream[STTEventMessage, _Close]):
     """
     Cartesia STT stream implementation with turn detection.
 
@@ -78,7 +82,6 @@ class AutoFinalizeRecognizeStream(stt.SocketStream[STTEventMessage, None]):
         - [Compare STT Endpoints](https://docs.cartesia.ai/use-the-api/compare-stt-endpoints)
     """
 
-    goodbye = '{"type":"close"}'
     # turn.start and turn.end are Cartesia's own turn boundaries
     provider_vad = True
 
@@ -115,7 +118,7 @@ class AutoFinalizeRecognizeStream(stt.SocketStream[STTEventMessage, None]):
         # cumulative transcript for the current turn; used to re-emit on turn.resume
         self._current_transcript = ""
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         self._current_transcript = ""
         # keyterm may repeat, so params is a list of pairs rather than a dict
         params: list[tuple[str, str]] = [
@@ -134,7 +137,7 @@ class AutoFinalizeRecognizeStream(stt.SocketStream[STTEventMessage, None]):
         if utils.is_given(self._keyterm):
             params.extend(("keyterm", term) for term in self._keyterm)
 
-        return http.SocketTarget(
+        return stt.WebSocketTarget(
             f"{self._ws_base_url}/stt/turns/websocket?{urlencode(params)}",
             headers={
                 API_VERSION_HEADER: API_VERSION,
@@ -143,16 +146,20 @@ class AutoFinalizeRecognizeStream(stt.SocketStream[STTEventMessage, None]):
             },
         )
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[None]:
-        if isinstance(item, rtc.AudioFrame):
-            return bytes(item.data)
-        if isinstance(item, stt.RecognizeStream.Flush) and not self.input.closed:
-            logger.warning(
-                "Cartesia STT stream.flush() was ignored. See https://docs.cartesia.ai/use-the-api/compare-stt-endpoints for details."
-            )
-        return None
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | _Close | None:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush():
+                if not self.input.closed:
+                    logger.warning(
+                        "Cartesia STT stream.flush() was ignored. See https://docs.cartesia.ai/use-the-api/compare-stt-endpoints for details."
+                    )
+                return None
+            case stt.EndOfAudio():
+                return _Close(type="close")
+            case _:
+                assert_never(item)
 
     def _transcript(
         self, text: str, *, final: bool = False, preflight: bool = False
@@ -161,13 +168,12 @@ class AutoFinalizeRecognizeStream(stt.SocketStream[STTEventMessage, None]):
             text, self._language, final=final, preflight=preflight, request_id=self._request_id
         )
 
-    def on_message(self, message: STTEventMessage) -> stt.Report | list[stt.Report] | None:
+    def on_message(self, message: STTEventMessage) -> None:
         if request_id := message.get("request_id"):
             self._request_id = request_id
 
         if message["type"] == "connected":
-            return None
-
+            return
         if message["type"] == "error":
             # an HTTP-style status: a 5xx is retried, a rejected request is not
             raise APIStatusError(
@@ -176,39 +182,36 @@ class AutoFinalizeRecognizeStream(stt.SocketStream[STTEventMessage, None]):
                 body=dict(message),
                 detail=message.get("message") or message.get("title"),
             )
-
         if message["type"] == "turn.start":
-            if self.speaking:
-                return None
-            self._current_transcript = ""
-            return stt.SpeechStarted()
-
+            if not self.speaking:
+                self._current_transcript = ""
+                self.report(stt.SpeechStarted())
+            return
         if not self.speaking:
-            return None
+            return
         transcript = message.get("transcript", "")
 
         if message["type"] == "turn.update":
             # only an interim that changed: an unchanged one would cancel the preflight
-            if not transcript or transcript == self._current_transcript:
-                return None
-            self._current_transcript = transcript
-            return self._transcript(transcript)
-
-        if message["type"] == "turn.eager_end":
+            if transcript and transcript != self._current_transcript:
+                self._current_transcript = transcript
+                self.report(self._transcript(transcript))
+        elif message["type"] == "turn.eager_end":
             transcript = transcript or self._current_transcript
-            if not transcript:
-                return None
-            self._current_transcript = transcript
-            return self._transcript(transcript, preflight=True)
-
-        if message["type"] == "turn.resume":
+            if transcript:
+                self._current_transcript = transcript
+                self.report(self._transcript(transcript, preflight=True))
+        elif message["type"] == "turn.resume":
             # no transcript: the last one again as an interim, so the preflight is cancelled
-            return self._transcript(self._current_transcript) if self._current_transcript else None
-
-        # turn.end
-        transcript = transcript or self._current_transcript
-        self._current_transcript = ""
-        return [self._transcript(transcript, final=True), stt.SpeechEnded()]
+            if self._current_transcript:
+                self.report(self._transcript(self._current_transcript))
+        elif message["type"] == "turn.end":
+            transcript = transcript or self._current_transcript
+            self._current_transcript = ""
+            self.report(self._transcript(transcript, final=True))
+            self.report(stt.SpeechEnded())
+        else:
+            assert_never(message)
 
     def update_options(
         self,

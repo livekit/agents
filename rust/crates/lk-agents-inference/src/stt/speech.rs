@@ -4,15 +4,25 @@ use lk_agents_abi::{SpeechEvent, SpeechEventType};
 /// Whether the person is speaking, from what a recognition reports. Every stream's
 /// START_OF_SPEECH and END_OF_SPEECH come from here: the first words start a speech, a final ends
 /// it (unless the provider detects speech itself), the provider's own boundaries are deduplicated
-/// and a connection boundary ends the open speech.
+/// and a connection boundary ends the open speech, its pending interim made final.
+///
+/// Each speech is one utterance, numbered on its events. A provider that detects speech may end
+/// one before its words are final: the speech stays open until that final, a new speech or the
+/// connection's end, so the final is still that utterance's.
 #[derive(Debug, Clone, Default)]
 pub struct Speech {
     provider_vad: bool,
     speaking: bool,
     /// The open speech produced words.
     heard: bool,
-    /// An interim stands that no final replaced.
-    interim: bool,
+    /// The interim no final replaced yet.
+    interim: Option<Transcript>,
+    /// The request id of the open speech's words, on the events minted for it.
+    request_id: String,
+    /// The provider ended the speech before its words were final: the end waits for them.
+    ending: bool,
+    /// The number of the open (or last) speech.
+    utterance: u64,
 }
 
 impl Speech {
@@ -24,23 +34,42 @@ impl Speech {
         self.speaking
     }
 
-    pub fn started(&mut self, out: &mut Vec<SpeechEvent>) {
+    pub fn settled(&self) -> bool {
+        !self.speaking && self.interim.is_none()
+    }
+
+    /// The provider heard speech start: an ended speech still waiting for its final ends first.
+    pub fn started(&mut self, speech_start_time: Option<f64>, out: &mut Vec<SpeechEvent>) {
+        if self.ending {
+            self.end(out);
+        }
         if !self.speaking {
-            self.speaking = true;
-            out.push(SpeechEvent::new(SpeechEventType::StartOfSpeech));
+            self.open();
+            out.push(SpeechEvent {
+                speech_start_time,
+                ..self.mark(SpeechEvent::new(SpeechEventType::StartOfSpeech))
+            });
         }
     }
 
-    /// Whether it ended an open speech.
+    /// The provider heard speech end: while its words are not final, the speech stays open for
+    /// them; one no words were heard in ends now. Whether it ended an open speech.
     pub fn ended(&mut self, out: &mut Vec<SpeechEvent>) -> bool {
-        self.heard = false;
-        self.interim = false;
-        if !self.speaking {
+        if self.provider_vad && self.speaking && self.interim.is_some() {
+            self.ending = true;
             return false;
         }
-        self.speaking = false;
-        out.push(SpeechEvent::new(SpeechEventType::EndOfSpeech));
-        true
+        self.end(out)
+    }
+
+    /// A connection ended: its pending interim is made final and the open speech ends. Whether
+    /// it ended an open speech.
+    pub fn boundary(&mut self, out: &mut Vec<SpeechEvent>) -> bool {
+        if let Some(interim) = self.interim.take() {
+            let promoted = Transcript { r#final: true, ..interim };
+            out.push(self.mark(event(SpeechEventType::FinalTranscript, promoted)));
+        }
+        self.end(out)
     }
 
     /// Whether it ended an open speech.
@@ -50,14 +79,15 @@ impl Speech {
             if !is_final {
                 return false;
             }
-            // a provider that detects speech still ends one no words were heard in
-            let ends = self.speaking && (!self.provider_vad || !self.heard);
-            if std::mem::take(&mut self.interim) {
-                out.push(event(SpeechEventType::InterimTranscript, transcript));
+            // a provider that detects speech still ends one no words were heard in, or one it
+            // already ended
+            let ends = self.speaking && (!self.provider_vad || !self.heard || self.ending);
+            if self.interim.take().is_some() {
+                out.push(self.mark(event(SpeechEventType::InterimTranscript, transcript)));
             } else if ends {
-                out.push(event(SpeechEventType::FinalTranscript, transcript));
+                out.push(self.mark(event(SpeechEventType::FinalTranscript, transcript)));
             }
-            return ends && self.ended(out);
+            return ends && self.end(out);
         }
         let kind = match (is_final, transcript.preflight) {
             (true, _) => SpeechEventType::FinalTranscript,
@@ -65,11 +95,45 @@ impl Speech {
             (false, true) => SpeechEventType::PreflightTranscript,
             (false, false) => SpeechEventType::InterimTranscript,
         };
-        self.started(out);
+        if !transcript.request_id.is_empty() {
+            self.request_id.clone_from(&transcript.request_id);
+        }
+        if !self.speaking {
+            self.open();
+            let start = SpeechEvent {
+                request_id: self.request_id.clone(),
+                ..SpeechEvent::new(SpeechEventType::StartOfSpeech)
+            };
+            out.push(self.mark(start));
+        }
         self.heard = true;
-        self.interim = !is_final;
-        out.push(event(kind, transcript));
-        is_final && !self.provider_vad && self.ended(out)
+        self.interim = (!is_final).then(|| transcript.clone());
+        out.push(self.mark(event(kind, transcript)));
+        is_final && (!self.provider_vad || self.ending) && self.end(out)
+    }
+
+    fn open(&mut self) {
+        self.speaking = true;
+        self.utterance += 1;
+    }
+
+    /// The event, as the open speech's.
+    fn mark(&self, event: SpeechEvent) -> SpeechEvent {
+        SpeechEvent { utterance: Some(self.utterance), ..event }
+    }
+
+    fn end(&mut self, out: &mut Vec<SpeechEvent>) -> bool {
+        self.heard = false;
+        self.interim = None;
+        self.ending = false;
+        let request_id = std::mem::take(&mut self.request_id);
+        if !self.speaking {
+            return false;
+        }
+        self.speaking = false;
+        let end = SpeechEvent { request_id, ..SpeechEvent::new(SpeechEventType::EndOfSpeech) };
+        out.push(self.mark(end));
+        true
     }
 }
 
@@ -84,6 +148,9 @@ fn event(kind: SpeechEventType, transcript: Transcript) -> SpeechEvent {
         speaker_id,
         words,
         source_languages,
+        source_texts,
+        target_languages,
+        target_texts,
         metadata,
         ..
     } = transcript;
@@ -98,9 +165,9 @@ fn event(kind: SpeechEventType, transcript: Transcript) -> SpeechEvent {
             speaker_id,
             words,
             source_languages,
-            source_texts: None,
-            target_languages: None,
-            target_texts: None,
+            source_texts,
+            target_languages,
+            target_texts,
             metadata,
         }],
         ..SpeechEvent::new(kind)
@@ -117,7 +184,7 @@ impl lk_agents_abi::stt::events::SpeechState for Speech {
     }
 
     fn settled(&self) -> bool {
-        !self.speaking && !self.interim
+        Speech::settled(self)
     }
 
     fn transcript(&mut self, transcript: Transcript) -> Vec<SpeechEvent> {
@@ -126,9 +193,9 @@ impl lk_agents_abi::stt::events::SpeechState for Speech {
         out
     }
 
-    fn started(&mut self) -> Vec<SpeechEvent> {
+    fn started(&mut self, speech_start_time: Option<f64>) -> Vec<SpeechEvent> {
         let mut out = Vec::new();
-        Speech::started(self, &mut out);
+        Speech::started(self, speech_start_time, &mut out);
         out
     }
 
@@ -140,7 +207,7 @@ impl lk_agents_abi::stt::events::SpeechState for Speech {
 
     fn boundary(&mut self) -> Vec<SpeechEvent> {
         let mut out = Vec::new();
-        Speech::ended(self, &mut out);
+        Speech::boundary(self, &mut out);
         out
     }
 }

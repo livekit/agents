@@ -20,7 +20,7 @@ import os
 import weakref
 from collections.abc import Sequence
 from enum import Enum, StrEnum
-from typing import Annotated, Any, Literal, NotRequired, TypedDict, TypeVar
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, TypeVar, assert_never
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError
@@ -34,7 +34,6 @@ from livekit.agents import (
     LanguageCode,
     VADEventType,
     VADStream,
-    http,
     stt,
     utils,
 )
@@ -542,7 +541,7 @@ class _GetSpeakers(TypedDict):
 _Command = _StartRecognition | _EndOfStream | _ForceEndOfUtterance | _GetSpeakers
 
 
-class SpeechStream(stt.SocketStream[_Message, _Command]):
+class SpeechStream(stt.WebSocketStream[_Message, _Command]):
     frame_ms = 100
     # audio waits for RecognitionStarted
     awaits_ready = True
@@ -574,9 +573,6 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
         self._vad = vad_instance
         self._vad_stream: VADStream | None = None
         self._session_id: str | None = None
-        # whether the service's turn is open: a final segment outside one (EXTERNAL mode sends
-        # no turns) is a speech of its own
-        self._in_turn = False
         # audio chunks and bytes sent on this connection: EndOfStream names the last chunk,
         # ForceEndOfUtterance the audio time it ends at
         self._seq_no = 0
@@ -592,9 +588,7 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
         """End the current turn when external endpointing controls this stream."""
         if self._turn_detection_mode == TurnDetectionMode.EXTERNAL:
             seconds = self._audio_bytes / (2 * self._sample_rate)
-            self.send_command(
-                _ForceEndOfUtterance(message="ForceEndOfUtterance", timestamp=seconds)
-            )
+            self.send_now(_ForceEndOfUtterance(message="ForceEndOfUtterance", timestamp=seconds))
 
     async def get_speaker_ids(self) -> list[SpeakerIdentifier]:
         """Request the current session's speaker identifiers."""
@@ -607,7 +601,7 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
 
         speakers: asyncio.Future[list[SpeakerIdentifier]]
         speakers = self._speakers = asyncio.get_running_loop().create_future()
-        self.send_command(_GetSpeakers(message="GetSpeakers"))
+        self.send_now(_GetSpeakers(message="GetSpeakers"))
         try:
             async with asyncio.timeout(5.0):
                 return await speakers
@@ -635,11 +629,10 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
             if ev.type == VADEventType.END_OF_SPEECH:
                 self.finalize()
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         self._session_id = None
-        self._in_turn = False
         self._seq_no = self._audio_bytes = 0
-        return http.SocketTarget(
+        return stt.WebSocketTarget(
             self._url,
             headers={"Authorization": f"Bearer {self._api_key}", "X-Request-Id": utils.shortuuid()},
         )
@@ -656,34 +649,34 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
             turn_config={"turn_detection_mode": self._turn_detection_mode.value},
         )
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[_Command]:
-        if isinstance(item, rtc.AudioFrame):
-            if self._vad_stream is not None:
-                self._vad_stream.push_frame(item)
-            self._seq_no += 1
-            self._audio_bytes += len(item.data) * 2
-            return bytes(item.data)
-        if isinstance(item, http.EndOfInput):
-            return _EndOfStream(message="EndOfStream", last_seq_no=self._seq_no)
-        return None
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | _Command | None:
+        match item:
+            case rtc.AudioFrame():
+                if self._vad_stream is not None:
+                    self._vad_stream.push_frame(item)
+                self._seq_no += 1
+                self._audio_bytes += len(item.data) * 2
+                return bytes(item.data)
+            case stt.Flush():
+                return None
+            case stt.EndOfAudio():
+                return _EndOfStream(message="EndOfStream", last_seq_no=self._seq_no)
+            case _:
+                assert_never(item)
 
     def on_message(
         self,
         message: _RecognitionStarted | _Logged | _Error | _Segment | _Turn | _SpeakersResult,
-    ) -> stt.Report | list[stt.Report] | http.Ready | http.Done | None:
+    ) -> None:
         if message["message"] == "RecognitionStarted":
             self._session_id = message.get("id")
             logger.info("Speechmatics session started", extra={"session_id": self._session_id})
-            return http.READY
-        if message["message"] == "Info":
+            self.report(stt.Ready())
+        elif message["message"] == "Info":
             logger.info("received Info message", extra={"lk.pii.message": message})
-            return None
-        if message["message"] == "Warning":
+        elif message["message"] == "Warning":
             logger.warning("received Warning message", extra={"lk.pii.message": message})
-            return None
-        if message["message"] == "Error":
+        elif message["message"] == "Error":
             # the session is over
             error_type = message.get("type", "error")
             raise APIError(
@@ -692,21 +685,22 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
                 body=message,
                 detail=message.get("reason", "unknown"),
             )
-        if message["message"] == "StartOfTurn":
-            self._in_turn = True
-            return stt.SpeechStarted()
-        if message["message"] == "EndOfTurn":
-            self._in_turn = False
-            return stt.SpeechEnded()
-        if message["message"] == "EndOfTranscript":
-            return http.DONE
-        if message["message"] == "SpeakersResult":
+        elif message["message"] == "StartOfTurn":
+            self.report(stt.SpeechStarted())
+        elif message["message"] == "EndOfTurn":
+            self.report(stt.SpeechEnded())
+        elif message["message"] == "EndOfTranscript":
+            self.report(stt.SessionFinished())
+        elif message["message"] == "SpeakersResult":
             self._speakers_result(message)
-            return None
-        transcript = self._transcript(message)
-        if transcript.final and not self._in_turn:
-            return [transcript, stt.SpeechEnded()]
-        return transcript
+        elif message["message"] == "AddSegment" or message["message"] == "AddPartialSegment":
+            transcript = self._transcript(message)
+            self.report(transcript)
+            # EXTERNAL mode sends no turns: each final segment ends its speech
+            if transcript.final and self._turn_detection_mode == TurnDetectionMode.EXTERNAL:
+                self.report(stt.SpeechEnded())
+        else:
+            assert_never(message)
 
     def _transcript(self, message: _Segment) -> stt.Transcript:
         segment = message.get("segment") or _SegmentBody()

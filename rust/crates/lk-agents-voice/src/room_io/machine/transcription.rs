@@ -169,6 +169,40 @@ impl RoomTranscriptionWriter {
         self.writing = Writing::Segment;
     }
 
+    /// The caller names the segment its next text goes to (the user's transcript, whose segments
+    /// the session names so a correction can publish one again). An open segment under another
+    /// name ends first.
+    pub fn name_segment(&mut self, segment: &str) {
+        if self.closed() || self.segment == segment {
+            return;
+        }
+        if self.writing == Writing::Segment {
+            self.end(Writing::Idle);
+        }
+        segment.clone_into(&mut self.segment);
+    }
+
+    /// `segment`, which a replacement transcript (the user's) already ended, reads `text`: it is
+    /// published again, final, so a frontend replaces it under its id.
+    pub fn rewrite(&mut self, segment: &str, text: &str) {
+        if self.is_delta_stream || self.closed() {
+            return;
+        }
+        let payload = encode(text, self.json_format, None);
+        self.send(RoomTranscriptionEffect::OpenStream {
+            segment: segment.to_owned(),
+            is_final: true,
+            expression: None,
+        });
+        self.send(RoomTranscriptionEffect::Write { payload });
+        self.send(RoomTranscriptionEffect::CloseStream { is_final: true, expression: None });
+        self.send(RoomTranscriptionEffect::PublishLegacy {
+            segment: segment.to_owned(),
+            text: text.to_owned(),
+            is_final: true,
+        });
+    }
+
     /// The segment's text is complete. `next_segment` belongs to the following text, including
     /// when this segment was empty.
     pub fn end_segment(&mut self, next_segment: String) {
@@ -575,6 +609,38 @@ pub fn retained_bytes(effects: &[RoomTranscriptionEffect]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: a correction of words the room already showed appended as a second segment, or
+    // found by searching the past segments' text rather than published under its id.
+    #[test]
+    fn a_correction_publishes_the_same_segment_again_with_the_full_words() {
+        let mut writer = RoomTranscriptionWriter::new(false, false, "SG_writer".into());
+        writer.name_segment("SG_user");
+        writer.capture(&TranscriptChunk::new("book a table"));
+        writer.end_segment("SG_next".into());
+        writer.name_segment("SG_again");
+        writer.capture(&TranscriptChunk::new("book a table"));
+        writer.end_segment("SG_next".into());
+        writer.take_effects();
+        writer.rewrite("SG_user", "book a table for two");
+        assert_eq!(
+            writer.take_effects(),
+            [
+                RoomTranscriptionEffect::OpenStream {
+                    segment: "SG_user".into(),
+                    is_final: true,
+                    expression: None,
+                },
+                RoomTranscriptionEffect::Write { payload: "book a table for two".into() },
+                RoomTranscriptionEffect::CloseStream { is_final: true, expression: None },
+                RoomTranscriptionEffect::PublishLegacy {
+                    segment: "SG_user".into(),
+                    text: "book a table for two".into(),
+                    is_final: true,
+                },
+            ]
+        );
+    }
 
     fn queued(admission: &mut Admission) -> Vec<RoomTranscriptionEffect> {
         std::iter::from_fn(|| admission.pop_batch()).flat_map(|batch| batch.effects).collect()

@@ -4296,7 +4296,7 @@ impl ::lk_agents_abi::llm::mcp::McpToolsetHost for McpToolsetHostProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/llm/realtime.rs.
 
-/// [`::lk_agents_abi::llm::realtime::HostRealtime`] over a host `livekit.agents.llm.realtime.RealtimeModel`.
+/// [`::lk_agents_abi::llm::realtime::HostRealtime`] over a host `livekit.agents.llm.realtime.RealtimeSessionModel`.
 #[derive(Clone)]
 pub struct HostRealtimeProxy {
     host: crate::py_objects::HostObject,

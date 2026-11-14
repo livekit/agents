@@ -4,7 +4,7 @@ import base64
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Annotated, Literal, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode
 
 import httpx  # mistralai raises httpx.TimeoutException from its httpx v1 client
@@ -21,7 +21,6 @@ from livekit.agents import (
     TokenUsage,
     VADEventType,
     VADStream,
-    http,
     stt,
     utils,
 )
@@ -125,7 +124,7 @@ class STT(stt.STT):
         self._client = client or Mistral(api_key=mistral_api_key)
         self._streams = weakref.WeakSet[SpeechStream]()
 
-    def _realtime_target(self) -> http.SocketTarget:
+    def _realtime_target(self) -> stt.WebSocketTarget:
         """The realtime socket, authorized and routed as the client's own requests are."""
         cfg = self._client.sdk_configuration
         base_url, _ = cfg.get_server_details()
@@ -148,7 +147,7 @@ class STT(stt.STT):
         url = f"{base_url.rstrip('/')}/v1/audio/transcriptions/realtime?{urlencode(params)}"
         if url.startswith("http"):
             url = url.replace("http", "ws", 1)
-        return http.SocketTarget(url, headers=headers)
+        return stt.WebSocketTarget(url, headers=headers)
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -331,7 +330,7 @@ class _SessionUpdate(TypedDict):
 _Command = _AudioAppend | _AudioControl | _SessionUpdate
 
 
-class SpeechStream(stt.SocketStream[_Message, _Command]):
+class SpeechStream(stt.WebSocketStream[_Message, _Command]):
     """Realtime speech recognition stream for Voxtral Realtime."""
 
     frame_ms = 50
@@ -352,8 +351,7 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
         self._mistral = stt
         self._vad = vad_instance
         self._vad_stream: VADStream | None = None
-        # whether the VAD's speech is open. Its transcript comes after its end, so the end waits
-        # for it: the final, or the next speech's start, ends the speech
+        # whether the VAD's speech is open: a final after its end ends it
         self._vad_speaking = False
         self._request_id = ""
         self._text = ""
@@ -378,47 +376,51 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
                 self.report(stt.SpeechEnded())
                 self.report(stt.SpeechStarted())
             elif ev.type == VADEventType.END_OF_SPEECH:
-                # force Mistral to finalize the current speech segment
-                self.send_command(_AudioControl(type="input_audio.flush"))
+                # force Mistral to finalize the current speech segment: its words come after the
+                # speech, so its final (or the next speech's start) ends it
                 self._vad_speaking = False
+                self.send_now(_AudioControl(type="input_audio.flush"))
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         self._text = ""
         return self._mistral._realtime_target()
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[_Command]:
-        if isinstance(item, rtc.AudioFrame):
-            if self._vad_stream is not None:
-                self._vad_stream.push_frame(item)
-            return _AudioAppend(
-                type="input_audio.append", audio=base64.b64encode(item.data).decode("ascii")
-            )
-        if isinstance(item, stt.RecognizeStream.Flush):
-            return _AudioControl(type="input_audio.flush")
-        return _AudioControl(type="input_audio.end")
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> _Command:
+        match item:
+            case rtc.AudioFrame():
+                if self._vad_stream is not None:
+                    self._vad_stream.push_frame(item)
+                return _AudioAppend(
+                    type="input_audio.append", audio=base64.b64encode(item.data).decode("ascii")
+                )
+            case stt.Flush():
+                return _AudioControl(type="input_audio.flush")
+            case stt.EndOfAudio():
+                return _AudioControl(type="input_audio.end")
+            case _:
+                assert_never(item)
 
     def on_message(
         self, message: _SessionCreated | _Language | _TextDelta | _Done | _Error
-    ) -> stt.Report | list[stt.Report] | http.Ready | None:
+    ) -> None:
         if message["type"] == "session.created":
             self._request_id = (message.get("session") or _Session()).get("request_id", "")
             if (delay := self._mistral._opts.target_streaming_delay_ms) is not None:
-                self.send_command(
+                self.send_now(
                     _SessionUpdate(
                         type="session.update", session={"target_streaming_delay_ms": delay}
                     )
                 )
-            return http.READY
-        if message["type"] == "transcription.language":
+            self.report(stt.Ready())
+        elif message["type"] == "transcription.language":
             if language := message.get("audio_language"):
                 self._detected_language = LanguageCode(language)
-            return None
-        if message["type"] == "transcription.text.delta":
+        elif message["type"] == "transcription.text.delta":
             self._text += message["text"]
-            return stt.Transcript(self._text, self._detected_language, request_id=self._request_id)
-        if message["type"] == "error":
+            self.report(
+                stt.Transcript(self._text, self._detected_language, request_id=self._request_id)
+            )
+        elif message["type"] == "error":
             error = message["error"]
             raise APIStatusError(
                 "Mistral transcription error",
@@ -426,10 +428,15 @@ class SpeechStream(stt.SocketStream[_Message, _Command]):
                 body=error,
                 detail=str(error.get("message")),
             )
-        self._text = ""
-        self._report_usage(message.get("usage") or _Usage())
-        transcript = self._final(message)
-        return transcript if self._vad_speaking else [transcript, stt.SpeechEnded()]
+        elif message["type"] == "transcription.done":
+            self._text = ""
+            self._report_usage(message.get("usage") or _Usage())
+            self.report(self._final(message))
+            # each final ends its speech, unless the VAD hears it going on
+            if not self._vad_speaking:
+                self.report(stt.SpeechEnded())
+        else:
+            assert_never(message)
 
     def _final(self, message: _Done) -> stt.Transcript:
         offset = self.start_time_offset

@@ -627,12 +627,11 @@ pub(crate) fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -
             }
             // A dotted class, with its type arguments when it is generic (`aio.Chan[..]`).
             let name = imports.annotation(host, "");
-            if *generic {
-                imports.add("typing", "Any");
-                format!("{name}[Any]")
-            } else {
-                name
+            if *generic == 0 {
+                return name;
             }
+            imports.add("typing", "Any");
+            format!("{name}[{}]", vec!["Any"; *generic].join(", "))
         }
         Ty::Source { class, .. } | Ty::Sink { class, .. } | Ty::Duplex { class, .. } => {
             class.clone()
@@ -702,3 +701,7 @@ pub(crate) fn docstring(doc: &[String], indent: &str) -> String {
     s.push_str("\"\"\"\n");
     s
 }
+
+#[cfg(test)]
+#[path = "class_stub_tests.rs"]
+mod tests;

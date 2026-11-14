@@ -1,5 +1,5 @@
 # GENERATED FILE -- DO NOT EDIT.
-# The names lk-agents-abi places in `livekit.agents.llm._realtime`, which star-imports this module.
+# The names lk-agents-abi places in `livekit.agents.llm.openai_protocol`, which star-imports this module.
 
 from __future__ import annotations
 

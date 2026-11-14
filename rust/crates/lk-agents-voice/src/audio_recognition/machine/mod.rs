@@ -1,8 +1,8 @@
 use super::{
     Detector, EndOfTurnInfo, InterruptionSignal, MIN_SILENCE_DURATION, OverlapVerdict,
-    PendingCommit, Phase, Prediction, Run, ServerSpeech, TurnConfig, TurnDetectionMode, TurnId,
-    TurnSnapshot, UserTurnCommitDecision, UserTurnCommitVerdict, UserTurnLimit, UserTurnTracker,
-    WallAnchor, compute_end_of_turn_metrics,
+    PendingCommit, Phase, Prediction, Promoted, Run, ServerSpeech, TurnConfig, TurnDetectionMode,
+    TurnId, TurnSnapshot, UserTurnCommitDecision, UserTurnCommitVerdict, UserTurnLimit,
+    UserTurnTracker, Utterance, WallAnchor, compute_end_of_turn_metrics,
 };
 use crate::agent_session::effects::Timer;
 use crate::agent_session::options::{AgentSessionOptions, DetectorKind, SessionLegs};
@@ -10,6 +10,7 @@ use crate::audio_recognition::effects::AudioRecognitionEffect;
 use crate::audio_recognition::overlap::OverlapJudge;
 use crate::endpointing::Endpointing;
 use crate::events::{AgentBackchannelOpportunityEvent, SessionEvent, UserTranscriptEvent};
+use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::tokenize::language::{LanguageCode, ThresholdOptions, TurnDetectorModel};
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::{EotPrediction, SpeechEvent, Ts};
@@ -44,6 +45,8 @@ pub struct AudioRecognition {
     /// whether) the verdict comes; a verdict that keeps them puts them back.
     committed_words: BTreeMap<TurnId, (String, Vec<f64>)>,
     interim_transcript: String,
+    /// The utterance the interim is of, when its stream numbers them.
+    interim_utterance: Option<Utterance>,
     preflight_transcript: String,
     final_confidences: Vec<f64>,
     last_language: Option<LanguageCode>,
@@ -60,7 +63,8 @@ pub struct AudioRecognition {
     agent_speech_started_at: Option<Ts>,
 
     ignore_user_transcript_until: Option<Ts>,
-    transcript_buffer: VecDeque<SpeechEvent>,
+    /// Recognition events held while the agent speaks, with the stream each came from.
+    transcript_buffer: VecDeque<(ResourceId, SpeechEvent)>,
     /// The STT stream's anchor, stamped on the first frame and reset on stream swap; every
     /// hold-window test is relative to it.
     pub(crate) input_started_at: Option<Ts>,
@@ -123,6 +127,7 @@ impl AudioRecognition {
             audio_transcript: String::new(),
             committed_words: BTreeMap::new(),
             interim_transcript: String::new(),
+            interim_utterance: None,
             preflight_transcript: String::new(),
             final_confidences: Vec::new(),
             last_language: None,
@@ -333,6 +338,7 @@ fn user_transcript(ev: &SpeechEvent, is_final: bool, speaking: Option<bool>) -> 
         is_final,
         speaking,
         item_id: None,
+        segment: String::new(),
     }))
 }
 

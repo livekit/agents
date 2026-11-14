@@ -257,6 +257,7 @@ fn info(turn: u64, transcript: &str) -> EndOfTurnInfo {
         backchannel_over_agent: false,
         late: false,
         snapshot: Default::default(),
+        promoted: None,
     }
 }
 

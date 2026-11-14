@@ -19,8 +19,8 @@ import jwt
 import pytest
 
 from livekit.agents import AgentServer, JobContext
-from livekit.agents.a2a import A2ASessionContext, Credentials
 from livekit.agents._generated.a2a_auth import AgentThreadGrant
+from livekit.agents.a2a import A2ASessionContext, Credentials
 from livekit.agents.storage import SQLiteStorage
 
 from .resources import REQUEST_SECONDS, STARTUP_SECONDS
@@ -158,8 +158,12 @@ async def test_the_node_refuses_a_caller_it_cannot_verify(
     grant = {"agentEndpoint": {"call": True}, "agentThread": {"all": True, "write": True}}
 
     anonymous, _ = await call(http, door, None, "message/send", message("hi"))
-    forged, _ = await call(http, door, door.raw(grant, secret="not-the-secret"), "message/send", message("hi"))
-    unknown_key = jwt.encode({**grant, "iss": "APInotakey", "sub": "x", "exp": int(time.time()) + 60}, "s")
+    forged, _ = await call(
+        http, door, door.raw(grant, secret="not-the-secret"), "message/send", message("hi")
+    )
+    unknown_key = jwt.encode(
+        {**grant, "iss": "APInotakey", "sub": "x", "exp": int(time.time()) + 60}, "s"
+    )
     unknown, _ = await call(http, door, unknown_key, "message/send", message("hi"))
 
     assert (anonymous, forged, unknown) == (401, 401, 401)

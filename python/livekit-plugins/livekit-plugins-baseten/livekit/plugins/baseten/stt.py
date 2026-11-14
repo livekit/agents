@@ -17,11 +17,10 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 import os
 import weakref
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, assert_never
 
 from livekit import rtc
 from livekit.agents import (
@@ -31,7 +30,6 @@ from livekit.agents import (
     LanguageCode,
     http,
     stt,
-    utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -369,14 +367,21 @@ class STT(stt.STT):
             )
 
 
+class _Metadata(TypedDict):
+    whisper_params: dict[str, Any]
+    streaming_params: dict[str, Any]
+    streaming_vad_config: dict[str, Any]
+
+
 class _Terminate(TypedDict):
     terminate_session: bool
 
 
-class SpeechStream(stt.SocketStream[TranscriptResponse, _Terminate]):
+class SpeechStream(stt.WebSocketStream[TranscriptResponse, _Metadata | _Terminate]):
     """A streaming speech-to-text session connected to Baseten via WebSocket."""
 
-    goodbye = _Terminate(terminate_session=True)
+    # 512-sample chunks at the default 16 kHz, the server's VAD window
+    frame_ms = 32
 
     def __init__(
         self,
@@ -392,9 +397,6 @@ class SpeechStream(stt.SocketStream[TranscriptResponse, _Terminate]):
         self._opts = opts
         self._api_key = api_key
         self._model_endpoint = model_endpoint
-        self._chunks = utils.media.AudioByteStream(
-            sample_rate=opts.sample_rate, num_channels=1, samples_per_channel=512
-        )
 
     def update_options(
         self,
@@ -422,12 +424,12 @@ class SpeechStream(stt.SocketStream[TranscriptResponse, _Terminate]):
         # the metadata is sent at each connection
         self.reconnect("options changed")
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
-        return http.SocketTarget(
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
+        return stt.WebSocketTarget(
             self._model_endpoint, headers={"Authorization": f"Api-Key {self._api_key}"}
         )
 
-    def setup(self) -> http.Encoded[_Terminate]:
+    def setup(self) -> _Metadata:
         """The ``StreamingWhisperInput`` metadata message.
 
         The metadata schema must match the Baseten server's ``StreamingWhisperInput``
@@ -438,7 +440,7 @@ class SpeechStream(stt.SocketStream[TranscriptResponse, _Terminate]):
         - ``streaming_vad_config`` – server-side Silero VAD configuration
         """
         # See: https://docs.baseten.co/reference/inference-api/predict-endpoints/streaming-transcription-api
-        metadata: dict[str, dict[str, Any]] = {
+        metadata: _Metadata = {
             "whisper_params": {
                 "audio_language": self._opts.language,
                 "show_word_timestamps": self._opts.show_word_timestamps,
@@ -464,19 +466,22 @@ class SpeechStream(stt.SocketStream[TranscriptResponse, _Terminate]):
                 str(lang) for lang in self._opts.language_options
             ]
 
-        return json.dumps(metadata)
+        return metadata
 
     def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[_Terminate]:
-        frames = (
-            self._chunks.push(item.data)
-            if isinstance(item, rtc.AudioFrame)
-            else self._chunks.flush()
-        )
-        return [bytes(frame.data) for frame in frames]
+        self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio
+    ) -> bytes | _Terminate | None:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush():
+                return None
+            case stt.EndOfAudio():
+                return _Terminate(terminate_session=True)
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: TranscriptResponse) -> stt.Transcript | None:
+    def on_message(self, message: TranscriptResponse) -> None:
         msg_type = message.get("type", "transcription")
         if msg_type == "error":
             raise APIError(
@@ -488,7 +493,7 @@ class SpeechStream(stt.SocketStream[TranscriptResponse, _Terminate]):
         # Skip other non-transcription messages (e.g. status)
         if msg_type != "transcription":
             logger.debug("Ignoring message type: %s", msg_type)
-            return None
+            return
 
         is_final = message.get("is_final") is not False
         segments = message.get("segments") or []
@@ -497,7 +502,7 @@ class SpeechStream(stt.SocketStream[TranscriptResponse, _Terminate]):
             message.get("transcript") or " ".join(seg.get("text", "") for seg in segments).strip()
         )
         if not text:
-            return None
+            return
 
         offset = self.start_time_offset
         # word-level timestamps when available, else segment-level timing
@@ -523,14 +528,16 @@ class SpeechStream(stt.SocketStream[TranscriptResponse, _Terminate]):
                     )
                 )
 
-        return stt.Transcript(
-            text,
-            LanguageCode(message.get("language_code") or self._opts.language)
-            if is_final
-            else LanguageCode(""),
-            final=is_final,
-            confidence=message.get("confidence", 0.0),
-            start_time=(segments[0].get("start_time", 0.0) if segments else 0.0) + offset,
-            end_time=(segments[-1].get("end_time", 0.0) if segments else 0.0) + offset,
-            words=timed_words,
+        self.report(
+            stt.Transcript(
+                text,
+                LanguageCode(message.get("language_code") or self._opts.language)
+                if is_final
+                else LanguageCode(""),
+                final=is_final,
+                confidence=message.get("confidence", 0.0),
+                start_time=(segments[0].get("start_time", 0.0) if segments else 0.0) + offset,
+                end_time=(segments[-1].get("end_time", 0.0) if segments else 0.0) + offset,
+                words=timed_words,
+            )
         )

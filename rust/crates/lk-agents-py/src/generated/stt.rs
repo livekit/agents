@@ -13,6 +13,17 @@ use pyo3::prelude::*;
 type SpeechStateImpl =
     <crate::generated::implementations::Selected as super::Implementations>::SpeechState;
 
+fn _extract_speech_state_started_speech_start_time(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<SpeechStateStartedSpeechStartTimeInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<f64>(obj.as_any(), "speech_start_time")).map(Some)
+    }
+}
+type SpeechStateStartedSpeechStartTimeInput = ::std::option::Option<f64>;
+
 /// One recognition's speech state: START_OF_SPEECH and END_OF_SPEECH are derived here from what
 /// the stream reports, the provider's own boundaries deduplicated, and open speech ends at each
 /// connection boundary.
@@ -69,10 +80,18 @@ impl SpeechState {
         )
     }
 
-    /// The provider heard speech start.
-    fn started<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let out =
-            <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::started(&mut self.0);
+    /// The provider heard speech start, at `speech_start_time` (wall clock) when it says.
+    #[pyo3(signature = (speech_start_time = None))]
+    fn started<'py>(
+        &mut self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = _extract_speech_state_started_speech_start_time)]
+        speech_start_time: SpeechStateStartedSpeechStartTimeInput,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let out = <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::started(
+            &mut self.0,
+            speech_start_time,
+        );
         ::pyo3::PyResult::Ok(
             ::pyo3::types::PyList::new(
                 py,
@@ -84,7 +103,8 @@ impl SpeechState {
         )
     }
 
-    /// The provider heard speech end.
+    /// The provider heard speech end: before the final of its words, the speech stays open until
+    /// that final, a new speech or the connection's end.
     fn ended<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let out =
             <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::ended(&mut self.0);
@@ -99,7 +119,8 @@ impl SpeechState {
         )
     }
 
-    /// A connection ended: the open speech ends before the next connection's events.
+    /// A connection ended: its pending interim becomes final and the open speech ends, before
+    /// the next connection's events.
     fn boundary<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let out =
             <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::boundary(&mut self.0);

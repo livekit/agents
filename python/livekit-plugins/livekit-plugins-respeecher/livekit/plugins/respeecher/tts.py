@@ -19,7 +19,7 @@ import os
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Annotated, Any, Literal, NotRequired, TypedDict, cast
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, assert_never, cast
 from urllib.parse import urlsplit
 
 from pydantic import Field
@@ -320,19 +320,19 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
 
 
-class _Mux(http.Multiplexer[_Message, _Speak]):
+class _Mux(tts.WebSocketMultiplexer[_Message, _Speak]):
     """One Respeecher socket carries every stream's segments, each its own context."""
 
     def __init__(self, opts: _TTSOptions) -> None:
         self._opts = opts
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
         url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
         parts = urlsplit(url)
         # the API key travels in the query: plain ws only to this machine
         if parts.scheme != "wss" and parts.hostname not in _LOOPBACK:
             raise APIError("Secure WebSocket connection (wss://) required", kind="invalid_request")
-        return http.SocketTarget(
+        return tts.WebSocketTarget(
             f"{url}{self._opts.model}/tts/websocket",
             params={
                 "api_key": self._opts.api_key,
@@ -348,7 +348,7 @@ class _Mux(http.Multiplexer[_Message, _Speak]):
         return message["context_id"]
 
 
-class SynthesizeStream(tts.SocketStream[_Message, _Speak]):
+class SynthesizeStream(tts.WebSocketStream[_Message, _Speak]):
     """Streamed API using WebSocket for real-time synthesis"""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions, opts: _TTSOptions) -> None:
@@ -360,19 +360,27 @@ class SynthesizeStream(tts.SocketStream[_Message, _Speak]):
         self._voice = voice
         self._output_format = {"encoding": opts.encoding, "sample_rate": opts.sample_rate}
 
-    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> _Speak | None:
-        if isinstance(item, tts.SegmentText):
-            return self._speak(item.segment_id, item.chunk.text + " ", more=True)
-        if isinstance(item, tts.SegmentEnd):
-            return self._speak(item.segment_id, " ", more=False)
-        return None
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Speak | None:
+        match item:
+            case tts.SegmentText():
+                return self._speak(item.segment_id, item.chunk.text + " ", more=True)
+            case tts.SegmentEnd():
+                return self._speak(item.segment_id, " ", more=False)
+            case tts.SegmentStart() | tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Chunk | _Done | _Error) -> tts.SegmentOutput:
+    def on_message(self, message: _Chunk | _Done | _Error) -> None:
         if message["type"] == "chunk":
-            return tts.SegmentAudio(message["context_id"], base64.b64decode(message["data"]))
-        if message["type"] == "done":
-            return tts.SegmentDone(message["context_id"])
-        raise _error(message)
+            audio = base64.b64decode(message["data"])
+            self.report(tts.SegmentAudio(message["context_id"], audio))
+        elif message["type"] == "done":
+            self.report(tts.SegmentDone(message["context_id"]))
+        elif message["type"] == "error":
+            raise _error(message)
+        else:
+            assert_never(message)
 
     def _speak(self, context_id: str, transcript: str, *, more: bool) -> _Speak:
         return {

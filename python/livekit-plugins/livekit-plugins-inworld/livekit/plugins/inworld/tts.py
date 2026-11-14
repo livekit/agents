@@ -21,13 +21,21 @@ import uuid
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, Literal, NotRequired, TypedDict, cast, get_args
+from typing import Any, Literal, NotRequired, TypedDict, assert_never, cast, get_args
 from urllib.parse import urljoin
 
 from pydantic import TypeAdapter
 
-from livekit.agents import http, tokenize, tts, utils
-from livekit.agents._bindings import APIConnectionError, APIError, APIStatusError, APITimeoutError
+from livekit.agents import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    http,
+    tokenize,
+    tts,
+    utils,
+)
 from livekit.agents.types import (
     NOT_GIVEN,
     APIConnectOptions,
@@ -208,7 +216,7 @@ class _Cancel(TypedDict):
 _Command = _Create | _SendText | _Flush | _Close | _Cancel
 
 
-class _Mux(http.Multiplexer[_Message, _Command]):
+class _Mux(tts.WebSocketMultiplexer[_Message, _Command]):
     """One Inworld socket carries up to five contexts."""
 
     max_contexts = 5
@@ -217,8 +225,8 @@ class _Mux(http.Multiplexer[_Message, _Command]):
         self._ws_url = ws_url
         self._authorization = authorization
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
-        return http.SocketTarget(
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        return tts.WebSocketTarget(
             urljoin(self._ws_url, "/tts/v1/voice:streamBidirectional").replace("http", "ws", 1),
             headers={
                 "Authorization": self._authorization,
@@ -676,7 +684,7 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
 
 
-class SynthesizeStream(tts.SocketStream[_Message, _Command]):
+class SynthesizeStream(tts.WebSocketStream[_Message, _Command]):
     def __init__(self, *, tts: TTS, opts: _TTSOptions, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
         self.multiplexer = tts._mux
@@ -684,22 +692,25 @@ class SynthesizeStream(tts.SocketStream[_Message, _Command]):
         self._opts = opts
         self._contexts: dict[str, _Segment] = {}
 
-    def encode(self, item: tts.SegmentInput | http.EndOfInput) -> http.Encoded[_Command]:
-        if isinstance(item, tts.SegmentStart):
-            rate = self._opts.sample_rate * 2 * NUM_CHANNELS
-            pcm = self._opts.encoding in ("PCM", "LINEAR16")
-            self._contexts[item.segment_id] = _Segment(pcm_byte_rate=rate if pcm else 0)
-            return _Create(create=_create_config(self._opts), contextId=item.segment_id)
-        if isinstance(item, tts.SegmentText):
-            return _SendText(send_text={"text": item.chunk.text + " "}, contextId=item.segment_id)
-        if isinstance(item, tts.SegmentEnd):
-            return [
-                _Flush(flush_context={}, contextId=item.segment_id),
-                _Close(close_context={}, contextId=item.segment_id),
-            ]
-        return None
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Command | None:
+        match item:
+            case tts.SegmentStart():
+                rate = self._opts.sample_rate * 2 * NUM_CHANNELS
+                pcm = self._opts.encoding in ("PCM", "LINEAR16")
+                self._contexts[item.segment_id] = _Segment(pcm_byte_rate=rate if pcm else 0)
+                return _Create(create=_create_config(self._opts), contextId=item.segment_id)
+            case tts.SegmentText():
+                text = _Text(text=item.chunk.text + " ")
+                return _SendText(send_text=text, contextId=item.segment_id)
+            case tts.SegmentEnd():
+                self.send_now(_Flush(flush_context={}, contextId=item.segment_id))
+                return _Close(close_context={}, contextId=item.segment_id)
+            case tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-    def on_message(self, message: _Message) -> list[tts.SegmentOutput]:
+    def on_message(self, message: _Message) -> None:
         result = message.get("result", {})
         segment_id = result.get("contextId", "")
         status = result.get("status", {})
@@ -711,8 +722,7 @@ class SynthesizeStream(tts.SocketStream[_Message, _Command]):
             )
         segment = self._contexts.get(segment_id)
         if segment is None:
-            return []
-        outputs: list[tts.SegmentOutput] = []
+            return
         if (chunk := result.get("audioChunk")) is not None:
             if timestamp_info := chunk.get("timestampInfo"):
                 words = _parse_timestamp_info(
@@ -720,7 +730,7 @@ class SynthesizeStream(tts.SocketStream[_Message, _Command]):
                 )
                 if words and words[-1].end_time is not None:
                     segment.generation_end_time = words[-1].end_time
-                outputs.append(tts.SegmentWords(segment_id, words))
+                self.report(tts.SegmentWords(segment_id, words))
             if usage := chunk.get("usage"):
                 segment.billed_characters = max(
                     segment.billed_characters or 0, usage.get("processedCharactersCount", 0)
@@ -730,7 +740,7 @@ class SynthesizeStream(tts.SocketStream[_Message, _Command]):
                 if segment.pcm_byte_rate:
                     pcm_len = len(audio) - (44 if audio[:4] == b"RIFF" else 0)
                     segment.audio_time += pcm_len / segment.pcm_byte_rate
-                outputs.append(tts.SegmentAudio(segment_id, audio))
+                self.report(tts.SegmentAudio(segment_id, audio))
         if "flushCompleted" in result:
             # the next generation's timestamps restart at 0
             segment.cumulative_time = (
@@ -738,10 +748,10 @@ class SynthesizeStream(tts.SocketStream[_Message, _Command]):
             )
         if "contextClosed" in result:
             del self._contexts[segment_id]
-            if segment.billed_characters is not None and self._emitter is not None:
-                self._emitter.report_usage(characters_count=segment.billed_characters)
-            outputs.append(tts.SegmentDone(segment_id))
-        return outputs
+            if segment.billed_characters is not None:
+                billed = tts.SegmentUsage(segment_id, characters_count=segment.billed_characters)
+                self.report(billed)
+            self.report(tts.SegmentDone(segment_id))
 
 
 def _create_config(opts: _TTSOptions) -> dict[str, Any]:

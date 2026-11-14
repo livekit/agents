@@ -16,7 +16,17 @@ impl Resolver<'_> {
         voc::only(
             at,
             &proxy.nested,
-            &["host", "view", "base", "generic", "sdk", "events", "self_events", "owns"],
+            &[
+                "host",
+                "annotation",
+                "view",
+                "base",
+                "generic",
+                "sdk",
+                "events",
+                "self_events",
+                "owns",
+            ],
         )?;
         let self_events = voc::find(&proxy.nested, "self_events").is_some();
         let owns = voc::find(&proxy.nested, "owns").is_some();
@@ -31,10 +41,7 @@ impl Resolver<'_> {
             },
         };
         let base = voc::text(at, &proxy.nested, "base")?;
-        let generic = voc::find(&proxy.nested, "generic").is_some();
-        if generic && base.is_none() {
-            return Err(format!("{at}: `generic` is a plugin base class's (`base = \"..\"`)"));
-        }
+        let generic = voc::generic(at, &proxy.nested)?;
         if !tr.generics.params.is_empty() {
             return Err(format!("{at}: a generic trait has no single proxy"));
         }

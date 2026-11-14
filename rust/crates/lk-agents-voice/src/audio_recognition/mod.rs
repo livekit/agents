@@ -251,6 +251,21 @@ pub fn compute_end_of_turn_metrics(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TurnId(pub u64);
 
+/// One utterance of one recognition stream: the words its next final settles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Utterance {
+    pub stream: lk_agents_abi::resources::ResourceId,
+    pub n: u64,
+}
+
+/// The pending interim a turn committed with, at `span` of its words: its utterance's final,
+/// when it comes, corrects them there.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Promoted {
+    pub utterance: Utterance,
+    pub span: std::ops::Range<usize>,
+}
+
 /// The turn anchors copied before waiting, since the live values keep changing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TurnSnapshot {
@@ -271,6 +286,8 @@ pub struct Run {
     /// `true` only when the owner declared the end (STT end of speech, a commit). A VAD end or a
     /// final carries `false`.
     pub declared: bool,
+    /// A host's commit or release: its interim joins the turn even with no utterance to correct.
+    pub manual: bool,
 }
 
 /// The streaming detector's answer.
@@ -360,6 +377,8 @@ pub struct EndOfTurnInfo {
     pub late: bool,
     /// The countdown's anchors: a reset happens only if no new speech arrived since them.
     pub snapshot: TurnSnapshot,
+    /// The interim the turn committed with, while its final may still come.
+    pub promoted: Option<Promoted>,
 }
 
 pub use lk_agents_abi::turn::interruption::{InterruptionSignal, OverlapVerdict};

@@ -1,21 +1,29 @@
 from __future__ import annotations
 
+import asyncio
 from abc import abstractmethod
-from collections.abc import Iterable
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any, ClassVar, assert_never
 
 from livekit import rtc
 
 from . import _core, tokenize, utils
 from ._generated import facades_tts as _facades, public_tts as _public
 from ._generated.public_tts import *  # noqa: F403
-from .http.socket import (
-    Done,
-    EndOfInput,
+from ._generated.websocket import WsFrame
+from ._websocket import (
+    Batch,
     InboundT,
+    Keepalive,
     OutboundT,
-    SocketProtocol,
-    _single_retry_owner,
+    WebSocketHost,
+    WebSocketKind,
+    WebSocketMultiplexer,
+    WebSocketPacing,
+    WebSocketProtocol,
+    WebSocketTarget,
+    frames_of,
+    protocol_error,
 )
 from .types import (
     NOT_GIVEN,
@@ -29,9 +37,17 @@ if TYPE_CHECKING:
     from ._generated.usage import TokenUsage
 
 __all__ = [
-    "SocketStream",
+    "EndOfText",
+    "Keepalive",
+    "ProviderRequestId",
+    "Ready",
+    "WebSocketMultiplexer",
+    "WebSocketPacing",
+    "WebSocketStream",
+    "WebSocketTarget",
     "StreamAdapter",
     "FallbackAdapter",
+    "protocol_error",
 ]
 __all__ += _public.__all__
 
@@ -118,35 +134,84 @@ class StreamAdapter(_facades.StreamAdapter):
         self._tts.prewarm()
 
 
-class SocketStream(SocketProtocol[SegmentInput, InboundT, OutboundT], SynthesizeStream):
+@dataclass(frozen=True)
+class EndOfText:
+    """The last input item ``encode`` receives: every segment is done, and the stream ends."""
+
+
+@dataclass(frozen=True)
+class Ready:
+    """Reported once the provider is ready for text after the connection's setup (with
+    ``awaits_ready``)."""
+
+
+@dataclass(frozen=True)
+class ProviderRequestId:
+    """Reported when the provider names its id for the audio that follows: it reaches that audio,
+    its metrics and the stream's errors."""
+
+    request_id: str
+
+
+class WebSocketStream(
+    WebSocketProtocol[SegmentInput | EndOfText, InboundT, OutboundT], SynthesizeStream
+):
     """A synthesis over the provider's socket, in segments. The framework cuts the input into
     segments at each flush and names them; the plugin writes ``connect`` (or sets a
     ``multiplexer``), ``encode`` for ``SegmentStart``, ``SegmentText``, ``SegmentEnd`` and
-    ``EndOfInput``, and ``on_message``, which returns each segment's audio, words and done.
+    ``EndOfText``, and ``on_message``, which reports each segment's audio, words, usage and done.
 
     The framework plays the segments in order (a later segment's audio waits for the ones
     before it), completes each once, and times a read out only while a segment whose text ended
-    is unanswered: never while the input waits for more text. ``EndOfInput`` comes once every
+    is unanswered: never while the input waits for more text. ``EndOfText`` comes once every
     segment is done, and the stream then ends. Each attempt is one socket session; the stream's
-    attempts own the retries and replay the text.
+    attempts own the retries and replay the text. The provider's request ids (the connection's,
+    and each ``ProviderRequestId`` reported) reach the emitted audio.
     """
 
     mime_type: str = "audio/pcm"
-    """The encoding of the audio ``on_message`` returns."""
-
-    _socket_ends_settled = True
+    """The encoding of the audio reported."""
+    connection_per_segment: ClassVar[bool] = False
+    """Each segment is its own provider session: the next segment waits until the segment is
+    done (its ``SegmentDone``, or the provider's close, which completes it), then goes on a new
+    connection."""
+    text_idle: float | None = None
+    """Seconds without text after which ``on_text_idle`` runs, once per silence."""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._socket_init()
         self._segments: _core.TtsSegments | None = None
+        self._synthesis = _Synthesis(self)
+        self._websocket = WebSocketHost(self, self._synthesis)
 
     @abstractmethod
-    def on_message(
-        self, message: InboundT
-    ) -> SegmentOutput | Iterable[SegmentOutput] | Done | None:
-        """One received message: what it carries for its segment; ``DONE`` once the provider
-        ended the whole stream."""
+    def on_message(self, message: InboundT) -> None:
+        """One received message: ``report`` what it carries for its segment, ``Ready`` once the
+        provider is ready for text, a ``ProviderRequestId`` naming its id for the audio that
+        follows."""
+
+    def on_text_idle(self) -> bytes | OutboundT | None:
+        """No text went out for ``text_idle`` seconds: the frame to send; reporting
+        ``SegmentDone`` may end a segment whose answers all came."""
+        return None
+
+    def report(self, output: SegmentOutput | Ready | ProviderRequestId) -> None:
+        """What the provider sent for a segment, or answered. ``encode`` may report the
+        ``SegmentDone`` of a segment whose answers all came, for a provider that answers each
+        text on its own."""
+        match output:
+            case Ready():
+                self._websocket.signal("ready")
+            case ProviderRequestId(request_id=request_id):
+                self._websocket.name_request(request_id)
+                self._synthesis.opened(request_id)
+            case SegmentDone():
+                self._synthesis.done(output)
+            case SegmentAudio() | SegmentWords() | SegmentUsage():
+                if self._segments is not None:
+                    self._segments.deliver(output)
+            case _:
+                assert_never(output)
 
     async def _run(self, output_emitter: _core.AudioEmitter) -> None:
         output_emitter.initialize(
@@ -157,36 +222,105 @@ class SocketStream(SocketProtocol[SegmentInput, InboundT, OutboundT], Synthesize
             stream=True,
         )
         self._segments = _core.TtsSegments(output_emitter, self._core_attempts, self._tts.label)
-        await self._socket_run(_single_retry_owner(self._conn_options))
+        # the stream's attempts own the retries: the socket runs once
+        await self._websocket.run(replace(self._conn_options, max_retry=0))
 
-    def _socket_segments(self) -> _core.TtsSegments | None:
-        return self._segments
 
-    async def _socket_input(self) -> SegmentInput | EndOfInput:
-        segments = self._segments
+class _Synthesis(WebSocketKind[SegmentInput | EndOfText]):
+    """The synthesis's terms for its socket: segments in, a segment in progress never cut by a
+    replacement; with ``connection_per_segment``, the next segment waits for the one before to be
+    done, which ends its session."""
+
+    def __init__(self, stream: WebSocketStream[Any, Any]) -> None:
+        self._stream = stream
+        self._ended = False
+        # a segment's end went to a provider that takes a session per segment, and whether it is
+        # done without the provider saying its session is
+        self._ending_session = False
+        self._done_unsaid = False
+        self._session_over = asyncio.Event()
+        self._session_over.set()
+
+    @property
+    def label(self) -> str:
+        return self._stream._tts.label
+
+    def done(self, output: SegmentDone) -> None:
+        if (segments := self._stream._segments) is not None:
+            segments.deliver(output)
+        if self._ending_session:
+            self._ending_session = False
+            if self.host.reading:
+                # the provider's own message: its session is over
+                self.host.signal("session_finished")
+            else:
+                self._done_unsaid = True
+            self._session_over.set()
+
+    async def take(self) -> Batch | None:
+        stream = self._stream
+        segments = stream._segments
         assert segments is not None
+        if self._ended:
+            return None
+        await self._session_over.wait()
+        if self._done_unsaid:
+            self._done_unsaid = False
+            self.host.end_session()
         while (item := segments.next()) is None:
             try:
-                taken = await self.input.recv()
+                taken = await stream.input.recv()
             except utils.aio.ChanClosed:
                 await segments.settled()
-                return EndOfInput()
+                self._ended = True
+                return Batch([EndOfText()])
             if isinstance(taken, SpeechChunk):
                 segments.push(taken)
             else:
                 segments.flush()
-        if isinstance(item, SegmentText):
-            self.mark_started()
-        return item
+        match item:
+            case SegmentText():
+                stream.mark_started()
+            case SegmentEnd() if stream.connection_per_segment:
+                self._ending_session = True
+                self._session_over.clear()
+            case SegmentStart() | SegmentEnd():
+                pass
+            case _:
+                assert_never(item)
+        return Batch([item])
 
-    def _socket_boundary(self, item: object) -> bool:
-        return isinstance(item, SegmentEnd)
+    def owes_reply(self) -> bool:
+        segments = self._stream._segments
+        return segments is not None and bool(segments.open)
 
-    def _socket_label(self) -> str:
-        return self._tts.label
+    def can_reconnect(self) -> bool:
+        return not self.owes_reply()
 
-    def _socket_deliver(self, answer: SegmentOutput | Iterable[SegmentOutput] | None) -> None:
-        if answer is None or self._segments is None:
-            return
-        for output in [answer] if isinstance(answer, SegmentOutput) else answer:
-            self._segments.deliver(output)
+    def expects_close(self) -> bool:
+        # a segment that ends its session, or the end of the text, asked the provider to close
+        return self._ending_session or self._ended
+
+    def retrying(self, error: Exception) -> None:
+        self._stream._core_retrying(error)
+
+    def opened(self, request_id: str | None) -> None:
+        if request_id is not None and (emitter := self._stream._emitter) is not None:
+            emitter.provider_request_id(request_id)
+
+    def session_finished(self) -> None:
+        if (segments := self._stream._segments) is not None:
+            segments.complete_ended()
+        self._ending_session = False
+        self._session_over.set()
+
+    def contexts(self) -> list[str]:
+        # each open segment is a context on a multiplexed provider
+        segments = self._stream._segments
+        return segments.open if segments is not None else []
+
+    def input_idle_after(self) -> float | None:
+        return self._stream.text_idle
+
+    def input_idle(self) -> list[WsFrame]:
+        return frames_of(self._stream.on_text_idle())

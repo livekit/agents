@@ -99,6 +99,9 @@ pub struct UserTranscriptEvent {
     /// Shared by every segment; `None` from the turn machine,
     /// stamped by the driver.
     pub item_id: Option<String>,
+    /// The room transcription segment it shows in: empty from the turn machine, named by the
+    /// driver.
+    pub segment: String,
 }
 
 /// The end-of-turn info, as much of it as the host needs.
@@ -286,6 +289,14 @@ pub enum SessionEvent {
     EotPrediction(EotPredictionEvent),
     AgentBackchannelOpportunity(AgentBackchannelOpportunityEvent),
     UserInputTranscribed(Box<UserTranscriptEvent>),
+    /// The final of words a turn committed as an interim came: `segment`, the room segment that
+    /// showed them, now reads `text`, and so do they in the user message `item_id`, when the turn
+    /// made one.
+    UserInputCorrected {
+        segment: String,
+        item_id: Option<String>,
+        text: String,
+    },
     StartOfSpeech(StartOfSpeechEvent),
     EndOfSpeech(EndOfSpeechEvent),
     PreemptiveGeneration(PreemptiveGenerationEvent),

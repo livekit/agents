@@ -168,7 +168,7 @@ impl VoiceSessionState {
             aec: AecWarmup::new(cfg.timers.aec_warmup()),
             by_audio_activity: cfg.turn.interruption.by_audio_activity(),
             errors: ErrorCounts { max: max_unrecoverable_errors, ..Default::default() },
-            ids: IdMint { session: session_id, id_seed, next: next_id, user_item: None },
+            ids: IdMint { session: session_id, id_seed, next: next_id, user_segment: None },
             config,
             chat_ctx,
             llm,
@@ -404,8 +404,8 @@ pub struct IdMint {
     session: String,
     id_seed: u64,
     next: NextId,
-    /// The user item an interim transcript opened, reused until its final.
-    user_item: Option<String>,
+    /// The user transcript segment an interim opened, reused until its final.
+    user_segment: Option<String>,
 }
 
 impl IdMint {
@@ -426,13 +426,13 @@ impl IdMint {
         SpeechId::nth(self.id_seed, (self.next)())
     }
 
-    pub(crate) fn user_transcript_item(&mut self, is_final: bool) -> String {
-        let id = match self.user_item.take() {
+    pub(crate) fn user_transcript_segment(&mut self, is_final: bool) -> String {
+        let id = match self.user_segment.take() {
             Some(id) => id,
-            None => self.mint("item"),
+            None => self.mint("SG"),
         };
         if !is_final {
-            self.user_item = Some(id.clone());
+            self.user_segment = Some(id.clone());
         }
         id
     }

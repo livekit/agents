@@ -4,11 +4,10 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from .._generated.realtime_options import InferenceGateway
-from ..llm._realtime import (
+from ..llm.openai_protocol import (
     AudioTranscription,
     NoiseReduction,
-    RealtimeModel as _RealtimeModel,
-    RealtimeSession,
+    OpenAIRealtimeModel,
     Reasoning,
     Tracing,
     Truncation,
@@ -22,13 +21,10 @@ from . import InferenceClass, get_default_inference_url, resolve_credentials
 if TYPE_CHECKING:
     from .._generated.realtime_wire import Modalities
 
-__all__ = [
-    "RealtimeModel",
-    "RealtimeSession",
-]
+__all__ = ["RealtimeModel"]
 
 
-class RealtimeModel(_RealtimeModel):
+class RealtimeModel(OpenAIRealtimeModel):
     """OpenAI-compatible realtime model authenticated through LiveKit Inference."""
 
     _dialect = "inference"

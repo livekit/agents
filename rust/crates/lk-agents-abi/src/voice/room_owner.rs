@@ -94,11 +94,15 @@ pub trait RoomIo: Send + Sync {
         identity: Option<ParticipantIdentity>,
     ) -> crate::BoxFuture<'a, Result<()>>;
     fn unset_participant<'a>(&'a self) -> crate::BoxFuture<'a, Result<()>>;
+    /// The user's transcript, in the segment the session names.
     fn on_user_input_transcribed<'a>(
         &'a self,
         transcript: &'a str,
         is_final: bool,
+        segment: &'a str,
     ) -> crate::BoxFuture<'a, Result<()>>;
+    /// The user's transcript `segment`, already final, now reads `text`.
+    fn on_user_input_corrected(&self, segment: &str, text: &str);
     fn aclose(self: Arc<Self>) -> crate::BoxFuture<'static, Closed>;
 }
 

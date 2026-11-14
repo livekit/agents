@@ -442,12 +442,6 @@ async def test_stt_unexpected_close_keeps_code_and_retryability(mode: str) -> No
             await provider.aclose()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="stt.SocketStream ends the open speech on a reconnect without finalizing its "
-    "interim: the turn heard before a dropped connection is never a FINAL_TRANSCRIPT",
-)
 async def test_a_turn_cut_by_a_dropped_connection_is_still_finalized() -> None:
     """The partial turn of a connection that dropped mid-turn reaches the reader as a final
     before its END_OF_SPEECH, as the turns stream did before the socket base."""

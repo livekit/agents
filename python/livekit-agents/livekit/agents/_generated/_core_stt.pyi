@@ -34,12 +34,16 @@ class SpeechState:
         """No speech is open and no interim awaits its final: nothing heard is left to transcribe."""
     def transcript(self, transcript: Transcript) -> list[SpeechEvent]:
         """The events a transcript produces."""
-    def started(self) -> list[SpeechEvent]:
-        """The provider heard speech start."""
+    def started(self, speech_start_time: float | None = None) -> list[SpeechEvent]:
+        """The provider heard speech start, at `speech_start_time` (wall clock) when it says."""
     def ended(self) -> list[SpeechEvent]:
-        """The provider heard speech end."""
+        """The provider heard speech end: before the final of its words, the speech stays open until
+        that final, a new speech or the connection's end.
+        """
     def boundary(self) -> list[SpeechEvent]:
-        """A connection ended: the open speech ends before the next connection's events."""
+        """A connection ended: its pending interim becomes final and the open speech ends, before
+        the next connection's events.
+        """
 
 class FallbackStt:
     """`stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""

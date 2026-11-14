@@ -390,9 +390,18 @@ impl FakeDatabase {
         let faulted = self.state.lock().faulted;
         self.registry.record_storage(StorageStep::PartitionSettled { unended, held, faulted });
         // The thread reads its rows back in their positions in the conversation.
-        let items = partition_key.history().await.unwrap_or_default();
-        let items = items.into_iter().map(|row| row.id).collect();
-        self.registry.record_storage(StorageStep::Saved { items });
+        let rows = partition_key.history().await.unwrap_or_default();
+        let user_texts = rows
+            .iter()
+            .filter_map(|row| match decode_chat_item(row.payload.clone()).ok()? {
+                ChatItem::Message(m) if m.role == lk_agents_abi::Role::User => {
+                    Some((row.id.clone(), m.raw_text_content().unwrap_or_default()))
+                }
+                _ => None,
+            })
+            .collect();
+        let items = rows.into_iter().map(|row| row.id).collect();
+        self.registry.record_storage(StorageStep::Saved { items, user_texts });
     }
 }
 

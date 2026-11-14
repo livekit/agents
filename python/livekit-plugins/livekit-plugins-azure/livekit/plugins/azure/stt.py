@@ -19,7 +19,7 @@ import uuid
 import weakref
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Annotated, Literal, NotRequired, TypedDict
+from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError
@@ -30,7 +30,6 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     LanguageCode,
-    http,
     stt,
 )
 from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
@@ -276,7 +275,7 @@ _PATHS = {"speech.hypothesis", "speech.fragment", "speech.phrase", "turn.end"}
 _BODY = TypeAdapter(dict[str, JsonValue])
 
 
-class SpeechStream(stt.SocketStream[_Message, str]):
+class SpeechStream(stt.WebSocketStream[_Message, str]):
     """Continuous recognition over the Speech service's websocket: each connection sends
     speech.config, then one turn's speech.context and wave header, then the audio; a turn the
     service ends while audio still flows is followed by a new one."""
@@ -322,7 +321,7 @@ class SpeechStream(stt.SocketStream[_Message, str]):
         # containers have no /stt/speech/universal/v2 route
         return not is_given(self._opts.speech_host) or is_given(self._opts.speech_endpoint)
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         opts = self._opts
         if is_given(opts.speech_endpoint):
             url = opts.speech_endpoint
@@ -367,20 +366,20 @@ class SpeechStream(stt.SocketStream[_Message, str]):
             headers["Authorization"] = f"Bearer {opts.speech_auth_token}"
         elif is_given(opts.speech_key):
             headers["Ocp-Apim-Subscription-Key"] = opts.speech_key
-        return http.SocketTarget(
+        return stt.WebSocketTarget(
             urlunsplit((scheme, parts.netloc, parts.path, urlencode(params), "")),
             headers=headers,
             request_id_header="X-RequestId",
         )
 
-    def setup(self) -> list[str | bytes]:
+    def setup(self) -> str:
         self._sent = self._turn_start = 0.0
         self._ended_turns.clear()
         self._request_id = uuid.uuid4().hex.upper()
-        return [
-            _text("speech.config", self._request_id, json.dumps(_SPEECH_CONFIG)),
-            *self._turn(),
-        ]
+        # the turn's frames follow the speech.config, ahead of the audio
+        for frame in self._turn():
+            self.send_now(frame)
+        return _text("speech.config", self._request_id, json.dumps(_SPEECH_CONFIG))
 
     def _turn(self) -> list[str | bytes]:
         """A turn's speech.context and wave header, under the current request id."""
@@ -462,25 +461,27 @@ class SpeechStream(stt.SocketStream[_Message, str]):
             }
         return context
 
-    def encode(
-        self, item: rtc.AudioFrame | stt.RecognizeStream.Flush | http.EndOfInput
-    ) -> http.Encoded[str]:
-        if isinstance(item, rtc.AudioFrame):
-            self._sent += item.duration
-            return _audio(self._request_id, bytes(item.data))
-        if isinstance(item, http.EndOfInput):
-            # an empty audio message ends the audio: the service sends its last phrases, then
-            # turn.end
-            self._audio_ended = True
-            return _audio(self._request_id, b"")
-        return None
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | None:
+        match item:
+            case rtc.AudioFrame():
+                self._sent += item.duration
+                return _audio(self._request_id, bytes(item.data))
+            case stt.Flush():
+                return None
+            case stt.EndOfAudio():
+                # an empty audio message ends the audio: the service sends its last phrases,
+                # then turn.end
+                self._audio_ended = True
+                return _audio(self._request_id, b"")
+            case _:
+                assert_never(item)
 
     def decode(self, frame: bytes | str) -> _Hypothesis | _Phrase | _TurnEnd | None:
         if isinstance(frame, bytes):
             return None
         head, separator, body = frame.partition("\r\n\r\n")
         if not separator:
-            raise http.protocol_error(self, f"a message without a header block: {frame}")
+            raise stt.protocol_error(self, f"a message without a header block: {frame}")
         headers = {
             name.strip().lower(): value.strip()
             for name, _, value in (line.partition(":") for line in head.split("\r\n") if line)
@@ -494,24 +495,22 @@ class SpeechStream(stt.SocketStream[_Message, str]):
                 {**fields, "path": path, "request_id": headers.get("x-requestid", "")}
             )
         except ValidationError as e:
-            raise http.protocol_error(self, f"{e}; frame: {frame}") from e
+            raise stt.protocol_error(self, f"{e}; frame: {frame}") from e
 
-    def on_message(
-        self, message: _Hypothesis | _Phrase | _TurnEnd
-    ) -> stt.Transcript | http.Done | None:
+    def on_message(self, message: _Hypothesis | _Phrase | _TurnEnd) -> None:
         if message["request_id"].upper() in self._ended_turns:
-            return None
+            return
         if message["path"] == "turn.end":
             if self._audio_ended:
-                return http.DONE
+                self.report(stt.SessionFinished())
+                return
             # the service ended the turn while audio still flows: the next turn starts here
             self._ended_turns.add(self._request_id)
             self._request_id = uuid.uuid4().hex.upper()
             self._turn_start = self._sent
             for frame in self._turn():
-                self.send_command(frame)
-            return None
-        if message["path"] == "speech.phrase":
+                self.send_now(frame)
+        elif message["path"] == "speech.phrase":
             status = message["RecognitionStatus"]
             if status != "Success" and status not in _NO_MATCH:
                 raise APIError(
@@ -520,10 +519,12 @@ class SpeechStream(stt.SocketStream[_Message, str]):
                 )
             # a phrase that recognized nothing retracts the interim it follows
             text = message.get("DisplayText", "") if status == "Success" else ""
-            return self._transcript(message, text, final=True)
-        if not message["Text"].strip():
-            return None
-        return self._transcript(message, message["Text"], final=False)
+            self.report(self._transcript(message, text, final=True))
+        elif message["path"] == "speech.hypothesis" or message["path"] == "speech.fragment":
+            if message["Text"].strip():
+                self.report(self._transcript(message, message["Text"], final=False))
+        else:
+            assert_never(message)
 
     def _transcript(
         self, message: _Hypothesis | _Phrase, text: str, *, final: bool

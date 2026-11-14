@@ -9,12 +9,13 @@ import os
 import time
 from collections.abc import AsyncIterable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, assert_never
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from livekit import rtc
 from livekit.agents import APIConnectOptions, http, llm, utils
+from livekit.agents.llm import realtime as llm_realtime
 from livekit.agents.llm.realtime import InputSpeechStartedEvent, InputSpeechStoppedEvent
 from livekit.agents.llm.utils import compute_chat_ctx_diff
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
@@ -96,7 +97,7 @@ class _ResponseGeneration:
     """Accumulated output text from agent responses"""
 
 
-class RealtimeModel(llm.RealtimeModel):
+class RealtimeModel(llm.RealtimeSessionModel):
     """Real-time language model using Ultravox.
 
     Connects to Ultravox's WebSocket API for streaming STT, LLM, and TTS.
@@ -277,7 +278,7 @@ _BARGE_IN = UserTextMessage(
 )
 
 
-class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
+class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]):
     """One Ultravox call per connection: a change Ultravox applies only to a new call (the
     instructions, the tools) creates one."""
 
@@ -309,7 +310,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
         self._last_user_final_ts: float | None = None
         self._connect_started = 0.0
 
-    async def connect(self, conn_options: APIConnectOptions) -> http.SocketTarget:
+    async def connect(self, conn_options: APIConnectOptions) -> llm_realtime.WebSocketTarget:
         self._connect_started = time.perf_counter()
         payload: dict[str, JsonValue] = {
             "systemPrompt": self._opts.system_prompt,
@@ -349,14 +350,14 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
         try:
             join_url = _CALL.validate_python(body)["joinUrl"]
         except ValidationError as e:
-            raise http.protocol_error(self, f"the created call has no joinUrl: {e}") from e
+            raise llm_realtime.protocol_error(self, f"the created call has no joinUrl: {e}") from e
 
         if self._opts.output_medium == "text":
-            self.send_command(SetOutputMedium(type="set_output_medium", medium="text"))
-        return http.SocketTarget(join_url)
+            self.send_now(SetOutputMedium(type="set_output_medium", medium="text"))
+        return llm_realtime.WebSocketTarget(join_url)
 
-    def encode(self, item: rtc.AudioFrame | http.EndOfInput) -> http.Encoded[ClientMessage]:
-        return bytes(item.data) if isinstance(item, rtc.AudioFrame) else None
+    def encode(self, item: rtc.AudioFrame) -> bytes:
+        return bytes(item.data)
 
     def on_message(self, message: ServerMessage) -> None:
         if isinstance(message, bytes):
@@ -371,6 +372,8 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
             self.emit("input_speech_started", InputSpeechStartedEvent())
         elif message["type"] == "call_started":
             self._report_connection_acquired(time.perf_counter() - self._connect_started)
+        else:
+            assert_never(message)
 
     # Helper function to fix TTFT issue : TTFT was showing -1.0 seconds during function calls
     def _pick_created_timestamp(self) -> float:
@@ -388,7 +391,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
         output_medium: NotGivenOr[Literal["text", "voice"]] = NOT_GIVEN,
     ) -> None:
         if is_given(output_medium):
-            self.send_command(SetOutputMedium(type="set_output_medium", medium=output_medium))
+            self.send_now(SetOutputMedium(type="set_output_medium", medium=output_medium))
         if is_given(tool_choice):
             logger.warning("tool choice updates are not supported by Ultravox.")
 
@@ -427,12 +430,12 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
                     result["errorMessage"] = item.output
                 else:
                     result["result"] = item.output
-                self.send_command(result)
+                self.send_now(result)
 
         self._chat_ctx = chat_ctx.copy()
 
     def _send_text(self, text: str, *, defer_response: bool = True) -> None:
-        self.send_command(
+        self.send_now(
             UserTextMessage(type="user_text_message", text=text, deferResponse=defer_response)
         )
 
@@ -475,7 +478,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
                 if f.cancelled() and self._pending_requested:
                     # cancelled by its caller after the request went out: barge in so Ultravox
                     # does not answer
-                    self.send_command(_BARGE_IN)
+                    self.send_now(_BARGE_IN)
 
         fut.add_done_callback(_on_done)
         return fut
@@ -517,7 +520,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
         # superseded or cancelled while collecting: never speak stale, uninterruptible text
         if self._pending_generation_fut is not fut:
             return
-        self.send_command(
+        self.send_now(
             ForcedAgentMessage(type="forced_agent_message", content=collected, uninterruptible=True)
         )
         self._pending_requested = True
@@ -550,7 +553,7 @@ class RealtimeSession(llm.RealtimeSocketSession[ServerMessage, ClientMessage]):
     def interrupt(self) -> None:
         if self._current_generation and not self._current_generation.done:
             # deferResponse keeps Ultravox from answering the barge-in
-            self.send_command(_BARGE_IN)
+            self.send_now(_BARGE_IN)
             self._interrupt_current_generation()
 
     def truncate(
