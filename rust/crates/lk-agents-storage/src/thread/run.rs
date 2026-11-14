@@ -1,4 +1,5 @@
 pub use lk_agents_abi::telemetry::health::PartitionKind;
+use std::ops::ControlFlow;
 use std::time::Duration;
 
 use crate::thread::db::{Commit, Committed, EventWrite, Fenced, Resolution};
@@ -508,7 +509,7 @@ impl Run {
         }
         let lease = opts.lease;
         let out = match self.writes(opts) {
-            Ok(commit) => match self.send(&commit, lease).await {
+            Ok(commit) => match self.send_until_answered(&commit, lease).await {
                 Err(StorageError::Uncertain(why)) => {
                     self.resolve_lost_ack(commit, lease, why).await
                 }
@@ -567,6 +568,26 @@ impl Run {
                 expected: fence.map_or(0, |f| f.version),
             },
             _ => StorageError::Invalid(why),
+        }
+    }
+
+    /// [`Run::send`] again while it is refused unapplied, up to [`RESOLVE_WAIT`]; a lost
+    /// acknowledgment is left to [`Run::resolve`], which reads back whether it applied.
+    async fn send_until_answered(
+        &self,
+        commit: &Commit,
+        after: LeaseAfterCommit,
+    ) -> Result<Committed, StorageError> {
+        let mut resend = self.partition_key.thread.resend(crate::telemetry::StorageWrite::Commit);
+        loop {
+            match self.send(commit, after).await {
+                Err(StorageError::Uncertain(why)) => return Err(StorageError::Uncertain(why)),
+                out => {
+                    if let ControlFlow::Break(out) = resend.after(out).await {
+                        return out;
+                    }
+                }
+            }
         }
     }
 

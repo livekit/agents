@@ -88,7 +88,7 @@ async fn an_orphaned_lease_is_reentered_by_its_owner_and_fenced_from_others() {
     let owner = Holder::new("voice");
     let (thread, faulty) = faulty(&db, &owner).await;
     faulty.fail_next_lease_take(WriteFault::StallAfter);
-    faulty.unreachable_after_commit_for(Duration::from_millis(300));
+    faulty.unreachable_after_commit_for(Duration::from_secs(20));
     let partition_key = thread.partition(PARTITION_KEY);
     let open = partition_key.open(RunOptions::new("r1", ""), &owner);
     assert!(tokio::time::timeout(Duration::from_millis(100), open).await.is_err());

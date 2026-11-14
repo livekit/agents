@@ -66,10 +66,11 @@ impl Default for LeaseTiming {
     }
 }
 
-/// One write's resends after a lost acknowledgment: the resolver every write shares. The write
-/// is idempotent by its key (a lease token, a run, task or message id): sent again it cannot
-/// apply twice. `Uncertain` reaches the caller only once `wait` ran out with the outcome still
-/// unknown.
+/// One write's resends: the one retry owner every write shares, as transports never resend. The
+/// write is idempotent by its key (a lease token, a run, task or message id): sent again it
+/// cannot apply twice. A refusal that applied nothing (`Unavailable`) is sent again until `wait`
+/// runs out, then reaches the caller as it is; `Uncertain` reaches the caller only once `wait`
+/// ran out with the outcome still unknown.
 pub(crate) struct Resend {
     clock: Arc<dyn Clock>,
     epoch: Ts,
@@ -108,8 +109,9 @@ impl Resend {
         self.lost.is_some()
     }
 
-    /// `Break` with the outcome once it is known, else waits out the next backoff step. After a
-    /// lost acknowledgment a refused connection is still no answer.
+    /// `Break` with the outcome once it is known, else waits out the next backoff step: after a
+    /// refusal that applied nothing, or a lost acknowledgment. After a lost acknowledgment a
+    /// refused connection is still no answer.
     pub(crate) async fn after<T>(
         &mut self,
         out: Result<T, StorageError>,
@@ -117,6 +119,14 @@ impl Resend {
         let lost = match (out, self.lost.take()) {
             (Err(StorageError::Uncertain(why)), _)
             | (Err(StorageError::Unavailable(_)), Some(why)) => why,
+            (Err(StorageError::Unavailable(why)), None) => {
+                let Some(at) = self.backoff.next(self.elapsed()) else {
+                    return ControlFlow::Break(Err(StorageError::Unavailable(why)));
+                };
+                log::debug!(target: lk_agents_abi::LOG_TARGET, "write refused unapplied, sending it again: {why}");
+                self.clock.wait_until(self.epoch.saturating_add(at)).await;
+                return ControlFlow::Continue(());
+            }
             (out, lost) => {
                 self.lost = lost;
                 return ControlFlow::Break(out);

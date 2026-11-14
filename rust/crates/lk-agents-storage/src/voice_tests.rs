@@ -340,3 +340,51 @@ async fn a_turns_edit_survives_another_writers_commit() {
     store.aclose().await.unwrap();
     fixture.cleanup(&[&thread]).await;
 }
+
+/// agent-db evicting the database idle refuses the turn's commit in flight unapplied (`retry`)
+/// and closes the socket: the commit is sent again on the redialed socket and the turn settles,
+/// so the call goes on. Before, the refusal ended the call as a storage failure.
+#[tokio::test(start_paused = true)]
+async fn a_commit_refused_by_an_idle_eviction_is_sent_again_and_the_call_goes_on() {
+    use crate::Storage as _;
+    use crate::testing::{Faults, TempDir, Wrapped, WriteFault, tasks};
+    use std::sync::Arc;
+    let dir = TempDir::new("evicted_commit_");
+    let storage = crate::backends::sqlite::SqliteStorage::open(
+        &dir.0,
+        crate::thread::LeaseTiming::default(),
+        tasks(),
+    );
+    let faults = Arc::<Faults>::default();
+    let shared = faults.clone();
+    let wrap = move |conn: crate::backends::sqlite::FileConnection| {
+        Arc::new(shared.over(Box::new(conn))) as Arc<dyn crate::ThreadDbConnection>
+    };
+    let storage = Arc::new(Wrapped { storage: Arc::new(storage.await.unwrap()), wrap });
+    let thread_id = storage.create_thread(Default::default()).await.unwrap().thread_id;
+    let store = Arc::new(
+        VoiceStore::bound(storage.clone(), thread_id.clone(), "desk".into(), None, Cx::NONE)
+            .await
+            .unwrap(),
+    );
+    let said = vec![ChatItem::Message(ChatMessage::text(
+        "hi",
+        Role::User,
+        "hello",
+        std::time::UNIX_EPOCH,
+    ))];
+    store.acquire(1, said.clone()).await.unwrap();
+    faults.fail_next_commit(WriteFault::EvictIdle);
+    let (sink, mut events) = Events::new();
+    Arc::clone(&store).dispatch(VoiceStorageCommand::Settle { speech: 1, history: said }, sink).unwrap();
+    match events.recv().await {
+        Some(VoiceStorageEvent::Settled { speech: 1, result, .. }) => {
+            assert!(result.is_ok(), "the call ended on a refusal that applied nothing: {result:?}")
+        }
+        _ => panic!("the turn did not settle"),
+    }
+    store.aclose().await.unwrap();
+    let reopened = VoiceStore::bound(storage, thread_id, "desk".into(), None, Cx::NONE).await;
+    let history = reopened.unwrap().initial_history().unwrap_or_default();
+    assert_eq!(history.len(), 1, "the turn committed once: {history:?}");
+}

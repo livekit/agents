@@ -918,13 +918,13 @@ lk_agents_storage::contract!(
     a_rejected_message_leaves_no_submitted_row,
 );
 
-/// A refused save fails the original task `storage-unavailable`, its staged changes absent: no
-/// new task, no answer in the history. A save refused as too large does too: it reached the
-/// client as the raw `TooLarge`, the task left `working`.
-#[tokio::test]
+/// A save refused past its resends fails the original task `storage-unavailable`, its staged
+/// changes absent: no new task, no answer in the history. A save refused as too large does too:
+/// it reached the client as the raw `TooLarge`, the task left `working`.
+#[tokio::test(start_paused = true)]
 async fn a_refused_commit_fails_the_original_task_storage_unavailable() {
     use lk_agents_storage::testing::WriteFault;
-    for fault in [WriteFault::Refuse, WriteFault::RefuseTooLarge] {
+    for fault in [WriteFault::RefuseEvery, WriteFault::RefuseTooLarge] {
         let fx = Backend::Sqlite.fixture(None).await;
         let (s, faults) = fx.faulty_thread().await;
         faults.fail_next_commit(fault);

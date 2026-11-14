@@ -297,7 +297,7 @@ async fn a_refused_direct_save_keeps_none_of_its_values() {
     let fields = vec![field("draft", json!("refused"))];
     let loaded = store.load("root:desk".into(), "Booking".into(), fields.clone()).await.unwrap();
     faulty.fail_next_commit(WriteFault::Refuse);
-    faulty.unreachable_after_commit_for(std::time::Duration::from_secs(1));
+    faulty.unreachable_after_commit_for(std::time::Duration::from_secs(20));
     let refused = store.save("root:desk".into(), "Booking".into(), loaded.revision, fields).await;
     assert!(refused.is_err(), "{refused:?}");
     assert!(store.writes().is_empty(), "the refused values stayed staged");

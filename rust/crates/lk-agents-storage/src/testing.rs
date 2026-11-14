@@ -174,7 +174,13 @@ pub enum WriteFault {
     /// Applied, then pending forever: the request outlives whoever awaits it.
     StallAfter,
     Refuse,
+    /// [`WriteFault::Refuse`] on every commit carrying staged writes: a refusal outlasting its
+    /// resends.
+    RefuseEvery,
     RefuseTooLarge,
+    /// Refused unapplied as agent-db refuses a write in flight when it evicts the database idle
+    /// (`retry`, then the socket closes and the next call redials).
+    EvictIdle,
 }
 
 /// A thread database connection with faults a real connection shows: a commit's answer lost
@@ -298,6 +304,7 @@ impl ThreadDbConnection for Faulty {
         let takes = has(StatementKind::LeaseTake);
         let fault = match *self.commit.lock() {
             Some(WriteFault::RefuseTooLarge) if !staged => None,
+            Some(WriteFault::RefuseEvery) => (is_commit && staged).then_some(WriteFault::Refuse),
             ref mut armed if is_commit => armed.take(),
             _ => None,
         };
@@ -326,12 +333,15 @@ impl ThreadDbConnection for Faulty {
                 self.inner.batch(statements).await?;
                 std::future::pending().await
             }
-            Some(WriteFault::Refuse) => {
+            Some(WriteFault::Refuse | WriteFault::RefuseEvery) => {
                 let io = rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_IOERR);
                 Err(crate::backends::sqlite::sqlite_error(rusqlite::Error::SqliteFailure(io, None)))
             }
             Some(WriteFault::RefuseTooLarge) => {
                 Err(StorageError::TooLarge { what: "the commit".into(), limit: 0 })
+            }
+            Some(WriteFault::EvictIdle) => {
+                Err(StorageError::Unavailable("agentdb retry: evicted while idle".into()))
             }
         }
     }
