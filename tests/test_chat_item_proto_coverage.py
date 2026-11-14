@@ -8,13 +8,7 @@ from google.protobuf.descriptor import FieldDescriptor
 from google.protobuf.message import Message
 
 from livekit.agents import llm
-from livekit.agents._proto import (
-    USAGE_VARIANTS,
-    encode_by_name,
-    encode_chat_item,
-    encode_metrics,
-    encode_session_usage,
-)
+from livekit.agents._proto import encode_chat_item, encode_metrics, encode_session_usage
 from livekit.agents.llm import (
     AgentConfigUpdate,
     AgentHandoff,
@@ -22,7 +16,14 @@ from livekit.agents.llm import (
     FunctionCall,
     FunctionCallOutput,
 )
-from livekit.agents.metrics import AgentSessionUsage
+from livekit.agents.metrics import (
+    AgentSessionUsage,
+    EOTModelUsage,
+    InterruptionModelUsage,
+    LLMModelUsage,
+    STTModelUsage,
+    TTSModelUsage,
+)
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
 pytestmark = pytest.mark.unit
@@ -131,8 +132,29 @@ def test_message_content_is_one_entry_per_part() -> None:
 def test_map_values_are_stringified() -> None:
     # extra dicts hold provider payloads and flags, the wire maps only strings
     extra = {"livekit": {"inference_deployment": "d"}, "flag": True}
-    msg = encode_by_name(agent_pb.ChatMessage, {"extra": extra})
+    msg = encode_chat_item(ChatMessage(role="user", content=["hi"], extra=extra)).message
     assert dict(msg.extra) == {k: str(v) for k, v in extra.items()}
+
+
+def test_function_call_extra_never_reaches_the_wire() -> None:
+    # livekit-protocol 1.1.28 added FunctionCall.extra; agents 1.7.0-1.8.8 filled it from the
+    # SDK's nested extra and every session report with a tool call failed to encode
+    call = FunctionCall(
+        call_id="call-1",
+        name="fn",
+        arguments="{}",
+        extra={"google": {"thought_signature": b"sig"}, "__livekit_agents_tool_non_blocking": True},
+    )
+    encode_chat_item(call).SerializeToString()
+
+
+USAGE_SOURCES: list[tuple[Any, type[Message], str]] = [
+    (LLMModelUsage, agent_pb.LLMModelUsage, "llm"),
+    (TTSModelUsage, agent_pb.TTSModelUsage, "tts"),
+    (STTModelUsage, agent_pb.STTModelUsage, "stt"),
+    (InterruptionModelUsage, agent_pb.InterruptionModelUsage, "interruption"),
+    (EOTModelUsage, agent_pb.EotModelUsage, "eot"),
+]
 
 
 def _saturated(src_type: Any, msg_type: type[Message]) -> Any:
@@ -145,21 +167,24 @@ def _saturated(src_type: Any, msg_type: type[Message]) -> Any:
 
 
 @pytest.mark.parametrize(
-    ("src_type", "msg_type"),
-    [(src, msg) for src, _, msg in USAGE_VARIANTS],
-    ids=[src.__name__ for src, _, _ in USAGE_VARIANTS],
+    ("src_type", "msg_type", "variant"),
+    USAGE_SOURCES,
+    ids=[src.__name__ for src, _, _ in USAGE_SOURCES],
 )
-def test_model_usage_reaches_every_proto_field(src_type: Any, msg_type: type[Message]) -> None:
-    dropped = _unset_fields(encode_by_name(msg_type, _saturated(src_type, msg_type)))
+def test_model_usage_reaches_every_proto_field(
+    src_type: Any, msg_type: type[Message], variant: str
+) -> None:
+    pb_usage = encode_session_usage(AgentSessionUsage(model_usage=[_saturated(src_type, msg_type)]))
+    dropped = _unset_fields(getattr(pb_usage.model_usage[0], variant))
     assert not dropped, f"{msg_type.DESCRIPTOR.name} drops {', '.join(dropped)}"
 
 
 def test_session_usage_carries_every_variant() -> None:
-    sources = [_saturated(src, msg) for src, _, msg in USAGE_VARIANTS]
+    sources = [_saturated(src, msg) for src, msg, _ in USAGE_SOURCES]
     pb_usage = encode_session_usage(AgentSessionUsage(model_usage=sources))
-    assert {mu.WhichOneof("usage") for mu in pb_usage.model_usage} == {
-        variant for _, variant, _ in USAGE_VARIANTS
-    }
+    assert [mu.WhichOneof("usage") for mu in pb_usage.model_usage] == [
+        variant for _, _, variant in USAGE_SOURCES
+    ]
 
 
 def test_encode_metrics_reaches_every_proto_field() -> None:

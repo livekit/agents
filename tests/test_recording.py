@@ -18,7 +18,7 @@ import pytest
 from google.rpc import error_details_pb2, status_pb2
 
 from livekit.agents import Agent, AgentSession
-from livekit.agents.llm import ChatContext, ChatMessage
+from livekit.agents.llm import ChatContext, ChatMessage, FunctionCall, FunctionCallOutput
 from livekit.agents.metrics import LLMModelUsage
 from livekit.agents.observability import Tagger
 from livekit.agents.telemetry.traces import _upload_session_report
@@ -649,6 +649,31 @@ async def test_upload_session_report_marks_stt_keyterms_as_pii() -> None:
     assert serialized_stt_options["lk.pii.keyterms"] == ["Acme Corp"]
     assert "keyterms" not in serialized_stt_options
     assert stt_context_options["keyterms"] == ["Acme Corp"]
+
+
+async def test_upload_session_report_with_tool_call() -> None:
+    # livekit-protocol 1.1.28 added FunctionCall.extra, and agents 1.7.0-1.8.8 copied the
+    # SDK's nested extra into it: every report with a tool call failed to upload
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    call = FunctionCall(
+        call_id="call-1",
+        name="lookup",
+        arguments="{}",
+        extra={"google": {"thought_signature": b"sig"}, "__livekit_agents_tool_non_blocking": True},
+    )
+    output = FunctionCallOutput(call_id="call-1", name="lookup", output="ok", is_error=False)
+    report.chat_history.items = [call, output]
+
+    with _patch_upload_deps() as mock_logger:
+        await _call_upload(report, http_session=_make_mock_http())
+
+    items = [
+        c.kwargs["attributes"]["chat.item"]
+        for c in mock_logger.emit.call_args_list
+        if c.kwargs.get("body") == "chat item"
+    ]
+    assert items[0]["function_call"]["name"] == "lookup"
+    assert items[1]["function_call_output"]["output"] == "ok"
 
 
 def test_session_report_constructor_includes_recording_options_in_options() -> None:
