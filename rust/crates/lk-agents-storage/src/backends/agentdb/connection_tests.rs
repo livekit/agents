@@ -83,7 +83,7 @@ pub(crate) fn reply(m: pb::server_message::Message) -> pb::ServerMessage {
 /// The server's notice that it evicted the database while the socket idled.
 pub(crate) fn idle_notice() -> pb::ServerMessage {
     reply(pb::server_message::Message::Error(pb::Error {
-        code: WsdbCode::IdleEvicted.as_str().into(),
+        code: ErrorCode::IdleEvicted.as_str().into(),
         message: "evicted while idle".into(),
     }))
 }
@@ -188,7 +188,7 @@ async fn hello_carries_the_token_and_a_refused_database_is_a_server_error() {
     let conn = dial(&url, "DB_1").await.unwrap();
     assert_eq!(conn.tip(), 7);
     let err = dial(&url, "DB_nope").await.err().unwrap();
-    assert!(matches!(&err, WsdbError::Server { code: WsdbCode::NotFound, .. }), "{err}");
+    assert!(matches!(&err, WsdbError::Server { code: ErrorCode::NotFound, .. }), "{err}");
     conn.close();
 }
 
@@ -199,12 +199,12 @@ async fn exec_query_and_credits() {
     let r = conn.exec(&st("INSERT", vec!["v".into()])).await.unwrap();
     assert_eq!((r.rows_affected, r.last_insert_id, r.tip), (1, 9, 8));
     let err = conn.exec(&st("boom", vec![])).await.err().unwrap();
-    assert!(matches!(err, WriteError::Sent(WsdbError::Server { code: WsdbCode::Exec, .. })));
+    assert!(matches!(err, WriteError::Sent(WsdbError::Server { code: ErrorCode::Exec, .. })));
     // Backpressure is returned once; the caller owns retry policy.
     let err = conn.exec(&st("busy", vec![])).await.err().unwrap();
     assert!(matches!(
         err,
-        WriteError::Sent(WsdbError::Server { code: WsdbCode::ResourceExhausted, .. })
+        WriteError::Sent(WsdbError::Server { code: ErrorCode::ResourceExhausted, .. })
     ));
     let busy = |log: &Served| {
         log.lock()
@@ -371,7 +371,7 @@ async fn a_redial_the_server_refuses_for_good_fails_later_calls_with_its_error()
     ));
     let err = conn.exec(&st("INSERT", vec![])).await.err().unwrap();
     assert!(
-        matches!(&err, WriteError::NotSent(WsdbError::Server { code: WsdbCode::NotFound, .. })),
+        matches!(&err, WriteError::NotSent(WsdbError::Server { code: ErrorCode::NotFound, .. })),
         "{err}"
     );
     assert_eq!(hellos(&log), 2, "no redial after a final refusal");

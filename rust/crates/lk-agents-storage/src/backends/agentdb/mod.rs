@@ -10,14 +10,12 @@ use crate::StorageError;
 use crate::sql::{BatchResult, Row, Statement};
 use async_trait::async_trait;
 use livekit_api::services::threads::ThreadClient;
-use livekit_api::services::{
-    LiveKitApi, ServerError, ServerErrorCode, ServiceError, public_api_url,
-};
+use livekit_api::services::{LiveKitApi, ServerError, ServiceError, public_api_url};
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
 use lk_agents_abi::storage::Unacknowledged;
-use lk_agents_abi::storage::wsdb::WsdbCode;
+use lk_agents_abi::storage::agentdb_error::{Applied, ErrorCode, Retry};
 use lk_agents_abi::{Clock, Ts};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::owned::Background;
@@ -29,28 +27,28 @@ pub use connection::{Conn, Options as ConnOptions, TokenMinter, WriteError, Wsdb
 
 // The threads service owns thread metadata; agent-db holds each thread's database, over `wsdb`.
 
+/// A server's refusal of a request that changed nothing, by its code: the codes naming a cause of
+/// their own as it, one that may succeed if sent again `Unavailable`, any other final.
+fn refused(code: ErrorCode, message: String) -> StorageError {
+    match code {
+        ErrorCode::NotFound => StorageError::NotFound(message),
+        ErrorCode::Unauthenticated | ErrorCode::PermissionDenied => {
+            StorageError::Unauthorized(message)
+        }
+        _ if code.retry() != Retry::Never => StorageError::Unavailable(message),
+        _ => StorageError::Invalid(format!("{}: {message}", code.as_str())),
+    }
+}
+
 /// A failure of a request that changed nothing: a read, or a write never sent. A lost
-/// connection or a backpressured database may be retried.
+/// connection, or a code that may succeed if sent again, may be retried.
 impl From<WsdbError> for StorageError {
     fn from(e: WsdbError) -> Self {
         match e {
             WsdbError::Closed | WsdbError::Disconnected | WsdbError::Timeout | WsdbError::Io(_) => {
                 StorageError::Unavailable(e.to_string())
             }
-            WsdbError::Server { code, message } => match code {
-                WsdbCode::Unavailable
-                | WsdbCode::ResourceExhausted
-                | WsdbCode::Retry
-                | WsdbCode::OutcomeUnknown
-                | WsdbCode::IdleEvicted => StorageError::Unavailable(message),
-                WsdbCode::NotFound => StorageError::NotFound(message),
-                WsdbCode::Unauthenticated => StorageError::Unauthorized(message),
-                WsdbCode::Protocol
-                | WsdbCode::Internal
-                | WsdbCode::Txn
-                | WsdbCode::Exec
-                | WsdbCode::Query => StorageError::Invalid(format!("{}: {message}", code.as_str())),
-            },
+            WsdbError::Server { code, message } => refused(code, message),
             WsdbError::Protocol(m) => StorageError::Invalid(m),
             WsdbError::TooLarge(_) => {
                 StorageError::TooLarge { what: "request".into(), limit: connection::MAX_FRAME }
@@ -59,16 +57,16 @@ impl From<WsdbError> for StorageError {
     }
 }
 
-/// A write the server answered was refused and rolled back (`retry` among them, retryable); one
-/// sent and never answered (a dropped or closed socket, a timeout, a malformed answer, a server
-/// going away) or answered `outcome_unknown` may have committed: `Uncertain`. Only a sent write
-/// can be.
+/// A sent write answered with a code that applied nothing is refused, as an unsent one is; one
+/// answered with a code that may have applied, or never answered (a dropped or closed socket, a
+/// timeout, a malformed answer, a server going away), may have committed: `Uncertain`. Only a
+/// sent write can be.
 impl From<WriteError> for StorageError {
     fn from(e: WriteError) -> Self {
         match e {
             WriteError::NotSent(e) => e.into(),
             WriteError::Sent(e @ WsdbError::Server { code, .. })
-                if !matches!(code, WsdbCode::Unavailable | WsdbCode::OutcomeUnknown) =>
+                if code.applied() == Applied::No =>
             {
                 e.into()
             }
@@ -77,41 +75,26 @@ impl From<WriteError> for StorageError {
     }
 }
 
-/// A `livekit-api` failure as a storage error: `not_found` is `NotFound`, `unauthenticated` and
-/// `permission_denied` `Unauthorized`, a lost request and the retryable codes `Unavailable`,
-/// anything else `Server` with its code.
+/// A `livekit-api` failure as a storage error: a lost request is `Unavailable`, an answered one
+/// is refused by its code, whose names are agent-db's.
 pub fn service_error(e: ServiceError) -> StorageError {
     match e {
         ServiceError::Twirp(ServerError::Request(e)) => StorageError::Unavailable(e.to_string()),
-        ServiceError::Twirp(ServerError::Twirp(c)) => match c.code.as_str() {
-            ServerErrorCode::NOT_FOUND => StorageError::NotFound(c.msg),
-            ServerErrorCode::UNAUTHENTICATED | ServerErrorCode::PERMISSION_DENIED => {
-                StorageError::Unauthorized(c.msg)
-            }
-            // the server's own cancellation, never this caller's: nothing to retry over
-            ServerErrorCode::CANCELED
-            | ServerErrorCode::UNAVAILABLE
-            | ServerErrorCode::DEADLINE_EXCEEDED
-            | ServerErrorCode::RESOURCE_EXHAUSTED => StorageError::Unavailable(c.msg),
-            _ => StorageError::Invalid(format!("{}: {}", c.code, c.msg)),
-        },
+        ServiceError::Twirp(ServerError::Twirp(c)) => refused(ErrorCode::from_wire(&c.code), c.msg),
         ServiceError::Twirp(e) => StorageError::Invalid(e.to_string()),
         other => StorageError::Invalid(other.to_string()),
     }
 }
 
-/// A thread write's failure: one sent and never answered (a lost response, a deadline, a
-/// server-side cancellation) may have applied, so it is `Uncertain`, never retryable.
+/// A thread write's failure: one sent and never answered, or answered with a code that may have
+/// applied, is `Uncertain`, never retryable.
 fn service_write_error(e: ServiceError) -> StorageError {
     match e {
         ServiceError::Twirp(ServerError::Request(e)) if !e.is_connect() && !e.is_builder() => {
             StorageError::Uncertain(Unacknowledged::sent(e))
         }
         ServiceError::Twirp(ServerError::Twirp(c))
-            if matches!(
-                c.code.as_str(),
-                ServerErrorCode::CANCELED | ServerErrorCode::DEADLINE_EXCEEDED
-            ) =>
+            if ErrorCode::from_wire(&c.code).applied() == Applied::Maybe =>
         {
             StorageError::Uncertain(Unacknowledged::sent(format!("{}: {}", c.code, c.msg)))
         }

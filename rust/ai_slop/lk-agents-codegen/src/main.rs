@@ -5,6 +5,7 @@
 
 mod accessors;
 mod adapter;
+mod agentdb_errors;
 mod bases;
 mod class_stub;
 mod decl;
@@ -82,6 +83,7 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     let mut declared = decl::resolve::declarations(&abi)?;
 
     let mut o = Outputs { files: Vec::new(), dirs: Vec::new() };
+    o.add(PathBuf::from(agentdb_errors::PATH), &agentdb_errors::emit(root)?);
     let registry = telemetry::read(&abi)?;
     for (path, text) in telemetry::otel(&registry) {
         o.add(PathBuf::from(path), &text);

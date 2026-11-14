@@ -249,3 +249,17 @@ async fn cloud_task_views_preserve_waiting_state_and_label_presence_and_refuse_u
     storage.aclose().await;
     peer.close().await;
 }
+
+/// A writer panic answers `internal` after the write may have applied, and a newer server may send
+/// a code this build does not know: either leaves a sent write `Uncertain`, resolved by its key,
+/// never a refusal that would drop a write that committed.
+#[test]
+fn a_sent_write_answered_internal_or_an_unknown_code_is_uncertain() {
+    for code in ["internal", "a_code_from_a_newer_server"] {
+        let answer = WsdbError::Server { code: ErrorCode::from_wire(code), message: code.into() };
+        let err: StorageError = WriteError::Sent(answer.clone()).into();
+        assert!(matches!(err, StorageError::Uncertain(_)), "{code}: {err:?}");
+        let err: StorageError = WriteError::NotSent(answer).into();
+        assert!(matches!(err, StorageError::Invalid(_)), "{code}: unsent, it is final: {err:?}");
+    }
+}

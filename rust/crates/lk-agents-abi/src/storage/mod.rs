@@ -1,3 +1,4 @@
+pub mod agentdb_error;
 mod constants;
 pub mod context;
 pub mod handles;
@@ -7,7 +8,6 @@ mod rows;
 pub mod session;
 pub mod thread;
 pub mod voice;
-pub mod wsdb;
 
 use std::collections::BTreeMap;
 

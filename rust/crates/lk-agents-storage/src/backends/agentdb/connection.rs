@@ -17,7 +17,7 @@ use wire as pb;
 
 use crate::StorageError;
 use crate::sql::{BatchResult, Row, SqlValue, Statement, StatementResult};
-use lk_agents_abi::storage::wsdb::WsdbCode;
+use lk_agents_abi::storage::agentdb_error::{ErrorCode, Retry};
 
 // Wire protocol: `Hello` first, with a token minted for this dial. `Exec` answers one `ExecResult`;
 // `Query` streams `Columns`, `ColumnBatch`* and `Done`, paced by `Credit`; `Batch` applies its
@@ -159,7 +159,7 @@ pub enum WsdbError {
     /// A server-reported error with its stable code (`not_found`, `unauthenticated`, `unavailable`,
     /// `retry`, `outcome_unknown`, ..).
     #[error("agentdb {}: {message}", code.as_str())]
-    Server { code: WsdbCode, message: String },
+    Server { code: ErrorCode, message: String },
     #[error("agentdb client: protocol: {0}")]
     Protocol(String),
     #[error("agentdb client: {0}")]
@@ -185,32 +185,20 @@ impl WsdbError {
     /// A `Hello` refusal that redialing cannot repair.
     fn is_final(&self) -> bool {
         match self {
-            Self::Server { code, .. } => match code {
-                WsdbCode::Unavailable
-                | WsdbCode::ResourceExhausted
-                | WsdbCode::Retry
-                | WsdbCode::OutcomeUnknown
-                | WsdbCode::IdleEvicted => false,
-                WsdbCode::Protocol
-                | WsdbCode::Unauthenticated
-                | WsdbCode::NotFound
-                | WsdbCode::Internal
-                | WsdbCode::Txn
-                | WsdbCode::Exec
-                | WsdbCode::Query => true,
-            },
+            Self::Server { code, .. } => code.retry() == Retry::Never,
             Self::Protocol(_) => true,
             _ => false,
         }
     }
 
+    /// A code this build does not know keeps its name in the message.
     fn server(error: pb::Error) -> Self {
-        match WsdbCode::from_wire(&error.code) {
-            Some(code) => Self::Server { code, message: error.message },
-            None => {
-                Self::Protocol(format!("unknown server code {}: {}", error.code, error.message))
-            }
-        }
+        let code = ErrorCode::from_wire(&error.code);
+        let message = match code {
+            ErrorCode::Unknown => format!("{}: {}", error.code, error.message),
+            _ => error.message,
+        };
+        Self::Server { code, message }
     }
 }
 
@@ -393,7 +381,7 @@ impl Supervisor {
             if conn.is_closed() {
                 return;
             }
-            let idle = matches!(cause, WsdbError::Server { code: WsdbCode::IdleEvicted, .. });
+            let idle = matches!(cause, WsdbError::Server { code: ErrorCode::IdleEvicted, .. });
             // Dormant before the gate closes, so a call that finds it closed wakes the redial.
             conn.0.state.lock().dormant = idle;
             self.ready.set(false);
@@ -491,10 +479,10 @@ impl Conn {
             .map_err(|e| match e {
                 // the upgrade's own refusal is final, as the same refusal at `Hello` is
                 TransportError::Status { status: 401 | 403, message, .. } => {
-                    WsdbError::Server { code: WsdbCode::Unauthenticated, message }
+                    WsdbError::Server { code: ErrorCode::Unauthenticated, message }
                 }
                 TransportError::Status { status: 404, message, .. } => {
-                    WsdbError::Server { code: WsdbCode::NotFound, message }
+                    WsdbError::Server { code: ErrorCode::NotFound, message }
                 }
                 e => WsdbError::Io(format!("dial {}: {e}", self.0.opts.url)),
             })?;
@@ -600,7 +588,7 @@ impl Conn {
             // the connection's own notice, answering no request: its socket ends for being idle
             Some(pb::server_message::Message::Error(e))
                 if resp.request_id == 0
-                    && WsdbCode::from_wire(&e.code) == Some(WsdbCode::IdleEvicted) =>
+                    && ErrorCode::from_wire(&e.code) == ErrorCode::IdleEvicted =>
             {
                 return Err(WsdbError::server(e.clone()));
             }
