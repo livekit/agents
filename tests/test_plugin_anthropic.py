@@ -114,3 +114,66 @@ class TestAnthropicStreamRetry:
 
         assert calls == 2
         assert response.usage is not None
+
+
+class _EventStream(_EmptyAnthropicStream):
+    def __init__(self, events):
+        self._events = list(events)
+
+    async def __anext__(self):
+        if not self._events:
+            raise StopAsyncIteration
+        return self._events.pop(0)
+
+
+class TestAnthropicStreamUsage:
+    @pytest.mark.asyncio
+    async def test_output_tokens_are_the_message_delta_total(self) -> None:
+        """message_delta reports the cumulative output tokens, not an increment."""
+        from anthropic.types import (
+            MessageDeltaUsage,
+            RawMessageDeltaEvent,
+            RawMessageStartEvent,
+            RawMessageStopEvent,
+        )
+
+        events = [
+            RawMessageStartEvent.model_validate(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-5",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 10, "output_tokens": 3},
+                    },
+                }
+            ),
+            RawMessageDeltaEvent(
+                type="message_delta",
+                delta={"stop_reason": "end_turn", "stop_sequence": None},
+                usage=MessageDeltaUsage(output_tokens=25),
+            ),
+            RawMessageStopEvent(type="message_stop"),
+        ]
+
+        async def event_stream():
+            return _EventStream(events)
+
+        stream = LLMStream(
+            _make_llm(),
+            create_anthropic_stream=event_stream,
+            chat_ctx=llm.ChatContext.empty(),
+            tools=[],
+            conn_options=APIConnectOptions(max_retry=0, retry_interval=0),
+        )
+
+        response = await stream.collect()
+
+        assert response.usage is not None
+        assert response.usage.completion_tokens == 25
+        assert response.usage.total_tokens == 35

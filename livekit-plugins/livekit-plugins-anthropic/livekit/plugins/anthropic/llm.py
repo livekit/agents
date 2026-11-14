@@ -390,7 +390,8 @@ class LLMStream(llm.LLMStream):
             if event.message.usage.cache_read_input_tokens:
                 self._cache_read_tokens = event.message.usage.cache_read_input_tokens
         elif event.type == "message_delta":
-            self._output_tokens += event.usage.output_tokens
+            # message_delta reports the cumulative output tokens of the message
+            self._output_tokens = event.usage.output_tokens
         elif event.type == "content_block_start":
             if event.content_block.type == "tool_use":
                 self._tool_call_id = event.content_block.id
