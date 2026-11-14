@@ -2,7 +2,7 @@
 
 Support for speech-to-text and text-to-speech with [Chariot](https://chariot.in/) in LiveKit Agents: English and Indian languages, including code-mixed speech such as Hinglish.
 
-See the [Chariot docs](https://docs.chariot.in/api-reference/introduction) for the API, models and voices.
+See the LiveKit docs for [speech-to-text](https://docs.livekit.io/agents/models/stt/chariot/) and [text-to-speech](https://docs.livekit.io/agents/models/tts/chariot/), and the [Chariot docs](https://docs.chariot.in/api-reference/introduction) for the API, models and voices.
 
 ## Installation
 
