@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
-use lk_agents_abi::errors::ErrorKind;
+use lk_agents_abi::errors::{ErrorKind, HostError};
 use lk_agents_abi::utils::socket::{KeepaliveFrame, SocketSend, SocketTarget};
 use lk_agents_abi::{BoxFuture, VirtualClock};
 use parking_lot::Mutex;
@@ -157,6 +157,8 @@ struct Protocol {
     /// Commands reported written, and returned unwritten.
     written: Mutex<Vec<u64>>,
     returned: Mutex<Vec<u64>>,
+    /// What `settled` answers: the provider owes nothing it was sent.
+    settled: AtomicBool,
 }
 
 impl Protocol {
@@ -170,6 +172,7 @@ impl Protocol {
             connects: AtomicUsize::new(0),
             written: Mutex::new(Vec::new()),
             returned: Mutex::new(Vec::new()),
+            settled: AtomicBool::new(false),
         };
         (Arc::new(protocol), tx)
     }
@@ -221,6 +224,10 @@ impl SocketHost for Protocol {
     fn returned(&self, command: u64) {
         self.returned.lock().push(command);
     }
+
+    fn settled(&self) -> Result<bool, HostError> {
+        Ok(self.settled.load(Ordering::SeqCst))
+    }
 }
 
 fn connection(goodbye: bool) -> SocketConnection {
@@ -253,7 +260,7 @@ fn setup_then_ready() -> SocketConnection {
 }
 
 fn command(text: &str, id: u64) -> SocketSend {
-    SocketSend { boundary: true, command: Some(id), ..item(text) }
+    SocketSend { boundary: true, input: false, command: Some(id), ..item(text) }
 }
 
 fn item(text: &str) -> SocketSend {
@@ -262,6 +269,7 @@ fn item(text: &str) -> SocketSend {
         boundary: false,
         end: false,
         done: false,
+        input: true,
         command: None,
     }
 }
@@ -272,6 +280,7 @@ fn end() -> SocketSend {
         boundary: true,
         end: true,
         done: false,
+        input: false,
         command: None,
     }
 }
@@ -373,6 +382,25 @@ async fn an_end_that_owes_nothing_closes_without_a_goodbye_or_drain() {
     assert!(provider.socket(0).closed.load(Ordering::SeqCst));
 }
 
+// Catches: an end on a connection that carried no input (none at all, or only on the one before
+// a rotation) sending the goodbye and waiting out a drain the provider has nothing to answer.
+#[tokio::test]
+async fn an_end_with_no_input_on_its_connection_closes_without_a_goodbye_or_drain() {
+    let clock = Arc::new(VirtualClock::new());
+    let provider = Provider::default();
+    let (protocol, input) = Protocol::new(connection(true));
+    let run = start(&protocol, &provider, &clock, 0);
+    input.send(item("audio")).unwrap();
+    until("sent", || provider.count() == 1 && provider.socket(0).sent() == ["audio"]).await;
+    run.session.reconnect("options changed");
+    until("the goodbye", || provider.socket(0).sent() == ["audio", "goodbye"]).await;
+    provider.socket(0).close(Some(1000), None);
+    until("the new connection", || provider.count() == 2).await;
+    input.send(end()).unwrap();
+    run.ended().await.unwrap();
+    assert_eq!(provider.socket(1).sent(), ["finalize"]);
+}
+
 // Catches: a close nobody expected read as the stream's end (the loop that ends silently), and
 // a retried failure not reported once.
 #[tokio::test]
@@ -390,8 +418,9 @@ async fn an_unexpected_close_is_retried_on_a_new_connection_and_reported() {
         "connect ran again: {}",
         provider.socket(1).url
     );
+    input.send(item("audio")).unwrap();
     input.send(end()).unwrap();
-    until("the goodbye", || provider.socket(1).sent().len() == 2).await;
+    until("the goodbye", || provider.socket(1).sent().len() == 3).await;
     provider.socket(1).close(Some(1000), None);
     run.ended().await.unwrap();
 }
@@ -500,12 +529,30 @@ async fn keepalive_fills_idle_time_and_a_silent_drain_times_out() {
     until("connected", || provider.count() == 1).await;
     crate::testkit::arm_then_advance(&clock, Duration::from_secs(5)).await;
     until("keepalive", || provider.socket(0).sent() == ["keepalive"]).await;
+    input.send(item("audio")).unwrap();
     input.send(end()).unwrap();
-    until("the goodbye", || provider.socket(0).sent().len() == 3).await;
+    until("the goodbye", || provider.socket(0).sent().len() == 4).await;
     crate::testkit::arm_then_advance(&clock, DRAIN_LIMIT).await;
     let error = run.ended().await.unwrap_err().attempt_error();
     assert_eq!(error.timeout, Some(lk_agents_abi::errors::Timeout::Read));
-    assert_eq!(provider.socket(0).sent(), ["keepalive", "finalize", "goodbye"]);
+    assert_eq!(provider.socket(0).sent(), ["keepalive", "audio", "finalize", "goodbye"]);
+}
+
+// Catches: a provider that answered everything it heard and then stays silent after the goodbye
+// failing the stream with a read timeout.
+#[tokio::test]
+async fn a_silent_drain_the_provider_owes_nothing_ends_cleanly_at_the_read_limit() {
+    let clock = Arc::new(VirtualClock::new());
+    let provider = Provider::default();
+    let (protocol, input) = Protocol::new(connection(true));
+    protocol.settled.store(true, Ordering::SeqCst);
+    let run = start(&protocol, &provider, &clock, 0);
+    input.send(item("audio")).unwrap();
+    input.send(end()).unwrap();
+    until("the goodbye", || provider.count() == 1 && provider.socket(0).sent().len() == 3).await;
+    crate::testkit::arm_then_advance(&clock, DRAIN_LIMIT).await;
+    run.ended().await.unwrap();
+    assert!(provider.socket(0).closed.load(Ordering::SeqCst));
 }
 
 // Catches: `aclose()` waiting on a stream parked on its input, or leaving the socket open.

@@ -29,6 +29,9 @@ class SpeechState:
     @property
     def speaking(self) -> bool:
         """Whether a speech is open."""
+    @property
+    def settled(self) -> bool:
+        """No speech is open and no interim awaits its final: nothing heard is left to transcribe."""
     def transcript(self, transcript: Transcript) -> list[SpeechEvent]:
         """The events a transcript produces."""
     def started(self) -> list[SpeechEvent]:

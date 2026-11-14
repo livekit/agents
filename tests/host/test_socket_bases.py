@@ -13,7 +13,7 @@ import pytest
 from aiohttp import web
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, stt
+from livekit.agents import APIConnectOptions, APIError, _core, stt
 from tests.fakes import until
 from tests.type_checks.socket_protocols import (
     CodecSttStream,
@@ -96,6 +96,44 @@ async def test_stt_stream_sends_typed_commands_and_reads_until_the_provider_fini
     assert [e.alternatives[0].text for e in finals] == ["hello"]
     assert seen == ["<1600 bytes>", "<1600 bytes>", "finalize", "close"]
     assert query == {"encoding": "linear16"}
+
+
+# Catches: a drain that runs out while a speech is still open (its final never came) ending the
+# stream cleanly, the transcript lost without an error.
+async def test_an_open_speech_at_the_drains_read_limit_fails_with_a_read_timeout(
+    peer: Callable[[Handler], Awaitable[str]],
+) -> None:
+    seen: list[str] = []
+
+    async def provider(ws: web.WebSocketResponse, request: web.Request) -> None:
+        async for msg in ws:
+            if msg.type is aiohttp.WSMsgType.TEXT:
+                seen.append(json.loads(msg.data)["type"])
+                if seen[-1] == "finalize":
+                    await ws.send_json({"type": "transcript", "text": "hel", "final": False})
+
+    read_timeout = 5.0
+    stream = LoopbackStt(await peer(provider)).stream(
+        conn_options=APIConnectOptions(max_retry=0, read_timeout=read_timeout)
+    )
+    got: list[stt.SpeechEvent] = []
+
+    async def read() -> None:
+        async for event in stream:
+            got.append(event)
+
+    async with stream:
+        reader = asyncio.create_task(read())
+        stream.push_frame(audio(100))
+        stream.end_input()
+        await until(lambda: "close" in seen, "the goodbye is sent")
+        await until(lambda: stream.speaking, "the interim opens a speech")
+        _core.skip_host_time(read_timeout)
+        await until(reader.done, "the stream ends")
+        with pytest.raises(APIError) as failed:
+            reader.result()
+    assert failed.value.kind == "timeout"
+    assert [e.type for e in got if e.type is stt.SpeechEventType.FINAL_TRANSCRIPT] == []
 
 
 # Catches: a stream failed by what the plugin never reads: a new event type the provider added,

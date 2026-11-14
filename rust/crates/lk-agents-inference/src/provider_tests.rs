@@ -98,6 +98,10 @@ impl AttemptHost for Host {
         Ok(self.produced)
     }
 
+    fn settled(&self) -> Result<bool, HostError> {
+        Ok(false)
+    }
+
     fn retrying(&self, error: ProviderError) {
         self.log.lock().retried.push(error.to_string());
     }

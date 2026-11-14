@@ -154,6 +154,19 @@ impl AttemptMachine {
         self.expect_response(now_ns);
     }
 
+    /// Whether a recognition's read limit after its input's end runs out at `now_ns`: it then
+    /// ends cleanly when nothing it heard is left (`settle`), else fails with the read timeout.
+    pub fn final_answer_runs_out(&self, now_ns: u64) -> bool {
+        let now = Ts::from_nanos(now_ns);
+        let due = |expecting| self.attempts.wake_at(expecting).is_some_and(|at| at <= now);
+        self.kind == RequestKind::SttStream && self.input_ended && due(self.expecting) && !due(None)
+    }
+
+    /// Nothing the recognition heard is left: its read limit is no failure.
+    pub fn settle(&mut self) {
+        self.expecting = None;
+    }
+
     pub fn observe(&mut self, event: SpeechEvent, now_ns: u64) {
         let retracted = event.best_alternative().is_some_and(|a| a.text.is_empty());
         match event.kind {
@@ -565,6 +578,7 @@ impl ProviderAttempts {
                 .into())
             })
         };
+        // `None`: the recognition settled at its read limit
         let interrupted = loop {
             let seen = self.changed.with(|n| *n);
             let wake = self.state.lock().machine.wake_at().map(|at| self.at(at));
@@ -584,21 +598,34 @@ impl ProviderAttempts {
                 } => {}
             }
             let now = self.now();
+            // asked outside the lock: the host knows whether anything heard is left
+            let runs_out = self.state.lock().machine.final_answer_runs_out(now);
+            if runs_out && self.host.settled().map_err(ProviderError::from)? {
+                self.state.lock().machine.settle();
+                break None;
+            }
             if let Err(error) = self.state.lock().machine.ready(now) {
-                break error;
+                break Some(error);
             }
         };
         // An attempt already finishing on its own (a provider's own timeout racing this one) is
-        // not interrupted in its cleanup; its outcome is rejected all the same.
-        if lk_agents_abi::timeout(self.clock(), DEADLINE_GRACE, attempt.as_mut()).await.is_ok() {
-            return Err(interrupted.into());
+        // not interrupted in its cleanup; past a deadline its outcome is rejected all the same.
+        let finished = lk_agents_abi::timeout(self.clock(), DEADLINE_GRACE, attempt.as_mut()).await;
+        let ended = match finished {
+            Ok(result) => Some(joined(result)),
+            Err(_) => {
+                cancel.cancel();
+                let cleanup = std::time::Duration::from_secs_f64(self.cleanup_timeout());
+                if lk_agents_abi::timeout(self.clock(), cleanup, attempt).await.is_err() {
+                    stalled_cleanup();
+                }
+                None
+            }
+        };
+        match interrupted {
+            Some(error) => Err(error.into()),
+            None => ended.unwrap_or(Ok(None)),
         }
-        cancel.cancel();
-        let cleanup = std::time::Duration::from_secs_f64(self.cleanup_timeout());
-        if lk_agents_abi::timeout(self.clock(), cleanup, attempt).await.is_err() {
-            stalled_cleanup();
-        }
-        Err(interrupted.into())
     }
 }
 

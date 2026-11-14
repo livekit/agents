@@ -380,6 +380,9 @@ class ChunkedStream(ABC):
     def _core_produced(self) -> bool:
         return self._emitter is not None and self._emitter.pushed_duration() > 0.0
 
+    def _core_settled(self) -> bool:
+        return False
+
     def _invalid(self, output_emitter: _core.AudioEmitter) -> str | None:
         return _core.validate_synthesis(self._input_text, output_emitter.pushed_duration(), None)
 
@@ -522,6 +525,9 @@ class SynthesizeStream(ABC):
 
     def _core_produced(self) -> bool:
         return self._emitter is not None and self._emitter.pushed_duration() > 0.0
+
+    def _core_settled(self) -> bool:
+        return False
 
     def _replay(self) -> None:
         ended = self.input.closed

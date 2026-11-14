@@ -2,7 +2,7 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::errors::ProviderError;
+use crate::errors::{HostError, ProviderError};
 use crate::{ApiConnectOptions, ApiConnectOptionsError};
 
 /// One websocket frame: text, or a binary payload.
@@ -63,9 +63,11 @@ pub struct SocketConnection {
 
 /// The frames of the next input item, encoded. `boundary`: it ended a segment (a flush), where a
 /// due rotation may run. `end`: it was the last item. `done`: the stream owes nothing more, so it
-/// ends once these frames went, with no goodbye or drain. `command`: the id of the command these
-/// frames carry, which belongs to the connection it was taken on: once written it is reported
-/// `sent`, and one that connection could not write is `returned` instead of sent on another.
+/// ends once these frames went, with no goodbye or drain. `input`: the frames carry input the
+/// provider answers, beyond the end's own marker: a connection that sent none ends at the input's
+/// end with no goodbye or drain. `command`: the id of the command these frames carry, which
+/// belongs to the connection it was taken on: once written it is reported `sent`, and one that
+/// connection could not write is `returned` instead of sent on another.
 #[crate::host(record(module = "socket", extract))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SocketSend {
@@ -73,6 +75,7 @@ pub struct SocketSend {
     pub boundary: bool,
     pub end: bool,
     pub done: bool,
+    pub input: bool,
     pub command: Option<u64>,
 }
 
@@ -114,6 +117,11 @@ pub trait SocketHost: Send + Sync {
     /// The command `command` was taken but its connection ended before writing it.
     #[host(notify, name = "_core_returned")]
     fn returned(&self, command: u64);
+
+    /// The drain after the input's end reached the read limit with the provider silent: whether
+    /// it owes nothing it was sent, so the stream ends cleanly instead of with a read timeout.
+    #[host(call, name = "_core_settled")]
+    fn settled(&self) -> Result<bool, HostError>;
 }
 
 /// A plugin's `http.Multiplexer`: one provider socket carrying many streams, each a context.

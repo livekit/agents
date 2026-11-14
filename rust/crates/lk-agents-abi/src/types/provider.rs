@@ -82,6 +82,11 @@ pub trait AttemptHost: Send + Sync {
     /// replayed (except a recognition, whose transcripts are idempotent per segment).
     #[host(call, name = "_core_produced")]
     fn produced(&self) -> Result<bool, HostError>;
+    /// A recognition's read limit after its input's end ran out with the provider silent:
+    /// whether nothing it heard is left to transcribe, so it ends cleanly instead of with a read
+    /// timeout. Asked of recognitions only.
+    #[host(call, name = "_core_settled")]
+    fn settled(&self) -> Result<bool, HostError>;
     /// A failed attempt that will be retried, as the provider's recoverable `error` event. The
     /// host reports the error that ends the request itself, unless the session owns retries.
     #[host(notify, name = "_core_retrying")]

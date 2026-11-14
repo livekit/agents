@@ -116,6 +116,10 @@ impl lk_agents_abi::stt::events::SpeechState for Speech {
         self.speaking
     }
 
+    fn settled(&self) -> bool {
+        !self.speaking && !self.interim
+    }
+
     fn transcript(&mut self, transcript: Transcript) -> Vec<SpeechEvent> {
         let mut out = Vec::new();
         Speech::transcript(self, transcript, &mut out);

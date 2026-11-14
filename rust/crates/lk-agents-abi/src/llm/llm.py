@@ -285,6 +285,9 @@ class LLMStream(ABC):
     def _core_produced(self) -> bool:
         return self._event_ch.output_sent
 
+    def _core_settled(self) -> bool:
+        return False
+
     def _core_retrying(self, error: Exception) -> None:
         self._llm._emit_error(error, True)
 

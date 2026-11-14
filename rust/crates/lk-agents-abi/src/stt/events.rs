@@ -240,6 +240,10 @@ pub trait SpeechState: Send + Sized + 'static {
     #[host(getter)]
     fn speaking(&self) -> bool;
 
+    /// No speech is open and no interim awaits its final: nothing heard is left to transcribe.
+    #[host(getter)]
+    fn settled(&self) -> bool;
+
     /// The events a transcript produces.
     #[host(call)]
     fn transcript(&mut self, transcript: Transcript) -> Vec<SpeechEvent>;

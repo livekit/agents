@@ -339,12 +339,6 @@ class SocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
         self._socket_connections = 0
         self._socket_ids = itertools.count(1)
         self._socket_taken: dict[int, tuple[bytes | str | OutboundT, int]] = {}
-        # input went out that the provider has not answered yet
-        self._socket_owed = False
-
-    def _socket_answered(self) -> None:
-        """The provider answered everything sent so far: an input that ends now owes nothing."""
-        self._socket_owed = False
 
     def _socket_label(self) -> str:
         return type(self).__name__
@@ -438,6 +432,7 @@ class SocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
                     boundary=True,
                     end=False,
                     done=False,
+                    input=False,
                     command=command_id,
                 )
             item = await self._next_input()
@@ -446,6 +441,8 @@ class SocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
             end = isinstance(item, EndOfInput)
             boundary = end or self._socket_boundary(item)
             frames: list[WsFrame] = []
+            # the end's own frames ask for the last answer: only the input before them owes one
+            marker: list[WsFrame] = []
             if isinstance(item, rtc.AudioFrame) and self.frame_ms is not None:
                 for chunk in self._rechunk(item):
                     frames += _frames(self.encode(typing.cast(ItemT, chunk)))
@@ -453,14 +450,15 @@ class SocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
                 if boundary:
                     for chunk in self._flush_audio():
                         frames += _frames(self.encode(typing.cast(ItemT, chunk)))
-                frames += _frames(self.encode(item))
-            if frames and not end:
-                self._socket_owed = True
+                (marker if end else frames).extend(_frames(self.encode(item)))
             if frames or boundary:
-                # an input that ends with nothing owed closes at once, without the drain
-                done = end and (self._socket_ends_settled or not self._socket_owed)
                 return SocketSend(
-                    frames=frames, boundary=boundary, end=end, done=done, command=None
+                    frames=frames + marker,
+                    boundary=boundary,
+                    end=end,
+                    done=end and self._socket_ends_settled,
+                    input=bool(frames),
+                    command=None,
                 )
 
     async def _core_on_message(self, frame: WsFrame) -> bool:
@@ -482,6 +480,11 @@ class SocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
 
     def _core_retrying(self, error: Exception) -> None:
         pass
+
+    def _core_settled(self) -> bool:
+        """Whether the provider owes nothing once the drain after the input's end ran out: the
+        stream then ends cleanly. A kind that cannot tell owes its answer."""
+        return False
 
     def _core_sent(self, command_id: int) -> None:
         if (taken := self._socket_taken.pop(command_id, None)) is not None:

@@ -13,7 +13,7 @@ from google.genai import types
 from google.oauth2.credentials import Credentials
 
 from livekit import rtc
-from livekit.agents import llm, stt
+from livekit.agents import APIConnectOptions, _core, llm, stt
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.plugins.google.beta import GeminiSTT
 from livekit.plugins.google.realtime import RealtimeModel
@@ -575,26 +575,32 @@ async def test_gemini_stt_input_that_ends_before_any_audio_closes_at_once(
     assert [e for e in events if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT] == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=TimeoutError,
-    reason="the STT base never tells the socket base a final answered the audio: "
-    "stt.SocketStream._socket_deliver must call self._socket_answered() on a final Transcript; "
-    "reproduces with audio, a final, then end_input()",
-)
-async def test_gemini_stt_input_that_ends_after_its_final_closes_at_once(
+async def test_gemini_stt_input_that_ends_after_its_final_ends_cleanly_at_the_read_limit(
     gemini_live: LivePeer,
 ) -> None:
-    """Once every audio frame was answered by a final, the input's end owes nothing."""
-    # Catches: a silent end after the last final waiting out the read limit, then failing the
-    # stream with a read timeout.
-    stream = GeminiSTT(api_key="test", http_options=gemini_live.http_options).stream()
+    """Gemini may answer ``audioStreamEnd`` with nothing once every speech was finalized: the
+    drain then ends cleanly at the read limit, nothing being left to transcribe."""
+    # Catches: a silent provider after the input's end failing the stream with a read timeout
+    # although no speech was open and no interim pending.
+    read_timeout = 5.0
+    stream = GeminiSTT(api_key="test", http_options=gemini_live.http_options).stream(
+        conn_options=APIConnectOptions(max_retry=0, read_timeout=read_timeout)
+    )
     stream.push_frame(rtc.AudioFrame(bytes(320), 16000, 1, 160))
     await gemini_live.send(serverContent={"inputTranscription": {"text": "Hello."}})
-    finals: list[str] = []
-    async with asyncio.timeout(2), stream:
+    events: list[stt.SpeechEvent] = []
+
+    async def read() -> None:
         async for event in stream:
-            if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
-                finals.append(event.alternatives[0].text)
-                stream.end_input()
-    assert finals == ["Hello."]
+            events.append(event)
+
+    async with stream:
+        reader = asyncio.create_task(read())
+        await until(lambda: events, "the final arrives")
+        stream.end_input()
+        await gemini_live.wait_sent("realtimeInput", 2)  # the audio, then audioStreamEnd
+        _core.skip_host_time(read_timeout)
+        await until(reader.done, "the stream ends")
+        reader.result()
+    finals = [e for e in events if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+    assert [e.alternatives[0].text for e in finals] == ["Hello."]

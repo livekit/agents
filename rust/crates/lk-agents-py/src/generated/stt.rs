@@ -39,6 +39,13 @@ impl SpeechState {
         ::pyo3::PyResult::Ok(out)
     }
 
+    /// No speech is open and no interim awaits its final: nothing heard is left to transcribe.
+    #[getter]
+    fn settled(&self) -> PyResult<bool> {
+        let out = <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::settled(&self.0);
+        ::pyo3::PyResult::Ok(out)
+    }
+
     /// The events a transcript produces.
     #[pyo3(signature = (transcript))]
     fn transcript<'py>(

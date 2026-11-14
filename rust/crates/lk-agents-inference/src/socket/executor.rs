@@ -362,8 +362,8 @@ async fn connection<'a>(
                     }
                     continue;
                 }
-                let (boundary, end, done, command) =
-                    (item.boundary, item.end, item.done, item.command);
+                let (boundary, end, done, input, command) =
+                    (item.boundary, item.end, item.done, item.input, item.command);
                 for frame in item.frames {
                     if let Err(error) = send(sender.as_ref(), frame).await {
                         // a write fails once the peer closed: its close says why, so the
@@ -380,8 +380,8 @@ async fn connection<'a>(
                     let mut machine = machine.lock();
                     match (done, end) {
                         (true, _) => machine.done(&mut effects),
-                        (false, true) => machine.input_ended(clock.now(), &mut effects),
-                        (false, false) => machine.sent(clock.now(), boundary, &mut effects),
+                        (false, true) => machine.input_ended(clock.now(), input, &mut effects),
+                        (false, false) => machine.sent(clock.now(), boundary, input, &mut effects),
                     }
                 }
                 if let Some(finish) = apply(sender.as_ref(), effects, &changed).await? {
@@ -398,8 +398,12 @@ async fn connection<'a>(
                     () = changed.wait_until(|n| (*n != seen).then_some(())) => continue,
                     () = crate::wait_for_deadline(clock, at) => {}
                 }
+                let now = clock.now();
+                // asked outside the lock: the host knows whether a silent provider owes anything
+                let runs_out = machine.lock().drain_runs_out(now);
+                let settled = runs_out && session.host.settled().map_err(ProviderError::from)?;
                 let mut effects = Vec::new();
-                machine.lock().tick(clock.now(), &mut effects);
+                machine.lock().tick(now, settled, &mut effects);
                 if let Some(finish) = apply(sender.as_ref(), effects, &changed).await? {
                     return Ok(finish);
                 }

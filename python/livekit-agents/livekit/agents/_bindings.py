@@ -136,6 +136,11 @@ class AttemptHost(Protocol):
         """Whether output already reached the caller, so the request may not be replayed."""
         ...
 
+    def _core_settled(self) -> bool:
+        """A recognition's read limit after its input's end ran out: whether nothing it heard is
+        left to transcribe, so it ends cleanly."""
+        ...
+
     def _core_retrying(self, error: Exception) -> None: ...
 
     def _core_failed(self, error: Exception) -> None: ...
@@ -246,6 +251,9 @@ class _Recognition:
         )
 
     def _core_produced(self) -> bool:
+        return False
+
+    def _core_settled(self) -> bool:
         return False
 
     def _core_retrying(self, error: Exception) -> None:

@@ -588,6 +588,9 @@ class _Request:
     def _core_produced(self) -> bool:
         return self._maybe_accepted
 
+    def _core_settled(self) -> bool:
+        return False
+
     def _core_retrying(self, error: Exception) -> None:
         pass
 

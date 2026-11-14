@@ -16626,6 +16626,9 @@ pub mod socket {
             })?,
             end: crate::py_values::attr_with(obj, "SocketSend", "end", |v| v.extract::<bool>())?,
             done: crate::py_values::attr_with(obj, "SocketSend", "done", |v| v.extract::<bool>())?,
+            input: crate::py_values::attr_with(obj, "SocketSend", "input", |v| {
+                v.extract::<bool>()
+            })?,
             command: crate::py_values::attr_with(obj, "SocketSend", "command", |v| {
                 if v.is_none() {
                     Ok(None)

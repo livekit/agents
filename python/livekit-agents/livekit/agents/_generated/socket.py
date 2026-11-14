@@ -66,15 +66,18 @@ class SocketConnection:
 class SocketSend:
     """The frames of the next input item, encoded. `boundary`: it ended a segment (a flush), where a
     due rotation may run. `end`: it was the last item. `done`: the stream owes nothing more, so it
-    ends once these frames went, with no goodbye or drain. `command`: the id of the command these
-    frames carry, which belongs to the connection it was taken on: once written it is reported
-    `sent`, and one that connection could not write is `returned` instead of sent on another.
+    ends once these frames went, with no goodbye or drain. `input`: the frames carry input the
+    provider answers, beyond the end's own marker: a connection that sent none ends at the input's
+    end with no goodbye or drain. `command`: the id of the command these frames carry, which
+    belongs to the connection it was taken on: once written it is reported `sent`, and one that
+    connection could not write is `returned` instead of sent on another.
     """
 
     frames: list[WsFrame]
     boundary: bool
     end: bool
     done: bool
+    input: bool
     command: int | None
 
 

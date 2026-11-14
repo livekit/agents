@@ -572,6 +572,9 @@ class RecognizeStream(ABC):
     def _core_produced(self) -> bool:
         return False
 
+    def _core_settled(self) -> bool:
+        return self._core_speech.settled
+
     def _core_retrying(self, error: Exception) -> None:
         self._stt._emit_error(error, True)
 

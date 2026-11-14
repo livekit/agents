@@ -141,6 +141,9 @@ class SocketStream(
     def _socket_label(self) -> str:
         return self._stt.label
 
+    # the recognition's answer, not the socket base's
+    _core_settled = RecognizeStream._core_settled
+
     def _socket_deliver(self, answer: Report | Iterable[Report] | None) -> None:
         if answer is None:
             return

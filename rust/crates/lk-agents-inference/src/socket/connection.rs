@@ -75,6 +75,8 @@ pub(super) struct Connection {
     last_sent: Ts,
     /// Input went out since the last boundary: a due rotation waits for the next one.
     mid_segment: bool,
+    /// Input went out on this connection: the input's end drains for the provider's answer.
+    owes: bool,
     rotate_at: Option<Ts>,
     rotation_due: bool,
 }
@@ -91,6 +93,7 @@ impl Connection {
             phase,
             last_sent: now,
             mid_segment: false,
+            owes: false,
             rotate_at,
             rotation_due: false,
         }
@@ -114,22 +117,36 @@ impl Connection {
         }
     }
 
-    /// An input item's frames went out; `boundary`: it ended a segment.
-    pub(super) fn sent(&mut self, now: Ts, boundary: bool, effects: &mut Vec<SocketEffect>) {
+    /// An input item's frames went out; `boundary`: it ended a segment, `input`: they carried
+    /// input the provider answers.
+    pub(super) fn sent(
+        &mut self,
+        now: Ts,
+        boundary: bool,
+        input: bool,
+        effects: &mut Vec<SocketEffect>,
+    ) {
         if self.phase != Phase::Open {
             return;
         }
         self.last_sent = now;
         self.mid_segment = !boundary;
+        self.owes |= input;
         if self.rotation_due && !self.mid_segment {
             self.drain(Finish::Rotate, now, effects);
         }
     }
 
-    /// The last input item went out: the goodbye follows, then the drain.
-    pub(super) fn input_ended(&mut self, now: Ts, effects: &mut Vec<SocketEffect>) {
-        if self.phase == Phase::Open {
+    /// The last input item went out: the goodbye follows, then the drain, once input went out
+    /// on this connection; with none, it owes nothing and ends at once.
+    pub(super) fn input_ended(&mut self, now: Ts, input: bool, effects: &mut Vec<SocketEffect>) {
+        if self.phase != Phase::Open {
+            return;
+        }
+        if self.owes || input {
             self.drain(Finish::Ended, now, effects);
+        } else {
+            self.finish(SocketEffect::Finish(Finish::Ended), effects);
         }
     }
 
@@ -169,8 +186,15 @@ impl Connection {
         self.finish(effect, effects);
     }
 
+    /// Whether the drain after the input's end runs out at `now`: its outcome then depends on
+    /// whether the provider still owes anything (`tick`'s `settled`).
+    pub(super) fn drain_runs_out(&self, now: Ts) -> bool {
+        matches!(self.phase, Phase::Draining { until, then: Finish::Ended } if now >= until)
+    }
+
     /// The time is `now`: a keepalive or a rotation may be due, or a drain may have run out.
-    pub(super) fn tick(&mut self, now: Ts, effects: &mut Vec<SocketEffect>) {
+    /// `settled`: the provider owes nothing it was sent, so a drain that ran out ends cleanly.
+    pub(super) fn tick(&mut self, now: Ts, settled: bool, effects: &mut Vec<SocketEffect>) {
         match self.phase {
             Phase::Opening { until: Some(until) } if now >= until => {
                 // connected, but the provider never said it is ready
@@ -195,6 +219,7 @@ impl Connection {
                 let effect = match then {
                     // the old connection owes nothing the next one cannot answer
                     Finish::Rotate => SocketEffect::Finish(Finish::Rotate),
+                    Finish::Ended if settled => SocketEffect::Finish(Finish::Ended),
                     Finish::Ended => SocketEffect::Fail(ApiError::timed_out(Timeout::Read)),
                 };
                 self.finish(effect, effects);
