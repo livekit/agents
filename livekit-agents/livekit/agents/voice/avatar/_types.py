@@ -13,7 +13,7 @@ from ... import utils
 from ...job import get_job_context
 from ...log import logger
 from ...metrics.base import AvatarMetrics, Metadata
-from ..events import ConversationItemAddedEvent, MetricsCollectedEvent
+from ..events import ConversationItemAddedEvent, MetricsCollectedEvent, UserStateChangedEvent
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
@@ -23,7 +23,11 @@ class AudioSegmentEnd:
     pass
 
 
-class AudioReceiver(ABC, rtc.EventEmitter[Literal["clear_buffer"]]):
+class AudioReceiver(ABC, rtc.EventEmitter[Literal["clear_buffer", "user_state_changed"]]):
+    """Emits ``clear_buffer`` when the sender interrupts the playback and
+    ``user_state_changed`` (with a :class:`UserStateChangedEvent`) when the sender
+    reports that the user started or stopped speaking."""
+
     async def start(self) -> None:
         pass
 
@@ -53,6 +57,12 @@ class VideoGenerator(ABC):
     @abstractmethod
     def clear_buffer(self) -> None | Coroutine[None, None, None]:
         """Clear the audio buffer, stopping audio playback immediately"""
+
+    def notify_user_state(self, ev: UserStateChangedEvent) -> None:  # noqa: B027 (optional hook)
+        """The user started or stopped speaking, as detected by the agent.
+
+        Optional: a generator that renders listening reactions (nods, gaze) while
+        the user speaks overrides this; the default ignores the state."""
 
     @abstractmethod
     def __aiter__(
@@ -97,6 +107,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         self._room = room
         self._agent_session = agent_session
         self._agent_session.on("conversation_item_added", self._on_conversation_item_added)
+        self._agent_session.on("user_state_changed", self._on_user_state_changed)
 
         if self._room.isconnected():
             self._wait_avatar_join_task = asyncio.create_task(self._wait_avatar_join())
@@ -146,6 +157,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
 
         if self._agent_session:
             self._agent_session.off("conversation_item_added", self._on_conversation_item_added)
+            self._agent_session.off("user_state_changed", self._on_user_state_changed)
             self._agent_session = None
 
         if self._room:
@@ -194,6 +206,22 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
                         ),
                     )
                 )
+
+    def _on_user_state_changed(self, ev: UserStateChangedEvent) -> None:
+        """Forward the user's speaking state to the avatar worker through the
+        session's DataStreamAudioOutput, wherever it sits in the output chain."""
+        if self._agent_session is None:
+            return
+
+        # imported here: _datastream_io imports this module
+        from ._datastream_io import DataStreamAudioOutput
+
+        output = self._agent_session.output.audio
+        while output is not None:
+            if isinstance(output, DataStreamAudioOutput):
+                output.notify_user_state(ev)
+                return
+            output = output.next_in_chain
 
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
         assert self._room is not None

@@ -80,6 +80,7 @@ class AvatarRunner:
         # start audio receiver
         await self._audio_recv.start()
         self._audio_recv.on("clear_buffer", self._on_clear_buffer)
+        self._audio_recv.on("user_state_changed", self._video_gen.notify_user_state)
 
         self._room.on("connection_state_changed", self._on_connection_state_changed)
         if self._room.isconnected():
