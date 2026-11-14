@@ -217,7 +217,7 @@ Every merge runs [`rust.yml`](../../.github/workflows/rust.yml): the rules, ever
 reports omitted coverage and rejects empty runs. Workspace compilation is not
 behavioral coverage of any component; the worker and the other async I/O crates
 run their real-transport, real-process and controlled-peer suites in the gate.
-Its `KNOWN_FINDINGS` baseline may only shrink. The purity Clippy policy rejects core
+Any campaign finding fails it; there is no baseline. The purity Clippy policy rejects core
 spawns, `select!`, clocks and unbounded channels; `rust/check` rejects executor
 dependencies in the cores and Tokio runtime uses and unbiased selects in the runtime's
 executor modules, with no baseline.

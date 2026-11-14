@@ -197,13 +197,9 @@ partitioning; a seed is not a permanent replay artifact.
 
 1. Read **ending** first: Completed, ContractViolated, Budget, Deadlock or Livelock. Check the
    evidence attached to the last three. `Outcome::ok()` only checks recorded contract failures.
-2. Read NEW FINDING versus KNOWN FINDING and expectation counts. A tolerated finding is still
-   a violation; an unexercised rule proves nothing.
+2. Read the failed contracts and expectation counts; an unexercised rule proves nothing.
 3. Copy the printed rerun command, preserving seed, budget and policy. The detailed report
    prints effective setup and schedule. Record repository revision and local changes too.
 4. Use `VOICE_TRACE=1` to see applied inputs, then `VOICE_JOURNAL=1` for production decisions.
    Folded dispatch order detects replay differences; the recent dispatch/pending-work trail
    locates a stalled operation.
-
-[known_findings.tsv](src/known_findings.tsv) records tolerated open findings by contract and
-subject kind; it only shrinks. Remove a fixed entry together with its regression.

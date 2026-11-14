@@ -80,9 +80,7 @@ fn nothing_grows_with_the_conversation() {
             outcome.busiest_instant
         );
         for failure in &outcome.failures {
-            if !failure.known() {
-                problems.push(format!("seed {seed}: {}: {}", failure.contract, failure.detail));
-            }
+            problems.push(format!("seed {seed}: {}: {}", failure.contract, failure.detail));
         }
         let case = outcome.case;
         let run = simulate_with(case.schedule, async {

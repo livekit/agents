@@ -86,43 +86,6 @@ impl Check {
     }
 }
 
-/// An open finding the launch gate tolerates: a contract failing on a kind of subject.
-pub struct Known {
-    pub contract: &'static str,
-    /// [`Subject::kind`]: which speech or resource never splits a key.
-    pub subject: &'static str,
-    /// The regression suite (`tests/regressions/<domain>/<name>.rs`, as `<domain>/<name>`) whose fix closes it, once one exists:
-    /// a fixed finding the full window no longer reaches fails the gate until it is removed.
-    pub fixed_by: Option<&'static str>,
-    pub why: &'static str,
-}
-
-/// The open findings from `known_findings.tsv`. Any other (contract, subject kind) fails the
-/// gate, so a new kind of defect cannot hide among known ones; the file only shrinks.
-/// `session_settles` is the release phase's own verdict, not a rule.
-pub static KNOWN_FINDINGS: std::sync::LazyLock<Vec<Known>> = std::sync::LazyLock::new(|| {
-    include_str!("known_findings.tsv")
-        .lines()
-        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
-        .map(|line| {
-            let fields: Vec<&'static str> = line.split('\t').collect();
-            let [contract, subject, fixed_by, why] = fields[..] else {
-                panic!("known_findings.tsv: not four tab-separated fields: {line:?}")
-            };
-            let fixed_by = (fixed_by != "-").then_some(fixed_by);
-            Known { contract, subject, fixed_by, why }
-        })
-        .collect()
-});
-
-impl Failure {
-    /// Whether this failure is one of the open findings.
-    pub fn known(&self) -> bool {
-        let kind = self.subject.kind();
-        KNOWN_FINDINGS.iter().any(|k| k.contract == self.contract && k.subject == kind)
-    }
-}
-
 /// One guarantee the driver must keep.
 ///
 /// A rule runs once over the complete recording and states a property of the whole timeline,
