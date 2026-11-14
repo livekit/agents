@@ -17,6 +17,7 @@ if current_process().name == "job_proc":
 import asyncio
 import contextlib
 import contextvars
+import json
 import socket
 import time
 from collections.abc import Awaitable, Callable
@@ -26,6 +27,7 @@ from typing import TYPE_CHECKING, Any, cast
 from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
+from livekit.api.access_token import Claims
 from livekit.protocol import agent
 
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
@@ -39,6 +41,8 @@ from .channel import Message
 from .inference_executor import InferenceExecutor
 from .proc_client import _dump_stack_traces_impl, _ProcClient
 from .proto import (
+    CreateJobTokenRequest,
+    CreateJobTokenResponse,
     DumpStackTraceRequest,
     Exiting,
     InferenceRequest,
@@ -191,6 +195,62 @@ class _InfClient(InferenceExecutor):
             fut.set_result(resp)
 
 
+class _JobTokenClient:
+    """Gets tokens for the job from the worker, which asks the server with
+    CreateJobTokenRequest. Used in token mode, where no process holds the API secret.
+
+    A token is cached per claims and renewed once half of its lifetime has passed.
+    """
+
+    def __init__(self, proc_client: _ProcClient) -> None:
+        self._client = proc_client
+        self._active_requests: dict[str, asyncio.Future[CreateJobTokenResponse]] = {}
+        # claims -> (token, renew_at), unix seconds
+        self._tokens: dict[str, tuple[str, float]] = {}
+
+    async def create_token(self, claims: str) -> str:
+        """Returns a token with ``claims``, the JSON payload of an access token."""
+        cached = self._tokens.get(claims)
+        if cached is not None and time.time() < cached[1]:
+            return cached[0]
+
+        request_id = shortuuid("job_token_")
+        fut = asyncio.Future[CreateJobTokenResponse]()
+        self._active_requests[request_id] = fut
+        try:
+            await self._client.send(CreateJobTokenRequest(request_id=request_id, claims=claims))
+        except Exception:
+            self._active_requests.pop(request_id, None)
+            raise
+
+        resp = await fut
+        if resp.error:
+            raise RuntimeError(resp.error)
+
+        now = time.time()
+        self._tokens[claims] = (resp.token, now + (resp.expires_at - now) / 2)
+        return resp.token
+
+    async def token_source(self, claims: Claims) -> str:
+        """A ``livekit.api.TokenSource`` for ``LiveKitAPI``."""
+        return await self.create_token(json.dumps(claims.asdict()))
+
+    def close(self) -> None:
+        for fut in self._active_requests.values():
+            if not fut.done():
+                fut.cancel()
+        self._active_requests.clear()
+
+    def _on_response(self, resp: CreateJobTokenResponse) -> None:
+        fut = self._active_requests.pop(resp.request_id, None)
+        if fut is None:
+            logger.warning("received unexpected job token response")
+            return
+
+        with contextlib.suppress(asyncio.InvalidStateError):
+            fut.set_result(resp)
+
+
 @dataclass
 class _ShutdownInfo:
     user_initiated: bool
@@ -232,6 +292,7 @@ class _JobProc:
     def initialize(self, init_req: InitializeRequest, client: _ProcClient) -> None:
         self._client = client
         self._inf_client = _InfClient(client)
+        self._job_token_client = _JobTokenClient(client)
         self._job_proc = JobProcess(
             executor_type=self._executor_type,
             user_arguments=self._user_arguments,
@@ -279,11 +340,15 @@ class _JobProc:
                 if isinstance(msg, InferenceResponse):
                     self._inf_client._on_inference_response(msg)
 
+                if isinstance(msg, CreateJobTokenResponse):
+                    self._job_token_client._on_response(msg)
+
                 if isinstance(msg, DumpStackTraceRequest):
                     _dump_stack_traces_impl()
 
             # unblock any pending do_inference() calls
             self._inf_client.close()
+            self._job_token_client.close()
 
         def _on_read_done(t: asyncio.Task[None]) -> None:
             if t.cancelled() or t.exception() is None:
@@ -349,6 +414,7 @@ class _JobProc:
             on_connect=_on_ctx_connect,
             on_shutdown=_on_ctx_shutdown,
             inference_executor=self._inf_client,
+            job_token_client=self._job_token_client,
         )
         # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._simulation_end_fnc

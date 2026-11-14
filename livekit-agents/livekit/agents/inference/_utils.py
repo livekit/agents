@@ -8,6 +8,7 @@ from typing import Literal
 
 from livekit import api
 
+from .._token_mode import token_mode_token
 from ..utils.misc import shortuuid
 from ..version import __version__
 
@@ -82,7 +83,7 @@ def resolve_credentials(
     resolved_api_key = api_key or os.getenv(
         "LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", "")
     )
-    if not resolved_api_key:
+    if not resolved_api_key and token_mode_token() is None:
         raise ValueError(
             "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
         )
@@ -90,12 +91,13 @@ def resolve_credentials(
     resolved_api_secret = api_secret or os.getenv(
         "LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", "")
     )
-    if not resolved_api_secret:
+    if not resolved_api_secret and token_mode_token() is None:
         raise ValueError(
             "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
         )
 
-    return resolved_api_key, resolved_api_secret
+    # both are empty in token mode, where create_access_token returns the worker token
+    return resolved_api_key or "", resolved_api_secret or ""
 
 
 def get_inference_headers(*, inference_class: str | None = None) -> dict[str, str]:
@@ -159,6 +161,10 @@ def create_inference_request_id(
 
 
 def create_access_token(api_key: str | None, api_secret: str | None, ttl: float = 600) -> str:
+    if (not api_key or not api_secret) and (token := token_mode_token()) is not None:
+        # token mode: no secret to sign with, the worker token is sent as is
+        return token
+
     grant = api.access_token.InferenceGrants(perform=True)
     return (
         api.AccessToken(api_key, api_secret)

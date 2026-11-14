@@ -487,6 +487,36 @@ async def test_upload_transcript_only() -> None:
     assert "audio" not in part_names
 
 
+@pytest.mark.parametrize("token_mode", [True, False], ids=["token_mode", "key_mode"])
+async def test_upload_authorization(token_mode: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Token mode sends the worker token as is; with a key and secret the upload signs one."""
+    monkeypatch.setenv("LIVEKIT_TOKEN", "worker-token")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "" if token_mode else "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "" if token_mode else "secret")
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    mock_http = _make_mock_http()
+
+    with _patch_upload_deps():
+        await _call_upload(report, http_session=mock_http)
+
+    authorization = mock_http.post.call_args.kwargs["headers"]["Authorization"]
+    assert authorization == ("Bearer worker-token" if token_mode else "Bearer test-jwt")
+
+
+@pytest.mark.parametrize("token_mode", [True, False], ids=["token_mode", "key_mode"])
+def test_telemetry_auth_header(token_mode: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit.agents.telemetry.traces import _AuthHeaderProvider
+
+    monkeypatch.setenv("LIVEKIT_TOKEN", "worker-token")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "" if token_mode else "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "" if token_mode else "secret")
+    with patch(f"{_TRACES_MOD}.api.AccessToken") as mock_at:
+        _stub_access_token(mock_at)
+        headers = _AuthHeaderProvider()()
+
+    assert headers == {"Authorization": "Bearer worker-token" if token_mode else "Bearer test-jwt"}
+
+
 async def test_upload_uses_extended_timeout() -> None:
     report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
     mock_http = _make_mock_http()

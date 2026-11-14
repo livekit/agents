@@ -8,6 +8,7 @@ from typing import Any
 import aiohttp
 
 from ... import utils
+from ..._token_mode import token_mode_token
 from ...language import LanguageCode
 from ...log import logger
 from ...types import (
@@ -84,9 +85,9 @@ class TurnDetector(_BaseStreamingTurnDetector):
             missing: list[str] = []
             if not lk_base_url:
                 missing.append("LIVEKIT_INFERENCE_URL")
-            if not lk_api_key:
+            if not lk_api_key and token_mode_token() is None:
                 missing.append("LIVEKIT_API_KEY")
-            if not lk_api_secret:
+            if not lk_api_secret and token_mode_token() is None:
                 missing.append("LIVEKIT_API_SECRET")
             if missing:
                 if auto:

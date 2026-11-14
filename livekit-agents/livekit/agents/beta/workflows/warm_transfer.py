@@ -12,6 +12,7 @@ from xml.sax.saxutils import quoteattr
 from livekit import api, rtc
 
 from ... import llm, stt, tts, utils, vad
+from ..._token_mode import require_api_secret
 from ...job import DEFAULT_PARTICIPANT_KINDS, get_job_context
 from ...llm.chat_context import Instructions
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
@@ -301,6 +302,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         job_ctx = get_job_context()
         ws_url = job_ctx._info.url
 
+        require_api_secret("WarmTransferTask")
         # create a new room for the human agent
         human_agent_room_name = self._caller_room.name + "-human-agent"
         room = rtc.Room()

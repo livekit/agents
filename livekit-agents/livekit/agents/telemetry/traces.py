@@ -66,6 +66,7 @@ from livekit import api
 from livekit.protocol import metrics as proto_metrics
 
 from .._proto import encode_chat_item
+from .._token_mode import token_mode_token
 from ..log import TRACE_LEVEL, logger
 from ..types import (
     ATTRIBUTE_REDACTION_ENABLED,
@@ -712,6 +713,12 @@ class _AuthHeaderProvider:
         self._refresh()
 
     def _refresh(self) -> None:
+        if (token := token_mode_token()) is not None:
+            # token mode: no secret to sign with, the worker token is sent as is
+            self._auth_header = f"Bearer {token}"
+            self._expires_at = datetime.now(timezone.utc) + _TOKEN_TTL
+            return
+
         access_token = (
             api.AccessToken()
             .with_observability_grants(api.ObservabilityGrants(write=True))
@@ -1421,7 +1428,8 @@ async def _upload_session_report(
         .with_observability_grants(api.ObservabilityGrants(write=True))
         .with_ttl(timedelta(hours=6))
     )
-    jwt = access_token.to_jwt()
+    # token mode: no secret to sign with, the worker token is sent as is
+    jwt = token_mode_token() or access_token.to_jwt()
 
     header_msg = proto_metrics.MetricsRecordingHeader(
         room_id=report.room_id,

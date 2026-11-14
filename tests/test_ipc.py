@@ -9,7 +9,7 @@ import socket
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from typing import ClassVar
@@ -692,6 +692,7 @@ def _create_thread_proc(
     *,
     close_timeout: float,
     job_entrypoint_fnc: Callable[[JobContext], object] = _job_entrypoint,
+    create_job_token: Callable[[str, str], Awaitable[agent.CreateJobTokenResponse]] | None = None,
 ) -> tuple[ipc.job_thread_executor.ThreadJobExecutor, _StartArgs]:
     # the runner is a thread of the test process, so the mp primitives of _StartArgs are plain
     # in-process synchronization here
@@ -710,6 +711,7 @@ def _create_thread_proc(
         high_ping_threshold=1.0,
         http_proxy=None,
         loop=loop,
+        create_job_token=create_job_token,
     )
     proc.user_arguments = start_args
     return proc, start_args
@@ -892,3 +894,106 @@ def test_inference_executor_is_alive_after_proc_closed() -> None:
     executor._proc = proc
 
     assert executor.is_alive() is False
+
+
+# -- CreateJobToken: a job asks its worker for a token (token mode)
+
+
+class _TokenWorker:
+    """Answers the requests of a _JobTokenClient the way the worker relays the server's."""
+
+    def __init__(self, *, ttl: int = 600, error: str = "") -> None:
+        self.claims: list[str] = []
+        self._ttl = ttl
+        self._error = error
+        self.client = ipc.job_proc_lazy_main._JobTokenClient(self)  # type: ignore[arg-type]
+
+    async def send(self, msg: ipc.proto.CreateJobTokenRequest) -> None:
+        self.claims.append(msg.claims)
+        resp = ipc.proto.CreateJobTokenResponse(
+            request_id=msg.request_id,
+            token=f"token-{len(self.claims)}",
+            expires_at=int(time.time()) + self._ttl,
+            error=self._error,
+        )
+        asyncio.get_running_loop().call_soon(self.client._on_response, resp)
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+async def test_job_token_is_cached_and_renewed_at_half_life() -> None:
+    worker = _TokenWorker(ttl=600)
+    claims = '{"video": {"roomList": true}}'
+
+    assert await worker.client.create_token(claims) == "token-1"
+    await asyncio.sleep(290)
+    assert await worker.client.create_token(claims) == "token-1"
+    assert await worker.client.create_token('{"video": {"roomCreate": true}}') == "token-2"
+
+    await asyncio.sleep(20)  # past half of the first token's 600s
+    assert await worker.client.create_token(claims) == "token-3"
+    assert worker.claims == [claims, '{"video": {"roomCreate": true}}', claims]
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+async def test_job_token_error_is_raised_and_not_cached() -> None:
+    worker = _TokenWorker(error="the LiveKit server refused the job token: claim not allowed")
+
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="refused the job token: claim not allowed"):
+            await worker.client.create_token('{"sha256": "x"}')
+    assert len(worker.claims) == 2
+
+
+_job_token_results: list[str] = []
+
+
+async def _job_entrypoint_creates_tokens(job_ctx: JobContext) -> None:
+    client = job_ctx._job_token_client
+    assert client is not None
+    claims = '{"video": {"roomList": true}}'
+    _job_token_results.append(await client.create_token(claims))
+    _job_token_results.append(await client.create_token(claims))
+    try:
+        await client.create_token('{"sha256": "x"}')
+    except RuntimeError as e:
+        _job_token_results.append(str(e))
+
+    await _job_entrypoint(job_ctx)
+
+
+async def test_job_token_round_trip_through_ipc() -> None:
+    """The job's request reaches the worker callback with the job's id, and the token or the
+    error comes back to the job."""
+    _job_token_results.clear()
+    requests: list[tuple[str, str]] = []
+
+    async def create_job_token(job_id: str, claims: str) -> agent.CreateJobTokenResponse:
+        requests.append((job_id, claims))
+        if "sha256" in claims:
+            raise RuntimeError("the LiveKit server refused the job token: sha256")
+        return agent.CreateJobTokenResponse(token="job-token", expires_at=int(time.time()) + 600)
+
+    proc, start_args = _create_thread_proc(
+        close_timeout=10.0,
+        job_entrypoint_fnc=_job_entrypoint_creates_tokens,
+        create_job_token=create_job_token,
+    )
+    await proc.start()
+    await proc.initialize()
+
+    fake_job = _generate_fake_job()
+    await proc.launch_job(fake_job)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert _job_token_results == [
+        "job-token",
+        "job-token",  # cached
+        "the LiveKit server refused the job token: sha256",
+    ]
+    assert requests == [
+        (fake_job.job.id, '{"video": {"roomList": true}}'),
+        (fake_job.job.id, '{"sha256": "x"}'),
+    ]
