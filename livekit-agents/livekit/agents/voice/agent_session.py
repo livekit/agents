@@ -882,8 +882,67 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             session=self,
         )
         self._global_run_state = run_state
-        self.generate_reply(user_input=user_input, input_modality=input_modality)
+        reply = self._reply_to_user_text(user_input, input_modality=input_modality)
+
+        async def _fail_run_on_error() -> None:
+            try:
+                await reply
+            except Exception as e:
+                # the run only sees errors carried by speech handles; a reply that never
+                # started has to fail the run itself
+                if not run_state.done():
+                    run_state._done_fut.set_exception(e)
+
+        run_state._watch_handle(asyncio.ensure_future(_fail_run_on_error()))
         return run_state
+
+    def _reply_to_user_text(
+        self,
+        user_input: str,
+        *,
+        input_modality: Literal["text", "audio"] = "text",
+    ) -> asyncio.Future[SpeechHandle | None]:
+        """Treat ``user_input`` as a completed user turn: run ``on_user_turn_completed``, then
+        reply unless the hook dropped the turn.
+
+        A text turn has no audio, so its end of turn is always certain; it goes through the
+        same hook as a spoken turn.
+        """
+        if self._activity is None:
+            raise RuntimeError("AgentSession isn't running")
+
+        activity = self._next_activity if self._activity.scheduling_paused else self._activity
+        if activity is None:
+            raise RuntimeError("AgentSession is closing, cannot use generate_reply()")
+
+        async def _reply() -> SpeechHandle | None:
+            user_message = llm.ChatMessage(role="user", content=[user_input])
+            hook_result = await activity._run_user_turn_hook(
+                user_message, context=self._root_span_context
+            )
+            if hook_result is None:
+                return None
+
+            if activity.scheduling_paused or activity._new_turns_blocked:
+                # as on a spoken turn: a handoff started from the hook drops this reply,
+                # whose context belongs to the agent being left
+                logger.warning(
+                    "skipping reply to user input, speech scheduling is paused",
+                    extra={"lk.pii.user_input": user_input},
+                )
+                return None
+
+            chat_ctx, _ = hook_result
+            handle = activity._generate_reply(
+                user_message=user_message,
+                chat_ctx=chat_ctx,
+                input_details=InputDetails(modality=input_modality),
+            )
+            if self._global_run_state is not None:
+                self._global_run_state._watch_handle(handle)
+            return handle
+
+        return asyncio.ensure_future(_reply())
 
     @overload
     async def start(
