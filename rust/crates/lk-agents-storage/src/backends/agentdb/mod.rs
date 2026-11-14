@@ -239,9 +239,8 @@ impl Storage for AgentDbStorage {
     }
 
     /// One connection to the thread's database, which has the thread's id, parked for the next
-    /// open when the thread closes.
+    /// open when the thread closes. An unknown thread is the `Hello`'s `not_found`.
     async fn open(&self, thread_id: &str) -> Result<Thread, StorageError> {
-        self.get_thread(thread_id).await?;
         let (conn, schema) = match self.pool.take(thread_id) {
             Some(idle) => (idle.conn, idle.schema),
             None => {
