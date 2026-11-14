@@ -7,10 +7,12 @@ import json
 import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
+from concurrent.futures import Executor, Future
 from types import SimpleNamespace
 from typing import Any
 
 import aiohttp
+import numpy as np
 import pytest
 
 import livekit.agents.inference.stt as inference_stt
@@ -950,6 +952,64 @@ async def test_session_closed_after_input_end_finishes_without_another_close() -
     gateway = _Gateway(handler)
     assert await _run_to_end(_gateway_stt(gateway)) == ["hello"]
     assert gateway.types() == ["session.create", "session.finalize"]
+
+
+_INFERENCE_VAD = inference_vad.VAD  # the real class, before _default_vad replaces it
+
+
+async def test_input_ending_in_open_speech_sends_one_session_finalize(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The VAD closing the open segment at input end must not repeat the input-end finalize."""
+
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if event["type"] == "session.finalize":
+            # leave the VAD time to close its segment and any second finalize to arrive
+            asyncio.get_running_loop().call_later(0.2, ws.reply, "session.closed")
+
+    class _Model:
+        sample_rate = 16000
+        window_size_samples = 512
+
+        def predict(self, samples: np.ndarray) -> float:
+            return float(np.any(samples))
+
+        __call__ = predict
+
+        def reset(self) -> None:
+            pass
+
+    class _InlineExecutor(Executor):
+        # predict on the loop thread, so virtual time cannot outrun the VAD
+        def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Future[Any]:
+            future: Future[Any] = Future()
+            future.set_result(fn(*args, **kwargs))
+            return future
+
+    monkeypatch.setattr(inference_vad, "_NativeVAD", _Model)
+    gateway = _Gateway(handler)
+    vad = _INFERENCE_VAD(min_speech_duration=0.032, executor=_InlineExecutor())
+    stt = _gateway_stt(gateway, "openai/gpt-live-transcribe", vad=vad)
+    stream = stt.stream(conn_options=_no_retry())
+    try:
+        for _ in range(10):
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=np.full(512, 100, dtype=np.int16).tobytes(),
+                    sample_rate=16000,
+                    num_channels=1,
+                    samples_per_channel=512,
+                )
+            )
+        stream.end_input()
+        await asyncio.wait_for(_finals(stream), timeout=2.0)
+    finally:
+        await stream.aclose()
+
+    assert [t for t in gateway.types() if t != "input_audio"] == [
+        "session.create",
+        "session.finalize",
+    ]
 
 
 @pytest.mark.parametrize("close_session", [False, True], ids=["socket", "session"])
