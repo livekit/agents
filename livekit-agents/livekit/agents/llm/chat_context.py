@@ -20,7 +20,7 @@ import json
 import textwrap
 import time
 from collections.abc import Generator, Sequence
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, cast, overload
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_serializer
 from typing_extensions import TypedDict
@@ -438,7 +438,7 @@ class ChatMessage(_ChatItemBase):
 
     @field_serializer("extra", when_used="json")
     def _serialize_extra(self, extra: dict[str, Any]) -> dict[str, Any]:
-        return _json_safe_extra(extra)
+        return cast(dict[str, Any], _json_safe_extra(extra))
 
     @field_serializer("hash", when_used="json")
     def _serialize_hash(self, hash_value: bytes | None) -> str | None:
@@ -500,7 +500,7 @@ class FunctionCall(_ChatItemBase):
 
     @field_serializer("extra", when_used="json")
     def _serialize_extra(self, extra: dict[str, Any]) -> dict[str, Any]:
-        return _json_safe_extra(extra)
+        return cast(dict[str, Any], _json_safe_extra(extra))
 
     def _essential_fields(self) -> tuple[Any, ...]:
         return (self.name, self.call_id, self.arguments)
