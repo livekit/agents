@@ -1684,3 +1684,224 @@ async def test_unexpected_provider_close_schedules_single_recovery(
     assert session._provider_reconnect_task is first_task
     assert await first_task is True
     assert len(created) == 1
+
+
+# --- Review fixes -------------------------------------------------------------------------
+
+
+class _ConnectedRoom:
+    name = "room-1"
+
+    def __init__(self) -> None:
+        self.off_calls: list[str] = []
+
+    def isconnected(self) -> bool:
+        return True
+
+    def off(self, event: str, *_: object) -> None:
+        self.off_calls.append(event)
+
+
+async def test_aclose_lets_the_base_remove_the_avatar_from_a_live_room(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The base aclose() removes the avatar participant only while it can still see the room."""
+    from livekit.agents.voice.avatar import _types as base_avatar
+
+    removed: list[object] = []
+
+    async def remove_participant(request: object) -> None:
+        removed.append(request)
+
+    job_ctx = SimpleNamespace(
+        api=SimpleNamespace(room=SimpleNamespace(remove_participant=remove_participant))
+    )
+    monkeypatch.setattr(base_avatar, "get_job_context", lambda required=False: job_ctx)
+
+    session = AvatarSession(api_key="k", app_id="a", avatar_id="av")
+    room = _ConnectedRoom()
+    session._room = room  # type: ignore[assignment]
+
+    await session.aclose()
+
+    assert len(removed) == 1, "the avatar participant was left in the room"
+    assert removed[0].identity == session.avatar_identity
+    assert "connection_state_changed" in room.off_calls
+    assert session._room is None
+
+
+class _SuspendingAvatarkitSession(FakeAvatarkitSession):
+    """A send that yields to the loop, like a real websocket write."""
+
+    async def send_audio(self, audio: bytes, end: bool = False) -> str:
+        await asyncio.sleep(0)
+        return await super().send_audio(audio, end)
+
+
+async def test_missing_end_marker_fallback_finalizes_the_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the segment end never arrives, the idle fallback sends end=True and queues the segment."""
+    monkeypatch.setattr(avatar, "ACTIVE_SEGMENT_IDLE_END_SECONDS", 0.01)
+    session, _, buffer = make_session()
+    fake = _SuspendingAvatarkitSession()
+    session._avatarkit_session = fake  # type: ignore[assignment]
+
+    await session._send_audio_frame(make_frame())
+    idle_end = session._active_segment_idle_end_task
+    assert idle_end is not None
+    await asyncio.gather(idle_end, return_exceptions=True)
+
+    assert not idle_end.cancelled(), "the fallback cancelled itself"
+    assert fake.sent[-1] == (0, True), fake.sent
+    assert session._active_req_id is None
+    assert fake.req_id in session._pending_segment_ids
+
+    session._on_playback_signal(provider_end_signal(fake.req_id))
+    assert buffer.events == ["started", ("finished", False)], buffer.events
+
+
+class _BlockingSendProvider(_ProviderSpy):
+    """Holds the second send open so a clear can land while it is in flight."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sends = 0
+        self.send_started = asyncio.Event()
+        self.allow_send = asyncio.Event()
+
+    async def send_audio(self, *, audio: bytes, end: bool) -> str:
+        self.sends += 1
+        if self.sends == 2:
+            self.send_started.set()
+            await self.allow_send.wait()
+        return await super().send_audio(audio=audio, end=end)
+
+
+class _QueuedAudioBuffer(_AudioBufferSpy):
+    def __init__(self) -> None:
+        super().__init__()
+        self.items: asyncio.Queue[rtc.AudioFrame | AudioSegmentEnd] = asyncio.Queue()
+
+    def __aiter__(self) -> _QueuedAudioBuffer:
+        return self
+
+    async def __anext__(self) -> rtc.AudioFrame | AudioSegmentEnd:
+        return await self.items.get()
+
+
+async def test_barge_in_during_a_send_interrupts_without_reconnecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A user interruption that lands mid-send is a normal interruption, not a provider failure."""
+    reconnects: list[object] = []
+    monkeypatch.setattr(avatar, "new_avatar_session", lambda **kw: reconnects.append(kw))
+
+    session = _session()
+    provider = _BlockingSendProvider()
+    audio = _QueuedAudioBuffer()
+    session._avatarkit_session = provider
+    session._audio_buffer = audio  # type: ignore[assignment]
+    forwarder = asyncio.create_task(session._run_main_task())
+    try:
+        audio.items.put_nowait(_rtc_frame(1))
+        audio.items.put_nowait(_rtc_frame(2))
+        await provider.send_started.wait()
+
+        session._on_clear_buffer()
+        provider.allow_send.set()
+        for _ in range(20):
+            await asyncio.sleep(0)
+
+        assert reconnects == [], "a barge-in reconnected the provider"
+        assert session._avatarkit_session is provider
+        assert provider.interrupt_calls == 1
+        assert audio.playback_finished and audio.playback_finished[-1][1] is True
+        assert not session._segments and session._active_req_id is None
+
+        audio.items.put_nowait(_rtc_frame(3))
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert provider.sent[-1] == ("request-2", bytes([3, 0]) * 4, False), provider.sent
+    finally:
+        await _stop_idle_end_timer(session)
+        forwarder.cancel()
+        await asyncio.gather(forwarder, return_exceptions=True)
+        await asyncio.gather(*list(session._background_tasks), return_exceptions=True)
+
+
+class _PositionBuffer(FakeBuffer):
+    def notify_playback_finished(self, *, playback_position: float, interrupted: bool) -> None:
+        self.events.append(("finished", round(playback_position, 3), interrupted))
+
+
+async def test_a_reply_split_across_requests_finishes_once() -> None:
+    """A req_id rollover mid-reply must not report the reply finished when the first request ends."""
+    session, fake, _ = make_session()
+    buffer = _PositionBuffer()
+    session._audio_buffer = buffer  # type: ignore[assignment]
+
+    await session._send_audio_frame(make_frame())  # 10 ms on req-1
+    fake.req_id = "req-2"
+    await session._send_audio_frame(make_frame())  # rolls over to req-2
+    await session._send_audio_frame(make_frame())
+
+    session._on_playback_signal(provider_end_signal("req-1"))
+    assert "finished" not in [e[0] for e in buffer.events if isinstance(e, tuple)], buffer.events
+
+    assert await session._finalize_active_segment(source="segment_end")
+    session._on_playback_signal(provider_end_signal("req-2"))
+    finished = [e for e in buffer.events if isinstance(e, tuple)]
+    assert finished == [("finished", 0.03, False)], buffer.events
+
+
+async def test_an_interrupted_split_reply_finishes_once() -> None:
+    session, fake, _ = make_session()
+    buffer = _PositionBuffer()
+    session._audio_buffer = buffer  # type: ignore[assignment]
+
+    await session._send_audio_frame(make_frame())
+    fake.req_id = "req-2"
+    await session._send_audio_frame(make_frame())
+
+    session._on_clear_buffer()
+    await _drain(session)
+    finished = [e for e in buffer.events if isinstance(e, tuple)]
+    assert len(finished) == 1 and finished[0][2] is True, buffer.events
+
+
+async def test_a_reply_restored_by_an_empty_resume_finishes_once_after_rollover() -> None:
+    """The segment an empty resume puts back in play still belongs to the same reply."""
+    import time
+
+    session, fake, _ = make_session()
+    buffer = _PositionBuffer()
+    session._audio_buffer = buffer  # type: ignore[assignment]
+
+    await session._send_audio_frame(make_frame())
+    segment = session._segments[fake.req_id]
+    session._mark_playback_started(segment, source="test")
+    segment.playback_started_at = time.time() - 5.0  # everything sent has played
+
+    session._on_pause()
+    await _drain(session)
+    session._on_resume()
+    await _drain(session)
+    assert session._segments.get("req-1") is segment, "the empty resume should restore the segment"
+
+    fake.req_id = "req-2"
+    await session._send_audio_frame(make_frame())
+    session._on_playback_signal(provider_end_signal("req-1"))
+    assert [e for e in buffer.events if isinstance(e, tuple)] == [], buffer.events
+
+    assert await session._finalize_active_segment(source="segment_end")
+    session._on_playback_signal(provider_end_signal("req-2"))
+    # req-1 was interrupted by the pause, so its late end event is ignored and the
+    # restored request completes on its duration fallback; the reply is still open
+    assert [e for e in buffer.events if isinstance(e, tuple)] == [], buffer.events
+
+    await session._wait_for_segment_completion_timeout("req-1", 0)
+    finished = [e for e in buffer.events if isinstance(e, tuple)]
+    assert finished == [("finished", 0.02, False)], buffer.events
+    assert buffer.events.count("started") == 1, buffer.events
+    await asyncio.sleep(0)  # let the cancelled completion timers unwind

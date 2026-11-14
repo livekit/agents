@@ -2,6 +2,8 @@
 
 Support for the [SpatialReal](https://www.spatialreal.ai/) virtual avatar.
 
+See the [SpatialReal integration docs](https://docs.livekit.io/agents/models/avatar/plugins/spatialreal/) for more information.
+
 The agent's speech is sent to SpatialReal, which joins the room and publishes the avatar's audio and
 animation; the SpatialReal client SDK renders the avatar on the viewer's own device.
 
