@@ -82,6 +82,22 @@ DEFAULT_SESSION_TTL = timedelta(hours=24) - timedelta(minutes=5)
 # SPATIALREAL_LIVEKIT_TOKEN_TTL_SECONDS or the livekit_token_ttl constructor arg.
 DEFAULT_LIVEKIT_TOKEN_TTL = timedelta(hours=24)
 LIVEKIT_AVATAR_PUBLISH_SOURCES = ["camera", "microphone"]
+
+
+def _egress_video_grants(room_name: str) -> api.VideoGrants:
+    """Grants of the room-join token the SpatialReal egress uses to publish the avatar.
+
+    The egress also publishes data, so the token must allow it.
+    """
+    return api.VideoGrants(
+        room_join=True,
+        room=room_name,
+        can_subscribe=False,
+        can_publish_data=True,
+        can_publish_sources=LIVEKIT_AVATAR_PUBLISH_SOURCES,
+    )
+
+
 PROVIDER_RECONNECT_DELAYS_SECONDS = (0.0, 0.5, 1.0)
 PROVIDER_CONNECT_TIMEOUT_SECONDS = 15.0
 PROVIDER_CLOSE_TIMEOUT_SECONDS = 5.0
@@ -364,16 +380,7 @@ class AvatarSession(BaseAvatarSession):
             .with_name(self._avatar_participant_name)
             .with_ttl(self._livekit_token_ttl)
             .with_attributes(egress_attributes)
-            .with_grants(
-                api.VideoGrants(
-                    room_join=True,
-                    room=room_name,
-                    can_subscribe=False,
-                    # The egress also publishes data, so the token must allow it.
-                    can_publish_data=True,
-                    can_publish_sources=LIVEKIT_AVATAR_PUBLISH_SOURCES,
-                )
-            )
+            .with_grants(_egress_video_grants(room_name))
             .to_jwt()
         )
 
