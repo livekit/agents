@@ -649,11 +649,15 @@ class _FakeReader:
         # split so the reader yields mid-message, the window a per-stream task
         # used to interleave in
         self._parts = [payload[:1], payload[1:]] if len(payload) > 1 else [payload]
+        self.closed = False
 
     async def __aiter__(self):
         for part in self._parts:
             await asyncio.sleep(0)  # a real reader yields between chunks
             yield part
+
+    def close(self) -> None:
+        self.closed = True
 
 
 @pytest.mark.asyncio
@@ -684,6 +688,34 @@ async def test_inbound_messages_are_read_without_a_task_each_and_stay_ordered():
     assert [m.event.user_input_transcribed.transcript for m in received] == [
         str(i) for i in range(10)
     ]
+
+    await transport.close()
+
+
+@pytest.mark.asyncio
+async def test_inbound_message_over_the_size_limit_is_dropped():
+    """The sender is remote, so an oversized message must not be buffered."""
+    transport = RoomSessionTransport(_fake_room())
+    await transport.start()
+
+    def _transcript(text: str) -> agent_pb.AgentSessionMessage:
+        return agent_pb.AgentSessionMessage(
+            event=agent_pb.AgentSessionEvent(
+                user_input_transcribed=agent_pb.AgentSessionEvent.UserInputTranscribed(
+                    transcript=text
+                )
+            )
+        )
+
+    oversized = _FakeReader(
+        _transcript("x" * remote_session_module._MAX_MESSAGE_SIZE).SerializeToString()
+    )
+    transport._on_byte_stream(oversized, "remote")
+    transport._on_byte_stream(_FakeReader(_transcript("ok").SerializeToString()), "remote")
+
+    received = await asyncio.wait_for(transport.__anext__(), timeout=2.0)
+    assert received.event.user_input_transcribed.transcript == "ok"
+    assert oversized.closed
 
     await transport.close()
 
