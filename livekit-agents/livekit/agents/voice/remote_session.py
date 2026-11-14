@@ -332,7 +332,10 @@ def _tool_names(tools: Sequence[llm.Tool | Toolset]) -> list[str]:
 def _serialize_options(opts: AgentSessionOptions) -> dict[str, str]:
     return {
         "endpointing": str(dict(opts.endpointing)),
-        "interruption": str(dict(opts.interruption)),
+        # inference credentials must not reach the remote client
+        "interruption": str(
+            {k: v for k, v in opts.interruption.items() if k not in ("api_key", "api_secret")}
+        ),
         "max_tool_steps": str(opts.max_tool_steps),
         "user_away_timeout": str(opts.user_away_timeout),
         "transcription_timeout": str(opts.transcription_timeout),

@@ -5494,7 +5494,12 @@ class AgentActivity(RecognitionHooks):
             return None
 
         try:
-            detector = inference.AdaptiveInterruptionDetector()
+            opts = self._session.options.interruption
+            detector = inference.AdaptiveInterruptionDetector(
+                base_url=opts.get("base_url"),
+                api_key=opts.get("api_key"),
+                api_secret=opts.get("api_secret"),
+            )
         except ValueError as e:
             logger.warning("failed to create AdaptiveInterruptionDetector", extra={"error": str(e)})
             return None
