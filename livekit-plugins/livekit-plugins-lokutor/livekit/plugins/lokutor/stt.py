@@ -248,6 +248,9 @@ class SpeechStream(stt.SpeechStream):
                 self._stt._ensure_session().ws_connect(
                     f"{self._stt._opts.base_url}/ws/stt",
                     max_msg_size=0,
+                    # The monitor answers pings and probes an idle socket, so a half-open
+                    # connection fails within conn_options.liveness_timeout.
+                    autoping=False,
                     # In a header, not the query string, so the key stays out of
                     # exception messages, tracing and access logs.
                     headers={"X-API-Key": self._stt._opts.api_key},
@@ -286,11 +289,14 @@ class SpeechStream(stt.SpeechStream):
         self._utterance_floor = 0.0
         ws = await self._connect_ws()
         try:
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             await ws.send_str(json.dumps({"language": self._api_lang}))
-            await asyncio.wait_for(self._await_ready(ws), self._conn_options.timeout)
+            await asyncio.wait_for(self._await_ready(monitor), self._conn_options.timeout)
 
             send_task = asyncio.create_task(self._send_task(ws))
-            recv_task = asyncio.create_task(self._recv_task(ws))
+            recv_task = asyncio.create_task(self._recv_task(monitor))
             try:
                 await asyncio.wait({send_task, recv_task}, return_when=asyncio.FIRST_COMPLETED)
                 if send_task.done():
@@ -313,9 +319,9 @@ class SpeechStream(stt.SpeechStream):
             self._report_usage()
             await ws.close()
 
-    async def _await_ready(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _await_ready(self, monitor: utils.aio.WebSocketMonitor) -> None:
         while True:
-            msg = await ws.receive()
+            msg = await monitor.receive()
             if msg.type != aiohttp.WSMsgType.TEXT:
                 raise APIConnectionError("Lokutor STT closed before it was ready")
             try:
@@ -347,9 +353,9 @@ class SpeechStream(stt.SpeechStream):
         self._input_done = True
         await ws.send_str(json.dumps({"type": "end"}))
 
-    async def _recv_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _recv_task(self, monitor: utils.aio.WebSocketMonitor) -> None:
         while True:
-            msg = await ws.receive()
+            msg = await monitor.receive()
             if msg.type in (
                 aiohttp.WSMsgType.CLOSED,
                 aiohttp.WSMsgType.CLOSE,
@@ -385,6 +391,7 @@ class SpeechStream(stt.SpeechStream):
                 self._done = True
                 return
             if kind == "transcript":
+                self._mark_provider_progress()
                 self._note_language(data.get("lang"))
                 self._on_transcript(
                     str(data.get("data") or "").strip(), data.get("isFinal") is True
