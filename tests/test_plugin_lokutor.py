@@ -10,10 +10,9 @@ import asyncio
 import base64
 import io
 import json
-import time
 import wave
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
@@ -312,36 +311,46 @@ async def test_stream_that_stalls_after_end_times_out():
         await asyncio.wait_for(_stream_against(ws_stt, timeout=0.5), 10)
 
 
-async def _live_stream(ws_stt, *, liveness_timeout: float = 1.0):
-    """A stream whose input stays open, against ``ws_stt``; returns (runner, session, stream)."""
+def _live_stream(*, answer_pings: bool = False) -> tuple[AsyncMock, stt.SpeechStream]:
+    """Keep input open against a fake socket, optionally answering the monitor's probes."""
     from livekit.plugins.lokutor import STT
 
-    app = web.Application()
-    app.router.add_get("/ws/stt", ws_stt)
-    runner, base = await _serve(app)
-    session = aiohttp.ClientSession()
-    s = STT(api_key="sk-test", base_url=base, http_session=session)
-    stream = s.stream(
-        conn_options=APIConnectOptions(max_retry=0, liveness_timeout=liveness_timeout)
+    incoming: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+    incoming.put_nowait(
+        aiohttp.WSMessage(
+            aiohttp.WSMsgType.TEXT, json.dumps({"type": "status", "data": "ready"}), ""
+        )
     )
-    stream.push_frame(_frame())
-    return runner, session, stream
+    ws = AsyncMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.receive.side_effect = incoming.get
 
+    if answer_pings:
 
-async def test_stream_fails_within_the_liveness_timeout_when_the_server_goes_silent():
-    # A half-open socket never delivers a close; only an unanswered ping reveals it.
-    async def ws_stt(request: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse(autoping=False)
-        await ws.prepare(request)
-        await ws.receive()
-        await ws.send_str(json.dumps({"type": "status", "data": "ready"}))
-        async for _ in ws:
-            pass
+        async def pong() -> None:
+            incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.PONG, b"", ""))
+
+        ws.ping.side_effect = pong
+
+    async def connect(url: str, *, autoping: bool, **kwargs: Any) -> AsyncMock:
+        assert autoping is False  # The monitor must receive control frames itself.
         return ws
 
-    runner, session, stream = await _live_stream(ws_stt)
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.closed = False
+    session.ws_connect = connect
+    s = STT(api_key="sk-test", http_session=session)
+    stream = s.stream(conn_options=APIConnectOptions(max_retry=0, liveness_timeout=1.0))
+    stream.push_frame(_frame())
+    return ws, stream
+
+
+@pytest.mark.virtual_time
+async def test_stream_fails_within_the_liveness_timeout_when_the_server_goes_silent():
+    # A half-open socket never delivers a close; only an unanswered ping reveals it.
+    ws, stream = _live_stream()
     try:
-        started = time.monotonic()
+        loop = asyncio.get_running_loop()
+        started = loop.time()
         with pytest.raises(APIConnectionError, match="WebSocket connection lost"):
 
             async def drain() -> None:
@@ -349,24 +358,15 @@ async def test_stream_fails_within_the_liveness_timeout_when_the_server_goes_sil
                     pass
 
             await asyncio.wait_for(drain(), 5)
-        assert time.monotonic() - started < 3
+        assert loop.time() - started == pytest.approx(1.0)
+        ws.ping.assert_awaited_once()
     finally:
         await stream.aclose()
-        await session.close()
-        await runner.cleanup()
 
 
+@pytest.mark.virtual_time
 async def test_a_quiet_stream_that_answers_pings_stays_open():
-    async def ws_stt(request: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse()  # answers pings
-        await ws.prepare(request)
-        await ws.receive()
-        await ws.send_str(json.dumps({"type": "status", "data": "ready"}))
-        async for _ in ws:
-            pass
-        return ws
-
-    runner, session, stream = await _live_stream(ws_stt)
+    ws, stream = _live_stream(answer_pings=True)
     events: list[stt.SpeechEvent] = []
 
     async def collect() -> None:
@@ -375,13 +375,14 @@ async def test_a_quiet_stream_that_answers_pings_stays_open():
 
     task = asyncio.create_task(collect())
     try:
-        await asyncio.sleep(2.5)  # over two liveness windows with no message from the server
+        # Virtual time spans more than two liveness windows without application messages.
+        await asyncio.sleep(2.5)
         assert not task.done()
+        assert ws.ping.await_count >= 6
+        assert events == []
     finally:
         await stream.aclose()
         await asyncio.gather(task, return_exceptions=True)
-        await session.close()
-        await runner.cleanup()
 
 
 async def test_stream_without_a_language_reports_the_detected_one():
