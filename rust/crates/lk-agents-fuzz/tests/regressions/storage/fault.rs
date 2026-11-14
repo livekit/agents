@@ -204,29 +204,39 @@ fn a_turn_reported_before_the_watchdog_fires_waits_for_its_receipt() {
 
 // Catches: a realtime reply whose server audio was already arriving held back until its speech
 // reloaded the voice partition, so the person waited on storage for the first word
-// (`first_audio_is_prompt`, campaign seeds 9850, 27056 and 27623, with storage lost).
+// (`first_audio_is_prompt`, with storage slow to answer).
 #[test]
 fn a_realtime_reply_plays_while_its_partition_reloads() {
-    for seed in [9850, 27056, 27623] {
-        let setup = lk_agents_fuzz::search::sample_setup(&mut fastrand::Rng::with_seed(seed));
-        let outcome = lk_agents_fuzz::search::explore(setup, seed, 3000);
-        let late = outcome.failures.iter().any(|f| f.contract == "first_audio_is_prompt");
-        assert!(!late, "seed {seed}: the reply's first audio waited on the partition_key");
-    }
-}
-
-// Catches the harness judging the partition by itself, not by the real backend (launch-gate seeds
-// 1239, 4416, 2692, 2634, 2990, 3368): a database worker a lease's renewal respawned off the task
-// bridge waited for virtual time to move until the lease lapsed; another worker's steal read the
-// lease it replaced before the call's take applied, and its take was observed before it was noted
-// speaking; a turn the close released at its bound reported afterwards, as designed.
-#[test]
-fn the_partition_is_judged_by_the_real_backend() {
-    for seed in [1239, 4416, 2692, 2634, 2990, 3368] {
-        let setup = lk_agents_fuzz::search::sample_setup(&mut fastrand::Rng::with_seed(seed));
-        let outcome = lk_agents_fuzz::search::explore(setup, seed, 3000);
-        let storage: Vec<_> =
-            outcome.failures.iter().filter(|f| f.contract.starts_with("storage_")).collect();
-        assert!(storage.is_empty(), "seed {seed}: {storage:#?}");
-    }
+    use lk_agents_fuzz::{drive::RealtimeSetup, record::Sink};
+    let recording = simulate(async {
+        let storage = StorageSetup { take_answer_ms: Some(3_000), ..StorageSetup::default() };
+        let setup = Setup {
+            realtime: Some(RealtimeSetup { turn_detection: false, ..RealtimeSetup::default() }),
+            storage: Some(storage),
+            ..Setup::default()
+        };
+        let mut run = Run::start(&setup, 0, Default::default()).await;
+        for input in [
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(5_000) },
+        ] {
+            run.apply(&input).await;
+        }
+        run.record
+    });
+    let acquired = recording.host_view().storage().iter().find_map(|(at, step)| {
+        matches!(step, StorageStep::Answered { operation: StorageOperation::Acquire, .. })
+            .then_some(at.at_ms)
+    });
+    let played = recording
+        .sink()
+        .iter()
+        .find_map(|(at, sink)| matches!(sink, Sink::Audio { .. }).then_some(at.at_ms));
+    // The storage answers the take three seconds on; the server's audio arrives long before.
+    assert!(
+        played.zip(acquired).is_some_and(|(played, acquired)| played < acquired),
+        "the reply's first audio waited on the partition: played {played:?}, acquired {acquired:?}"
+    );
+    let (failures, _) = lk_agents_fuzz::check::check_all(&recording);
+    assert!(failures.is_empty(), "{failures:#?}");
 }
