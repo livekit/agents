@@ -106,7 +106,8 @@ def record_exception(
         {
             trace_types.ATTR_EXCEPTION_TYPE: exception.__class__.__name__,
             trace_types.ATTR_EXCEPTION_MESSAGE: str(exception),
-            trace_types.ATTR_EXCEPTION_TRACE: traceback.format_exc(),
+            # not format_exc(): the exception may be recorded after its handler exited
+            trace_types.ATTR_EXCEPTION_TRACE: "".join(traceback.format_exception(exception)),
         }
     )
 

@@ -594,6 +594,22 @@ def test_record_exception_preserves_details_when_not_redacted() -> None:
     assert span.status.description == "secret transcript"
 
 
+def test_record_exception_traces_the_given_exception_outside_its_handler() -> None:
+    # SpeechHandle records a stored pipeline error from a task done callback, long after
+    # the except block that caught it has exited
+    try:
+        raise RuntimeError("secret transcript")
+    except RuntimeError as exc:
+        error = exc
+
+    span = _FakeSpan()
+    telemetry_utils.record_exception(span, error, redacted=False)  # type: ignore[arg-type]
+
+    trace_text = span.attributes[trace_types.ATTR_EXCEPTION_TRACE]
+    assert "RuntimeError: secret transcript" in trace_text
+    assert "_outside_its_handler" in trace_text
+
+
 def test_record_exception_omits_details_when_redacted() -> None:
     span = _FakeSpan()
 
