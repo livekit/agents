@@ -1532,10 +1532,8 @@ async def test_audio_output_waits_for_active_submission_and_source_playout() -> 
 
     assert not finished.interrupted
     assert finished.playback_position == pytest.approx(frame.duration)
-<<<<<<< HEAD
 
 
-<<<<<<< HEAD
 # -- legacy transcription gate ------------------------------------------------
 
 
@@ -1720,75 +1718,3 @@ async def test_modern_stream_still_published_when_legacy_is_skipped() -> None:
 
     assert "".join(writer.chunks) == "hello"
     assert room.local_participant.publish_transcription.await_count == 0
-=======
-async def test_prebuffer_wraps_the_room_audio_output_when_requested() -> None:
-    room = _FakeRoom()
-    room_io = RoomIO(
-        MagicMock(spec=AgentSession),
-        room,
-        options=RoomOptions(audio_output=AudioOutputOptions(prebuffer_ms=300)),
-    )
-    await room_io.start()
-    try:
-        await asyncio.sleep(0)
-        sink = room_io._audio_output
-        assert sink is not None
-        buffered = room_io._effective_audio_output
-        # the buffer sits directly in front of the RoomIO sink, so playback events still
-        # bubble up to anything chained above it
-        assert isinstance(buffered, BufferedAudioOutput)
-        assert buffered.next_in_chain is not None
-        assert buffered.next_in_chain.next_in_chain is sink
-    finally:
-        await room_io.aclose()
-
-
-async def test_audio_output_is_unbuffered_by_default() -> None:
-    room = _FakeRoom()
-    room_io = RoomIO(
-        MagicMock(spec=AgentSession),
-        room,
-        options=RoomOptions(audio_output=AudioOutputOptions()),
-    )
-    await room_io.start()
-    try:
-        await asyncio.sleep(0)
-        assert room_io._effective_audio_output is room_io._audio_output
-    finally:
-        await room_io.aclose()
-<<<<<<< HEAD
->>>>>>> 6411074fc (fix(voice): add an opt-in prebuffer AudioOutput for realtime-paced audio)
-=======
-
-
-async def test_prebuffer_and_transcription_synchronizer_chain_correctly() -> None:
-    """The prebuffer sits below the synchronizer so transcript timing tracks real playback."""
-    room = _FakeRoom()
-    room_io = RoomIO(
-        MagicMock(spec=AgentSession),
-        room,
-        options=RoomOptions(
-            audio_output=AudioOutputOptions(prebuffer_ms=300),
-            text_output=TextOutputOptions(sync_transcription=True),
-        ),
-    )
-    await room_io.start()
-    try:
-        await asyncio.sleep(0)
-        # session output should be the synchronizer's output
-        assert room_io._tr_synchronizer is not None
-        assert room_io._effective_audio_output is not room_io._audio_output
-        # chain: _SyncedAudioOutput -> BufferedAudioOutput -> _ParticipantAudioOutput
-        synced = room_io._tr_synchronizer.audio_output
-        assert synced is not None
-        buffered = synced.next_in_chain
-        assert isinstance(buffered, BufferedAudioOutput)
-        sink = buffered.next_in_chain
-        assert sink is not None
-        # the sink's next_in_chain might be _AudioSinkProxy, so just verify it reaches the RoomIO sink
-        assert sink.next_in_chain is not None
-    finally:
-        await room_io.aclose()
->>>>>>> a33f6a1f2 (test(voice): verify prebuffer + transcription sync chain order)
-=======
->>>>>>> 33518af8d (fix(voice): address longcw review issues in BufferedAudioOutput)
