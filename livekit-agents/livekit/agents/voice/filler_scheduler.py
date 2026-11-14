@@ -70,7 +70,7 @@ class _FillerScheduler:
         self._session.on("user_state_changed", _on_user)
 
         async def _loop() -> None:
-            while True:
+            while self._max_steps is None or len(self._created_speeches) < self._max_steps:
                 await self._session.wait_for_idle()
                 self._speaking_ev.clear()
                 try:

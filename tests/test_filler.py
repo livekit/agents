@@ -213,6 +213,17 @@ async def test_scheduler_fires_repeatedly_with_interval() -> None:
     assert set(_texts(session)) == {"tick"}
 
 
+@pytest.mark.parametrize("interval", [None, 0.05])
+async def test_scheduler_does_not_fire_with_zero_max_steps(interval: float | None) -> None:
+    session = _FakeSession()
+    scheduler = _scheduler(
+        session, _FakeSpeechHandle(), "tick", delay=0.05, interval=interval, max_steps=0
+    )
+    await asyncio.sleep(0.3)
+    await scheduler.aclose()
+    assert session.say_calls == []
+
+
 async def test_scheduler_does_not_fire_after_speech_interrupted() -> None:
     session = _FakeSession()
     handle = _FakeSpeechHandle()
