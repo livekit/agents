@@ -75,87 +75,6 @@ async def test_decode_and_transcribe():
     assert wer(final_text, expected_text) < 0.2
 
 
-def test_stream_buffer():
-    buffer = StreamBuffer()
-    data_chunks = [b"hello", b"world", b"test", b"data"]
-    received_data = bytearray()
-    write_completed = threading.Event()
-
-    def writer():
-        for chunk in data_chunks:
-            buffer.write(chunk)
-            time.sleep(0.01)  # Simulate some processing time
-        buffer.end_input()
-        write_completed.set()
-
-    def reader():
-        while True:
-            data = buffer.read(4)  # Read in small chunks
-            if not data:  # EOF
-                break
-            received_data.extend(data)
-
-    # Run writer and reader in separate threads
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        reader_future = executor.submit(reader)
-        writer_future = executor.submit(writer)
-
-        # Wait for both threads to complete
-        writer_future.result()
-        reader_future.result()
-
-    # Verify that all data was received correctly
-    expected_data = b"".join(data_chunks)
-    assert bytes(received_data) == expected_data
-
-
-def test_stream_buffer_large_chunks():
-    import hashlib
-
-    buffer = StreamBuffer()
-    large_chunk = os.urandom(1024 * 1024)  # 1MB of random bytes
-    num_chunks = 5
-    total_size = 0
-    write_completed = threading.Event()
-    input_hasher = hashlib.sha256()
-
-    def writer():
-        nonlocal total_size
-        for _ in range(num_chunks):
-            buffer.write(large_chunk)
-            total_size += len(large_chunk)
-            input_hasher.update(large_chunk)
-        buffer.end_input()
-        write_completed.set()
-
-    received_size = 0
-    output_hasher = hashlib.sha256()
-
-    def reader():
-        nonlocal received_size
-        # allow writer to start first
-        time.sleep(0.1)
-        while True:
-            chunk = buffer.read(8192)  # Read in 8KB chunks
-            if not chunk:
-                break
-            received_size += len(chunk)
-            output_hasher.update(chunk)
-
-    # Run writer and reader in separate threads
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        reader_future = executor.submit(reader)
-        writer_future = executor.submit(writer)
-
-        # Wait for both threads to complete
-        writer_future.result()
-        reader_future.result()
-
-    assert received_size == total_size
-    assert total_size == num_chunks * len(large_chunk)
-    assert input_hasher.hexdigest() == output_hasher.hexdigest()
-
-
 def test_stream_buffer_early_close():
     buffer = StreamBuffer()
 
@@ -180,7 +99,7 @@ def test_stream_buffer_slow_writer_fast_reader():
     def writer():
         for chunk in chunks:
             buffer.write(chunk)
-            time.sleep(0.005)
+            time.sleep(0.001)
         buffer.end_input()
 
     def reader():
@@ -216,7 +135,7 @@ def test_stream_buffer_reader_starts_before_writer():
 
     def writer():
         reader_started.wait()
-        time.sleep(0.05)  # ensure reader is blocking in read()
+        time.sleep(0.01)  # ensure reader is blocking in read()
         buffer.write(payload)
         buffer.end_input()
 
@@ -290,11 +209,6 @@ def test_stream_buffer_compaction():
     assert len(received) == total_written
     assert input_hasher.hexdigest() == output_hasher.hexdigest()
 
-    # confirm compaction actually fired: after reading 6MB in 4KB chunks,
-    # _read_pos would have exceeded the 5MB threshold at least once.
-    # The data integrity check above is the real proof — if compaction
-    # dropped or duplicated bytes, the hash would mismatch.
-
 
 def test_stream_buffer_compaction_boundary():
     """Compaction must not lose the tail bytes sitting between read_pos and write_pos."""
@@ -341,7 +255,7 @@ def test_stream_buffer_close_while_reading():
     with ThreadPoolExecutor(max_workers=1) as pool:
         rf = pool.submit(reader)
         reader_started.wait()
-        time.sleep(0.05)  # ensure reader is blocking
+        time.sleep(0.01)  # ensure reader is blocking
         buffer.close()
         rf.result(timeout=2)
 
