@@ -376,7 +376,9 @@ async fn a_commit_refused_by_an_idle_eviction_is_sent_again_and_the_call_goes_on
     store.acquire(1, said.clone()).await.unwrap();
     faults.fail_next_commit(WriteFault::EvictIdle);
     let (sink, mut events) = Events::new();
-    Arc::clone(&store).dispatch(VoiceStorageCommand::Settle { speech: 1, history: said }, sink).unwrap();
+    Arc::clone(&store)
+        .dispatch(VoiceStorageCommand::Settle { speech: 1, history: said }, sink)
+        .unwrap();
     match events.recv().await {
         Some(VoiceStorageEvent::Settled { speech: 1, result, .. }) => {
             assert!(result.is_ok(), "the call ended on a refusal that applied nothing: {result:?}")
