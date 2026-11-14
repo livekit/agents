@@ -343,7 +343,7 @@ class STT(stt.STT):
 
     @property
     def model(self) -> str:
-        return "slng"
+        return self._model or "unknown"
 
     @property
     def provider(self) -> str:
