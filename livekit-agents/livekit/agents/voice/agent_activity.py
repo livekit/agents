@@ -1174,7 +1174,7 @@ class AgentActivity(RecognitionHooks):
                         "input_audio_transcription_completed",
                         self._on_input_audio_transcription_completed,
                     )
-                    self._rt_session.off("metrics_collected", self._on_metrics_collected)
+                    self._rt_session.off("metrics_collected", self._on_realtime_metrics_collected)
                     self._rt_session.off("remote_item_added", self._on_remote_item_added)
                     self._rt_session.off("error", self._on_error)
                     self._rt_session.off("delegation_created", self._on_delegation_created)
@@ -1304,7 +1304,7 @@ class AgentActivity(RecognitionHooks):
                 "input_audio_transcription_completed",
                 self._on_input_audio_transcription_completed,
             )
-            self._rt_session.on("metrics_collected", self._on_metrics_collected)
+            self._rt_session.on("metrics_collected", self._on_realtime_metrics_collected)
             self._rt_session.on("remote_item_added", self._on_remote_item_added)
             self._rt_session.on("error", self._on_error)
             self._rt_session.on("delegation_created", self._on_delegation_created)
@@ -1675,7 +1675,7 @@ class AgentActivity(RecognitionHooks):
 
             def _on_rt_closed(closed: asyncio.Future[None]) -> None:
                 # after the close, so the final usage reported while closing is still counted
-                rt_session.off("metrics_collected", self._on_metrics_collected)
+                rt_session.off("metrics_collected", self._on_realtime_metrics_collected)
                 if realtime_spans is not None:
                     realtime_spans.clear()
                 self._session._rt_closing.discard(closed)
@@ -2275,6 +2275,26 @@ class AgentActivity(RecognitionHooks):
             "session_usage_updated",
             SessionUsageUpdatedEvent(usage=self._session.usage),
         )
+
+    def _on_realtime_metrics_collected(
+        self,
+        ev: STTMetrics | TTSMetrics | VADMetrics | LLMMetrics | RealtimeModelMetrics,
+    ) -> None:
+        """Handle metrics from the realtime session.
+
+        A duplex model's usage is the session's, not a speech burst's, so it matches no
+        realtime inference span; it gets a ``realtime_metrics`` span under the session. Every
+        event is then forwarded to ``_on_metrics_collected``.
+        """
+        # what no inference span can carry gets a span of its own, under the session
+        if isinstance(ev, RealtimeModelMetrics) and isinstance(self.llm, llm.DuplexRealtimeAdapter):
+            # a duplex model reports usage for its session: the realtime spans are keyed by the
+            # adapter's own speech bursts, whose ids the model never sees, so none would match
+            with tracer.start_span(
+                "realtime_metrics", context=self._session._root_span_context
+            ) as span:
+                trace_utils.record_realtime_metrics(span, ev)
+        self._on_metrics_collected(ev)
 
     def _on_remote_item_added(self, ev: llm.RemoteItemAddedEvent) -> None:
         # add the remote item to the local chat context as a placeholder

@@ -80,7 +80,8 @@ SPAN_PARENTS: dict[str, frozenset[str | None]] = {
         "function_tool": {"agent_turn"},
         "agent_speaking": {"agent_turn"},
         "realtime_inference": {"agent_turn"},
-        "realtime_metrics": {"realtime_inference", "agent_turn"},
+        # a duplex model's usage is the session's, not a turn's (GPT-Live)
+        "realtime_metrics": {"realtime_inference", "agent_turn", "agent_session"},
         # -- model requests: under the node that made them, or the feature that owns them.
         # An adapter's request span stands in for the provider's and opens no attempt span of
         # its own: each wrapped request nests directly under it, with its own attempts:
