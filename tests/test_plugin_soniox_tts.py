@@ -340,3 +340,21 @@ async def test_reduce_silence_rejected_on_unsupported_model() -> None:
     with pytest.raises(ValueError, match="reduce_silence"):
         tts.update_options(model="tts-rt-v1")
     assert tts._opts.model == "tts-rt-v2"
+
+
+@pytest.mark.parametrize("invalid", [{"speed": 2.0}, {"stream_idle_timeout": 0}])
+async def test_rejected_update_options_changes_nothing(invalid: dict[str, Any]) -> None:
+    """A rejected update_options leaves every option as it was."""
+    tts = soniox.TTS(api_key="fake-key")
+    snapshot = dict(vars(tts._opts))
+
+    with pytest.raises(ValueError):
+        tts.update_options(
+            model="tts-rt-v2",
+            language="es",
+            voice="Adrian",
+            reduce_silence=True,
+            **{"speed": 1.2, "stream_idle_timeout": 10.0, **invalid},
+        )
+
+    assert vars(tts._opts) == snapshot
