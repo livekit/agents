@@ -388,6 +388,10 @@ class VoiceActivityVideoSampler:
 DEFAULT_TTS_TEXT_TRANSFORMS: list[TextTransforms] = ["filter_markdown", "filter_emoji"]
 
 
+class _AgentAlreadyRunningError(RuntimeError):
+    """The requested agent already belongs to an active activity."""
+
+
 class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @deprecate_params(
         {
@@ -1915,16 +1919,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
                 return
 
-            # _update_activity is called directly sometimes, update for redundancy
-            self._agent = agent
-
             if new_activity == "start":
                 previous_agent = self._activity.agent if self._activity else None
                 if agent._activity is not None and (
                     # allow updating the same agent that is running
                     agent is not previous_agent or previous_activity != "close"
                 ):
-                    raise RuntimeError("cannot start agent: an activity is already running")
+                    raise _AgentAlreadyRunningError(
+                        "cannot start agent: an activity is already running"
+                    )
 
                 self._next_activity = AgentActivity(agent, self)
             elif new_activity == "resume":
@@ -1932,6 +1935,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     raise RuntimeError("cannot resume agent: no existing active activity to resume")
 
                 self._next_activity = agent._activity
+
+            # Inline tasks can call _update_activity directly.
+            self._agent = agent
 
             if self._root_span_context is not None:
                 # restore the root span context so on_exit, on_enter, and future turns
@@ -2048,7 +2054,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if old_task is not None:
             await old_task
 
-        await self._update_activity(agent, wait_on_enter=False)
+        try:
+            await self._update_activity(agent, wait_on_enter=False)
+        except _AgentAlreadyRunningError:
+            activity = self._activity
+            if activity is None:
+                raise
+            if self._update_activity_atask is asyncio.current_task() and not self._closing:
+                # A newer queued handoff still needs to block incoming turns.
+                self._agent = activity.agent
+                activity._new_turns_blocked = False
+            logger.warning("agent handoff rejected: target activity is already running")
+            return
 
         # watch on_enter so the run captures its output without awaiting it
         if (activity := self._activity) is not None and activity._on_enter_task is not None:
