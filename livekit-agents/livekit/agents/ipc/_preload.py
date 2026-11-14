@@ -79,6 +79,12 @@ def _rtc_native_library() -> None:
     get_ffi_lib()
 
 
+def _inference_llm() -> None:
+    # livekit.agents.inference loads its LLM modules, and the openai SDK under them, on first
+    # use so a worker registers without them (~100 ms); a job builds its LLM from them
+    from ..inference import llm, responses  # noqa: F401
+
+
 def _openai_resources() -> None:
     # the openai SDK, which livekit.agents.inference is built on, imports its whole resources
     # tree on the first client attribute access (~300-550 ms)
@@ -106,6 +112,7 @@ def _httpx_client() -> None:
 _step("av", _av)
 _step("the local inference models", _local_inference_models)
 _step("the livekit-rtc native library", _rtc_native_library)
+_step("the inference LLM", _inference_llm)
 _step("the openai SDK resources", _openai_resources)
 _step("the livekit.agents.inference exports", _inference_exports)
 _step("the httpx client", _httpx_client)
