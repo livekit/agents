@@ -14,7 +14,7 @@ screen. Your frontend must use the Spatius client SDK and LiveKit adapter to dec
 the track and render the avatar.
 
 See the [client integration guide](https://docs.spatius.ai/livekit-agents/client?utm_source=livekit) and
-the [reference frontend](https://github.com/spatius-ai/spatius-avatar-demo/tree/main/platform-integrations/livekit-agents-demo/livekit-agents-reference-demo/frontend)
+the [reference frontend](https://github.com/spatius-ai/spatius-avatar-demo/tree/main/platform-integrations)
 for a working implementation.
 
 ## Installation
