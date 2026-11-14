@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from livekit import blingfire
 
 from . import token_stream, tokenizer
+from ._basic_sent import THAI_SENTENCE_END_RE
 
 __all__ = [
     "SentenceTokenizer",
@@ -25,9 +26,12 @@ def _split_sentences(
     _, offsets = blingfire.text_to_sentences_with_offsets(text)
 
     # blingfire doesn't treat the danda ("।", "॥") used by Hindi, Bengali, etc. as a
-    # sentence terminator, so also end a sentence after a danda followed by whitespace
+    # sentence terminator, so also end a sentence after a danda followed by whitespace.
+    # Thai has no terminator at all, so a space between Thai words ends one too.
     ends = sorted(
-        {end for _, end in offsets} | {m.end() for m in _DANDA_BOUNDARY_RE.finditer(text)}
+        {end for _, end in offsets}
+        | {m.end() for m in _DANDA_BOUNDARY_RE.finditer(text)}
+        | {m.end() for m in THAI_SENTENCE_END_RE.finditer(text)}
     )
 
     sentences: list[tuple[str, int, int]] = []
