@@ -14,4 +14,8 @@ pub enum WsdbCode {
     Retry,
     /// A write that may or may not have applied, and takes effect whole if it did.
     OutcomeUnknown,
+    /// A connection's notice, on request id 0: the server evicted its database over the warm cap
+    /// while the connection had nothing in flight, and its socket ends. The client redials only
+    /// when a call needs the connection again.
+    IdleEvicted,
 }

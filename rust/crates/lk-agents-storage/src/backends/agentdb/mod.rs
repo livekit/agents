@@ -41,7 +41,8 @@ impl From<WsdbError> for StorageError {
                 WsdbCode::Unavailable
                 | WsdbCode::ResourceExhausted
                 | WsdbCode::Retry
-                | WsdbCode::OutcomeUnknown => StorageError::Unavailable(message),
+                | WsdbCode::OutcomeUnknown
+                | WsdbCode::IdleEvicted => StorageError::Unavailable(message),
                 WsdbCode::NotFound => StorageError::NotFound(message),
                 WsdbCode::Unauthenticated => StorageError::Unauthorized(message),
                 WsdbCode::Protocol

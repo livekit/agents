@@ -29,7 +29,8 @@ fn a_malformed_column_is_refused_not_read_as_null() {
 pub(crate) type Served = Arc<Mutex<Vec<pb::ClientMessage>>>;
 
 /// Accepts connections forever; `script` answers one request. Every client frame is kept in
-/// the returned log. An exec of `drop` closes the socket when `drop_once` is set, once.
+/// the returned log. An exec of `drop` closes the socket when `drop_once` is set, once. An
+/// `idle_notice` among the answers goes on request id 0, and the socket closes after it.
 pub(crate) async fn serve(
     script: fn(&pb::ClientMessage) -> Vec<pb::ServerMessage>,
     drop_once: bool,
@@ -54,11 +55,19 @@ pub(crate) async fn serve(
                     {
                         break; // the socket closes with the request unanswered
                     }
+                    let mut evicted = false;
                     for mut resp in script(&msg) {
-                        resp.request_id = msg.request_id;
+                        if resp == idle_notice() {
+                            evicted = true;
+                        } else {
+                            resp.request_id = msg.request_id;
+                        }
                         if ws.send(Message::binary(resp.encode_to_vec())).await.is_err() {
                             break;
                         }
+                    }
+                    if evicted {
+                        break;
                     }
                 }
             });
@@ -69,6 +78,14 @@ pub(crate) async fn serve(
 
 pub(crate) fn reply(m: pb::server_message::Message) -> pb::ServerMessage {
     pb::ServerMessage { request_id: 0, message: Some(m) }
+}
+
+/// The server's notice that it evicted the database while the socket idled.
+pub(crate) fn idle_notice() -> pb::ServerMessage {
+    reply(pb::server_message::Message::Error(pb::Error {
+        code: WsdbCode::IdleEvicted.as_str().into(),
+        message: "evicted while idle".into(),
+    }))
 }
 
 pub(crate) fn hello_ok() -> pb::ServerMessage {
@@ -263,6 +280,40 @@ async fn a_dropped_socket_fails_the_request_in_flight_and_redials() {
         conn.exec(&st("INSERT", vec![])).await,
         Err(WriteError::NotSent(WsdbError::Closed))
     ));
+}
+
+/// A socket the server evicted while it idled is redialed only once a call wants the
+/// connection: two idle connections at a warm cap of one would otherwise evict each other's
+/// database in a loop. Dormant meanwhile, it is no pool's to take back.
+#[tokio::test]
+async fn an_idle_evicted_socket_is_redialed_only_when_a_call_wants_it() {
+    fn evicting(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        match &m.message {
+            Some(pb::client_message::Message::Exec(s)) if s.sql == "idle" => {
+                let mut answer = script(m);
+                answer.push(idle_notice());
+                answer
+            }
+            _ => script(m),
+        }
+    }
+    let (url, log) = serve(evicting, false).await;
+    let conn = dial(&url, "DB_1").await.unwrap();
+    conn.exec(&st("idle", vec![])).await.unwrap();
+    for _ in 0..200 {
+        if !conn.is_idle() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!conn.is_idle(), "an idle-evicted connection is dormant, no pool's to take back");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(hellos(&log), 1, "nothing redials an idle socket");
+    let r = conn.exec(&st("INSERT", vec![])).await.unwrap();
+    assert_eq!(r.rows_affected, 1);
+    assert_eq!(hellos(&log), 2, "the call redialed once");
+    assert!(conn.is_idle());
+    conn.close();
 }
 
 fn hellos(log: &Served) -> usize {

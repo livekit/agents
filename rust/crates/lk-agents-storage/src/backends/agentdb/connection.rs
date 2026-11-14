@@ -23,6 +23,8 @@ use lk_agents_abi::storage::wsdb::WsdbCode;
 // `Query` streams `Columns`, `ColumnBatch`* and `Done`, paced by `Credit`; `Batch` applies its
 // statements atomically, one result per statement, then `Done`. A dropped socket is redialed within
 // a budget; requests issued meanwhile wait, and those in flight fail `Disconnected` (outcome unknown).
+// A socket the server evicted for being idle (`idle_evicted`, on request id 0) is redialed only once
+// a call wants the connection: until then it is dormant, which no pool takes back.
 
 /// A bound value as the wire carries it.
 fn to_wire(v: &SqlValue) -> wire::Value {
@@ -187,7 +189,8 @@ impl WsdbError {
                 WsdbCode::Unavailable
                 | WsdbCode::ResourceExhausted
                 | WsdbCode::Retry
-                | WsdbCode::OutcomeUnknown => false,
+                | WsdbCode::OutcomeUnknown
+                | WsdbCode::IdleEvicted => false,
                 WsdbCode::Protocol
                 | WsdbCode::Unauthenticated
                 | WsdbCode::NotFound
@@ -277,6 +280,8 @@ struct State {
     /// Why the connection gave up for good; later calls fail with it.
     fatal: Option<WsdbError>,
     tip: i64,
+    /// The server evicted the socket for being idle: no socket until a call wants one.
+    dormant: bool,
 }
 
 struct Inner {
@@ -286,6 +291,8 @@ struct Inner {
     state: Mutex<State>,
     /// Whether a socket is live, published by the supervisor; ended once it is gone.
     ready: signal::Cell<bool>,
+    /// A call wants a dormant connection's socket back; the supervisor takes it.
+    wanted: signal::Shared<bool>,
     /// The executor the connection's supervisor, heartbeat and writer run on.
     spawner: Arc<dyn Spawner>,
     /// What its dial bound, heartbeat, redial backoff and read deadline wait on.
@@ -377,7 +384,8 @@ impl Drop for Supervisor {
 }
 
 impl Supervisor {
-    /// Reads the live socket and redials when it dies.
+    /// Reads the live socket and redials when it dies: at once, or, evicted idle, once a call
+    /// wants the connection.
     async fn run(self, mut socket: Socket) {
         let conn = &self.conn;
         loop {
@@ -385,8 +393,14 @@ impl Supervisor {
             if conn.is_closed() {
                 return;
             }
+            let idle = matches!(cause, WsdbError::Server { code: WsdbCode::IdleEvicted, .. });
+            // Dormant before the gate closes, so a call that finds it closed wakes the redial.
+            conn.0.state.lock().dormant = idle;
             self.ready.set(false);
             conn.dropped(&cause);
+            if idle {
+                conn.0.wanted.wait_until(|wanted| std::mem::take(wanted).then_some(())).await;
+            }
             if conn.0.opts.reconnect.disable {
                 return;
             }
@@ -394,6 +408,7 @@ impl Supervisor {
                 Some(next) => socket = next,
                 None => return,
             }
+            conn.0.state.lock().dormant = false;
             self.ready.set(true);
         }
     }
@@ -418,8 +433,10 @@ impl Conn {
                 closed: false,
                 fatal: None,
                 tip: 0,
+                dormant: false,
             }),
             ready: ready_cell,
+            wanted: signal::Shared::new(false),
             spawner,
             clock,
             tasks: Arc::default(),
@@ -578,8 +595,16 @@ impl Conn {
     fn route_response(&self, bytes: &[u8]) -> Result<(), WsdbError> {
         let resp =
             pb::ServerMessage::decode(bytes).map_err(|e| WsdbError::Protocol(e.to_string()))?;
-        if matches!(resp.message, Some(pb::server_message::Message::Pong(_))) {
-            return Ok(());
+        match &resp.message {
+            Some(pb::server_message::Message::Pong(_)) => return Ok(()),
+            // the connection's own notice, answering no request: its socket ends for being idle
+            Some(pb::server_message::Message::Error(e))
+                if resp.request_id == 0
+                    && WsdbCode::from_wire(&e.code) == Some(WsdbCode::IdleEvicted) =>
+            {
+                return Err(WsdbError::server(e.clone()));
+            }
+            _ => {}
         }
         let st = self.0.state.lock();
         if let Some(ch) = st.pending.get(&resp.request_id) {
@@ -647,10 +672,11 @@ impl Conn {
         self.0.state.lock().closed
     }
 
-    /// Open, nothing in flight: a connection another opener can take.
+    /// Open, its socket live or redialing, nothing in flight: a connection another opener can
+    /// take. A dormant one (evicted idle) is not: whoever needs the database dials afresh.
     pub fn is_idle(&self) -> bool {
         let st = self.0.state.lock();
-        !st.closed && st.pending.is_empty()
+        !st.closed && !st.dormant && st.pending.is_empty()
     }
 
     /// Ends the connection; every waiter and every later call fails [`WsdbError::Closed`].
@@ -677,6 +703,9 @@ impl Conn {
     async fn register(&self) -> Result<Request<'_>, WsdbError> {
         // a request issued mid-reconnect is delayed rather than failed; the supervisor gone, it
         // closed the connection first
+        if self.0.state.lock().dormant {
+            self.0.wanted.modify(|wanted| *wanted = true);
+        }
         if self.is_closed() || self.0.ready.wait_for(|ready| *ready).await.is_err() {
             return Err(self.closed_error());
         }
