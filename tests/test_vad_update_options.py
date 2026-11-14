@@ -1,10 +1,10 @@
-import pytest
-pytestmark = pytest.mark.unit
-
 """Tests for VAD update_options behavior, specifically deactivation_threshold recalculation."""
 
 import pytest
+
 from livekit.agents.inference import VAD as InferenceVAD
+
+pytestmark = pytest.mark.unit
 
 
 def test_inference_vad_update_options_recalculates_deactivation_threshold() -> None:
@@ -85,6 +85,3 @@ def test_inference_vad_update_options_activation_below_deactivation() -> None:
     assert vad._opts.activation_threshold == 0.2
     assert vad._opts.deactivation_threshold == pytest.approx(0.05)  # recalculated, not 0.55
     assert vad._opts.deactivation_threshold < vad._opts.activation_threshold
-
-# Silero plugin tests require the ONNX model, so they need the plugin mark
-# They are in a separate test module to avoid loading the model for unit tests
