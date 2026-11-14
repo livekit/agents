@@ -18,6 +18,24 @@ mod side_tables {
         a_pyerr_is_captured_as_its_own_value_and_is_not_retryable();
         generated_wrappers_preserve_the_original_exception();
         foreign_exception_keys_cannot_peek_or_take_a_local_exception();
+        a_write_of_unknown_outcome_raises_storage_uncertain();
+    }
+
+    // Catches: a write whose outcome stayed unknown reaching Python as a plain `StorageError`,
+    // which a caller cannot tell from a refusal that applied nothing.
+    fn a_write_of_unknown_outcome_raises_storage_uncertain() {
+        use _core::py_errors::HostException;
+        use lk_agents_abi::storage::{StorageError, Unacknowledged};
+        Python::attach(|py| {
+            let storage = py.import("livekit.agents.storage").unwrap();
+            let raised = StorageError::Uncertain(Unacknowledged::sent("socket closed")).to_py_err();
+            let uncertain = storage.getattr("StorageUncertain").unwrap();
+            assert!(raised.value(py).is_instance(&uncertain).unwrap());
+            let base = storage.getattr("StorageError").unwrap();
+            assert!(raised.value(py).is_instance(&base).unwrap(), "still a StorageError");
+            let unavailable = storage.getattr("StorageUnavailable").unwrap();
+            assert!(!raised.value(py).is_instance(&unavailable).unwrap(), "never retryable");
+        });
     }
 
     use _core::py_errors::{capture, capture_value, raise_original, resolve_captured};

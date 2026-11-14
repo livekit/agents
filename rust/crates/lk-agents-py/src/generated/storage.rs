@@ -2123,6 +2123,11 @@ inventory::submit! {
 impl crate::py_errors::HostException for ::lk_agents_abi::storage::StorageError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         match self {
+            Self::Uncertain(..) => crate::py_errors::host_exception(
+                "livekit.agents.storage",
+                "StorageUncertain",
+                ::std::string::ToString::to_string(self),
+            ),
             Self::Rejected { running_task_id } => crate::py_errors::host_exception_with(
                 "livekit.agents.storage",
                 "RunRejected",

@@ -33,6 +33,11 @@ class StorageUnavailable(StorageError):
     __module__ = "livekit.agents.storage"
 
 
+class StorageUncertain(StorageError):
+    "A write's outcome stayed unknown at its deadline: it may or may not have committed. Read back before writing it again."
+    __module__ = "livekit.agents.storage"
+
+
 class LeaseLost(StorageError):
     "The run's partition_key lease was taken, released or could not be renewed in time."
     __module__ = "livekit.agents.storage"
@@ -55,6 +60,7 @@ __all__ = [
     "NotSerializable",
     "TooLarge",
     "StorageUnavailable",
+    "StorageUncertain",
     "LeaseLost",
     "RunRejected",
 ]

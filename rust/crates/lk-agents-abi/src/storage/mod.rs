@@ -28,6 +28,7 @@ pub enum StorageError {
     /// A write sent and never answered: it may or may not have committed. Resolved by the
     /// write's identity before anything is reported or retried; never proof of a rollback.
     #[error("write outcome unknown: {0}")]
+    #[host(kind = "livekit.agents.storage.StorageUncertain")]
     Uncertain(Unacknowledged),
     /// The partition refused the run: another holder has it (`reject`, or a waiter whose wait ran
     /// out). The running task, when the journal names it.
@@ -360,6 +361,7 @@ pub struct ThreadTask {
     NotSerializable(base = "StorageError", doc = "A field could not be serialized; the message names it."),
     TooLarge(base = "StorageError", doc = "A value exceeded its size limit; the message names what and the limit."),
     StorageUnavailable(base = "StorageError", doc = "Retryable: the database is unavailable, busy or answered with invalid data."),
+    StorageUncertain(base = "StorageError", doc = "A write's outcome stayed unknown at its deadline: it may or may not have committed. Read back before writing it again."),
     LeaseLost(base = "StorageError", doc = "The run's partition_key lease was taken, released or could not be renewed in time."),
     RunRejected(base = "StorageError", doc = "The partition_key refused the run while another turn runs.",
         fields(message(ty = "str", positional, inherited), running_task_id(ty = "str | None", default = None)),
