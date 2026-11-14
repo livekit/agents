@@ -22,8 +22,17 @@ fn main() {
     let root = env::var("CARGO_MANIFEST_DIR").unwrap();
     let rules = Path::new(&root).join("src/rules");
     let (mut text, mut voice) = (Vec::new(), Vec::new());
-    for domain in fs::read_dir(&rules).unwrap().flatten().filter(|e| e.path().is_dir()) {
+    println!("cargo:rerun-if-changed={}", rules.display());
+    for domain in fs::read_dir(&rules).unwrap().flatten() {
         let dir = domain.path();
+        if !dir.is_dir() {
+            assert!(
+                domain.file_name() == "mod.rs",
+                "{}: a rule lives in a domain directory",
+                dir.display()
+            );
+            continue;
+        }
         println!("cargo:rerun-if-changed={}", dir.display());
         let files = fs::read_dir(&dir).unwrap().flatten().map(|entry| entry.path());
         let files = files.filter(|path| path.extension().is_some_and(|e| e == "rs"));
