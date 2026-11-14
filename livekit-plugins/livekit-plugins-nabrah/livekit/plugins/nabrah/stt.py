@@ -145,11 +145,9 @@ class STT(stt.STT):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         language: str = "ar-SA",
-        end_of_utterance_silence_ms: int = -1,
-        disable_number_normalization: bool = False,
         priority_words: list[str] | None = None,
         priority_words_strength: float = 0.5,
-        max_transcript_inactivity_seconds: float | None = None,
+        end_of_turn_idle_timeout_seconds: float | None = 3.0,
         end_of_turn_confirm_delay_seconds: float | None = 0.4,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -179,11 +177,9 @@ class STT(stt.STT):
 
         self._recognition_model = recognition_model
         self._language = language
-        self._end_of_utterance_silence_ms = end_of_utterance_silence_ms
-        self._disable_number_normalization = disable_number_normalization
         self._priority_words = priority_words or []
         self._priority_words_strength = priority_words_strength
-        self._max_transcript_inactivity_seconds = max_transcript_inactivity_seconds
+        self._end_of_turn_idle_timeout_seconds = end_of_turn_idle_timeout_seconds
         self._end_of_turn_confirm_delay_seconds = end_of_turn_confirm_delay_seconds
         self._session = http_session
         self._label = "nabrah.STT (nabrah-stt-v1)"
@@ -279,8 +275,8 @@ class SpeechStream(stt.SpeechStream):
         return {
             "api_key": self._stt._api_key,
             "recognition_model": self._stt._recognition_model,
-            "end_of_utterance_silence_ms": self._stt._end_of_utterance_silence_ms,
-            "disable_number_normalization": self._stt._disable_number_normalization,
+            "end_of_utterance_silence_ms": -1,
+            "disable_number_normalization": False,
             "priority_words": self._stt._priority_words,
             "priority_words_strength": self._stt._priority_words_strength,
         }
@@ -370,7 +366,7 @@ class SpeechStream(stt.SpeechStream):
             await ws.close()
 
     async def _eot_watchdog(self) -> None:
-        inactivity_timeout = self._stt._max_transcript_inactivity_seconds
+        inactivity_timeout = self._stt._end_of_turn_idle_timeout_seconds
         confirm_delay = self._stt._end_of_turn_confirm_delay_seconds
         while True:
             await asyncio.sleep(_WATCHDOG_POLL_SECONDS)
