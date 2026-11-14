@@ -63,6 +63,37 @@ def get_dtmf_task(ask_for_confirmation: bool) -> beta.workflows.GetDtmfTask:
     )
 
 
+@pytest.mark.parametrize("ask_for_confirmation", [False, True])
+@pytest.mark.parametrize("count", [0, 1, 2, 4])
+async def test_dtmf_tool_rejects_wrong_number_of_digits(
+    ask_for_confirmation: bool, count: int
+) -> None:
+    from livekit.agents.beta.workflows.utils import DtmfEvent
+
+    task = beta.workflows.GetDtmfTask(num_digits=3, ask_for_confirmation=ask_for_confirmation)
+    tool = task.tools[0]
+
+    with pytest.raises(ToolError, match=f"Expect 3 digits, got {count}"):
+        await tool([DtmfEvent.ONE] * count)
+
+    assert not task.done()
+    await tool([DtmfEvent.ZERO, DtmfEvent.ONE, DtmfEvent.TWO])
+    assert task.done()
+
+
+@pytest.mark.parametrize("ask_for_confirmation", [False, True])
+async def test_dtmf_tool_accepts_exact_number_of_digits(ask_for_confirmation: bool) -> None:
+    from livekit.agents.beta.workflows.utils import DtmfEvent
+
+    task = beta.workflows.GetDtmfTask(num_digits=3, ask_for_confirmation=ask_for_confirmation)
+    tool = task.tools[0]
+    with patch.object(task, "complete", wraps=task.complete) as complete:
+        await tool([DtmfEvent.ZERO, DtmfEvent.ONE, DtmfEvent.TWO])
+
+    assert task.done()
+    complete.assert_called_once_with(beta.workflows.GetDtmfResult(user_input="0 1 2"))
+
+
 @pytest.mark.asyncio
 async def test_get_dtmf_sip_event_without_confirmation() -> None:
     with patch("livekit.agents.beta.workflows.dtmf_inputs.get_job_context", get_mock_job_context):
