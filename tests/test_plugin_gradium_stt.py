@@ -4,11 +4,156 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
+from typing import Any
 from unittest.mock import MagicMock, patch
 
+import aiohttp
 import pytest
 
-pytestmark = pytest.mark.plugin("gradium")
+from livekit import rtc
+from livekit.agents import APIConnectOptions, APIStatusError
+from livekit.agents.stt import SpeechEventType
+from livekit.plugins.gradium.stt import DEFAULT_DELAY_IN_FRAMES
+
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
+
+# no retries: the tests assert on the behaviour of the single attempt
+CONN_OPTS = APIConnectOptions(max_retry=0, timeout=5)
+SAMPLE_RATE = 24000
+VAD_HORIZONS = (0.5, 1.0, 2.0, 3.0)
+
+READY = {
+    "type": "ready",
+    "request_id": "req",
+    "model_name": "default",
+    "sample_rate": SAMPLE_RATE,
+    "frame_size": 1920,
+    "delay_in_frames": 3,
+}
+EOS = {"type": "end_of_stream"}
+SILENT = (0.99,) * len(VAD_HORIZONS)
+
+
+def _text(text: str, start_s: float = 0.0) -> dict[str, Any]:
+    return {"type": "text", "text": text, "start_s": start_s}
+
+
+def _vad_step(idx: int, probs: tuple[float, ...]) -> dict[str, Any]:
+    return {
+        "type": "step",
+        "step_idx": idx,
+        "step_duration_s": 0.08,
+        "total_duration_s": idx * 0.08,
+        "vad": [
+            {"horizon_s": h, "inactivity_prob": p}
+            for h, p in zip(VAD_HORIZONS, probs, strict=False)
+        ],
+    }
+
+
+@dataclass
+class _Msg:
+    type: Any
+    data: Any = None
+    extra: Any = None
+
+
+class FakeWebSocket:
+    """Scripted server side.
+
+    `frames` are replayed in order (JSON dicts as TEXT, the string "close" as a CLOSE frame
+    with `close_code`). Once exhausted, receive() blocks until the client sends
+    end_of_stream, then replays `after_eos`, by default the server's EOS and a normal close.
+    """
+
+    def __init__(
+        self,
+        frames: list[Any],
+        *,
+        after_eos: list[Any] | None = None,
+        close_code: int = 1000,
+        fail_send_on: str | None = None,
+    ) -> None:
+        self._frames = list(frames)
+        self._after_eos = [EOS, "close"] if after_eos is None else list(after_eos)
+        self.close_code = close_code
+        self._fail_send_on = fail_send_on
+        self.sent: list[dict[str, Any]] = []
+        self._client_eos = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        msg = json.loads(data)
+        if msg.get("type") == self._fail_send_on:
+            self._client_eos.set()
+            raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+        self.sent.append(msg)
+        if msg.get("type") == "end_of_stream":
+            self._client_eos.set()
+
+    async def ping(self) -> None:
+        pass
+
+    async def receive(self, timeout: float | None = None) -> _Msg:
+        if not self._frames:
+            await self._client_eos.wait()
+            self._frames, self._after_eos = self._after_eos, []
+            if not self._frames:
+                return _Msg(aiohttp.WSMsgType.CLOSED)
+        frame = self._frames.pop(0)
+        if frame == "close":
+            return _Msg(aiohttp.WSMsgType.CLOSE, self.close_code, "")
+        return _Msg(aiohttp.WSMsgType.TEXT, json.dumps(frame))
+
+    async def close(self) -> bool:
+        return True
+
+
+class FakeSession:
+    def __init__(self, ws: FakeWebSocket) -> None:
+        self.ws = ws
+        self.connects: list[tuple[str, dict[str, Any]]] = []
+
+    async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+        self.connects.append((url, kwargs))
+        return self.ws
+
+
+def _make_stt(
+    frames: list[Any],
+    *,
+    after_eos: list[Any] | None = None,
+    fail_send_on: str | None = None,
+    **kwargs: Any,
+):
+    from livekit.plugins.gradium import STT
+
+    ws = FakeWebSocket(frames, after_eos=after_eos, fail_send_on=fail_send_on)
+    session = FakeSession(ws)
+    stt = STT(api_key="test-key", http_session=session, **kwargs)  # type: ignore[arg-type]
+    return stt, session, ws
+
+
+def _audio_frame(duration_s: float = 0.08) -> rtc.AudioFrame:
+    return rtc.AudioFrame.create(
+        sample_rate=SAMPLE_RATE,
+        num_channels=1,
+        samples_per_channel=int(SAMPLE_RATE * duration_s),
+    )
+
+
+async def _collect_until(stream, predicate, timeout: float = 3.0) -> list[Any]:
+    """Drain events until `predicate` matches or the stream ends."""
+    events: list[Any] = []
+
+    async def _drain() -> None:
+        async for ev in stream:
+            events.append(ev)
+            if predicate(ev):
+                return
+
+    await asyncio.wait_for(_drain(), timeout)
+    return events
 
 
 @pytest.mark.parametrize("stop_s", [0.4, 0.0, None])
@@ -30,10 +175,10 @@ async def test_endpoint_uses_end_text_timing(monkeypatch, stop_s):
     send({"type": "text", "text": "hello", "start_s": 0.1})
     if stop_s is not None:
         send({"type": "end_text", "stop_s": stop_s})
-    for _ in range(7):
+    for _ in range(DEFAULT_DELAY_IN_FRAMES + 1):
         send({"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]})
     send({"type": "text", "text": "again", "start_s": 1.0})
-    for _ in range(7):
+    for _ in range(DEFAULT_DELAY_IN_FRAMES + 1):
         send({"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]})
     ws = SimpleNamespace(receive=messages.get, send_str=AsyncMock(), close=AsyncMock())
     monkeypatch.setattr(gradium_stt.SpeechStream, "_connect_ws", AsyncMock(return_value=ws))
@@ -84,6 +229,9 @@ async def test_synthetic_vad_silence_does_not_shift_later_turns(monkeypatch, vad
     stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
     stream.start_time_offset = 7.0
 
+    # vad_flush pads the model delay (80 ms frames) of silence after each turn
+    padding = DEFAULT_DELAY_IN_FRAMES * 0.08
+
     def sent_duration(ws):
         return sum(
             len(base64.b64decode(data["audio"])) / (24000 * 2)
@@ -100,10 +248,10 @@ async def test_synthetic_vad_silence_does_not_shift_later_turns(monkeypatch, vad
         step = {"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]}
         ws.respond(step)
         if vad_flush:
-            await wait_until(lambda: sent_duration(ws) >= provider_start + 1.48 - 1e-6)
+            await wait_until(lambda: sent_duration(ws) >= provider_start + 1.0 + padding - 1e-6)
         # The boundary precedes the padding, even when its reply arrives after it.
         ws.respond({"type": "end_text", "stop_s": provider_start + 0.4})
-        for _ in range(6):
+        for _ in range(DEFAULT_DELAY_IN_FRAMES):
             ws.respond(step)
         async for event in stream:
             if event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
@@ -121,7 +269,7 @@ async def test_synthetic_vad_silence_does_not_shift_later_turns(monkeypatch, vad
                 await check_turn(
                     index,
                     captured_at=1000.0 + index,
-                    provider_start=index * (1.48 if vad_flush else 1.0),
+                    provider_start=index * (1.0 + padding if vad_flush else 1.0),
                     expected_end=7.4 + index,
                 )
             stream.update_options(buffer_size_seconds=0.1)
@@ -395,8 +543,8 @@ async def test_vad_start_of_speech_without_text_still_ends_the_turn():
     collector = _EventCollector(stream)
     try:
         session.ws.incoming.put_nowait(_step(0.2))
-        # the first positive step starts the countdown, delay_in_tokens (6) more end the turn
-        for _ in range(7):
+        # the first positive step starts the countdown, delay_in_frames more end the turn
+        for _ in range(DEFAULT_DELAY_IN_FRAMES + 1):
             session.ws.incoming.put_nowait(_step(0.95))
         session.ws.incoming.put_nowait(_step(0.2))
 
@@ -457,8 +605,8 @@ async def test_vad_start_of_speech_with_vad_bucket_zero():
             return step
 
         session.ws.incoming.put_nowait(bucket_zero_step(0.2))
-        # the first positive step starts the countdown, delay_in_tokens (6) more end the turn
-        for _ in range(7):
+        # the first positive step starts the countdown, delay_in_frames more end the turn
+        for _ in range(DEFAULT_DELAY_IN_FRAMES + 1):
             session.ws.incoming.put_nowait(bucket_zero_step(0.95))
 
         events = await collector.wait_for(3)
@@ -486,3 +634,124 @@ async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
     finally:
         await stream.aclose()
         await provider.aclose()
+
+
+async def test_final_transcript_uses_delay_in_frames_from_ready():
+    """A positive VAD finalizes after the model delay the server announced (3), not the fallback."""
+    frames = [READY, _text("hello", 0.1)] + [_vad_step(i, SILENT) for i in range(4)]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    types = [ev.type for ev in events]
+    assert types[0] == SpeechEventType.START_OF_SPEECH
+    assert types[-1] == SpeechEventType.FINAL_TRANSCRIPT
+    assert events[-1].alternatives[0].text == "hello"
+
+
+async def test_end_input_sends_eos_and_finalizes_pending_text():
+    """Closing the input sends end_of_stream; the server's EOS flushes the last words."""
+    stt, _, ws = _make_stt([READY, _text("hello", 0.1), _text("world", 0.4)])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+
+    assert ws.sent[0]["type"] == "setup"
+    assert ws.sent[-1] == {"type": "end_of_stream"}
+    finals = [ev for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [ev.alternatives[0].text for ev in finals] == ["hello world"]
+    assert events[-1].type == SpeechEventType.END_OF_SPEECH
+
+
+@pytest.mark.parametrize(("code", "retryable"), [(1011, True), (1003, False)])
+async def test_error_frame_raises_api_error(code: int, retryable: bool):
+    """The server's message is surfaced; a client error (1003) is not retried."""
+    error = {"type": "error", "message": "Unsupported language 'xx'.", "code": code}
+    stt, _, _ = _make_stt([READY, error, "close"])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIStatusError, match="Unsupported language") as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.status_code == code
+        assert excinfo.value.retryable is retryable
+    finally:
+        await stream.aclose()
+
+
+async def test_non_object_frame_is_skipped():
+    """Valid JSON that is not an object is logged and skipped, not fatal."""
+    stt, _, _ = _make_stt([READY, ["unexpected"], _text("hello", 0.1)])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+
+    finals = [ev for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [ev.alternatives[0].text for ev in finals] == ["hello"]
+
+
+async def test_pending_text_is_finalized_when_the_server_closes_instead_of_replying():
+    """A close in place of the server's end_of_stream must not lose the buffered words."""
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1), _text("world", 0.4)], after_eos=["close"])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+
+    finals = [ev for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [ev.alternatives[0].text for ev in finals] == ["hello world"]
+
+
+async def test_server_ending_the_session_mid_input_finalizes_then_reconnects():
+    """The server's end_of_stream while audio still flows: keep the words, and raise so
+    the base class reconnects rather than the next audio write failing raw."""
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1), EOS, "close"])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIStatusError, match="while input was still open") as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.retryable is True
+    finally:
+        await stream.aclose()
+
+
+async def test_final_end_of_stream_send_on_a_closed_socket_is_not_an_error():
+    stt, _, _ = _make_stt(
+        [READY, _text("hello", 0.1)], after_eos=["close"], fail_send_on="end_of_stream"
+    )
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)  # no exception
+    finally:
+        await stream.aclose()
+    finals = [
+        ev.alternatives[0].text for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert finals == ["hello"]
