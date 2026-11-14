@@ -14,14 +14,15 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import textwrap
 import time
 from collections.abc import Generator, Sequence
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, cast, overload
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_serializer
 from typing_extensions import TypedDict
 
 from livekit import rtc
@@ -404,6 +405,25 @@ def _fingerprint_default(value: Any) -> Any:
     return str(value)
 
 
+def _json_safe_extra(value: Any) -> Any:
+    """Recursively encode ``bytes`` inside ``extra`` as base64.
+
+    ``extra`` is ``dict[str, Any]`` and may hold provider-specific ``bytes``
+    (e.g. ``extra["google"]`` for a thought signature). Pydantic's JSON mode
+    would either crash on non-UTF-8 bytes or silently decode UTF-8 bytes into
+    ``str``, so encode them explicitly before JSON serialization.
+    """
+    if isinstance(value, bytes):
+        return base64.b64encode(value).decode("ascii")
+    if isinstance(value, dict):
+        return {k: _json_safe_extra(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe_extra(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_safe_extra(v) for v in value]
+    return value
+
+
 class ChatMessage(_ChatItemBase):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["message"] = "message"
@@ -415,6 +435,16 @@ class ChatMessage(_ChatItemBase):
     metrics: MetricsReport = Field(default_factory=lambda: MetricsReport())
     created_at: float = Field(default_factory=time.time)
     hash: bytes | None = Field(default=None, deprecated="hash is deprecated")
+
+    @field_serializer("extra", when_used="json")
+    def _serialize_extra(self, extra: dict[str, Any]) -> dict[str, Any]:
+        return cast(dict[str, Any], _json_safe_extra(extra))
+
+    @field_serializer("hash", when_used="json")
+    def _serialize_hash(self, hash_value: bytes | None) -> str | None:
+        if hash_value is None:
+            return None
+        return base64.b64encode(hash_value).decode("ascii")
 
     @property
     def text_content(self) -> str | None:
@@ -467,6 +497,10 @@ class FunctionCall(_ChatItemBase):
     """Optional group ID for parallel function calls. When multiple function calls
     should be grouped together (e.g., parallel tool calls from a single API response),
     set this to a shared value. If not set, falls back to using id for grouping."""
+
+    @field_serializer("extra", when_used="json")
+    def _serialize_extra(self, extra: dict[str, Any]) -> dict[str, Any]:
+        return cast(dict[str, Any], _json_safe_extra(extra))
 
     def _essential_fields(self) -> tuple[Any, ...]:
         return (self.name, self.call_id, self.arguments)
