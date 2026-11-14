@@ -1,5 +1,11 @@
 [tool.uv]
-constraint-dependencies = ['onnxruntime<1.24; python_version < "3.11"']
+constraint-dependencies = [
+    'onnxruntime<1.24; python_version < "3.11"',
+    # onnxruntime stopped shipping macOS x86_64 wheels after 1.23.2;
+    # unconstrained resolution picks an ARM-only build that can't install on
+    # Intel Macs.
+    'onnxruntime<1.24; sys_platform == "darwin" and platform_machine == "x86_64"',
+]
 default-groups = ["dev", "typing"]
 # Universal resolution only checks that a wheel exists for the Python version.
 # A release that publishes wheels for one platform and no sdist (bithuman 2.12.2
