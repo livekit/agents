@@ -485,7 +485,7 @@ async def drive_thru_agent(ctx: JobContext) -> None:
                 ],
             },
         ),
-        llm=inference.LLM("google/gemma-4-31b-it"),
+        llm=inference.LLM(os.getenv("DRIVE_THRU_LLM_MODEL", "google/gemma-4-31b-it")),
         tts=inference.TTS(
             "inworld/inworld-tts-2",
             voice="Sarah",
