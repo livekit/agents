@@ -59,14 +59,15 @@ def _is_xml_only(text: str) -> bool:
     return len(stripped) == 0
 
 
-def _clean_to_orig(clean_pos: int, tag_spans: list[tuple[int, int]]) -> int:
+def _clean_to_orig(clean_pos: int, tag_spans: list[tuple[int, int, bool]]) -> int:
     """Map a position in tag-stripped text to the corresponding original position.
 
-    Tags that sit right at the boundary are left for the next sentence.
+    Tags that sit right at the boundary are left for the next sentence, except a
+    closing tag, which ends the span the sentence is in.
     """
     orig = clean_pos
-    for tag_start, tag_end in tag_spans:
-        if tag_start < orig:
+    for tag_start, tag_end, is_closing in tag_spans:
+        if tag_start < orig or (tag_start == orig and is_closing):
             orig += tag_end - tag_start
         else:
             break
@@ -90,7 +91,7 @@ def _xml_wrap_tokenizer(
             return [(text, 0, len(text))] if text.strip() else []
 
     def _wrapped_impl(text: str) -> list[str] | list[tuple[str, int, int]]:
-        tag_spans = [(m.start(), m.end()) for m in _XML_TAG_RE.finditer(text)]
+        tag_spans = [(m.start(), m.end(), m.group(1) == "/") for m in _XML_TAG_RE.finditer(text)]
         if not tag_spans:
             return tokenize_fnc(text)
 
