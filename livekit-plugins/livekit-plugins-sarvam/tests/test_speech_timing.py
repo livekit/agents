@@ -36,6 +36,8 @@ def _make_stream_under_test(
     instance._eos_fallback_timeout = eos_fallback_timeout  # type: ignore[attr-defined]
     instance._final_received_for_utterance = False  # type: ignore[attr-defined]
     instance._eos_emitted_for_utterance = False  # type: ignore[attr-defined]
+    instance._utterance_settled = asyncio.Event()  # type: ignore[attr-defined]
+    instance._utterance_settled.set()
     return instance, captured
 
 
