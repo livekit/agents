@@ -489,10 +489,8 @@ mod a_clear_the_output_never_reports {
 mod a_body_detaching_as_the_session_closes {
     //! A body whose call a host update already ended, detaching as the session closes: it is over
     //! at its answer, since nothing (no call of the driver's, no runtime task) is left to end it.
-    //! The survey reached it through an output failure that only steered the run there.
-    use lk_agents_fuzz::drive::{Case, Policy, Setup, run};
+    use lk_agents_fuzz::drive::{Case, Setup, run};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs};
-    use lk_agents_fuzz::search;
 
     fn failed(outcome: &lk_agents_fuzz::drive::Outcome) -> Vec<String> {
         outcome.failures.iter().map(|f| format!("{}: {}", f.contract, f.detail)).collect()
@@ -530,15 +528,5 @@ mod a_body_detaching_as_the_session_closes {
         let outcome = run(case);
         assert!(outcome.ok(), "{:?}", failed(&outcome));
         assert!(!outcome.stopped_early, "{:?}", outcome.ending);
-    }
-
-    // The survey finding itself (seed 209 TaskBridge, nothing_left_live).
-    #[test]
-    fn survey_seed_209() {
-        let seed = 209;
-        let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
-        let dials = search::Dials::of(seed);
-        let outcome = search::explore_with(setup, seed, 3000, dials, Policy::TaskBridge);
-        assert!(outcome.ok(), "{:?}", failed(&outcome));
     }
 }

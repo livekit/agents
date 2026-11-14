@@ -81,8 +81,10 @@ Open `console_reply_plays_out::a_console_say_finishes_on_the_cli_receipt` in
    expected `Outcome::ending`, so finite exploration exhaustion cannot look like completion.
 
 Add a regression next to the tests of its subject in `tests/regressions/<domain>/`; a new file
-is declared in its domain's `mod.rs`. Prefer a small explicit case over reproducing an entire
-generated conversation.
+is declared in its domain's `mod.rs`. A campaign finding becomes a small handwritten case:
+a regression never replays a generated seed (`search::explore`) or pins a schedule number,
+since any change to the generator, fakes or scheduler makes the same number a different run.
+Prove the case fails with the bug put back before keeping it.
 
 ## Add a contract
 
