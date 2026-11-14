@@ -346,6 +346,52 @@ async def test_emoji_filter():
     assert await _outputs(filter_emoji, EMOJI_INPUT) == {EMOJI_EXPECTED_OUTPUT}
 
 
+# emoji that sit outside the Unicode blocks the filter strips wholesale
+EMOJI_OUTSIDE_BLOCKS = [
+    "⌚",  # watch
+    "⌛",  # hourglass done
+    "⏳",  # hourglass not done
+    "⏰",  # alarm clock
+    "⏱️",  # stopwatch
+    "⌨️",  # keyboard
+    "⏩",  # fast-forward button
+    "⏸️",  # pause button
+    "⏏️",  # eject button
+    "▶️",  # play button
+    "◀️",  # reverse button
+    "◽",  # white medium-small square
+    "▪️",  # black small square
+    "↔️",  # left-right arrow
+    "↩️",  # right arrow curving left
+    "⤴️",  # right arrow curving up
+    "‼️",  # double exclamation mark
+    "⁉️",  # exclamation question mark
+    "ℹ️",  # information
+    "Ⓜ️",  # circled M
+    "〰️",  # wavy dash
+    "〽️",  # part alternation mark
+    "㊗️",  # Japanese "congratulations" button
+    "㊙️",  # Japanese "secret" button
+    "🙂\u200d↔️",  # head shaking horizontally
+    "🏴\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f",  # flag: England
+    "🏴\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f",  # flag: Scotland
+    "🏴\U000e0067\U000e0062\U000e0077\U000e006c\U000e0073\U000e007f",  # flag: Wales
+]
+
+
+@pytest.mark.parametrize("emoji", EMOJI_OUTSIDE_BLOCKS)
+async def test_emoji_filter_outside_blocks(emoji: str):
+    text = f"{emoji} Your appointment is at 3 PM."
+    assert await _outputs(filter_emoji, text) == {" Your appointment is at 3 PM."}
+
+
+async def test_emoji_filter_keeps_text_symbols():
+    # text-style symbols are spoken content, not emoji; only the emoji selector goes
+    text = "Acme© Widget® and Brand™ ship 2 → 3 units ← here, 5 × 4 = 20."
+    assert await _outputs(filter_emoji, text) == {text}
+    assert await _outputs(filter_emoji, "Acme©\ufe0f Brand™\ufe0f") == {"Acme© Brand™"}
+
+
 # --- text_transforms.replace ---
 
 
