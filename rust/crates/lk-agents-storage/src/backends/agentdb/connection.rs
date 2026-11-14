@@ -277,6 +277,9 @@ struct State {
     /// Each pending request's frame, sent again on the next socket after an idle eviction, whose
     /// notice says none of them ran.
     frames: HashMap<u32, Vec<u8>>,
+    /// The requests an idle eviction left in flight, or that were written before the redial: what
+    /// [`Conn::resend`] sends, in order.
+    held: Vec<u32>,
     /// The live socket's writer; `None` between a drop and the redial.
     tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
     closed: bool,
@@ -438,6 +441,7 @@ impl Conn {
             state: Mutex::new(State {
                 pending: HashMap::new(),
                 frames: HashMap::new(),
+                held: Vec::new(),
                 tx: None,
                 closed: false,
                 fatal: None,
@@ -627,9 +631,14 @@ impl Conn {
     /// response can still be delivered.
     fn dropped(&self, cause: &WsdbError, idle: bool) {
         let mut st = self.0.state.lock();
-        if !idle {
+        if idle {
+            let mut held: Vec<u32> = st.frames.keys().copied().collect();
+            held.sort_unstable();
+            st.held = held;
+        } else {
             st.pending.clear();
             st.frames.clear();
+            st.held.clear();
         }
         st.tx = None;
         drop(st);
@@ -641,12 +650,13 @@ impl Conn {
     /// and runs nothing it reads after, so each is answered once, on the new socket. No
     /// transaction can be open (one pins the database), so none autocommits.
     fn resend(&self) {
-        let st = self.0.state.lock();
+        let mut st = self.0.state.lock();
+        let held = std::mem::take(&mut st.held);
         let Some(tx) = &st.tx else { return };
-        let mut held: Vec<_> =
-            st.frames.iter().filter(|(id, _)| st.pending.contains_key(id)).collect();
-        held.sort_by_key(|(id, _)| **id);
-        for (_, bytes) in held {
+        for id in held {
+            let Some(bytes) = st.frames.get(&id).filter(|_| st.pending.contains_key(&id)) else {
+                continue;
+            };
             if tx.send(bytes.clone()).is_err() {
                 return; // the writer stopped: the read loop sees the drop, and they fail as lost
             }
@@ -775,6 +785,11 @@ impl Conn {
         }
         match &st.tx {
             Some(tx) => tx.send(bytes).map_err(|_| WsdbError::Disconnected),
+            // the socket an idle eviction ended ran nothing: the request goes out with the resend
+            None if request && st.dormant && st.pending.contains_key(&request_id) => {
+                st.held.push(request_id);
+                Ok(())
+            }
             None => Err(WsdbError::Disconnected),
         }
     }
