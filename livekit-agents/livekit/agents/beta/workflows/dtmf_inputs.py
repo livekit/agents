@@ -60,6 +60,11 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         self._curr_dtmf_inputs: list[DtmfEvent] = []
         self._dtmf_reply_running: bool = False
 
+        def complete_inputs(inputs: list[DtmfEvent]) -> None:
+            if len(inputs) != num_digits:
+                raise ToolError(f"Expect {num_digits} digits, got {len(inputs)}")
+            self.complete(GetDtmfResult.from_dtmf_inputs(inputs))
+
         @function_tool
         async def confirm_inputs(inputs: list[DtmfEvent]) -> None:
             """Finalize the collected digit inputs after explicit user confirmation.
@@ -68,19 +73,20 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
             user confirms they are correct, call this tool with the inputs.
 
             Do not use this tool to capture the initial digits."""
-            self.complete(GetDtmfResult.from_dtmf_inputs(inputs))
+            complete_inputs(inputs)
 
         @function_tool
         async def record_inputs(inputs: list[DtmfEvent]) -> None:
             """Record the collected digit inputs without additional confirmation.
 
             Call this tool as soon as a valid sequence of digits has been provided by the user (via DTMF or spoken)."""
-            self.complete(GetDtmfResult.from_dtmf_inputs(inputs))
+            complete_inputs(inputs)
 
         instructions = (
             "You are a single step in a broader system, responsible solely for gathering digits input from the user. "
             "You will either receive a sequence of digits through dtmf events tagged by <dtmf_inputs>, or "
             "user will directly say the digits to you. You should be able to handle both cases. "
+            f"Collect exactly {num_digits} digits. "
         )
 
         if ask_for_confirmation:
