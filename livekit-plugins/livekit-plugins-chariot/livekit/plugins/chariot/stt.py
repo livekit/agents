@@ -287,6 +287,11 @@ class STT(stt.STT):
         self._streams.add(stream)
         return stream
 
+    async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
+
 
 class SpeechStream(stt.SpeechStream):
     """Streams audio over `WSS /v1/asr/ws` and receives interim and final transcripts."""
@@ -308,6 +313,7 @@ class SpeechStream(stt.SpeechStream):
         self._partial_words: list[TimedString] = []
         self._unreported_audio = 0.0
         self._pending_commits = 0  # commits the server has not answered yet
+        self._committed_until = 0.0  # session audio clock at the end of the last commit
 
     def update_options(
         self,
@@ -442,6 +448,7 @@ class SpeechStream(stt.SpeechStream):
         self._partial_text = ""
         self._partial_words = []
         self._pending_commits = 0
+        self._committed_until = 0.0
 
     async def _connect_ws(self) -> _WebSocket:
         params: dict[str, Any] = {
@@ -567,12 +574,19 @@ class SpeechStream(stt.SpeechStream):
             self._partial_words = []
             text = event.get("text", "").strip()
             words = _timed_words(event.get("words"), offset=self.start_time_offset)
-            start = float(event.get("start") or 0.0)
-            end = float(event.get("end") or 0.0)
+            if event_type == "transcript.committed":
+                start = float(event.get("start") or 0.0)
+                end = float(event.get("end") or 0.0)
+            else:
+                # the closing transcript carries no bounds: it covers the audio after the
+                # last commit, up to the end of the session's audio
+                start = self._committed_until
+                end = max(start, float(event.get("audio_seconds") or 0.0))
             if text:
                 self._start_speech()
             if event_type == "transcript.committed":
                 self._pending_commits = max(0, self._pending_commits - 1)
+                self._committed_until = max(self._committed_until, end)
             if event_type == "transcript.committed" or text:
                 self._emit_final(text, words, start, end)
             if not text or self._opts.server_vad is not None or event_type == "transcript.done":

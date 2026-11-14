@@ -45,6 +45,7 @@ class FakeChariot:
     received: list[Any] = field(default_factory=list)
     flushed: list[str] = field(default_factory=list)  # each generated segment's text
     commits: int = 0
+    asr_ended: int = 0  # ASR connections that have ended, either way
     uploads: list[dict[str, Any]] = field(default_factory=list)
 
     async def _accept(self, request: web.Request) -> web.WebSocketResponse | None:
@@ -145,30 +146,40 @@ class FakeChariot:
             delay, self.start_delay = self.start_delay, 0.0
             await asyncio.sleep(delay)
         await ws.send_json({"type": "session.started", "session_id": "s"})
+        bytes_per_second = int(request.query["audio_format"].removeprefix("pcm_")) * 2
         heard = 0  # audio bytes since the last commit
-        async for msg in ws:
-            if msg.type == aiohttp.WSMsgType.BINARY:
-                self.received.append(len(msg.data))
-                if heard == 0:
-                    if request.query.get("commit_strategy") == "vad":
-                        await ws.send_json({"type": "input_audio_buffer.speech_started"})
-                    await ws.send_json({"type": "transcript.delta", "text": "namaste"})
-                heard += len(msg.data)
-                continue
-            event = json.loads(msg.data)
-            self.received.append(event)
-            if event["type"] == "input.commit":
-                self.commits += 1
-                text = f"segment {self.commits}"
-                words = [{"text": text, "start": 0.1, "end": 0.5}]
-                await ws.send_json(
-                    {"type": "transcript.committed", "text": text, "start": 0.0, "end": 0.6}
-                    | {"words": words}
-                )
-                heard = 0
-            elif event["type"] == "input.done":
-                await ws.send_json({"type": "transcript.done", "text": "the tail" if heard else ""})
-                await ws.close()
+        committed = 0.0  # session audio clock at the last commit
+        try:
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.BINARY:
+                    self.received.append(len(msg.data))
+                    if heard == 0:
+                        if request.query.get("commit_strategy") == "vad":
+                            await ws.send_json({"type": "input_audio_buffer.speech_started"})
+                        await ws.send_json({"type": "transcript.delta", "text": "namaste"})
+                    heard += len(msg.data)
+                    continue
+                event = json.loads(msg.data)
+                self.received.append(event)
+                if event["type"] == "input.commit":
+                    self.commits += 1
+                    text = f"segment {self.commits}"
+                    end = committed + heard / bytes_per_second
+                    words = [{"text": text, "start": committed + 0.05, "end": end - 0.05}]
+                    await ws.send_json(
+                        {"type": "transcript.committed", "text": text, "start": committed}
+                        | {"end": end, "words": words}
+                    )
+                    committed, heard = end, 0
+                elif event["type"] == "input.done":
+                    audio_seconds = committed + heard / bytes_per_second
+                    await ws.send_json(
+                        {"type": "transcript.done", "text": "the tail" if heard else ""}
+                        | {"audio_seconds": audio_seconds}
+                    )
+                    await ws.close()
+        finally:
+            self.asr_ended += 1
         return ws
 
     async def asr_http(self, request: web.Request) -> web.Response:
@@ -218,7 +229,11 @@ async def tts_server(fake: FakeChariot, **kwargs: Any) -> AsyncIterator[chariot.
 @contextlib.asynccontextmanager
 async def stt_server(fake: FakeChariot, **kwargs: Any) -> AsyncIterator[chariot.STT]:
     async with serve(fake) as (url, session):
-        yield chariot.STT(api_key="key", base_url=url, http_session=session, **kwargs)
+        stt = chariot.STT(api_key="key", base_url=url, http_session=session, **kwargs)
+        try:
+            yield stt
+        finally:
+            await stt.aclose()
 
 
 async def _speak_frames(tts: chariot.TTS, text: str) -> list[rtc.AudioFrame]:
@@ -440,6 +455,38 @@ async def test_stt_server_vad_lets_the_server_split_utterances() -> None:
         "true",
     )
     assert "language" not in query  # detected
+
+
+async def test_stt_finals_carry_their_place_in_the_audio() -> None:
+    fake = FakeChariot()
+    async with stt_server(fake) as stt:
+        stream = stt.stream(conn_options=NO_RETRY)
+        stream.start_time_offset = 2.0
+        for frame in _frames(300):
+            stream.push_frame(frame)
+        stream.flush()
+        for frame in _frames(200):
+            stream.push_frame(frame)
+        stream.end_input()
+        events = [ev async for ev in stream]
+    finals = [ev.alternatives[0] for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [alt.text for alt in finals] == ["segment 1", "the tail"]
+    # the closing transcript has no bounds of its own: it starts where the last commit ended
+    offset = stream.start_time_offset
+    assert offset > 1  # the offset is applied once, on the caller's timeline
+    times = [t - offset for alt in finals for t in (alt.start_time, alt.end_time)]
+    assert times == pytest.approx([0.0, 0.3, 0.3, 0.5], abs=1e-3)
+
+
+async def test_stt_aclose_closes_its_open_streams() -> None:
+    fake = FakeChariot()
+    async with stt_server(fake) as stt:
+        stream = stt.stream(conn_options=NO_RETRY)
+        for frame in _frames(100):
+            stream.push_frame(frame)
+        await wait_until(lambda: bool(fake.received))
+        await stt.aclose()
+        await wait_until(lambda: fake.asr_ended == 1)
 
 
 async def test_stt_slow_session_start_is_retried() -> None:
