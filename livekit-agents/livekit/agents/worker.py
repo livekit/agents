@@ -1388,6 +1388,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         return resp
 
+    async def _update_token(self, token: str) -> None:
+        """Replaces the worker token (token mode): the next connection registers with it,
+        and jobs read it from LIVEKIT_TOKEN."""
+        self._token = token
+        # read here by this process and thread jobs; a job process gets it over IPC, from
+        # launch_job when its job starts and below when it already runs one
+        os.environ["LIVEKIT_TOKEN"] = token
+        if self._closed:  # not running (the dev channel can connect first): no job processes
+            return
+        for proc in self._proc_pool.processes:
+            if isinstance(proc, ipc.job_proc_executor.ProcJobExecutor) and proc.running_job:
+                with contextlib.suppress(utils.aio.duplex_unix.DuplexClosed):
+                    await proc.update_worker_token(token)
+
     async def _reload_jobs_token_mode(self, jobs: list[RunningJobInfo]) -> None:
         # the server creates tokens only for jobs it knows run on this worker: tell it, in
         # MigrateJobRequest.jobs, on the connection the token requests use

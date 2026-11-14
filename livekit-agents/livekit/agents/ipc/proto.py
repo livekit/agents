@@ -303,6 +303,21 @@ class CreateJobTokenResponse:
         self.error = channel.read_string(b)
 
 
+@dataclass
+class UpdateWorkerToken:
+    """sent by the main process to the subprocess in token mode: the worker token that
+    replaces LIVEKIT_TOKEN in the subprocess environment"""
+
+    MSG_ID: ClassVar[int] = 15
+    token: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.token)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.token = channel.read_string(b)
+
+
 IPC_MESSAGES = {
     InitializeRequest.MSG_ID: InitializeRequest,
     InitializeResponse.MSG_ID: InitializeResponse,
@@ -319,4 +334,5 @@ IPC_MESSAGES = {
     JoinTiming.MSG_ID: JoinTiming,
     CreateJobTokenRequest.MSG_ID: CreateJobTokenRequest,
     CreateJobTokenResponse.MSG_ID: CreateJobTokenResponse,
+    UpdateWorkerToken.MSG_ID: UpdateWorkerToken,
 }

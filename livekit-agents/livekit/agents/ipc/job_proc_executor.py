@@ -10,6 +10,7 @@ from typing import Any
 
 from livekit.protocol import agent
 
+from .._token_mode import token_mode_token
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..telemetry import metrics
@@ -202,12 +203,20 @@ class ProcJobExecutor(SupervisedProc):
         start_req = proto.StartJobRequest()
         start_req.running_job = info
         try:
+            if (token := token_mode_token()) is not None:
+                # the process may hold an older worker token in its environment, from when
+                # it started
+                await channel.asend_message(self._pch, proto.UpdateWorkerToken(token=token))
             await channel.asend_message(self._pch, start_req)
         except Exception:
             self._running_job = None
             self._job_status = None
             metrics.job_ended()
             raise
+
+    async def update_worker_token(self, token: str) -> None:
+        """sends a refreshed worker token (token mode) to the process running a job"""
+        await channel.asend_message(self._pch, proto.UpdateWorkerToken(token=token))
 
     def logging_extra(self) -> dict[str, Any]:
         extra = super().logging_extra()

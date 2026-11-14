@@ -5,6 +5,7 @@ import ctypes
 import io
 import logging
 import multiprocessing as mp
+import os
 import socket
 import threading
 import time
@@ -13,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from typing import ClassVar
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import psutil
 import pytest
@@ -687,6 +688,36 @@ async def test_start_job_error_reports_failure_and_exits():
 
     await asyncio.wait_for(job_proc.entrypoint(cch), timeout=5.0)
     assert job_proc.failed
+
+
+async def test_update_worker_token_replaces_livekit_token_in_the_job_process():
+    """A refreshed worker token from the worker replaces LIVEKIT_TOKEN in the job process,
+    where token_mode_token() reads it for inference and telemetry."""
+    from livekit.agents._token_mode import token_mode_token
+    from livekit.agents.ipc import job_proc_lazy_main, proto
+
+    class _Client:
+        async def send(self, msg: object) -> None:
+            pass
+
+    job_proc = job_proc_lazy_main._JobProc(
+        _initialize_proc,
+        _job_entrypoint,
+        None,
+        session_end_timeout=300.0,
+        executor_type=job.JobExecutorType.THREAD,
+    )
+    job_proc._client = _Client()  # type: ignore[assignment]
+    job_proc._inf_client = job_proc_lazy_main._InfClient(job_proc._client)
+    job_proc._job_token_client = job_proc_lazy_main._JobTokenClient(job_proc._client)
+
+    cch = utils.aio.Chan[ipc.channel.Message]()
+    cch.send_nowait(proto.UpdateWorkerToken(token="refreshed-worker-token"))
+    cch.send_nowait(proto.ShutdownRequest())
+    env = {"LIVEKIT_API_KEY": "", "LIVEKIT_API_SECRET": "", "LIVEKIT_TOKEN": "first-worker-token"}
+    with patch.dict(os.environ, env):
+        await asyncio.wait_for(job_proc.entrypoint(cch), timeout=5.0)
+        assert token_mode_token() == "refreshed-worker-token"
 
 
 def _create_thread_proc(

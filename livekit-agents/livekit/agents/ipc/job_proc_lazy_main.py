@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import contextvars
 import json
+import os
 import socket
 import time
 from collections.abc import Awaitable, Callable
@@ -53,6 +54,7 @@ from .proto import (
     ShutdownRequestAck,
     ShuttingDown,
     StartJobRequest,
+    UpdateWorkerToken,
 )
 
 if TYPE_CHECKING:
@@ -355,6 +357,10 @@ class _JobProc:
 
                 if isinstance(msg, CreateJobTokenResponse):
                     self._job_token_client._on_response(msg)
+
+                if isinstance(msg, UpdateWorkerToken):
+                    # read by token_mode_token(), for inference and telemetry
+                    os.environ["LIVEKIT_TOKEN"] = msg.token
 
                 if isinstance(msg, DumpStackTraceRequest):
                     _dump_stack_traces_impl()

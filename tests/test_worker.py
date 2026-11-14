@@ -862,3 +862,85 @@ async def test_hot_reload_waits_until_registered() -> None:
         await asyncio.wait_for(reload_task, timeout=5)
 
     assert [m.WhichOneof("message") for m in sent] == ["migrate_job", "create_job_token"]
+
+
+async def test_update_token_reaches_the_worker_and_running_job_processes() -> None:
+    """A refreshed worker token is used by the next connection, read by token_mode_token(),
+    and sent to the processes that run a job; an idle process gets it when its job starts."""
+    from livekit.agents._token_mode import token_mode_token
+    from livekit.agents.ipc.job_proc_executor import ProcJobExecutor
+
+    server = _token_mode_server()
+    with patch.dict(os.environ, _NO_KEY_ENV):
+        # the dev channel can deliver one before the server runs, without a process pool
+        await server._update_token("early-worker-token")
+        assert token_mode_token() == "early-worker-token"
+
+    running = MagicMock(spec=ProcJobExecutor, update_worker_token=AsyncMock())
+    idle = MagicMock(spec=ProcJobExecutor, running_job=None, update_worker_token=AsyncMock())
+    server._proc_pool = MagicMock(processes=[running, idle])
+    server._closed = False  # running
+    with patch.dict(os.environ, _NO_KEY_ENV):
+        await server._update_token("refreshed-worker-token")
+        assert token_mode_token() == "refreshed-worker-token"
+
+    assert server._token == "refreshed-worker-token"
+    running.update_worker_token.assert_awaited_once_with("refreshed-worker-token")
+    idle.update_worker_token.assert_not_awaited()
+
+
+async def test_watch_client_reports_token_mode_and_applies_credentials() -> None:
+    """The agent tells the CLI it supports token mode, and applies Credentials whether they
+    come before or after the reply to its GetRunningJobsRequest."""
+    from livekit.agents.cli.watcher import WatchClient, _recv_proto, _send_proto
+    from livekit.protocol.agent_pb import agent_dev
+
+    tokens: list[str] = []
+    both_applied = asyncio.Event()
+
+    async def update_token(token: str) -> None:
+        tokens.append(token)
+        if len(tokens) == 2:
+            both_applied.set()
+
+    server = MagicMock(
+        _agent_name="my-agent",
+        _ws_url="wss://example.livekit.cloud",
+        _update_token=update_token,
+        _reload_jobs=AsyncMock(),
+    )
+    received: list[agent_dev.AgentDevMessage] = []
+    done = asyncio.Event()
+
+    async def cli(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        for _ in range(2):  # ServerInfo, GetRunningJobsRequest
+            received.append(agent_dev.AgentDevMessage.FromString(await _recv_proto(reader)))
+        for token in ("first", "second"):
+            creds = agent_dev.Credentials(url="wss://x", token=token, expires_at=1)
+            await _send_proto(
+                writer, agent_dev.AgentDevMessage(credentials=creds).SerializeToString()
+            )
+            if token == "first":
+                jobs = agent_dev.GetRunningAgentJobsResponse()
+                msg = agent_dev.AgentDevMessage(get_running_jobs_response=jobs)
+                await _send_proto(writer, msg.SerializeToString())
+        await done.wait()
+        writer.close()
+
+    cli_server = await asyncio.start_server(cli, "127.0.0.1", 0)
+    port = cli_server.sockets[0].getsockname()[1]
+    client = WatchClient(server, f"127.0.0.1:{port}", loop=asyncio.get_running_loop())
+    client.start()
+    try:
+        await asyncio.wait_for(both_applied.wait(), timeout=5)
+    finally:
+        done.set()
+        await client.aclose()
+        cli_server.close()
+        await cli_server.wait_closed()
+
+    assert received[0].server_info.supports_token_mode
+    assert received[0].server_info.agent_name == "my-agent"
+    assert received[1].HasField("get_running_jobs_request")
+    assert tokens == ["first", "second"]
+    server._reload_jobs.assert_not_awaited()  # no jobs to reload
