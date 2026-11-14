@@ -316,6 +316,34 @@ async fn an_idle_evicted_socket_is_redialed_only_when_a_call_wants_it() {
     conn.close();
 }
 
+/// The idle_evicted notice says no request in flight on the socket ran: one sent as the
+/// database was evicted is sent again on the next socket and answered there, once, rather than
+/// failed as of unknown outcome.
+#[tokio::test]
+async fn a_request_in_flight_at_an_idle_eviction_is_sent_again_and_answered_once() {
+    static EVICTED: AtomicBool = AtomicBool::new(false);
+    fn evict_once(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        match &m.message {
+            Some(pb::client_message::Message::Exec(_)) if !EVICTED.swap(true, Ordering::SeqCst) => {
+                vec![idle_notice()]
+            }
+            _ => script(m),
+        }
+    }
+    let (url, log) = serve(evict_once, false).await;
+    let conn = dial(&url, "DB_1").await.unwrap();
+    let r = conn.exec(&st("INSERT", vec![])).await.unwrap();
+    assert_eq!(r.rows_affected, 1);
+    assert_eq!(hellos(&log), 2, "the eviction's redial");
+    let execs = log
+        .lock()
+        .iter()
+        .filter(|m| matches!(m.message, Some(pb::client_message::Message::Exec(_))))
+        .count();
+    assert_eq!(execs, 2, "sent once on each socket, answered on the second");
+    conn.close();
+}
+
 fn hellos(log: &Served) -> usize {
     let log = log.lock();
     log.iter().filter(|m| matches!(m.message, Some(pb::client_message::Message::Hello(_)))).count()

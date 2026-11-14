@@ -274,6 +274,9 @@ pub struct ExecResult {
 
 struct State {
     pending: HashMap<u32, mpsc::UnboundedSender<pb::ServerMessage>>,
+    /// Each pending request's frame, sent again on the next socket after an idle eviction, whose
+    /// notice says none of them ran.
+    frames: HashMap<u32, Vec<u8>>,
     /// The live socket's writer; `None` between a drop and the redial.
     tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
     closed: bool,
@@ -330,6 +333,7 @@ impl Inner {
             }
             st.closed = true;
             st.pending.clear();
+            st.frames.clear();
             st.tx = None;
         }
         self.tasks.close();
@@ -397,8 +401,9 @@ impl Supervisor {
             // Dormant before the gate closes, so a call that finds it closed wakes the redial.
             conn.0.state.lock().dormant = idle;
             self.ready.set(false);
-            conn.dropped(&cause);
-            if idle {
+            conn.dropped(&cause, idle);
+            // a request held for resend wants the connection already
+            if idle && conn.0.state.lock().pending.is_empty() {
                 conn.0.wanted.wait_until(|wanted| std::mem::take(wanted).then_some(())).await;
             }
             if conn.0.opts.reconnect.disable {
@@ -409,6 +414,9 @@ impl Supervisor {
                 None => return,
             }
             conn.0.state.lock().dormant = false;
+            if idle {
+                conn.resend();
+            }
             self.ready.set(true);
         }
     }
@@ -429,6 +437,7 @@ impl Conn {
             next_id: AtomicU32::new(0),
             state: Mutex::new(State {
                 pending: HashMap::new(),
+                frames: HashMap::new(),
                 tx: None,
                 closed: false,
                 fatal: None,
@@ -613,14 +622,35 @@ impl Conn {
         Ok(())
     }
 
-    /// Fails everything in flight. Only after the read loop returned, so no response can still be
-    /// delivered.
-    fn dropped(&self, cause: &WsdbError) {
+    /// Fails everything in flight, but for an idle eviction, which ran none of it: those requests
+    /// stay pending to be sent again ([`Conn::resend`]). Only after the read loop returned, so no
+    /// response can still be delivered.
+    fn dropped(&self, cause: &WsdbError, idle: bool) {
         let mut st = self.0.state.lock();
-        st.pending.clear();
+        if !idle {
+            st.pending.clear();
+            st.frames.clear();
+        }
         st.tx = None;
         drop(st);
         log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb connection lost: {cause}");
+    }
+
+    /// Sends again, on the socket a redial just opened, every request held across an idle eviction,
+    /// in the order they were first sent: the server evicts only a database with nothing in flight
+    /// and runs nothing it reads after, so each is answered once, on the new socket. No
+    /// transaction can be open (one pins the database), so none autocommits.
+    fn resend(&self) {
+        let st = self.0.state.lock();
+        let Some(tx) = &st.tx else { return };
+        let mut held: Vec<_> =
+            st.frames.iter().filter(|(id, _)| st.pending.contains_key(id)).collect();
+        held.sort_by_key(|(id, _)| **id);
+        for (_, bytes) in held {
+            if tx.send(bytes.clone()).is_err() {
+                return; // the writer stopped: the read loop sees the drop, and they fail as lost
+            }
+        }
     }
 
     /// Exponential backoff until the budget runs out.
@@ -731,10 +761,17 @@ impl Conn {
             return Err(WsdbError::TooLarge(size));
         }
         let bytes = frame.encode_to_vec();
-        let st = self.0.state.lock();
+        let mut st = self.0.state.lock();
         if st.closed {
             drop(st);
             return Err(self.closed_error());
+        }
+        let request = !matches!(
+            frame.message,
+            Some(pb::client_message::Message::Credit(_) | pb::client_message::Message::Cancel(_))
+        );
+        if request && st.pending.contains_key(&request_id) {
+            st.frames.insert(request_id, bytes.clone());
         }
         match &st.tx {
             Some(tx) => tx.send(bytes).map_err(|_| WsdbError::Disconnected),
@@ -880,7 +917,10 @@ impl Request<'_> {
 
 impl Drop for Request<'_> {
     fn drop(&mut self) {
-        self.conn.0.state.lock().pending.remove(&self.id);
+        let mut st = self.conn.0.state.lock();
+        st.pending.remove(&self.id);
+        st.frames.remove(&self.id);
+        drop(st);
         if !self.answered {
             let _ = self.conn.write(self.id, pb::client_message::Message::Cancel(pb::Cancel {}));
         }
