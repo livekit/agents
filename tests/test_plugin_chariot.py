@@ -40,6 +40,7 @@ class FakeChariot:
     session_error: dict[str, Any] | None = None  # ends the whole connection on the next text
     heartbeat: float | None = None  # ping every this often; close a connection that misses one
     start_delay: float = 0.0  # delay before the first ASR session starts
+    asr_drop: bool = False  # drop the first ASR connection after its first transcript
     connections: int = 0
     queries: list[dict[str, str]] = field(default_factory=list)
     received: list[Any] = field(default_factory=list)
@@ -157,6 +158,10 @@ class FakeChariot:
                         if request.query.get("commit_strategy") == "vad":
                             await ws.send_json({"type": "input_audio_buffer.speech_started"})
                         await ws.send_json({"type": "transcript.delta", "text": "namaste"})
+                        if self.asr_drop:
+                            self.asr_drop = False
+                            await ws.close(code=1011, message=b"upstream lost")
+                            break
                     heard += len(msg.data)
                     continue
                 event = json.loads(msg.data)
@@ -322,6 +327,7 @@ async def test_tts_refused_connection_is_not_retried(refuse: dict[str, Any], sta
     assert (exc.value.status_code, exc.value.retryable) == (status, False)
 
 
+@pytest.mark.virtual_time
 async def test_tts_idle_connection_answers_the_server_pings() -> None:
     # the server closes a connection that misses a ping; one waiting in the pool between
     # replies must still answer, or the next reply would find it dead
@@ -344,6 +350,7 @@ async def test_tts_session_ending_error_is_reported_and_the_connection_dropped()
     assert fake.connections == 2
 
 
+@pytest.mark.virtual_time
 async def test_tts_keepalive_while_the_llm_is_slow(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(chariot.tts, "KEEPALIVE_INTERVAL", 0.01)
     fake = FakeChariot()
@@ -476,6 +483,12 @@ async def test_stt_finals_carry_their_place_in_the_audio() -> None:
     assert offset > 1  # the offset is applied once, on the caller's timeline
     times = [t - offset for alt in finals for t in (alt.start_time, alt.end_time)]
     assert times == pytest.approx([0.0, 0.3, 0.3, 0.5], abs=1e-3)
+    # an interim runs from the last commit to the audio sent so far
+    interim = next(
+        ev.alternatives[0] for ev in events if ev.type == SpeechEventType.INTERIM_TRANSCRIPT
+    )
+    assert interim.start_time - offset == pytest.approx(0.0, abs=1e-3)
+    assert interim.end_time - offset >= 0.1 - 1e-3
 
 
 async def test_stt_aclose_closes_its_open_streams() -> None:
@@ -489,6 +502,27 @@ async def test_stt_aclose_closes_its_open_streams() -> None:
         await wait_until(lambda: fake.asr_ended == 1)
 
 
+@pytest.mark.virtual_time
+async def test_stt_dropped_connection_ends_the_utterance_and_keeps_its_words() -> None:
+    fake = FakeChariot(asr_drop=True)
+    async with stt_server(fake) as stt:
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
+        for frame in _frames(100):
+            stream.push_frame(frame)
+        await wait_until(lambda: fake.connections == 2)
+        for frame in _frames(100):
+            stream.push_frame(frame)
+        stream.end_input()
+        events = _without_usage([ev async for ev in stream])
+    start, interim = SpeechEventType.START_OF_SPEECH, SpeechEventType.INTERIM_TRANSCRIPT
+    final, end = SpeechEventType.FINAL_TRANSCRIPT, SpeechEventType.END_OF_SPEECH
+    # the cut-off utterance ends with what was heard before the next one starts
+    assert [ev.type for ev in events] == [start, interim, final, end, start, interim, final, end]
+    finals = [ev.alternatives[0].text for ev in events if ev.type == final]
+    assert finals == ["namaste", "the tail"]
+
+
+@pytest.mark.virtual_time
 async def test_stt_slow_session_start_is_retried() -> None:
     fake = FakeChariot(start_delay=0.06)
     async with stt_server(fake) as stt:
