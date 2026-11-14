@@ -420,6 +420,13 @@ impl VoiceDriver {
         }
     }
 
+    /// The speech's tasks reported its turn, its save unanswered: only that answer ends it, so no
+    /// interruption watchdog is armed for it.
+    pub(crate) fn storage_awaits_save(&self, speech: SpeechId) -> bool {
+        let storage = &self.session.storage;
+        storage.turn_of(speech).is_some() && !storage.unreported(speech)
+    }
+
     /// The speech's tasks reported its turn: the interruption watchdog, there for tasks that never
     /// report, no longer ends it: its save's answer does.
     fn turn_reported(&mut self, speech: SpeechId) {

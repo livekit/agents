@@ -240,3 +240,48 @@ fn a_realtime_reply_plays_while_its_partition_reloads() {
     let (failures, _) = lk_agents_fuzz::check::check_all(&recording);
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+// Catches: an interruption landing on a speech whose turn was already reported, its commit sent
+// again through an outage: the interruption armed the watchdog anew and it ended the speech, so
+// the speech was announced done before its storage receipt (seed 634, TaskBridge).
+#[test]
+fn an_interruption_after_the_turn_is_reported_waits_for_its_receipt() {
+    let recording = simulate(async {
+        // The database goes down between the reply's checkpoint and its commit, past the watchdog.
+        let storage = StorageSetup { outage: Some((2_001, 9_000)), ..StorageSetup::default() };
+        let setup = Setup { tts: false, storage: Some(storage), ..Setup::default() };
+        let mut run = Run::start(&setup, 0, Default::default()).await;
+        for input in [
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(2_000) },
+            Input::LlmText { chat: Ref::new(0), text: AgentText("Hello.".into()) },
+            Input::LlmEnd { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(500) },
+            Input::Interrupt { force: true, wait: false },
+            Input::Advance { ms: Millis(12_000) },
+        ] {
+            run.apply(&input).await;
+        }
+        run.record
+    });
+    let host = recording.host_view();
+    let settle = |answered: bool| {
+        host.storage().iter().find_map(|(at, step)| {
+            let op = match step {
+                StorageStep::Requested { operation, .. } if !answered => operation,
+                StorageStep::Answered { operation, .. } if answered => operation,
+                _ => return None,
+            };
+            (*op == StorageOperation::Settle).then_some(at.at_ms)
+        })
+    };
+    // The interruption lands at 2.5 s, the commit already sent; its watchdog would fire at 7.5 s.
+    let (committed, received) = (settle(false), settle(true));
+    assert!(
+        committed.is_some_and(|c| c < 2_500) && received.is_none_or(|r| r > 7_500),
+        "the commit did not straddle the watchdog: sent {committed:?}, answered {received:?}"
+    );
+    let (failures, _) = lk_agents_fuzz::check::check_all(&recording);
+    let storage: Vec<_> = failures.iter().filter(|f| f.contract.starts_with("storage_")).collect();
+    assert!(storage.is_empty(), "{storage:#?}");
+}

@@ -369,10 +369,11 @@ impl VoiceDriver {
             self.record_effect(VoiceEffect::Audio(AudioOp::Gate { speech, op, cause, output }));
         }
         let realtime = self.activity.is_realtime_speech(speech);
-        // No watchdog after the close: every handle is interrupted there and the loop exits.
+        // No watchdog after the close: every handle is interrupted there and the loop exits. Nor
+        // for a turn already reported: its save's answer ends the speech.
         let closing = self.session.closing_past_edge();
         let watchdog = Timer::InterruptionTimeout(speech);
-        if !closing && self.deadline(watchdog).is_none() {
+        if !closing && !self.storage_awaits_save(speech) && self.deadline(watchdog).is_none() {
             let at = now.saturating_add(HOST_TEARDOWN_TIMEOUT);
             self.set_deadline(watchdog, at);
             self.record_trace(SpeechStep::WatchdogArmed { speech, at });
