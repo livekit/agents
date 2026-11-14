@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from types import SimpleNamespace
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
@@ -153,6 +154,38 @@ def test_streaming_disables_connection_retries(
     assert stream_conn_options.max_retry == 0
     assert stream_conn_options.retry_interval == 1.5
     assert stream_conn_options.timeout == 12.0
+
+
+def test_streaming_selects_saaras_v4(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _CapturedStream:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(stt_streaming, "RealtimeSpeechStream", _CapturedStream)
+    stt = stt_streaming.STTRealtime(
+        api_key="sk_test",
+        model="saaras:v4",
+        http_session=object(),  # type: ignore[arg-type]
+    )
+    stt.update_options(language="hi-IN")
+    stt.stream()
+
+    assert stt.model == "saaras:v4"
+    opts = captured["opts"]
+    assert isinstance(opts, stt_streaming.RealtimeSTTOptions)
+    assert opts.model == "saaras:v4"
+    params = _parse_ws_url(
+        stt_streaming._build_realtime_ws_url(stt_streaming.SARVAM_STT_REALTIME_URL, opts)
+    )
+    assert params["model"] == "saaras:v4"
+
+
+def test_streaming_defaults_to_v3_realtime_and_rejects_unknown_models() -> None:
+    assert stt_streaming.STTRealtime(api_key="sk_test").model == "saaras:v3-realtime"
+    with pytest.raises(ValueError, match="model must be one of"):
+        stt_streaming.STTRealtime(api_key="sk_test", model="saaras:v3")
 
 
 def test_realtime_ws_url_includes_core_and_vad_params() -> None:
@@ -1427,7 +1460,7 @@ async def test_streaming_connect_logs_handshake_failure(
     ]
     assert len(records) == 1
     assert records[0].status_code == 403
-    assert "API-SUBSCRIPTION-KEY" not in records[0].url
+    assert "API-SUBSCRIPTION-KEY" not in getattr(records[0], "lk.pii.url")
 
 
 @pytest.mark.asyncio
@@ -1957,3 +1990,79 @@ async def test_process_audio_forwards_small_frames_regardless_of_stream_type(
     assert stt_streaming.AUDIO_CHUNK_MS <= 100
     assert len(sent) == 1000 // stt_streaming.AUDIO_CHUNK_MS
     assert {len(payload) for payload in sent} == {expected_bytes}
+
+
+# ---------------------------------------------------------------------------
+# Keyterms (saaras:v4)
+# ---------------------------------------------------------------------------
+
+
+KEYTERMS = ["Sarvam", "New Delhi", "Vistaar"]
+
+
+def _url_query(url: str) -> dict[str, str]:
+    return {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
+
+
+def _capture_realtime_streams(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    captured: list[Any] = []
+
+    class _CapturedStream:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.append(kwargs["opts"])
+
+    monkeypatch.setattr(stt_streaming, "RealtimeSpeechStream", _CapturedStream)
+    return captured
+
+
+def test_realtime_sends_keyterms_on_the_connection_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _capture_realtime_streams(monkeypatch)
+    stt = stt_streaming.STTRealtime(
+        api_key="sk_test",
+        model="saaras:v4",
+        keyterms=KEYTERMS,
+        http_session=object(),  # type: ignore[arg-type]
+    )
+    assert stt.capabilities.keyterms
+
+    stt.stream()
+
+    url = stt_streaming._build_realtime_ws_url(stt_streaming.SARVAM_STT_REALTIME_URL, captured[0])
+    assert json.loads(_url_query(url)["keyterms"]) == KEYTERMS
+
+
+def test_realtime_omits_keyterms_when_unset() -> None:
+    opts = stt_streaming.RealtimeSTTOptions(language="hi-IN", api_key="sk_test")
+    url = stt_streaming._build_realtime_ws_url(stt_streaming.SARVAM_STT_REALTIME_URL, opts)
+    assert "keyterms" not in _url_query(url)
+
+
+def test_realtime_rejects_keyterms_on_v3_realtime() -> None:
+    with pytest.raises(ValueError, match="only supported by saaras:v4"):
+        stt_streaming.STTRealtime(api_key="sk_test", keyterms=KEYTERMS)
+
+
+def test_realtime_merges_session_keyterms_into_new_streams(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _capture_realtime_streams(monkeypatch)
+    stt = stt_streaming.STTRealtime(
+        api_key="sk_test",
+        model="saaras:v4",
+        keyterms=["Sarvam"],
+        http_session=object(),  # type: ignore[arg-type]
+    )
+
+    stt._update_session_keyterms(["Vistaar", "Sarvam"])
+    stt.stream()
+    stt.update_options(keyterms=["Bulbul"])
+    stt.stream()
+
+    assert captured[0].keyterms == ["Sarvam", "Vistaar"]
+    assert captured[1].keyterms == ["Bulbul", "Vistaar", "Sarvam"]
+    assert stt._opts.keyterms == ["Bulbul"]  # session terms never leak into user terms
+
+
+def test_realtime_keyterms_capability_follows_the_model() -> None:
+    assert not stt_streaming.STTRealtime(api_key="sk_test").capabilities.keyterms
+    assert stt_streaming.STTRealtime(api_key="sk_test", model="saaras:v4").capabilities.keyterms

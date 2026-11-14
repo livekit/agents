@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from livekit.agents import stt
+from livekit.agents import NOT_GIVEN, stt
 from livekit.plugins.sarvam.stt import SpeechStream
 
 pytestmark = pytest.mark.unit
@@ -36,6 +36,15 @@ def _make_stream_under_test(
     instance._eos_fallback_timeout = eos_fallback_timeout  # type: ignore[attr-defined]
     instance._final_received_for_utterance = False  # type: ignore[attr-defined]
     instance._eos_emitted_for_utterance = False  # type: ignore[attr-defined]
+    instance._utterance_settled = asyncio.Event()  # type: ignore[attr-defined]
+    instance._utterance_settled.set()
+    instance._utterance_resolved = asyncio.Event()  # type: ignore[attr-defined]
+    instance._pending_keyterms = NOT_GIVEN  # type: ignore[attr-defined]
+    instance._sent_samples = 0  # type: ignore[attr-defined]
+    instance._end_speech_sample = None  # type: ignore[attr-defined]
+    instance._release_at_end_speech = False  # type: ignore[attr-defined]
+    instance._connection_offset = None  # type: ignore[attr-defined]
+    instance._recent_audio = bytearray()  # type: ignore[attr-defined]
     return instance, captured
 
 
