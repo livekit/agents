@@ -192,26 +192,10 @@ agent context.
 
 ## Implementation ownership
 
-The shared agent core owns deterministic run/event assertions. Evaluation
-helpers follow the owning subject's pure-algorithm rules; model calls and judge
-orchestration are async Rust in `lk-agents-inference`, and application callbacks
-run through HostInvoker.
-The SDK judge API remains supported without requiring a separate scenario or
-judging subsystem inside the agent core. Simulation verdicts and SDK judgments
-keep their distinct result types and meanings.
-
 Programmatic tests need no room or session: `agent.run()` runs the agent
 directly. The framework ships no test-only room or fake export; its own
 room-level behavior is tested in Rust over simulated SDK peers.
 
-The framework's deterministic simulation runs the real voice, room and avatar
-executors and the real decision cores, with fakes only at the SDK and provider
-ports. Executors spawn and sleep only through an injected spawner and clock, so
-a deterministic scheduler using basic partial-order sampling decides every
-interleaving, and every `select!` is biased so no branch is chosen at random.
-The [implementation reference](internals/testing.md#deterministic-simulation-testing) owns
-that contract.
-
-The [implementation reference](internals/components.md#support-algorithms-and-observations)
-defines these implementation boundaries; this page owns the public testing,
-evaluation and simulation-context contracts.
+Contributor references define [assertion and judge ownership](internals/components.md#support-algorithms-and-observations)
+and [deterministic simulation testing](internals/testing.md#deterministic-simulation-testing).
+SDK simulations and the framework's internal DST are separate test layers.

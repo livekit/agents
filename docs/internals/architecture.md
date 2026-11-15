@@ -102,26 +102,10 @@ tools and host RTC objects.
 
 ### Voice lifecycle owners
 
-Keep one discoverable runtime boundary for each lifecycle while allowing private synchronous
-submachines inside its owner:
-
-| Owner | Runtime-facing contract | Responsibility |
-| --- | --- | --- |
-| `AudioPlayback` | `AudioPlaybackEvent` / `AudioPlaybackEffect` | One generated segment's source forwarding, interruption, cut-receipt wait, completion and heard-audio accounting |
-| `TranscriptSync` | `TranscriptSyncEvent` / `TranscriptSyncEffect` | Transcript attachments and close, queued segments and word pacing; direct word/flush/heard effects |
-| `Hooks` | Existing hook calls/results, with common terminal acceptance and dispatch | One terminal cause per hook; exit continuation deferred until dependent state is installed; abandonment suppresses delivery |
-| `OutputBindings` | `OutputBindingEvent`, answered through the correlated session answer stream | Reserve, activate, retain while physical cleanup is pending, and release the exact binding |
-| `GenerationPreparation` | Scoped preparation events/effects and ordinary `PlaybackAuthorization` outcomes | Admit speculative synthesis and retain step-wide authorization across segments, including text-only output |
-
-Playback's forwarding, receipt, finishing, and accounting helpers are private. Transcript's
-segment queue and pacer are private. The runtime sees the enclosing owner's protocol rather
-than nested instruction enums. Output bindings cover both audio and text and may outlive
-cancelled generation. Room transport owns publication/backpressure and sink observations;
-it is not merged into generated-speech playback. Speech/floor scheduling and per-segment
-launch holds remain distinct from generation-step authorization.
-
-Each crate's `effects.rs` index records every named effect enum with its producer and
-executor. Most executor protocols are peers; `RoomIo` exposes no `RoomIoEffect` enum.
+The [voice component contracts](components.md#generation-playback-and-transcripts)
+map recognition, speech, playback and transcript decisions to their owners.
+Follow the pipeline or realtime execution path above to reach those owners;
+[effect execution](#effect-execution) explains how their results return.
 
 ### Effect and machine source layout
 
@@ -249,7 +233,7 @@ audio; it does not authorize playback, route room tracks, or report what a perso
 | `lk-agents-abi` | Public export declarations and typed boundary records: chat items, events, effects, errors and resource descriptions; contracts and data, plus the hand-written Python plugin bases (`stt.py`, `tts.py`, `llm.py`, `realtime.py`, `vad.py`) beside their proxy traits |
 | `lk-agents-core` | Shared AgentRun, request planning, the attempt machine every retried request shares (connection limits, retry allowance and backoff, total deadline, cleanup), tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair, tool search and deterministic run/event assertions; speech tokenization and expressive markup (`lk_agents_core::tokenize`, `lk_agents_core::markup`); telemetry destination policy, metric admission and session report records (`lk_agents_core::telemetry`); no voice lifecycle or transport dependency |
 | `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption, IVR, AMD and media coordination; transcript pacing decisions; composes agent execution from `lk-agents-core` |
-| `lk-agents-storage` | Async I/O: all database interaction: schema and statements, the AgentDB and SQLite backends, retries, fencing, lease renewal and lost-acknowledgment resolution; every failure is a typed error: the database's `Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound` and `VersionConflict`, the caller's `Invalid`, `NotSerializable`, `TooLarge` and `Unauthorized`, the handler's `Refused(HostError)`, and `Cancelled` |
+| `lk-agents-storage` | Async database I/O, AgentDB and SQLite backends, shared thread/run/lease engine; see [storage](storage.md#rust-interface) for contracts and typed errors |
 | `lk-agents-media` | Synchronous decoding, encoding, TTS audio framing, image preparation and conversion, resampling, media filters, recording files and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime; the one worker pool primitive (bounded plain threads with per-class admission) and the process's media pool |
 | `lk-agents-net` | Async I/O: the shared transport: HTTP with per-limit deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; telemetry's export (`lk_agents_net::export`): the OTLP exporter for every telemetry destination and the process's exporter slot, the LiveKit Cloud session report and recording upload with its own bounded admission, the host span (`_core.TelemetrySpan`) and `Tagger` classes, event-loop stall recording, the job's sampled stack profile (`export/profile`, pprof, carried by the recording upload) and the worker's Prometheus exposition (`export/prometheus.rs`); the process environment value (`lk_agents_net::env::ProcessEnv`) and the process's blocking I/O pool |
 | `lk-agents-telemetry` | Span recording: `Trace` and `ManualSpan` for sans-I/O machines; the process `Tracer`, `Cx`'s recorder, `ScopedSpan` and `start`/`end`/`event`/`measure` for async work. Depends only on ABI; no executor or transport |

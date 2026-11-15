@@ -94,13 +94,9 @@ each request. The shared agent definition stores none of these values.
 
 ## Persisted application fields
 
-A run's context marks stored fields with `persisted(default_factory=...)`.
-Call `store.load_context(app)` to restore and validate them, then call
-`store.save_context(app)` after the run to save changes. Marking a field
-alone does not save mutations. Unmarked customers, clients, and services
-are application-supplied runtime values. Scope belongs to the
-conversation/job, not to the agent definition. See
-[context and persisted fields](context.md) for the complete example.
+Declare stored fields on the [application context](context.md), not the shared
+agent definition. The [persistence guide](persistence.md) owns their load/save
+contract and the distinction between application fields and session state.
 
 ## Running a turn
 
@@ -182,11 +178,9 @@ per-run history or application data after it returns. The
 next turn continues from `result.all_messages()`. The model and tool loop
 stops when it accepts the final output or requests human input.
 
-Inside a managed `a2a_session` endpoint the runtime supplies the loaded history
-and scoped `ctx.store`. The application constructs its context with fresh
-runtime dependencies, explicitly calls `await ctx.store.load_context(app)`,
-passes `context=app` to the run, and calls `await ctx.store.save_context(app)`
-to save changes. See [context loading](context.md#explicit-load-and-save-on-the-store).
+Inside a managed `a2a_session` endpoint the runtime supplies loaded history and
+scoped `ctx.store`. Follow the [context loading example](persistence.md#explicit-load-and-save-on-the-store)
+to construct dependencies and retain application changes.
 `agent.run()` executes the agent the caller selected.
 [TextSession](text-session.md) reconstructs and coordinates text conversations
 from explicitly supplied state on each request.
@@ -340,9 +334,9 @@ execution; otherwise a run starts a new execution at its own invocation id. On
 A2A it is the transport task id, which a frontend can supply by continuing that
 task. On a call it is one id for the whole call.
 
-Approval binds to the exact effect terms and draft revision. Changed dates,
-room, price, guest, or payment details invalidate prior approval. Recheck
-availability and authorization before committing the booking.
+Use the [tool approval gate](tools.md#approval) for effects that require confirmation.
+The booking tool must recheck availability and authorization before committing;
+the output function resolves the result after that effect.
 
 ## Hooks
 
@@ -608,9 +602,11 @@ choose which event fields their external clients may see.
 `result.question`. There is no open stream or suspended backend coroutine
 waiting for the person's later answer.
 
-Save retained history, application fields, and text session state explicitly.
-The next input starts another invocation with that saved data. Streaming does
-not add a separate approval API or change the shared `needs_approval` gate.
+Retain history and state according to the selected
+[persistence mode](persistence.md#session-state-and-explicit-binding): bound
+sessions checkpoint their state, while detached callers save it explicitly.
+Application fields always require explicit saves. The next input starts another
+invocation with that data. Streaming uses the shared [approval gate](tools.md#approval).
 A question already streamed is finalized as the same question, not delivered
 again merely because the caller reads `result.question`.
 
@@ -676,11 +672,9 @@ last explicitly saved state and reconcile external effects as needed.
 
 ### Managed endpoints and persistence
 
-A run's settled result is not a promise that the surrounding handler transaction
-has committed. `result()` finalizes the run's result and history; the
-application then stages its explicit saves, and the managed endpoint commits
-when its handler completes. External business operations keep their own
-idempotency and commit boundaries.
+The [persistence contract](persistence.md) separates settled results, conversation
+checkpoints, explicit application saves and the managed handler's commit. The
+example below uses detached application context and stages its save after the run.
 
 ```python
 @server.a2a_session(endpoint="support", description="Airline support.")
@@ -707,11 +701,10 @@ result finalizes the existing answer artifact or input-required status; it does
 not send the streamed text a second time. A direct `agent.run()` can retain the
 managed endpoint's automatic forwarding behavior.
 
-A failed or cancelled run can leave already delivered text visible. It does not
-convert that text into an accepted typed result. Save context only at explicit
-application-selected boundaries; do not unconditionally save partial mutations
-in `finally`. Merely opening, consuming, or closing a stream saves no application
-context or text session state.
+A failed or cancelled run can leave already delivered text visible; that text is
+not an accepted typed result. Stream delivery does not change the selected
+persistence mode or save ordinary application fields. Use the
+[explicit save contract](persistence.md#explicit-saves) to retain application changes.
 
 
 ## Frontend interaction tasks

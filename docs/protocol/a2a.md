@@ -191,59 +191,32 @@ A text answered together with the one that followed it:
 
 ## Tokens
 
-Two credentials reach an endpoint. The project credential is a token the
-project's key signed carrying the `agentEndpoint` call grant
-(`Credentials.project_token()`). It invokes the endpoint and reads its card,
-but grants no thread access: a message or a task method under it alone is
-refused 403. A token the project signed with neither grant, such as a room
-join token, is refused 403. A thread grant, minted by the application's
-backend for a browser or a device the way a room token is
-([browser thread access](../clients.md#from-the-browser)), scopes everything
-to one scope, the subject the threads belong to. `Credentials.thread_grant_token()`
-also gives it the `agentEndpoint` call grant, so a LiveKit node admits it to the
-endpoint, which authorizes the thread access:
+The [authentication contract](../auth.md) owns credential authority, permission
+flags, node admission and worker verification. Requests through a LiveKit node
+need `agentEndpoint.call` for reach and the appropriate `agentThread` permission
+for thread data. `Credentials.thread_grant_token()` includes both grants;
+[client examples](../clients.md#tokens) show how to mint them.
+
+These permissions are JWT claims, not A2A metadata. For example:
 
 ```json
-{"agentThread": {"scope": "user:42",
-                 "create": true, "write": true, "read": true}}
+{
+  "agentEndpoint": {"call": true},
+  "agentThread": {"scope": "user:42", "create": true, "write": true, "read": true}
+}
 ```
 
-`threadIds` in place of `scope` scopes the token to listed threads; a
-grant with neither is refused unless `all` is true. A thread belongs to the project, not to one
-agent: any agent of the project continues it, and the grant names no
-endpoint. A token with only `agentThread` may call every endpoint of the
-project: its card, and messages and task methods on the threads the grant
-covers, as its flags allow. An `agentEndpoint` grant naming an agent or a
-deployment limits where the project credential is admitted; it does not
-narrow a token that also carries `agentThread`.
+`agentThread.scope` is a string, `threadIds` an array of string IDs, and `all`
+a boolean. Permission flags are booleans and default to false; `all` does not
+enable missing flags. A subject is required: `scope`, `threadIds` or `all`.
+A first message with no `contextId` gets its scope from the authorized claim,
+never from the request. See [thread grants](../auth.md#the-thread-grant) for
+which subject forms permit creation and listing.
 
-The `agentThread` claim is a JSON object. `scope` is a string, `threadIds`
-is an array of string IDs, and `all` is a boolean (default false) extending
-access to every thread and scope in the project. Permission flags are booleans
-and default to false; `all` does not enable missing permissions. These are
-LiveKit JWT claims, not A2A metadata. `agentEndpoint.call` is a separate boolean
-permission to invoke an endpoint; it does not grant access to thread data.
-
-| Flag     | Allows |
-| -------- | ------ |
-| `create` | a first message with no `contextId`: a new thread in the grant's scope, which the request never carries; a grant with no scope cannot create |
-| `write`  | a message, `tasks/cancel` |
-| `read`   | `tasks/get`, `tasks/list`, and the thread's history and tasks from the platform's threads API ([browser thread access](../clients.md#from-the-browser)) |
-| `list`, `delete` | the threads service's listing of the scope and deletion, for a browser ([browser thread access](../clients.md#from-the-browser)) |
-| `sql`    | the thread's database on the data plane, for the worker running it; never in a browser's grant |
-
-A thread of another scope is refused.
-
-Through a LiveKit node, the node verifies the token, admits one carrying the
-`agentEndpoint` call grant, passes its verdict to the worker and forwards the
-token as sent. The worker reads that token's claims, from `Authorization: Bearer`
-or else the `access_token` query parameter, so a thread grant's scope and flags
-reach it; it never verifies a signature ([auth](../auth.md#verification)). A
-browser streams with `fetch`, a JSON-RPC `POST` carrying the bearer header.
-
-A refusal is an HTTP status with `{"error": "..."}`, not a JSON-RPC error:
-401 for no token or a token the project did not sign; 403 for a grant that
-does not cover the call.
+Send the token as `Authorization: Bearer <token>`. An authorization refusal is
+an HTTP response outside JSON-RPC; [endpoint authentication](../auth.md#endpoints)
+defines its status and error shape. Browser SSE delivery uses a JSON-RPC POST
+through `fetch`, with the bearer header.
 
 ## Delegation and conversation data
 

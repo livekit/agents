@@ -65,7 +65,7 @@ class STTContextOptions(TypedDict, total=False):
 
     Can be passed as a plain dict::
 
-        AgentSession(
+        VoiceSession(
             stt_context_options={
                 "keyterms": ["LiveKit", "Acme Corp"],
                 "keyterm_detection": {"enabled": True, "turn_interval": 1},

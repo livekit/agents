@@ -10,7 +10,9 @@ From the repository root, `make test` runs the hermetic Python suites and `make 
 journeys against a LiveKit project; `PYTEST_ARGS` passes pytest options, for example
 `make test PYTEST_ARGS="-k recording"`. [CI](#enforcement) lists every category.
 `make type-check` runs both type checkers; `TYPE_CHECK_ARGS` selects a checker or its options.
-`make bench` runs standalone measurements described in the [benchmark guide](../../bench/README.md).
+`make bench` runs the standalone IPC benchmark; `make bench-startup` measures launches
+and `make bench-host` measures the Rust-to-Python boundary. Their sources live in
+[`bench/`](../../bench/).
 
 Run `make install` once, then `make build` to rebuild the Python extension in
 place without installing dependencies again. Python-only changes use the editable
@@ -47,8 +49,8 @@ compiler toolchain, or MSVC build tools). Building FFmpeg from source on macOS
 or Linux also requires Bash, Make, pkg-config, and the Opus development library.
 For Windows and cross compilation, provide a target-compatible static FFmpeg
 installation through `LK_CODECS_FFMPEG_PREFIX`; Windows archives must be built
-with FFmpeg's MSVC toolchain. The compatible `rust-sdks` sources live beside
-this checkout, as declared by the workspace's relative Cargo paths.
+with FFmpeg's MSVC toolchain. Cargo fetches the compatible `rust-sdks` revision
+pinned in the workspace manifest; no modified sibling checkout is required.
 
 The repository-root `.cargo/config.toml` supplies the same compiler flags when
 Cargo runs from the root, `rust/`, or the Python package. It explicitly selects

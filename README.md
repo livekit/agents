@@ -30,7 +30,7 @@ You need a LiveKit **staging** project (its URL, API key and secret from the das
 Python 3.11+.
 
 ```sh
-git clone -b agents-2.0 https://github.com/livekit/agents && cd agents   # the examples
+git clone -b v2.0 https://github.com/livekit/agents && cd agents   # the examples
 uv venv -p 3.12 && source .venv/bin/activate
 uv pip install "livekit-agents==2.0.0b1" livekit-plugins-openai uvicorn python-dotenv
 
@@ -64,8 +64,8 @@ lk agent console
 
 - [Docs](docs/README.md), one feature per page
 - [Contributor docs](docs/internals/README.md): architecture, builds, and tests
-- From source: `git clone`, then `uv sync --all-packages` (needs Rust);
-  `make check`, `uv run pytest --unit`
+- From source: follow [local builds](docs/internals/development.md#local-builds)
+  for installation, rebuilding, checks and test commands.
 - Issues with the `v2` label; licensed [Apache-2.0](LICENSE)
 
 <!--BEGIN_REPO_NAV-->

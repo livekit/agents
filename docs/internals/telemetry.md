@@ -1,14 +1,25 @@
 # Telemetry internals
 
 How every telemetry signal is produced and where it travels. The public API is
-in [telemetry.md](../telemetry.md); crate placement follows
-[runtime contracts](runtime.md#telemetry). What is emitted, in full, and what each
+in [telemetry.md](../telemetry.md). What is emitted, in full, and what each
 consumer reads is in the [telemetry reference](telemetry-reference.md).
 
 Rust owns telemetry end to end: the framework's spans and metrics, the session
 report's records, the session report upload, and OTLP export. Python is an
 adapter. It keeps the OpenTelemetry API working for application code and hands
 everything to Rust.
+
+## Implementation placement
+
+| Crate | Owns |
+| --- | --- |
+| `lk-agents-abi` | Span, event, metric and record declarations (`telemetry::spans`); the attribute wire types; `SpanContext` |
+| `lk-agents-telemetry` | Span recording: `ManualSpan` and `Trace` for sans-I/O machines; the tracer, `Cx`'s recorder, `ScopedSpan` |
+| `lk-agents-core` | Destination policy, admission and byte charges; report records and tags |
+| `lk-agents-voice` | The session's spans, each owned by the entity it describes (session, user turn, speech) |
+| `lk-agents-runtime`, `-inference`, `-worker` | `ScopedSpan` spans at their I/O choke points; activating the current span for host calls |
+| `lk-agents-net` | Export (`export`): the OTLP exporter, per-destination queues and metric aggregation; the session report and recording upload |
+| `lk-agents-py` | The generated tracer, span and provider classes behind the Python OpenTelemetry API |
 
 ## Rules
 
@@ -267,11 +278,10 @@ current at that call and for the step's job and conversation, which the node's
 
 ## Recording defaults
 
-A session in a job connected to LiveKit Cloud records everything by default:
-audio, traces, metrics, logs and the transcript. The transcript is recorded by
-default whatever the GenAI message capture setting, because the Cloud session
-view is built from it. The session's recording options turn individual parts
-off; turning a part off never affects the application endpoint.
+The public [Cloud recording contract](../telemetry.md#livekit-cloud) owns defaults
+and session options. Transcript recording is independent of GenAI message capture:
+Cloud builds its session view from the transcript. Destination policy evaluates
+the recording decision separately from the application endpoint's admission.
 
 ## Destinations
 

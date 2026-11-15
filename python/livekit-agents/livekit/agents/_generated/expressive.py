@@ -67,8 +67,8 @@ class SpeechSteeringOptions(TypedDict, total=False):
 
 
 class ExpressiveOptions(TypedDict, total=False):
-    """Configuration for the expressive pipeline, passed as ``AgentSession(expressive=...)``
-    or ``Agent(expressive=...)`` (the agent value overrides the session's).
+    """Configuration for the expressive pipeline, passed as ``VoiceSession(expressive=...)``
+    or changed through ``session.update_options(expressive=...)``.
 
     Controls how TTS markup instructions are injected into the LLM when expressive is
     enabled. All keys are optional; common shapes:

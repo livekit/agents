@@ -10,11 +10,10 @@ Use [development](development.md) for installation, builds, checks and review co
 
 | Guide | Use it for |
 | --- | --- |
-| [Architecture](architecture.md) | Crate dependencies, sans-I/O decisions, effects and runtime composition |
-| [Component contracts](components.md) | Ownership of agent execution, text routing, voice, providers, room I/O, storage and workers |
-| [Conversation and voice lifecycle](voice-lifecycle.md) | Speech normalization, user drafts, interruption and shared voice/text persistence |
-| [Bindings and Python](bindings.md) | ABI declarations, code generation, facades, host values, GIL boundaries and plugins |
-| [Runtime contracts](runtime.md) | Calls, streams, cancellation, resource lifetimes, backpressure, retries and managed turns |
+| [Architecture](architecture.md) | Execution paths, crate dependencies, source layout and machine composition |
+| [Component contracts](components.md) | Decision ownership and component-specific behavior for agents, sessions, providers, rooms, storage and workers |
+| [Bindings and Python](bindings.md) | Host value semantics, ABI declarations, code generation, facades and the GIL boundary |
+| [Runtime contracts](runtime.md) | Shared call/stream lifetimes, cancellation, resource ownership, backpressure and effect execution |
 | [Processes and IPC](processes.md) | Job supervision, fork safety, preloading, shutdown and process logging |
 
 ## Persistence and observability
@@ -33,5 +32,16 @@ Use [development](development.md) for installation, builds, checks and review co
 | [Internal testing](testing.md) | Component, boundary and deterministic simulation tests |
 | [DST guide](../../rust/crates/lk-agents-fuzz/README.md) | Add a regression, model a fake port, reproduce a seed and diagnose a failure |
 
+## Design proposals
+
+[Shared RoomIO](../proposals/room-io.md) is the alignment proposal for room bindings
+shared by voice, translation, transcription and application-defined sessions.
+It covers shared ownership and bindings with existing legacy protocols; a new
+Protobuf session protocol is deferred and TBD. Its proposed API and unresolved
+decisions are separate from current contracts.
+
 Keep current contracts in their owning guide. Migration ledgers, dated file counts and
 completed audit checklists are not part of the implementation reference.
+Architecture links to component decisions instead of defining them again. Binding
+adapters refer to runtime lifetimes; component guides describe only their domain's
+additional rules. Storage, telemetry and testing own their detailed mechanics.

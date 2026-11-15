@@ -304,6 +304,16 @@ flush, stale prediction and timer delivery, audio-source replacement,
 user backchannels, agent opportunities, opportunity/full-reply arbitration,
 transcript timeout, turn limits and final speech at close.
 
+`SpeechNormalizer` (`lk-agents-inference::stt::normalizer`) owns provider boundary
+normalization, synthesized starts and ends, utterance numbering and owed final words.
+Provider utterances and conversational turns have different identities. The normalizer
+holds a normalized end until owed final words arrive. An
+`EndOfSpeechPending` observation exposes a provider end without pretending those words arrived.
+The voice core starts `final_transcript_timeout` from that evidence. Repeated ends and interim
+updates do not extend the wait. At expiry, automatic endpointing may use the latest interim;
+manual mode still requires a commit. A late final corrects the original user item by identity.
+A new utterance, retired STT stream, reset or close cancels the old wait.
+
 ### Generation, playback and transcripts
 
 Generation describes what may be produced. Playback tracks progress reported
@@ -330,6 +340,127 @@ that queue; its boundary reports remain schedulable in simulation.
 Tests cover cuts at segment boundaries, zero-audio segments, stalled outputs,
 partial synthesis followed by failure, output replacement, delayed acknowledgments
 and realtime truncation while the model continues generating.
+
+`SessionChatCtx` owns accepted conversation, item identity, ordering, revisions and
+visibility. It shares stable-ID replacement, timestamp insertion and tool-output
+grouping with storage through `lk-agents-abi::llm::chat_context::ordering`.
+
+Generation, playback, floor ownership, tools and persistence settle independently. Releasing
+the floor allows a newer reply while an older tool still runs. Ordinary interruption marks
+the originating speech handle interrupted, cuts playback and retains only the delivered
+transcript prefix. It does not cancel application tools, even after the generation cleanup
+watchdog. Each tool retains its originating `RunContext.speech_handle`.
+
+An ordinary late tool result belongs to the original call and is recorded with
+`reply_required=false`; it cannot continue the interrupted reply. Async-tool update delivery
+has a separate policy. Shutdown owns bounded cleanup of tools that remain live.
+
+Items revise in place by stable ID. New independent items use their conversation timestamps,
+with ties following existing items. Tool outputs remain with their call group, even when their
+result arrives after a newer reply. A speech ID correlates speech work; a `TurnId` identifies
+user recognition; neither identifies a database run. Overlapping speeches may share one run.
+
+#### Runtime-facing voice owners
+
+Keep one discoverable runtime boundary for each lifecycle while allowing private synchronous
+submachines inside its owner:
+
+| Owner | Runtime-facing contract | Responsibility |
+| --- | --- | --- |
+| `AudioPlayback` | `AudioPlaybackEvent` / `AudioPlaybackEffect` | One generated segment's source forwarding, interruption, cut-receipt wait, completion and heard-audio accounting |
+| `TranscriptSync` | `TranscriptSyncEvent` / `TranscriptSyncEffect` | Transcript attachments and close, queued segments and word pacing; direct word/flush/heard effects |
+| `Hooks` | Existing hook calls/results, with common terminal acceptance and dispatch | One terminal cause per hook; exit continuation deferred until dependent state is installed; abandonment suppresses delivery |
+| `OutputBindings` | `OutputBindingEvent`, answered through the correlated session answer stream | Reserve, activate, retain while physical cleanup is pending, and release the exact binding |
+| `GenerationPreparation` | Scoped preparation events/effects and ordinary `PlaybackAuthorization` outcomes | Admit speculative synthesis and retain step-wide authorization across segments, including text-only output |
+
+Playback's forwarding, receipt, finishing, and accounting helpers are private. Transcript's
+segment queue and pacer are private. The runtime sees the enclosing owner's protocol rather
+than nested instruction enums. Output bindings cover both audio and text and may outlive
+cancelled generation. Room transport owns publication/backpressure and sink observations;
+it is not merged into generated-speech playback. Speech/floor scheduling and per-segment
+launch holds remain distinct from generation-step authorization.
+
+Each crate's `effects.rs` index records every named effect enum with its producer and
+executor. Most executor protocols are peers; `RoomIo` exposes no `RoomIoEffect` enum.
+
+#### Interruption decisions and paused speech
+
+`agent_session::machine::activity::false_interruption` owns audio interruption
+guards and `PausedSpeech`. Each request names its trigger: VAD duration, STT
+interim without VAD, STT final, or adaptive-detector verdict. The guards check
+turn ownership, trigger thresholds, audio interruption permission, AEC warmup,
+realtime ownership, word count and the current speech's permission. Refusals are
+recorded with their typed reason.
+
+`PausedSpeech` retains the exact speech ID, its original agent state and the
+resume timeout captured at pause time. Recovery requires enabled audio, an
+output declaring pause capability, `resume_false_interruption` and a non-null
+`false_interruption_timeout`. The core emits `GateOp::Pause` and changes the
+agent state to listening; generation remains alive. Runtime executes the gate
+operation against the correlated output. A pause is not an interrupted handle
+or completed speech.
+
+User speech onset cancels the resume deadline. VAD end, or STT end when STT owns
+the turn, arms it; a request arriving after user speech ended arms it immediately.
+A nonempty STT final cancels the pause and interrupts its original handle;
+an empty final leaves recovery available. A replying turn admission also cancels
+the pause. An onset before agent playback starts can park an eligible speech
+with a zero timeout, resolved after speech ends on the next timer tick.
+
+At `Timer::FalseInterruption`, `AudioRecognition::turn_open()` means an
+`Awaiting`, `Delaying` or `ManualCommitted` decision is in flight. Recovery then
+waits for `TurnSettled::Decided` or `TornDown`; `Superseded` keeps waiting on the
+replacement decision. Turn effects run in order, so admission can cancel the
+pause before recovery considers resuming. Close tears down the turn without
+resuming it.
+
+Recovery takes the pause once, checks that a newer speech has not taken over,
+and restores state and playback only for the original unfinished speech. It
+emits `AgentFalseInterruption { resumed }` after restoration. Completion,
+authorization changes, output capability changes and close release the parked
+output explicitly. If pause capability disappears while the user is speaking,
+the parked speech is interrupted before its output gate is released.
+
+#### Turn decisions and boundary filtering
+
+`audio_recognition::machine::speech` translates VAD, normalized STT and realtime
+observations into speech evidence. `machine::end_of_turn` owns the phase enum,
+prediction request identity, transcript snapshot and endpoint deadline. Phase
+changes arm/cancel their own timers; stale predictions and timer deliveries
+cannot advance a retired decision. A speech end, a provider declaration, an STT
+final and a committed `TurnId` are distinct facts.
+
+A pending prediction selects minimum or maximum endpoint delay against the
+language threshold. Delay is anchored to the last speech timestamp. Missing or
+failed predictions use the minimum; resumed speech abandons automatic countdowns.
+Commit snapshots the words, holds them by `TurnId` and emits `EndOfTurn` followed
+by `TurnSettled`. Activity admission returns a correlated verdict to recognition:
+accepted, too few interruption words, realtime backchannel, empty or dropped.
+Recognition retains or clears words according to that verdict. Utterance identity
+also routes a late final for promoted interim words back to the original item.
+
+`audio_recognition::overlap::OverlapJudge` owns each adaptive overlap request and
+its interruption guard. While judging, it disables ordinary audio interruption
+so VAD cannot cut ahead of the verdict. A backchannel keeps that guard until
+agent speech ends; an interruption verdict releases it and requests the usual
+guarded interruption. Superseded or closed overlap IDs cannot affect a new speech.
+
+The two `backchannel_boundary` margins are implemented separately. Audible agent
+speech starts `Timer::BackchannelBoundary`. While armed, a non-interruption
+verdict is terminal for its overlap but is not trusted as a backchannel; its
+guard is released to ordinary audio interruption policy. At agent speech end,
+recognition cancels that timer and retires the overlap. It subtracts the end
+margin from `ignore_user_transcript_until` before filtering buffered STT events
+by their stream-relative timestamps. The cutoff excludes interior overlap while
+preserving the suffix near the handover; a new user onset clears the exclusion.
+Pause ends an audible interval and resume starts another, even if generation
+never stopped.
+
+The public configuration and timing contract lives in
+[turn boundaries and interruption](../voice-session.md#turn-boundaries-and-interruption).
+Regressions cover pause/resume once, a timeout waiting on a turn decision,
+superseded verdicts, nonempty versus empty finals, playback replacement and
+transcript corrections on the originating turn.
 
 ### Provider protocols and inference
 
@@ -449,12 +580,12 @@ establish exactly-once execution of external effects.
 Storage uses the Rust `Storage` lifecycle trait and the internal
 `ThreadDbConnection` execution trait. AgentDB and local SQLite adapters share
 `Thread`, `Partition`, `Run` and `Lease` engine types, including typed content reads
-that require no partition lease. The [storage plan](storage.md#rust-interface)
+that require no partition lease. The [storage interface](storage.md#rust-interface)
 defines the interfaces, backend contracts and failure behavior;
 [thread content reads](storage.md#reading-thread-items-and-tasks) distinguish
 runtime handles from Cloud service APIs. Host-visible records follow the ABI
 and generated-binding rules. Application writes follow the
-[context transaction contract](../context.md#application-records-and-transactions).
+[context transaction contract](../persistence.md#application-records-and-transactions).
 Cloud supplies an authorized threads API for browser reads. Local SQLite
 supplies backend thread reads; browser access requires application-provided
 HTTP routes. A hosted read API is not part of backend storage parity.
@@ -468,37 +599,16 @@ HTTP routes. A hosted read API is not part of backend storage parity.
 | Managed run | Loaded revision, staged writes and commit/abandon outcome | One fenced commit; explicit application saves; transport acknowledgment and commit boundaries are distinct |
 | A2A task | Arrival policy, message deduplication, pending input and terminal transition (`lk_agents_core::a2a`) | Typed handler/checkpoint outcomes drive policy; completed transport does not imply a persisted Python continuation |
 
-`lk-agents-storage` is a plain async crate. It owns all database interaction:
-both backends, retries, fencing, lease renewal and resolution of lost
-acknowledgments. Every failure reaches the caller as a precise typed error.
-A database failure is `Uncertain` (the outcome is unknown), `Rejected { running_task_id }`,
-`LeaseLost`, `Unavailable` (the one retryable error), `NotFound` or
-`VersionConflict`; a request the caller made wrongly is `Invalid`,
-`NotSerializable`, `TooLarge` or `Unauthorized`; the handler's own save refused
-through its turn is `Refused(HostError)`; a turn the host cancelled is
-`Cancelled`. The A2A task
-decisions in `lk_agents_core::a2a` are sans-I/O over request/result records and
-error types declared in ABI; core has no dependency on storage. The runtime's
-thin A2A door executes core's storage effects by calling storage and feeds the
-typed results back. Storage is tested against real SQLite and a fake AgentDB
-server with injected faults. A2A and TextSession behavior is covered by core,
-runtime and storage component tests; the DST is limited to voice and room simulation.
+The [storage interface](storage.md#rust-interface) owns typed errors, backend
+contracts and database interaction. The [ownership protocol](storage.md#one-writer-at-a-time)
+defines acquisition, lease loss and fencing. Runtime executes those operations
+and returns their outcomes to core; it does not reinterpret failures as policy.
 
-Tests cover concurrent arrivals, lost ownership, duplicate messages, uncertain
-writes, commit failure, worker loss and pending human input. The same storage
-contract suite runs against SQLite and AgentDB, including restart persistence,
-thread lifecycle, cross-process ownership and partial lifecycle failures.
-Cloud routing information is not a substitute for authoritative write ownership.
-Application transactions and external effects retain their own operation IDs.
-
-Observed lease loss stops admission of new conversational work and cancels the
-owning run's invocation. Managed writes remain fenced at the database even if
-the former owner has not observed the loss. Cleanup remains owned and continues.
-Lease expiry cannot prevent a paused former owner from resuming application code.
-External mutations require the receiving system's conditional-write, fencing
-or idempotency protocol. Idempotency prevents duplicate operations; it does not
-by itself reject a stale owner's action. Already-started effects can remain
-uncertain and require reconciliation under the application transaction contract.
+Storage adapters are tested against real SQLite and a controlled AgentDB peer.
+A2A and TextSession also run through the text DST with controlled model and host
+callbacks. The [DST guide](../../rust/crates/lk-agents-fuzz/README.md) owns those
+simulation boundaries, and [storage verification](storage.md#verification)
+defines backend parity and fault coverage.
 
 ### Support algorithms and observations
 

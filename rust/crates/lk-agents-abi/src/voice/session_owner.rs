@@ -396,7 +396,7 @@ pub trait VoiceSessionFacade {
     #[host(via = Running)]
     async fn set_participant(&self, identity: Option<String>) -> crate::voice::io::Result<()>;
 
-    /// `AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it.
+    /// Internal turn reset: drop the open turn and everything accumulated for it.
     #[host(via = Running, native = clear_user_turn)]
     fn _clear_user_turn(&self) -> Result<(), super::session::SessionRefused>;
 
@@ -405,7 +405,7 @@ pub trait VoiceSessionFacade {
     #[host(via = Running, annotation(ret = "livekit.agents._core.UserTurn"))]
     fn start_user_turn(&self) -> Result<crate::HostRef, super::session::UserTurnRefused>;
 
-    /// `AgentSession.interrupt(force=)`: the current and queued speeches up to the first
+    /// `VoiceSession.interrupt(force=)`: the current and queued speeches up to the first
     /// uninterruptible; answers when they are done, or with the refusal.
     #[host(via = Running, future)]
     async fn interrupt(
@@ -413,16 +413,16 @@ pub trait VoiceSessionFacade {
         #[host(kw, default = false)] force: bool,
     ) -> Result<(), super::session::NotInterruptible>;
 
-    /// `AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
+    /// `VoiceSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
     /// speech is left. Answers `None`, or why it was refused.
     #[host(via = Running, discard)]
     async fn drain(&self) -> Option<super::session::DrainRefused>;
 
-    /// `AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`).
+    /// `VoiceSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`).
     #[host(via = Running)]
     async fn wait_for_idle(&self) -> Result<(), super::session::IdleRefused>;
 
-    /// `AgentSession.commit_user_turn(..)`: flush, wait for the final, commit, answer with the
+    /// Internal turn commit: flush, wait for the final, commit, answer with the
     /// transcript. Runs whether or not awaited; a newer commit supersedes it.
     #[host(via = Running, native = commit_user_turn, future)]
     async fn _commit_user_turn(

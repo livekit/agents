@@ -110,10 +110,10 @@ export AZURE_OPENAI_API_VERSION=2024-10-01-preview
 For more control over individual components:
 
 ```python
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, VoiceSession
 from livekit.plugins import azure, openai, silero
 
-session = AgentSession(
+session = VoiceSession(
     stt=azure.STT(),
     llm=openai.LLM.with_azure(
         model="gpt-4o",

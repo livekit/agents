@@ -86,7 +86,7 @@ class EotPredictionEvent:
 class _AgentBackchannelOpportunityEvent:
     """Internal: a window in which the agent could backchannel (a short
     acknowledgment such as "mm-hmm"), as predicted by the turn detector. Passed to
-    ``AgentActivity`` only — not surfaced as a public ``AgentSession`` event yet.
+    ``AgentActivity`` only — not surfaced as a public ``VoiceSession`` event yet.
 
     ``AgentActivity`` owns the decision of what to do with it. The end-of-turn margin
     (``end_of_turn_threshold - end_of_turn_probability``) gives a progressive risk axis:

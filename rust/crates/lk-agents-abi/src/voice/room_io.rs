@@ -465,8 +465,8 @@ pub struct RoomOptions {
     ///     accept `DEFAULT_PARTICIPANT_KINDS`.
     #[host(annotation = "list[rtc.ParticipantKind.ValueType]")]
     pub participant_kinds: crate::Maybe<Vec<i32>>,
-    /// The participant to link to. If not provided, link to the first participant.
-    ///     Can be overridden by the `participant` argument of RoomIO constructor or `set_participant`.
+    /// The participant to link to. If not provided, link to the first accepted participant.
+    /// Change the linked participant with ``VoiceSession.set_participant(identity)``.
     pub participant_identity: crate::Maybe<String>,
     /// Close the VoiceSession if the linked participant disconnects with reasons in
     ///     CLIENT_INITIATED, ROOM_DELETED, or USER_REJECTED.

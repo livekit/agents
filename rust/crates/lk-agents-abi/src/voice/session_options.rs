@@ -143,9 +143,8 @@ impl TurnDetectionKwarg {
 
 /// Configuration for endpointing.
 ///
-/// All keys are optional. Missing keys inherit from the session default
-/// (at the ``Agent`` level) or use the documented defaults
-/// (at the ``AgentSession`` level).
+/// All keys are optional. Missing keys use the session's resolved defaults;
+/// updates merge supplied keys into the current session configuration.
 #[crate::host(record(
     module = "turn",
     name = "EndpointingOptions",
@@ -175,9 +174,8 @@ pub struct EndpointingKwargs {
 
 /// Configuration for interruption handling.
 ///
-/// All keys are optional. Missing keys inherit from the session default
-/// (at the ``Agent`` level) or use the documented defaults
-/// (at the ``AgentSession`` level).
+/// All keys are optional. Missing keys use the session's resolved defaults;
+/// updates merge supplied keys into the current session configuration.
 ///
 /// ``mode`` absent means the session picks the best available strategy.
 #[crate::host(record(
@@ -289,7 +287,7 @@ pub struct UserTurnLimitKwargs {
 /// Can be passed as a plain dict::
 ///
 #[cfg_attr(doctest, doc = "```text")]
-///     AgentSession(
+///     VoiceSession(
 ///         turn_handling={
 ///             "endpointing": {"min_delay": 0.3},
 ///             "interruption": {"enabled": False},
@@ -334,7 +332,7 @@ pub struct TurnHandlingKwargs {
     pub push_to_talk: Option<bool>,
 }
 
-/// Every option keyword of the reference's `AgentSession.__init__`, once. Host-object kwargs
+/// Every option keyword of `VoiceSession.__init__`, once. Host-object kwargs
 /// (`stt`, `llm`, `tools`, ...) are legs, not options.
 #[crate::host(record(module = "session_options", typed_dict, extract))]
 #[derive(Clone, PartialEq)]
@@ -364,7 +362,7 @@ pub struct SessionKwargs {
     pub session_close_transcript_timeout: f64,
 }
 
-/// `AgentSession.update_options(..)`'s option surface.
+/// `VoiceSession.update_options(..)`'s option surface.
 #[crate::host(record(module = "session_options", typed_dict, extract))]
 #[derive(Clone, Default, PartialEq)]
 pub struct UpdateKwargs {
@@ -661,8 +659,8 @@ impl From<String> for Instructions {
     }
 }
 
-/// Configuration for the expressive pipeline, passed as ``AgentSession(expressive=...)``
-/// or ``Agent(expressive=...)`` (the agent value overrides the session's).
+/// Configuration for the expressive pipeline, passed as ``VoiceSession(expressive=...)``
+/// or changed through ``session.update_options(expressive=...)``.
 ///
 /// Controls how TTS markup instructions are injected into the LLM when expressive is
 /// enabled. All keys are optional; common shapes:
@@ -694,7 +692,7 @@ pub struct ExpressiveConfig {
     pub tts_instructions_append: Option<String>,
 }
 
-/// `bool | ExpressiveOptions`, as `VoiceSession(expressive=)`, `Agent(expressive=)` and
+/// `bool | ExpressiveOptions`, as `VoiceSession(expressive=)` and
 /// `update_options(expressive=)` take it: `False`/`None` is off, `True` the default options, a dict
 /// (even an empty one) on with those options.
 #[crate::host(codec(

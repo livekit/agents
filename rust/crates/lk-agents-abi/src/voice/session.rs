@@ -416,7 +416,7 @@ pub struct VoiceSessionArgs {
     pub job_run: Option<Arc<dyn crate::worker::ipc_host::JobExecution>>,
 }
 
-/// `AgentSession(**kwargs)`'s options before the session holds them: the raw kwargs, read once,
+/// `VoiceSession(**kwargs)`'s options before the session holds them: the raw kwargs, read once,
 /// and the session layer they became (plus every `update_options` so far).
 #[crate::host(class(name = "SessionOptions"))]
 pub trait SessionOptions: Clone + Send + Sync + Sized + 'static {
@@ -516,7 +516,7 @@ pub enum DrainRefused {
     TaskRunning,
 }
 
-/// `voice/agent_session.py`'s `AgentSession`: assembled at construction, started at `start()`,
+/// The public `VoiceSession`: assembled at construction, started at `start()`,
 /// closed at `aclose()`; every other method is one command to its loop.
 #[crate::host(class(name = "VoiceSession"))]
 pub trait VoiceSession: Send + Sync + Sized + 'static {
@@ -677,7 +677,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         voice_agent: Option<Arc<dyn crate::agent::AgentFrame>>,
     ) -> Result<(), SessionRefused>;
 
-    /// `AgentSession.update_options(..)` on a running session: merged into its session layer and
+    /// `VoiceSession.update_options(..)` on a running session: merged into its session layer and
     /// re-resolved; `expressive` reaches the next reply, `keyterms` replace the user's list. A turn
     /// detector object is refused: swapping the detector of a running session is not ported.
     #[host(call)]
@@ -753,7 +753,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         #[host(default = false)] drain: bool,
     ) -> Result<BoxFuture<'static, ()>, UnknownCloseReason>;
 
-    /// `AgentSession.shutdown(drain=)`: `aclose` without waiting for it.
+    /// `VoiceSession.shutdown(drain=)`: `aclose` without waiting for it.
     #[host(call)]
     fn shutdown(&self, #[host(kw, default = true)] drain: bool);
 
@@ -784,7 +784,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(call)]
     fn filler_stop(&self, id: u64);
 
-    /// `AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it.
+    /// Internal turn reset: drop the open turn and everything accumulated for it.
     #[host(call)]
     fn clear_user_turn(&self) -> Result<(), SessionRefused>;
 
@@ -816,7 +816,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(call)]
     fn update_chat_ctx(&self, items: Vec<ChatItem>) -> Result<(), SessionRefused>;
 
-    /// `AgentSession.interrupt(force=)`: the current and queued speeches up to the first
+    /// `VoiceSession.interrupt(force=)`: the current and queued speeches up to the first
     /// uninterruptible; answers when they are done, or with the refusal.
     #[host(await)]
     fn interrupt(
@@ -824,12 +824,12 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         #[host(kw, default = false)] force: bool,
     ) -> Result<BoxFuture<'static, Result<(), NotInterruptible>>, SessionRefused>;
 
-    /// `AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
+    /// `VoiceSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
     /// speech is left. Answers `None`, or why it was refused.
     #[host(await)]
     fn drain(&self) -> Result<BoxFuture<'static, Option<DrainRefused>>, SessionRefused>;
 
-    /// `AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`).
+    /// `VoiceSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`).
     #[host(await)]
     fn wait_for_idle(
         &self,
@@ -848,7 +848,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(call)]
     fn release_idle_hold(&self, hold: u64);
 
-    /// `AgentSession._claim_user_turn()`'s enter: pins the user state to `speaking` and holds
+    /// `VoiceSession._claim_user_turn()`'s enter: pins the user state to `speaking` and holds
     /// `wait_for_idle` open. Reentrant.
     #[host(call)]
     fn claim_user_turn(&self) -> Result<(), SessionRefused>;
@@ -904,7 +904,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(call)]
     fn agent_chat_ctx(&self) -> Vec<ChatItem>;
 
-    /// `AgentSession.commit_user_turn(..)`: flush, wait for the final, commit, answer with the
+    /// Internal turn commit: flush, wait for the final, commit, answer with the
     /// transcript. Runs whether or not awaited; a newer commit supersedes it.
     #[host(await)]
     fn commit_user_turn(

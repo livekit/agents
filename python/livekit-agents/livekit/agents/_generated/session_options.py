@@ -27,7 +27,7 @@ DetectorKind: TypeAlias = Literal["streaming"]
 
 
 class SessionKwargs(TypedDict, total=False):
-    """Every option keyword of the reference's `AgentSession.__init__`, once. Host-object kwargs
+    """Every option keyword of `VoiceSession.__init__`, once. Host-object kwargs
     (`stt`, `llm`, `tools`, ...) are legs, not options.
     """
 
@@ -49,7 +49,7 @@ class SessionKwargs(TypedDict, total=False):
 
 
 class UpdateKwargs(TypedDict, total=False):
-    """`AgentSession.update_options(..)`'s option surface."""
+    """`VoiceSession.update_options(..)`'s option surface."""
 
     turn_handling: TurnHandlingOptions
     """Merged by key over the session's, nested groups included. `turn_detection=None` reverts

@@ -29,9 +29,8 @@ InterruptionMode: TypeAlias = Literal["adaptive", "vad"]
 class EndpointingOptions(TypedDict, total=False):
     """Configuration for endpointing.
 
-    All keys are optional. Missing keys inherit from the session default
-    (at the ``Agent`` level) or use the documented defaults
-    (at the ``AgentSession`` level).
+    All keys are optional. Missing keys use the session's resolved defaults;
+    updates merge supplied keys into the current session configuration.
     """
 
     mode: EndpointingMode
@@ -54,9 +53,8 @@ class EndpointingOptions(TypedDict, total=False):
 class InterruptionOptions(TypedDict, total=False):
     """Configuration for interruption handling.
 
-    All keys are optional. Missing keys inherit from the session default
-    (at the ``Agent`` level) or use the documented defaults
-    (at the ``AgentSession`` level).
+    All keys are optional. Missing keys use the session's resolved defaults;
+    updates merge supplied keys into the current session configuration.
 
     ``mode`` absent means the session picks the best available strategy.
     """
@@ -149,7 +147,7 @@ class TurnHandlingOptions(TypedDict, total=False):
 
     Can be passed as a plain dict::
 
-        AgentSession(
+        VoiceSession(
             turn_handling={
                 "endpointing": {"min_delay": 0.3},
                 "interruption": {"enabled": False},

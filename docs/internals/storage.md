@@ -7,7 +7,7 @@ load and save persisted context and routing state. A new worker continues
 from committed records; in-memory changes are lost on a crash.
 
 Application-facing field saves and independently committed business records
-follow the [context transaction contract](../context.md#application-records-and-transactions).
+follow the [context transaction contract](../persistence.md#application-records-and-transactions).
 The storage sections below define how managed transport writes are implemented.
 
 ## Configuration
@@ -357,7 +357,7 @@ The partition's unique token is checked against its database row; it is not a mo
 increasing fencing epoch that an independent downstream service can order.
 Uncertain effects require reconciliation. Sharing a thread database or taking
 its partition lease does not extend the managed fence to another transaction or
-service. See [application records and transactions](../context.md#application-records-and-transactions).
+service. See [application records and transactions](../persistence.md#application-records-and-transactions).
 
 Runs waiting for a partition execute in the order their messages arrived: each
 message's `submitted` row is written before its run waits for the lease,
@@ -370,13 +370,16 @@ commit append-only, with no fence, and write no state.
 
 ### Voice and text share a partition
 
-A call's `VoiceSession`, given `thread=ctx.thread`, keeps the conversation
-in memory and takes the partition's lease for each voice turn, from the end of the
-person's turn to the commit of the reply, then releases it. A text that arrives between two voice
-turns runs on any worker that takes the partition. When the call's next turn
-takes the lease and finds a newer version than the one it last committed,
-it reloads the transport history. Application code must reload marked context
-fields before using updates saved by another activation.
+A store-bound `VoiceSession` and a text endpoint selecting the same thread and
+partition share the database's ownership boundary. Voice can acquire ownership
+to checkpoint recognition before a reply exists; overlapping speeches can keep
+the same run alive until their work settles. Text requests wait under the
+endpoint's admission policy while that ownership is held. Each acquisition
+reconciles committed transport history before execution. Application code must
+reload marked context fields before using updates saved by another activation.
+See [session checkpoints](#session-checkpoints-and-reconciliation) for voice timing
+and [context binding](../persistence.md#session-state-and-explicit-binding) for opting in;
+a `thread=` association alone does not activate session persistence.
 
 ### Two brains, one thread
 
@@ -441,6 +444,46 @@ the partial item. Generated but unheard text is never stored as completed speech
 tool call without a result requires reconciliation before new execution; recovery does not
 replay its body automatically.
 
+### Session checkpoints and reconciliation
+
+Persistence serves both session kinds. A session decides when its state is ready
+to save; storage owns database runs, reconciliation, item diffs, fencing and retries.
+
+Voice's `agent_session::storage` coordinator owns checkpoint timing and receipt
+barriers for recognition, delivered speech and tool steps. `VoiceStore` is the
+storage adapter for overlapping speech owners and recognition recovery.
+`SessionBinding` owns explicit binding, live session views and text checkpoint
+publication through `ContextStore` and native `SessionState`. Both adapters use
+the shared `Run` for database history baselines, item diffs, fenced writes and
+write identity. Runtime executes correlated effects and returns acknowledgments,
+including task death.
+
+Unaccepted recognition is a draft. A bound voice session checkpoints its latest text into
+`pending_user_turns` in the persisted voice state, independently of whether an assistant reply
+exists. Drafts do not enter model-visible history. Acceptance moves the words into conversation
+history with the same item ID and clears the pending projection. A turn accepted without a
+reply still saves. On recovery, the store reconciles pending words under the acquired lease;
+stable IDs prevent inserting them twice.
+
+The [public persistence contract](../persistence.md) defines binding, snapshots,
+explicit application saves and transaction boundaries. Both session adapters
+use the shared run/checkpoint machinery below.
+
+Voice additionally checkpoints live recognition and delivered playback. A save carries concrete
+items and a submission sequence, rather than asking storage to guess which user turn to save.
+The database compares stable IDs, payloads and positions against the run's loaded baseline.
+Already stored items are unchanged unless their accepted revision or position changed.
+
+Acquisition always reads and reconciles under ownership before releasing the next model read.
+Explicit local history is not proof that unseen database rows were deleted. A concurrent
+writer's rows survive the first acquisition; an unchanged stored baseline permits local edits,
+while another writer's changed version wins reconciliation. Progress and terminal voice saves
+share a submission order so a delayed older operation cannot overwrite newer history.
+
+Success receipts mean the included checkpoint is durable, even if another speech still owns
+the shared run. Only a receipt marks edits saved. Failed or lost work returns a typed result;
+a bound session closes on storage failure. Closing waits for outstanding conversation saves.
+
 SQLite uses WAL with `synchronous=NORMAL`. A successful checkpoint survives process crashes;
 power loss can lose recent commits that have not reached stable storage. No numeric loss
 window is promised. Immutable history revisions and message/task receipts remain for the
@@ -451,24 +494,12 @@ period. History pruning must preserve every referenced item revision and ordered
 
 ### Application writes and failure boundaries
 
-Persisted context requires explicit load/save; see
-[context.md](../context.md). Marked field writes staged by `save_context` join
-the managed commit. Independent application transactions and external effects
-retain their own durable boundaries and idempotency requirements.
-
-Application SQL is unrestricted: it may read and write any table, including
-the framework's. `async with ctx.store.transaction()` joins the managed commit;
-`async with ctx.store.independent_transaction()` commits durably when its block
-exits. No SQL transaction stays open across model or tool network calls.
-Writes are staged and apply together when the transaction commits, so a read
-after a write in the same transaction is refused. A row is a tuple of column
-values in select order: null, integers, floats or strings (a boolean reads back
-as 0 or 1); parameters may also be booleans. There are no BLOBs: a BLOB column read as a row value is
-refused (select `hex(...)`), and bytes are not a parameter
-([context.md](../context.md#application-records-and-transactions)).
-
-Durable execution, operation outboxes, and durable timers are outside this
-storage contract.
+The [application transaction contract](../persistence.md#application-records-and-transactions)
+defines SQL access and managed versus independent commits. Storage executes
+that choice through `ContextStore` and `Run`; it keeps no SQL transaction open
+across model or tool network calls. Fencing protects managed writes only.
+Independent transactions and external effects retain their own durable
+boundaries and idempotency requirements.
 
 ## Backends
 

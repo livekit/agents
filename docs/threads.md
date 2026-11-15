@@ -114,13 +114,14 @@ For SMS, WhatsApp and email routing, see [channels.md](channels.md).
 
 ## Runs
 
-A run is one input to one result, tools included: a text message, a voice
-turn. The framework loads the agent's partition before a run and commits it
-after, so a run can execute on any worker. Application fields require explicit
-load/save; returning from a handler does not save them.
-Runs of one agent in a thread execute one at a time, in the order their
-messages arrived, unless the endpoint chose otherwise; see
-[partition mechanics](internals/storage.md#partitions) and [server.md](server.md).
+An agent run processes one input through model and tool execution to a result.
+A database run owns a separate persistence lifetime: overlapping voice speeches
+can share one database run. Direct agent execution need not have storage.
+
+Managed endpoint requests load and commit through their selected partition.
+Their admission order follows the endpoint's [request policy](server.md#a-message-while-a-turn-is-running);
+database ownership follows [partition mechanics](internals/storage.md#partitions).
+Application saves follow the [persistence contract](persistence.md).
 
 ## `ctx.thread`
 
@@ -164,15 +165,12 @@ in one turn; see [server.md](server.md).
 
 ## Session binding and snapshots
 
-The entrypoint's store selects the thread and partition. `ctx.store.bind(app)` explicitly
-authorizes TextSession or VoiceSession to advance that conversation. A persisted session
-field is discovered only within this explicit binding; passing ordinary context does not
-implicitly restore or update a conversation.
-
-`await ctx.store.load_session()` reads a detached committed snapshot without executing an
-agent. `ctx.thread.chat_history()` reads the selected partition's messages. Separate reads
-are not one atomic historical snapshot. During execution, a bound app.session reflects
-accepted in-memory state, which can lead committed storage until the next checkpoint.
+The entrypoint selects the thread and partition; the
+[persistence guide](persistence.md#session-state-and-explicit-binding) defines
+how session execution binds that selection or reads detached snapshots.
+`ctx.thread.chat_history()` reads committed transport messages rather than
+private TextSession frame histories. Separate reads are not an atomic historical
+snapshot.
 
 Delegation into an active caller/ancestor's same store/thread/partition is rejected before
 task admission, including the default key. Different threads or stores remain independent;

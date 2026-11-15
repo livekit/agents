@@ -320,24 +320,9 @@ normalized contributions. Telemetry can export a selected breakdown, but names,
 units, and inclusion rules must agree. Per-request spans describe their own work;
 an inclusive session total is not another independent billable contribution.
 
-## Removing duplicate contracts
+## Record compatibility
 
-The public API uses `Usage`, `TokenUsage`, and the specialized `ModelUsage` union.
-It has no separate `RunUsage` or `AgentSessionUsage` shape, public
-`session_usage_updated` event, or mutable caller-supplied usage accumulator.
-An application can read a snapshot without configuring telemetry or collecting
-provider events.
-
-Normalized token names are `input_tokens`, `output_tokens`, `cache_read_tokens`,
-and `cache_write_tokens`. The per-request span summaries sent to Cloud
-(`lk.llm_metrics` and its siblings) use these usage names and omit a value that
-was not measured instead of writing `-1` or `0`. Remove `prompt_tokens`/`completion_tokens`, the duplicate
-`prompt_cached_tokens`/`cache_read_tokens` representation, and cache-creation
-aliases from the normalized API. Provider SDK field names remain confined to
-adapters. Deprecated provider-specific output-image fields are replaced by the
-optional normalized output-image breakdown when a provider actually reports it.
-
-Totals are computed, absent measurements stay explicit, and empty compatibility
-base classes do not form part of the public usage API. Legacy persisted records
-are decoded at the storage boundary; compatibility decoding does not reintroduce
-old field names or types into newly returned records.
+Legacy persisted records are decoded at the storage boundary. Compatibility
+decoding does not add old field names or types to newly returned records.
+Provider SDK names stay in their adapters; normalized records and exported
+measurements use the [public usage fields](#public-records).

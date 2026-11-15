@@ -77,7 +77,7 @@ pub trait KeytermFunctions {
 /// Can be passed as a plain dict::
 ///
 #[cfg_attr(doctest, doc = "```text")]
-///     AgentSession(
+///     VoiceSession(
 ///         stt_context_options={
 ///             "keyterms": ["LiveKit", "Acme Corp"],
 ///             "keyterm_detection": {"enabled": True, "turn_interval": 1},

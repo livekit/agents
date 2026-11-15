@@ -189,7 +189,7 @@ class VoiceSession:
         await self._running.set_participant(identity)
 
     def _clear_user_turn(self) -> None:
-        """`AgentSession.clear_user_turn()`: drop the open turn and everything accumulated for it."""
+        """Internal turn reset: drop the open turn and everything accumulated for it."""
         self._running.clear_user_turn()
 
     def start_user_turn(self) -> HostUserTurn:
@@ -199,19 +199,19 @@ class VoiceSession:
         return self._running.start_user_turn()
 
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
-        """`AgentSession.interrupt(force=)`: the current and queued speeches up to the first
+        """`VoiceSession.interrupt(force=)`: the current and queued speeches up to the first
         uninterruptible; answers when they are done, or with the refusal.
         """
         return asyncio.ensure_future(self._running.interrupt(force=force))
 
     async def drain(self) -> None:
-        """`AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
+        """`VoiceSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
         speech is left. Answers `None`, or why it was refused.
         """
         await self._running.drain()
 
     async def wait_for_idle(self) -> None:
-        """`AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`)."""
+        """`VoiceSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`)."""
         await self._running.wait_for_idle()
 
     def _commit_user_turn(
@@ -221,7 +221,7 @@ class VoiceSession:
         stt_flush_duration: float = 2.0,
         skip_reply: bool = False,
     ) -> asyncio.Future[str]:
-        """`AgentSession.commit_user_turn(..)`: flush, wait for the final, commit, answer with the
+        """Internal turn commit: flush, wait for the final, commit, answer with the
         transcript. Runs whether or not awaited; a newer commit supersedes it.
         """
         return asyncio.ensure_future(self._running.commit_user_turn(

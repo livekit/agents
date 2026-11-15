@@ -129,19 +129,12 @@ token = credentials.thread_grant_token(
 | `project_token(identity="worker", ttl_seconds=3600)` | a project credential carrying the `agentEndpoint` call grant, which passes the node to any endpoint of any agent in the project |
 | `verify(token)` | the `Principal`: `kind` (`project` or `grant`), `grant`, `identity`, `claims`; raises `Unauthorized` |
 
-`Unauthorized` (401) and `Forbidden` (403, a valid token without the needed grant) are the
-`AuthError`s an endpoint answers with, outside JSON-RPC.
-
-`AgentThreadGrant` takes `scope` or `thread_ids` and the flags `create`,
-`write`, `read` and `sql` ([auth](auth.md#the-thread-grant)); never give a browser `sql`; `can_create()`,
-`can_list(scope)`, `can_read(thread)`, `can_write(thread)` and
-`can_delete(thread)` are its checks. Its `list` and `delete` flags are the
-threads service's browser operations
-([thread handles](#a-thread-handle)). With that token the browser talks to the platform's threads API, and
-what it cannot do is see another scope, set attributes, or anything the
-grant does not list. What stays on your backend: minting tokens, setting
-attributes such as a title when the agent does not, and your product's own
-tables.
+`AgentThreadGrant` uses Python names such as `thread_ids`; the
+[grant contract](auth.md#the-thread-grant) defines subjects and permission flags.
+[Endpoint authentication](auth.md#endpoints) owns authorization errors and
+[verification](auth.md#verification) distinguishes client-side token verification
+from node admission and worker authorization. Browser integration is shown
+[below](#from-the-browser).
 
 ## A client for an endpoint
 

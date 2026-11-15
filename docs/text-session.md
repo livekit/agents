@@ -180,40 +180,15 @@ turn = await TextSession(agent=front_desk).run(ctx.message, context=binding)
 result = turn.result
 ```
 
-The runtime discovers the marked session field, updates its object as accepted execution
-progresses and checkpoints it. No assignment of turn.state or save_context call is required
-for session state, including input-required transitions. Ordinary marked application fields
-still require explicit saves and join the managed turn's final transaction.
+This bound execution restores the selected stored conversation and checkpoints
+accepted frame changes. For a detached invocation, pass `state=` or a plain
+application context and retain `turn.state` yourself. The
+[persistence guide](persistence.md#session-state-and-explicit-binding) owns
+binding validation, object identity, snapshot rules and save boundaries.
 
-For explicit snapshot execution:
-
-```python
-before = await ctx.store.load_session()
-turn = await TextSession(agent=front_desk).run(message, state=before, context=dependencies)
-after = turn.state
-```
-
-To persist manually through an application's marked `SessionState` field, assign the settled
-snapshot and explicitly save the context:
-
-```python
-app = await ctx.store.load_context(App(services=services))
-turn = await TextSession(agent=front_desk).run(ctx.message, context=app)
-app.session = turn.state
-await ctx.store.save_context(app)
-```
-
-The snapshot and marked application fields join the handler's commit together. Without the
-assignment and save, plain context execution leaves the stored conversation unchanged.
-
-`dependencies` in this example has no session-state field. Explicit state cannot be combined
-with a bound context or a second session field. Detached snapshots do not follow live updates.
-Reading a snapshot never starts a binding or advances a stored conversation.
-
-TextSession does not cache a conversation between calls. Two plain-context invocations start
-from the same supplied snapshot if that context is unchanged. Two bound invocations continue
-the selected stored conversation. Bindings end after stream consumption and cleanup, including
-cancellation; retained snapshots remain unchanged. See [context binding](context.md#session-state-and-explicit-binding).
+TextSession does not cache a conversation between calls. Bound invocations
+continue the stored conversation; detached invocations continue only the
+snapshot the caller supplies. Runtime cleanup ends the binding.
 
 Agent-tool names, typed parameters, approvals and history selection use [the tool API](tools.md#configuring-an-agent-tool).
 
@@ -243,10 +218,10 @@ permission to commit the booking. Configure that tool with
 `needs_approval=`; bind its approval to the exact reservation terms and
 draft revision. See [human input and approvals](tools.md#approval).
 
-The application explicitly saves each returned routing state, including approval
-waits. Session state stores pending decisions and call relationships; runtime
-services are supplied again by the application on the next request. External
-effects still require their own idempotency and authorization checks.
+Session state stores pending decisions and call relationships; runtime services
+are supplied again by the application on the next request. Persist the transition
+using the selected [binding or snapshot mode](#loading-and-saving-session-state).
+External effects still require their own idempotency and authorization checks.
 
 ## Calling an agent as a tool
 
@@ -366,9 +341,10 @@ needs a different context is called from an ordinary tool that runs
 ## Persistence and execution ownership
 
 Session state contains serializable frame histories and routing metadata.
-The application explicitly loads and saves it alongside the relevant context
-fields. Runtime services are reconstructed by application code. Save routing
-and application changes consistently so both describe the same completed turn.
+Bound execution checkpoints that state; snapshot execution requires explicit
+assignment and saving, as shown in [loading and saving session state](#loading-and-saving-session-state).
+Ordinary application fields require explicit saves in either mode. Runtime
+services are reconstructed by application code.
 
 Serialize turns for one conversation and use revision checks on saves.
 `TextSession(agent=..., max_depth=8)` bounds the stack depth; an agent-tool call
@@ -382,7 +358,8 @@ and arbitrary await points are outside the persisted state.
 ## Direct execution
 
 `agent.run(message, message_history=..., context=...)` always runs that agent.
-A stored routing frame is consulted only by `session.run(..., state=...)`.
+Stored routing frames are consulted by TextSession execution, whether restored
+through an explicit binding or supplied as a snapshot.
 
 An application switching to direct execution supplies the selected frame's
 history and appropriate context. An active child's history is independently

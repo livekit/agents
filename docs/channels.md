@@ -15,12 +15,8 @@ Every A2A message may carry `livekit/channel` with the channel's name, and
 the handler reads the resolved value as `ctx.messages[i].channel`. On the wire
 the key is `https://livekit.io/a2a/ext/agents/v1/channel`; `livekit/<name>` is
 this page's shorthand ([metadata keys](protocol/a2a.md#metadata-keys)).
-`livekit/kind: delegation` selects `delegation` even with an explicit channel;
-otherwise it uses `livekit/channel`, or `a2a` when absent. The channel picks
-the endpoint's policy and debounce for a message that arrives while a turn
-runs; see
-[server.md](server.md). Delegations default to `queue`, web
-chat and API clients to `queue`.
+The [server request policy](server.md#a-message-while-a-turn-is-running) owns
+channel selection, delegation precedence, batching and debounce defaults.
 
 Messages address a thread by ID; see [threads](threads.md). A routing key
 selects that ID before the message reaches the endpoint.
@@ -43,9 +39,8 @@ The key never travels on the A2A wire and is never shown by the public
 API. The ingress resolves it with the threads service's internal
 `ResolveThread`, get-or-create, and posts the message
 with the thread's id as `contextId` and the channel as `livekit/channel`
-(`sms`, `whatsapp`, `email`). The endpoint's default policy for these
-channels is `batch`: a burst of texts is answered together in one turn, as
-one reply, after a two second debounce.
+(`sms`, `whatsapp`, `email`). The endpoint applies the configured
+[request policy](server.md#a-message-while-a-turn-is-running) before running the handler.
 
 Within a configured routing namespace, SMS, WhatsApp and calls can share the
 `phone:` key to continue one conversation. A routing key identifies that

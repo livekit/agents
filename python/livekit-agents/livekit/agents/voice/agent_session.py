@@ -152,9 +152,13 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
                 defaults to ``inference.VAD(model="silero")``; ``vad=None`` opts out.
             tools: Tools shared by every agent of the session. A name an agent's own tool
                 also has is refused with ``ValueError`` when that agent runs.
-            context, thread: Read by tools through ``RunContext``. Without ``thread``, the call
-                runs in memory and writes nothing; a ``thread`` whose partition does not load fails
-                ``start()`` with its ``StorageError``.
+            context: Application context read by tools through ``RunContext``. Pass a store
+                binding to restore and checkpoint the conversation; plain context keeps session
+                state in memory. Ordinary application fields still require explicit saves.
+            thread: Optional thread association. A store binding supplies its own thread;
+                an explicit thread must match that binding. Association alone does not activate
+                session persistence. Failure to load bound state fails ``start()`` with its
+                ``StorageError``.
             video_sampler: How often camera frames reach the model; ``None`` sends every frame.
             conn_options: Each leg's connection policy.
             stt_context_options: The keyterms and context the STT is biased toward.

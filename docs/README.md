@@ -9,8 +9,9 @@ These documents define the intended API and behavior.
 
 1. [Agents](agents.md): define behavior, register a tool, run an invocation, and read its result.
 2. [Tools](tools.md): tool execution, human input, approvals, and agents as tools.
-3. [Context](context.md): construct dependencies and explicitly load/save application data.
-4. Choose [TextSession](text-session.md) for request-scoped text conversations or [VoiceSession](voice-session.md) for a live call.
+3. [Context](context.md): declare application data and construct runtime dependencies.
+4. [Persistence](persistence.md): load/save fields, bind session state, and choose transaction boundaries.
+5. Choose [TextSession](text-session.md) for request-scoped text conversations or [VoiceSession](voice-session.md) for a live call.
 
 For bounded voice interactions, continue with [VoiceTask](voice-tasks.md).
 To expose and call your application, read [server entrypoints](server.md) and
@@ -25,7 +26,8 @@ To expose and call your application, read [server entrypoints](server.md) and
 | [models.md](models.md) | Model strings and the inference catalog, realtime options, connection options and pools, the HTTP/WebSocket client, timeouts, errors, retries, provider streams, and the plugin-author contract |
 | [telemetry.md](telemetry.md) | Exporting to your backend, application spans, distributed traces, content and PII, LiveKit Cloud recording, Prometheus, and diagnostics |
 | [usage.md](usage.md) | Usage snapshots, token and billing units, accounting scope, measurement availability, and performance metrics |
-| [context.md](context.md) | Runtime dependencies, persisted fields, explicit load/save, scope, concurrency, and schema evolution |
+| [context.md](context.md) | Runtime dependencies, persisted field declarations, context scopes, and schema evolution |
+| [persistence.md](persistence.md) | Explicit load/save, session binding and snapshots, durability, transactions, and concurrent updates |
 | [text-session.md](text-session.md) | Session rehydration, backend agent frames, delegation, private histories, and continuation across requests |
 | [voice-session.md](voice-session.md) | Audio and turn configuration, agent replacement, frontend expert events, and reply routing |
 | [lexer.md](lexer.md) | A model reply's text on its way to the voice, the transcript and the history: hidden reasoning and template leaks, expressive markup, markdown and emoji, transcript sync, and how long text is held |
@@ -38,8 +40,11 @@ To expose and call your application, read [server entrypoints](server.md) and
 | [testing.md](testing.md) | Run event assertions, conversation judges, simulations, and SimulationContext verdicts and callbacks |
 
 Each contract has one owning page. Other pages show how to use it and link to
-its definition. Run results and streaming live in `agents.md`; wire encoding
-and storage mechanics have separate references below.
+its definition. Keep shared rules, defaults, exhaustive option tables and failure
+semantics in that owner; examples elsewhere should explain only their specific
+use. Public behavior and implementation mechanics have separate owners. Run
+results and streaming live in `agents.md`; wire encoding and storage mechanics
+have separate references below.
 
 ## Protocol
 

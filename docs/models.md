@@ -399,9 +399,10 @@ enforces `conn_options` itself.
   (`"<provider>: attempt N failed, retrying in Xs: <error>"`, keyed `lk.retry.subject`,
   `lk.retry.attempt` and `lk.retry.delay`).
 
-In a plugin's own retry loop, `async with conn_options.total_deadline():`
-bounds the operation by `total_timeout`, and `conn_options.interval_for_retry(n)`
-is the delay before retry `n`.
+An integration that owns its operation loop rather than using these attempt-based
+stream classes applies `async with conn_options.total_deadline():` to bound the
+operation and `conn_options.interval_for_retry(n)` for retry delays. It must
+remain the request's sole retry owner; an attempt-based `_run` never adds that loop.
 
 ### Connection pools
 

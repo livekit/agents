@@ -48,11 +48,9 @@ takes `raw_arguments: dict`, optionally after `ctx`, and validates them itself.
 
 ### Retries
 
-Arguments that fail validation and `ModelRetry` from the body send the model
-back to correct the call. Each tool counts its own
-consecutive retries against the agent's `retries["tools"]` budget (default
-`1`); `retries=` on the tool replaces that budget for it. A run whose tool
-goes over its budget fails with `UnexpectedModelBehavior`.
+Use `ModelRetry` to ask the model to correct a call. `retries=` on the tool
+sets its budget; inheritance, resets, defaults and exhaustion follow
+[agent retries](agents.md#retries).
 
 ```python
 @scheduler.tool(retries=3)
@@ -63,10 +61,6 @@ async def find_slot(ctx: RunContext[PatientContext], day: str) -> str:
         raise ModelRetry(f"No slots on {day}; ask for another day or try the next weekday.")
     return slots[0].label
 ```
-
-`@agent.tool(retries=)`, `@function_tool(retries=)` (also on a toolset's
-methods) and `MCPToolOptions(retries=)` take the same budget. See
-[agent retries](agents.md#retries) for the run-level budgets.
 
 ## Agents as tools
 
@@ -335,8 +329,8 @@ later call, even with identical arguments, asks again. The model cannot grant
 approval through a tool argument.
 
 For an agent tool, the session retains the pending invocation in its state.
-The application explicitly saves that state and loads it for the next reply.
-See [approval persistence](text-session.md#approval-before-starting-a-child).
+See [approval persistence](text-session.md#approval-before-starting-a-child)
+for bound execution and manually saved snapshots.
 
 
 ```python

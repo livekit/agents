@@ -130,17 +130,15 @@ Each `a2a_session` is a public HTTP endpoint at
 `/agents/<agent>/<deployment>/<endpoint>` ([where it is served](#launching-and-shutdown)).
 It serves only:
 
-| Request | Project token | Thread grant |
-| --- | --- | --- |
-| `GET .well-known/agent-card.json`: name, `description=`, version, URL | yes | yes |
-| `POST v1` `message/send`, `message/stream` | no (403) | `write`; `create` for a new thread |
-| `POST v1` `tasks/get`, `tasks/list` | no (403) | `read` |
-| `POST v1` `tasks/cancel` | no (403) | `write` |
+| Request | Exposes |
+| --- | --- |
+| `GET .well-known/agent-card.json` | Agent name, description, version and URL |
+| `POST v1` | A2A message and task methods defined by the [protocol](protocol/a2a.md#tasks) |
 
-A grant covers only its scope's threads, and works on every door of the project: a
-browser's grant can call the back office as well as the front desk. History, partitions,
-context and the journal are never served here. Under `lk agent console` there is no
-authentication. Tokens: [protocol/a2a.md](protocol/a2a.md#tokens).
+[Endpoint authentication](auth.md#endpoints) defines the permissions for these
+requests. History, partitions, context and the journal are not content routes
+of an A2A door; use the [thread APIs](clients.md#reading-a-thread). Under
+`lk agent console` the local listener is unauthenticated.
 
 `AgentServer(preload_modules=[...])` imports preload modules in the supplied
 order before job readiness. Import failures stop initialization and identify
@@ -554,43 +552,13 @@ messages. `debounce` and `wait_timeout` are `timedelta`s.
 
 ## Tasks on the wire
 
-Every turn is an A2A task in the thread's context. Its `submitted` row is
-written before the turn waits for the partition, so a client can `tasks/get`,
-`tasks/list` and `tasks/cancel` it from any worker at
-once. Each of these finds the thread from `contextId` in its params: A2A's
-task methods carry only the task id, so a stock client that sends just the
-id gets `TaskNotFoundError`. Responses stream live on their original request.
-After a disconnect, use `tasks/get` for the saved task outcome. Response events
-are not retained; `tasks/resubscribe` is unsupported.
+Endpoint invocations are exposed as A2A tasks. The [protocol task contract](protocol/a2a.md#tasks)
+owns states, method parameters, streaming order, cancellation and reconnect
+behavior. [Answering a task](protocol/a2a.md#answering-a-task) defines continuation
+of input-required work and task merging; [metadata keys](protocol/a2a.md#metadata-keys)
+defines every LiveKit key and its exact location.
 
-- A resent `messageId` returns the task the first send created; nothing
-  runs twice.
-- `tasks/cancel` on a running turn ends it `canceled`; the turn yields at its
-  next boundary and a running tool finishes.
-- A tool's `InputRequired` ends the turn `input-required` with the question
-  as the reply. The next message in the thread answers it; see
-  [human input](tools.md#human-input).
-- A message with the `taskId` of a terminal task fails with
-  `UnsupportedOperationError`: a follow-up is a new task.
-
-LiveKit endpoints add typed chat items and these metadata keys, under the
-namespace `https://livekit.io/a2a/ext/agents/v1` and written `livekit/<name>`
-for short. The metadata keys need no extension negotiation; the card's
-`capabilities.extensions` entry is only a capability hint and grants no thread
-access ([explicit authority](protocol/a2a.md#delegation-and-conversation-data)).
-A stock client ignores them.
-
-| Key                                                 | Meaning                                                                                      |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `livekit/channel`                                   | the channel a message came on; `a2a` when absent                                             |
-| `livekit/kind`                                      | `delegation` on a message another agent sent                                                 |
-| `livekit/mergedInto`                                | on a `completed` task whose message was answered by another task's turn                      |
-| `livekit/reason`                                    | why a task failed: `thread-not-found`, `lease-timeout`, `worker-lost`, `storage-unavailable` |
-| `livekit/verbatim`                                  | the part of an answer or a question that reaches the person exactly as written               |
-
-`livekit/mergedInto` marks three cases: a message a `batch` turn answered
-with a later one, a message that continued a waiting task, and a waiting
-task a new message answered.
-
-
+The server makes submission durable before publishing the submitted task. Its
+[request policy](#a-message-while-a-turn-is-running) controls admission and
+batching. Handler outputs follow [handler outcomes](#handler-outcomes).
 Endpoint clients and browser access follow the [client API](clients.md).

@@ -217,6 +217,106 @@ quietly, or, when the block raised, adds a note to that error. Transfer,
 DTMF and `VoiceTask` interactions use the same mechanism; a task opens its
 overrides inside its own code and they are released when the task ends.
 
+## Turn boundaries and interruption
+
+Speech activity, a completed transcript and an accepted user turn are separate
+boundaries. The person can pause several times within one turn. An STT final ends
+a transcript segment; it does not by itself mean the person has finished their
+turn. Endpointing decides when to propose the accumulated words for a reply.
+Accepting a turn adds its user message to history; the agent's generation,
+playback and running tools have separate lifetimes.
+
+### Ending a user turn
+
+| Turn detection | What supplies the turn boundary |
+| --- | --- |
+| `"vad"` | VAD end-of-speech starts endpointing; STT supplies the words. Without VAD, the session uses STT boundaries |
+| `"stt"` | The recognizer's end-of-speech declares the end; endpointing waits for the words and the configured delay |
+| `inference.TurnDetector()` | A streaming prediction refines endpointing after speech; the session still owns turn acceptance |
+| `"realtime_llm"` | The realtime provider owns turn taking; local audio activity does not independently interrupt its replies |
+| `"manual"` | The application explicitly ends the turn; silence and STT finals do not commit it |
+
+`turn_handling.endpointing` sets `min_delay` and `max_delay` in seconds. With a
+turn detector, an end-of-turn probability at or above the language's threshold
+uses the minimum; a lower probability uses the maximum. No prediction, detector
+failure or an unsupported language uses the minimum. The delay runs from the
+last speech time, so detector latency counts toward it. New speech cancels the
+pending automatic decision and lets the person continue.
+
+Defaults are 0.3–2.5 seconds with a streaming detector, or 0.5–3 seconds without
+one. `turn_handling={"endpointing": {"mode": "dynamic"}}` adapts the minimum to
+conversational pauses.
+The separate `final_transcript_timeout` bounds waiting for final words owed after
+an STT end: available interim words may complete an automatic turn, and a late
+final corrects that same message. It does not end a manual turn. For explicit
+turn control, see [push-to-talk](#user-turns-and-push-to-talk).
+
+### False interruption recovery
+
+A noise or brief vocalization can look like an interruption before recognition
+knows whether anything was said. When recovery is enabled and audio output
+supports pausing, an eligible audio interruption pauses the current speech
+instead of marking its handle interrupted. The agent becomes `"listening"`;
+the existing reply is retained so it can continue.
+
+When the person stops speaking, the session starts
+`false_interruption_timeout` (2 seconds by default). New speech cancels that
+resume timer. A nonempty final transcript ends the pause by interrupting the
+original speech; an empty final does not. A turn accepted for a new reply also
+ends the pause. If the timeout expires while an endpointing or turn prediction
+decision is pending, recovery waits for that decision to settle. This prevents
+resuming over a turn that is about to be accepted.
+
+If no real interruption replaced the paused speech, recovery restores its agent
+state and resumes playback. `agent_false_interruption` reports `resumed=True`
+when playback was resumed, or `False` when that speech had already finished.
+A newer current speech prevents restoring the old reply. Explicit
+`session.interrupt()` stops speech rather than entering this recovery path.
+Running application tools are not cancelled by ordinary interruption.
+
+```python
+session = VoiceSession(
+    stt=recognizer,
+    tts=synthesizer,
+    turn_handling={
+        "interruption": {
+            "resume_false_interruption": True,
+            "false_interruption_timeout": 2.0,
+            "backchannel_boundary": (1.0, 1.0),
+        },
+    },
+)
+```
+
+`resume_false_interruption=False` or `false_interruption_timeout=None` disables
+pause-and-resume recovery. An output without pause support also uses ordinary
+interruption. Eligibility still respects `enabled`, the speech's
+`allow_interruptions`, echo-cancellation warmup, `min_duration` (0.5 seconds by
+default for VAD) and `min_words` (0 by default when STT is available). Adaptive
+interruption detection classifies overlapping speech before requesting a cut;
+false interruption recovery governs what happens after that request is eligible.
+
+### Backchannels near agent turn boundaries
+
+An acknowledgment such as “mm-hmm” during the agent's speech may be a
+backchannel rather than a request to take the floor. Near the start or end of
+agent speech, that classification is less reliable: the person may be starting
+a new turn, and STT timestamps can straddle the handover.
+
+`interruption.backchannel_boundary` defaults to `(1.0, 1.0)` seconds. A single
+number applies to both margins; a tuple selects `(start, end)`; `None` disables
+both. The margins have different jobs:
+
+- At the start of audible agent speech, a backchannel verdict during the start
+  window is ignored and ordinary audio interruption checks regain control.
+  A verdict classified as an interruption still passes through those checks.
+- At the end, the margin moves the overlap-transcript exclusion cutoff earlier,
+  preserving nearby user words when buffered transcripts are released. This
+  allows for inaccurate STT timestamps at the handover.
+
+These margins do not make agent speech uninterruptible or commit a user turn.
+A resumed speech starts a fresh audible interval and start window.
+
 ## User turns and push-to-talk
 
 A user turn can be opened and closed from code, whatever the turn detection: a
@@ -536,7 +636,11 @@ The door resolves the job's `thread_id` in the server's storage before the entry
 ([how a call gets its thread](threads.md#calls)). `ctx.thread` names that thread; a dispatch
 without a thread runs in memory. An unknown or deleted dispatch thread is logged as refused.
 
-Bind the job's store to enable automatic session restoration and incremental checkpoints:
+Use the [shared binding contract](persistence.md#session-state-and-explicit-binding)
+to enable restoration and checkpoints. JobContext.store is available before
+startup; the session and its tools reuse that activation. Input, model and tool
+work starts only after binding validation. The entrypoint's `partition_key`
+selects the stored conversation.
 
 ```python
 app = App()
@@ -546,9 +650,8 @@ session = VoiceSession(context=binding, llm=model)
 await session.start(agent, room=ctx.room)
 ```
 
-With no application context, use `context=ctx.store.bind()`. Passing a plain application
-context or a `thread=` association alone does not enable automatic session persistence.
-See [session binding](context.md#session-state-and-explicit-binding) for the live view and detached snapshot APIs.
+The binding guide defines live session views, detached snapshots and durability
+barriers. This section describes voice checkpoint timing and recovery.
 
 A bound session restores committed history at startup unless an explicit `chat_ctx` is supplied.
 Each voice turn takes the partition lease, checkpoints accepted conversation progress, commits
@@ -591,6 +694,10 @@ try:
 except StorageError:
     ...  # end this call or explicitly create a new session
 ```
+
+Voice snapshots recover configured agent identity and conversation references. They do not
+restore the in-process expert-event queue or resume audio streams, Python coroutines or live
+VoiceTask parent stacks. A stored agent unavailable in the new configuration is an error.
 
 An uncaught error ends the job as any entrypoint exception does. For phone-number routing and
 conversation continuity, see [channel routing](channels.md#channel-routing).
@@ -916,33 +1023,3 @@ the waiting frontend tool. Neither frontend path requires `TextSession`.
 The remote backend may use plain `Agent.run()` or a backend
 [TextSession](text-session.md) to coordinate its own specialists. The endpoint
 returns its outcome through A2A; it does not select the frontend speaking agent.
-
-
-## Session persistence
-
-Use the entrypoint's store to opt into conversation persistence:
-
-```python
-await ctx.store.load_context(app)
-binding = ctx.store.bind(app)
-voice = VoiceSession(context=binding, llm=model)
-await voice.start(agent=front_desk, room=ctx.room)
-```
-
-JobContext.store is available before startup. VoiceSession and its tools reuse that activation;
-the declaration does not create another store or lease. Input/model/tool work starts only
-after binding validation. The entrypoint's partition_key selects the stored conversation.
-
-A marked SessionState field on app is optional. When present, it retains identity and follows
-accepted runtime changes; otherwise the session owns its state internally. Plain context
-does not opt into managed session persistence. Runtime services remain application-supplied.
-
-Conversation checkpoints retain turn ownership and do not commit staged application saves.
-An explicit store.flush is a conversation durability barrier. Detached load_session snapshots
-remain unchanged; they can lag accepted in-memory state. Managed storage failure ends the
-binding and surfaces an error rather than silently claiming durability in memory.
-
-Voice snapshots recover configured agent identity and conversation references. They do not
-restore the in-process expert-event queue or resume audio streams, Python coroutines or live
-VoiceTask parent stacks. A stored agent unavailable in the new configuration is an error.
-See [context binding](context.md#session-state-and-explicit-binding).

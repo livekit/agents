@@ -325,9 +325,12 @@ reaches the executor after its outcome is reported. A group of tasks is a
 `TaskSet` of owned tasks: named, cancellable by id, drained under a deadline;
 tasks that end on their own (a pump until its input closes, a close that must
 outlive its waiter) live in their owner's set, which the owner drains at its end.
-Work nobody owns by choice goes through `spawn_detached`, with the reason at the
-call site. Tokio's `JoinHandle` remains only inside executors; no `JoinSet` or
-`TaskTracker` is used, and Tokio's blocking pool is not used (below).
+Work that outlives its caller belongs to the owner's `TaskSet` or
+`owned::Background`, whose close joins it. Nothing calls `spawn_detached`.
+Executors retain `ScopedTask` handles so dropping or replacing a handle cancels
+its task while the set still joins it. Tokio's `JoinHandle` remains only inside
+the task primitive; no `JoinSet` or `TaskTracker` is used, and Tokio's blocking
+pool is not used (below).
 
 Cancellation is idempotent and correlated. It can arrive before launch, during
 an await/pull, after partial output or alongside completion. The owner records
@@ -465,28 +468,10 @@ the same native TLS configuration. The explicit insecure
 worker WebTransport option is restricted to loopback destinations; `localhost` is pinned
 to a loopback IP for that option so name resolution cannot send unverified traffic elsewhere.
 
-`APIConnectOptions` is the shared immutable per-operation policy. Declare its
-fields, defaults, validation and timeout error categories once in ABI and
-generate the Python and Node APIs. Native and host providers consume the same
-resolved policy; plugins do not maintain parallel definitions.
-
-| Field | Scope |
-| --- | --- |
-| `pool_timeout` | Wait for transport capacity or a pooled connection |
-| `connect_timeout` | Establish a usable connection, including DNS and TLS |
-| `write_timeout` | Wait without progress while writing pending bytes |
-| `read_timeout` | Wait without progress while a remote response is expected |
-| `total_timeout` | Entire operation, including admission, retries and fallback |
-
-Each timeout accepts a finite nonnegative duration in seconds or `None` to
-disable that limit. Keep the limits' defaults at 10 seconds and `total_timeout=None`.
-Keep `max_retry=3` and `retry_interval=2.0`; `max_retry` counts additional attempts
-after the initial attempt. Retry counts are nonnegative integers. Reject invalid
-values at the generated boundary before starting work.
-
-Resolve provider defaults and explicit call options before execution. A supplied
-options object replaces the provider's default policy in full. Forward the
-resolved values without mutation or hidden SDK overrides.
+The public [connection policy](../models.md#connection-options) owns
+`APIConnectOptions` fields, defaults, validation and retry counts. Runtime and
+host providers consume the same resolved immutable policy. A supplied options
+object replaces the provider default in full; plugins do not redefine it.
 
 ### Timeout lifecycle
 
@@ -623,47 +608,18 @@ that observation. Worker loss does not implicitly rerun application code.
 External actions follow the application transaction contract. Storage failures follow the
 [storage contract](storage.md#the-unit-of-work).
 
-The application constructs its context and explicitly loads/saves fields.
-Only explicitly staged application fields join the managed write set. An explicit
-`store.bind(app)` activates native session persistence and a live SessionState view; detached
-reads do not bind. Routing frames and immutable history references are checkpointed under the
-existing fence without committing application drafts. Python facades are generated from ABI;
-dataclass discovery and application-object identity remain host adapters. No Python execution
-stack is persisted. The handler checkpoint protocol
-is separate from the public [semantic run stream](../agents.md#semantic-events).
+The [public persistence contract](../persistence.md) defines field saving,
+binding and snapshots; [storage](storage.md#session-checkpoints-and-reconciliation)
+defines database checkpoint execution. Runtime activates the selected binding,
+passes native session state through the handler bridge and settles its cleanup.
+Python only discovers dataclass fields and preserves application-object identity.
+The handler checkpoint protocol is separate from the public
+[semantic run stream](../agents.md#semantic-events).
+
 ## Telemetry
 
-Rust owns telemetry end to end. [Telemetry internals](telemetry.md) is the full
-contract: data flows, destinations, the span API, the naming registry, consumers
-and verification. Placement:
-
-| Crate | Owns |
-| --- | --- |
-| `lk-agents-abi` | Span, event, metric and record declarations (`telemetry::spans`); the attribute wire types; `SpanContext` |
-| `lk-agents-telemetry` | Span recording: `ManualSpan` and `Trace` for sans-I/O machines; the tracer, `Cx`'s recorder, `ScopedSpan` |
-| `lk-agents-core` | Destination policy, admission and byte charges; report records and tags |
-| `lk-agents-voice` | The session's spans, each owned by the entity it describes (session, user turn, speech) |
-| `lk-agents-runtime`, `-inference`, `-worker` | `ScopedSpan` spans at their I/O choke points; activating the current span for host calls |
-| `lk-agents-net` | Export (`export`): the OTLP exporter, per-destination queues and metric aggregation; the session report and recording upload |
-| `lk-agents-py` | The generated tracer, span and provider classes behind the Python OpenTelemetry API |
-
-Rules:
-
-- Parentage comes from explicit data: a `ManualSpan` parent handle, a `SpanContext`
-  in an effect, the `cx` of a `ScopedSpan`, the Invocation of a host call, or a
-  validated W3C `traceparent`. No span is found through a process-global or
-  thread-local current span.
-- Sans-I/O crates take time and span ids as inputs. Recording a span or a
-  measurement is synchronous and never waits on export.
-- Export is best-effort and bounded. A full queue drops and counts; an export
-  failure cannot fail a conversation; flush and shutdown share the job's cleanup
-  deadline and never block the session loop or the worker heartbeat.
-- Each destination exports an independent snapshot under its own policy. Cloud
-  export is gated per job; disabling it leaves the application destination
-  unchanged.
-- Declared metric labels are bounded by type. Ids, user content and error
-  messages are never labels; the Cloud destination stamps job identity on its
-  per-job series as attributes, outside the label set.
-- Applications keep their own OpenTelemetry providers. The framework installs
-  its provider only when the application set none, attaches one processor to an
-  application SDK provider, and never shuts one down.
+[Telemetry internals](telemetry.md) owns signal production, crate placement,
+destination policy, parentage and export lifetimes. Runtime executes its host
+and session integration under those contracts; it defines no separate telemetry
+schema or export policy. The [telemetry reference](telemetry-reference.md)
+owns emitted fields and consumer compatibility.

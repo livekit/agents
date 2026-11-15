@@ -9,6 +9,8 @@ Persistence is opt-in **per field**, not per entire context. The context is a
 dataclass instance; mark a user's validated data structure with
 `persisted(...)`, explicitly load its saved values with `load_context` and save
 changes with `save_context`. Ordinary fields remain runtime dependencies/data.
+The [persistence guide](persistence.md) owns loading, saving, session binding,
+snapshots, transactions and durability.
 
 ## A complete context
 
@@ -63,8 +65,8 @@ persistence from whether an arbitrary object happens to serialize.
 | `draft` | Yes, under `draft` | Decode and validate RoomDraft before user code |
 | `customer` | No | Application supplies/loads it for each activation |
 | `hotel` | No | Application supplies a live service for each activation |
-| Session frames, active agent, private histories | Only if session state is explicitly stored | Load the application's saved session state |
-| Thread history and approvals | Separately, by the runtime | Load the thread records |
+| Session frames, active agent, private histories | Through a binding or an explicitly saved snapshot | See [session persistence](persistence.md#session-state-and-explicit-binding) |
+| A2A transport history and task records | Separately, by the runtime | Load the thread records |
 
 The application constructs runtime context as usual:
 
@@ -112,11 +114,10 @@ customer service/database; conversation preferences do not silently update
 it. A child's final Booking result lets the parent update its own
 preferences.last_booking_code explicitly. State is not merged on child exit.
 
-Session state is separate from agent application data and can be stored in its
-own marked field using the same explicit load/save API.
-The session records the active frame, its parent, and the parent tool-call ID
-that receives the child's accepted output. Every frame reads the context
-supplied to the turn.
+Session state is separate from application data. TextSession owns
+[frames and routing](text-session.md#frames-and-history-isolation);
+[persistence](persistence.md#session-state-and-explicit-binding) defines how that
+state is bound or saved. Every frame reads the context supplied to the turn.
 History, preferences, draft, and customer profile are not interchangeable
 forms of memory.
 
@@ -124,239 +125,6 @@ A child can start with fresh or forked history. On completion, the parent can
 receive its typed result alone or the result plus visible dialogue. These
 history choices do not share or merge application context fields; context
 scopes retain their explicit ownership. See the [history policies](text-session.md#history-passed-to-the-child).
-
-## Session state and explicit binding
-
-TextSession and VoiceSession accept an application context with an optional persisted
-SessionState field:
-
-```python
-@dataclass
-class App:
-    services: Services
-    session: SessionState = persisted(default_factory=SessionState)
-    draft: Draft = persisted(default_factory=Draft)
-
-await ctx.store.load_context(app)
-binding = ctx.store.bind(app)
-turn = await TextSession(agent=main).run(ctx.message, context=binding)
-```
-
-`ctx.store.bind(app)` declares that session execution manages the selected conversation.
-Constructing the declaration performs no I/O and changes no application fields. Execution
-activates it, keeps the same app.session object current, checkpoints conversation progress,
-and unbinds during cleanup. Tools receive the original app through ctx.context.
-
-The marked field is discovered by its SessionState type, not its name. Without such a field,
-bound sessions restore their own state internally. A declared field must be hydrated through
-the same store before execution. Ordinary application fields remain explicitly saved with
-save_context; binding does not automatically save draft changes.
-
-Plain `context=app` executes from the supplied session snapshot without updating app.session
-or enabling automatic session writes. Two runs from unchanged context start from the same
-state; model outputs and tool side effects can still differ.
-
-`await ctx.store.load_session()` returns an immutable detached read of committed state.
-It never binds and never aliases app.session. Bound state can lead stored state until a
-checkpoint completes. `await ctx.store.flush()` waits for accepted conversation checkpoints;
-it does not commit ordinary application saves staged for the managed turn.
-
-TextSessionTurn.state is a detached snapshot. Retained snapshots and results do not follow
-later execution. Runtime services, Python stacks and media connections are not serialized.
-See [TextSession](text-session.md#loading-and-saving-session-state) and
-[voice persistence](voice-session.md#session-persistence).
-
-## Explicit load and save on the store
-
-The runtime supplies `ctx.store`, already bound to the current thread,
-execution, context scope, and transaction ownership. It opens/releases the
-connection and manages leases; application code does not open storage, close
-connections, or pass thread/scope IDs for ordinary context persistence.
-Construct the application context explicitly, then load its marked fields.
-
-`customers` and `hotel_service` are application dependencies.
-`customer_id` is resolved by application authentication before constructing the context.
-
-```python
-@server.a2a_session(endpoint="booking", description="Book a hotel room.")
-async def booking(ctx: A2ASessionContext):
-    store = ctx.store
-
-    app = BookingContext(
-        customer=await customers.get(customer_id),
-        hotel=hotel_service,
-    )
-    await store.load_context(app)
-
-    result = await book_room.run(
-        ctx.message, message_history=ctx.message_history, context=app
-    )
-
-    await store.save_context(app)
-    return result
-```
-
-load_context mutates only marked fields and returns the same typed object
-for callers preferring assignment. Existing saved values replace defaults
-before the agent runs; a new scope uses declared defaults. Runtime customer
-and service fields are untouched. The store tracks the loaded revision so
-save_context can reject stale writes; saving an object that store did not load
-raises `ValueError`. Framework scope/revision metadata is not serialized as
-application fields.
-
-Storage failures raise a `StorageError` from `livekit.agents.storage`:
-`VersionConflict` (a stale save), `LeaseLost`, `ThreadNotFound`, `TooLarge`,
-`NotSerializable`, `StorageUnavailable` (retryable: the database was unreachable or
-busy) or `RunRejected` (a `reject` partition refused the run; `running_task_id` names the
-running turn).
-
-Top-level helpers are equivalent conveniences using the supplied store:
-
-```python
-await load_context(app, store=ctx.store)
-await save_context(app, store=ctx.store)
-```
-
-Use the scoped store for both methods. Entrypoints, tools, and tests receive
-the store from their execution host. The runtime manages its connection.
-
-A store view is activation-scoped and must not be retained in persisted
-context or reused after its runtime ends. A child agent called as a tool uses
-its parent's store.
-Returning from the handler lets the runtime finish its commit and release
-resources.
-
-## Explicit saves
-
-Streaming has the same persistence boundary. `stream.result()` returns
-the settled invocation value; it does not call `save_context` or commit the
-surrounding handler transaction. Save retained fields and backend routing state
-explicitly after a successful completed or input-required outcome. See
-[streaming persistence](agents.md#managed-endpoints-and-persistence).
-
-`persisted(...)` selects fields for storage. Mutating a marked field changes
-only the in-memory object until the application calls `save_context`.
-`agent.run(...)` and returning from a handler do not implicitly save context.
-
-For each activation:
-
-1. Construct the context with fresh runtime dependencies.
-2. Call `await store.load_context(app)` to restore and validate marked fields.
-3. Run the agent with `context=app`.
-4. Call `await store.save_context(app)` to save the resulting application data.
-
-Save after each turn whose changes should be retained, including turns that
-have `status="input_required"`. `save_context` validates and serializes all marked
-fields, including nested in-place mutations, and checks the loaded revision
-to reject stale writes. Unmarked fields remain in memory.
-
-In a managed transaction, `save_context` stages the field write for the
-runtime's commit alongside conversation changes. Outside that transaction,
-it commits a version-checked field write. An explicit save is required in
-either case. The runtime owns connection and transaction cleanup.
-
-A crash before commit loses uncommitted changes. On failure, reload the last
-saved values. Save only changes the application intends to retain; placing
-`save_context` in `finally` can persist incomplete work. Loading or saving
-context does not preserve a Python call stack.
-
-An external effect may succeed before its local result is committed. Stable
-operation identities and idempotency/reconciliation are required; saving a
-draft cannot make an external API atomic with AgentDB. See
-[the AgentDB access contract](#application-records-and-transactions).
-
-Custom field storage adapters remain an advanced option. They must specify
-ownership and commit behavior; external stores cannot be described as atomic
-with execution storage without an actual protocol. The default persisted
-field path requires no handwritten snapshots or repositories.
-
-## Application records and transactions
-
-Draft persistence and direct application writes can use the same AgentDB.
-Choose the access pattern according to the data and its commit requirements:
-
-| Access | Purpose | Commit behavior |
-| --- | --- | --- |
-| persisted context fields | Save marked application data with explicit `save_context` | Join the managed commit, or commit directly outside a managed transaction |
-| Explicit application SQL/transactions | Business records, unique operation IDs, invoices, outbox entries | `transaction()` joins the managed commit; `independent_transaction()` commits on block exit |
-
-Use the same thread database when the data belongs to that thread. A
-customer-wide invoice or global room inventory may require a different
-application/database scope; thread deletion/expiry must not accidentally
-remove records whose retention or ownership outlives the conversation.
-Sharing AgentDB does not imply all business records belong in one thread.
-
-The runtime opens storage internally and supplies a scoped handle:
-
-```python
-store = ctx.store
-await store.load_context(app)
-# Run agent/tools with the loaded application context.
-await store.save_context(app)
-```
-
-Connection open/close, thread/scope resolution, and lease ownership are
-framework responsibilities.
-
-The scoped store provides context load/save and application database access
-through two transaction forms:
-
-```python
-async with ctx.store.transaction() as tx:   # joins the turn's managed commit
-    await tx.execute(
-        "INSERT INTO notes (booking_id, body) VALUES (?, ?)", (booking_id, body)
-    )
-
-async with ctx.store.independent_transaction() as tx:   # durable when the block exits
-    rows = await tx.fetch("SELECT id, status FROM charges WHERE booking_id = ?", (booking_id,))
-    charge = await tx.fetch_one("SELECT * FROM charges WHERE id = ?", (charge_id,))
-```
-
-`tx` is a `Transaction`:
-
-| Method | Returns |
-| --- | --- |
-| `await tx.execute(sql, params)` | nothing; runs one statement |
-| `await tx.fetch(sql, params)` | `list[Row]` |
-| `await tx.fetch_one(sql, params)` | one `Row`, or `None` |
-
-A `Row` (`list[SqlValue]`, both from `livekit.agents.storage`) is a list of
-column values in select order: `None`, numbers or strings (a boolean reads back
-as 0 or 1); parameters are `SqlValue`s: `None`, booleans, numbers or strings. There are no BLOBs: a BLOB column
-read as a row value is refused, so select `hex(...)` instead. Reads observe committed records and writes
-apply together when the transaction commits, so a transaction reads before
-its first write; a read after a write is refused.
-
-Writes in `transaction()` commit or roll back with the turn, like a nested
-savepoint. Outside a managed turn, `transaction()` behaves like
-`independent_transaction()`. `independent_transaction()` commits when its
-block exits, whatever the turn does next. Application SQL is unrestricted: it may read and write any
-table, including the framework's history, state, task and event tables;
-keeping those consistent is then the application's responsibility. Do not
-place raw SQL inside the draft.
-
-For a payment, an independently committed preparation transaction is essential:
-
-```text
-independent_transaction(): create/retrieve unique pending charge operation
-  -> commit before dispatch
-Payment provider: charge exact saved terms using operation ID as idempotency key
-independent_transaction(): record outcome and related business changes
-  -> draft/checkpoint references that authoritative outcome
-```
-
-If preparation were staged until the end-of-turn commit, a charge could happen
-before its operation record existed durably, so preparation uses
-`independent_transaction()`, durable on block exit. Do not hold an open SQL
-transaction across network calls to a payment provider. Async dispatch can use
-an outbox committed with the operation record.
-
-After a provider timeout or crash between effect and outcome commit, reconcile
-the same operation; absence of a result is not proof no charge happened. Domain
-uniqueness constraints guard repeated semantic requests even when the LLM emits
-another tool call ID. Persisted context fields are working data, not a
-replacement for those constraints. Both can share one AgentDB while keeping
-separate commit boundaries.
 
 ## How many drafts? Scope and cardinality
 
@@ -444,26 +212,3 @@ their saved receivers.
 Runtime dependency recreation and schema evolution remain separate concerns.
 Define a context factory/provider at the application boundary for service and
 customer loading, followed by explicit load_context.
-
-## Concurrency and execution ownership
-
-Sharing a scope means sharing persisted values, not obtaining an independent
-snapshot to mutate concurrently. Serialize stateful activations against that
-scope and fence commits so parent/child updates cannot overwrite one another.
-Within one activation, aliases referring to a shared scope must refer to the
-same hydrated values. Independent background jobs should use separate scopes
-or explicit application concurrency control. Their completion reaches the
-parent as an event/result, not as a hidden draft mutation.
-
-## Persistence boundaries
-
-The application supplies a typed context object containing its data and runtime
-services. Only fields marked `persisted(...)` are stored. Explicit loading
-restores those fields; explicit `save_context` calls record their changes without serializing
-service clients or other unmarked values.
-
-Conversation history, application fields, and external effects have separate
-lifecycles. Saving a draft does not record an external operation's outcome or
-make that operation safe to repeat. Services must enforce idempotency and
-reconcile uncertain outcomes. The framework provides no durable execution
-runtime or external wake-up recovery; context persistence does not provide them.
