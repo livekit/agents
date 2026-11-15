@@ -1,0 +1,19 @@
+livekit-plugins/livekit-plugins-gladia/livekit/plugins/gladia/__init__.py
+  s_a557e9e4a90ba8::t_98ac3209a6f66f 20,23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0b4303f07e711d52c470b68733870ed573bfe888",
+  "prompts": {},
+  "sessions": {
+    "s_a557e9e4a90ba8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1de92-1012-78a3-97e8-34414157f38e",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
