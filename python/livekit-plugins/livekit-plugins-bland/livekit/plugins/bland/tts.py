@@ -14,13 +14,11 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Literal, NotRequired, TypedDict, assert_never
 
 from livekit.agents import (
     APIConnectionError,
@@ -34,8 +32,6 @@ from livekit.agents import (
 from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
-
 DEFAULT_BASE_URL = "https://api.bland.ai/v2"
 DEFAULT_VOICE_ID = "2f29fdbb-c55e-4add-9c7c-93437ebf379d"
 DEFAULT_SAMPLE_RATE = 48000
@@ -43,17 +39,8 @@ NUM_CHANNELS = 1
 
 SAMPLE_RATES = (8000, 16000, 24000, 44100, 48000)
 
-# Bland ends a session that goes 60s without a client message. The pool clock is
-# refreshed on every acquire, so this expires a socket that has sat unused across a
-# long conversational gap rather than handing back one the server already dropped.
-_MAX_SESSION_DURATION = 50
-
-# How long a barge-in waits for the cancelled turn's terminal before giving up on
-# the socket. Answering `cancel` is a state flip on the server, so this only ever
-# covers a round trip; anything slower is a socket worth replacing. Deliberately
-# not derived from `conn_options.connect_timeout` — that budget is for establishing a
-# connection, and spending it here stalls the next turn behind a dead one.
-_CANCEL_DRAIN_TIMEOUT = 0.5
+# Bland ends a session that goes 60s without a client message: a parked socket closes before.
+_IDLE_TIMEOUT = 50.0
 
 # What each error code means. An unlisted code (a synthesis failure, a busy concurrency pool) is
 # the provider's failure and worth another attempt.
@@ -85,6 +72,83 @@ class _TTSOptions:
     expressiveness: NotGivenOr[float]
     stability: NotGivenOr[float]
     base_url: str
+
+
+# Bland's realtime socket: `init` fixes the voice and format for the socket's life, then one turn
+# (a context) at a time: a `speak` for a new context preempts the active one. Binary audio
+# belongs to the turn between its utterance_start and utterance_end. Each message declares only
+# the fields read.
+
+
+class _Ready(TypedDict):
+    type: Literal["ready"]
+    encoding: NotRequired[str]
+    sample_rate: NotRequired[int]
+
+
+class _UtteranceStart(TypedDict):
+    type: Literal["utterance_start"]
+    context_id: str
+
+
+class _UtteranceEnd(TypedDict):
+    type: Literal["utterance_end"]
+    context_id: str
+    reason: str
+
+
+class _Error(TypedDict):
+    type: Literal["error"]
+    context_id: NotRequired[str]
+    code: NotRequired[str]
+    message: NotRequired[str]
+
+
+_Message = bytes | _Ready | _UtteranceStart | _UtteranceEnd | _Error
+# the turn endings known to fail it; any other (complete, one Bland added since) ends it as said
+_FAILED = frozenset({"cancelled", "error", "failed"})
+
+
+class _Audio(TypedDict):
+    encoding: Literal["pcm_s16le"]
+    sample_rate: int
+
+
+class _Controls(TypedDict, total=False):
+    expressiveness: float
+    stability: float
+
+
+class _Init(TypedDict):
+    type: Literal["init"]
+    voice: str
+    audio: _Audio
+    controls: NotRequired[_Controls]
+
+
+class _Speak(TypedDict):
+    type: Literal["speak"]
+    context_id: str
+    text: str
+
+
+class _Turn(TypedDict):
+    type: Literal["end_of_turn", "cancel"]
+    context_id: str
+
+
+class _Close(TypedDict):
+    type: Literal["close"]
+
+
+class _SynthesizeBody(TypedDict):
+    text: str
+    voice: str
+    audio: _Audio
+    controls: NotRequired[_Controls]
+
+
+_Command = _Init | _Speak | _Turn | _Close
 
 
 class TTS(tts.TTS):
@@ -146,18 +210,9 @@ class TTS(tts.TTS):
         )
         self._session = http_session.with_request_id("x-request-id") if http_session else None
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        # No pool when streaming is off: nothing would ever check a socket out of it,
-        # and an open session holds a concurrency slot for as long as it lives.
-        self._pool = (
-            utils.ConnectionPool[http.WebSocket](
-                connect_cb=self._connect_ws,
-                close_cb=self._close_ws,
-                max_session_duration=_MAX_SESSION_DURATION,
-                mark_refreshed_on_get=True,
-            )
-            if streaming
-            else None
-        )
+        # an open session holds a concurrency slot for as long as it lives: none is opened when
+        # streaming is off
+        self._mux = _Mux(self._api_key, self._opts) if streaming else None
 
     @property
     def provider(self) -> str:
@@ -168,65 +223,6 @@ class TTS(tts.TTS):
             self._session = http.http_session().with_request_id("x-request-id")
         return self._session
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
-        """Open a session and hold it at `ready`, so a turn starts on the first `speak`."""
-        ws = await self._ensure_session().ws_connect(
-            _ws_url(self._opts.base_url),
-            headers={"Authorization": f"Bearer {self._api_key}"},
-            conn_options=conn_options,
-        )
-        try:
-            init: dict[str, Any] = {
-                "type": "init",
-                "voice": self._opts.voice_id,
-                "audio": {"encoding": "pcm_s16le", "sample_rate": self._opts.sample_rate},
-            }
-            if controls := _controls(self._opts):
-                init["controls"] = controls
-            await ws.send_str(json.dumps(init))
-
-            while True:
-                msg = await ws.receive(timeout=conn_options.read_timeout)
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise ws.close_error("Bland closed before acknowledging init")
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    continue
-                data = _frame(msg.text)
-                if data.get("type") == "error":
-                    raise _api_error(data)
-                if data.get("type") == "ready":
-                    break
-            if (
-                data.get("encoding") != "pcm_s16le"
-                or data.get("sample_rate") != self._opts.sample_rate
-            ):
-                raise APIError(
-                    "Bland acknowledged an unexpected audio format",
-                    body=data,
-                    kind="invalid_request",
-                )
-        except BaseException:
-            try:
-                await ws.close()
-            except Exception:
-                pass
-            raise
-
-        logger.debug("Bland TTS session ready", extra={"session_id": data.get("session_id")})
-        return ws
-
-    async def _close_ws(self, ws: http.WebSocket) -> None:
-        """Settle the session rather than dropping the socket, so usage is reconciled once."""
-        if ws.closed:
-            return
-        try:
-            # the close handshake then waits for Bland to settle and close
-            await ws.send_str(json.dumps({"type": "close"}))
-        except Exception as e:
-            logger.debug("Bland TTS close handshake skipped", extra={"error": str(e)})
-        finally:
-            await ws.close()
-
     def update_options(
         self,
         *,
@@ -236,23 +232,21 @@ class TTS(tts.TTS):
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        changed = False
-        if is_given(voice_id):
-            self._opts.voice_id = voice_id
-            changed = True
-        if is_given(expressiveness):
-            self._opts.expressiveness = expressiveness
-            changed = True
-        if is_given(stability):
-            self._opts.stability = stability
-            changed = True
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            changed = False
+            if is_given(voice_id):
+                self._opts.voice_id = voice_id
+                changed = True
+            if is_given(expressiveness):
+                self._opts.expressiveness = expressiveness
+                changed = True
+            if is_given(stability):
+                self._opts.stability = stability
+                changed = True
 
-        if changed:
-            # `init` fixes the voice and controls for the life of a session, so a pooled
-            # socket would keep serving the old ones.
-            if self._pool is not None:
-                self._pool.invalidate()
+        if changed and self._mux is not None:
+            # `init` fixes the voice and controls for the life of a session
+            self._mux.invalidate()
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
@@ -267,28 +261,26 @@ class TTS(tts.TTS):
         )
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
-        if self._pool is None:
+        if self._mux is None:
             raise RuntimeError(
                 "streaming is disabled on this Bland TTS instance; construct it with "
                 "`streaming=True`, or wrap it in a `tts.StreamAdapter`"
             )
-        stream = SynthesizeStream(
-            pool=self._pool, opts=replace(self._opts), tts=self, conn_options=conn_options
-        )
+        stream = SynthesizeStream(mux=self._mux, tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
     def prewarm(self) -> None:
-        if self._pool is not None:
-            self._pool.prewarm()
+        if self._mux is not None:
+            self._mux.prewarm()
 
     async def aclose(self) -> None:
         for stream in list(self._streams):
             await stream.aclose()
 
         self._streams.clear()
-        if self._pool is not None:
-            await self._pool.aclose()
+        if self._mux is not None:
+            await self._mux.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -311,11 +303,11 @@ class ChunkedStream(tts.ChunkedStream):
         self._api_key = api_key
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        body: dict[str, Any] = {
-            "text": self._input_text,
-            "voice": self._opts.voice_id,
-            "audio": {"encoding": "pcm_s16le", "sample_rate": self._opts.sample_rate},
-        }
+        body = _SynthesizeBody(
+            text=self._input_text,
+            voice=self._opts.voice_id,
+            audio=_Audio(encoding="pcm_s16le", sample_rate=self._opts.sample_rate),
+        )
         if controls := _controls(self._opts):
             body["controls"] = controls
 
@@ -348,216 +340,120 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    """Stream text into a session and receive audio as it is rendered.
+class _Mux(tts.WebSocketMultiplexer[_Message, _Command]):
+    """Bland sessions, each carrying one stream at a time: its binary audio names no turn. A turn
+    a barge-in left is cancelled in place, and the session speaks the next one once Bland ended
+    it; a session the pool closes is closed on Bland's side first."""
 
-    Bland accumulates the text deltas server-side and picks its own synthesis
-    boundaries, so tokens go out as they arrive: no sentence tokenizer, no character
-    threshold, and no flush after every fragment.
-    """
+    routed = False
+    idle_timeout = _IDLE_TIMEOUT
+    awaits_ready = True
 
-    def __init__(
-        self,
-        *,
-        pool: utils.ConnectionPool[http.WebSocket],
-        opts: _TTSOptions,
-        tts: TTS,
-        conn_options: APIConnectOptions,
-    ) -> None:
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        # `TTS.stream()` refuses to build one of these without a pool, so this is
-        # always present — bound once here rather than re-narrowed at each use.
+    def __init__(self, api_key: str, opts: _TTSOptions) -> None:
+        self._api_key = api_key
         self._opts = opts
-        self._pool = pool
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        # One stream is one segment, which is one Bland turn: the socket carries a
-        # single turn at a time and the framework opens a stream per segment.
-        context_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=context_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=NUM_CHANNELS,
-            mime_type="audio/pcm",
-            stream=True,
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        base_url = self._opts.base_url
+        url = base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
+        return tts.WebSocketTarget(
+            f"{url}/tts/ws",
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            request_id_header="x-request-id",
         )
-        output_emitter.start_segment(segment_id=context_id)
-        input_sent = asyncio.Event()
-        text_sent = False
-        # reads time out only while a response is owed, never while waiting for more text
-        read_deadline = self._core_attempts
 
-        async def send_task(ws: http.WebSocket) -> None:
-            nonlocal text_sent
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    continue
+    def setup(self) -> _Init:
+        init = _Init(
+            type="init",
+            voice=self._opts.voice_id,
+            audio=_Audio(encoding="pcm_s16le", sample_rate=self._opts.sample_rate),
+        )
+        if controls := _controls(self._opts):
+            init["controls"] = controls
+        return init
 
-                text_sent = True
-                self.mark_started()
-                await ws.send_str(
-                    json.dumps({"type": "speak", "context_id": context_id, "text": data.text + " "})
+    def ready(self, message: _Message) -> bool:
+        if isinstance(message, bytes) or message["type"] != "ready":
+            return False
+        # a field the acknowledgement leaves out is the format asked for
+        if message.get("encoding", "pcm_s16le") != "pcm_s16le" or (
+            message.get("sample_rate", self._opts.sample_rate) != self._opts.sample_rate
+        ):
+            raise APIError(
+                "Bland acknowledged an unexpected audio format",
+                body=message,
+                kind="invalid_request",
+            )
+        return True
+
+    def route(self, message: _Message) -> str | None:
+        if not isinstance(message, bytes) and message["type"] == "error":
+            # the session's own error, before it is ready
+            raise _api_error(message)
+        return None
+
+    def close_context(self, context_id: str) -> _Turn:
+        return _Turn(type="cancel", context_id=context_id)
+
+    def context_ended(self, message: _Message) -> str | None:
+        if isinstance(message, bytes) or message["type"] != "utterance_end":
+            return None
+        return message["context_id"]
+
+    def goodbye(self) -> _Close:
+        # Bland settles the session and closes it, so it holds no concurrency slot
+        return _Close(type="close")
+
+
+class SynthesizeStream(tts.WebSocketStream[_Message, _Command]):
+    """Each segment is one Bland turn. Bland accumulates the text deltas server-side and picks its
+    own synthesis boundaries, so text goes out as it arrives; a new turn would preempt the
+    active one, so the next segment waits for the one before to end."""
+
+    connection_per_segment = True
+
+    def __init__(self, *, mux: _Mux, tts: TTS, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self.multiplexer = mux
+        # the one turn in progress: the binary audio routed here is its
+        self._turn = ""
+
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Command | None:
+        match item:
+            case tts.SegmentStart():
+                self._turn = item.segment_id
+                return None
+            case tts.EndOfText():
+                return None
+            case tts.SegmentText():
+                return _Speak(type="speak", context_id=item.segment_id, text=f"{item.chunk.text} ")
+            case tts.SegmentEnd():
+                # Bland holds a short tail back waiting for more context; this releases it
+                return _Turn(type="end_of_turn", context_id=item.segment_id)
+            case _:
+                assert_never(item)
+
+    def on_message(self, message: _Message) -> None:
+        if isinstance(message, bytes):
+            self.report(tts.SegmentAudio(self._turn, message))
+        elif message["type"] == "utterance_end":
+            if message["context_id"] != self._turn:
+                return  # a turn this stream already left
+            if message["reason"] in _FAILED:
+                raise APIError(
+                    f"Bland turn ended as {message['reason']}", kind="server", body=message
                 )
-                read_deadline.expect_response()
-                input_sent.set()
-
-            if not text_sent:
-                output_emitter.end_segment()
-                input_sent.set()
-                return
-
-            # Bland holds a short tail back waiting for more context; this releases it.
-            await ws.send_str(json.dumps({"type": "end_of_turn", "context_id": context_id}))
-            read_deadline.expect_response(final=True)
-            input_sent.set()
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            await input_sent.wait()
-            if not text_sent:
-                return
-            while True:
-                msg = await ws.receive()
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise ws.close_error("Bland connection closed unexpectedly")
-
-                if msg.type is http.WebSocketMessageType.BINARY:
-                    read_deadline.audio_received()
-                    output_emitter.push(msg.binary)
-                    continue
-
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    logger.warning("unexpected Bland message type %s", msg.type)
-                    continue
-
-                data = _frame(msg.text)
-                event = data.get("type")
-                if event == "utterance_end":
-                    # A stale terminator can only belong to a turn this stream already
-                    # abandoned, so it is not this turn's boundary.
-                    if data.get("context_id") != context_id:
-                        continue
-                    if (reason := data.get("reason")) != "complete":
-                        raise APIError(f"Bland turn ended as {reason}", kind="server", body=data)
-                    output_emitter.end_segment()
-                    return
-                elif event == "utterance_start":
-                    continue
-                elif event == "error":
-                    raise _api_error(data)
-                else:
-                    logger.warning("unexpected Bland message %s", data)
-
-        async def cancel_and_drain(ws: http.WebSocket) -> None:
-            """Cancel the active turn and consume its terminal event before reuse."""
-            await ws.send_str(json.dumps({"type": "cancel", "context_id": context_id}))
-            while True:
-                msg = await ws.receive()
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise ws.close_error("Bland connection closed unexpectedly")
-                if msg.type is http.WebSocketMessageType.BINARY:
-                    continue
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    continue
-
-                data = _frame(msg.text)
-                if data.get("context_id") != context_id:
-                    continue
-                if data.get("type") == "utterance_end":
-                    if data.get("reason") in ("cancelled", "complete"):
-                        return
-                    raise APIError(
-                        "Bland did not cancel the turn cleanly", kind="server", body=data
-                    )
-                if data.get("type") == "error":
-                    # An admission failure creates no turn and emits no terminal, so
-                    # there is nothing left to drain to. Returning here would hand the
-                    # socket back reusable — but from this side an admission refusal
-                    # is indistinguishable from a mid-turn error whose terminal is
-                    # still in flight, and that terminal would surface against the
-                    # next, unrelated turn. Raising closes the socket, which costs one
-                    # reconnect on a path that has already failed and keeps turns from
-                    # contaminating each other.
-                    raise _api_error(data)
-
-        cancelled: asyncio.CancelledError | None = None
-        try:
-            async with self._pool.connection(conn_options=self._conn_options) as ws:
-                tasks = utils.aio.TaskSet()
-                try:
-                    await asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
-                except asyncio.CancelledError as e:
-                    turn_was_sent = input_sent.is_set()
-                    input_sent.set()
-                    await tasks.aclose()
-                    if text_sent and not turn_was_sent:
-                        # Cancellation interrupted the first write, so whether the
-                        # server owns this context is unknowable. Do not reuse it.
-                        try:
-                            await ws.close()
-                        except Exception:
-                            pass
-                        raise
-                    if text_sent:
-                        try:
-                            # Bounded: a socket that does not answer must not hold up
-                            # the barge-in that is waiting on this teardown.
-                            await asyncio.wait_for(
-                                cancel_and_drain(ws), timeout=_CANCEL_DRAIN_TIMEOUT
-                            )
-                        except asyncio.CancelledError:
-                            try:
-                                await ws.close()
-                            except Exception:
-                                pass
-                            raise
-                        except BaseException as drain_error:
-                            # Tidying up failed, but this is still a cancellation, and
-                            # it has to leave as one. Letting the drain's own error
-                            # escape would turn a barge-in into a retryable API error:
-                            # the framework replays the buffered text, so the caller
-                            # hears the interrupted sentence a second time — and when
-                            # the cancel came from `aclose()` before `end_input()`, the
-                            # replay waits forever on an input channel nothing will
-                            # close, with the one cancellation already spent.
-                            logger.debug(
-                                "Bland cancel handshake failed",
-                                extra={"error": str(drain_error)},
-                            )
-                            try:
-                                await ws.close()
-                            except Exception:
-                                pass
-                            raise e from drain_error
-                    # Exit the pool context normally so this clean, drained session is
-                    # returned for the next turn, then preserve caller cancellation.
-                    cancelled = e
-                except BaseException:
-                    # A failed stream cannot safely return a socket with unread turn
-                    # state to the pool.
-                    try:
-                        await ws.close()
-                    except Exception:
-                        pass
-                    raise
-                finally:
-                    input_sent.set()
-                    await tasks.aclose()
-            if cancelled is not None:
-                raise cancelled
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
+            self.report(tts.SegmentDone(message["context_id"]))
+        elif message["type"] == "error":
+            raise _api_error(message)
+        elif message["type"] == "ready" or message["type"] == "utterance_start":
+            pass
+        else:
+            assert_never(message)
 
 
-def _ws_url(base_url: str) -> str:
-    base_url = base_url.rstrip("/")
-    return f"{base_url.replace('https://', 'wss://', 1).replace('http://', 'ws://', 1)}/tts/ws"
-
-
-def _controls(opts: _TTSOptions) -> dict[str, float]:
-    controls: dict[str, float] = {}
+def _controls(opts: _TTSOptions) -> _Controls:
+    controls = _Controls()
     if is_given(opts.expressiveness):
         controls["expressiveness"] = opts.expressiveness
     if is_given(opts.stability):
@@ -565,21 +461,11 @@ def _controls(opts: _TTSOptions) -> dict[str, float]:
     return controls
 
 
-def _frame(text: str) -> dict[str, Any]:
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        data = None
-    if not isinstance(data, dict):
-        raise APIError("Bland sent a malformed message", kind="protocol", detail=text)
-    return data
-
-
-def _api_error(data: dict[str, Any]) -> APIError:
-    code, message = data.get("code"), data.get("message")
+def _api_error(message: _Error) -> APIError:
+    code = message.get("code")
     return APIError(
         f"Bland returned an error ({code})" if code else "Bland returned an error",
-        body=data,
-        kind=_ERROR_KINDS.get(str(code), "server") if code else "invalid_request",
-        detail=None if message is None else str(message),
+        body=message,
+        kind=_ERROR_KINDS.get(code, "server") if code else "invalid_request",
+        detail=message.get("message"),
     )

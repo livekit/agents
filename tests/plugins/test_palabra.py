@@ -36,9 +36,12 @@ Frame = dict[str, Any]
 
 @dataclass
 class PalabraTTS:
-    """The local Palabra TTS endpoint: ``received`` holds the client's frames; frames put on
-    ``send_queue`` are pushed to it; setting ``close_event`` closes its sockets."""
+    """The local Palabra TTS endpoint at ``url``: ``received`` holds the client's frames and
+    ``sockets`` its connections; frames put on ``send_queue`` are pushed to it; setting
+    ``close_event`` closes its sockets."""
 
+    url: str = ""
+    sockets: list[web.WebSocketResponse] = field(default_factory=list)
     received: list[Frame] = field(default_factory=list)
     send_queue: asyncio.Queue[Frame] = field(default_factory=asyncio.Queue)
     close_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -55,8 +58,8 @@ class PalabraSTT:
 
 
 @pytest.fixture
-async def mock_palabra_ws(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[PalabraTTS]:
-    """A local Palabra realtime TTS endpoint, installed as the SDK's "eu" region."""
+async def mock_palabra_ws() -> AsyncIterator[PalabraTTS]:
+    """A local Palabra realtime TTS endpoint."""
     peer = PalabraTTS()
     received, send_queue, close_event = peer.received, peer.send_queue, peer.close_event
 
@@ -98,6 +101,7 @@ async def mock_palabra_ws(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Pala
     async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
+        peer.sockets.append(ws)
         async for raw in ws:
             if raw.type == web.WSMsgType.TEXT:
                 frame = json.loads(raw.data)
@@ -113,9 +117,7 @@ async def mock_palabra_ws(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Pala
     app.router.add_get("/v1/text-to-speech/stream", ws_handler)
     server = TestServer(app)
     await server.start_server()
-    url = str(server.make_url("/v1/text-to-speech/stream").with_scheme("ws"))
-
-    monkeypatch.setitem(REGIONS, "eu", Region(tts=url))
+    peer.url = str(server.make_url("/v1/text-to-speech/stream").with_scheme("ws"))
 
     yield peer
     pusher_task.cancel()
@@ -149,7 +151,7 @@ async def test_synthesize_stream_full_flow(mock_palabra_ws: PalabraTTS) -> None:
     """A streamed reply sends one init, ends with an EOS text frame and plays the audio."""
     ws = mock_palabra_ws
 
-    tts = TTS(api_key="test-key")
+    tts = TTS(api_key="test-key", base_url=ws.url)
     stream = tts.stream()
     stream.push_text("Hello world.")
     stream.end_input()
@@ -174,9 +176,9 @@ async def test_synthesize_stream_full_flow(mock_palabra_ws: PalabraTTS) -> None:
 
 
 async def test_interruption_flow(mock_palabra_ws: PalabraTTS) -> None:
-    """Closing an interrupted reply stops provider work and filters stale audio."""
+    """Closing an interrupted reply ends its session and filters stale audio."""
     ws = mock_palabra_ws
-    tts = TTS(api_key="test-key")
+    tts = TTS(api_key="test-key", base_url=ws.url)
 
     # one whole 200 ms frame at 24 kHz, so it plays before the reply's end
     ws.send_queue.put_nowait(_audio_chunk(b"\x44" * 9600, last_chunk=False))
@@ -193,12 +195,7 @@ async def test_interruption_flow(mock_palabra_ws: PalabraTTS) -> None:
     await stream.aclose()
     assert loop.time() - started < 1.5
 
-    await until(
-        lambda: any(m.get("type") == "cancel" for m in ws.received), "Palabra gets a cancel"
-    )
-    cancels = [m for m in ws.received if m.get("type") == "cancel"]
-    assert cancels
-    assert all("generation_id" not in m for m in cancels)
+    await until(lambda: ws.sockets[0].closed, "the interrupted session ends")
     cancelled_gen = next(m["generation_id"] for m in ws.received if m.get("type") == "text")
 
     # The next turn must filter late audio from the cancelled generation.

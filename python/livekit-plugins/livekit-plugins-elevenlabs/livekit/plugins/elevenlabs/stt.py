@@ -447,12 +447,21 @@ class _Word(TypedDict, total=False):
 
 
 class _Transcript(TypedDict):
-    message_type: Literal[
-        "partial_transcript", "committed_transcript", "committed_transcript_with_timestamps"
-    ]
     text: NotRequired[str]
     words: NotRequired[list[_Word] | None]
     language_code: NotRequired[str | None]
+
+
+class _Partial(_Transcript):
+    message_type: Literal["partial_transcript"]
+
+
+class _Committed(_Transcript):
+    message_type: Literal["committed_transcript"]
+
+
+class _CommittedWithTimestamps(_Transcript):
+    message_type: Literal["committed_transcript_with_timestamps"]
 
 
 class _SessionStarted(TypedDict):
@@ -460,15 +469,43 @@ class _SessionStarted(TypedDict):
     session_id: NotRequired[object]
 
 
-class _Error(TypedDict):
-    message_type: Literal[
-        "auth_error", "quota_exceeded", "transcriber_error", "input_error", "error"
-    ]
+class _ErrorFields(TypedDict):
     message: NotRequired[object]
     details: NotRequired[object]
 
 
-_Message = Annotated[_Transcript | _SessionStarted | _Error, Field(discriminator="message_type")]
+class _AuthError(_ErrorFields):
+    message_type: Literal["auth_error"]
+
+
+class _QuotaExceeded(_ErrorFields):
+    message_type: Literal["quota_exceeded"]
+
+
+class _TranscriberError(_ErrorFields):
+    message_type: Literal["transcriber_error"]
+
+
+class _InputError(_ErrorFields):
+    message_type: Literal["input_error"]
+
+
+class _Error(_ErrorFields):
+    message_type: Literal["error"]
+
+
+_Message = Annotated[
+    _Partial
+    | _Committed
+    | _CommittedWithTimestamps
+    | _SessionStarted
+    | _AuthError
+    | _QuotaExceeded
+    | _TranscriberError
+    | _InputError
+    | _Error,
+    Field(discriminator="message_type"),
+]
 
 
 class _AudioChunk(TypedDict):
@@ -666,7 +703,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _AudioChunk]):
         else:
             assert_never(message)
 
-    def _committed(self, message: _Transcript) -> None:
+    def _committed(self, message: _Committed | _CommittedWithTimestamps) -> None:
         # 11labs sends every commit twice; _final_message_type picks the copy this session reads
         if message["message_type"] != self._final_message_type:
             return

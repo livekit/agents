@@ -30,7 +30,6 @@ WIRE_WHITELIST = frozenset(
         "enable_partials",
         "language",
         "model",
-        "operating_point",
         "output_locale",
         "speaker_diarization_config",
         "transcript_filtering_config",
@@ -129,6 +128,19 @@ async def test_session_config_sends_only_whitelisted_fields(
     assert sent["diarization"] == "speaker"
     assert sent["speaker_diarization_config"]["max_speakers"] == 3
     assert [entry["content"] for entry in sent["additional_vocab"]] == ["LiveKit"]
+
+
+@pytest.mark.parametrize("model", ["linden-1", "oak-1"])
+async def test_the_model_reaches_the_session_as_given(
+    peer: tuple[SpeechmaticsPeer, str], model: str
+) -> None:
+    """The chosen model is sent as `model`, never swapped for the default."""
+    server, url = peer
+
+    provider = STT(api_key="k", base_url=url, vad=None, model=model)
+    await transcribe(provider.stream(conn_options=NO_RETRY))
+
+    assert server.start["transcription_config"]["model"] == model
 
 
 async def test_segments_become_transcripts_with_provider_timing(

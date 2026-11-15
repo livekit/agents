@@ -510,3 +510,183 @@ mod voice_task {
         );
     }
 }
+
+mod cut_by_a_late_final {
+    //! A speech made while the person is still being transcribed is cut by their words when the
+    //! recogniser hands them over, here as its dropped connection's last final: they spoke, and
+    //! the session hears their turn instead of talking over it.
+    use lk_agents_fuzz::drive::{Case, Setup, run};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, SayInput, UserText};
+
+    // Catches: survey seeds 1722 and 1868. `speech_is_heard` counted the person's words only from
+    // the case's own transcript inputs, so a speech cut by the final a dropped connection delivered
+    // read as cut with the person silent.
+    #[test]
+    fn the_cut_is_the_persons() {
+        let inputs = vec![
+            Input::Advance { ms: Millis(1_000) },
+            Input::SttStart { stt: Ref::new(0) },
+            Input::SttInterim {
+                utterance: Ref::new(0),
+                text: UserText("my number is".into()),
+                speaker: None,
+            },
+            Input::Advance { ms: Millis(300) },
+            Input::Say {
+                text: AgentText("Let me check that again.".into()),
+                input: SayInput::Words,
+                allow: None,
+                to_ctx: true,
+            },
+            Input::SttDrop { stt: Ref::new(0) },
+            Input::Advance { ms: Millis(16_000) },
+        ];
+        let setup = Setup { stt: true, ..Setup::default() };
+        let outcome = run(Case { setup, inputs, ..Case::default() });
+        let failed: Vec<_> =
+            outcome.failures.iter().filter(|f| f.contract == "speech_is_heard").collect();
+        assert!(failed.is_empty(), "{failed:?}");
+        assert!(outcome.expectations.get("speech_is_heard").is_some_and(|n| *n > 0));
+    }
+}
+
+mod paced_voice_settles {
+    //! A paced voice's later sentences go on its own clock: the run lets that clock run.
+    use lk_agents_fuzz::drive::{Outcome, Run, Setup, finish, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref};
+
+    // Catches (seed 1766): a paced voice holding its last sentences until the long audio it had
+    // already sent played down, its segment still open, so the case's finish report was refused;
+    // the release rounds then stepped the clock a millisecond at a time and never reached the
+    // pacer's wake, and the run never went quiet.
+    #[test]
+    fn a_paced_reply_longer_than_its_release_rounds_completes() {
+        let sentence = "You can ask for a copy of your data at any time, and you can ask us to \
+                        delete it, except where the law requires us to keep it.";
+        let reply = format!("Sure. {}", [sentence; 6].join(" "));
+        let outcome = simulate(async {
+            let setup = Setup { tts: true, tts_pacing: true, ..Setup::default() };
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in [
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmText { chat: Ref::new(0), text: AgentText(reply) },
+                Input::LlmEnd { chat: Ref::new(0) },
+            ] {
+                run.apply(&input).await;
+            }
+            finish(run, Outcome::default()).await
+        });
+        assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
+    }
+}
+
+mod cleanup_during_natural_completion {
+    use lk_agents_abi::errors::ProviderError;
+    use lk_agents_abi::{
+        ApiConnectOptions, BoxFuture, Closed, ProviderStream, StreamOutput, Ts, VirtualClock,
+    };
+    use lk_agents_fuzz::drive::simulate;
+    use lk_agents_runtime::inference::retry::{Open, stream};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::task::{Context, Waker};
+    use tokio_util::sync::CancellationToken;
+    struct Ending {
+        started: Arc<AtomicBool>,
+        closed: Arc<AtomicBool>,
+        release: lk_agents_runtime::net::signal::Cell<bool>,
+        panics: bool,
+    }
+
+    impl StreamOutput<u32> for Ending {
+        fn next(&mut self) -> BoxFuture<'_, Result<Option<u32>, ProviderError>> {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn close(self: Box<Self>, _deadline: Ts) -> BoxFuture<'static, Closed> {
+            Box::pin(async move {
+                self.started.store(true, Ordering::SeqCst);
+                self.release.wait_map(|released| released.then_some(())).await.unwrap();
+                self.closed.store(true, Ordering::SeqCst);
+                assert!(!self.panics, "injected fault: close panicked");
+                Closed::Clean
+            })
+        }
+    }
+
+    impl ProviderStream<u32> for Ending {}
+
+    #[test]
+    fn closing_during_natural_completion_finishes_the_cleanup_already_started() {
+        simulate(async {
+            let started = Arc::new(AtomicBool::new(false));
+            let closed = Arc::new(AtomicBool::new(false));
+            let (release, ready) = lk_agents_runtime::net::signal::signal(false);
+            let (opening, finished) = (started.clone(), closed.clone());
+            let open: Open<u32> = Arc::new(move || {
+                let source = Ending {
+                    started: opening.clone(),
+                    closed: finished.clone(),
+                    release: ready.clone(),
+                    panics: false,
+                };
+                Box::pin(async move { Ok(Box::new(source) as Box<dyn ProviderStream<u32>>) })
+            });
+            let mut stream = stream(
+                "ending".into(),
+                &ApiConnectOptions::default(),
+                Arc::new(VirtualClock::new()),
+                open,
+                |_| true,
+                Arc::new(|_, _, _| {}),
+                CancellationToken::new(),
+            )
+            .await;
+            let mut reading = stream.next();
+            assert!(reading.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+            assert!(started.load(Ordering::SeqCst));
+            drop(reading);
+            release.set(true);
+            assert_eq!(stream.close(Ts::from_nanos(u64::MAX)).await, Closed::Clean);
+            assert!(closed.load(Ordering::SeqCst), "the in-flight cleanup was joined");
+        });
+    }
+
+    // Catches: seed 145; a close that panicked during a pull was polled again at teardown.
+    #[test]
+    fn a_panicked_close_is_never_resumed_at_teardown() {
+        simulate(async {
+            let (release, ready) = lk_agents_runtime::net::signal::signal(true);
+            let open: Open<u32> = Arc::new(move || {
+                let source = Ending {
+                    started: Arc::new(AtomicBool::new(false)),
+                    closed: Arc::new(AtomicBool::new(false)),
+                    release: ready.clone(),
+                    panics: true,
+                };
+                Box::pin(async move { Ok(Box::new(source) as Box<dyn ProviderStream<u32>>) })
+            });
+            let mut stream = stream(
+                "panicking close".into(),
+                &ApiConnectOptions::default(),
+                Arc::new(VirtualClock::new()),
+                open,
+                |_| true,
+                Arc::new(|_, _, _| {}),
+                CancellationToken::new(),
+            )
+            .await;
+            let mut reading = stream.next();
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                reading.as_mut().poll(&mut Context::from_waker(Waker::noop()))
+            }));
+            assert!(panic.is_err(), "the original provider panic reaches its caller");
+            drop(reading);
+            assert_eq!(stream.close(Ts::from_nanos(u64::MAX)).await, Closed::Clean);
+            drop(release);
+        });
+    }
+}

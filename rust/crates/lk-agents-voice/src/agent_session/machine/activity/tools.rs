@@ -184,6 +184,9 @@ impl VoiceDriver {
             early: Vec::new(),
             hosted: running,
         });
+        if self.clear_deadline_if_set(Timer::InterruptionTimeout(speech)) {
+            self.record_trace(crate::trace::SpeechStep::WatchdogCleared { speech });
+        }
         hosted
     }
 
@@ -288,6 +291,15 @@ impl VoiceDriver {
             }
         };
         self.publish_tool_end(now, call_id, message, status);
+        let interrupted = self.activity.outliving_tools.contains(&speech)
+            || self
+                .activity
+                .speech_scheduler
+                .speech(speech)
+                .is_some_and(|state| state.interrupted());
+        if interrupted {
+            self.arm_generation_cleanup(now, speech);
+        }
     }
 
     /// The shared final lifecycle projection, after the exact live owner has been removed.
@@ -357,16 +369,12 @@ impl VoiceDriver {
             }
             pairs.push((r.step, execution.call, execution.output));
         }
-        for (step, call, mut output) in pairs {
+        for (step, call, output) in pairs {
             self.commit_item(
                 ChatItem::FunctionCall(call),
                 Source::ToolCall { speech, step },
                 Visibility::Both,
             );
-            // Right after its call's group, before what was said since the call.
-            if let Some(end) = self.session.chat_ctx.call_group_end(&output.call_id) {
-                output.created_at = end;
-            }
             self.commit_item(
                 ChatItem::FunctionCallOutput(output),
                 Source::ToolOutput { speech, step },

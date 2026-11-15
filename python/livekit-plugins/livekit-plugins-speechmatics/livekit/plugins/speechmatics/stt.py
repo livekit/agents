@@ -19,7 +19,7 @@ import dataclasses
 import os
 import weakref
 from collections.abc import Sequence
-from enum import Enum, StrEnum
+from enum import StrEnum
 from typing import Annotated, Any, Literal, NotRequired, TypedDict, TypeVar, assert_never
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -163,7 +163,6 @@ class STTOptions:
     # -------------------
 
     # Features
-    # The resolved model name (operating point). See `_resolve_model`.
     model: str = DEFAULT_MODEL.value
     include_partials: bool | None = None
 
@@ -181,7 +180,7 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         turn_detection_mode: TurnDetectionMode = DEFAULT_TURN_DETECTION_MODE,
-        model: NotGivenOr[Model | str] = NOT_GIVEN,
+        model: Model | str = DEFAULT_MODEL,
         domain: NotGivenOr[str] = NOT_GIVEN,
         language: str = "en",
         output_locale: NotGivenOr[str] = NOT_GIVEN,
@@ -219,9 +218,7 @@ class STT(stt.STT):
                 `turn_handling={"turn_detection": "stt"}` on the `VoiceSession`, which
                 otherwise ignores the end-of-speech events this plugin emits. Defaults to `DEFAULT_TURN_DETECTION_MODE`.
 
-            model: The transcription model to use, e.g. `"linden-1"`. A name agent-STT
-                does not accept falls back to the default model with a warning. Defaults
-                to the SDK's default model.
+            model: The transcription model to use. Defaults to `Model.LINDEN_1`.
 
             domain: Domain to use. Optional.
 
@@ -303,7 +300,7 @@ class STT(stt.STT):
             speaker_format=_set(speaker_format),
             known_speakers=_set(known_speakers) or [],
             additional_vocab=_normalize_additional_vocab(_set(additional_vocab) or []),
-            model=_resolve_model(model),
+            model=str(model),
             include_partials=_set(include_partials),
             enable_diarization=enable_diarization if is_given(enable_diarization) else True,
             speaker_sensitivity=_set(speaker_sensitivity),
@@ -475,8 +472,12 @@ class _RecognitionStarted(TypedDict):
     id: NotRequired[str]
 
 
-class _Logged(TypedDict):
-    message: Literal["Info", "Warning"]
+class _Info(TypedDict):
+    message: Literal["Info"]
+
+
+class _Warning(TypedDict):
+    message: Literal["Warning"]
 
 
 class _Error(TypedDict):
@@ -496,13 +497,28 @@ class _SegmentTiming(TypedDict):
 
 
 class _Segment(TypedDict):
-    message: Literal["AddSegment", "AddPartialSegment"]
     segment: NotRequired[_SegmentBody | None]
     metadata: NotRequired[_SegmentTiming | None]
 
 
-class _Turn(TypedDict):
-    message: Literal["StartOfTurn", "EndOfTurn", "EndOfTranscript"]
+class _AddSegment(_Segment):
+    message: Literal["AddSegment"]
+
+
+class _AddPartialSegment(_Segment):
+    message: Literal["AddPartialSegment"]
+
+
+class _StartOfTurn(TypedDict):
+    message: Literal["StartOfTurn"]
+
+
+class _EndOfTurn(TypedDict):
+    message: Literal["EndOfTurn"]
+
+
+class _EndOfTranscript(TypedDict):
+    message: Literal["EndOfTranscript"]
 
 
 class _SpeakersResult(TypedDict):
@@ -512,7 +528,16 @@ class _SpeakersResult(TypedDict):
 
 
 _Message = Annotated[
-    _RecognitionStarted | _Logged | _Error | _Segment | _Turn | _SpeakersResult,
+    _RecognitionStarted
+    | _Info
+    | _Warning
+    | _Error
+    | _AddSegment
+    | _AddPartialSegment
+    | _StartOfTurn
+    | _EndOfTurn
+    | _EndOfTranscript
+    | _SpeakersResult,
     Field(discriminator="message"),
 ]
 
@@ -664,10 +689,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
             case _:
                 assert_never(item)
 
-    def on_message(
-        self,
-        message: _RecognitionStarted | _Logged | _Error | _Segment | _Turn | _SpeakersResult,
-    ) -> None:
+    def on_message(self, message: _Message) -> None:
         if message["message"] == "RecognitionStarted":
             self._session_id = message.get("id")
             logger.info("Speechmatics session started", extra={"session_id": self._session_id})
@@ -702,7 +724,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
         else:
             assert_never(message)
 
-    def _transcript(self, message: _Segment) -> stt.Transcript:
+    def _transcript(self, message: _AddSegment | _AddPartialSegment) -> stt.Transcript:
         segment = message.get("segment") or _SegmentBody()
         timing = message.get("metadata") or _SegmentTiming()
         # segments the service did not attribute are labelled UU
@@ -864,38 +886,3 @@ def _resolve_base_url(base_url: NotGivenOr[str]) -> str:
         )
 
     return resolved
-
-
-def _model_name(value: Model | str) -> str:
-    """Normalize a model value to its wire string.
-
-    Accepts an enum member (`Model`, or any future `str` enum) or a plain string,
-    and returns the string the service reads.
-    """
-    return value.value if isinstance(value, Enum) else str(value)
-
-
-def _resolve_model(model: NotGivenOr[Model | str]) -> str:
-    """Resolve `model` to a model name agent-STT accepts; the SDK's default when not given.
-
-    This never raises. A name agent-STT does not accept — a typo, or one of the `enhanced` /
-    `standard` operating points the plugin took before Agent STT — falls back to the default
-    model with a warning, so old code keeps transcribing instead of dying at construction.
-
-    Returns:
-        The resolved model name as a string.
-    """
-    resolved = _model_name(model) if is_given(model) else None
-    if not resolved:
-        return DEFAULT_MODEL.value
-
-    supported = [m.value for m in Model]
-    if resolved in supported:
-        return resolved
-
-    logger.warning(
-        f"{resolved!r} is not a model agent-STT accepts ({', '.join(supported)}); using "
-        f"{DEFAULT_MODEL.value!r} instead. The old `enhanced` and `standard` operating points "
-        f"belong to the previous service and have no Agent STT equivalent."
-    )
-    return DEFAULT_MODEL.value

@@ -174,9 +174,9 @@ class TTS(tts.TTS):
             pacing (SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or ``None`` to
                 send each chunk as soon as it is split.
         """  # noqa: E501
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        self._opts.voice_uuid = voice_uuid or self._opts.voice_uuid
-        self._opts.model = model if model is not None else self._opts.model
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            self._opts.voice_uuid = voice_uuid or self._opts.voice_uuid
+            self._opts.model = model if model is not None else self._opts.model
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions

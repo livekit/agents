@@ -33,26 +33,27 @@ tts = slng.TTS(
 )
 ```
 
-Additional keyword arguments are forwarded to the gateway and applied according to the selected model's contract. Failover across multiple models or endpoints is available via `connections=[...]`; see [docs.slng.ai](https://docs.slng.ai/) for details.
+Additional keyword arguments are forwarded to the gateway and applied according to the selected model's contract. TTS failover across multiple models or endpoints is available via `connections=[...]`; see [docs.slng.ai](https://docs.slng.ai/) for details.
+
+## STT failover
+
+One `slng.STT` speaks to one model. To fail over across models or regions, wrap several in `stt.FallbackAdapter`: a failed one is skipped until it recovers.
+
+```python
+from livekit.agents import stt
+from livekit.plugins import slng
+
+speech_to_text = stt.FallbackAdapter(
+    [
+        slng.STT(model="deepgram/nova:3", region_override="eu-west-1"),
+        slng.STT(model="deepgram/nova:3", region_override="us-east-1"),
+    ]
+)
+```
 
 ## End of turn finalization
 
-For the lowest STT turn latency, let the plugin know when the user stops speaking. The plugin then sends a finalize signal so the provider returns the final transcript immediately instead of waiting for its own endpointing:
-
-```python
-session = VoiceSession(stt=stt, ...)
-stt.attach_to_session(session)
-```
-
-Or wire it manually:
-
-```python
-@session.on("user_state_changed")
-def _on_user_state_changed(ev):
-    stt.notify_user_state(ev.new_state)
-```
-
-Without this hook the plugin still works, but end of turn detection relies entirely on the provider's endpointing, which typically adds a few hundred milliseconds per turn.
+The session flushes the STT at each end of turn, which sends the bridge a finalize: the provider returns the final transcript at once instead of waiting for its own endpointing. No wiring is needed.
 
 ## Region override
 
@@ -96,3 +97,4 @@ Version 2.0 is a breaking change:
 - Language codes are no longer normalized client-side; send the value the model expects (for example BCP-47 `hi-IN` for Sarvam, not `hi`).
 - STT `recognize()` (HTTP batch) is no longer supported; use `stream()`. Only `pcm_s16le` input audio is supported.
 - STT `api_token` was removed; use `api_key`.
+- STT takes one `model`: `connections`, `final_timeout_s`, `fallback_recovery_cooldown_s`, `http_session`, `notify_user_state()`, `attach_to_session()` and `set_final_timeout_allowed()` were removed. Wrap several `slng.STT` in `stt.FallbackAdapter` to fail over; the session's end of turn sends the finalize.

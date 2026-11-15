@@ -686,8 +686,11 @@ inputs! {
     TtsHold { tts: Ref<Tts> };
     TtsRelease { tts: Ref<Tts> };
     TtsFail { tts: Ref<Tts> };
-    /// The recogniser fails mid-stream; the stream is spent.
+    /// The recogniser gives up mid-stream; the stream is spent.
     SttFail { stt: Ref<Stt> };
+    /// The recogniser's connection drops and it reconnects: the stream carries on, the speech it
+    /// was in ended there.
+    SttDrop { stt: Ref<Stt> };
     /// The person speaks into the microphone: this many 10 ms frames, forwarded by the driver to
     /// every provider listening. What they contained is for VAD and STT to report.
     MicFrames { mic: Ref<Mic>, chunks: Count };

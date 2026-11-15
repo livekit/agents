@@ -6,11 +6,13 @@ import asyncio
 import logging
 import struct
 from collections.abc import Callable
+from typing import Never
 
 import numpy as np
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, http
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, APIError, utils
+from livekit.agents.voice.avatar import AvatarWebSocket, WebSocketTarget
 from livekit.agents.voice.io import AudioInput
 
 logger = logging.getLogger(__name__)
@@ -116,6 +118,41 @@ class MeetingAudioInput(AudioInput):
         return await self._queue.get()
 
 
+class _Relay(AvatarWebSocket[bytes | str, Never]):
+    """The meeting relay's socket: PCM audio frames as binary, chat as JSON text; it is sent
+    nothing."""
+
+    ping_interval = 20.0
+
+    def __init__(
+        self,
+        url: str,
+        audio_sink: Callable[[bytes], None],
+        chat_sink: Callable[[str], None] | None,
+    ) -> None:
+        super().__init__("LemonSlice meeting relay")
+        self._url = url
+        self._audio_sink = audio_sink
+        self._chat_sink = chat_sink
+        self._audio_frames = 0
+        self._chat_messages = 0
+
+    async def connect(self, conn_options: APIConnectOptions) -> WebSocketTarget:
+        return WebSocketTarget(self._url)
+
+    def on_message(self, message: bytes | str) -> None:
+        if isinstance(message, bytes):
+            self._audio_sink(message)
+            self._audio_frames += 1
+            if self._audio_frames == 1:
+                logger.debug("received first pcm audio frame in meeting relay")
+        elif self._chat_sink is not None:
+            self._chat_sink(message)
+            self._chat_messages += 1
+            if self._chat_messages == 1:
+                logger.debug("received first chat message in meeting relay")
+
+
 async def stream_meeting_relay(
     websocket_url: str,
     audio_sink: Callable[[bytes], None],
@@ -135,44 +172,30 @@ async def stream_meeting_relay(
         audio_sink: Callback invoked with each binary PCM payload.
         stop: Event that signals the relay loop to exit.
         chat_sink: Optional callback invoked with each text chat JSON payload.
+        conn_options: The connect limit of each connection.
         reconnect_delay_s: Initial reconnect delay in seconds.
         max_reconnect_delay_s: Maximum reconnect delay in seconds.
     """
     backoff_time = reconnect_delay_s
+
+    async def relay(socket: _Relay) -> None:
+        nonlocal backoff_time
+        await socket.open(conn_options)
+        backoff_time = reconnect_delay_s
+        logger.debug("connected to meeting relay")
+        await socket.run(conn_options)
+
     while not stop.is_set():
+        socket = _Relay(websocket_url, audio_sink, chat_sink)
         try:
-            async with http.open() as session:
-                ws = await session.ws_connect(
-                    websocket_url, conn_options=conn_options, heartbeat=20.0
-                )
-                try:
-                    backoff_time = reconnect_delay_s
-                    audio_frames = 0
-                    chat_messages = 0
-                    logger.debug("connected to meeting relay")
-                    async for msg in ws:
-                        if stop.is_set():
-                            break
-                        if msg.type is http.WebSocketMessageType.BINARY:
-                            audio_sink(msg.binary)
-                            audio_frames += 1
-                            if audio_frames == 1:
-                                logger.debug("received first pcm audio frame in meeting relay")
-                        elif chat_sink is not None:
-                            chat_sink(msg.text)
-                            chat_messages += 1
-                            if chat_messages == 1:
-                                logger.debug("received first chat message in meeting relay")
-                finally:
-                    await ws.close()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
+            async with utils.aio.TaskSet() as tasks:
+                await tasks.first_completed(relay(socket), stop.wait())
+        except APIError:
             logger.warning(
-                "meeting relay disconnected; retrying in %ss",
-                backoff_time,
-                exc_info=True,
+                "meeting relay disconnected; retrying in %ss", backoff_time, exc_info=True
             )
+        finally:
+            await socket.aclose()
         if not stop.is_set():
             await asyncio.sleep(backoff_time)
             backoff_time = min(backoff_time * 2, max_reconnect_delay_s)

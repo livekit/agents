@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::llm::mcp::{McpSession as McpSessionPort, McpTimeout};
+use lk_agents_abi::llm::mcp::{
+    JsonObject, McpCallResult, McpSession as McpSessionPort, McpTimeout, McpTool,
+};
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_core::mcp::timeout_duration;
@@ -24,14 +26,15 @@ use rmcp::handler::client::progress::ProgressDispatcher;
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, CancelledNotification, CancelledNotificationParam,
     ClientRequest, PaginatedRequestParams, ProgressNotificationParam, RequestId, ServerResult,
+    Tool,
 };
 use rmcp::service::serve_client_with_ct;
 use rmcp::service::{
-    NotificationContext, PeerRequestOptions, QuitReason, RoleClient, RunningService, ServiceError,
+    NotificationContext, PeerRequestOptions, QuitReason, RequestHandle, RoleClient, RunningService,
+    ServiceError,
 };
 use rmcp::transport::Transport;
 use rmcp::{ClientHandler, Peer};
-use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
 use super::transport::{Observed, StdioTransport, TransportReceipt, connect_http};
@@ -145,13 +148,14 @@ impl Drop for Call {
 struct CancelOnDrop<'a> {
     connection: &'a Connection,
     id: Option<RequestId>,
+    reason: &'static str,
 }
 impl Drop for CancelOnDrop<'_> {
     fn drop(&mut self) {
         let Some(id) = self.id.take() else { return };
-        let peer = self.connection.peer.clone();
+        let (peer, reason) = (self.connection.peer.clone(), self.reason);
         self.connection.background.spawn("MCP cancel notification", async move {
-            let reason = Some(CALLER_CANCELLED.into());
+            let reason = Some(reason.into());
             let notification =
                 CancelledNotification::new(CancelledNotificationParam::new(Some(id), reason));
             if let Err(error) = peer.send_notification(notification.into()).await {
@@ -273,7 +277,7 @@ impl McpSessionPort for McpSession {
         let env = env.unwrap_or_default().into_iter().collect();
         self.connect_to(Target::Stdio { command, args, env, cwd }).await
     }
-    async fn list_tools(&self) -> Result<Value, McpError> {
+    async fn list_tools(&self) -> Result<Vec<McpTool>, McpError> {
         // A connection that answered but could not list counts against the gate, as a failed
         // connect already does, so that retries back off.
         let mut reached = false;
@@ -302,12 +306,7 @@ impl McpSessionPort for McpSession {
                 else {
                     return Err(McpError::UnexpectedResponse);
                 };
-                let tools = page
-                    .tools
-                    .into_iter()
-                    .map(serde_json::to_value)
-                    .collect::<Result<_, _>>()
-                    .map_err(|e| McpError::Decode(Arc::new(e)))?;
+                let tools = page.tools.into_iter().map(listed).collect();
                 let closing = connection.cancel.is_cancelled();
                 step = self.state.lock().listing.page(pages, tools, page.next_cursor, closing);
             }
@@ -320,11 +319,11 @@ impl McpSessionPort for McpSession {
             self.state.lock().gate.failed(self.clock().now());
         }
         match result {
-            Ok(tools) => Ok(tools.into()),
+            Ok(tools) => Ok(tools),
             Err(error) => match self.state.lock().listing.last_known() {
                 Some(tools) if !matches!(error, McpError::NotInitialized) => {
                     log::warn!(target: lk_agents_abi::LOG_TARGET, "MCP tool listing failed, using the last listing: {error}");
-                    Ok(tools.into())
+                    Ok(tools)
                 }
                 _ => Err(error),
             },
@@ -333,11 +332,11 @@ impl McpSessionPort for McpSession {
     async fn call_tool(
         &self,
         name: String,
-        arguments: Map<String, Value>,
+        arguments: JsonObject,
         timeout: Option<f64>,
         progress: Option<Arc<dyn McpProgress>>,
         host_context: Option<HostRef>,
-    ) -> Result<Value, McpError> {
+    ) -> Result<McpCallResult, McpError> {
         let timeout = match timeout {
             Some(seconds) => Some(timeout_duration(McpTimeout::Tool, seconds)?),
             None => self.request_timeout,
@@ -345,34 +344,55 @@ impl McpSessionPort for McpSession {
         let connection = self.ensure(McpError::Unavailable).await?;
         let _call = connection.borrow()?;
         let mut params = CallToolRequestParams::new(name);
-        params.arguments = Some(arguments);
+        params.arguments = Some(arguments.0);
         let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
+        // The limit runs on the session's clock from the request on, each progress message
+        // restarting it.
+        let clock = self.clock();
+        let mut deadline = timeout.map(|limit| clock.now().saturating_add(limit));
         let handle = tokio::select! {
             _ = connection.cancel.cancelled() => return Err(cancelled()),
-            result = connection.peer.send_cancellable_request(request, options(timeout)) => result.map_err(|e| connection.error(e))?,
+            result = connection.peer.send_cancellable_request(request, PeerRequestOptions::no_options()) => result.map_err(|e| connection.error(e))?,
         };
-        let mut guard = CancelOnDrop { connection: &connection, id: Some(handle.id.clone()) };
+        let mut guard = CancelOnDrop {
+            connection: &connection,
+            id: Some(handle.id.clone()),
+            reason: CALLER_CANCELLED,
+        };
         let mut updates = connection.client.progress.subscribe(handle.progress_token.clone()).await;
         let response = handle.await_response();
         tokio::pin!(response);
+        let expired = |deadline: Option<lk_agents_abi::Ts>| async move {
+            match deadline {
+                Some(at) => clock.wait_until(at).await,
+                None => std::future::pending().await,
+            }
+        };
         let result = loop {
             tokio::select! {
                 biased;
                 _ = connection.cancel.cancelled() => return Err(cancelled()),
                 result = &mut response => {
-                    // A reply, or a timeout the SDK already cancelled on the server.
                     guard.id = None;
                     break result.map_err(|e| connection.error(e))?;
                 }
                 Some(update) = updates.next() => {
+                    deadline = timeout.map(|limit| clock.now().saturating_add(limit));
                     forward_progress(&connection, progress.as_ref(), &host_context, update).await?
+                }
+                () = expired(deadline) => {
+                    // The guard cancels the request on the server.
+                    guard.reason = RequestHandle::<RoleClient>::REQUEST_TIMEOUT_REASON;
+                    let limit = timeout.unwrap_or_default();
+                    let cause = ServiceError::Timeout { timeout: limit };
+                    return Err(McpError::Timeout { timeout: limit, cause: Arc::new(cause) });
                 }
             }
         };
         match result {
-            ServerResult::CallToolResult(result) => {
-                serde_json::to_value(result).map_err(|e| McpError::Decode(Arc::new(e)))
-            }
+            ServerResult::CallToolResult(result) => serde_json::to_value(result)
+                .and_then(serde_json::from_value)
+                .map_err(|e| McpError::Decode(Arc::new(e))),
             _ => Err(McpError::UnexpectedResponse),
         }
     }
@@ -589,6 +609,7 @@ impl McpSession {
         let connection = self.state.lock().connection.clone();
         connection.filter(|c| c.alive())
     }
+    /// A listing's request, which the listing's `init_timeout` bounds as a whole.
     async fn request(
         &self,
         connection: &Connection,
@@ -596,17 +617,9 @@ impl McpSession {
     ) -> Result<ServerResult, McpError> {
         tokio::select! {
             _ = connection.cancel.cancelled() => Err(cancelled()),
-            result = async { connection.peer.send_cancellable_request(request, options(self.request_timeout)).await?.await_response().await } => result.map_err(|e| connection.error(e)),
+            result = async { connection.peer.send_cancellable_request(request, PeerRequestOptions::no_options()).await?.await_response().await } => result.map_err(|e| connection.error(e)),
         }
     }
-}
-
-/// A request's limit, reset by each of its progress notifications.
-fn options(timeout: Option<Duration>) -> PeerRequestOptions {
-    let mut options = PeerRequestOptions::no_options();
-    options.timeout = timeout;
-    options.reset_timeout_on_progress = true;
-    options
 }
 
 impl Drop for McpSession {
@@ -630,6 +643,16 @@ pub(super) fn service_error(error: ServiceError) -> McpError {
         ServiceError::Timeout { timeout } => McpError::Timeout { timeout, cause: Arc::new(error) },
         ServiceError::Cancelled { .. } => McpError::Cancelled(Arc::new(error)),
         _ => McpError::Transport(Arc::new(error)),
+    }
+}
+
+/// A listed tool as the core reads it.
+fn listed(tool: Tool) -> McpTool {
+    McpTool {
+        name: tool.name.into_owned(),
+        description: tool.description.map(std::borrow::Cow::into_owned),
+        input_schema: Arc::unwrap_or_clone(tool.input_schema),
+        meta: tool.meta.map(|meta| meta.0),
     }
 }
 

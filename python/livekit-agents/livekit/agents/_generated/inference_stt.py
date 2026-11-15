@@ -45,7 +45,7 @@ AssemblyAIModels: TypeAlias = Literal["assemblyai/universal-streaming", "assembl
 XaiModels: TypeAlias = Literal["xai/stt-1"]
 
 
-SpeechmaticsModels: TypeAlias = Literal["speechmatics/enhanced", "speechmatics/standard", "speechmatics/linden-1"]
+SpeechmaticsModels: TypeAlias = Literal["speechmatics/linden-1", "speechmatics/oak-1"]
 
 
 InworldModels: TypeAlias = Literal["inworld/inworld-stt-1"]

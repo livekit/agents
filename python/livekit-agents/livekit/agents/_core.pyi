@@ -169,7 +169,7 @@ from ._generated._core_stt import (
     FallbackStt as FallbackStt,
     InferenceStt as InferenceStt,
     InferenceSttStream as InferenceSttStream,
-    SpeechState as SpeechState,
+    SpeechNormalizer as SpeechNormalizer,
     SttAdapterStream as SttAdapterStream,
     SttStreamAdapter as SttStreamAdapter,
 )

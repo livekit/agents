@@ -14,46 +14,30 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
-import time
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
-from typing import Any, Literal, NamedTuple
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
+from typing import Literal, NotRequired, TypedDict, assert_never
 
 from livekit import rtc
 from livekit.agents import (
-    APIConnectionError,
     APIConnectOptions,
-    APIError,
     APIStatusError,
     LanguageCode,
-    http,
     stt,
-    utils,
 )
-from livekit.agents.stt import SpeechEventType
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
 )
 
-from .log import logger
-
 # Base URL for Soniox Speech-to-Text API.
 BASE_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
 
-# WebSocket messages and tokens.
-KEEPALIVE_MESSAGE = '{"type": "keepalive"}'
+# the tokens that mark an endpoint, and a finalization
 END_TOKEN = "<end>"
 FINALIZED_TOKEN = "<fin>"
-
-
-def is_end_token(token: Mapping[str, object]) -> bool:
-    """Return True if the given token marks an end or finalized event."""
-    return token.get("text") in (END_TOKEN, FINALIZED_TOKEN)
 
 
 @dataclass
@@ -108,7 +92,7 @@ class TranslationConfig:
 class STTOptions:
     """Configuration options for Soniox Speech-to-Text service."""
 
-    model: str = "stt-rt-v5"
+    model: str = "stt-rt-v6"
 
     language_hints: list[str] | None = None
     language_hints_strict: bool = False
@@ -151,6 +135,88 @@ class STTOptions:
             raise ValueError("endpoint_latency_adjustment_level must be between 0 and 3")
 
 
+class _Token(TypedDict):
+    text: str
+    is_final: bool
+    language: NotRequired[str]
+    speaker: NotRequired[str]
+    start_ms: NotRequired[float]
+    end_ms: NotRequired[float]
+    confidence: NotRequired[float]
+    translation_status: NotRequired[str]
+
+
+class _Response(TypedDict):
+    """A result, the session's end (``finished``) or an error: Soniox tags none of them."""
+
+    tokens: NotRequired[list[_Token]]
+    total_audio_proc_ms: NotRequired[float]
+    finished: NotRequired[bool]
+    error_code: NotRequired[int]
+    error_message: NotRequired[str]
+
+
+class _GeneralItem(TypedDict):
+    key: str
+    value: str
+
+
+class _TranslationTerm(TypedDict):
+    source: str
+    target: str
+
+
+class _Context(TypedDict, total=False):
+    general: list[_GeneralItem]
+    text: str
+    terms: list[str]
+    translation_terms: list[_TranslationTerm]
+
+
+class _Translation(TypedDict):
+    type: Literal["one_way", "two_way"]
+    target_language: NotRequired[str]
+    language_a: NotRequired[str]
+    language_b: NotRequired[str]
+
+
+class _Config(TypedDict):
+    model: str
+    audio_format: Literal["pcm_s16le"]
+    num_channels: int
+    enable_endpoint_detection: bool
+    sample_rate: int
+    language_hints: list[str] | None
+    language_hints_strict: bool
+    enable_speaker_diarization: bool
+    enable_language_identification: bool
+    client_reference_id: str | None
+    max_endpoint_delay_ms: int
+    context: NotRequired[str | _Context]
+    endpoint_sensitivity: NotRequired[float]
+    endpoint_latency_adjustment_level: NotRequired[int]
+    translation: NotRequired[_Translation]
+
+
+class _Keepalive(TypedDict):
+    type: Literal["keepalive"]
+
+
+def _context(context: ContextObject) -> _Context:
+    wire = _Context()
+    if context.general is not None:
+        wire["general"] = [_GeneralItem(key=g.key, value=g.value) for g in context.general]
+    if context.text is not None:
+        wire["text"] = context.text
+    if context.terms is not None:
+        wire["terms"] = context.terms
+    if context.translation_terms is not None:
+        wire["translation_terms"] = [
+            _TranslationTerm(source=t.source, target=t.target) for t in context.translation_terms
+        ]
+    return wire
+
+
 class STT(stt.STT):
     """Speech-to-Text service using Soniox Speech-to-Text API.
 
@@ -166,7 +232,6 @@ class STT(stt.STT):
         *,
         api_key: str | None = None,
         base_url: str = BASE_URL,
-        http_session: http.HttpSession | None = None,
         params: STTOptions | None = None,
     ) -> None:
         """Initialize instance of Soniox Speech-to-Text API service.
@@ -175,7 +240,6 @@ class STT(stt.STT):
             api_key: Soniox API key, if not provided, will look for SONIOX_API_KEY env variable.
             base_url: Base URL for Soniox Speech-to-Text API, default to BASE_URL defined in this
                 module.
-            http_session: Optional HttpSession to use for requests.
             params: Additional configuration parameters, such as model, language hints, context and
                 speaker diarization.
         """
@@ -197,7 +261,6 @@ class STT(stt.STT):
             raise ValueError("Soniox API key is required. Set SONIOX_API_KEY or pass api_key")
         self._api_key = resolved_key
         self._base_url = base_url
-        self._http_session = http_session
         self._params = params
 
     @property
@@ -227,25 +290,22 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        """Return a new LiveKit streaming speech-to-text session."""
+        """Return a new LiveKit streaming speech-to-text session; ``language`` hints only it."""
+        params = self._params
+        if language:
+            params = replace(params, language_hints=[language])
         return SpeechStream(
             stt=self,
-            params=self._params,
+            params=params,
             base_url=self._base_url,
             api_key=self._api_key,
-            ensure_session=self._ensure_session,
             conn_options=conn_options,
         )
 
-    def _ensure_session(self) -> http.HttpSession:
-        """Get or create an HttpSession for WebSocket connections."""
-        if not self._http_session:
-            self._http_session = http.http_session()
 
-        return self._http_session
+class SpeechStream(stt.WebSocketStream[_Response, _Config | _Keepalive]):
+    keepalive = stt.Keepalive(every=5.0, frame=_Keepalive(type="keepalive"))
 
-
-class SpeechStream(stt.RecognizeStream):
     def __init__(
         self,
         stt: STT,
@@ -253,332 +313,149 @@ class SpeechStream(stt.RecognizeStream):
         params: STTOptions,
         base_url: str,
         api_key: str,
-        ensure_session: Callable[[], http.HttpSession],
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        """Set up state and queues for a WebSocket-based transcription stream."""
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=params.sample_rate)
         self._params = params
         self._base_url = base_url
         self._api_key = api_key
-        self._ensure_session = ensure_session
-        self._ws: http.WebSocket | None = None
+        # Translation routes original-language tokens to `_final_original` and translated
+        # tokens to `_final`. In non-translation mode, all tokens go to `_final` and
+        # `_final_original` stays empty (so `_final` IS the source side there).
+        self._final = _TokenAccumulator()
+        self._final_original = _TokenAccumulator()
+        self._reported_ms = 0.0
 
-        self.audio_queue: asyncio.Queue[bytes | str] = asyncio.Queue()
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
+        # a connection's session starts from nothing
+        self._final.reset()
+        self._final_original.reset()
+        self._reported_ms = 0.0
+        url = self._base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
+        return stt.WebSocketTarget(url, headers={"Authorization": f"Bearer {self._api_key}"})
 
-        self._reported_duration_ms = 0
+    def setup(self) -> _Config:
+        params = self._params
+        config = _Config(
+            model=params.model,
+            audio_format="pcm_s16le",
+            num_channels=params.num_channels or 1,
+            enable_endpoint_detection=True,
+            sample_rate=params.sample_rate,
+            language_hints=params.language_hints,
+            language_hints_strict=params.language_hints_strict,
+            enable_speaker_diarization=params.enable_speaker_diarization,
+            enable_language_identification=params.enable_language_identification,
+            client_reference_id=params.client_reference_id,
+            max_endpoint_delay_ms=params.max_endpoint_delay_ms,
+        )
+        if isinstance(params.context, ContextObject):
+            config["context"] = _context(params.context)
+        elif params.context is not None:
+            config["context"] = params.context
+        if params.endpoint_sensitivity is not None:
+            config["endpoint_sensitivity"] = params.endpoint_sensitivity
+        if params.endpoint_latency_adjustment_level is not None:
+            config["endpoint_latency_adjustment_level"] = params.endpoint_latency_adjustment_level
+        if (tr := params.translation) is not None:
+            translation = _Translation(type=tr.type)
+            if tr.type == "one_way" and tr.target_language:
+                translation["target_language"] = tr.target_language
+            elif tr.type == "two_way" and tr.language_a and tr.language_b:
+                translation["language_a"] = tr.language_a
+                translation["language_b"] = tr.language_b
+            config["translation"] = translation
+        return config
 
-    async def _connect_ws(self) -> http.WebSocket:
-        """Open a WebSocket connection to the Soniox Speech-to-Text API and send the
-        initial configuration."""
-        context_raw = self._params.context
-        context_value: dict[str, Any] | str | None
-        if isinstance(context_raw, ContextObject):
-            context_value = asdict(context_raw)
-        else:
-            context_value = context_raw
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | None:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush():
+                return None
+            case stt.EndOfAudio():
+                # an empty frame ends the audio: Soniox finalizes and answers ``finished``
+                return b""
+            case _:
+                assert_never(item)
 
-        # Create initial config object.
-        config: dict[str, Any] = {
-            "model": self._params.model,
-            "audio_format": "pcm_s16le",
-            "num_channels": self._params.num_channels or 1,
-            "enable_endpoint_detection": True,
-            "sample_rate": self._params.sample_rate,
-            "language_hints": self._params.language_hints,
-            "language_hints_strict": self._params.language_hints_strict,
-            "context": context_value,
-            "enable_speaker_diarization": self._params.enable_speaker_diarization,
-            "enable_language_identification": self._params.enable_language_identification,
-            "client_reference_id": self._params.client_reference_id,
-        }
-        config["max_endpoint_delay_ms"] = self._params.max_endpoint_delay_ms
-        if self._params.endpoint_sensitivity is not None:
-            config["endpoint_sensitivity"] = self._params.endpoint_sensitivity
-        if self._params.endpoint_latency_adjustment_level is not None:
-            config["endpoint_latency_adjustment_level"] = (
-                self._params.endpoint_latency_adjustment_level
+    def on_message(self, message: _Response) -> None:
+        if "error_code" in message or "error_message" in message:
+            code = message.get("error_code", -1)
+            raise APIStatusError(
+                f"Soniox STT error: {code}",
+                status_code=code,
+                body=message,
+                detail=message.get("error_message"),
             )
-        if self._params.translation is not None:
-            tr = self._params.translation
-            translation_dict: dict[str, Any] = {"type": tr.type}
-            if tr.type == "one_way":
-                translation_dict["target_language"] = tr.target_language
-            elif tr.type == "two_way":
-                translation_dict["language_a"] = tr.language_a
-                translation_dict["language_b"] = tr.language_b
-            config["translation"] = translation_dict
-        # Connect to the Soniox Speech-to-Text API.
-        ws = await self._ensure_session().ws_connect(
-            self._base_url,
-            headers={"Authorization": f"Bearer {self._api_key}"},
-            # Without a heartbeat a silently dropped socket (half-open TCP, no
-            # FIN/RST) is never noticed: `_recv_messages_task` parks on receive
-            # forever and the reconnect in `_run` is only ever triggered by that
-            # task ending. A ping that goes unanswered closes the socket, which
-            # surfaces as APIConnectionError in the recv loop.
-            heartbeat=30.0,
-            conn_options=self._conn_options,
-        )
-        # Set initial configuration message.
-        await ws.send_str(json.dumps(config))
-        logger.debug("Soniox Speech-to-Text API connection established!")
-
-        self._reported_duration_ms = 0
-        self.audio_queue = asyncio.Queue()
-        return ws
-
-    def _report_processed_audio_duration(self, total_audio_proc_ms: float) -> None:
-        """Report the total audio duration processed by the STT engine."""
-        to_report_ms = total_audio_proc_ms - self._reported_duration_ms
-        if to_report_ms <= 0:
-            return
-
-        usage_event = stt.SpeechEvent(
-            type=stt.SpeechEventType.RECOGNITION_USAGE,
-            alternatives=[],
-            recognition_usage=stt.RecognitionUsage(
-                audio_duration=to_report_ms / 1000,
-            ),
-        )
-        self.send(usage_event)
-        self._reported_duration_ms = int(total_audio_proc_ms)
-
-    async def _run(self) -> None:
-        """Run one connection; a failure ends the attempt and the base class reconnects."""
-        try:
-            self._ws = await self._connect_ws()
-            async with utils.aio.TaskSet() as tasks:
-                await asyncio.gather(
-                    tasks.spawn(self._prepare_audio_task()),
-                    tasks.spawn(self._send_audio_task()),
-                    tasks.spawn(self._recv_messages_task()),
-                    tasks.spawn(self._keepalive_task()),
-                )
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError(f"An unexpected error occurred: {e}") from e
-        finally:
-            if self._ws is not None:
-                await self._ws.close()
-                self._ws = None
-
-    async def _keepalive_task(self) -> None:
-        """Periodically send keepalive messages (while no audio is being sent)
-        to maintain the WebSocket connection."""
-        while self._ws:
-            await self._ws.send_str(KEEPALIVE_MESSAGE)
-            await asyncio.sleep(5)
-
-    async def _prepare_audio_task(self) -> None:
-        """Read audio frames and enqueue PCM data for sending."""
-        if not self._ws:
-            logger.error("WebSocket connection to Soniox Speech-to-Text API is not established")
-            return
-
-        async for data in self.input:
-            if isinstance(data, rtc.AudioFrame):
-                # Get the raw bytes from the audio frame.
-                pcm_data = data.data.tobytes()
-                self.audio_queue.put_nowait(pcm_data)
-
-    async def _send_audio_task(self) -> None:
-        """Take queued audio data and transmit it over the WebSocket."""
-        if not self._ws:
-            logger.error("WebSocket connection to Soniox Speech-to-Text API is not established")
-            return
-
-        while self._ws:
-            data = await self.audio_queue.get()
-            if isinstance(data, bytes):
-                await self._ws.send_bytes(data)
-            else:
-                await self._ws.send_str(data)
-
-    async def _recv_messages_task(self) -> None:
-        """Receive transcription messages, handle tokens, errors, and dispatch events."""
-
-        # Translation routes original-language tokens to `final_original` and translated
-        # tokens to `final`. In non-translation mode, all tokens go to `final` and
-        # `final_original` stays empty (so `final` IS the source side there).
-        is_translation_mode = self._params.translation is not None
-
-        # final tokens are accumulated across messages until an endpoint is detected.
-        final = _TokenAccumulator()
-        final_original = _TokenAccumulator()
-        is_speaking = False
-
-        def send_endpoint_transcript() -> None:
-            nonlocal is_speaking
-            if final.text:
-                # Translation mode determines the role of each accumulator:
-                # when on, `final_original` carries the source side and
-                # `final` carries the target side -- even across flush windows
-                # where the originals were finalized in a prior message and
-                # only translation tokens land in this one. When translation
-                # is off, `final` IS the source side and `final_original`
-                # stays empty.
-                src_segs: Sequence[tuple[str, str]]
-                tgt_segs: Sequence[tuple[str, str]]
-                src_segs, tgt_segs = (
-                    (final_original.language_segments, final.language_segments)
-                    if is_translation_mode
-                    else (final.language_segments, [])
-                )
-                source_languages, source_texts = _lang_segments_to_fields(src_segs)
-                target_languages, target_texts = _lang_segments_to_fields(tgt_segs)
-                self.send(
-                    stt.SpeechEvent(
-                        type=SpeechEventType.FINAL_TRANSCRIPT,
-                        alternatives=[
-                            final.to_speech_data(
-                                self.start_time_offset,
-                                source_languages=source_languages,
-                                source_texts=source_texts,
-                                target_languages=target_languages,
-                                target_texts=target_texts,
-                            )
-                        ],
-                    )
-                )
-                self.send(
-                    stt.SpeechEvent(
-                        type=SpeechEventType.END_OF_SPEECH,
-                    )
-                )
-
-                # Reset buffers.
-                final.reset()
-                final_original.reset()
-
-                # Reset speaking state, so the next transcript will send START_OF_SPEECH again.
-                is_speaking = False
-            else:
-                final_original.reset()
-
-        if not self._ws:
-            return
-
-        async for msg in self._ws:
-            if msg.type is not http.WebSocketMessageType.TEXT:
-                logger.warning(
-                    f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}"
-                )
-                continue
-
-            try:
-                content = json.loads(msg.data)
-            except json.JSONDecodeError as e:
-                raise APIError(
-                    "Soniox STT sent a malformed message", kind="protocol", detail=str(msg.data)
-                ) from e
-            if not isinstance(content, dict):
-                raise APIError(
-                    "Soniox STT sent a malformed message", kind="protocol", detail=str(msg.data)
-                )
-            has_error = bool(content.get("error_code") or content.get("error_message"))
-            tokens = content.get("tokens") or []
-
-            non_final = _TokenAccumulator()
-            non_final_original = _TokenAccumulator()
-            total_audio_proc_ms = content.get("total_audio_proc_ms", 0)
-
-            # 1) process tokens: accumulate final/non-final,
-            #    flush immediately on endpoint tokens.
-            for token in tokens:
-                is_translated = token.get("translation_status") == "translation"
-                if is_translation_mode and not is_end_token(token) and not is_translated:
-                    # Original-language token: capture text for source_text only.
-                    if token["is_final"]:
-                        final_original.update(token)
-                    else:
-                        non_final_original.update(token)
-                    continue
+        translating = self._params.translation is not None
+        final, final_original = self._final, self._final_original
+        non_final, non_final_original = _TokenAccumulator(), _TokenAccumulator()
+        for token in message.get("tokens", []):
+            is_end = token["text"] in (END_TOKEN, FINALIZED_TOKEN)
+            if translating and not is_end and token.get("translation_status") != "translation":
+                # an original-language token: the source text only
+                (final_original if token["is_final"] else non_final_original).update(token)
+            elif is_end:
                 if token["is_final"]:
-                    if is_end_token(token):
-                        send_endpoint_transcript()
-                    else:
-                        final.update(token)
-                else:
-                    non_final.update(token)
+                    self._endpoint()
+            elif token["is_final"]:
+                final.update(token)
+            else:
+                non_final.update(token)
 
-            # 2) emit START_OF_SPEECH + transcript for remaining content.
-            if final.text or non_final.text:
-                if not is_speaking:
-                    is_speaking = True
-                    self.send(stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH))
-                # Same source/target classification as in
-                # `send_endpoint_transcript`: in translation mode the
-                # `_original` buckets carry the source side and `final` /
-                # `non_final` carry the translation; in non-translation
-                # mode the `_original` buckets are empty and `final` /
-                # `non_final` ARE the source.
-                merged_originals = _merge_lang_segments(
-                    final_original.language_segments,
-                    non_final_original.language_segments,
+        if final.text or non_final.text:
+            source = _merge_lang_segments(
+                final_original.language_segments, non_final_original.language_segments
+            )
+            primary = _merge_lang_segments(final.language_segments, non_final.language_segments)
+            # every token final: a stable interim, for preemptive generation once speaking
+            self.report(
+                final.transcript(
+                    non_final,
+                    self.start_time_offset,
+                    source=source if translating else primary,
+                    target=primary if translating else [],
+                    preflight=not non_final.text and self.speaking,
                 )
-                merged_primary = _merge_lang_segments(
-                    final.language_segments, non_final.language_segments
+            )
+
+        if message.get("finished", False):
+            self._endpoint()
+        # processed audio for every response: gating on endpoints drops what never reached one
+        processed = message.get("total_audio_proc_ms", 0.0)
+        if processed > self._reported_ms:
+            self.send(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                    recognition_usage=stt.RecognitionUsage(
+                        audio_duration=(processed - self._reported_ms) / 1000
+                    ),
                 )
-                interim_src_segs, interim_tgt_segs = (
-                    (merged_originals, merged_primary)
-                    if is_translation_mode
-                    else (merged_primary, [])
-                )
-                interim_src_langs, interim_src_texts = _lang_segments_to_fields(interim_src_segs)
-                interim_tgt_langs, interim_tgt_texts = _lang_segments_to_fields(interim_tgt_segs)
+            )
+            self._reported_ms = processed
+        if message.get("finished", False):
+            self.report(stt.SessionFinished())
 
-                # When all tokens in this batch are final (no non-final pending),
-                # speech has reached a stable state — emit PREFLIGHT_TRANSCRIPT to
-                # allow preemptive LLM generation. This mirrors Deepgram v2's
-                # EagerEndOfTurn behavior.
-                event_type = (
-                    SpeechEventType.PREFLIGHT_TRANSCRIPT
-                    if final.text and not non_final.text
-                    else SpeechEventType.INTERIM_TRANSCRIPT
-                )
-                self.send(
-                    stt.SpeechEvent(
-                        type=event_type,
-                        alternatives=[
-                            final.merged_speech_data(
-                                non_final,
-                                self.start_time_offset,
-                                source_languages=interim_src_langs,
-                                source_texts=interim_src_texts,
-                                target_languages=interim_tgt_langs,
-                                target_texts=interim_tgt_texts,
-                            )
-                        ],
-                    )
-                )
-
-            # 3) on error or finish, flush any remaining final tokens.
-            if content.get("finished") or has_error:
-                send_endpoint_transcript()
-
-            # 4) report processed audio for every frame; gating on
-            #    endpoint/finish frames dropped whatever never reached one.
-            self._report_processed_audio_duration(total_audio_proc_ms)
-
-            if has_error:
-                err_code = content.get("error_code")
-                err_msg = content.get("error_message", "Unknown Soniox STT error")
-                status_code = int(err_code) if isinstance(err_code, int) else -1
-                if isinstance(err_code, str) and err_code.isdigit():
-                    status_code = int(err_code)
-                raise APIStatusError(
-                    f"Soniox STT error: {err_code}",
-                    status_code=status_code,
-                    body=content,
-                    detail=str(err_msg),
-                )
-
-            if content.get("finished"):
-                return
-
-        raise self._ws.close_error("Soniox STT WebSocket closed")
+    def _endpoint(self) -> None:
+        """Soniox detected the end of the speech: its final tokens are the final transcript."""
+        final, final_original = self._final, self._final_original
+        if not final.text and final_original.text:
+            # the originals' translation is still to come: the next endpoint carries both
+            return
+        translating = self._params.translation is not None
+        # an empty final retracts an interim no final token confirmed, and ends the speech
+        self.report(
+            final.transcript(
+                _TokenAccumulator(),
+                self.start_time_offset,
+                source=final_original.language_segments if translating else final.language_segments,
+                target=final.language_segments if translating else [],
+                final=True,
+            )
+        )
+        final.reset()
+        final_original.reset()
 
 
 def _merge_lang_segments(
@@ -608,11 +485,6 @@ def _lang_segments_to_fields(
     )
 
 
-class _LangStats(NamedTuple):
-    num_chars: int
-    updated_at: float
-
-
 class _TokenAccumulator:
     """Accumulates token metadata (text, language, speaker, timing, confidence).
 
@@ -632,7 +504,9 @@ class _TokenAccumulator:
         self._confidence_count: int = 0
         self._has_start_time: bool = False
         self._lang_segments: list[tuple[str, str]] = []  # (language, text) pairs
-        self._lang_stats: dict[str, _LangStats] = {}
+        # per language: its characters, and when (in tokens taken) it reached them
+        self._lang_stats: dict[str, tuple[int, int]] = {}
+        self._taken = 0
 
     @property
     def language_segments(self) -> Sequence[tuple[str, str]]:
@@ -642,31 +516,32 @@ class _TokenAccumulator:
         """Language with the most characters; ties go to the one that reached the count first."""
         if not self._lang_stats:
             return ""
-        most_chars = max(s.num_chars for s in self._lang_stats.values())
+        most_chars = max(chars for chars, _ in self._lang_stats.values())
         tied = [
-            (lang_code, stats)
-            for lang_code, stats in self._lang_stats.items()
-            if stats.num_chars == most_chars
+            (lang_code, reached)
+            for lang_code, (chars, reached) in self._lang_stats.items()
+            if chars == most_chars
         ]
-        return min(tied, key=lambda t: t[1].updated_at)[0]
+        return min(tied, key=lambda t: t[1])[0]
 
-    def update(self, token: dict[str, Any]) -> None:
+    def update(self, token: _Token) -> None:
         text = token["text"]
         lang = token.get("language", "")
         self.text += text
+        self._taken += 1
         if lang and text:
-            chars, _ = self._lang_stats.get(lang, (0, 0.0))
-            self._lang_stats[lang] = _LangStats(chars + len(text), time.monotonic())
+            chars, _ = self._lang_stats.get(lang, (0, 0))
+            self._lang_stats[lang] = (chars + len(text), self._taken)
             self.language = self._get_language()
         if "speaker" in token and self.speaker_id is None:
-            self.speaker_id = str(token["speaker"])
+            self.speaker_id = token["speaker"]
         if "start_ms" in token:
-            start_ms = float(token["start_ms"])
+            start_ms = token["start_ms"]
             if not self._has_start_time or start_ms < self.start_time:
                 self._has_start_time = True
                 self.start_time = start_ms
         if "end_ms" in token:
-            self.end_time = max(self.end_time, float(token["end_ms"]))
+            self.end_time = max(self.end_time, token["end_ms"])
         if "confidence" in token:
             self._confidence_sum += token["confidence"]
             self._confidence_count += 1
@@ -694,52 +569,37 @@ class _TokenAccumulator:
         self._has_start_time = False
         self._lang_segments = []
         self._lang_stats = {}
+        self._taken = 0
 
-    def to_speech_data(
-        self,
-        start_time_offset: float = 0.0,
-        source_languages: list[LanguageCode] | None = None,
-        source_texts: list[str] | None = None,
-        target_languages: list[LanguageCode] | None = None,
-        target_texts: list[str] | None = None,
-    ) -> stt.SpeechData:
-        return stt.SpeechData(
-            text=self.text,
-            language=LanguageCode(self.language),
-            source_languages=source_languages,
-            source_texts=source_texts,
-            target_languages=target_languages,
-            target_texts=target_texts,
-            speaker_id=self.speaker_id,
-            start_time=self.start_time / 1000 + start_time_offset,
-            end_time=self.end_time / 1000 + start_time_offset,
-            confidence=self.confidence,
-        )
-
-    def merged_speech_data(
+    def transcript(
         self,
         other: _TokenAccumulator,
-        start_time_offset: float = 0.0,
-        source_languages: list[LanguageCode] | None = None,
-        source_texts: list[str] | None = None,
-        target_languages: list[LanguageCode] | None = None,
-        target_texts: list[str] | None = None,
-    ) -> stt.SpeechData:
-        """Build a SpeechData combining self (final) with other (non-final)."""
+        start_time_offset: float,
+        *,
+        source: Sequence[tuple[str, str]],
+        target: Sequence[tuple[str, str]],
+        final: bool = False,
+        preflight: bool = False,
+    ) -> stt.Transcript:
+        """The transcript of self (final tokens) followed by other (non-final ones)."""
         candidates = [acc.start_time for acc in (self, other) if acc._has_start_time]
         start = min(candidates) if candidates else 0.0
         end = max(self.end_time, other.end_time)
         total_count = self._confidence_count + other._confidence_count
         total_sum = self._confidence_sum + other._confidence_sum
-        return stt.SpeechData(
-            text=self.text + other.text,
-            language=LanguageCode(self.language if self.language else other.language),
+        source_languages, source_texts = _lang_segments_to_fields(source)
+        target_languages, target_texts = _lang_segments_to_fields(target)
+        return stt.Transcript(
+            self.text + other.text,
+            LanguageCode(self.language if self.language else other.language),
+            final=final,
+            preflight=preflight,
+            start_time=start / 1000 + start_time_offset,
+            end_time=end / 1000 + start_time_offset,
+            confidence=total_sum / total_count if total_count > 0 else 0.0,
+            speaker_id=self.speaker_id if self.speaker_id is not None else other.speaker_id,
             source_languages=source_languages,
             source_texts=source_texts,
             target_languages=target_languages,
             target_texts=target_texts,
-            speaker_id=self.speaker_id if self.speaker_id is not None else other.speaker_id,
-            start_time=start / 1000 + start_time_offset,
-            end_time=end / 1000 + start_time_offset,
-            confidence=total_sum / total_count if total_count > 0 else 0.0,
         )

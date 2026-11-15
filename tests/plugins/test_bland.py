@@ -28,11 +28,19 @@ class _BlandPeer:
     """``/v2/tts/ws`` speaking Bland's turn protocol: ready, utterance_start, audio, utterance_end."""
 
     def __init__(
-        self, frames: list[bytes], *, stale_end: bool = False, answers_close: bool = True
+        self,
+        frames: list[bytes],
+        *,
+        stale_end: bool = False,
+        answers_close: bool = True,
+        silent_turns: int = 0,
+        end_reason: str = "complete",
     ) -> None:
         self.frames = frames
+        self.silent_turns = silent_turns  # the first turns stay unanswered, still rendering
         self.stale_end = stale_end  # replay the previous turn's utterance_end mid-turn
         self.answers_close = answers_close
+        self.end_reason = end_reason  # the reason the turn's utterance_end gives
         self.received: list[dict[str, object]] = []
         self.headers: dict[str, str] = {}
 
@@ -57,6 +65,8 @@ class _BlandPeer:
                 )
             elif message["type"] == "end_of_turn":
                 ended = [m["context_id"] for m in self.of_type("end_of_turn")]
+                if len(ended) <= self.silent_turns:
+                    continue
                 for i, frame in enumerate(self.frames):
                     await ws.send_bytes(frame)
                     if i == 0 and self.stale_end and len(ended) > 1:
@@ -67,7 +77,7 @@ class _BlandPeer:
                     {
                         "type": "utterance_end",
                         "context_id": message["context_id"],
-                        "reason": "complete",
+                        "reason": self.end_reason,
                         "frames": len(self.frames),
                         "duration_ms": 40 * len(self.frames),
                     }
@@ -144,6 +154,16 @@ async def test_init_sent_once_with_voice_format_and_bearer_key() -> None:
     assert peer.headers["Authorization"] == "Bearer test-key"
 
 
+# Catches: a turn ending Bland added since failing the segment as a server error (and a retry)
+# instead of ending it as a completed turn.
+async def test_a_turn_ending_bland_added_since_ends_the_segment() -> None:
+    frames = [_pcm(480)]
+
+    audio = await _speak(_BlandPeer(frames, end_reason="max_length_reached"), "hello")
+
+    assert audio[: len(frames[0])] == frames[0]
+
+
 async def test_binary_frames_reach_the_pipeline_unchanged() -> None:
     """Every PCM sample Bland sends is played, in order. https://github.com/livekit/agents/pull/6752"""
     frames = [_pcm(480), _pcm(480), _pcm(240)]
@@ -156,13 +176,12 @@ async def test_binary_frames_reach_the_pipeline_unchanged() -> None:
 
 
 async def test_an_abandoned_turn_is_cancelled_and_its_connection_reused() -> None:
-    """A barge-in cancels the turn on the open socket; the next turn speaks on that same socket.
-
-    https://github.com/livekit/agents/pull/6752
+    """A barge-in cancels the turn on the open socket; the next turn speaks on that same socket
+    once Bland ended the cancelled one. https://github.com/livekit/agents/pull/6752
     """
     # Catches: an interrupted turn left uncancelled, or its socket dropped so every barge-in
     # pays a new connection.
-    peer = _BlandPeer([_pcm(480)])
+    peer = _BlandPeer([_pcm(480)], silent_turns=1)
     app = web.Application()
     app.router.add_get("/v2/tts/ws", peer.handle)
     async with TestServer(app) as server, http.open():
@@ -170,7 +189,7 @@ async def test_an_abandoned_turn_is_cancelled_and_its_connection_reused() -> Non
         abandoned = tts.stream(conn_options=NO_RETRY)
         abandoned.push_text("hello there")
         abandoned.flush()
-        await until(lambda: peer.of_type("speak"), "the first turn is spoken")
+        await until(lambda: peer.of_type("end_of_turn"), "the first turn is rendering")
         await abandoned.aclose()
         audio = await _say(tts, "again")
         await tts.aclose()

@@ -192,6 +192,27 @@ mod a_capture_that_never_returns {
             second.error()
         );
     }
+
+    // Catches: a capture that hung mid-segment was no hang to the release phase, which kept
+    // reporting the held segment played, refused forever, and never reached the close. The close
+    // cuts the held speech.
+    #[test]
+    fn a_frame_held_mid_speech_is_cut_by_the_close() {
+        use lk_agents_fuzz::drive::{Case, Ending, run};
+        let outcome = run(Case {
+            setup: Setup {
+                output_fault: Some(CaptureFault { at: 3, hangs: true }),
+                ..Setup::default()
+            },
+            inputs: vec![say("One, two, three, four, five."), Input::Advance { ms: Millis(2_000) }],
+            ..Case::default()
+        });
+        let failed: Vec<_> =
+            outcome.failures.iter().map(|f| format!("{}: {}", f.contract, f.detail)).collect();
+        assert!(failed.is_empty(), "{failed:?}");
+        assert_eq!(outcome.ending, Ending::Completed);
+        assert!(outcome.expectations.get("speech_settles").is_some_and(|n| *n > 0));
+    }
 }
 
 mod a_clear_the_output_never_reports {

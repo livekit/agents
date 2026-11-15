@@ -12,6 +12,7 @@ Use [development](development.md) for installation, builds, checks and review co
 | --- | --- |
 | [Architecture](architecture.md) | Crate dependencies, sans-I/O decisions, effects and runtime composition |
 | [Component contracts](components.md) | Ownership of agent execution, text routing, voice, providers, room I/O, storage and workers |
+| [Conversation and voice lifecycle](voice-lifecycle.md) | Speech normalization, user drafts, interruption and shared voice/text persistence |
 | [Bindings and Python](bindings.md) | ABI declarations, code generation, facades, host values, GIL boundaries and plugins |
 | [Runtime contracts](runtime.md) | Calls, streams, cancellation, resource lifetimes, backpressure, retries and managed turns |
 | [Processes and IPC](processes.md) | Job supervision, fork safety, preloading, shutdown and process logging |

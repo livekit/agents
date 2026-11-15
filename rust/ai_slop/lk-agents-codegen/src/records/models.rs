@@ -1052,6 +1052,18 @@ fn union_alias(name: &str, members: &[&str]) -> String {
 }
 
 /// `any`: JSON reads `JsonValue` (a pydantic model's public annotation), else `object`.
+/// The local names of dotted host classes, imported.
+fn classes<'a>(classes: &'a [String], typing: &mut Imports) -> Vec<&'a str> {
+    classes
+        .iter()
+        .map(|class| {
+            let (m, name) = class.rsplit_once('.').expect("a host class is dotted");
+            typing.add(m, name);
+            name
+        })
+        .collect()
+}
+
 fn annotation(ty: &Ty, module: &str, own: &[String], any: bool, typing: &mut Imports) -> String {
     match ty {
         Ty::Bool => "bool".into(),
@@ -1092,7 +1104,7 @@ fn annotation(ty: &Ty, module: &str, own: &[String], any: bool, typing: &mut Imp
         ),
         Ty::Set(t) => format!("frozenset[{}]", annotation(t, module, own, any, typing)),
         Ty::Error(_) => "BaseException".into(),
-        Ty::Proxy { host, .. } => {
+        Ty::Proxy { host, natives, .. } => {
             let (m, name) = host.rsplit_once('.').expect("a proxy's host class is dotted");
             typing.add(m, name);
             // A host iterator a proxy pulls: its items are typed where the core reads them.
@@ -1100,17 +1112,10 @@ fn annotation(ty: &Ty, module: &str, own: &[String], any: bool, typing: &mut Imp
                 typing.add("typing", "Any");
                 return format!("{name}[Any]");
             }
-            name.to_owned()
+            // A native class the host passes as itself.
+            std::iter::once(name).chain(classes(natives, typing)).collect::<Vec<_>>().join(" | ")
         }
-        Ty::Native { classes, .. } => classes
-            .iter()
-            .map(|class| {
-                let (m, name) = class.rsplit_once('.').expect("a host class is dotted");
-                typing.add(m, name);
-                name
-            })
-            .collect::<Vec<_>>()
-            .join(" | "),
+        Ty::Native { classes: natives, .. } => classes(natives, typing).join(" | "),
         Ty::Record(r) => match &r.host {
             HostForm::Record { module: m, name } if m == module && own.contains(name) => {
                 name.clone()

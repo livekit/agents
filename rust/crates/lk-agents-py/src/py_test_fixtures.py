@@ -301,7 +301,7 @@ def streams():
         return Tracked()
 
     async def open_tracked():
-        await asyncio.sleep(0)
+        await gate.wait()
         tracked_returned.set()
         return Tracked()
 

@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Coroutine, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import TYPE_CHECKING, Generic, Literal, Never
 
 from typing_extensions import TypeVar
 
-from livekit import api, rtc
+import livekit.rtc as rtc
+from livekit import api
 
 from .. import _core, http, utils
 from .._bindings import APIError
@@ -18,6 +20,16 @@ from .._generated import public_voice_avatar as _public
 from .._generated.avatar_queue import QueueEffects
 from .._generated.io_events import AvatarPlaybackSegment
 from .._generated.public_voice_avatar import *  # noqa: F403
+from .._websocket import (
+    Batch,
+    InboundT,
+    Keepalive,
+    OutboundT,
+    WebSocketHost,
+    WebSocketKind,
+    WebSocketProtocol,
+    WebSocketTarget,
+)
 from ..job import _server_credentials, get_job_context
 from ..log import logger
 from ..types import (
@@ -40,7 +52,10 @@ __all__ = [
     "AvatarRunner",
     "AvatarSession",
     "AvatarStart",
+    "AvatarWebSocket",
     "ForwardingAvatarSession",
+    "Keepalive",
+    "WebSocketTarget",
     "VideoGenerator",
     "AudioReceiver",
     "QueueAudioOutput",
@@ -403,8 +418,9 @@ class ForwardingAvatarSession(AvatarSession[TEvent]):
         """Drop the audio not yet played: the agent was interrupted."""
 
     async def receive(self) -> None:
-        """The provider's own events (its socket's receive loop), run beside the forwarding
-        until the avatar closes. A failure fails the avatar like one of ``forward``'s."""
+        """The provider's own events (an ``AvatarWebSocket``'s ``run``), run beside the
+        forwarding until the avatar closes. A failure fails the avatar like one of
+        ``forward``'s."""
         await asyncio.Event().wait()
 
     def playback_started(self) -> None:
@@ -459,6 +475,123 @@ class ForwardingAvatarSession(AvatarSession[TEvent]):
     async def _forward_frames(self, output: QueueAudioOutput) -> None:
         async for item in output:
             await self.forward(item)
+
+
+class AvatarWebSocket(
+    WebSocketProtocol[bytes | OutboundT, InboundT, OutboundT], Generic[InboundT, OutboundT]
+):
+    """A socket an avatar plugin holds to its provider (its events, its audio ingress, a relay),
+    on the framework's transport: pings that notice a silent peer, the provider's close failing
+    as an ``APIError`` of the kind its code names, and the connect limit over the handshake and,
+    with ``awaits_ready``, the provider's readiness.
+
+    The plugin declares ``Inbound`` and ``Outbound`` and writes ``connect`` and ``on_message``,
+    which calls ``ready()`` once the provider says so (with ``awaits_ready``). ``send`` queues a
+    message; the queue goes in order once the socket is open and ready. A socket is one
+    connection: a failure, the provider's close included, ends it and is never retried.
+    """
+
+    def __init__(self, label: str) -> None:
+        """
+        Args:
+            label: The provider's socket, as its failures and logs name it.
+        """
+        self._websocket_label = label
+        self._websocket_outbound = utils.aio.Chan[bytes | OutboundT]()
+        self._websocket_open = asyncio.Event()
+        self._websocket = WebSocketHost(
+            self,
+            _AvatarSocketTerms(
+                label,
+                self._websocket_outbound,
+                self._websocket_open,
+                awaits_ready=type(self).awaits_ready,
+            ),
+        )
+        self._websocket_tasks = utils.aio.TaskSet()
+        self._websocket_run: asyncio.Task[None] | None = None
+
+    def encode(self, item: bytes | OutboundT) -> bytes | OutboundT | None:
+        return item
+
+    def send(self, message: bytes | OutboundT) -> None:
+        """Queue ``message`` for the provider; once the socket is closed it is dropped."""
+        with contextlib.suppress(utils.aio.ChanClosed):
+            self._websocket_outbound.send_nowait(message)
+
+    def ready(self) -> None:
+        """From ``on_message``: the provider's session is ready for what ``send`` queued."""
+        self._websocket.signal("ready")
+        self._websocket_open.set()
+
+    async def open(self, conn_options: APIConnectOptions) -> None:
+        """Open the socket and wait until it is open, or ready with ``awaits_ready``. Raises the
+        failure that ended it first; the socket keeps running for ``run``."""
+        running = self._start(conn_options)
+        async with utils.aio.TaskSet() as tasks:
+            await tasks.first_completed(asyncio.shield(running), self._websocket_open.wait())
+        if not self._websocket_open.is_set():
+            raise APIError(f"{self._websocket_label} closed before it opened", kind="connection")
+
+    async def run(self, conn_options: APIConnectOptions) -> None:
+        """Run the socket, opened now unless ``open`` did, until ``aclose()``; raises the failure
+        that ends it."""
+        await self._start(conn_options)
+
+    async def aclose(self) -> None:
+        """Close the socket, bounded, and end its run."""
+        self._websocket_outbound.close()
+        await self._websocket.aclose()
+        await self._websocket_tasks.aclose()
+
+    def _start(self, conn_options: APIConnectOptions) -> asyncio.Task[None]:
+        if self._websocket_run is None:
+            self._websocket_run = self._websocket_tasks.spawn(
+                self._websocket.run(replace(conn_options, max_retry=0)),
+                name=self._websocket_label,
+            )
+        return self._websocket_run
+
+
+class _AvatarSocketTerms(WebSocketKind[bytes | OutboundT]):
+    """An avatar socket's terms: what ``send`` queued goes in order; it owes the provider no
+    reply at its close and is never replaced or retried."""
+
+    def __init__(
+        self,
+        label: str,
+        outbound: utils.aio.Chan[bytes | OutboundT],
+        opened: asyncio.Event,
+        *,
+        awaits_ready: bool,
+    ) -> None:
+        self._label = label
+        self._outbound = outbound
+        self._opened = opened
+        self._awaits_ready = awaits_ready
+
+    @property
+    def label(self) -> str:
+        return self._label
+
+    async def take(self) -> Batch | None:
+        try:
+            return Batch([await self._outbound.recv()])
+        except utils.aio.ChanClosed:
+            return None
+
+    def owes_reply(self) -> bool:
+        return False
+
+    def can_reconnect(self) -> bool:
+        return False
+
+    def retrying(self, error: Exception) -> None:
+        """Never called: the socket runs one attempt."""
+
+    def opened(self, request_id: str | None) -> None:
+        if not self._awaits_ready:
+            self._opened.set()
 
 
 class DataStreamAudioReceiver(AudioReceiver):

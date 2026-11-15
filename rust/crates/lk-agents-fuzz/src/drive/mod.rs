@@ -216,6 +216,9 @@ pub struct Setup {
     /// Which recorded recogniser the person's transcripts behave like, by its index in
     /// `search::STT_MODELS`: its timing, its cuts, its quirks.
     pub stt_model: usize,
+    /// How the recogniser reports speech: with its own detection or without, transcribing during
+    /// the speech or only after it ended.
+    pub stt_speech: fakes::SttSpeech,
     /// The voice takes as long to its first audio as a real one does, drawn from this seed;
     /// `None` answers at once.
     pub tts_latency: Option<u64>,
@@ -258,6 +261,8 @@ pub struct StorageSetup {
     pub faults: bool,
     /// The database unreachable over `[from, from + len)` ms of the call, as `(from, len)`.
     pub outage: Option<(u64, u64)>,
+    /// Writes sent over `[from, from + len)` ms of the call apply, and their answers are lost.
+    pub lost_answers: Option<(u64, u64)>,
     /// Every lease take answers this long after it applied: a slow acknowledgment.
     pub take_answer_ms: Option<u64>,
 }
@@ -507,6 +512,7 @@ impl Default for Setup {
             ivr: None,
             amd: None,
             stt_model: 0,
+            stt_speech: fakes::SttSpeech::default(),
             tts_latency: None,
             tts_alignment: TtsAlignment::None,
             tts_markup: "",

@@ -12,478 +12,239 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Speech-to-Text implementation for Sarvam.ai
-
-This module provides an STT implementation that uses the Sarvam.ai API.
-"""
+"""Speech-to-Text for Sarvam.ai: realtime streaming (``saaras:v3-realtime``) and batch
+recognition (``saaras:v3``, ``saaras:v4``), the model picking the endpoint."""
 
 from __future__ import annotations
 
-import asyncio
-import enum
-import json
 import os
 import platform
-import time
-from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode
 
-from pydantic import ValidationError
+import numpy as np
+from pydantic import JsonValue
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
     APIError,
     APIStatusError,
-    APITimeoutError,
     LanguageCode,
     __version__ as livekit_version,
     http,
     stt,
-    utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
 from livekit.agents.utils import is_given
 
-from ._utils import looks_like_error_text
 from .log import logger
-from .models import (
-    STT_MESSAGE,
-    ErrorData,
-    EventData,
-    EventMessage,
-    STTMessage,
-    TranscriptionData,
-    TranscriptMessage,
-    UnknownData,
-    message_request_id,
-)
+from .models import TranscriptionData
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
-EOS_FALLBACK_TIMEOUT = 1.0
 
-# Sarvam API details
 SARVAM_STT_BASE_URL = "https://api.sarvam.ai/speech-to-text"
-SARVAM_STT_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text/ws"
-SARVAM_STT_TRANSLATE_BASE_URL = "https://api.sarvam.ai/speech-to-text-translate"
-SARVAM_STT_TRANSLATE_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text-translate/ws"
+SARVAM_STT_REALTIME_URL = "wss://api.sarvam.ai/speech-to-text-realtime/ws"
+REALTIME_MODEL = "saaras:v3-realtime"
 
-# Models
-SarvamSTTModels = Literal["saaras:v3", "saaras:v4"]
+SarvamSTTModels = Literal["saaras:v3-realtime", "saaras:v4", "saaras:v3"]
 SarvamSTTModes = Literal["transcribe", "translate", "verbatim", "translit", "codemix"]
-_SUNSET_STT_MODELS = frozenset({"saarika:v2.5", "saaras:v2.5"})
+RealtimeStreamType = Literal["fast", "balanced", "simulated"]
+RealtimeEndpointing = Literal["vad", "manual"]
+RealtimeEncoding = Literal["linear16", "linear32", "mulaw", "alaw"]
 
-
-def _warn_if_sunset_stt_model(model: str) -> None:
-    if model in _SUNSET_STT_MODELS:
-        logger.warning(
-            f"Sarvam STT model '{model}' is sunset. Please migrate to 'saaras:v3' or 'saaras:v4'."
-        )
-
-
-# Valid mode values (single source of truth)
-ALLOWED_MODES: set[str] = {"transcribe", "translate", "verbatim", "translit", "codemix"}
-
-
-class SpeechToTextLanguage(enum.StrEnum):
-    """Languages supported for STT."""
-
-    UNKNOWN = "unknown"
-    HI_IN = "hi-IN"
-    BN_IN = "bn-IN"
-    KN_IN = "kn-IN"
-    ML_IN = "ml-IN"
-    MR_IN = "mr-IN"
-    OD_IN = "od-IN"
-    PA_IN = "pa-IN"
-    TA_IN = "ta-IN"
-    TE_IN = "te-IN"
-    EN_IN = "en-IN"
-    GU_IN = "gu-IN"
-    ASSAMESE = "as-IN"
-    URDU = "ur-IN"
-    NEPALI = "ne-IN"
-    KONKANI = "kok-IN"
-    KASHMIRI = "ks-IN"
-    SINDHI = "sd-IN"
-    SANSKRIT = "sa-IN"
-    SANTALI = "sat-IN"
-    MANIPURI = "mni-IN"
-    BODO = "brx-IN"
-    MAITHILI = "mai-IN"
-    DOGRI = "doi-IN"
-
-
-SAARAS_V3_LANGUAGES = {lang.value for lang in SpeechToTextLanguage}
-
-
-@dataclass(frozen=True)
-class ModelConfig:
-    """Immutable configuration for a Sarvam STT model.
-
-    Attributes:
-        supports_prompt: Whether the model accepts prompt parameter.
-        supports_mode: Whether the model accepts mode parameter.
-        supports_language: Whether the model accepts language parameter.
-        supports_vad_params: Whether the model accepts fine-grained VAD parameters.
-        default_language: Default language code (None = auto-detect).
-        default_mode: Default mode (None = not applicable).
-        use_translate_endpoint: Whether to use speech_to_text_translate_streaming endpoint.
-        use_translate_method: Whether to use translate() method instead of transcribe().
-        allowed_languages: Allowed language codes for this model (None = no validation).
-    """
-
-    supports_prompt: bool
-    supports_mode: bool
-    supports_language: bool
-    supports_vad_params: bool
-    default_language: str | None
-    default_mode: str | None
-    use_translate_endpoint: bool
-    use_translate_method: bool
-    allowed_languages: set[str] | None
-
-
-MODEL_CONFIGS: dict[str, ModelConfig] = {
-    "saaras:v3": ModelConfig(
-        supports_prompt=False,
-        supports_mode=True,
-        supports_language=True,
-        supports_vad_params=True,
-        default_language="en-IN",
-        default_mode="transcribe",
-        use_translate_endpoint=False,
-        use_translate_method=False,
-        allowed_languages=SAARAS_V3_LANGUAGES,
-    ),
-    "saaras:v4": ModelConfig(
-        supports_prompt=False,
-        supports_mode=True,
-        supports_language=True,
-        supports_vad_params=True,
-        default_language="en-IN",
-        default_mode="transcribe",
-        use_translate_endpoint=False,
-        use_translate_method=False,
-        allowed_languages=SAARAS_V3_LANGUAGES,
-    ),
-}
-
-
-def _get_model_config(model: str) -> ModelConfig | None:
-    return MODEL_CONFIGS.get(model)
-
-
-def _validate_mode_for_model(model: str, mode: str | None) -> str:
-    """Validate and resolve mode for a given model.
-
-    Args:
-        model: The Sarvam model name.
-        mode: The requested mode (may be None to use default).
-    Returns:
-        The resolved mode string.
-
-    Raises:
-        ValueError: If mode is invalid or unsupported for the model.
-    """
-    model_config = _get_model_config(model)
-
-    if model_config:
-        if not model_config.supports_mode:
-            default_mode = model_config.default_mode or "transcribe"
-            if mode is None or mode == default_mode:
-                return default_mode
-            raise ValueError(f"mode is not supported for model {model}")
-        # Model supports mode — validate it
-        resolved = mode or model_config.default_mode or "transcribe"
-        if resolved not in ALLOWED_MODES:
-            raise ValueError(f"mode must be one of {', '.join(sorted(ALLOWED_MODES))}")
-        return resolved
-
-    # Unknown model — fallback
-    if mode is not None:
-        if mode not in ALLOWED_MODES:
-            raise ValueError(f"mode must be one of {', '.join(sorted(ALLOWED_MODES))}")
-        return mode
-    return "transcribe"
-
-
-def _validate_language_for_model(model: str, language: str | None) -> str | None:
-    """Validate language code for a given model.
-
-    Args:
-        model: The Sarvam model name.
-        language: The requested language code (may be None).
-
-    Returns:
-        The validated language code (or None if not provided).
-
-    Raises:
-        ValueError: If language is not supported by the model.
-    """
-    if language is None:
-        return None
-
-    model_config = _get_model_config(model)
-    if model_config and model_config.allowed_languages is not None:
-        if language not in model_config.allowed_languages:
-            raise ValueError(f"language {language} is not supported for model {model}")
-    return language
-
-
-def _model_supports_prompt(model: str) -> bool:
-    """Check whether the model supports prompt parameter."""
-    model_config = _get_model_config(model)
-    if model_config:
-        return model_config.supports_prompt
-    # Fallback for unknown models: assume saaras-family supports prompt
-    return model.startswith("saaras")
-
-
-def _model_supports_mode(model: str) -> bool:
-    """Check whether the model supports mode parameter."""
-    model_config = _get_model_config(model)
-    if model_config:
-        return model_config.supports_mode
-    return False
-
-
-def _model_supports_vad_params(model: str) -> bool:
-    """Check whether the model supports fine-grained VAD parameters."""
-    model_config = _get_model_config(model)
-    if model_config:
-        return model_config.supports_vad_params
-    return False
-
-
-class ConnectionState(enum.Enum):
-    """WebSocket connection states."""
-
-    DISCONNECTED = "disconnected"
-    CONNECTING = "connecting"
-    CONNECTED = "connected"
-    RECONNECTING = "reconnecting"
-    FAILED = "failed"
+_MODES = frozenset({"transcribe", "translate", "verbatim", "translit", "codemix"})
+_STREAM_TYPES = frozenset({"fast", "balanced", "simulated"})
+_ENDPOINTING = frozenset({"vad", "manual"})
+_ENCODINGS = frozenset({"linear16", "linear32", "mulaw", "alaw"})
+_REALTIME_SAMPLE_RATES = frozenset({8000, 16000})
+_BATCH_LANGUAGES = frozenset(
+    {
+        "unknown",
+        "hi-IN",
+        "bn-IN",
+        "kn-IN",
+        "ml-IN",
+        "mr-IN",
+        "od-IN",
+        "pa-IN",
+        "ta-IN",
+        "te-IN",
+        "en-IN",
+        "gu-IN",
+        "as-IN",
+        "ur-IN",
+        "ne-IN",
+        "kok-IN",
+        "ks-IN",
+        "sd-IN",
+        "sa-IN",
+        "sat-IN",
+        "mni-IN",
+        "brx-IN",
+        "mai-IN",
+        "doi-IN",
+    }
+)
+_REALTIME_LANGUAGES = (_BATCH_LANGUAGES - {"unknown", "od-IN"}) | {"or-IN", "auto"}
 
 
 @dataclass
-class SarvamSTTOptions:
-    """Options for the Sarvam.ai STT service.
+class _Options:
+    model: str
+    language: str
+    mode: str
+    sample_rate: int
+    prompt: str | None
+    stream_type: str
+    endpointing: str
+    encoding: str
+    return_timestamps: bool
+    vad_sot_threshold: float | None
+    vad_min_speech_ms: int | None
+    vad_min_silence_ms: int | None
+    vad_prefix_padding_ms: int | None
 
-    Args:
-        language: BCP-47 language code, e.g., "hi-IN", "en-IN"
-        model: The Sarvam STT model to use
-        mode: Mode for saaras:v3/v4 (transcribe/translate/verbatim/translit/codemix)
-        base_url: API endpoint URL (auto-determined from model if not provided)
-        streaming_url: WebSocket streaming URL (auto-determined from model if not provided)
-        prompt: Optional prompt for STT translate (saaras models only)
-    """
+    @property
+    def realtime(self) -> bool:
+        return self.model == REALTIME_MODEL
 
-    language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
-    api_key: str
-    model: SarvamSTTModels | str = "saaras:v4"
-    mode: SarvamSTTModes | str = "transcribe"
-    base_url: str | None = None
-    streaming_url: str | None = None
-    prompt: str | None = None  # Optional prompt for STT translate (saaras models only)
-    high_vad_sensitivity: bool | None = None
-    sample_rate: int = 16000
-    flush_signal: bool | None = None
-    input_audio_codec: str | None = None
-    positive_speech_threshold: float | None = None
-    negative_speech_threshold: float | None = None
-    min_speech_frames: int | None = None
-    first_turn_min_speech_frames: int | None = None
-    negative_frames_count: int | None = None
-    negative_frames_window: int | None = None
-    start_speech_volume_threshold: float | None = None
-    interrupt_min_speech_frames: int | None = None
-    pre_speech_pad_frames: int | None = None
-    num_initial_ignored_frames: int | None = None
-
-    def __post_init__(self) -> None:
-        """Set URLs based on model if not explicitly provided."""
-        model_config = _get_model_config(self.model)
-        if self.base_url is None or self.streaming_url is None:
-            base_url, streaming_url = _get_urls_for_model(self.model)
-            if self.base_url is None:
-                self.base_url = base_url
-            if self.streaming_url is None:
-                self.streaming_url = streaming_url
-        if model_config and model_config.default_language and not self.language:
-            self.language = model_config.default_language
-        _validate_language_for_model(self.model, self.language)
-        self.mode = _validate_mode_for_model(self.model, self.mode)
+    def validate(self) -> None:
+        if self.mode not in _MODES:
+            raise ValueError(f"mode must be one of {', '.join(sorted(_MODES))}")
         if self.sample_rate <= 0:
             raise ValueError("sample_rate must be greater than zero")
-
-
-def _get_urls_for_model(model: str) -> tuple[str, str]:
-    """Get base URL and streaming URL based on model type.
-
-    Args:
-        model: The Sarvam model name
-
-    Returns:
-        Tuple of (base_url, streaming_url)
-    """
-    model_config = _get_model_config(model)
-    if model_config and model_config.use_translate_endpoint:
-        return SARVAM_STT_TRANSLATE_BASE_URL, SARVAM_STT_TRANSLATE_STREAMING_URL
-    return SARVAM_STT_BASE_URL, SARVAM_STT_STREAMING_URL
-
-
-def _extract_confidence(payload: TranscriptionData) -> float:
-    """Sarvam's ``language_probability``, or 1.0 when it is absent or not a number."""
-    probability = payload.language_probability
-    return 1.0 if probability is None else probability
-
-
-def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
-    """Build WebSocket URL with parameters."""
-    params = {
-        "language-code": opts.language,
-        "model": opts.model,
-        "vad_signals": "true",
-    }
-
-    if opts.sample_rate:
-        params["sample_rate"] = str(opts.sample_rate)
-    if opts.high_vad_sensitivity is not None:
-        params["high_vad_sensitivity"] = str(opts.high_vad_sensitivity).lower()
-    if opts.flush_signal is not None:
-        params["flush_signal"] = str(opts.flush_signal).lower()
-    if _model_supports_mode(opts.model):
-        params["mode"] = opts.mode
-    if opts.input_audio_codec:
-        params["input_audio_codec"] = opts.input_audio_codec
-
-    if _model_supports_vad_params(opts.model):
-        if opts.positive_speech_threshold is not None:
-            params["positive_speech_threshold"] = str(opts.positive_speech_threshold)
-        if opts.negative_speech_threshold is not None:
-            params["negative_speech_threshold"] = str(opts.negative_speech_threshold)
-        if opts.min_speech_frames is not None:
-            params["min_speech_frames"] = str(opts.min_speech_frames)
-        if opts.first_turn_min_speech_frames is not None:
-            params["first_turn_min_speech_frames"] = str(opts.first_turn_min_speech_frames)
-        if opts.negative_frames_count is not None:
-            params["negative_frames_count"] = str(opts.negative_frames_count)
-        if opts.negative_frames_window is not None:
-            params["negative_frames_window"] = str(opts.negative_frames_window)
-        if opts.start_speech_volume_threshold is not None:
-            params["start_speech_volume_threshold"] = str(opts.start_speech_volume_threshold)
-        if opts.interrupt_min_speech_frames is not None:
-            params["interrupt_min_speech_frames"] = str(opts.interrupt_min_speech_frames)
-        if opts.pre_speech_pad_frames is not None:
-            params["pre_speech_pad_frames"] = str(opts.pre_speech_pad_frames)
-        if opts.num_initial_ignored_frames is not None:
-            params["num_initial_ignored_frames"] = str(opts.num_initial_ignored_frames)
-
-    return f"{base_url}?{urlencode(params)}"
-
-
-def _has_error_field(message: STTMessage) -> bool:
-    if message.error is not None:
-        return True
-    nested = message.data
-    if isinstance(nested, (EventData, UnknownData)):
-        return nested.error is not None or nested.event_type == "error" or nested.event == "error"
-    return isinstance(nested, ErrorData) and nested.error is not None
+        if not self.realtime:
+            if self.language not in _BATCH_LANGUAGES:
+                raise ValueError(f"language {self.language} is not supported for {self.model}")
+            return
+        if self.language not in _REALTIME_LANGUAGES:
+            raise ValueError(f"language {self.language} is not supported for {self.model}")
+        if self.stream_type not in _STREAM_TYPES:
+            raise ValueError(f"stream_type must be one of {', '.join(sorted(_STREAM_TYPES))}")
+        if self.endpointing not in _ENDPOINTING:
+            raise ValueError(f"endpointing must be one of {', '.join(sorted(_ENDPOINTING))}")
+        if self.encoding not in _ENCODINGS:
+            raise ValueError(f"encoding must be one of {', '.join(sorted(_ENCODINGS))}")
+        if self.sample_rate not in _REALTIME_SAMPLE_RATES:
+            raise ValueError(f"sample_rate must be 8000 or 16000 for {self.model}")
+        if self.vad_sot_threshold is not None and not 0.0 <= self.vad_sot_threshold <= 1.0:
+            raise ValueError("vad_sot_threshold must be between 0.0 and 1.0")
+        for name, value in (
+            ("vad_min_speech_ms", self.vad_min_speech_ms),
+            ("vad_min_silence_ms", self.vad_min_silence_ms),
+            ("vad_prefix_padding_ms", self.vad_prefix_padding_ms),
+        ):
+            if value is not None and value < 0:
+                raise ValueError(f"{name} must be greater than or equal to 0")
 
 
 class STT(stt.STT):
-    """Sarvam.ai Speech-to-Text implementation.
+    """Sarvam.ai speech-to-text, specialized in Indian languages.
 
-    This class provides speech-to-text functionality using the Sarvam.ai API.
-    Sarvam.ai specializes in high-quality STT for Indian languages.
-
-    Args:
-        language: BCP-47 language code, e.g., "hi-IN", "en-IN"
-        model: The Sarvam STT model to use
-        mode: Mode for saaras:v3/v4 (transcribe/translate/verbatim/translit/codemix)
-        api_key: Sarvam.ai API key (falls back to SARVAM_API_KEY env var)
-        base_url: API endpoint URL
-        http_session: Optional HTTP session to use
-        prompt: Optional prompt for STT translate (saaras models only)
+    ``saaras:v3-realtime`` streams over Sarvam's realtime WebSocket; ``saaras:v3`` and
+    ``saaras:v4`` recognize whole utterances over HTTP (a session streams them through its VAD).
     """
 
     def __init__(
         self,
         *,
+        model: SarvamSTTModels | str = REALTIME_MODEL,
         language: str = "en-IN",
-        model: SarvamSTTModels | str = "saaras:v4",
         mode: SarvamSTTModes | str = "transcribe",
+        prompt: str | None = None,
+        sample_rate: int = 16000,
+        stream_type: NotGivenOr[RealtimeStreamType | str] = NOT_GIVEN,
+        endpointing: NotGivenOr[RealtimeEndpointing | str] = NOT_GIVEN,
+        encoding: NotGivenOr[RealtimeEncoding | str] = NOT_GIVEN,
+        return_timestamps: NotGivenOr[bool] = NOT_GIVEN,
+        vad_sot_threshold: NotGivenOr[float] = NOT_GIVEN,
+        vad_min_speech_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_min_silence_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_prefix_padding_ms: NotGivenOr[int] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: str | None = None,
         http_session: http.HttpSession | None = None,
-        prompt: str | None = None,
-        high_vad_sensitivity: bool | None = None,
-        sample_rate: int = 16000,
-        flush_signal: bool | None = None,
-        input_audio_codec: str | None = None,
-        positive_speech_threshold: float | None = None,
-        negative_speech_threshold: float | None = None,
-        min_speech_frames: int | None = None,
-        first_turn_min_speech_frames: int | None = None,
-        negative_frames_count: int | None = None,
-        negative_frames_window: int | None = None,
-        start_speech_volume_threshold: float | None = None,
-        interrupt_min_speech_frames: int | None = None,
-        pre_speech_pad_frames: int | None = None,
-        num_initial_ignored_frames: int | None = None,
     ) -> None:
+        """Create a Sarvam STT.
+
+        Args:
+            model: ``saaras:v3-realtime`` streams; ``saaras:v3`` and ``saaras:v4`` recognize
+                whole utterances.
+            language: BCP-47 language code; ``auto`` (realtime) identifies it.
+            mode: Task applied to the transcript: ``transcribe``, ``translate``, ``verbatim``,
+                ``translit`` or ``codemix``.
+            prompt: Context or terminology hint (realtime only).
+            sample_rate: Audio sample rate in Hz; ``8000`` or ``16000`` for realtime.
+            stream_type: Realtime latency profile: ``fast``, ``balanced`` or ``simulated``.
+            endpointing: Realtime turn boundaries: ``vad`` (Sarvam's), or ``manual`` (the
+                stream's flushes).
+            encoding: Realtime wire encoding: ``linear16``, ``linear32``, ``mulaw`` or ``alaw``.
+            return_timestamps: Realtime finals carry their start and end times.
+            vad_sot_threshold: Realtime VAD activation threshold (``vad`` endpointing).
+            vad_min_speech_ms: Realtime minimum speech duration in ms (``vad`` endpointing).
+            vad_min_silence_ms: Realtime end-of-turn silence in ms (``vad`` endpointing).
+            vad_prefix_padding_ms: Realtime audio kept before speech onset in ms.
+            api_key: Sarvam API key; ``SARVAM_API_KEY`` when not given.
+            base_url: The model's endpoint; Sarvam's for its family when not given.
+            http_session: The session batch recognition posts with.
+
+        Raises:
+            ValueError: No API key, a realtime-only option with a batch model, or an option
+                the endpoint rejects.
+        """
+        realtime_only = {
+            "prompt": prompt is not None,
+            "stream_type": is_given(stream_type),
+            "endpointing": is_given(endpointing),
+            "encoding": is_given(encoding),
+            "return_timestamps": is_given(return_timestamps),
+            "vad_sot_threshold": is_given(vad_sot_threshold),
+            "vad_min_speech_ms": is_given(vad_min_speech_ms),
+            "vad_min_silence_ms": is_given(vad_min_silence_ms),
+            "vad_prefix_padding_ms": is_given(vad_prefix_padding_ms),
+        }
+        if model != REALTIME_MODEL and (given := [n for n, set_ in realtime_only.items() if set_]):
+            raise ValueError(f"{', '.join(given)} only apply to {REALTIME_MODEL}, not {model}")
+        self._opts = _Options(
+            model=model,
+            language=language,
+            mode=mode,
+            sample_rate=sample_rate,
+            prompt=prompt,
+            stream_type=stream_type if is_given(stream_type) else "balanced",
+            endpointing=endpointing if is_given(endpointing) else "vad",
+            encoding=encoding if is_given(encoding) else "linear16",
+            return_timestamps=return_timestamps if is_given(return_timestamps) else False,
+            vad_sot_threshold=vad_sot_threshold if is_given(vad_sot_threshold) else None,
+            vad_min_speech_ms=vad_min_speech_ms if is_given(vad_min_speech_ms) else None,
+            vad_min_silence_ms=vad_min_silence_ms if is_given(vad_min_silence_ms) else None,
+            vad_prefix_padding_ms=vad_prefix_padding_ms
+            if is_given(vad_prefix_padding_ms)
+            else None,
+        )
+        self._opts.validate()
+        realtime = self._opts.realtime
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True,
-                interim_results=True,
-                # chunk timestamps don't seem to work despite the docs saying they do
+                streaming=realtime,
+                interim_results=realtime,
                 aligned_transcript=False,
-                # streaming usage is the audio_duration Sarvam reports with each transcript
-                reports_usage=True,
+                offline_recognize=not realtime,
             )
         )
-
-        self._api_key = api_key or os.environ.get("SARVAM_API_KEY")
-        if not self._api_key:
+        resolved_key = api_key or os.environ.get("SARVAM_API_KEY")
+        if not resolved_key:
             raise ValueError(
                 "Sarvam API key is required. "
                 "Provide it directly or set SARVAM_API_KEY environment variable."
             )
-
-        self._opts = SarvamSTTOptions(
-            language=LanguageCode(language),
-            api_key=self._api_key,
-            model=model,
-            mode=mode,
-            base_url=base_url,
-            prompt=prompt,
-            high_vad_sensitivity=high_vad_sensitivity,
-            sample_rate=sample_rate,
-            flush_signal=flush_signal,
-            input_audio_codec=input_audio_codec,
-            positive_speech_threshold=positive_speech_threshold,
-            negative_speech_threshold=negative_speech_threshold,
-            min_speech_frames=min_speech_frames,
-            first_turn_min_speech_frames=first_turn_min_speech_frames,
-            negative_frames_count=negative_frames_count,
-            negative_frames_window=negative_frames_window,
-            start_speech_volume_threshold=start_speech_volume_threshold,
-            interrupt_min_speech_frames=interrupt_min_speech_frames,
-            pre_speech_pad_frames=pre_speech_pad_frames,
-            num_initial_ignored_frames=num_initial_ignored_frames,
-        )
+        self._api_key = resolved_key
+        self._base_url = base_url or (SARVAM_STT_REALTIME_URL if realtime else SARVAM_STT_BASE_URL)
         self._session = http_session
-        self._logger = logger.getChild(self.__class__.__name__)
-        # Strong ownership: a stream that finishes and gets garbage-collected would
-        # otherwise take its still-open per-stream HttpSession with it.
-        # Streams discard themselves in SpeechStream.aclose() once closed.
         self._streams: set[SpeechStream] = set()
-        _warn_if_sunset_stt_model(model)
 
     @property
     def model(self) -> str:
@@ -493,15 +254,6 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Sarvam"
 
-    def _ensure_session(self) -> http.HttpSession:
-        if not self._session:
-            self._session = http.http_session()
-        return self._session
-
-    @staticmethod
-    def _single_attempt_conn_options(conn_options: APIConnectOptions) -> APIConnectOptions:
-        return replace(conn_options, max_retry=0)
-
     async def recognize(
         self,
         buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
@@ -509,1003 +261,426 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        single_attempt_conn_options = self._single_attempt_conn_options(conn_options)
+        # each request is billed: never sent twice
         return await super().recognize(
-            buffer,
-            language=language,
-            conn_options=single_attempt_conn_options,
+            buffer, language=language, conn_options=replace(conn_options, max_retry=0)
         )
-
-    def _resolve_opts(
-        self,
-        *,
-        language: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[SarvamSTTModels | str] = NOT_GIVEN,
-        mode: NotGivenOr[SarvamSTTModes | str] = NOT_GIVEN,
-    ) -> tuple[str, str, str]:
-        """Resolve language, model and mode from overrides or defaults.
-
-        Returns:
-            Tuple of (language, model, mode).
-
-        Raises:
-            ValueError: If mode is explicitly given but not supported by the model.
-        """
-        resolved_language = LanguageCode(language) if is_given(language) else self._opts.language
-        resolved_model = model if is_given(model) else self._opts.model
-        if is_given(model):
-            _warn_if_sunset_stt_model(resolved_model)
-
-        if is_given(mode):
-            resolved_mode = str(mode)
-            # Validate: caller explicitly asked for a mode — error if unsupported
-            _validate_mode_for_model(resolved_model, resolved_mode)
-        else:
-            resolved_mode = self._opts.mode
-
-        _validate_language_for_model(resolved_model, resolved_language)
-
-        return resolved_language, resolved_model, resolved_mode
 
     async def _recognize_impl(
         self,
         buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[SarvamSTTModels | str] = NOT_GIVEN,
-        mode: NotGivenOr[SarvamSTTModes | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        """Recognize speech using Sarvam.ai API.
-
-        Args:
-            buffer: Audio buffer containing speech data
-            language: BCP-47 language code (overrides the one set in constructor)
-            model: Sarvam model to use (overrides the one set in constructor)
-            conn_options: Connection options for API requests
-
-        Returns:
-            A SpeechEvent containing the transcription result
-
-        Raises:
-            APIConnectionError: On network connection errors
-            APIStatusError: On API errors (non-200 status)
-            APITimeoutError: On API timeout
-        """
-        opts_language, opts_model, opts_mode = self._resolve_opts(
-            language=language,
-            model=model,
-            mode=mode,
-        )
-
+        if self._opts.realtime:
+            raise NotImplementedError(f"{REALTIME_MODEL} only streams")
+        opts = replace(self._opts, language=language) if is_given(language) else self._opts
+        opts.validate()
         audio = rtc.combine_audio_frames(buffer)
-        wav_bytes = audio.to_wav_bytes()
-
         form_data = http.FormData()
-        form_data.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/wav")
-
-        # Add model and language_code to the form data
-        if opts_language:
-            form_data.add_field("language_code", opts_language)
-        if opts_model:
-            form_data.add_field("model", str(opts_model))
-        if _model_supports_mode(opts_model):
-            form_data.add_field("mode", str(opts_mode))
-
-        if not self._api_key:
-            raise ValueError("API key cannot be None")
-        headers = {
-            "api-subscription-key": self._api_key,
-            "User-Agent": USER_AGENT,
-        }
-
-        try:
-            base_url, _ = _get_urls_for_model(opts_model)
-            async with self._ensure_session().post(
-                base_url,
-                data=form_data,
-                headers=headers,
-                conn_options=conn_options,
-            ) as res:
-                if res.status != 200:
-                    error_text = await res.text()
-                    raise APIStatusError(
-                        "Sarvam STT request failed",
-                        status_code=res.status,
-                        body=error_text,
-                        detail=error_text,
-                    )
-
-                response_json = TranscriptionData.model_validate(await res.json())
-                self._logger.debug(
-                    "Sarvam API response received", extra={"lk.pii.response_json": response_json}
+        form_data.add_field(
+            "file", audio.to_wav_bytes(), filename="audio.wav", content_type="audio/wav"
+        )
+        form_data.add_field("language_code", opts.language)
+        form_data.add_field("model", opts.model)
+        form_data.add_field("mode", opts.mode)
+        session = self._session or http.http_session()
+        async with session.post(
+            self._base_url,
+            data=form_data,
+            headers={"api-subscription-key": self._api_key, "User-Agent": USER_AGENT},
+            conn_options=conn_options,
+        ) as res:
+            if res.status != 200:
+                error_text = await res.text()
+                raise APIStatusError(
+                    "Sarvam STT request failed",
+                    status_code=res.status,
+                    body=error_text,
+                    detail=error_text,
                 )
+            response = TranscriptionData.model_validate(await res.json())
 
-                transcript_text = response_json.transcript
-                request_id = response_json.request_id or ""
-                detected_language = response_json.language_code
-                if not isinstance(detected_language, str):
-                    detected_language = LanguageCode(opts_language or "")
-                else:
-                    detected_language = LanguageCode(detected_language)
-
-                start_time = 0.0
-                end_time = 0.0
-
-                # Try to get timestamps if available
-                timestamps_data = response_json.timestamps
-                if timestamps_data is not None:
-                    if timestamps_data.start_time_seconds:
-                        start_time = timestamps_data.start_time_seconds[0]
-                    if timestamps_data.end_time_seconds:
-                        end_time = timestamps_data.end_time_seconds[-1]
-
-                # If start/end times are still 0, use buffer duration as an estimate for end_time
-                if start_time == 0.0 and end_time == 0.0:
-                    end_time = audio.duration
-
-                alternatives = [
-                    stt.SpeechData(
-                        language=detected_language,
-                        text=transcript_text,
-                        start_time=start_time,
-                        end_time=end_time,
-                        confidence=_extract_confidence(response_json),
-                    )
-                ]
-
-                return stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    request_id=request_id,
-                    alternatives=alternatives,
+        start_time = end_time = 0.0
+        if (timestamps := response.timestamps) is not None:
+            if timestamps.start_time_seconds:
+                start_time = timestamps.start_time_seconds[0]
+            if timestamps.end_time_seconds:
+                end_time = timestamps.end_time_seconds[-1]
+        if start_time == 0.0 and end_time == 0.0:
+            end_time = audio.duration
+        probability = response.language_probability
+        return stt.SpeechEvent(
+            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+            request_id=response.request_id or "",
+            alternatives=[
+                stt.SpeechData(
+                    language=LanguageCode(response.language_code or opts.language),
+                    text=response.transcript,
+                    start_time=start_time,
+                    end_time=end_time,
+                    confidence=1.0 if probability is None else probability,
                 )
-
-        except APIError:
-            # Preserve provider-originated status/body/retry metadata.
-            raise
-        except Exception as e:
-            raise APIConnectionError(f"Unexpected error in Sarvam STT: {e}") from e
+            ],
+        )
 
     def stream(
         self,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[SarvamSTTModels | str] = NOT_GIVEN,
-        mode: NotGivenOr[SarvamSTTModes | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        prompt: NotGivenOr[str] = NOT_GIVEN,
-        high_vad_sensitivity: NotGivenOr[bool] = NOT_GIVEN,
-        sample_rate: NotGivenOr[int] = NOT_GIVEN,
-        flush_signal: NotGivenOr[bool] = NOT_GIVEN,
-        input_audio_codec: NotGivenOr[str] = NOT_GIVEN,
-        positive_speech_threshold: NotGivenOr[float] = NOT_GIVEN,
-        negative_speech_threshold: NotGivenOr[float] = NOT_GIVEN,
-        min_speech_frames: NotGivenOr[int] = NOT_GIVEN,
-        first_turn_min_speech_frames: NotGivenOr[int] = NOT_GIVEN,
-        negative_frames_count: NotGivenOr[int] = NOT_GIVEN,
-        negative_frames_window: NotGivenOr[int] = NOT_GIVEN,
-        start_speech_volume_threshold: NotGivenOr[float] = NOT_GIVEN,
-        interrupt_min_speech_frames: NotGivenOr[int] = NOT_GIVEN,
-        pre_speech_pad_frames: NotGivenOr[int] = NOT_GIVEN,
-        num_initial_ignored_frames: NotGivenOr[int] = NOT_GIVEN,
     ) -> SpeechStream:
-        """Create a streaming transcription session."""
-        opts_language, opts_model, opts_mode = self._resolve_opts(
-            language=language,
-            model=model,
-            mode=mode,
-        )
-
-        # Handle prompt conversion from NotGiven to None
-        final_prompt = prompt if isinstance(prompt, str) else self._opts.prompt
-
-        opts_high_vad = (
-            high_vad_sensitivity
-            if is_given(high_vad_sensitivity)
-            else self._opts.high_vad_sensitivity
-        )
-        opts_sample_rate = sample_rate if is_given(sample_rate) else self._opts.sample_rate
-        opts_flush_signal = flush_signal if is_given(flush_signal) else self._opts.flush_signal
-        opts_input_codec = (
-            input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec
-        )
-        opts_positive_speech = (
-            positive_speech_threshold
-            if is_given(positive_speech_threshold)
-            else self._opts.positive_speech_threshold
-        )
-        opts_negative_speech = (
-            negative_speech_threshold
-            if is_given(negative_speech_threshold)
-            else self._opts.negative_speech_threshold
-        )
-        opts_min_speech = (
-            min_speech_frames if is_given(min_speech_frames) else self._opts.min_speech_frames
-        )
-        opts_first_turn = (
-            first_turn_min_speech_frames
-            if is_given(first_turn_min_speech_frames)
-            else self._opts.first_turn_min_speech_frames
-        )
-        opts_neg_count = (
-            negative_frames_count
-            if is_given(negative_frames_count)
-            else self._opts.negative_frames_count
-        )
-        opts_neg_window = (
-            negative_frames_window
-            if is_given(negative_frames_window)
-            else self._opts.negative_frames_window
-        )
-        opts_vol_threshold = (
-            start_speech_volume_threshold
-            if is_given(start_speech_volume_threshold)
-            else self._opts.start_speech_volume_threshold
-        )
-        opts_interrupt = (
-            interrupt_min_speech_frames
-            if is_given(interrupt_min_speech_frames)
-            else self._opts.interrupt_min_speech_frames
-        )
-        opts_pre_pad = (
-            pre_speech_pad_frames
-            if is_given(pre_speech_pad_frames)
-            else self._opts.pre_speech_pad_frames
-        )
-        opts_initial_ignored = (
-            num_initial_ignored_frames
-            if is_given(num_initial_ignored_frames)
-            else self._opts.num_initial_ignored_frames
-        )
-        single_attempt_conn_options = self._single_attempt_conn_options(conn_options)
-
-        # Create options for the stream
-        stream_opts = SarvamSTTOptions(
-            language=opts_language,
-            api_key=self._api_key if self._api_key else "",
-            model=opts_model,
-            mode=opts_mode,
-            prompt=final_prompt,
-            high_vad_sensitivity=opts_high_vad,
-            sample_rate=opts_sample_rate,
-            flush_signal=opts_flush_signal,
-            input_audio_codec=opts_input_codec,
-            positive_speech_threshold=opts_positive_speech,
-            negative_speech_threshold=opts_negative_speech,
-            min_speech_frames=opts_min_speech,
-            first_turn_min_speech_frames=opts_first_turn,
-            negative_frames_count=opts_neg_count,
-            negative_frames_window=opts_neg_window,
-            start_speech_volume_threshold=opts_vol_threshold,
-            interrupt_min_speech_frames=opts_interrupt,
-            pre_speech_pad_frames=opts_pre_pad,
-            num_initial_ignored_frames=opts_initial_ignored,
-        )
-
-        # Create a fresh session for this stream to avoid conflicts
-        stream_session = http.HttpSession()
-
-        if not self._api_key:
-            raise ValueError("API key cannot be None")
-        stream = SpeechStream(
+        """A realtime recognition. It connects once: Sarvam bills each connection, so a failure
+        is never retried."""
+        if not self._opts.realtime:
+            raise NotImplementedError(
+                f"{self._opts.model} recognizes whole utterances: stream it through "
+                "stt.StreamAdapter"
+            )
+        opts = replace(self._opts, language=language) if is_given(language) else self._opts
+        opts.validate()
+        stream_class = _VadStream if opts.endpointing == "vad" else _ManualStream
+        stream = stream_class(
             stt=self,
-            opts=stream_opts,
-            conn_options=single_attempt_conn_options,
+            opts=replace(opts),
+            conn_options=replace(conn_options, max_retry=0),
             api_key=self._api_key,
-            http_session=stream_session,
-            release_stream=self._streams.discard,
+            base_url=self._base_url,
         )
         self._streams.add(stream)
         return stream
 
+    def update_options(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        mode: NotGivenOr[SarvamSTTModes | str] = NOT_GIVEN,
+        stream_type: NotGivenOr[RealtimeStreamType | str] = NOT_GIVEN,
+        prompt: NotGivenOr[str | None] = NOT_GIVEN,
+        vad_sot_threshold: NotGivenOr[float | None] = NOT_GIVEN,
+        vad_min_speech_ms: NotGivenOr[int | None] = NOT_GIVEN,
+        vad_min_silence_ms: NotGivenOr[int | None] = NOT_GIVEN,
+    ) -> None:
+        """Update the options every stream applies from now on: open realtime streams get them
+        as Sarvam's ``config.update``. Options fixed by the connection (sample rate, encoding,
+        endpointing, timestamps, prefix padding) are set at construction."""
+        opts = replace(
+            self._opts,
+            language=language if is_given(language) else self._opts.language,
+            mode=mode if is_given(mode) else self._opts.mode,
+            stream_type=stream_type if is_given(stream_type) else self._opts.stream_type,
+            prompt=prompt if is_given(prompt) else self._opts.prompt,
+            vad_sot_threshold=vad_sot_threshold
+            if is_given(vad_sot_threshold)
+            else self._opts.vad_sot_threshold,
+            vad_min_speech_ms=vad_min_speech_ms
+            if is_given(vad_min_speech_ms)
+            else self._opts.vad_min_speech_ms,
+            vad_min_silence_ms=vad_min_silence_ms
+            if is_given(vad_min_silence_ms)
+            else self._opts.vad_min_silence_ms,
+        )
+        opts.validate()
+        self._opts = opts
+        for stream in self._streams:
+            stream.update_options(
+                language=language,
+                mode=mode,
+                stream_type=stream_type,
+                prompt=prompt,
+                vad_sot_threshold=vad_sot_threshold,
+                vad_min_speech_ms=vad_min_speech_ms,
+                vad_min_silence_ms=vad_min_silence_ms,
+            )
+
     async def aclose(self) -> None:
-        """Close every stream this instance created.
-
-        ``stream()`` gives each ``SpeechStream`` its own ``http.HttpSession``,
-        and only ``SpeechStream.aclose()`` closes it. Streams are owned strongly
-        (see ``self._streams``) so a finished, garbage-collected stream cannot
-        take its open session with it; closed streams discard themselves, so the
-        set never grows without bound. ``stt_streaming.py`` in this package
-        already does the same.
-        """
-        closed = list(self._streams)
-        for stream in closed:
+        """Close every stream this instance created."""
+        streams = list(self._streams)
+        for stream in streams:
             await stream.aclose()
-        # Remove only what this call closed: a stream created concurrently (or one
-        # whose aclose was cancelled mid-cleanup) stays tracked for a later close.
-        self._streams.difference_update(closed)
+        self._streams.difference_update(streams)
 
 
-class SpeechStream(stt.RecognizeStream):
-    """Sarvam.ai streaming speech-to-text implementation."""
+def _encode_pcm(encoding: str, pcm: bytes) -> bytes:
+    """Little-endian signed 16-bit PCM in Sarvam's realtime wire encoding."""
+    if encoding == "linear16":
+        return pcm
+    # NumPy's Buffer/ArrayLike overloads contain Unknown.
+    samples = np.frombuffer(pcm, dtype="<i2").astype(np.int32)  # pyright: ignore[reportUnknownMemberType]
+    if encoding == "linear32":
+        return (samples.astype(np.int64) * (1 << 16)).astype("<i4").tobytes()
+    if encoding == "mulaw":
+        # ITU-T G.711 mu-law
+        magnitude = np.minimum(np.abs(samples), 32635) + 0x84
+        # NumPy's Buffer/ArrayLike overloads contain Unknown.
+        exponent = np.clip(np.floor(np.log2(magnitude)).astype(np.int32) - 7, 0, 7)  # pyright: ignore[reportUnknownMemberType]
+        mantissa = (magnitude >> (exponent + 3)) & 0x0F
+        # NumPy's Buffer/ArrayLike overloads contain Unknown.
+        sign = np.where(samples < 0, 0x80, 0)  # pyright: ignore[reportUnknownMemberType]
+        return bytes((~(sign | (exponent << 4) | mantissa) & 0xFF).astype(np.uint8).tobytes())
+    # ITU-T G.711 A-law
+    magnitude = np.minimum(np.abs(samples), 32767)
+    # NumPy's Buffer/ArrayLike overloads contain Unknown.
+    exponent = np.clip(np.floor(np.log2(np.maximum(magnitude, 1))).astype(np.int32) - 7, 0, 7)  # pyright: ignore[reportUnknownMemberType]
+    mantissa = (magnitude >> (exponent + 3)) & 0x0F
+    # NumPy's Buffer/ArrayLike overloads contain Unknown.
+    encoded = np.where(magnitude < 256, magnitude >> 4, (exponent << 4) | mantissa)  # pyright: ignore[reportUnknownMemberType]
+    # NumPy's Buffer/ArrayLike overloads contain Unknown.
+    xor_mask = np.where(samples >= 0, 0xD5, 0x55)  # pyright: ignore[reportUnknownMemberType]
+    return bytes((encoded ^ xor_mask).astype(np.uint8).tobytes())
 
-    _CHUNK_DURATION_MS = 50
+
+class _SessionBegin(TypedDict):
+    event: Literal["session.begin"]
+    request_id: NotRequired[str]
+
+
+class _SpeechStart(TypedDict):
+    event: Literal["vad.speech_start"]
+
+
+class _SpeechEnd(TypedDict):
+    event: Literal["vad.speech_end"]
+
+
+class _TranscriptFields(TypedDict):
+    text: NotRequired[str | None]
+    language: NotRequired[str | None]
+    confidence: NotRequired[float | None]
+    language_confidence: NotRequired[float | None]
+    utterance_idx: NotRequired[int | None]
+    start_s: NotRequired[float | None]
+    end_s: NotRequired[float | None]
+
+
+class _PartialTranscript(_TranscriptFields):
+    event: Literal["transcript.partial"]
+
+
+class _FinalTranscript(_TranscriptFields):
+    event: Literal["transcript.final"]
+
+
+class _SessionEnd(TypedDict):
+    event: Literal["session.end"]
+
+
+class _Error(TypedDict):
+    event: Literal["error"]
+    code: NotRequired[str]
+    message: NotRequired[str]
+    is_fatal: NotRequired[bool]
+    status_code: NotRequired[int | None]
+
+
+_Message = (
+    _SessionBegin
+    | _SpeechStart
+    | _SpeechEnd
+    | _PartialTranscript
+    | _FinalTranscript
+    | _SessionEnd
+    | _Error
+)
+
+
+class _Control(TypedDict):
+    event: Literal["speech_start", "speech_end", "end"]
+
+
+class _ConfigUpdate(TypedDict, total=False):
+    event: Literal["config.update"]
+    language_code: str
+    stream_type: str
+    mode: str
+    prompt: str
+    threshold: float | None
+    min_speech_duration_ms: int | None
+    silence_duration_ms: int | None
+
+
+class SpeechStream(stt.WebSocketStream[_Message, _Control | _ConfigUpdate]):
+    """A realtime recognition on Sarvam's ``saaras:v3-realtime`` socket."""
+
+    frame_ms = 50
 
     def __init__(
         self,
         *,
         stt: STT,
-        opts: SarvamSTTOptions,
+        opts: _Options,
         conn_options: APIConnectOptions,
         api_key: str,
-        http_session: http.HttpSession,
-        release_stream: Callable[[SpeechStream], None],
-        client_request_id: str | None = None,
-        server_request_id: str | None = None,
+        base_url: str,
     ) -> None:
-        self._release_stream = release_stream
-        self._opts = opts
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
+        self._sarvam = stt
+        self._opts = opts
         self._api_key = api_key
-        self._session = http_session
-        self._speaking = False
-        self._logger = logger.getChild(self.__class__.__name__)
-        self._reconnect_event = asyncio.Event()
-
-        # Connection state management
-        self._connection_state = ConnectionState.DISCONNECTED
-        self._connection_lock = asyncio.Lock()
-        self._session_id = id(self)
-        self._client_request_id = client_request_id
-        self._server_request_id = server_request_id
-
-        # Add flush mechanism
-        self._ws: http.WebSocket | None = None  # Store WebSocket reference for flush
-        self._should_flush = False  # Flag to trigger flush
-
-        self._utterance_speech_start_wall: float | None = None
-        self._pending_final_data: TranscriptionData | None = None
-        self._pending_eos = False
-        self._eos_fallback_task: asyncio.Task[None] | None = None
-        self._eos_fallback_timeout = EOS_FALLBACK_TIMEOUT
-        self._final_received_for_utterance = False
-        self._eos_emitted_for_utterance = False
-
-        # Task management for cleanup
-        self._audio_task: asyncio.Task[None] | None = None
-        self._message_task: asyncio.Task[None] | None = None
-        self._tasks = utils.aio.TaskSet()
-        self._audio_encoding = self._opts.input_audio_codec or "audio/wav"
-        self._chunk_size = max(
-            int(self._opts.sample_rate * self._CHUNK_DURATION_MS / 1000),
-            1,
-        )
-        self._end_of_stream_msg = self._build_end_of_stream_message()
-
-    def _build_end_of_stream_message(self) -> str:
-        return json.dumps(
-            {
-                "type": "end_of_stream",
-                "audio": {
-                    "data": "",
-                    "encoding": self._audio_encoding,
-                    "sample_rate": self._opts.sample_rate,
-                },
-            }
-        )
-
-    def _build_log_context(self) -> dict[str, object]:
-        """Build consistent logging context."""
-        return {
-            "session_id": self._session_id,
-            "connection_state": self._connection_state.value,
-            "model": self._opts.model,
-            "mode": self._opts.mode,
-            "language": self._opts.language,
-            "client_request_id": self._client_request_id,
-            "server_request_id": self._server_request_id,
-        }
-
-    def _maybe_set_server_request_id(self, request_id: object) -> None:
-        """Capture server-assigned request_id once it is available."""
-        if self._server_request_id is None and request_id:
-            self._server_request_id = str(request_id)
-
-    def _positive_time(self, value: float | None) -> float | None:
-        if value is None or value <= 0:
-            return None
-        # Shift into the stream timeline so the value survives reconnects: the base
-        # class advances start_time_offset by the session start -> audio start delay.
-        return value + self.start_time_offset
-
-    def _reset_utterance_state(self) -> None:
-        self._cancel_eos_fallback()
-        self._pending_final_data = None
-        self._pending_eos = False
-        self._utterance_speech_start_wall = time.time()
-        self._final_received_for_utterance = False
-        self._eos_emitted_for_utterance = False
-
-    def _cancel_eos_fallback(self) -> asyncio.Task[None] | None:
-        current_task = asyncio.current_task()
-        fallback_task = self._eos_fallback_task
-        self._eos_fallback_task = None
-        if fallback_task and fallback_task is not current_task and not fallback_task.done():
-            fallback_task.cancel()
-            return fallback_task
-        return None
-
-    def _send_final_transcript(self, transcript: TranscriptionData) -> bool:
-        transcript_text = transcript.transcript
-        if not transcript_text:
-            return False
-
-        language = LanguageCode(transcript.language_code or "")
-        request_id = transcript.request_id or self._server_request_id or ""
-        # Streaming reports timing via speech_start/speech_end (the batch
-        # `timestamps` array is not sent over the socket). When absent, end_time
-        # is 0.0 and the pipeline falls back to wall-clock for EOU timing.
-        speech_data = stt.SpeechData(
-            language=language,
-            text=transcript_text,
-            start_time=self._positive_time(transcript.speech_start) or 0.0,
-            end_time=self._positive_time(transcript.speech_end) or 0.0,
-            confidence=_extract_confidence(transcript),
-        )
-        self.send(
-            stt.SpeechEvent(
-                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                request_id=request_id,
-                alternatives=[speech_data],
-            )
-        )
-        return True
-
-    def _try_commit_utterance(self) -> None:
-        # Flush in order: FINAL_TRANSCRIPT first, then END_OF_SPEECH.
-        if self._pending_final_data is None or self._eos_emitted_for_utterance:
-            return
-
-        committed_data = self._pending_final_data
-        if self._send_final_transcript(committed_data):
-            self._logger.debug("Sarvam STT utterance committed", extra=self._build_log_context())
-            self._emit_end_of_speech()
-            self._pending_final_data = None
-
-    def _emit_end_of_speech(self) -> None:
-        if self._eos_emitted_for_utterance:
-            return
-
-        self._cancel_eos_fallback()
-
-        # Bare END_OF_SPEECH (no alternatives), like other plugins' EOS events. The
-        # speech-end timing lives on the FINAL_TRANSCRIPT's end_time, not here.
-        self.send(
-            stt.SpeechEvent(
-                type=stt.SpeechEventType.END_OF_SPEECH,
-                request_id=self._server_request_id or "",
-            )
-        )
-        self._eos_emitted_for_utterance = True
-        self._pending_eos = False
-
-    async def _emit_pending_eos_after_timeout(self) -> None:
-        timeout = self._eos_fallback_timeout
-        if timeout > 0:
-            await asyncio.sleep(timeout)
-        if self._pending_eos and not self._eos_emitted_for_utterance:
-            self._emit_end_of_speech()
+        self._base_url = base_url
+        self._request_id = ""
+        # seconds of audio sent: where a final without timestamps ends
+        self._audio_sent = 0.0
 
     async def aclose(self) -> None:
-        """Close the stream and clean up resources."""
-        self._logger.debug("Starting stream cleanup", extra=self._build_log_context())
-
-        async with self._connection_lock:
-            self._connection_state = ConnectionState.DISCONNECTED
-
-        # Cancel running tasks first
-        tasks_to_cancel: list[asyncio.Task[None]] = []
-        if self._audio_task and not self._audio_task.done():
-            tasks_to_cancel.append(self._audio_task)
-        if self._message_task and not self._message_task.done():
-            tasks_to_cancel.append(self._message_task)
-        fallback_task = self._cancel_eos_fallback()
-        if fallback_task is not None:
-            tasks_to_cancel.append(fallback_task)
-
-        if tasks_to_cancel:
-            try:
-                await utils.aio.cancel_and_wait(*tasks_to_cancel)
-            except Exception as e:
-                self._logger.warning(
-                    f"Error cancelling tasks: {e}",
-                    extra=self._build_log_context(),
-                )
-
-        # Close WebSocket
-        try:
-            if self._ws and not self._ws.closed:
-                await self._ws.close()
-                self._logger.debug("WebSocket closed", extra=self._build_log_context())
-        except Exception as e:
-            self._logger.warning(f"Error closing WebSocket: {e}", extra=self._build_log_context())
-        finally:
-            self._ws = None
-
-        # Call parent cleanup
-        try:
-            await super().aclose()
-        except Exception as e:
-            self._logger.warning(f"Error in parent cleanup: {e}", extra=self._build_log_context())
-
-        # Close session last
-        try:
-            await self._session.aclose()
-            self._logger.debug("HTTP session closed", extra=self._build_log_context())
-            # Release the STT's strong ownership only after session cleanup succeeds.
-            self._release_stream(self)
-        except Exception as e:
-            self._logger.warning(f"Error closing session: {e}", extra=self._build_log_context())
-        finally:
-            self._client_request_id = None
-            self._server_request_id = None
+        await super().aclose()
+        self._sarvam._streams.discard(self)
 
     def update_options(
         self,
         *,
-        language: str,
-        model: str,
-        prompt: str | None = None,
-        mode: str | None = None,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        mode: NotGivenOr[SarvamSTTModes | str] = NOT_GIVEN,
+        stream_type: NotGivenOr[RealtimeStreamType | str] = NOT_GIVEN,
+        prompt: NotGivenOr[str | None] = NOT_GIVEN,
+        vad_sot_threshold: NotGivenOr[float | None] = NOT_GIVEN,
+        vad_min_speech_ms: NotGivenOr[int | None] = NOT_GIVEN,
+        vad_min_silence_ms: NotGivenOr[int | None] = NOT_GIVEN,
     ) -> None:
-        """Update streaming options."""
-        if not language or not language.strip():
-            raise ValueError("LanguageCode cannot be empty")
-        if not model or not model.strip():
-            raise ValueError("Model cannot be empty")
-        _warn_if_sunset_stt_model(model)
-
-        self._opts.language = LanguageCode(language)
-        self._opts.model = model
-        self._opts.base_url, self._opts.streaming_url = _get_urls_for_model(model)
-        if prompt is not None:
+        update = _ConfigUpdate(event="config.update")
+        if is_given(language):
+            self._opts.language = update["language_code"] = language
+        if is_given(mode):
+            self._opts.mode = update["mode"] = mode
+        if is_given(stream_type):
+            self._opts.stream_type = update["stream_type"] = stream_type
+        if is_given(prompt):
             self._opts.prompt = prompt
+            update["prompt"] = prompt or ""
+        if is_given(vad_sot_threshold):
+            self._opts.vad_sot_threshold = update["threshold"] = vad_sot_threshold
+        if is_given(vad_min_speech_ms):
+            self._opts.vad_min_speech_ms = update["min_speech_duration_ms"] = vad_min_speech_ms
+        if is_given(vad_min_silence_ms):
+            self._opts.vad_min_silence_ms = update["silence_duration_ms"] = vad_min_silence_ms
+        if len(update) > 1:
+            self.send_now(update)
 
-        # Use centralised validation
-        self._opts.mode = _validate_mode_for_model(model, mode)
-        _validate_language_for_model(model, self._opts.language)
-
-        self._logger.info(
-            "Options updated, triggering reconnection",
-            extra={**self._build_log_context(), "lk.pii.prompt": prompt},
-        )
-        self._reconnect_event.set()
-
-    async def _send_initial_config(self, ws: http.WebSocket) -> None:
-        """Send initial configuration message with prompt for saaras models."""
-        try:
-            config_message = {"prompt": self._opts.prompt, "type": "config"}
-            await ws.send_str(json.dumps(config_message))
-            self._logger.debug(
-                "Sent initial config for saaras model",
-                extra={**self._build_log_context(), "lk.pii.prompt": self._opts.prompt},
-            )
-        except Exception as e:
-            raise APIConnectionError(f"Failed to send initial config: {e}") from e
-
-    async def _run(self) -> None:
-        """Main streaming loop with WebSocket connection."""
-        request_id = utils.shortuuid()
-        self._client_request_id = request_id
-        self._server_request_id = None
-        try:
-            await self._run_connection()
-        except APIError:
-            async with self._connection_lock:
-                self._connection_state = ConnectionState.FAILED
-            # Preserve provider-originated status/body/kind metadata.
-            raise
-        except Exception as e:
-            async with self._connection_lock:
-                self._connection_state = ConnectionState.FAILED
-            raise APIConnectionError(f"STT WebSocket session failed: {e}") from e
-
-    async def _run_connection(self) -> None:
-        """Run a single WebSocket connection attempt."""
-        if self._session.closed:
-            raise APIConnectionError("Session is closed, cannot establish WebSocket connection")
-
-        async with self._connection_lock:
-            self._connection_state = ConnectionState.CONNECTING
-
-        # Build WebSocket URL with parameters
-        if self._opts.streaming_url is None:
-            raise ValueError("streaming_url cannot be None")
-        ws_url = _build_websocket_url(self._opts.streaming_url, self._opts)
-
-        # Connect to WebSocket with proper authentication
-        headers = {
-            "api-subscription-key": self._api_key,
-            "User-Agent": USER_AGENT,
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
+        opts = self._opts
+        params = {
+            "language_code": opts.language,
+            "stream_type": opts.stream_type,
+            "endpointing": opts.endpointing,
+            "encoding": opts.encoding,
+            "sample_rate": str(opts.sample_rate),
+            "model": opts.model,
+            "mode": opts.mode,
+            "return_timestamps": str(opts.return_timestamps).lower(),
         }
-
-        self._logger.info(
-            "Connecting to STT WebSocket",
-            extra={**self._build_log_context(), "url": ws_url, "user-agent": USER_AGENT},
+        if opts.prompt is not None:
+            params["prompt"] = opts.prompt
+        if opts.endpointing == "vad":
+            for key, value in (
+                ("threshold", opts.vad_sot_threshold),
+                ("min_speech_duration_ms", opts.vad_min_speech_ms),
+                ("silence_duration_ms", opts.vad_min_silence_ms),
+                ("prefix_padding_ms", opts.vad_prefix_padding_ms),
+            ):
+                if value is not None:
+                    params[key] = str(value)
+        return stt.WebSocketTarget(
+            f"{self._base_url}?{urlencode(params)}",
+            headers={"API-SUBSCRIPTION-KEY": self._api_key, "User-Agent": USER_AGENT},
         )
 
-        ws = await self._session.ws_connect(
-            ws_url, headers=headers, conn_options=self._conn_options
-        )
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | _Control | None:
+        match item:
+            case rtc.AudioFrame():
+                self._audio_sent += item.duration
+                return _encode_pcm(self._opts.encoding, bytes(item.data))
+            case stt.Flush():
+                return None
+            case stt.EndOfAudio():
+                return _Control(event="end")
+            case _:
+                assert_never(item)
 
-        # Store WebSocket reference for cleanup - ensure it's always cleaned up
-        self._ws = ws
-
-        async with self._connection_lock:
-            self._connection_state = ConnectionState.CONNECTED
-
-        self._logger.info("WebSocket connected successfully", extra=self._build_log_context())
-
-        # Send initial configuration message if model supports prompt
-        if _model_supports_prompt(self._opts.model) and self._opts.prompt:
-            await self._send_initial_config(ws)
-
-        async def _audio_then_messages() -> None:
-            assert self._audio_task is not None and self._message_task is not None
-            winner = await self._tasks.first_completed(
-                self._audio_task, asyncio.shield(self._message_task)
-            )
-            if winner is not self._audio_task:
-                return
-            # Keep listening for server-side terminal errors when audio finishes first.
-            try:
-                async with asyncio.timeout(self._conn_options.read_timeout):
-                    await asyncio.shield(self._message_task)
-            except TimeoutError as e:
-                if self._message_task.done():
-                    raise
-                raise APITimeoutError(
-                    "Timed out waiting for STT server response after audio input ended"
-                ) from e
-
-        try:
-            async with utils.aio.TaskSet() as self._tasks:
-                self._audio_task = self._tasks.spawn(self._process_audio(ws))
-                self._message_task = self._tasks.spawn(self._process_messages(ws))
-                reconnect = self._tasks.spawn(self._reconnect_event.wait())
-                try:
-                    if await self._tasks.first_completed(_audio_then_messages(), reconnect) is (
-                        reconnect
-                    ):
-                        self._logger.info(
-                            "Reconnection requested, closing current connection",
-                            extra=self._build_log_context(),
-                        )
-                        self._reconnect_event.clear()
-                finally:
-                    self._cancel_eos_fallback()
-        finally:
-            # Close WebSocket
-            try:
-                if ws and not ws.closed:
-                    await ws.close()
-            except Exception as e:
-                self._logger.warning(
-                    f"Error closing WebSocket: {e}",
-                    extra=self._build_log_context(),
-                )
-
-    async def _process_audio(self, ws: http.WebSocket) -> None:
-        """Process audio frames and send them in chunks."""
-        import base64
-
-        import numpy as np
-
-        # Audio buffering for chunked sending
-        audio_buffer: list[np.int16] = []
-        chunk_size = self._chunk_size  # Derived from selected sample rate
-        chunks_sent = 0
-
-        self._logger.debug(
-            "Starting audio processing",
-            extra={**self._build_log_context(), "chunk_size": chunk_size},
-        )
-
-        try:
-            async for frame in self.input:
-                if isinstance(frame, rtc.AudioFrame):
-                    # Convert audio frame to Int16 data
-                    audio_data = frame.data.tobytes()
-                    # NumPy's Buffer/ArrayLike overloads contain Unknown.
-                    audio_array = np.frombuffer(audio_data, dtype=np.int16)  # pyright: ignore[reportUnknownMemberType]
-                    audio_buffer.extend(audio_array)
-
-                    # Check if we have enough data for a chunk
-                    while len(audio_buffer) >= chunk_size:
-                        # Convert to Int16Array
-                        chunk_data = np.array(audio_buffer[:chunk_size], dtype=np.int16)
-
-                        # Convert to base64
-                        base64_audio = base64.b64encode(chunk_data.tobytes()).decode("utf-8")
-
-                        # Send audio in the required format
-                        audio_message = {
-                            "audio": {
-                                "data": base64_audio,
-                                "encoding": self._audio_encoding,
-                                "sample_rate": self._opts.sample_rate,
-                            }
-                        }
-
-                        await ws.send_str(json.dumps(audio_message))
-                        chunks_sent += 1
-
-                        # Remove sent data from buffer
-                        audio_buffer = audio_buffer[chunk_size:]
-
-                        # Log progress periodically
-                        if chunks_sent % 100 == 0:
-                            self._logger.debug(
-                                f"Sent {chunks_sent} audio chunks",
-                                extra=self._build_log_context(),
-                            )
-
-                else:
-                    # LiveKit VAD FlushSentinel - handles stream termination
-                    self._logger.debug(
-                        "Received FlushSentinel, sending end of stream",
-                        extra=self._build_log_context(),
-                    )
-                    await ws.send_str(self._end_of_stream_msg)
-                    break
-
-                # Check if Sarvam VAD triggered flush
-                if self._should_flush:
-                    self._logger.debug(
-                        "VAD triggered flush, sending flush message",
-                        extra=self._build_log_context(),
-                    )
-                    flush_message = {"type": "flush"}
-                    await ws.send_str(json.dumps(flush_message))
-                    self._should_flush = False  # Reset flag
-
-        finally:
-            self._logger.debug(
-                f"Audio processing completed, sent {chunks_sent} chunks",
-                extra=self._build_log_context(),
-            )
-
-    async def _process_messages(self, ws: http.WebSocket) -> None:
-        """Process incoming messages from the WebSocket."""
-        self._logger.info(
-            "Starting message processing",
-            extra={**self._build_log_context(), "ws_closed": ws.closed},
-        )
-
-        while True:
-            msg = await ws.receive()
-            if msg.type == http.WebSocketMessageType.TEXT:
-                try:
-                    await self._handle_message(STT_MESSAGE.validate_json(msg.data))
-                except ValidationError as e:
-                    if any(error["type"] != "json_invalid" for error in e.errors()):
-                        raise APIError(
-                            "Sarvam STT sent an invalid event", kind="protocol", detail=msg.text
-                        ) from e
-                    if looks_like_error_text(msg.data):
-                        raise APIError(
-                            "Sarvam STT sent a non-JSON error",
-                            kind="invalid_request",
-                            body={"raw_message": msg.data},
-                            detail=msg.text,
-                        ) from e
-                    self._logger.warning(
-                        "Invalid JSON received from WebSocket",
-                        extra={
-                            **self._build_log_context(),
-                            "lk.pii.raw_data": msg.data,
-                            "error": str(e),
-                        },
-                    )
-                    continue  # Skip malformed message
-                except APIError:
-                    # Let API errors propagate without re-wrapping
-                    raise
-                except Exception as e:
-                    raise APIError(
-                        "Sarvam STT message processing error",
-                        kind="protocol",
-                        body={"raw_message": msg.data},
-                        detail=msg.text,
-                    ) from e
-
-            elif msg.type == http.WebSocketMessageType.CLOSE:
-                close_code = ws.close_code
-                close_reason = msg.data
-                is_expected_close = close_code in (1000, 1001, None)
-                has_error_reason = looks_like_error_text(close_reason)
-
-                if not is_expected_close or has_error_reason:
-                    raise ws.close_error("Sarvam STT WebSocket closed unexpectedly")
-                self._logger.info(
-                    f"WebSocket closed: {msg.type}",
-                    extra={
-                        **self._build_log_context(),
-                        "close_code": close_code,
-                        "close_reason": close_reason,
-                    },
-                )
-                break
-
-            else:
-                self._logger.debug(
-                    f"Unknown WebSocket message type: {msg.type}",
-                    extra=self._build_log_context(),
-                )
-
-    async def _handle_message(self, data: STTMessage) -> None:
-        """Handle different types of messages from Sarvam streaming API."""
-        try:
-            msg_type = data.type
-            self._maybe_set_server_request_id(message_request_id(data))
-            if not msg_type:
-                self._logger.warning(
-                    "Received message without type field",
-                    extra={**self._build_log_context(), "lk.pii.data": data},
-                )
-                return
-
-            if isinstance(data, TranscriptMessage):
-                await self._handle_transcript_data(data)
-            elif isinstance(data, EventMessage):
-                if _has_error_field(data):
-                    await self._handle_error_message(data)
-                else:
-                    await self._handle_events(data)
-            elif msg_type in ("error", "errors"):
-                await self._handle_error_message(data)
-            elif _has_error_field(data):
-                await self._handle_error_message(data)
-            else:
-                self._logger.debug(
-                    f"Unknown message type: {msg_type}",
-                    extra={**self._build_log_context(), "lk.pii.data": data},
-                )
-
-        except KeyError as e:
-            self._logger.warning(
-                f"Missing required field in message: {e}",
-                extra={**self._build_log_context(), "lk.pii.data": data},
-            )
-        except APIError:
-            # Let API errors propagate without re-wrapping
-            raise
-        except Exception as e:
-            raise APIError(
-                "Sarvam STT message processing error", kind="protocol", detail=str(e)
-            ) from e
-
-    async def _handle_transcript_data(self, data: TranscriptMessage) -> None:
-        """Handle transcription result messages."""
-        transcript_data = data.data
-        if transcript_data is None:
-            self._logger.debug("Received transcript without data", extra=self._build_log_context())
-            return
-        transcript_text = transcript_data.transcript
-        self._maybe_set_server_request_id(transcript_data.request_id)
-        # Prefer the per-message request_id from the server; fall back to the
-        # session-wide server request_id captured from an earlier message.
-        request_id = transcript_data.request_id or self._server_request_id or ""
-
-        if not transcript_text:
-            self._logger.debug("Received empty transcript", extra=self._build_log_context())
-            return
-
-            # Create usage event with proper metrics extraction
-        metrics = transcript_data.metrics
-        # request_data = {
-        #     "original_id": request_id,
-        #     "processing_latency": metrics.get("processing_latency", 0.0),
-        # }
-        usage_event = stt.SpeechEvent(
-            type=stt.SpeechEventType.RECOGNITION_USAGE,
-            request_id=request_id,
-            recognition_usage=stt.RecognitionUsage(
-                audio_duration=metrics.audio_duration,
-            ),
-        )
-        self.send(usage_event)
-
-        if self._pending_eos:
-            self._pending_final_data = transcript_data
-            self._final_received_for_utterance = True
-            self._try_commit_utterance()
+    def on_message(self, message: _Message) -> None:
+        if message["event"] == "session.begin":
+            self._request_id = message.get("request_id", "")
+        elif message["event"] == "vad.speech_start":
+            self.report(stt.SpeechStarted())
+        elif message["event"] == "vad.speech_end":
+            self.report(stt.SpeechEnded())
+        elif message["event"] == "transcript.partial" or message["event"] == "transcript.final":
+            self.report(self._transcript(message))
+        elif message["event"] == "session.end":
+            self.report(stt.SessionFinished())
+        elif message["event"] == "error":
+            self._error(message)
         else:
-            if self._send_final_transcript(transcript_data):
-                self._final_received_for_utterance = True
+            assert_never(message)
 
-        self._logger.debug(
-            "Transcript processed successfully",
-            extra={
-                **self._build_log_context(),
-                "text_length": len(transcript_text),
-                "language": self._opts.language,
-            },
+    def _transcript(self, message: _PartialTranscript | _FinalTranscript) -> stt.Transcript:
+        final = message["event"] == "transcript.final"
+        offset = self.start_time_offset
+        start, end = message.get("start_s"), message.get("end_s")
+        # recognition confidence only: language_confidence scores the language identification
+        metadata: dict[str, JsonValue] = {}
+        if (utterance := message.get("utterance_idx")) is not None:
+            metadata["utterance_idx"] = utterance
+        if (language_confidence := message.get("language_confidence")) is not None:
+            metadata["language_confidence"] = language_confidence
+        confidence = message.get("confidence")
+        return stt.Transcript(
+            # whitespace carries no words
+            (message.get("text") or "").strip(),
+            LanguageCode(message.get("language") or self._opts.language),
+            final=final,
+            request_id=self._request_id,
+            start_time=max(start, 0.0) + offset if final and start is not None else 0.0,
+            end_time=(max(end, 0.0) if end is not None else self._audio_sent) + offset
+            if final
+            else 0.0,
+            confidence=1.0 if confidence is None else confidence,
+            metadata=metadata or None,
         )
 
-    async def _handle_events(self, data: EventMessage) -> None:
-        """Handle VAD (Voice Activity Detection) events."""
-        event_data = data.data
-        if event_data is None:
-            self._logger.debug("Received event without data", extra=self._build_log_context())
-            return
-        signal_type = event_data.signal_type
-        self._maybe_set_server_request_id(event_data.request_id)
-
-        if not signal_type:
-            self._logger.warning(
-                "VAD event missing signal_type",
-                extra={**self._build_log_context(), "lk.pii.event_data": event_data},
+    def _error(self, message: _Error) -> None:
+        code = message.get("code", "unknown")
+        if not message.get("is_fatal", False):
+            logger.warning(
+                "Sarvam realtime STT reported a non-fatal error",
+                extra={"error_code": code, "status_code": message.get("status_code")},
             )
             return
-
-        self._logger.debug(
-            f"Processing VAD event: {signal_type}",
-            extra={**self._build_log_context(), "signal_type": signal_type},
-        )
-
-        if signal_type == "START_SPEECH":
-            if not self._speaking:
-                self._reset_utterance_state()
-                self._speaking = True
-                start_event = stt.SpeechEvent(
-                    type=stt.SpeechEventType.START_OF_SPEECH,
-                    request_id=self._server_request_id or "",
-                    speech_start_time=self._utterance_speech_start_wall,
-                )
-                self.send(start_event)
-                self._logger.debug("Speech started", extra=self._build_log_context())
-
-        elif signal_type == "END_SPEECH":
-            if self._speaking:
-                self._speaking = False
-                self._pending_eos = True
-                self._try_commit_utterance()
-                if not self._eos_emitted_for_utterance and self._pending_final_data is None:
-                    if self._final_received_for_utterance:
-                        self._emit_end_of_speech()
-                    elif self._eos_fallback_task is None or self._eos_fallback_task.done():
-                        # Give Sarvam a short grace period to deliver the
-                        # final transcript so LiveKit sees FINAL before EOS.
-                        self._eos_fallback_task = self._tasks.spawn(
-                            self._emit_pending_eos_after_timeout()
-                        )
-
-                # Set flag to trigger flush when Sarvam detects end of speech
-                self._should_flush = True
-                self._logger.debug(
-                    "Speech ended, flush triggered",
-                    extra=self._build_log_context(),
-                )
-        else:
-            self._logger.debug(
-                f"Unknown VAD signal type: {signal_type}",
-                extra=self._build_log_context(),
-            )
-
-    async def _handle_error_message(self, message: STTMessage) -> None:
-        """Preserve provider error details and request identity."""
-        nested = message.data
-        error_code = message.code
-        if error_code is None and isinstance(nested, (ErrorData, EventData, UnknownData)):
-            error_code = nested.code
-        raw = message.model_dump(mode="json", exclude_unset=True)
-        raw_error_message = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
-        self._maybe_set_server_request_id(message_request_id(message))
-        status_code = int(error_code) if isinstance(error_code, int) else None
-        if isinstance(error_code, str) and error_code.isdigit():
-            status_code = int(error_code)
-        if status_code is None:
-            # an error frame without a status refused the request
+        # an unavailable model may come back; without a status the frame refused the request
+        kind: ErrorKind | None = "server" if code == "model_unavailable" else None
+        detail = message.get("message", code)
+        if (status := message.get("status_code")) is None:
             raise APIError(
-                "Sarvam streaming API error",
-                kind="invalid_request",
-                body=raw,
-                detail=raw_error_message,
+                "Sarvam realtime STT error",
+                kind=kind or "invalid_request",
+                body=message,
+                detail=detail,
             )
         raise APIStatusError(
-            "Sarvam streaming API error",
-            status_code=status_code,
-            body=raw,
-            detail=raw_error_message,
+            "Sarvam realtime STT error",
+            status_code=status,
+            kind=kind,
+            request_id=self._request_id or None,
+            body=message,
+            detail=detail,
         )
+
+
+class _VadStream(SpeechStream):
+    # Sarvam's VAD starts and ends each speech
+    provider_vad = True
+
+
+class _ManualStream(SpeechStream):
+    """The stream's flushes delimit the speech Sarvam transcribes."""
+
+    _speaking = False
+
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | _Control | None:
+        if isinstance(item, rtc.AudioFrame) and not self._speaking:
+            self._speaking = True
+            self.send_now(_Control(event="speech_start"))
+        elif isinstance(item, stt.Flush) and self._speaking:
+            self._speaking = False
+            return _Control(event="speech_end")
+        return super().encode(item)

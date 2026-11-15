@@ -37,7 +37,6 @@ from . import _core, telemetry
 from ._generated import semconv
 from ._generated.job_records import JobExecutorType as JobExecutorType
 from ._generated.public_job import *  # noqa: F403
-from ._generated.room_io import DEFAULT_PARTICIPANT_KINDS
 from ._generated.telemetry import ReportJob, SessionReport as SessionReport
 from ._generated.types import ATTRIBUTE_SIMULATOR_DISPATCH
 from .http import client as http_client

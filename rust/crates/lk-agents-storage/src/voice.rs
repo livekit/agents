@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::Mutex;
 
 use crate::thread::run::{ItemRow, RunOutcome};
+use livekit_protocol::agent::chat_context::ChatItem as StoredItem;
 use lk_agents_abi::llm::chat_context::protocol::{decode_chat_item, encode_chat_item};
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::context::ContextActivation as _;
@@ -46,9 +47,9 @@ pub struct VoiceStore {
 }
 
 struct State {
-    /// Each conversational item as this store last read it from the partition or committed it.
-    known: BTreeMap<String, ChatItem>,
-    version: i64,
+    /// Each conversational item as this store last read it from the partition or committed it,
+    /// in its stored form: what the partition keeps of an item is all a reading can compare.
+    known: BTreeMap<String, StoredItem>,
     active: Option<Active>,
 }
 
@@ -56,11 +57,89 @@ struct Active {
     thread: Thread,
     run: Run,
     speeches: BTreeSet<u64>,
-    checkpoint_sequence: Option<u64>,
+    history_sequence: Option<u64>,
+    input_sequence: Option<u64>,
+    /// Recognition progress is durable but not yet accepted model-visible conversation.
+    pending_user_turns: Vec<lk_agents_abi::ChatMessage>,
 }
 
 fn conversational(item: &ChatItem) -> bool {
     !item.as_message().is_some_and(|message| matches!(message.role, Role::System | Role::Developer))
+}
+
+impl State {
+    /// Reconcile against rows actually read or written, never treating a local omission as
+    /// deletion of an unseen item. Only the database baseline can retire a previously known row.
+    fn reconcile(
+        &mut self,
+        stored: Vec<ChatItem>,
+        local: Vec<ChatItem>,
+    ) -> (Vec<ChatItem>, Vec<ChatItem>) {
+        let rows: BTreeMap<_, _> = stored.iter().map(|item| (item.id(), item)).collect();
+        let (mut instructions, pending): (Vec<_>, Vec<_>) =
+            local.into_iter().partition(|item| !conversational(item));
+        let mut merged = Vec::new();
+        for item in pending {
+            match rows.get(item.id()) {
+                Some(row) if self.known.get(item.id()) != Some(&encode_chat_item(row)) => {
+                    merged.push((*row).clone());
+                }
+                Some(_) => merged.push(item),
+                None if self.known.get(item.id()) != Some(&encode_chat_item(&item)) => {
+                    merged.push(item);
+                }
+                // A previously observed row absent from the owned baseline was removed by
+                // another writer; its unchanged stale copy cannot resurrect it. An explicit
+                // new revision under that identity is still a local edit to persist.
+                None => {}
+            }
+        }
+        if !merged.iter().any(|item| rows.contains_key(item.id())) {
+            // With no shared anchor, the database rows precede equally stamped local
+            // additions: they existed before this snapshot was introduced.
+            let additions = std::mem::replace(&mut merged, stored.clone());
+            for item in additions {
+                lk_agents_abi::llm::chat_context::ordering::commit_by_instant(&mut merged, item);
+            }
+        }
+        // A model view omits history-only records (handoffs, another agent's items). Preserve
+        // those rows' stored neighbors instead of moving them behind timestamp ties in the
+        // narrower view. Local new items keep the session ledger's relative order.
+        for (index, row) in stored.iter().enumerate() {
+            if !merged.iter().any(|item| item.id() == row.id()) {
+                let next = stored[index + 1..]
+                    .iter()
+                    .find_map(|neighbor| merged.iter().position(|item| item.id() == neighbor.id()));
+                let previous = stored[..index].iter().rev().find_map(|neighbor| {
+                    merged.iter().position(|item| item.id() == neighbor.id()).map(|at| at + 1)
+                });
+                if let Some(at) = next.or(previous) {
+                    merged.insert(at, row.clone());
+                } else {
+                    lk_agents_abi::llm::chat_context::ordering::commit_by_instant(
+                        &mut merged,
+                        row.clone(),
+                    );
+                }
+            }
+        }
+        self.known.extend(stored.iter().map(|item| (item.id().to_owned(), encode_chat_item(item))));
+        let written = instructions
+            .iter()
+            .chain(&merged)
+            .filter(|item| rows.contains_key(item.id()))
+            .cloned()
+            .collect();
+        instructions.extend(merged);
+        (instructions, written)
+    }
+
+    /// The partition holds `rows`, the stored forms of `items`, as this store wrote them.
+    fn wrote(&mut self, items: &[ChatItem], rows: &[StoredItem]) {
+        for (item, row) in items.iter().zip(rows).filter(|(item, _)| conversational(item)) {
+            self.known.insert(item.id().to_owned(), row.clone());
+        }
+    }
 }
 
 impl VoiceStore {
@@ -90,16 +169,14 @@ impl VoiceStore {
                 "voice context belongs to a different or closed partition".into(),
             ));
         }
-        let (history, version) = with_thread(&*backend, &thread_id, async |thread| {
+        let history = with_thread(&*backend, &thread_id, async |thread| {
             let partition_key = thread.partition(&partition_key);
             let history = if explicit_history.is_none() {
                 partition_key.history().await?
             } else {
                 Vec::new()
             };
-            let version =
-                partition_key.info().await?.map_or(0, |partition_key| partition_key.version);
-            Ok::<_, StorageError>((history, version))
+            Ok::<_, StorageError>(history)
         })
         .await?;
         let items = history
@@ -123,12 +200,10 @@ impl VoiceStore {
                 ));
             }
         }
-        let known = explicit_history
-            .as_ref()
-            .unwrap_or(&items)
-            .iter()
-            .map(|item| (item.id().to_owned(), item.clone()))
-            .collect();
+        // Only rows actually read from storage establish a database baseline. Supplied
+        // history is a local view, never proof that unseen rows were deleted or edited.
+        let known =
+            items.iter().map(|item| (item.id().to_owned(), encode_chat_item(item))).collect();
         let activation = match activation {
             Some(activation) => activation,
             None => {
@@ -147,7 +222,7 @@ impl VoiceStore {
             holder: Holder::new("voice"),
             activation,
             initial: explicit_history.is_none().then_some(items),
-            state: tokio::sync::Mutex::new(State { known, version, active: None }),
+            state: tokio::sync::Mutex::new(State { known, active: None }),
             lease: Mutex::new(None),
             generation: signal::signal(0).0,
             lost: Arc::new(AtomicBool::new(false)),
@@ -170,7 +245,7 @@ impl VoiceStore {
 
     async fn begin(
         &self,
-        speech: u64,
+        speech: Option<u64>,
         local: Vec<ChatItem>,
     ) -> Result<Vec<ChatItem>, StorageError> {
         let mut state = self.state.lock().await;
@@ -181,8 +256,14 @@ impl VoiceStore {
             return Err(StorageError::LeaseLost("the voice partition_key lease was lost".into()));
         }
         if let Some(active) = &mut state.active {
-            active.speeches.insert(speech);
-            return Ok(local);
+            active.speeches.extend(speech);
+            let stored = active
+                .run
+                .history()
+                .iter()
+                .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(state.reconcile(stored, local).0);
         }
         // Exclude direct saves before taking the partition, avoiding the inverse lock/lease order.
         let fields = self.activation.lock_managed().await;
@@ -201,62 +282,22 @@ impl VoiceStore {
         let prepared = (|| {
             // The partition as this store last saw it: the turn's own reading, edits included, is
             // the newest.
-            let (merged, written) = if run.version() == state.version {
-                // The turn's new items are known from now on: if it is abandoned, a later reload
-                // drops them rather than committing them as another turn's.
-                for item in local.iter().filter(|item| conversational(item)) {
-                    state.known.entry(item.id().to_owned()).or_insert_with(|| item.clone());
-                }
-                // `local` is the turn's view (the model's), not the partition's history: the
-                // partition keeps its rows (history-only items, other agents' items), with the
-                // turn's edits. Its new items are the session's to write, in the session's order.
-                let stored = run
-                    .history()
+            let (merged, written) = {
+                let rows = run.history();
+                let mut stored = rows
                     .iter()
                     .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
                     .collect::<Result<Vec<_>, _>>()?;
-                let mine: BTreeMap<&str, &ChatItem> =
-                    local.iter().map(|item| (item.id(), item)).collect();
-                let written: Vec<ChatItem> = stored
-                    .into_iter()
-                    .map(|row| mine.get(row.id()).map_or(row, |item| (*item).clone()))
-                    .collect();
-                (local, written)
-            } else {
-                let stored = run
-                    .history()
-                    .iter()
-                    .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let ids: BTreeSet<_> = stored.iter().map(|item| item.id().to_owned()).collect();
-                let (mut instructions, pending): (Vec<_>, Vec<_>) =
-                    local.into_iter().partition(|item| !conversational(item));
-                let mut edited: BTreeMap<String, ChatItem> = BTreeMap::new();
-                let mut added = Vec::new();
-                for item in pending {
-                    if ids.contains(item.id()) {
-                        edited.insert(item.id().to_owned(), item);
-                    } else if !state.known.contains_key(item.id()) {
-                        added.push(item);
+                // A previous voice activation ended mid-input. Its latest durable words are
+                // retained as one user item, just as a lost recognition connection retains them.
+                if let Some(routing) = run.state() {
+                    for pending in crate::session_state::pending_voice_inputs(routing)? {
+                        if !stored.iter().any(|item| item.id() == pending.id) {
+                            stored.push(ChatItem::Message(pending));
+                        }
                     }
                 }
-                // A row the other writer left as this store last saw it keeps the turn's own
-                // edit (a question answered since the last commit); one it changed is its own.
-                let mut merged: Vec<ChatItem> = stored
-                    .iter()
-                    .map(|row| match edited.remove(row.id()) {
-                        Some(mine) if state.known.get(row.id()) == Some(row) => mine,
-                        _ => row.clone(),
-                    })
-                    .collect();
-                state.known = stored.into_iter().map(|item| (item.id().to_owned(), item)).collect();
-                state.known.extend(added.iter().map(|item| (item.id().to_owned(), item.clone())));
-                // The turn's new items are the session's to write, at their positions in its
-                // conversation: what the store writes now is only the partition's own rows.
-                let written = instructions.iter().chain(&merged).cloned().collect();
-                merged.extend(added);
-                instructions.extend(merged);
-                (instructions, written)
+                state.reconcile(stored, local)
             };
             let session = self.activation.session_state();
             self.activation.begin_managed(
@@ -287,26 +328,64 @@ impl VoiceStore {
         state.active = Some(Active {
             thread,
             run,
-            speeches: BTreeSet::from([speech]),
-            checkpoint_sequence: None,
+            speeches: speech.into_iter().collect(),
+            history_sequence: None,
+            input_sequence: None,
+            pending_user_turns: Vec::new(),
         });
         if let Some(routing) = self.activation.session_state() {
+            let rows: Vec<StoredItem> = written.iter().map(encode_chat_item).collect();
             state
                 .active
                 .as_mut()
                 .expect("turn was installed")
                 .run
-                .checkpoint_session(routing, written.iter().map(encode_chat_item).collect())
+                .checkpoint_session(routing, rows.clone())
                 .await?;
+            state.wrote(&written, &rows);
         }
         Ok(merged)
     }
 
-    async fn finish(&self, speech: u64, history: Vec<ChatItem>) -> Result<(), StorageError> {
+    async fn finish(
+        &self,
+        speech: Option<u64>,
+        sequence: u64,
+        history: Vec<ChatItem>,
+    ) -> Result<(), StorageError> {
         let mut state = self.state.lock().await;
         let Some(active) = state.active.as_mut() else { return Ok(()) };
-        active.speeches.remove(&speech);
+        if let Some(speech) = speech {
+            active.speeches.remove(&speech);
+        }
+        let newer = active.history_sequence.is_none_or(|held| sequence > held);
+        let history = if newer {
+            history
+        } else {
+            active
+                .run
+                .history()
+                .iter()
+                .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
+                .collect::<Result<Vec<_>, _>>()?
+        };
         if !active.speeches.is_empty() {
+            if !newer {
+                return Ok(());
+            }
+            // Another speech keeps the database run open, but this speech's successful receipt
+            // must already protect its final item revisions. A subsequent abort retains this
+            // checkpoint, including a cut prefix and its interruption flag.
+            let agent = self
+                .activation
+                .session_state()
+                .and_then(|state| {
+                    state.get("agent").and_then(|agent| agent.as_str()).map(str::to_owned)
+                })
+                .unwrap_or_default();
+            self.checkpoint_history(&mut state, agent, &history).await?;
+            state.active.as_mut().expect("checkpoint kept its run").history_sequence =
+                Some(sequence);
             return Ok(());
         }
         let fields = self.activation.lock_managed().await;
@@ -318,8 +397,8 @@ impl VoiceStore {
             .map(|row| (row.id.clone(), row.message_id.clone()))
             .collect();
         let history: Vec<ChatItem> = history.into_iter().filter(conversational).collect();
-        let committed: BTreeMap<String, ChatItem> =
-            history.iter().map(|item| (item.id().to_owned(), item.clone())).collect();
+        let committed: BTreeMap<String, StoredItem> =
+            history.iter().map(|item| (item.id().to_owned(), encode_chat_item(item))).collect();
         let history = history
             .into_iter()
             .map(|item| {
@@ -338,14 +417,29 @@ impl VoiceStore {
                 })
             })
             .collect::<Result<Vec<_>, StorageError>>();
-        let result = match history {
-            Ok(history) => {
-                *active.run.history_mut() = history;
-                if let Some(routing) = self.activation.session_state() {
-                    active.run.set_state(routing);
-                }
-                active.run.stage_scopes(self.activation.writes());
-                active.run.stage_statements(self.activation.statements());
+        let prepared = history.and_then(|history| {
+            *active.run.history_mut() = history;
+            active.pending_user_turns.retain(|message| !committed.contains_key(&message.id));
+            let agent = self
+                .activation
+                .session_state()
+                .and_then(|state| {
+                    state.get("agent").and_then(|agent| agent.as_str()).map(str::to_owned)
+                })
+                .unwrap_or_default();
+            let routing = crate::session_state::voice_progress_value(
+                agent,
+                active.run.history().iter().map(|item| item.id.clone()).collect(),
+                &active.pending_user_turns,
+            )?;
+            self.activation.stage_session(routing.clone())?;
+            active.run.set_state(routing);
+            active.run.stage_scopes(self.activation.writes());
+            active.run.stage_statements(self.activation.statements());
+            Ok(())
+        });
+        let result = match prepared {
+            Ok(()) => {
                 active.run.commit(CommitOptions::default()).await.map(|committed| committed.version)
             }
             Err(error) => {
@@ -384,13 +478,65 @@ impl VoiceStore {
         self.released();
         active.thread.close().await;
         self.activation.end_managed(result.is_ok(), fields);
-        if let Ok(version) = result {
-            state.version = version;
-            state.known = committed;
+        if result.is_ok() {
+            state.known.extend(committed);
             Ok(())
         } else {
             result.map(|_| ())
         }
+    }
+
+    /// Durably publish conversation items without ending the shared database run. Used by
+    /// progress barriers and by an individual speech settling while another still owns it.
+    async fn checkpoint_history(
+        &self,
+        state: &mut State,
+        agent: String,
+        history: &[ChatItem],
+    ) -> Result<(), StorageError> {
+        let stored = state
+            .active
+            .as_ref()
+            .expect("the caller holds the active run")
+            .run
+            .history()
+            .iter()
+            .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
+            .collect::<Result<Vec<_>, _>>()?;
+        let history: Vec<_> = state
+            .reconcile(stored, history.to_vec())
+            .0
+            .into_iter()
+            .filter(conversational)
+            .collect();
+        state
+            .active
+            .as_mut()
+            .expect("the caller holds the active run")
+            .pending_user_turns
+            .retain(|pending| !history.iter().any(|item| item.id() == pending.id));
+        let routing = crate::session_state::voice_progress_value(
+            agent,
+            history
+                .iter()
+                .filter(|item| conversational(item))
+                .map(|item| item.id().to_owned())
+                .collect(),
+            &state.active.as_ref().expect("the caller holds the active run").pending_user_turns,
+        )?;
+        let rows: Vec<StoredItem> =
+            history.iter().filter(|item| conversational(item)).map(encode_chat_item).collect();
+        state
+            .active
+            .as_mut()
+            .expect("the caller holds the active run")
+            .run
+            .checkpoint_session(routing.clone(), rows.clone())
+            .await?;
+        state.wrote(&history, &rows);
+        self.activation.stage_session(routing)?;
+        self.activation.acknowledge_session_state();
+        Ok(())
     }
 
     async fn abandon(&self, speech: u64) -> Result<(), StorageError> {
@@ -428,10 +574,22 @@ impl VoiceStore {
         }
     }
 
-    fn settle_in_background(self: &Arc<Self>, speech: u64, history: Vec<ChatItem>, events: Events) {
+    fn settle_in_background(
+        self: &Arc<Self>,
+        speech: u64,
+        sequence: u64,
+        history: Vec<ChatItem>,
+        events: Events,
+    ) {
         let store = self.clone();
         self.tasks.spawn(&*self.background.spawner, "voice storage settle", async move {
-            let result = store.finish(speech, history).await;
+            // Closing may cancel the speech's original acquire before it installs a run.
+            // A successful final receipt still protects these concrete items, so establish
+            // ownership and reconcile first instead of treating an absent run as a save.
+            let result = match store.begin(Some(speech), history).await {
+                Ok(history) => store.finish(Some(speech), sequence, history).await,
+                Err(error) => Err(error),
+            };
             let lease_lost = store.lease_lost();
             let _ = events.push(VoiceStorageEvent::Settled { speech, result, lease_lost });
         });
@@ -469,8 +627,8 @@ impl VoiceStorage for VoiceStore {
         }
         // Each task is spawned while `closing` is held, so none starts after close.
         match command {
-            VoiceStorageCommand::Settle { speech, history } => {
-                self.settle_in_background(speech, history, events)
+            VoiceStorageCommand::Settle { speech, sequence, history } => {
+                self.settle_in_background(speech, sequence, history, events)
             }
             VoiceStorageCommand::Abort { speech } => self.abandon_in_background(speech, events),
             VoiceStorageCommand::ObserveLoss { speech } => self.report_lease_loss(speech, events),
@@ -480,10 +638,51 @@ impl VoiceStorage for VoiceStore {
     }
 
     fn acquire(&self, speech: u64, local: Vec<ChatItem>) -> StorageWork<'_, Vec<ChatItem>> {
-        Box::pin(self.begin(speech, local))
+        Box::pin(self.begin(Some(speech), local))
+    }
+    fn conversation(
+        &self,
+        progress: lk_agents_abi::storage::voice::VoiceConversationProgress,
+    ) -> StorageWork<'_, Vec<ChatItem>> {
+        Box::pin(async move {
+            use lk_agents_abi::storage::voice::VoiceConversationBoundary;
+            let mut history = self.begin(None, progress.history).await?;
+            let mut state = self.state.lock().await;
+            let active = state
+                .active
+                .as_mut()
+                .ok_or_else(|| StorageError::Invalid("the voice conversation has ended".into()))?;
+            if active.history_sequence.is_some_and(|held| progress.sequence <= held) {
+                history = active
+                    .run
+                    .history()
+                    .iter()
+                    .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
+                    .collect::<Result<Vec<_>, _>>()?;
+            }
+            if active.input_sequence.is_none_or(|held| progress.sequence > held) {
+                active.pending_user_turns = progress.pending_user_turns;
+                active.input_sequence = Some(progress.sequence);
+            }
+            if progress.boundary == VoiceConversationBoundary::Progress {
+                self.checkpoint_history(&mut state, progress.agent, &history).await?;
+                let active = state.active.as_mut().expect("checkpoint kept its run");
+                active.history_sequence = Some(
+                    active
+                        .history_sequence
+                        .map_or(progress.sequence, |held| held.max(progress.sequence)),
+                );
+            }
+            drop(state);
+            if progress.boundary == VoiceConversationBoundary::UserTurnCompleted {
+                self.finish(None, progress.sequence, history.clone()).await?;
+            }
+            Ok(history)
+        })
     }
     fn checkpoint(
         &self,
+        speech: u64,
         sequence: u64,
         agent: String,
         history: Vec<ChatItem>,
@@ -493,25 +692,16 @@ impl VoiceStorage for VoiceStore {
             let active = state
                 .active
                 .as_mut()
-                .ok_or_else(|| StorageError::Invalid("no voice turn owns the partition".into()))?;
-            if active.checkpoint_sequence.is_some_and(|accepted| sequence <= accepted) {
+                .filter(|active| active.speeches.contains(&speech))
+                .ok_or_else(|| {
+                StorageError::Invalid("the turn does not own the partition".into())
+            })?;
+            if active.history_sequence.is_some_and(|accepted| sequence <= accepted) {
                 return Ok(());
             }
-            let routing = crate::session_state::voice_value(
-                agent,
-                history
-                    .iter()
-                    .filter(|item| conversational(item))
-                    .map(|item| item.id().to_owned())
-                    .collect(),
-            )?;
-            active
-                .run
-                .checkpoint_session(routing.clone(), history.iter().map(encode_chat_item).collect())
-                .await?;
-            active.checkpoint_sequence = Some(sequence);
-            self.activation.stage_session(routing)?;
-            self.activation.acknowledge_session_state();
+            self.checkpoint_history(&mut state, agent, &history).await?;
+            state.active.as_mut().expect("checkpoint kept its run").history_sequence =
+                Some(sequence);
             Ok(())
         })
     }
@@ -622,10 +812,9 @@ impl lk_agents_abi::a2a::turn::HandlerPort for VoiceSessionSink {
                             .collect::<Vec<_>>()
                     ),
                 );
-            active
-                .run
-                .checkpoint_session(routing.clone(), merged.iter().map(encode_chat_item).collect())
-                .await?;
+            let rows: Vec<StoredItem> = merged.iter().map(encode_chat_item).collect();
+            active.run.checkpoint_session(routing.clone(), rows.clone()).await?;
+            state.wrote(&merged, &rows);
             store.activation.stage_session(routing)?;
             Ok(())
         })

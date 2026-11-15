@@ -57,14 +57,15 @@ impl Talk {
         let model = &STT_MODELS[self.run.setup.stt_model % STT_MODELS.len()];
         let timing = self.run.setup.timing();
         let listening = !live.of(Kind::Stt).is_empty();
+        let reports = self.run.setup.stt_speech;
+        let knobs = SttKnobs { reports, latency, late_finals, revisions };
         if let (true, Some(text)) = (stt, speech.text) {
-            let knobs = SttKnobs { latency, late_finals, revisions };
             out.extend(recogniser(model, text, dur, rng, knobs, &timing));
             if vad {
                 out.push(Verdict { at_ms: vad_end_at, word: Word::VadEnd });
             }
         } else if listening && speech.text.is_some() && model.empty_finals {
-            out.extend(recogniser_noise(model, dur, rng, latency, &timing));
+            out.extend(recogniser_noise(model, dur, rng, knobs, &timing));
             if vad {
                 out.push(Verdict { at_ms: vad_end_at, word: Word::VadEnd });
             }
@@ -119,6 +120,12 @@ impl Talk {
         // The recogniser may give out partway through.
         let mut stt_fails_at = (self.rng.u8(0..100) < self.providers.stt_fails)
             .then(|| self.rng.u64(0..seg.dur_ms.max(1)));
+        // Or its connection drops and it reconnects, anywhere in the speech or its tail.
+        let mut stt_drops_at = (self.rng.u8(0..100) < self.providers.stt_drops)
+            .then(|| self.rng.u64(0..seg.dur_ms.max(1) + STT_LATE_FINAL_MS.end));
+        // The utterance this stretch's recogniser opened last: what its words are about, even
+        // once it reported the end of it.
+        let mut utterance: Option<Ref<crate::input::Utterance>> = None;
         let mut vad_started_at: Option<u64> = None;
         let mut vad_ended = false;
         let mut judged = false;
@@ -162,6 +169,15 @@ impl Talk {
                 stt_fails_at = None;
                 self.send(Input::SttFail { stt: Ref::new(stt) }).await?;
             }
+            // The reconnected recogniser knows nothing of the utterance it was in: the rest of
+            // its words are lost, but for those its stream already promoted.
+            if stt_drops_at.is_some_and(|at| elapsed >= at)
+                && let Some(stt) = self.first(Kind::Stt)
+            {
+                stt_drops_at = None;
+                stt_start = None;
+                self.send(Input::SttDrop { stt: Ref::new(stt) }).await?;
+            }
             // The detector's tick on this beat's frames, once the driver has handed them over:
             // speech only in frames that carried the microphone, silence in anything else.
             if chunks > 0
@@ -192,7 +208,8 @@ impl Talk {
                 if !self.sendable(&verdict.word, segment_start, stt_start) {
                     continue;
                 }
-                if matches!(verdict.word, Word::SttStart) {
+                let opens = matches!(verdict.word, Word::SttStart);
+                if opens {
                     stt_start = Some(self.run.record.forwarded().len());
                 }
                 if matches!(verdict.word, Word::VadStart) {
@@ -201,7 +218,11 @@ impl Talk {
                 if matches!(verdict.word, Word::VadEnd) {
                     vad_ended = true;
                 }
-                self.say(seg, verdict).await?;
+                self.say(seg, verdict, utterance).await?;
+                if opens {
+                    utterance =
+                        self.run.record.live().of(Kind::Utterance).into_iter().max().map(Ref::new);
+                }
             }
             self.predict(seg.done).await?;
             // A stretch long enough to be an interruption is judged as soon as it is one, a
@@ -217,11 +238,15 @@ impl Talk {
         Ok(())
     }
 
-    /// Send one verdict against what is live now; dropped when what it names is gone, because a
-    /// recogniser whose utterance already closed has nobody to report to.
-    async fn say(&mut self, seg: &Segment, verdict: Verdict) -> Result<(), Halt> {
-        // The newest utterance: the one this segment's `SttStart` opened.
-        let utterance = self.run.record.live().of(Kind::Utterance).into_iter().max().map(Ref::new);
+    /// Send one verdict against what is live now; dropped when what it names is gone. A
+    /// recogniser's words are about `utterance`, the one its stretch opened last, even once it
+    /// reported that utterance's end.
+    async fn say(
+        &mut self,
+        seg: &Segment,
+        verdict: Verdict,
+        utterance: Option<Ref<crate::input::Utterance>>,
+    ) -> Result<(), Halt> {
         let vad = self.first(Kind::Vad).map(Ref::new);
         let stt = self.first(Kind::Stt).map(Ref::new);
         let input = match verdict.word {

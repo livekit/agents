@@ -1,3 +1,10 @@
+//! Owns input stream installation, replacement and routing identities.
+//!
+//! Open requests carry a generation: a superseded result is closed unused. Only the installed
+//! recognizer (or a stream explicitly draining a released user turn) may change recognition.
+//! Audio frames use the data plane; provider observations use the session's ordered queue.
+//! Provider utterance normalization belongs to STT, conversational timing to recognition.
+
 use crate::agent_session::effects::{AudioOp, StreamKind, VoiceEffect};
 use crate::agent_session::{IoKind, VoiceDriver};
 use crate::audio::{AudioChannel, ChannelEnd, on_leg_ended};
@@ -84,8 +91,12 @@ impl AgentInput {
 
 impl VoiceDriver {
     fn install_sink(&mut self, channel: AudioChannel, sink: ResourceId) {
-        self.input.sinks.insert(channel, sink);
+        let previous = self.input.sinks.insert(channel, sink);
         if channel == AudioChannel::Stt {
+            if let Some(previous) = previous.filter(|previous| *previous != sink) {
+                let effects = self.activity.audio_recognition.retire_stt_stream(previous);
+                self.apply_recognition_effects(effects);
+            }
             self.input.live_stt = Some(sink);
             self.stt_stream_opened(sink);
         }
@@ -100,6 +111,10 @@ impl VoiceDriver {
             self.input.live_stt = None;
         }
         if let Some(sink) = self.input.sinks.remove(&channel) {
+            if channel == AudioChannel::Stt {
+                let effects = self.activity.audio_recognition.retire_stt_stream(sink);
+                self.apply_recognition_effects(effects);
+            }
             self.record_effect(VoiceEffect::UpdateAudioInputRouting(
                 AudioInputRouterCommand::Remove(sink),
             ));

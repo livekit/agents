@@ -24,8 +24,7 @@ from livekit.agents import (
     NotGivenOr,
     llm,
 )
-from livekit.plugins.google import LLM
-from livekit.plugins.google.beta import GeminiTTS
+from livekit.plugins.google import LLM, GeminiTTS
 from livekit.plugins.google.tools import GoogleSearch
 from tests.fakes import until
 
@@ -38,6 +37,7 @@ WireJSON = Any  # a request body decoded from the wire: untyped JSON the asserti
 
 
 class Recorded(NamedTuple):
+    path: str
     body: WireJSON
     headers: dict[str, str]
 
@@ -59,7 +59,9 @@ class GeminiPeer:
         self.connections: list[asyncio.BaseTransport] = []
 
     async def handle(self, request: web.Request) -> web.StreamResponse:
-        self.requests.append(Recorded(body=await request.json(), headers=dict(request.headers)))
+        self.requests.append(
+            Recorded(path=request.path, body=await request.json(), headers=dict(request.headers))
+        )
         if request.transport is not None:
             self.connections.append(request.transport)
         if self.status != 200:
@@ -611,6 +613,19 @@ async def test_gemini_tts_asks_for_headerless_pcm(gemini_tts: GeminiPeer) -> Non
     assert gemini_tts.body["generationConfig"]["response_format"] == {
         "audio": {"mime_type": "AUDIO_L16"}
     }
+
+
+async def test_gemini_tts_defaults_to_a_model_google_still_serves(
+    gemini_tts: GeminiPeer,
+) -> None:
+    """The default is not a preview model Google shuts down on Dec 18, 2026.
+
+    https://aistudio.google.com/docs/deprecations
+    """
+    await speak(GeminiTTS(api_key="test"), "Hello world")
+
+    [request] = gemini_tts.requests
+    assert request.path.endswith("/models/gemini-3.8-flash-tts:streamGenerateContent")
 
 
 async def test_closing_gemini_tts_closes_its_connection(gemini_tts: GeminiPeer) -> None:

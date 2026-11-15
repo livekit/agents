@@ -491,9 +491,14 @@ impl VoiceDriver {
             }
             ActivityCommand::UpdateChatCtx(items) => {
                 let count = items.len();
-                // Host-supplied, so not announced: the host already holds these items.
+                // Publish the resulting record as a whole: replacing a model view can remove
+                // its private items while retaining other agents' and accepted history items.
                 let agent = self.activity.agent.clone();
                 self.session.chat_ctx.update_agent_chat_ctx(items, &agent);
+                self.conversation_changed();
+                self.publish_event(crate::events::SessionEvent::HistoryReloaded {
+                    items: self.session.chat_ctx.items().cloned().collect(),
+                });
                 if self.activity.realtime().is_some() {
                     let ctx = self.session.chat_ctx.for_realtime();
                     self.rt_send(lk_agents_abi::RealtimeCommand::UpdateChatCtx(
@@ -582,6 +587,7 @@ impl VoiceDriver {
 
     /// The one write to the record, inserted by its acoustic `created_at`.
     pub(crate) fn commit_item(&mut self, item: ChatItem, source: Source, visibility: Visibility) {
+        self.conversation_changed();
         // Attributed to the speech's agent: a tool may commit after its agent was left.
         let agent = source
             .speech()
@@ -602,12 +608,14 @@ impl VoiceDriver {
         self.perform_commit(commit);
         if let Some((turn, message)) = user_turn {
             self.user_turn_message_added(turn, &message);
+            self.forget_user_input(turn);
         }
     }
 
     /// Items on the record changed in place: the host is told again of each under its own id,
     /// and a realtime server's copy follows once.
     pub(crate) fn replace_items(&mut self, items: impl IntoIterator<Item = ChatItem>) {
+        self.conversation_changed();
         let mut replaced = false;
         for item in items {
             let Some(entry) = self.session.chat_ctx.entry(item.id()) else { continue };

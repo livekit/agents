@@ -739,6 +739,7 @@ pub(super) fn option_kwargs() -> lk_agents_abi::voice::session_options::SessionK
         ivr_detection: false,
         user_away_timeout: Some(15.0),
         transcription_timeout: None,
+        final_transcript_timeout: 2.0,
         session_close_transcript_timeout: 2.0,
     }
 }

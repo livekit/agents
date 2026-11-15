@@ -131,9 +131,9 @@ class TTS(tts.TTS):
             pacing: A ``SentenceStreamPacer``, or ``None`` to send each chunk as soon as it is
                 split.
         """
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if is_given(voice) and is_given(ref_audio):
-            raise ValueError("Only one of 'voice' or 'ref_audio' may be provided, not both")
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            if is_given(voice) and is_given(ref_audio):
+                raise ValueError("Only one of 'voice' or 'ref_audio' may be provided, not both")
         if is_given(model):
             self._opts.model = model
         if is_given(voice):

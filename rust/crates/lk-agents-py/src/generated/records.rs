@@ -8824,6 +8824,1198 @@ pub mod mcp {
             },
         })
     }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+    static MCP_TOOL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn mcp_tool_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::mcp::McpTool> {
+        let py = obj.py();
+        if !obj.is_instance(MCP_TOOL.import(py, "livekit.agents._generated.mcp", "MCPTool")?)? {
+            return Err(super::not_a(obj, "MCPTool"));
+        }
+        Ok(::lk_agents_abi::llm::mcp::McpTool {
+            name: crate::py_values::attr_with(obj, "MCPTool", "name", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            description: crate::py_values::attr_with(obj, "MCPTool", "description", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+            input_schema: crate::py_values::attr_with(obj, "MCPTool", "input_schema", |v| {
+                match crate::py_values::value_from_py(v, "MCPTool.input_schema")? {
+                    ::serde_json::Value::Object(map) => Ok(map),
+                    _ => Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "MCPTool.input_schema: expected a dict",
+                    )),
+                }
+            })?,
+            meta: crate::py_values::attr_with(obj, "MCPTool", "meta", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (match crate::py_values::value_from_py(v, "MCPTool.meta")? {
+                        ::serde_json::Value::Object(map) => Ok(map),
+                        _ => Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "MCPTool.meta: expected a dict",
+                        )),
+                    })
+                    .map(Some)
+                }
+            })?,
+        })
+    }
+
+    pub fn mcp_tool_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpTool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::mcp::McpTool { name, description, input_schema, meta } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
+        kwargs.set_item(
+            "description",
+            match description {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "input_schema",
+            crate::py_values::extra_to_py(py, &input_schema)?.into_any(),
+        )?;
+        kwargs.set_item(
+            "meta",
+            match meta {
+                None => py.None().into_bound(py),
+                Some(x) => crate::py_values::extra_to_py(py, &x)?.into_any(),
+            },
+        )?;
+        crate::py_calls::call(
+            MCP_TOOL.import(py, "livekit.agents._generated.mcp", "MCPTool")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+    static CALL_TOOL_RESULT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn call_tool_result_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::mcp::McpCallResult> {
+        let py = obj.py();
+        if !obj.is_instance(CALL_TOOL_RESULT.import(
+            py,
+            "livekit.agents._generated.mcp",
+            "CallToolResult",
+        )?)? {
+            return Err(super::not_a(obj, "CallToolResult"));
+        }
+        Ok(::lk_agents_abi::llm::mcp::McpCallResult {
+            content: crate::py_values::attr_with(obj, "CallToolResult", "content", |v| {
+                if v.is_instance_of::<::pyo3::types::PyList>()
+                    || v.is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    v.try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            crate::generated::records::mcp::content_block_from_py(item)
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "CallToolResult.content: expected a list or tuple",
+                    ))
+                }
+            })?,
+            is_error: crate::py_values::attr_with(obj, "CallToolResult", "is_error", |v| {
+                v.extract::<bool>()
+            })?,
+        })
+    }
+
+    pub fn call_tool_result_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpCallResult,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::mcp::McpCallResult { content, is_error } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "content",
+            ::pyo3::types::PyList::new(
+                py,
+                content
+                    .into_iter()
+                    .map(|x| crate::generated::records::mcp::content_block_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item("is_error", ::pyo3::IntoPyObjectExt::into_bound_py_any(is_error, py)?)?;
+        crate::py_calls::call(
+            CALL_TOOL_RESULT
+                .import(py, "livekit.agents._generated.mcp", "CallToolResult")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+    static CONTENT_BLOCK__TEXT_CONTENT: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static CONTENT_BLOCK__IMAGE_CONTENT: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static CONTENT_BLOCK__AUDIO_CONTENT: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static CONTENT_BLOCK__EMBEDDED_RESOURCE: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static CONTENT_BLOCK__RESOURCE_LINK: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn content_block_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::mcp::McpContent> {
+        if obj.is_instance(
+            CONTENT_BLOCK__TEXT_CONTENT
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.mcp")?
+                            .getattr("TextContent")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::llm::mcp::McpContent::Text(
+                crate::generated::records::mcp::text_content_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance(
+            CONTENT_BLOCK__IMAGE_CONTENT
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.mcp")?
+                            .getattr("ImageContent")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::llm::mcp::McpContent::Image(
+                crate::generated::records::mcp::image_content_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance(
+            CONTENT_BLOCK__AUDIO_CONTENT
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.mcp")?
+                            .getattr("AudioContent")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::llm::mcp::McpContent::Audio(
+                crate::generated::records::mcp::audio_content_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance(
+            CONTENT_BLOCK__EMBEDDED_RESOURCE
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.mcp")?
+                            .getattr("EmbeddedResource")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::llm::mcp::McpContent::Resource(
+                crate::generated::records::mcp::embedded_resource_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance(
+            CONTENT_BLOCK__RESOURCE_LINK
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.mcp")?
+                            .getattr("ResourceLink")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::llm::mcp::McpContent::ResourceLink(
+                crate::generated::records::mcp::resource_link_from_py(obj)?,
+            ));
+        }
+        Err(super::not_a(obj, "ContentBlock"))
+    }
+
+    pub fn content_block_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpContent,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::llm::mcp::McpContent::Text(x) => {
+                crate::generated::records::mcp::text_content_to_py(py, x)?
+            }
+            ::lk_agents_abi::llm::mcp::McpContent::Image(x) => {
+                crate::generated::records::mcp::image_content_to_py(py, x)?
+            }
+            ::lk_agents_abi::llm::mcp::McpContent::Audio(x) => {
+                crate::generated::records::mcp::audio_content_to_py(py, x)?
+            }
+            ::lk_agents_abi::llm::mcp::McpContent::Resource(x) => {
+                crate::generated::records::mcp::embedded_resource_to_py(py, x)?
+            }
+            ::lk_agents_abi::llm::mcp::McpContent::ResourceLink(x) => {
+                crate::generated::records::mcp::resource_link_to_py(py, x)?
+            }
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+    static TEXT_CONTENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn text_content_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::mcp::McpText> {
+        let py = obj.py();
+        if !obj.is_instance(TEXT_CONTENT.import(
+            py,
+            "livekit.agents._generated.mcp",
+            "TextContent",
+        )?)? {
+            return Err(super::not_a(obj, "TextContent"));
+        }
+        Ok(::lk_agents_abi::llm::mcp::McpText {
+            text: crate::py_values::attr_with(obj, "TextContent", "text", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            meta: crate::py_values::attr_with(obj, "TextContent", "meta", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (match crate::py_values::value_from_py(v, "TextContent.meta")? {
+                        ::serde_json::Value::Object(map) => Ok(map),
+                        _ => Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "TextContent.meta: expected a dict",
+                        )),
+                    })
+                    .map(Some)
+                }
+            })?,
+            annotations: crate::py_values::attr_with(obj, "TextContent", "annotations", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::mcp::annotations_from_py(v)).map(Some)
+                }
+            })?,
+        })
+    }
+
+    pub fn text_content_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpText,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::mcp::McpText { text, meta, annotations } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+        kwargs.set_item(
+            "meta",
+            match meta {
+                None => py.None().into_bound(py),
+                Some(x) => crate::py_values::extra_to_py(py, &x)?.into_any(),
+            },
+        )?;
+        kwargs.set_item(
+            "annotations",
+            match annotations {
+                None => py.None().into_bound(py),
+                Some(x) => crate::generated::records::mcp::annotations_to_py(py, x)?,
+            },
+        )?;
+        crate::py_calls::call(
+            TEXT_CONTENT.import(py, "livekit.agents._generated.mcp", "TextContent")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+    static IMAGE_CONTENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn image_content_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::mcp::McpImage> {
+        let py = obj.py();
+        if !obj.is_instance(IMAGE_CONTENT.import(
+            py,
+            "livekit.agents._generated.mcp",
+            "ImageContent",
+        )?)? {
+            return Err(super::not_a(obj, "ImageContent"));
+        }
+        Ok(::lk_agents_abi::llm::mcp::McpImage {
+            data: crate::py_values::attr_with(obj, "ImageContent", "data", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            mime_type: crate::py_values::attr_with(obj, "ImageContent", "mime_type", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            meta: crate::py_values::attr_with(obj, "ImageContent", "meta", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (match crate::py_values::value_from_py(v, "ImageContent.meta")? {
+                        ::serde_json::Value::Object(map) => Ok(map),
+                        _ => Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "ImageContent.meta: expected a dict",
+                        )),
+                    })
+                    .map(Some)
+                }
+            })?,
+            annotations: crate::py_values::attr_with(obj, "ImageContent", "annotations", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::mcp::annotations_from_py(v)).map(Some)
+                }
+            })?,
+        })
+    }
+
+    pub fn image_content_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpImage,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::mcp::McpImage { data, mime_type, meta, annotations } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("data", ::pyo3::IntoPyObjectExt::into_bound_py_any(data, py)?)?;
+        kwargs.set_item("mime_type", ::pyo3::IntoPyObjectExt::into_bound_py_any(mime_type, py)?)?;
+        kwargs.set_item(
+            "meta",
+            match meta {
+                None => py.None().into_bound(py),
+                Some(x) => crate::py_values::extra_to_py(py, &x)?.into_any(),
+            },
+        )?;
+        kwargs.set_item(
+            "annotations",
+            match annotations {
+                None => py.None().into_bound(py),
+                Some(x) => crate::generated::records::mcp::annotations_to_py(py, x)?,
+            },
+        )?;
+        crate::py_calls::call(
+            IMAGE_CONTENT.import(py, "livekit.agents._generated.mcp", "ImageContent")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+    static AUDIO_CONTENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn audio_content_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::mcp::McpAudio> {
+        let py = obj.py();
+        if !obj.is_instance(AUDIO_CONTENT.import(
+            py,
+            "livekit.agents._generated.mcp",
+            "AudioContent",
+        )?)? {
+            return Err(super::not_a(obj, "AudioContent"));
+        }
+        Ok(::lk_agents_abi::llm::mcp::McpAudio {
+            data: crate::py_values::attr_with(obj, "AudioContent", "data", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            mime_type: crate::py_values::attr_with(obj, "AudioContent", "mime_type", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            meta: crate::py_values::attr_with(obj, "AudioContent", "meta", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (match crate::py_values::value_from_py(v, "AudioContent.meta")? {
+                        ::serde_json::Value::Object(map) => Ok(map),
+                        _ => Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "AudioContent.meta: expected a dict",
+                        )),
+                    })
+                    .map(Some)
+                }
+            })?,
+            annotations: crate::py_values::attr_with(obj, "AudioContent", "annotations", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::mcp::annotations_from_py(v)).map(Some)
+                }
+            })?,
+        })
+    }
+
+    pub fn audio_content_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpAudio,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::mcp::McpAudio { data, mime_type, meta, annotations } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("data", ::pyo3::IntoPyObjectExt::into_bound_py_any(data, py)?)?;
+        kwargs.set_item("mime_type", ::pyo3::IntoPyObjectExt::into_bound_py_any(mime_type, py)?)?;
+        kwargs.set_item(
+            "meta",
+            match meta {
+                None => py.None().into_bound(py),
+                Some(x) => crate::py_values::extra_to_py(py, &x)?.into_any(),
+            },
+        )?;
+        kwargs.set_item(
+            "annotations",
+            match annotations {
+                None => py.None().into_bound(py),
+                Some(x) => crate::generated::records::mcp::annotations_to_py(py, x)?,
+            },
+        )?;
+        crate::py_calls::call(
+            AUDIO_CONTENT.import(py, "livekit.agents._generated.mcp", "AudioContent")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+    static EMBEDDED_RESOURCE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn embedded_resource_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::mcp::McpEmbeddedResource> {
+        let py = obj.py();
+        if !obj.is_instance(EMBEDDED_RESOURCE.import(
+            py,
+            "livekit.agents._generated.mcp",
+            "EmbeddedResource",
+        )?)? {
+            return Err(super::not_a(obj, "EmbeddedResource"));
+        }
+        Ok(::lk_agents_abi::llm::mcp::McpEmbeddedResource {
+            resource: crate::py_values::attr_with(obj, "EmbeddedResource", "resource", |v| {
+                crate::generated::records::mcp::resource_contents_from_py(v)
+            })?,
+            meta: crate::py_values::attr_with(obj, "EmbeddedResource", "meta", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (match crate::py_values::value_from_py(v, "EmbeddedResource.meta")? {
+                        ::serde_json::Value::Object(map) => Ok(map),
+                        _ => Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "EmbeddedResource.meta: expected a dict",
+                        )),
+                    })
+                    .map(Some)
+                }
+            })?,
+            annotations: crate::py_values::attr_with(
+                obj,
+                "EmbeddedResource",
+                "annotations",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (crate::generated::records::mcp::annotations_from_py(v)).map(Some)
+                    }
+                },
+            )?,
+        })
+    }
+
+    pub fn embedded_resource_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpEmbeddedResource,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::mcp::McpEmbeddedResource { resource, meta, annotations } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "resource",
+            crate::generated::records::mcp::resource_contents_to_py(py, resource)?,
+        )?;
+        kwargs.set_item(
+            "meta",
+            match meta {
+                None => py.None().into_bound(py),
+                Some(x) => crate::py_values::extra_to_py(py, &x)?.into_any(),
+            },
+        )?;
+        kwargs.set_item(
+            "annotations",
+            match annotations {
+                None => py.None().into_bound(py),
+                Some(x) => crate::generated::records::mcp::annotations_to_py(py, x)?,
+            },
+        )?;
+        crate::py_calls::call(
+            EMBEDDED_RESOURCE
+                .import(py, "livekit.agents._generated.mcp", "EmbeddedResource")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+    static RESOURCE_CONTENTS__TEXT_RESOURCE_CONTENTS: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static RESOURCE_CONTENTS__BLOB_RESOURCE_CONTENTS: ::pyo3::sync::PyOnceLock<Py<PyAny>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn resource_contents_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::mcp::McpResourceContents> {
+        if obj.is_instance(
+            RESOURCE_CONTENTS__TEXT_RESOURCE_CONTENTS
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.mcp")?
+                            .getattr("TextResourceContents")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::llm::mcp::McpResourceContents::Text(
+                crate::generated::records::mcp::text_resource_contents_from_py(obj)?,
+            ));
+        }
+        if obj.is_instance(
+            RESOURCE_CONTENTS__BLOB_RESOURCE_CONTENTS
+                .get_or_try_init(obj.py(), || {
+                    PyResult::Ok(
+                        obj.py()
+                            .import("livekit.agents._generated.mcp")?
+                            .getattr("BlobResourceContents")?
+                            .unbind(),
+                    )
+                })?
+                .bind(obj.py()),
+        )? {
+            return Ok(::lk_agents_abi::llm::mcp::McpResourceContents::Blob(
+                crate::generated::records::mcp::blob_resource_contents_from_py(obj)?,
+            ));
+        }
+        Err(super::not_a(obj, "ResourceContents"))
+    }
+
+    pub fn resource_contents_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpResourceContents,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::llm::mcp::McpResourceContents::Text(x) => {
+                crate::generated::records::mcp::text_resource_contents_to_py(py, x)?
+            }
+            ::lk_agents_abi::llm::mcp::McpResourceContents::Blob(x) => {
+                crate::generated::records::mcp::blob_resource_contents_to_py(py, x)?
+            }
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+    static TEXT_RESOURCE_CONTENTS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn text_resource_contents_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::mcp::McpTextResource> {
+        let py = obj.py();
+        if !obj.is_instance(TEXT_RESOURCE_CONTENTS.import(
+            py,
+            "livekit.agents._generated.mcp",
+            "TextResourceContents",
+        )?)? {
+            return Err(super::not_a(obj, "TextResourceContents"));
+        }
+        Ok(::lk_agents_abi::llm::mcp::McpTextResource {
+            uri: crate::py_values::attr_with(obj, "TextResourceContents", "uri", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            mime_type: crate::py_values::attr_with(
+                obj,
+                "TextResourceContents",
+                "mime_type",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (v.extract::<::std::string::String>()).map(Some)
+                    }
+                },
+            )?,
+            text: crate::py_values::attr_with(obj, "TextResourceContents", "text", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            meta: crate::py_values::attr_with(obj, "TextResourceContents", "meta", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (match crate::py_values::value_from_py(v, "TextResourceContents.meta")? {
+                        ::serde_json::Value::Object(map) => Ok(map),
+                        _ => Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "TextResourceContents.meta: expected a dict",
+                        )),
+                    })
+                    .map(Some)
+                }
+            })?,
+        })
+    }
+
+    pub fn text_resource_contents_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpTextResource,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::mcp::McpTextResource { uri, mime_type, text, meta } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("uri", ::pyo3::IntoPyObjectExt::into_bound_py_any(uri, py)?)?;
+        kwargs.set_item(
+            "mime_type",
+            match mime_type {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+        kwargs.set_item(
+            "meta",
+            match meta {
+                None => py.None().into_bound(py),
+                Some(x) => crate::py_values::extra_to_py(py, &x)?.into_any(),
+            },
+        )?;
+        crate::py_calls::call(
+            TEXT_RESOURCE_CONTENTS
+                .import(py, "livekit.agents._generated.mcp", "TextResourceContents")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+    static BLOB_RESOURCE_CONTENTS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn blob_resource_contents_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::mcp::McpBlobResource> {
+        let py = obj.py();
+        if !obj.is_instance(BLOB_RESOURCE_CONTENTS.import(
+            py,
+            "livekit.agents._generated.mcp",
+            "BlobResourceContents",
+        )?)? {
+            return Err(super::not_a(obj, "BlobResourceContents"));
+        }
+        Ok(::lk_agents_abi::llm::mcp::McpBlobResource {
+            uri: crate::py_values::attr_with(obj, "BlobResourceContents", "uri", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            mime_type: crate::py_values::attr_with(
+                obj,
+                "BlobResourceContents",
+                "mime_type",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (v.extract::<::std::string::String>()).map(Some)
+                    }
+                },
+            )?,
+            blob: crate::py_values::attr_with(obj, "BlobResourceContents", "blob", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            meta: crate::py_values::attr_with(obj, "BlobResourceContents", "meta", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (match crate::py_values::value_from_py(v, "BlobResourceContents.meta")? {
+                        ::serde_json::Value::Object(map) => Ok(map),
+                        _ => Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "BlobResourceContents.meta: expected a dict",
+                        )),
+                    })
+                    .map(Some)
+                }
+            })?,
+        })
+    }
+
+    pub fn blob_resource_contents_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpBlobResource,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::mcp::McpBlobResource { uri, mime_type, blob, meta } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("uri", ::pyo3::IntoPyObjectExt::into_bound_py_any(uri, py)?)?;
+        kwargs.set_item(
+            "mime_type",
+            match mime_type {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item("blob", ::pyo3::IntoPyObjectExt::into_bound_py_any(blob, py)?)?;
+        kwargs.set_item(
+            "meta",
+            match meta {
+                None => py.None().into_bound(py),
+                Some(x) => crate::py_values::extra_to_py(py, &x)?.into_any(),
+            },
+        )?;
+        crate::py_calls::call(
+            BLOB_RESOURCE_CONTENTS
+                .import(py, "livekit.agents._generated.mcp", "BlobResourceContents")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+    static RESOURCE_LINK: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn resource_link_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::mcp::McpResourceLink> {
+        let py = obj.py();
+        if !obj.is_instance(RESOURCE_LINK.import(
+            py,
+            "livekit.agents._generated.mcp",
+            "ResourceLink",
+        )?)? {
+            return Err(super::not_a(obj, "ResourceLink"));
+        }
+        Ok(::lk_agents_abi::llm::mcp::McpResourceLink {
+            uri: crate::py_values::attr_with(obj, "ResourceLink", "uri", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            name: crate::py_values::attr_with(obj, "ResourceLink", "name", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            title: crate::py_values::attr_with(obj, "ResourceLink", "title", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+            description: crate::py_values::attr_with(obj, "ResourceLink", "description", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+            mime_type: crate::py_values::attr_with(obj, "ResourceLink", "mime_type", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+            size: crate::py_values::attr_with(obj, "ResourceLink", "size", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<u64>(v, "ResourceLink.size")).map(Some)
+                }
+            })?,
+            icons: crate::py_values::attr_with(obj, "ResourceLink", "icons", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (if v.is_instance_of::<::pyo3::types::PyList>()
+                        || v.is_instance_of::<::pyo3::types::PyTuple>()
+                    {
+                        v.try_iter()?
+                            .map(|item| {
+                                let item = &item?;
+                                crate::generated::records::mcp::icon_from_py(item)
+                            })
+                            .collect::<PyResult<Vec<_>>>()
+                    } else {
+                        Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "ResourceLink.icons: expected a list or tuple",
+                        ))
+                    })
+                    .map(Some)
+                }
+            })?,
+            meta: crate::py_values::attr_with(obj, "ResourceLink", "meta", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (match crate::py_values::value_from_py(v, "ResourceLink.meta")? {
+                        ::serde_json::Value::Object(map) => Ok(map),
+                        _ => Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "ResourceLink.meta: expected a dict",
+                        )),
+                    })
+                    .map(Some)
+                }
+            })?,
+            annotations: crate::py_values::attr_with(obj, "ResourceLink", "annotations", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::mcp::annotations_from_py(v)).map(Some)
+                }
+            })?,
+        })
+    }
+
+    pub fn resource_link_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpResourceLink,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::mcp::McpResourceLink {
+            uri,
+            name,
+            title,
+            description,
+            mime_type,
+            size,
+            icons,
+            meta,
+            annotations,
+        } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("uri", ::pyo3::IntoPyObjectExt::into_bound_py_any(uri, py)?)?;
+        kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
+        kwargs.set_item(
+            "title",
+            match title {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "description",
+            match description {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "mime_type",
+            match mime_type {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "size",
+            match size {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "icons",
+            match icons {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::types::PyList::new(
+                    py,
+                    x.into_iter()
+                        .map(|x| crate::generated::records::mcp::icon_to_py(py, x))
+                        .collect::<PyResult<Vec<_>>>()?,
+                )?
+                .into_any(),
+            },
+        )?;
+        kwargs.set_item(
+            "meta",
+            match meta {
+                None => py.None().into_bound(py),
+                Some(x) => crate::py_values::extra_to_py(py, &x)?.into_any(),
+            },
+        )?;
+        kwargs.set_item(
+            "annotations",
+            match annotations {
+                None => py.None().into_bound(py),
+                Some(x) => crate::generated::records::mcp::annotations_to_py(py, x)?,
+            },
+        )?;
+        crate::py_calls::call(
+            RESOURCE_LINK.import(py, "livekit.agents._generated.mcp", "ResourceLink")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+    static ICON: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn icon_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::mcp::McpIcon> {
+        let py = obj.py();
+        if !obj.is_instance(ICON.import(py, "livekit.agents._generated.mcp", "Icon")?)? {
+            return Err(super::not_a(obj, "Icon"));
+        }
+        Ok(::lk_agents_abi::llm::mcp::McpIcon {
+            src: crate::py_values::attr_with(obj, "Icon", "src", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            mime_type: crate::py_values::attr_with(obj, "Icon", "mime_type", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+            sizes: crate::py_values::attr_with(obj, "Icon", "sizes", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (if v.is_instance_of::<::pyo3::types::PyList>()
+                        || v.is_instance_of::<::pyo3::types::PyTuple>()
+                    {
+                        v.try_iter()?
+                            .map(|item| {
+                                let item = &item?;
+                                item.extract::<::std::string::String>()
+                            })
+                            .collect::<PyResult<Vec<_>>>()
+                    } else {
+                        Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "Icon.sizes: expected a list or tuple",
+                        ))
+                    })
+                    .map(Some)
+                }
+            })?,
+            theme: crate::py_values::attr_with(obj, "Icon", "theme", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::mcp::icon_theme_from_py(v)).map(Some)
+                }
+            })?,
+        })
+    }
+
+    pub fn icon_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpIcon,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::mcp::McpIcon { src, mime_type, sizes, theme } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("src", ::pyo3::IntoPyObjectExt::into_bound_py_any(src, py)?)?;
+        kwargs.set_item(
+            "mime_type",
+            match mime_type {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "sizes",
+            match sizes {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::types::PyList::new(
+                    py,
+                    x.into_iter()
+                        .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
+                        .collect::<PyResult<Vec<_>>>()?,
+                )?
+                .into_any(),
+            },
+        )?;
+        kwargs.set_item(
+            "theme",
+            match theme {
+                None => py.None().into_bound(py),
+                Some(x) => crate::generated::records::mcp::icon_theme_to_py(py, x)?,
+            },
+        )?;
+        crate::py_calls::call(
+            ICON.import(py, "livekit.agents._generated.mcp", "Icon")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+
+    pub fn icon_theme_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::mcp::McpIconTheme> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "light" => Ok(::lk_agents_abi::llm::mcp::McpIconTheme::Light),
+            "dark" => Ok(::lk_agents_abi::llm::mcp::McpIconTheme::Dark),
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "IconTheme: {other:?} is not one of 'light', 'dark'"
+            ))),
+        }
+    }
+
+    pub fn icon_theme_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpIconTheme,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::llm::mcp::McpIconTheme::Light => "light",
+            ::lk_agents_abi::llm::mcp::McpIconTheme::Dark => "dark",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+    static ANNOTATIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn annotations_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::llm::mcp::McpAnnotations> {
+        let py = obj.py();
+        if !obj.is_instance(ANNOTATIONS.import(
+            py,
+            "livekit.agents._generated.mcp",
+            "Annotations",
+        )?)? {
+            return Err(super::not_a(obj, "Annotations"));
+        }
+        Ok(::lk_agents_abi::llm::mcp::McpAnnotations {
+            audience: crate::py_values::attr_with(obj, "Annotations", "audience", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (if v.is_instance_of::<::pyo3::types::PyList>()
+                        || v.is_instance_of::<::pyo3::types::PyTuple>()
+                    {
+                        v.try_iter()?
+                            .map(|item| {
+                                let item = &item?;
+                                crate::generated::records::mcp::role_from_py(item)
+                            })
+                            .collect::<PyResult<Vec<_>>>()
+                    } else {
+                        Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "Annotations.audience: expected a list or tuple",
+                        ))
+                    })
+                    .map(Some)
+                }
+            })?,
+            priority: crate::py_values::attr_with(obj, "Annotations", "priority", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(v, "Annotations.priority")).map(Some)
+                }
+            })?,
+            last_modified: crate::py_values::attr_with(obj, "Annotations", "last_modified", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+        })
+    }
+
+    pub fn annotations_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpAnnotations,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::mcp::McpAnnotations { audience, priority, last_modified } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "audience",
+            match audience {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::types::PyList::new(
+                    py,
+                    x.into_iter()
+                        .map(|x| crate::generated::records::mcp::role_to_py(py, x))
+                        .collect::<PyResult<Vec<_>>>()?,
+                )?
+                .into_any(),
+            },
+        )?;
+        kwargs.set_item(
+            "priority",
+            match priority {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        kwargs.set_item(
+            "last_modified",
+            match last_modified {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        crate::py_calls::call(
+            ANNOTATIONS.import(py, "livekit.agents._generated.mcp", "Annotations")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+
+    pub fn role_from_py(obj: &Bound<'_, PyAny>) -> PyResult<::lk_agents_abi::llm::mcp::McpRole> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "user" => Ok(::lk_agents_abi::llm::mcp::McpRole::User),
+            "assistant" => Ok(::lk_agents_abi::llm::mcp::McpRole::Assistant),
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "Role: {other:?} is not one of 'user', 'assistant'"
+            ))),
+        }
+    }
+
+    pub fn role_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::mcp::McpRole,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::llm::mcp::McpRole::User => "user",
+            ::lk_agents_abi::llm::mcp::McpRole::Assistant => "assistant",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
 }
 
 pub mod metrics {
@@ -14756,6 +15948,15 @@ pub mod session_options {
                 ),
                 _ => None,
             },
+            final_transcript_timeout: match obj.get_item("final_transcript_timeout")? {
+                Some(v) if !crate::py_values::is_not_given(&v)? => {
+                    (crate::py_values::number_from_py::<f64>(
+                        v.as_any(),
+                        "SessionKwargs.final_transcript_timeout",
+                    ))?
+                }
+                _ => 2.0,
+            },
             session_close_transcript_timeout: match obj
                 .get_item("session_close_transcript_timeout")?
             {
@@ -15081,6 +16282,7 @@ pub mod session_options {
             ivr_detection,
             user_away_timeout,
             transcription_timeout,
+            final_transcript_timeout,
             aec_warmup_duration,
             session_close_transcript_timeout,
         } = value;
@@ -15158,6 +16360,10 @@ pub mod session_options {
                 None => py.None().into_bound(py),
                 Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
             },
+        )?;
+        dict.set_item(
+            "final_transcript_timeout",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(final_transcript_timeout, py)?,
         )?;
         dict.set_item(
             "aec_warmup_duration",
@@ -18884,8 +20090,9 @@ pub mod stt {
             "final_transcript" => Ok(::lk_agents_abi::SpeechEventType::FinalTranscript),
             "recognition_usage" => Ok(::lk_agents_abi::SpeechEventType::RecognitionUsage),
             "end_of_speech" => Ok(::lk_agents_abi::SpeechEventType::EndOfSpeech),
+            "end_of_speech_pending" => Ok(::lk_agents_abi::SpeechEventType::EndOfSpeechPending),
             other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
-                "SpeechEventType: {other:?} is not one of 'start_of_speech', 'interim_transcript', 'preflight_transcript', 'final_transcript', 'recognition_usage', 'end_of_speech'"
+                "SpeechEventType: {other:?} is not one of 'start_of_speech', 'interim_transcript', 'preflight_transcript', 'final_transcript', 'recognition_usage', 'end_of_speech', 'end_of_speech_pending'"
             ))),
         }
     }
@@ -18901,6 +20108,7 @@ pub mod stt {
             ::lk_agents_abi::SpeechEventType::FinalTranscript => "final_transcript",
             ::lk_agents_abi::SpeechEventType::RecognitionUsage => "recognition_usage",
             ::lk_agents_abi::SpeechEventType::EndOfSpeech => "end_of_speech",
+            ::lk_agents_abi::SpeechEventType::EndOfSpeechPending => "end_of_speech_pending",
         };
         crate::py_calls::call(
             SPEECH_EVENT_TYPE
@@ -27208,6 +28416,22 @@ pub mod websocket {
                     }
                 },
             )?,
+            max_message_size: crate::py_values::attr_with(
+                obj,
+                "WebSocketTarget",
+                "max_message_size",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (crate::py_values::number_from_py::<u64>(
+                            v,
+                            "WebSocketTarget.max_message_size",
+                        ))
+                        .map(Some)
+                    }
+                },
+            )?,
         })
     }
 
@@ -27236,6 +28460,12 @@ pub mod websocket {
             frame: crate::py_values::attr_with(obj, "WebSocketKeepaliveFrame", "frame", |v| {
                 crate::generated::records::websocket::ws_frame_from_py(v)
             })?,
+            only_while_unused: crate::py_values::attr_with(
+                obj,
+                "WebSocketKeepaliveFrame",
+                "only_while_unused",
+                |v| v.extract::<bool>(),
+            )?,
         })
     }
 
@@ -27320,38 +28550,22 @@ pub mod websocket {
                 "awaits_ready",
                 |v| v.extract::<bool>(),
             )?,
-            input_idle: crate::py_values::attr_with(
-                obj,
-                "WebSocketConnection",
-                "input_idle",
-                |v| {
-                    if v.is_none() {
-                        Ok(None)
-                    } else {
-                        (crate::py_values::number_from_py::<f64>(
-                            v,
-                            "WebSocketConnection.input_idle",
-                        ))
-                        .map(Some)
-                    }
-                },
-            )?,
-            context_keepalive: crate::py_values::attr_with(
-                obj,
-                "WebSocketConnection",
-                "context_keepalive",
-                |v| {
-                    if v.is_none() {
-                        Ok(None)
-                    } else {
-                        (crate::py_values::number_from_py::<f64>(
-                            v,
-                            "WebSocketConnection.context_keepalive",
-                        ))
-                        .map(Some)
-                    }
-                },
-            )?,
+            goodbye: crate::py_values::attr_with(obj, "WebSocketConnection", "goodbye", |v| {
+                if v.is_instance_of::<::pyo3::types::PyList>()
+                    || v.is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    v.try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            crate::generated::records::websocket::ws_frame_from_py(item)
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "WebSocketConnection.goodbye: expected a list or tuple",
+                    ))
+                }
+            })?,
         })
     }
 
@@ -27419,6 +28633,9 @@ pub mod websocket {
                     (v.extract::<::std::string::String>()).map(Some)
                 }
             })?,
+            response: crate::py_values::attr_with(obj, "WebSocketRead", "response", |v| {
+                v.extract::<bool>()
+            })?,
         })
     }
 
@@ -27454,6 +28671,74 @@ pub mod websocket {
             })?,
             ready: crate::py_values::attr_with(obj, "WebSocketMuxRoute", "ready", |v| {
                 v.extract::<bool>()
+            })?,
+            ended_context: crate::py_values::attr_with(
+                obj,
+                "WebSocketMuxRoute",
+                "ended_context",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (v.extract::<::std::string::String>()).map(Some)
+                    }
+                },
+            )?,
+        })
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/utils/websocket.rs.
+    static WEB_SOCKET_CONTEXTS_CANCEL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn web_socket_contexts_cancel_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::utils::websocket::WebSocketContextsCancel> {
+        let py = obj.py();
+        if !obj.is_instance(WEB_SOCKET_CONTEXTS_CANCEL.import(
+            py,
+            "livekit.agents._generated.websocket",
+            "WebSocketContextsCancel",
+        )?)? {
+            return Err(super::not_a(obj, "WebSocketContextsCancel"));
+        }
+        Ok(::lk_agents_abi::utils::websocket::WebSocketContextsCancel {
+            contexts: crate::py_values::attr_with(
+                obj,
+                "WebSocketContextsCancel",
+                "contexts",
+                |v| {
+                    if v.is_instance_of::<::pyo3::types::PyList>()
+                        || v.is_instance_of::<::pyo3::types::PyTuple>()
+                    {
+                        v.try_iter()?
+                            .map(|item| {
+                                let item = &item?;
+                                item.extract::<::std::string::String>()
+                            })
+                            .collect::<PyResult<Vec<_>>>()
+                    } else {
+                        Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "WebSocketContextsCancel.contexts: expected a list or tuple",
+                        ))
+                    }
+                },
+            )?,
+            frames: crate::py_values::attr_with(obj, "WebSocketContextsCancel", "frames", |v| {
+                if v.is_instance_of::<::pyo3::types::PyList>()
+                    || v.is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    v.try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            crate::generated::records::websocket::ws_frame_from_py(item)
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "WebSocketContextsCancel.frames: expected a list or tuple",
+                    ))
+                }
             })?,
         })
     }
@@ -27528,6 +28813,18 @@ pub mod websocket {
             routed: crate::py_values::attr_with(obj, "WebSocketMuxOptions", "routed", |v| {
                 v.extract::<bool>()
             })?,
+            reuses_sockets: crate::py_values::attr_with(
+                obj,
+                "WebSocketMuxOptions",
+                "reuses_sockets",
+                |v| v.extract::<bool>(),
+            )?,
+            reads_cancel_end: crate::py_values::attr_with(
+                obj,
+                "WebSocketMuxOptions",
+                "reads_cancel_end",
+                |v| v.extract::<bool>(),
+            )?,
         })
     }
 }

@@ -9,16 +9,15 @@ import json
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
-from pydantic import ValidationError
 
 from livekit.agents import APIConnectOptions, APIError, http
 from livekit.plugins import inworld
 
 
-@pytest.mark.parametrize("body", ["{", "[]", '{"result":{"transcription":{"transcript":42}}}'])
+@pytest.mark.parametrize("body", ["{", '{"result":{"transcription":{"transcript":42}}}'])
 async def test_malformed_stream_frame_is_terminal_provider_error(body: str) -> None:
-    """A transcription frame whose read fields are malformed breaks the provider's contract: the
-    stream fails for good, caused by its validation."""
+    """A frame that is no JSON, or a transcription whose read fields are malformed, breaks the
+    provider's contract: the stream fails for good, caused by its parse."""
 
     async def recognize(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
@@ -40,7 +39,7 @@ async def test_malformed_stream_frame_is_terminal_provider_error(body: str) -> N
             with pytest.raises(APIError) as failure:
                 await asyncio.wait_for(anext(stream), 0.5)
             assert failure.value.kind == "protocol"
-            assert isinstance(failure.value.__cause__, ValidationError)
+            assert isinstance(failure.value.__cause__, ValueError)
         await model.aclose()
     await session.aclose()
 

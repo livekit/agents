@@ -93,14 +93,9 @@ test:
 	"$(CARGO_RUNNER)" test --locked -q --workspace --exclude lk-agents-py --exclude lk-agents-fuzz
 
 PYTHON_HOME = $(shell "$(PYO3_PYTHON)" -c 'import sys; print(sys.base_prefix)')
-SITE_PACKAGES = $(shell "$(PYO3_PYTHON)" -c 'import site; print(site.getsitepackages()[0])')
-
-# The abi tests behind `python` set process globals (fork guard, cached host classes): nextest
-# gives each its own process.
+# The binding crate's separate test targets isolate interpreter and process globals.
 test-bindings:
 	PYTHONHOME="$(PYTHON_HOME)" "$(CARGO_RUNNER)" test --locked -q -p lk-agents-py --features ffmpeg
-	PYTHONHOME="$(PYTHON_HOME)" PYTHONPATH="$(SITE_PACKAGES)" "$(CARGO_RUNNER)" nextest run --locked \
-		--cargo-quiet --status-level fail --final-status-level fail -p lk-agents-abi --features python
 
 dst:
 	crates/lk-agents-fuzz/dst.sh

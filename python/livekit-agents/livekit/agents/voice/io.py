@@ -418,8 +418,8 @@ class SpeechHandle(_facades.SpeechHandle):
     @staticmethod
     def _of(core: _core.SpeechHandle) -> SpeechHandle:
         ref = core.host
-        handle = ref() if ref is not None else None
-        return handle or SpeechHandle(core)
+        handle = ref() if isinstance(ref, weakref.ref) else None
+        return handle if isinstance(handle, SpeechHandle) else SpeechHandle(core)
 
     async def wait_for_playout(self) -> None:
         from ._session_callbacks import _origin

@@ -105,6 +105,11 @@ async fn a_returned_stream_nobody_took_is_closed() {
     // Started on its loop by the first poll, returned meanwhile, then abandoned unread.
     let first = std::future::poll_fn(|cx| std::task::Poll::Ready(entered.as_mut().poll(cx))).await;
     assert!(first.is_pending());
+    Python::attach(|py| {
+        let g = g.bind(py);
+        let set = g.getattr("gate").unwrap().getattr("set").unwrap();
+        g.getattr("loop").unwrap().call_method1("call_soon_threadsafe", (set,)).unwrap();
+    });
     signalled(&g, "tracked_returned", "[]");
     drop(entered);
     signalled(&g, "tracked_closed", "['tracked closed']");

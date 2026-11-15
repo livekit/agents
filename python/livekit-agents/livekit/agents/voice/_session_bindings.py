@@ -111,7 +111,7 @@ def initialize(
     options: SessionKwargs,
 ) -> None:
     session._conn_options = conn_options or SessionConnectOptions()
-    session._options = _core.SessionOptions(options, session._conn_options)
+    session._session_options = _core.SessionOptions(options, session._conn_options)
     session._stt_context = stt_context_options if is_given(stt_context_options) else None
 
     stt_model = inference.STT.from_model_string(stt) if isinstance(stt, str) else stt or None
@@ -411,8 +411,9 @@ class SessionHost:
         storage = session._native.storage
         assert storage is not None
         if session._bound_context is not None:
-            session._store = session._bound_context.store
-            session._session_binding = session._store._bind_session(session._context)
+            store = session._bound_context.store
+            session._store = store
+            session._session_binding = store._bind_session(session._context)
             session._session_binding.voice_history = lambda: list(session.history.items)
             try:
                 session._session_binding.validate_voice(agent.name)

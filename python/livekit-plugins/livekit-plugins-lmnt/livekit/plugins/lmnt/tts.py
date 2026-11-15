@@ -180,23 +180,23 @@ class TTS(tts.TTS):
             pacing: A ``SentenceStreamPacer``, or ``None`` to send each chunk as soon as it is
                 split.
         """
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if is_given(model):
-            self._opts.model = model
-        if is_given(voice):
-            self._opts.voice = voice
-        if is_given(language):
-            self._opts.language = language
-        if is_given(format):
-            self._opts.format = format
-        if is_given(sample_rate):
-            self._opts.sample_rate = sample_rate
-            # keep the base class property in sync; the framework reads tts.sample_rate
-            self._sample_rate = int(sample_rate)
-        if is_given(temperature):
-            self._opts.temperature = temperature
-        if is_given(top_p):
-            self._opts.top_p = top_p
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            if is_given(model):
+                self._opts.model = model
+            if is_given(voice):
+                self._opts.voice = voice
+            if is_given(language):
+                self._opts.language = language
+            if is_given(format):
+                self._opts.format = format
+            if is_given(sample_rate):
+                self._opts.sample_rate = sample_rate
+                # keep the base class property in sync; the framework reads tts.sample_rate
+                self._sample_rate = int(sample_rate)
+            if is_given(temperature):
+                self._opts.temperature = temperature
+            if is_given(top_p):
+                self._opts.top_p = top_p
 
     def _ensure_session(self) -> http.HttpSession:
         if not self._session:

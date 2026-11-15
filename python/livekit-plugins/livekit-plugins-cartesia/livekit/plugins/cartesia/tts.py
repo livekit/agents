@@ -215,10 +215,10 @@ class TTS(tts.TTS):
         )
 
         if speed or emotion or volume or pronunciation_dict_id:
-            self._check_generation_config()
+            _check_generation_config(self._opts)
 
         self._session = http_session
-        self._mux = _Mux(self._opts)
+        self._mux = _Mux(self)
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
         if word_timestamps:
@@ -292,31 +292,35 @@ class TTS(tts.TTS):
             pacing (tts.SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or
                 ``None`` to send each chunk as soon as it is split.
         """
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if is_given(model):
-            self._opts.model = model
-        if is_given(language):
-            self._opts.language = LanguageCode(language) if language else None
-        if is_given(voice):
-            self._opts.voice = voice
-        if is_given(speed):
-            self._opts.speed = cast(TTSVoiceSpeed | float, speed)
-        if is_given(emotion):
-            emotion = [emotion] if isinstance(emotion, str) else emotion
-            self._opts.emotion = emotion
-        if is_given(volume):
-            self._opts.volume = volume
-        if is_given(pronunciation_dict_id):
-            self._opts.pronunciation_dict_id = pronunciation_dict_id
-        if is_given(api_version) and api_version != self._opts.api_version:
-            self._opts.api_version = api_version
-            # cartesia_version is a query parameter on the websocket URL, so a shared
-            # socket keeps speaking the version it was opened with while
-            # _to_cartesia_options starts shaping the body for the new one.
-            self._mux.invalidate()
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            opts = replace(self._opts)
+            if is_given(model):
+                opts.model = model
+            if is_given(language):
+                opts.language = LanguageCode(language) if language else None
+            if is_given(voice):
+                opts.voice = voice
+            if is_given(speed):
+                opts.speed = cast(TTSVoiceSpeed | float, speed)
+            if is_given(emotion):
+                emotion = [emotion] if isinstance(emotion, str) else emotion
+                opts.emotion = emotion
+            if is_given(volume):
+                opts.volume = volume
+            if is_given(pronunciation_dict_id):
+                opts.pronunciation_dict_id = pronunciation_dict_id
+            if is_given(api_version):
+                opts.api_version = api_version
 
-        if speed or emotion or volume or pronunciation_dict_id:
-            self._check_generation_config()
+            if speed or emotion or volume or pronunciation_dict_id:
+                _check_generation_config(opts)
+        # cartesia_version is a query parameter on the websocket URL, so a shared socket keeps
+        # speaking the version it was opened with while _to_cartesia_options starts shaping the
+        # body for the new one.
+        version_changed = opts.api_version != self._opts.api_version
+        self._opts = opts
+        if version_changed:
+            self._mux.invalidate()
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
@@ -341,37 +345,31 @@ class TTS(tts.TTS):
         self._streams.clear()
         await self._mux.aclose()
 
-    def _check_generation_config(self) -> None:
-        if _is_sonic_3(self._opts.model):
-            if self._opts.speed:
-                if not isinstance(self._opts.speed, float):
-                    raise ValueError("speed must be a float for sonic-3")
-                if not 0.6 <= self._opts.speed <= 2.0:
-                    logger.warning("speed must be between 0.6 and 2.0 for sonic-3")
-            if self._opts.volume is not None and not 0.5 <= self._opts.volume <= 2.0:
-                logger.warning("volume must be between 0.5 and 2.0 for sonic-3")
-        elif (
-            self._opts.api_version != API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
-            or self._opts.model != MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
-        ):
-            logger.warning(
-                f"speed and emotion controls are only supported for model '{MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', and API version '{API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', "
-                "see https://docs.cartesia.ai/developer-tools/changelog for details",
-                extra={
-                    "model": self._opts.model,
-                    "speed": self._opts.speed,
-                    "emotion": self._opts.emotion,
-                },
-            )
 
-        if self._opts.pronunciation_dict_id and not _is_sonic_3(self._opts.model):
-            logger.warning(
-                "pronunciation_dict_id is only supported for sonic-3 models",
-                extra={
-                    "model": self._opts.model,
-                    "pronunciation_dict_id": self._opts.pronunciation_dict_id,
-                },
-            )
+def _check_generation_config(opts: _TTSOptions) -> None:
+    if _is_sonic_3(opts.model):
+        if opts.speed:
+            if not isinstance(opts.speed, float):
+                raise ValueError("speed must be a float for sonic-3")
+            if not 0.6 <= opts.speed <= 2.0:
+                logger.warning("speed must be between 0.6 and 2.0 for sonic-3")
+        if opts.volume is not None and not 0.5 <= opts.volume <= 2.0:
+            logger.warning("volume must be between 0.5 and 2.0 for sonic-3")
+    elif (
+        opts.api_version != API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
+        or opts.model != MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
+    ):
+        logger.warning(
+            f"speed and emotion controls are only supported for model '{MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', and API version '{API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', "
+            "see https://docs.cartesia.ai/developer-tools/changelog for details",
+            extra={"model": opts.model, "speed": opts.speed, "emotion": opts.emotion},
+        )
+
+    if opts.pronunciation_dict_id and not _is_sonic_3(opts.model):
+        logger.warning(
+            "pronunciation_dict_id is only supported for sonic-3 models",
+            extra={"model": opts.model, "pronunciation_dict_id": opts.pronunciation_dict_id},
+        )
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -424,14 +422,16 @@ class _Mux(tts.WebSocketMultiplexer[_Message, _Speak | _Cancel]):
 
     max_session_duration = 300
 
-    def __init__(self, opts: _TTSOptions) -> None:
-        self._opts = opts
+    def __init__(self, owner: TTS) -> None:
+        self._owner = owner
 
     async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        # the TTS's options as they are now: update_options replaces them
+        opts = self._owner._opts
         return tts.WebSocketTarget(
-            self._opts.get_ws_url("/tts/websocket"),
-            headers={"User-Agent": USER_AGENT, API_AUTH_HEADER: self._opts.api_key},
-            params={"cartesia_version": self._opts.api_version},
+            opts.get_ws_url("/tts/websocket"),
+            headers={"User-Agent": USER_AGENT, API_AUTH_HEADER: opts.api_key},
+            params={"cartesia_version": opts.api_version},
             request_id_header=REQUEST_ID_HEADER,
         )
 

@@ -3,12 +3,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Generic, Literal
 
 from .. import _bindings, _core
 from ..log import logger
 from . import realtime_availability
-from .realtime import RealtimeModel
+from .realtime import RealtimeModel, TEvent
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from .llm_fallback import AvailabilityChanged
 
 
-class RealtimeModelFallbackAdapter(_core.RealtimeFallbackModel, RealtimeModel[Literal["realtime_availability_changed"]]):
+class RealtimeModelFallbackAdapter(_core.RealtimeFallbackModel, RealtimeModel[Literal["realtime_availability_changed"] | TEvent], Generic[TEvent]):
     """`llm.RealtimeModelFallbackAdapter`: falls back between realtime models (or restarts one),
     preserving chat context and handlers. A failed model is skipped until its cooldown ends, the
     conversation is replayed onto the next one, and a reply cut by the swap is asked for again.
@@ -27,6 +27,10 @@ class RealtimeModelFallbackAdapter(_core.RealtimeFallbackModel, RealtimeModel[Li
         _members: list[RealtimeModel]
 
         def _core_failed(self, error: BaseException, recoverable: bool) -> None: ...
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.refuse_overrides(cls, ("session",), "session.llm_node")
 
     def __init__(
         self,

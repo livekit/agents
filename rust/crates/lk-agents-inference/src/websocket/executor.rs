@@ -13,9 +13,7 @@ use lk_agents_net::signal;
 use lk_agents_net::transport::{WsReceiver, WsSender};
 use parking_lot::Mutex;
 
-use super::connection::{
-    Connection, ConnectionOptions, Finish, Keepalive, Readiness, WebSocketEffect,
-};
+use super::connection::{Connection, ConnectionOptions, Finish, Readiness, WebSocketEffect};
 use super::liveness::{Beat, Liveness};
 use super::mux::Context;
 use super::{DEFAULT_WAIT, Inbound, Links, Session, close_by, lost, open_direct, recv_heard, send};
@@ -103,8 +101,10 @@ impl<'a> Input<'a> {
 /// A control message being taken.
 type TakingControl<'a> = BoxFuture<'a, Result<Vec<WsFrame>, ProviderError>>;
 
-/// The control message being taken; the host hands over only messages sent for the connection
-/// open when it does, so the taking survives a connection's end.
+/// The control message one connection is taking. The host hands over only messages sent for the
+/// connection open when it does, and runs its take on its own: one it completed after the
+/// connection ended (sent while none was open) belongs to no connection, so the take ends with its
+/// connection, never carried to the next. Dropping a pending take leaves its message queued.
 #[derive(Default)]
 struct Controls<'a> {
     taking: Option<TakingControl<'a>>,
@@ -127,7 +127,6 @@ impl<'a> Controls<'a> {
 #[derive(Default)]
 struct Carried<'a> {
     input: Input<'a>,
-    controls: Controls<'a>,
 }
 
 /// `run()`: attempts under `conn_options`, each one connection after another until the stream
@@ -273,9 +272,19 @@ async fn open(
 ) -> Result<(Owned<Link>, ConnectionOptions, Vec<WsFrame>), ProviderError> {
     let reply_limit =
         session.conn_options.read_timeout.map_or(DEFAULT_WAIT, Duration::from_secs_f64);
+    // the stream's own, read at each connection whether it is direct or shared
+    let input_idle = session.host.input_idle_after().map_err(ProviderError::from)?;
+    let input_idle = seconds(input_idle, "input_idle_after")?;
+    let response_idle = session.host.response_idle_after().map_err(ProviderError::from)?;
+    let response_idle = seconds(response_idle, "response_idle_after")?;
     match &session.links {
         Links::Direct(transports) => {
             let connection = session.host.connect(cx, session.conn_options).await?;
+            if connection.keepalive.as_ref().is_some_and(|k| k.only_while_unused) {
+                let message = "a keepalive only while unused is a multiplexer's: a stream's own \
+                               socket is always in use";
+                return Err(ApiError::new(ErrorKind::InvalidRequest, message).into());
+            }
             let clock = session.env.clock.as_ref();
             // the connect limit covers the handshake and the provider's readiness
             let ready_by = ready_by(clock, &session.conn_options);
@@ -288,7 +297,8 @@ async fn open(
                 .and_then(|name| receiver.response_header(name));
             opened(session, request_id);
             let link = Link::owned(background, sender, Source::Direct(receiver));
-            let mut options = options(&connection, reply_limit)?;
+            let mut options = options(&connection, reply_limit, input_idle)?;
+            options.response_idle = response_idle;
             if connection.awaits_ready {
                 options.readiness = Readiness::Awaited { by: ready_by };
             }
@@ -299,19 +309,20 @@ async fn open(
             let context = mux.acquire(cx, &session.conn_options, context_id.clone(), host).await?;
             let sender = context.sender();
             opened(session, context.request_id());
-            let keepalive = context.context_keepalive().map(|every| (every, Keepalive::Contexts));
             let link = Link::owned(background, sender, Source::Shared(context));
             if let Source::Shared(context) = &link.inbound {
                 context.open(cx).await?;
             }
             // the socket's own keepalive, readiness and rotation belong to the shared socket
             let options = ConnectionOptions {
-                keepalive,
+                keepalive: None,
                 max_session_duration: None,
                 reply_limit,
                 readiness: Readiness::Open,
                 ping: None,
-                input_idle: None,
+                input_idle,
+                response_idle,
+                goodbye: Vec::new(),
             };
             Ok((link, options, Vec::new()))
         }
@@ -345,10 +356,11 @@ pub(super) fn seconds(value: Option<f64>, what: &str) -> Result<Option<Duration>
 pub(super) fn options(
     connection: &WebSocketConnection,
     reply_limit: Duration,
+    input_idle: Option<Duration>,
 ) -> Result<ConnectionOptions, ApiError> {
     let keepalive = match &connection.keepalive {
         Some(keepalive) => seconds(Some(keepalive.interval), "keepalive.interval")?
-            .map(|every| (every, Keepalive::Frame(keepalive.frame.clone()))),
+            .map(|every| (every, keepalive.frame.clone())),
         None => None,
     };
     Ok(ConnectionOptions {
@@ -357,7 +369,9 @@ pub(super) fn options(
         reply_limit,
         readiness: Readiness::Open,
         ping: seconds(connection.ping_interval, "ping_interval")?,
-        input_idle: seconds(connection.input_idle, "input_idle")?,
+        input_idle,
+        response_idle: None,
+        goodbye: connection.goodbye.clone(),
     })
 }
 
@@ -420,8 +434,8 @@ impl Loops<'_> {
         for effect in effects {
             let frames = match effect {
                 WebSocketEffect::Send(frame) => vec![frame],
-                WebSocketEffect::KeepContexts => self.session.host.keep_context(self.cx).await?,
                 WebSocketEffect::InputIdle => self.session.host.input_idle(self.cx).await?,
+                WebSocketEffect::ResponseIdle => self.session.host.response_idle(self.cx).await?,
                 WebSocketEffect::Finish(finish) => return Ok(Some(finish)),
                 WebSocketEffect::Fail(error) => return Err(error.into()),
             };
@@ -460,7 +474,7 @@ impl Loops<'_> {
     }
 
     /// Replaces the connection once `max_session_duration` passed and the stream has nothing in
-    /// progress a new connection would cut.
+    /// progress a new connection would cut, after draining the provider session its goodbye ends.
     async fn replace_if_due(&self) -> Result<Option<Finish>, ProviderError> {
         if !self.machine.lock().replacement_due() {
             return Ok(None);
@@ -469,7 +483,7 @@ impl Loops<'_> {
             return Ok(None);
         }
         let mut effects = Vec::new();
-        self.machine.lock().replace(&mut effects);
+        self.machine.lock().replace_due(self.clock().now(), &mut effects);
         self.apply(effects).await
     }
 }
@@ -510,6 +524,9 @@ async fn connection<'a>(
                 match inbound {
                     Inbound::Frame { frame, message } => {
                         let read = session.host.on_message(cx, frame, message).await?;
+                        if read.response {
+                            loops.machine.lock().received_response(clock.now());
+                        }
                         if let Some(request_id) = read.request_id {
                             *session.request_id.lock() = Some(request_id);
                         }
@@ -519,7 +536,17 @@ async fn connection<'a>(
                     }
                     Inbound::Closed { code, reason } => {
                         let expected = session.host.expects_close().map_err(ProviderError::from)?;
-                        loops.machine.lock().closed(code, reason, expected, &mut effects);
+                        // asked outside the lock: whether the provider closed with words owed
+                        let finished = loops.machine.lock().is_finished();
+                        let nothing_pending = !finished
+                            && session.host.nothing_pending().map_err(ProviderError::from)?;
+                        let mut machine = loops.machine.lock();
+                        // a reconnect asked for before the close replaces the connection, whether
+                        // or not the replacement loop ran first
+                        if session.rotations.with(|n| *n) != rotations {
+                            machine.replace(&mut effects);
+                        }
+                        machine.closed(code, reason, expected, nothing_pending, &mut effects);
                     }
                 }
                 if let Some(finish) = loops.apply(effects).await? {
@@ -531,7 +558,8 @@ async fn connection<'a>(
             }
         };
         let send = async {
-            let Carried { input, controls, .. } = carried;
+            let Carried { input } = carried;
+            let mut controls = Controls::default();
             // the provider session's setup goes first, ahead of anything carried from before
             if !loops.write_other(setup).await {
                 return std::future::pending().await;

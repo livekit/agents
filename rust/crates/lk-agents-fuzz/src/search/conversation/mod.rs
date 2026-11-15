@@ -258,6 +258,8 @@ struct Providers {
     /// The recogniser fails partway through a stretch; its stream is spent and the driver does not
     /// reopen it, so the rest of the call is deaf: a rare, fatal failure.
     stt_fails: u8,
+    /// The recogniser's connection drops partway through a stretch and it reconnects.
+    stt_drops: u8,
     /// The interruption detector fails its judgement of an overlap.
     overlap_fails: u8,
     /// The realtime server drops the socket during a reply, then comes back.
@@ -297,6 +299,7 @@ impl Providers {
             detector_right: rng("detector_right").u8(0..=100),
             llm_fails: fails("llm_fails", 30, 5..=50),
             stt_fails: fails("stt_fails", 30, 1..=10),
+            stt_drops: fails("stt_drops", 30, 5..=30),
             overlap_fails: fails("overlap_fails", 30, 10..=80),
             socket_drops: fails("socket_drops", 30, 5..=30),
             realtime_errors: fails("realtime_errors", 30, 5..=30),

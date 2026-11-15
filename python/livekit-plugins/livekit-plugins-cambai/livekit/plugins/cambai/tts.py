@@ -152,16 +152,16 @@ class TTS(tts.TTS):
         pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """Update TTS options dynamically."""
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if voice_id is not None:
-            self._opts.voice_id = voice_id
-        if language is not None:
-            self._opts.language = language
-        if model is not None:
-            self._opts.speech_model = model
-            self._sample_rate = MODEL_SAMPLE_RATES.get(model, 22050)
-        if user_instructions is not None:
-            self._opts.user_instructions = user_instructions
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            if voice_id is not None:
+                self._opts.voice_id = voice_id
+            if language is not None:
+                self._opts.language = language
+            if model is not None:
+                self._opts.speech_model = model
+                self._sample_rate = MODEL_SAMPLE_RATES.get(model, 22050)
+            if user_instructions is not None:
+                self._opts.user_instructions = user_instructions
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions

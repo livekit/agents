@@ -226,6 +226,9 @@ impl Run {
                     let items = items.into_iter().map(|(g, ms)| (g % 255, ms)).collect();
                     self.record.record_held(at, socket, items);
                 }
+                Record::Recognition { at, stt, report, emitted } => {
+                    self.record.record_recognition(at, stt, report, emitted);
+                }
                 Record::InputEnded { at, slot } => {
                     self.record.record_input_ended(at, slot.kind, slot.nth);
                 }

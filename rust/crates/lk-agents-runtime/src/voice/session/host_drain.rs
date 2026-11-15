@@ -212,16 +212,10 @@ pub(super) async fn answer_hook(
                 .map(|()| HookOutcome::Returned),
             None => Ok(HookOutcome::Failed),
         },
-        HookCall::FunctionToolsExecuted { event, .. } => {
-            use lk_agents_abi::ChatItem;
-            let calls = event.function_calls.into_iter().map(ChatItem::FunctionCall).collect();
-            let outputs =
-                event.function_call_outputs.into_iter().map(ChatItem::FunctionCallOutput).collect();
-            hooks
-                .function_tools_executed(&session, calls, outputs)
-                .await
-                .map(|reply_required| HookOutcome::FunctionToolsExecuted { reply_required })
-        }
+        HookCall::FunctionToolsExecuted { event, .. } => hooks
+            .function_tools_executed(&session, event.function_calls, event.function_call_outputs)
+            .await
+            .map(|reply_required| HookOutcome::FunctionToolsExecuted { reply_required }),
         HookCall::FillerSource { source: None, .. } => {
             Ok(HookOutcome::Filler(FillerReply::Declined))
         }

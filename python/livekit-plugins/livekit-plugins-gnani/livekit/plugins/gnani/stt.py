@@ -242,8 +242,20 @@ class _Transcript(TypedDict):
     segment_id: NotRequired[str]
 
 
-class _Speech(TypedDict):
-    type: Literal["speech_start", "vad_start", "speech_end", "vad_end"]
+class _SpeechStart(TypedDict):
+    type: Literal["speech_start"]
+
+
+class _VadStart(TypedDict):
+    type: Literal["vad_start"]
+
+
+class _SpeechEnd(TypedDict):
+    type: Literal["speech_end"]
+
+
+class _VadEnd(TypedDict):
+    type: Literal["vad_end"]
 
 
 class _Error(TypedDict):
@@ -251,7 +263,10 @@ class _Error(TypedDict):
     message: NotRequired[str]
 
 
-_Message = Annotated[_Connected | _Transcript | _Speech | _Error, Field(discriminator="type")]
+_Message = Annotated[
+    _Connected | _Transcript | _SpeechStart | _VadStart | _SpeechEnd | _VadEnd | _Error,
+    Field(discriminator="type"),
+]
 
 
 class SpeechStream(stt.WebSocketStream[_Message, None]):

@@ -392,6 +392,8 @@ pub struct SpeechmaticsOptions {
     #[host(annotation = "dict[str, typing.Any]")]
     pub transcript_filtering_config:
         crate::Maybe<std::collections::BTreeMap<String, serde_json::Value>>,
+    #[host(annotation = "list[str]")]
+    pub language_hints: crate::Maybe<Vec<String>>,
 }
 
 #[crate::host(record(

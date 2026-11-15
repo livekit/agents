@@ -265,3 +265,74 @@ fn a_commit_takes_the_interim_at_its_span() {
     assert_eq!(promoted.utterance.n, 2);
     assert_eq!(promoted.span, 13..25);
 }
+
+fn numbered(kind: SpeechEventType, text: &str, n: u64) -> SpeechEvent {
+    let mut event = SpeechEvent::new(kind);
+    event.utterance = Some(n);
+    if !text.is_empty() {
+        event.alternatives.push(SpeechData::new("en", text));
+    }
+    event
+}
+
+// The provider's repeated end/interims must not slide the final deadline indefinitely.
+#[test]
+fn owed_final_deadline_uses_the_latest_interim_without_extending_the_wait() {
+    let mut t = Turns::stt_only(Ts::ZERO);
+    t.stt(ms(0), numbered(SpeechEventType::StartOfSpeech, "", 1));
+    t.stt(ms(10), numbered(SpeechEventType::InterimTranscript, "book", 1));
+    t.stt(ms(100), numbered(SpeechEventType::EndOfSpeechPending, "", 1));
+    t.stt(ms(1_900), numbered(SpeechEventType::InterimTranscript, "book a table", 1));
+    t.stt(ms(2_000), numbered(SpeechEventType::EndOfSpeechPending, "", 1));
+    t.at(ms(2_100));
+    assert_eq!(t.committed(), ["book a table"]);
+    assert_eq!(t.ended[0].promoted.as_ref().map(|p| p.utterance.n), Some(1));
+    assert!(!t.r.user_speaking());
+}
+
+// Normal final arrival retires the wait; its old deadline must not commit another turn.
+#[test]
+fn an_owed_final_arriving_before_its_deadline_commits_once() {
+    let mut t = Turns::stt_only(Ts::ZERO);
+    t.stt(ms(0), numbered(SpeechEventType::StartOfSpeech, "", 1));
+    t.stt(ms(10), numbered(SpeechEventType::InterimTranscript, "book", 1));
+    t.stt(ms(100), numbered(SpeechEventType::EndOfSpeechPending, "", 1));
+    t.stt(ms(200), numbered(SpeechEventType::FinalTranscript, "book a table", 1));
+    t.stt(ms(200), numbered(SpeechEventType::EndOfSpeech, "", 1));
+    t.at(ms(5_000));
+    assert_eq!(t.committed(), ["book a table"]);
+    assert!(t.r.pending_final.is_none());
+}
+
+// An old held end cannot stop a newer utterance, nor the replacement recognizer.
+#[test]
+fn a_new_utterance_or_retired_stream_cancels_the_old_final_deadline() {
+    for replacement in [false, true] {
+        let mut t = Turns::stt_only(Ts::ZERO);
+        t.stt(ms(0), numbered(SpeechEventType::StartOfSpeech, "", 1));
+        t.stt(ms(10), numbered(SpeechEventType::InterimTranscript, "book", 1));
+        t.stt(ms(100), numbered(SpeechEventType::EndOfSpeechPending, "", 1));
+        if replacement {
+            let eff = t.r.retire_stt_stream(ResourceId(0));
+            t.apply(eff);
+        } else {
+            t.stt(ms(200), numbered(SpeechEventType::StartOfSpeech, "", 2));
+        }
+        t.at(ms(5_000));
+        assert!(t.committed().is_empty(), "an old deadline ended newer speech");
+    }
+}
+
+// A provider end is evidence, not a host command: manual mode keeps its explicit commit rule.
+#[test]
+fn an_owed_final_deadline_does_not_commit_a_manual_turn() {
+    let mut t = Turns::stt_only(Ts::ZERO);
+    let eff = t.r.set_turn_detection_mode(Ts::ZERO, TurnDetectionMode::Manual);
+    t.apply(eff);
+    t.stt(ms(0), numbered(SpeechEventType::StartOfSpeech, "", 1));
+    t.stt(ms(10), numbered(SpeechEventType::InterimTranscript, "book", 1));
+    t.stt(ms(100), numbered(SpeechEventType::EndOfSpeechPending, "", 1));
+    t.at(ms(5_000));
+    assert!(t.committed().is_empty());
+    assert_eq!(t.r.current_transcript(), "book");
+}

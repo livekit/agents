@@ -4,8 +4,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+from dataclasses import dataclass
+from inspect import get_annotations
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
+from pydantic import JsonValue
 from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
@@ -53,7 +56,139 @@ class MCPToolOptions(TypedDict, total=False):
     """
 
 
+@dataclass(frozen=True)
+class MCPTool:
+    """A tool an MCP server lists."""
+
+    name: str
+    description: str | None
+    """What the tool does, which MCP leaves optional."""
+    input_schema: dict[str, JsonValue]
+    """The JSON Schema of its arguments."""
+    meta: dict[str, JsonValue] | None
+    """The server's `_meta` for the tool."""
+
+
+@dataclass(frozen=True)
+class CallToolResult:
+    """A tool call's result as the server sent it: its content blocks, and whether the tool failed."""
+
+    content: list[ContentBlock]
+    is_error: bool
+
+
+@dataclass(frozen=True)
+class TextContent:
+    text: str
+    meta: dict[str, JsonValue] | None
+    annotations: Annotations | None
+    type: Literal["text"] = "text"
+
+
+@dataclass(frozen=True)
+class ImageContent:
+    data: str
+    """Base64."""
+    mime_type: str
+    meta: dict[str, JsonValue] | None
+    annotations: Annotations | None
+    type: Literal["image"] = "image"
+
+
+@dataclass(frozen=True)
+class AudioContent:
+    data: str
+    """Base64."""
+    mime_type: str
+    meta: dict[str, JsonValue] | None
+    annotations: Annotations | None
+    type: Literal["audio"] = "audio"
+
+
+@dataclass(frozen=True)
+class EmbeddedResource:
+    """A resource's contents, inline in the result."""
+
+    resource: ResourceContents
+    meta: dict[str, JsonValue] | None
+    annotations: Annotations | None
+    type: Literal["resource"] = "resource"
+
+
+@dataclass(frozen=True)
+class TextResourceContents:
+    uri: str
+    mime_type: str | None
+    text: str
+    meta: dict[str, JsonValue] | None
+
+
+@dataclass(frozen=True)
+class BlobResourceContents:
+    uri: str
+    mime_type: str | None
+    blob: str
+    """Base64."""
+    meta: dict[str, JsonValue] | None
+
+
+@dataclass(frozen=True)
+class ResourceLink:
+    """A link to a resource the client may read."""
+
+    uri: str
+    name: str
+    title: str | None
+    description: str | None
+    mime_type: str | None
+    size: int | None
+    """Bytes, before encoding."""
+    icons: list[Icon] | None
+    meta: dict[str, JsonValue] | None
+    annotations: Annotations | None
+    type: Literal["resource_link"] = "resource_link"
+
+
+@dataclass(frozen=True)
+class Icon:
+    src: str
+    mime_type: str | None
+    sizes: list[str] | None
+    """Each `WxH`, or `any`."""
+    theme: IconTheme | None
+
+
+IconTheme: TypeAlias = Literal["light", "dark"]
+"""The background an icon is drawn for."""
+
+
+@dataclass(frozen=True)
+class Annotations:
+    """How a client may use a block: who it is for, how much it matters, and when it last changed."""
+
+    audience: list[Role] | None
+    priority: float | None
+    """From 0, least important, to 1."""
+    last_modified: str | None
+    """An ISO 8601 timestamp."""
+
+
+Role: TypeAlias = Literal["user", "assistant"]
+
+
+ContentBlock: TypeAlias = (
+    TextContent | ImageContent | AudioContent | EmbeddedResource | ResourceLink
+)
+"""One block of a tool's result, in MCP's wire form."""
+
+
+ResourceContents: TypeAlias = TextResourceContents | BlobResourceContents
+"""A resource's contents: text, or a base64 blob."""
+
+
 MCPToolOptions.__module__ = "livekit.agents.llm.mcp"
+MCPTool.__annotations__ = get_annotations(MCPTool, eval_str=True)
+MCPTool.__module__ = "livekit.agents.llm.mcp"
 
 
 MCP_IDLE_CLOSE_SECONDS: Final = 60.0

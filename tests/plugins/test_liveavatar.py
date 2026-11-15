@@ -24,12 +24,13 @@ from livekit.agents import (
     http,
 )
 from livekit.agents.voice.avatar import QueueAudioOutput
-from livekit.plugins.liveavatar import AvatarSession
+from livekit.plugins.liveavatar import AvatarSession, avatar as liveavatar_avatar
 from tests.fakes import until
 
 SAMPLE_RATE = 24000
 NOT_CONNECTED = "the session is not connected yet"
 OPTIONS = APIConnectOptions(max_retry=2, retry_interval=0, connect_timeout=1, read_timeout=1)
+HEARTBEAT = 0.05  # the socket's ping interval, scaled down from its 30 s
 
 
 class Command(TypedDict, total=False):
@@ -62,6 +63,8 @@ class LiveAvatarPeer:
         self.ws_url = ""
         self.api_url = ""
         self.socket: web.WebSocketResponse | None = None
+        self.autoping = True
+        """Whether the event socket answers pings; ``False`` is a peer gone silent."""
 
     def app(self) -> web.Application:
         app = web.Application()
@@ -88,7 +91,7 @@ class LiveAvatarPeer:
     async def events(self, request: web.Request) -> web.WebSocketResponse:
         self.handshakes += 1
         await self.handshake.wait()
-        socket = web.WebSocketResponse()
+        socket = web.WebSocketResponse(autoping=self.autoping)
         await socket.prepare(request)
         told = False
 
@@ -105,6 +108,8 @@ class LiveAvatarPeer:
         connecting = asyncio.create_task(connect())
         try:
             async for message in socket:
+                if message.type is not web.WSMsgType.TEXT:
+                    continue
                 command = message.json()
                 if not told:
                     self.early.append(command)
@@ -419,10 +424,10 @@ async def test_zero_retries_still_starts_the_session(
     assert peer.starts == 1
 
 
-async def test_event_socket_handshake_obeys_read_timeout(
+async def test_event_socket_handshake_obeys_the_connect_limit(
     peer: LiveAvatarPeer, avatar_host: SimpleNamespace
 ) -> None:
-    """An event socket whose handshake never answers is dropped after the read timeout."""
+    """An event socket whose handshake never answers is dropped at the connect limit."""
     hung_up = asyncio.Event()
 
     async def silent(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -432,7 +437,7 @@ async def test_event_socket_handshake_obeys_read_timeout(
 
     server = await asyncio.start_server(silent, "127.0.0.1", 0)
     peer.ws_url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/events"
-    options = APIConnectOptions(max_retry=0, connect_timeout=30, read_timeout=0.05)
+    options = APIConnectOptions(max_retry=0, connect_timeout=0.05, read_timeout=30)
     avatar = AvatarSession(
         api_key="key", avatar_id="avatar", api_url=peer.api_url, conn_options=options
     )
@@ -462,3 +467,22 @@ async def test_invalid_api_url_is_not_classified_as_invalid_provider_response(
             await avatar.start(VoiceSession(vad=None), avatar_host.room)
 
     assert "invalid response" not in str(error.value)
+
+
+async def test_a_silent_event_socket_fails_the_avatar_as_lost(
+    peer: LiveAvatarPeer, avatar_host: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An event socket that stops answering pings fails the avatar with a connection error
+    instead of leaving it waiting on a half-open socket."""
+    peer.autoping = False
+    monkeypatch.setattr(liveavatar_avatar._Events, "ping_interval", HEARTBEAT)
+    avatar = AvatarSession(
+        api_key="key", avatar_id="avatar", api_url=peer.api_url, conn_options=OPTIONS
+    )
+    await avatar.start(VoiceSession(vad=None), avatar_host.room)
+    try:
+        await until(lambda: avatar_host.lifecycle.fail.called, "the avatar fails")
+    finally:
+        await avatar.aclose()
+
+    assert isinstance(avatar_host.lifecycle.fail.call_args.args[0], APIConnectionError)

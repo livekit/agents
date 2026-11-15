@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import os
 
-from livekit.agents import http
-
 API_BASE_URL = "wss://api.telnyx.com/v2"
 TTS_ENDPOINT = f"{API_BASE_URL}/text-to-speech/speech"
 STT_ENDPOINT = f"{API_BASE_URL}/speech-to-text/transcription"
@@ -17,20 +15,3 @@ def get_api_key(api_key: str | None = None) -> str:
     if not resolved_key:
         raise ValueError("Telnyx API key required. Set TELNYX_API_KEY or provide api_key.")
     return resolved_key
-
-
-class SessionManager:
-    def __init__(self, http_session: http.HttpSession | None = None) -> None:
-        self._session = http_session
-        self._owns_session = False
-
-    def ensure_session(self) -> http.HttpSession:
-        if not self._session:
-            self._session = http.HttpSession()
-            self._owns_session = True
-        return self._session
-
-    async def close(self) -> None:
-        if self._owns_session and self._session:
-            await self._session.aclose()
-            self._session = None

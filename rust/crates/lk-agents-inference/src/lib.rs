@@ -54,12 +54,10 @@ pub mod websocket;
 
 pub use ids::{RequestKind, create_inference_request_id, shortuuid};
 
-/// Resolves at `at` on `clock`; with no deadline it never resolves.
+/// Resolves at `at` on `clock`; with no deadline it never resolves. Either way it waits on the
+/// clock, so a host clock skipping time knows the waiting task is back to waiting.
 pub(crate) async fn wait_for_deadline(clock: &dyn abi::Clock, at: Option<abi::Ts>) {
-    match at {
-        Some(at) => clock.wait_until(at).await,
-        None => std::future::pending().await,
-    }
+    clock.wait_until(at.unwrap_or(abi::Ts::from_nanos(u64::MAX))).await;
 }
 pub use llm::models::{drop_unsupported_params, min_reasoning_effort};
 

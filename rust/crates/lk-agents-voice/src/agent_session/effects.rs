@@ -54,8 +54,12 @@ pub enum VoiceEffect {
     StorageAbort(SpeechId),
     StorageCommit {
         speech: SpeechId,
+        /// Shares the checkpoint sequence: a late older snapshot cannot replace this one.
+        sequence: u64,
         history: Vec<lk_agents_abi::ChatItem>,
     },
+    /// Recognition checkpoints and accepted conversation without a corresponding speech.
+    SaveConversation(Box<lk_agents_abi::storage::voice::VoiceConversationProgress>),
     Outputs(crate::agent_session::Outputs),
     Tap(crate::agent_session::SystemTap),
     SessionView(Arc<crate::agent_session::SessionView>),
@@ -199,6 +203,8 @@ pub enum Timer {
     EndpointingDelay,
     /// `_arm_transcription_timeout`.
     TranscriptionTimeout,
+    /// An STT provider ended but still owes its utterance's final transcript.
+    FinalTranscriptTimeout,
     /// `_backchannel_boundary_timer`: after agent speech onset, a backchannel verdict is ignored.
     BackchannelBoundary,
     /// `_false_interruption_timer`.

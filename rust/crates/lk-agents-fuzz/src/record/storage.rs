@@ -1,15 +1,36 @@
 use lk_agents_abi::storage::StorageError;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StorageOperation {
     Acquire,
     Settle,
     Abandon,
     ObserveLoss,
+    /// A turn's checkpoint of the conversation so far.
+    Checkpoint,
 }
 
 #[derive(Clone, Debug)]
 pub enum StorageStep {
+    /// A concrete speech checkpoint or terminal snapshot submitted to the production store.
+    HistorySubmitted {
+        speech: u64,
+        sequence: u64,
+        history: Vec<lk_agents_abi::ChatItem>,
+    },
+    ConversationRequested {
+        progress: lk_agents_abi::storage::voice::VoiceConversationProgress,
+    },
+    ConversationAnswered {
+        sequence: u64,
+        result: Result<(), StorageError>,
+    },
+    /// A successful live checkpoint read back through the database's observer connection.
+    ConversationCheckpoint {
+        sequence: u64,
+        items: Vec<lk_agents_abi::ChatItem>,
+        pending_user_turns: Vec<lk_agents_abi::ChatMessage>,
+    },
     Requested {
         speech: u64,
         operation: StorageOperation,
@@ -33,11 +54,15 @@ pub enum StorageStep {
         held: bool,
         faulted: bool,
     },
-    /// What the partition saved once the store closed: its items' ids, in the thread's order, and
-    /// the text of each user message among them.
+    /// Decoded database rows after the store closed, in their persisted conversation order.
+    /// Full payloads preserve assistant text and interruption flags for durability checks.
     Saved {
-        items: Vec<String>,
-        user_texts: Vec<(String, String)>,
+        items: Vec<lk_agents_abi::ChatItem>,
+    },
+    /// Another writer committed this complete partition view. Its unseen additions and edits
+    /// remain authoritative until a later accepted local revision or another foreign commit.
+    ForeignCommitted {
+        items: Vec<lk_agents_abi::ChatItem>,
     },
     /// The fake database holds a request's answer this long on purpose (a slow lease take).
     Slowed {

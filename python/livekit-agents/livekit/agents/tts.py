@@ -10,6 +10,7 @@ from livekit import rtc
 from . import _core, tokenize, utils
 from ._generated import facades_tts as _facades, public_tts as _public
 from ._generated.public_tts import *  # noqa: F403
+from ._generated.tts import TEvent
 from ._generated.websocket import WsFrame
 from ._websocket import (
     Batch,
@@ -23,6 +24,7 @@ from ._websocket import (
     WebSocketProtocol,
     WebSocketTarget,
     frames_of,
+    log_skipped,
     protocol_error,
 )
 from .types import (
@@ -47,6 +49,7 @@ __all__ = [
     "WebSocketTarget",
     "StreamAdapter",
     "FallbackAdapter",
+    "log_skipped",
     "protocol_error",
 ]
 __all__ += _public.__all__
@@ -86,9 +89,10 @@ class _EmitterOutput:
         return self._ch.closed
 
 
-class FallbackAdapter(_facades.FallbackAdapter):
+class FallbackAdapter(_facades.FallbackAdapter[TEvent]):
     """Several TTS behind one: a failed one is skipped until it recovers. Each prepares its text
-    by its own options; ``options`` are the serving TTS's."""
+    by its own options; ``options`` are the serving TTS's. A subclass that relays its members' own
+    events names them: ``FallbackAdapter[Literal["my_event"]]``."""
 
     def prewarm(self) -> None:
         self._members[0].prewarm()
@@ -177,6 +181,9 @@ class WebSocketStream(
     connection."""
     text_idle: float | None = None
     """Seconds without text after which ``on_text_idle`` runs, once per silence."""
+    audio_idle: float | None = None
+    """Seconds of silence after received audio and the latest text before ``on_audio_idle``.
+    No callback runs before audio arrives; each response restarts the interval."""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
@@ -195,10 +202,18 @@ class WebSocketStream(
         ``SegmentDone`` may end a segment whose answers all came."""
         return None
 
+    def on_audio_idle(self) -> bytes | OutboundT | None:
+        """The response went silent for ``audio_idle`` seconds, once per silence."""
+        return None
+
     def report(self, output: SegmentOutput | Ready | ProviderRequestId) -> None:
         """What the provider sent for a segment, or answered. ``encode`` may report the
         ``SegmentDone`` of a segment whose answers all came, for a provider that answers each
         text on its own."""
+        if self._websocket.reading and isinstance(
+            output, SegmentAudio | SegmentWords | SegmentDone
+        ):
+            self._websocket.response_received = True
         match output:
             case Ready():
                 self._websocket.signal("ready")
@@ -297,6 +312,10 @@ class _Synthesis(WebSocketKind[SegmentInput | EndOfText]):
     def can_reconnect(self) -> bool:
         return not self.owes_reply()
 
+    def nothing_pending(self) -> bool:
+        # every segment is done
+        return not self.owes_reply()
+
     def expects_close(self) -> bool:
         # a segment that ends its session, or the end of the text, asked the provider to close
         return self._ending_session or self._ended
@@ -324,3 +343,9 @@ class _Synthesis(WebSocketKind[SegmentInput | EndOfText]):
 
     def input_idle(self) -> list[WsFrame]:
         return frames_of(self._stream.on_text_idle())
+
+    def response_idle_after(self) -> float | None:
+        return self._stream.audio_idle
+
+    def response_idle(self) -> list[WsFrame]:
+        return frames_of(self._stream.on_audio_idle())

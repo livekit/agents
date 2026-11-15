@@ -128,9 +128,8 @@ impl Rule for SpeechErrorIsInjected {
                         && speech.done_at().is_none_or(|done| *at <= done)
                 });
             // Its own storage request failed, or the call closed on a storage error after
-            // the run faulted the store (a checkpoint has no request of its own): the fake store
-            // fails only where the run injects a fault, and a bound call cannot run the speech
-            // without its partition.
+            // the run faulted the store: the fake store fails only where the run injects a fault,
+            // and a bound call cannot run the speech without its partition.
             let before_its_end =
                 |at: &crate::record::Observed| speech.done_at().is_none_or(|done| *at <= done);
             let storage = host.storage();

@@ -110,10 +110,9 @@ impl UnplayedAudio {
         for unplayed in &self.segments {
             let captured: Duration =
                 unplayed.frames.iter().map(|f| Duration::from_secs_f64(f.duration())).sum();
+            // A segment played up to all it took is joined too: the rest of it is still to come,
+            // and its reports carry the segment's own offsets.
             let base = unplayed.heard.unwrap_or_default().min(captured);
-            if base >= captured {
-                continue;
-            }
             let unreported = match (unplayed.heard, unplayed.started) {
                 (None, Some(started)) => Some((started, now)),
                 _ => None,

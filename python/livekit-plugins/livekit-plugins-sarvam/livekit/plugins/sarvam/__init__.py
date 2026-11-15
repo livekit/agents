@@ -27,14 +27,11 @@ from livekit.agents import Plugin
 from .llm import LLM, SarvamLLMModels
 from .log import logger
 from .stt import STT
-from .stt_streaming import RealtimeSpeechStream, STTRealtime
 from .tts import TTS
 from .version import __version__
 
 __all__ = [
     "STT",
-    "STTRealtime",
-    "RealtimeSpeechStream",
     "TTS",
     "LLM",
     "SarvamLLMModels",

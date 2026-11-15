@@ -20,9 +20,9 @@ from aiohttp.test_utils import TestServer
 from multidict import CIMultiDict
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError, http, stt
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, http, stt
 from livekit.plugins import microsoft_ai
-from tests.fakes import until
+from tests.fakes import FakeVAD, until
 
 OPTIONS = APIConnectOptions(max_retry=0, connect_timeout=0.5, read_timeout=0.5)
 PCM = b"\x81\xff" * 3717
@@ -57,7 +57,7 @@ async def microsoft(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[MicrosoftA
     """A local Microsoft AI: a realtime transcription socket and an SSML synthesis endpoint.
 
     The socket acknowledges ``session.update`` when ``auto_update`` and answers each commit with
-    a ``turn N`` transcript when ``auto_commit``; ``drop_after_audio`` closes it at the first
+    a ``turn N`` transcript when ``auto_commit``; ``drop_after_audio`` closes it with a server error at the first
     audio. ``sent`` lists the client's events and ``commits`` the audio of each commit.
     Synthesis answers with ``tts_status`` and ``tts_body``; ``tts_requests`` keeps each request.
     """
@@ -77,7 +77,7 @@ async def microsoft(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[MicrosoftA
             elif event["type"] == "input_audio_buffer.append":
                 pending.extend(base64.b64decode(event["audio"], validate=True))
                 if peer.drop_after_audio:
-                    await socket.close()
+                    await socket.close(code=1011)
             elif event["type"] == "input_audio_buffer.commit":
                 peer.commits.append(bytes(pending))
                 pending.clear()
@@ -240,7 +240,7 @@ async def test_revisions_deltas_and_final_are_not_duplicated(microsoft: Microsof
 
 
 async def test_empty_completion_retracts_the_interim(microsoft: MicrosoftAI) -> None:
-    """A completion with no text after an interim ends the turn with an empty final."""
+    """A completion with no text after an interim withdraws the interim and ends the turn."""
     microsoft.auto_commit = False
     instance = _stt(microsoft)
     async with instance, instance.stream(conn_options=OPTIONS) as stream:
@@ -255,8 +255,51 @@ async def test_empty_completion_retracts_the_interim(microsoft: MicrosoftAI) -> 
         await _transcript(socket, "completed", transcript="")
         events = [event async for event in stream]
 
-    assert _finals(events) == [""]
+    turn = _turn(events)
+    assert _finals(events) == []
+    assert turn[-2].type == stt.SpeechEventType.INTERIM_TRANSCRIPT
+    assert turn[-2].alternatives[0].text == ""
+    assert turn[-1].type == stt.SpeechEventType.END_OF_SPEECH
+
+
+async def test_a_transcript_sent_before_a_close_after_the_audio_ended_is_delivered(
+    microsoft: MicrosoftAI,
+) -> None:
+    """The provider transcribes after the commit: a close that follows the end of the audio
+    still lets the transcript it sent first through."""
+    microsoft.auto_commit = False
+    instance = _stt(microsoft)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(_audio())
+        stream.end_input()
+        await until(lambda: microsoft.commits, "the turn is committed")
+        socket = microsoft.socket
+        assert socket is not None
+        await _complete(socket, "item-1", "goodbye")
+        await socket.close()
+        events = [event async for event in stream]
+
+    assert _finals(events) == ["goodbye"]
     assert _turn(events)[-1].type == stt.SpeechEventType.END_OF_SPEECH
+
+
+async def test_a_close_before_the_transcript_of_a_commit_is_not_a_clean_end(
+    microsoft: MicrosoftAI,
+) -> None:
+    """A commit owes its transcript: a close after the end of the audio that leaves it unsent
+    fails the stream instead of ending it as if nothing was said."""
+    microsoft.auto_commit = False
+    instance = _stt(microsoft)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(_audio())
+        stream.end_input()
+        await until(lambda: microsoft.commits, "the turn is committed")
+        socket = microsoft.socket
+        assert socket is not None
+        await socket.close()
+        with pytest.raises(APIConnectionError):
+            async for _ in stream:
+                pass
 
 
 async def test_disconnect_after_audio_reconnects(microsoft: MicrosoftAI) -> None:
@@ -272,6 +315,45 @@ async def test_disconnect_after_audio_reconnects(microsoft: MicrosoftAI) -> None
             pass
 
     assert len(microsoft.connections) == 2
+
+
+SILENT, SPOKEN = b"\0\0" * 800, b"\x00\x40" * 800  # 50 ms frames, quiet and loud
+
+
+# Catches: idle silence uploaded (and billed) between turns, a turn's onset clipped by a gate
+# that waits for the VAD's start, speech frames dropped on their way to the provider, or the
+# usage measuring the audio pushed instead of the audio sent.
+async def test_with_a_vad_only_speech_and_its_pre_roll_are_uploaded(
+    microsoft: MicrosoftAI,
+) -> None:
+    vad = FakeVAD()
+    instance = microsoft_ai.STT(
+        vad=vad, url=microsoft.stt_url, model="test-transcriber", api_key="dummy-stt-key"
+    )
+    # each turn: 1 s of silence, 0.5 s of speech, 0.4 s of silence (its last 0.2 s ends it)
+    turn = [SILENT] * 20 + [SPOKEN] * 10 + [SILENT] * 8
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        pushed = 0.0
+        for pcm in turn * 2:
+            stream.push_frame(rtc.AudioFrame(pcm, 16000, 1, 800))
+            pushed += 0.05
+            await until(lambda at=pushed: vad.heard >= at - 1e-6, "the VAD judges the frame")
+        stream.end_input()
+        events = [event async for event in stream]
+
+    # 300 ms before the speech, all of it, and the 200 ms of quiet the VAD took to end it
+    heard = SILENT * 6 + SPOKEN * 10 + SILENT * 4
+    assert microsoft.commits == [heard, heard]
+    appended = b"".join(
+        base64.b64decode(event["audio"])
+        for event in microsoft.sent
+        if event["type"] == "input_audio_buffer.append"
+    )
+    assert appended == heard * 2
+    assert _finals(events) == ["turn 1", "turn 2"]
+    # 1 s sent per turn (20 frames of 50 ms), of the 3.8 s pushed
+    usage = sum(e.recognition_usage.audio_duration or 0.0 for e in events if e.recognition_usage)
+    assert usage == pytest.approx(2.0)
 
 
 async def test_complete_wav_request_and_exact_audio_framing(microsoft: MicrosoftAI) -> None:

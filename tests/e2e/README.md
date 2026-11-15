@@ -39,6 +39,15 @@ Only the models (`tests/fakes.py`) and the application service (`resources.Recor
 are scripted; agent execution, tools, approval, leases, persistence and transports are the
 production implementation.
 
+The lean text storage journey runs against two loopback servers sharing SQLite, and against
+AgentDB when configured. It checks manual snapshot assignment plus `save_context`, automatic
+`bind()` checkpoints, and an unsaved control, reading persisted state through fresh requests
+on the other server:
+
+```sh
+uv run --no-sync pytest tests/e2e/test_text.py --e2e -k text_session_storage
+```
+
 ## Prerequisites
 
 - Live journeys: `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` naming a project with

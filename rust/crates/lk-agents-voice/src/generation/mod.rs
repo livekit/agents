@@ -90,6 +90,9 @@ pub struct TurnAccumulator {
     /// A segment's synthesis failed for good, or the output cut one under it: the item reads as
     /// cut short.
     cut_short: bool,
+    /// A segment played cut short since the last words recorded: the last word heard is whole, and
+    /// the next segment's words do not continue it.
+    after_cut: bool,
     /// Where the last segment that played its own audio stopped: the step's
     /// `lk.playout.position` when it is interrupted.
     cut_at: Option<std::time::Duration>,
@@ -108,6 +111,7 @@ impl TurnAccumulator {
             forwarded_text: String::new(),
             recorded_prefix: 0,
             cut_short: false,
+            after_cut: false,
             cut_at: None,
         }
     }
@@ -165,6 +169,14 @@ impl TurnAccumulator {
 
     /// One forwarded segment's text (`segment_outputs.append(out)`).
     pub fn record(&mut self, forwarded_text: &str) {
+        if forwarded_text.is_empty() {
+            return;
+        }
+        if std::mem::take(&mut self.after_cut)
+            && crate::transcription::continues_word(&self.forwarded_text, forwarded_text)
+        {
+            self.forwarded_text.push(' ');
+        }
         self.forwarded_text.push_str(forwarded_text);
     }
 

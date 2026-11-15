@@ -80,7 +80,7 @@ fn bound_storage_faults_close_the_call_and_successful_receipts_finish_the_speech
                     StorageOperation::Acquire => 0,
                     StorageOperation::Settle => 1,
                     StorageOperation::Abandon => 2,
-                    StorageOperation::ObserveLoss => continue,
+                    StorageOperation::ObserveLoss | StorageOperation::Checkpoint => continue,
                 };
                 if matches!(result, Err(StorageError::Unavailable(_))) && index < 2 {
                     unavailable[index] = true;
@@ -312,4 +312,112 @@ fn an_interruption_after_the_turn_is_reported_waits_for_its_receipt() {
     let (failures, _) = lk_agents_fuzz::check::check_all(&recording);
     let storage: Vec<_> = failures.iter().filter(|f| f.contract.starts_with("storage_")).collect();
     assert!(storage.is_empty(), "{storage:#?}");
+}
+
+// Catches (seed 1284): an interrupted reply whose turn waited on its checkpoint, the
+// checkpoint's answer lost and the database then unreachable, ended by the interruption watchdog,
+// read as a reply stuck on a wait the interrupt should cut: the recording never showed the
+// checkpoint, the turn's own wait on its partition.
+#[test]
+fn an_interrupted_turn_waits_on_its_checkpoint() {
+    use lk_agents_fuzz::input::{ToolAnswer, ToolArgs};
+    let recording = simulate(async {
+        let storage = StorageSetup {
+            lost_answers: Some((395, 10)),
+            outage: Some((405, 20_000)),
+            ..StorageSetup::default()
+        };
+        let setup = Setup {
+            tts: false,
+            tools: vec!["lookup".into()],
+            storage: Some(storage),
+            ..Setup::default()
+        };
+        let mut run = Run::start(&setup, 0, Default::default()).await;
+        for input in [
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(100) },
+            Input::LlmToolCall {
+                chat: Ref::new(0),
+                name: "lookup".into(),
+                args: ToolArgs("{}".into()),
+            },
+            Input::LlmEnd { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(300) },
+            Input::ToolAnswered {
+                tool: Ref::new(0),
+                answer: ToolAnswer::Value,
+                text: AgentText("Found it.".into()),
+            },
+            Input::Advance { ms: Millis(50) },
+            Input::Interrupt { force: true, wait: false },
+            Input::Advance { ms: Millis(6_000) },
+        ] {
+            run.apply(&input).await;
+        }
+        run.record
+    });
+    assert!(checkpoint_at_watchdog(&recording), "no watchdog fired over an unanswered checkpoint");
+    let rule = "interrupt_ends_the_reply";
+    let (failures, _) = lk_agents_fuzz::check::check_all(&recording);
+    let failed: Vec<_> = failures.iter().filter(|f| f.contract == rule).collect();
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// Whether a speech's interruption watchdog fired while its turn's checkpoint was unanswered.
+fn checkpoint_at_watchdog(recording: &Recording) -> bool {
+    let storage = recording.host_view().storage();
+    recording.host_view().speeches().iter().any(|speech| {
+        let Some(fired) = recording.internal_view().speech(speech.id).timed_out_at() else {
+            return false;
+        };
+        let checkpoint = |answered: bool| {
+            storage
+                .iter()
+                .filter(|(at, step)| {
+                    *at < fired
+                        && match step {
+                            StorageStep::Requested { speech: s, operation } => {
+                                !answered
+                                    && *s == speech.id
+                                    && *operation == StorageOperation::Checkpoint
+                            }
+                            StorageStep::Answered { speech: s, operation, .. } => {
+                                answered
+                                    && *s == speech.id
+                                    && *operation == StorageOperation::Checkpoint
+                            }
+                            _ => false,
+                        }
+                })
+                .count()
+        };
+        checkpoint(false) > checkpoint(true)
+    })
+}
+
+// Catches (seed 1626): a write the database refused, its resend still waiting out storage's own
+// backoff on the clock, read as a quiet run: the case settled and closed with the speech still
+// owed its receipt, and `speech_settles` found it done only after everything was answered.
+#[test]
+fn a_write_refused_and_resent_is_owed_until_its_answer() {
+    let outcome = simulate(async {
+        let storage = StorageSetup { outage: Some((16_100, 5_000)), ..StorageSetup::default() };
+        let setup = Setup { tts: false, storage: Some(storage), ..Setup::default() };
+        let mut run = Run::start(&setup, 0, Default::default()).await;
+        for input in [
+            // Past the first away timer, so no deadline of the driver's outlasts the resends.
+            Input::Advance { ms: Millis(16_000) },
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(100) },
+            Input::LlmText { chat: Ref::new(0), text: AgentText("Hello.".into()) },
+            Input::LlmEnd { chat: Ref::new(0) },
+            // The commit is refused from here on, and resent on storage's own backoff.
+            Input::Advance { ms: Millis(1_000) },
+        ] {
+            run.apply(&input).await;
+        }
+        finish(run, Outcome::default()).await
+    });
+    assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
 }

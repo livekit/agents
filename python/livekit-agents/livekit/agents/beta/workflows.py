@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Awaitable
 from datetime import date
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, NamedTuple, cast
 
 from pydantic import AfterValidator
 
@@ -12,6 +13,7 @@ from livekit import api
 from .. import _core, llm, stt, tts
 from .._generated import public_beta_workflows as _public
 from .._generated.public_beta_workflows import *  # noqa: F403
+from .._generated.session_options import SessionKwargs
 from .._generated.vad import VAD
 from .._generated.voice_session import DtmfTaskOptions
 from .._generated.workflow_prompts import (
@@ -20,7 +22,15 @@ from .._generated.workflow_prompts import (
 )
 from .._generated.workflows import IoEnableState, WorkflowInstructions as WorkflowInstructions
 from ..job import JobContext, _server_credentials, get_job_context
-from ..llm.tool_context import Completed, ToolError, ToolFlag, function_tool
+from ..llm.tool_context import (
+    Completed,
+    RawFunctionDescription,
+    ToolError,
+    ToolFlag,
+    function_tool,
+)
+from ..stt import STT
+from ..tts import TTS
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from ..voice import Agent, room_io
@@ -250,7 +260,9 @@ class WarmTransfer:
             env_sip_number=os.environ.get("LIVEKIT_SIP_NUMBER", ""),
         )
         self._agent = _briefing_agent(self._transfer, tools=tools, llm=llm)
-        self._briefing_audio = _given(stt=stt, vad=vad, tts=tts, turn_handling=turn_handling)
+        self._briefing_audio = _BriefingAudio(
+            stt=stt, vad=vad, tts=tts, turn_handling=turn_handling
+        )
 
     async def run(self) -> WarmTransferResult:
         """Dial and bridge a human participant. Await it inside a tool of the agent holding the
@@ -329,7 +341,9 @@ class TwilioConnectorWarmTransfer(WarmTransfer):
             },
         )
         self._agent = _briefing_agent(self._transfer, tools=tools, llm=llm)
-        self._briefing_audio = _given(stt=stt, vad=vad, tts=tts, turn_handling=turn_handling)
+        self._briefing_audio = _BriefingAudio(
+            stt=stt, vad=vad, tts=tts, turn_handling=turn_handling
+        )
 
 
 def _briefing_agent(
@@ -345,11 +359,18 @@ def _briefing_agent(
     )
 
 
-def _given(**options: Any) -> dict[str, Any]:
-    return {k: v for k, v in options.items() if is_given(v)}
+class _BriefingAudio(NamedTuple):
+    """The briefing session's own audio settings; each one not given is the caller session's."""
+
+    stt: NotGivenOr[STT | None]
+    vad: NotGivenOr[VAD | None]
+    tts: NotGivenOr[TTS | None]
+    turn_handling: NotGivenOr[TurnHandlingOptions]
 
 
-def _transfer_tool(transfer: _core.WarmTransfer, spec: dict[str, Any]) -> llm.RawFunctionTool:
+def _transfer_tool(
+    transfer: _core.WarmTransfer, spec: RawFunctionDescription
+) -> llm.RawFunctionTool[[dict[str, object]], Awaitable[None]]:
     async def call(raw_arguments: dict[str, object]) -> None:
         await transfer.call_tool(spec["name"], raw_arguments)
 
@@ -364,14 +385,16 @@ class _TransferHost:
         self._room = rtc.Room()
         self._player = BackgroundAudioPlayer()
         # the briefing session's audio: the transfer's own, else the caller session's
+        audio = transfer._briefing_audio
+        options: SessionKwargs = {}
+        if is_given(audio.turn_handling):
+            options["turn_handling"] = audio.turn_handling
         self._human: VoiceSession = VoiceSession(
-            **{
-                "vad": session.vad or NOT_GIVEN,
-                "llm": session.llm or NOT_GIVEN,
-                "stt": session.stt or NOT_GIVEN,
-                "tts": session.tts or NOT_GIVEN,
-                **transfer._briefing_audio,
-            }
+            vad=audio.vad if is_given(audio.vad) else session.vad or NOT_GIVEN,
+            llm=session.llm or NOT_GIVEN,
+            stt=(audio.stt if is_given(audio.stt) else session.stt) or NOT_GIVEN,
+            tts=(audio.tts if is_given(audio.tts) else session.tts) or NOT_GIVEN,
+            **options,
         )
 
     async def _core_start_hold(self) -> PlayHandle | None:

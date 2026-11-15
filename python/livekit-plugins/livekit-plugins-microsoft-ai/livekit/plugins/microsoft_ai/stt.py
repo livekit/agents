@@ -12,133 +12,44 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Adapted from the OpenAI STT plugin: Microsoft AI transcription only, with
-# client-owned VAD boundaries, ordered audio drain and explicit finalization.
+# Adapted from the OpenAI STT plugin: Microsoft AI transcription only, with client-owned
+# VAD boundaries and explicit commits.
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import math
 import weakref
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import Field
 
 from livekit import rtc
 from livekit.agents import (
     VAD,
-    APIConnectionError,
     APIConnectOptions,
     APIError,
-    APIStatusError,
-    APITimeoutError,
     LanguageCode,
-    VADEvent,
-    VADEventType,
     http,
     stt,
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 
-from ._http import Configuration, HTTPClient, positive_timeout, status_error
-from .log import logger
+from ._http import Configuration, HTTPClient, status_error
 
 SAMPLE_RATE = 16000
-NUM_CHANNELS = 1
-_TRANSCRIPTION = "conversation.item.input_audio_transcription."
-_MAX_TEXT_LENGTH = 65536
-
-
-class _WSMessage(Protocol):
-    @property
-    def type(self) -> http.WebSocketMessageType: ...
-
-    @property
-    def data(self) -> str | bytes: ...
-
-
-class _WebSocket(Protocol):
-    async def send_json(self, data: dict[str, object]) -> None: ...
-
-    async def receive(self) -> _WSMessage: ...
-
-    async def close(self) -> None: ...
-
-    def close_error(self, message: str) -> APIConnectionError: ...
-
-
-def _session_update(model: str, language: str | None) -> dict[str, object]:
-    transcription = {"model": model}
-    if language is not None:
-        transcription["language"] = language
-    return {
-        "type": "session.update",
-        "session": {
-            "type": "transcription",
-            "audio": {
-                "input": {
-                    "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
-                    "transcription": transcription,
-                    "turn_detection": None,
-                    "noise_reduction": None,
-                }
-            },
-        },
-    }
-
-
-class _Event(BaseModel):
-    model_config = ConfigDict(strict=True)
-    type: str
-    error: object = None
-    event_id: object = None
-    item_id: object = None
-    intermediate: object = None
-    delta: object = None
-    transcript: object = None
-
-
-def _string(value: object, key: str, *, nonempty: bool = False) -> str:
-    if not isinstance(value, str) or (nonempty and not value):
-        raise APIError(
-            f"Microsoft AI STT event requires a string {key}", kind="protocol", detail=repr(value)
-        )
-    if len(value) > _MAX_TEXT_LENGTH:
-        raise APIError("Microsoft AI STT event exceeds the text limit", kind="protocol")
-    return value
-
-
-def _provider_error(error: object) -> APIError:
-    if isinstance(error, dict):
-        status = error.get("status_code")
-        if isinstance(status, int) and not isinstance(status, bool) and 400 <= status < 600:
-            return status_error("STT", status)
-        code = error.get("code")
-        if isinstance(code, str):
-            status = {
-                "invalid_api_key": 401,
-                "rate_limit_exceeded": 429,
-                "content_filter": 403,
-                "safety_violation": 403,
-            }.get(code)
-            if status is not None:
-                return status_error("STT", status)
-    # Do not put provider messages/bodies in errors: they can echo audio, text, URLs or keys.
-    return APIError("Microsoft AI STT rejected the transcription request", kind="invalid_request")
-
-
-@dataclass
-class _Item:
-    id: str
-    finalized: str = ""
-    hypothesis: str = ""
-    last_interim: str = ""
+# the provider's error codes that name an HTTP status
+_ERROR_STATUS = {
+    "invalid_api_key": 401,
+    "rate_limit_exceeded": 429,
+    "content_filter": 403,
+    "safety_violation": 403,
+}
 
 
 class STT(stt.STT):
@@ -147,13 +58,11 @@ class STT(stt.STT):
     See the package README for deployment-specific contract and validation limits.
 
     Args:
-        vad: A VAD emitting ordered INFERENCE_DONE events even during silence,
-            with input-relative timestamps, and START_OF_SPEECH
-            frames containing the detected onset/prefix through that timestamp
-            (e.g. LiveKit's Silero VAD). Idle audio is withheld; these public frames
-            recover the onset even when the start notification is delayed.
-            Required explicitly: pass None only when driving flush/end_input yourself.
-            VoiceSession's separate VAD does not commit a native STT stream.
+        vad: A VAD whose end of speech commits the audio as one turn (e.g. LiveKit's Silero
+            VAD); only its speech, led by the 300 ms before it, is uploaded, so silence is not
+            billed. Required explicitly: pass None only when driving flush/end_input yourself
+            (every frame is then uploaded). VoiceSession's separate VAD does not commit a native
+            STT stream.
         url: Full WebSocket URL, or MICROSOFT_AI_STT_URL. No paths/query parameters
             are added automatically.
         model: Deployment model ID, or MICROSOFT_AI_STT_MODEL. No model is assumed.
@@ -166,9 +75,6 @@ class STT(stt.STT):
         http_session: Optional caller-owned HttpSession.
         env_file: Explicit dotenv file, or MICROSOFT_AI_ENV_FILE. Constructor
             arguments override environment variables, which override this file.
-        max_buffered_audio: Client-side queued-audio and VAD start-prefix limits
-            in seconds. Queue overflow or an oversized VAD prefix fails explicitly
-            instead of silently dropping speech.
     """
 
     def __init__(
@@ -183,15 +89,17 @@ class STT(stt.STT):
         language: str | None = None,
         http_session: http.HttpSession | None = None,
         env_file: str | Path | None = None,
-        max_buffered_audio: float = 5.0,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True, interim_results=True, offline_recognize=False
+                streaming=True,
+                interim_results=True,
+                offline_recognize=False,
+                # a turn is transcribed once committed: its final follows the commit
+                transcribes_after_speech_ends=True,
             )
         )
         config = Configuration(env_file)
-        positive_timeout(max_buffered_audio, "max_buffered_audio")
         if language is None:
             language = config.get("MICROSOFT_AI_STT_LANGUAGE") or None
         if language is not None and not language.strip():
@@ -208,9 +116,7 @@ class STT(stt.STT):
         )
         self._vad = vad
         self._language = language
-        self._max_buffered_audio = max_buffered_audio
-        self._streams: weakref.WeakSet[SpeechStream] = weakref.WeakSet()
-        self._closed = False
+        self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
     def model(self) -> str:
@@ -235,430 +141,270 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        """Open a transcription stream; flush commits a turn, end_input also drains finals."""
-        if self._closed:
-            raise RuntimeError("Microsoft AI STT is closed")
+        """Open a transcription stream; a flush commits a turn, end_input also drains finals."""
         selected_language = language if utils.is_given(language) else self._language
         if selected_language is not None and not selected_language.strip():
             raise ValueError("language must be nonempty when supplied")
-        stream = SpeechStream(
-            stt=self,
-            client=self._client,
-            max_buffered_audio=self._max_buffered_audio,
-            vad=self._vad,
-            language=selected_language,
-            conn_options=conn_options,
-        )
+        stream = SpeechStream(stt=self, language=selected_language, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
     async def aclose(self) -> None:
-        self._closed = True
         await asyncio.gather(*(stream.aclose() for stream in list(self._streams)))
         await self._client.aclose()
 
 
-class SpeechStream(stt.RecognizeStream):
-    """A socket with ordered audio/commit writes and concurrent transcript reception."""
+class _ErrorBody(TypedDict):
+    code: NotRequired[str]
+    status_code: NotRequired[int]
 
-    def __init__(
-        self,
-        *,
-        stt: STT,
-        client: HTTPClient,
-        max_buffered_audio: float,
-        vad: VAD | None,
-        language: str | None,
-        conn_options: APIConnectOptions,
-    ) -> None:
-        super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
-        self._stt: STT = stt
-        self._client = client
-        self._max_buffered_audio = max_buffered_audio
-        self._vad = vad
+
+class _SessionUpdated(TypedDict):
+    type: Literal["session.updated"]
+
+
+class _Committed(TypedDict):
+    type: Literal["input_audio_buffer.committed"]
+    item_id: str
+    event_id: NotRequired[str]
+
+
+class _Intermediate(TypedDict):
+    type: Literal["conversation.item.input_audio_transcription.intermediate"]
+    item_id: str
+    intermediate: str
+    event_id: NotRequired[str]
+
+
+class _Delta(TypedDict):
+    type: Literal["conversation.item.input_audio_transcription.delta"]
+    item_id: str
+    delta: str
+    event_id: NotRequired[str]
+
+
+class _Completed(TypedDict):
+    type: Literal["conversation.item.input_audio_transcription.completed"]
+    item_id: str
+    transcript: str
+    event_id: NotRequired[str]
+
+
+class _Failed(TypedDict):
+    type: Literal["conversation.item.input_audio_transcription.failed"]
+    error: NotRequired[_ErrorBody]
+
+
+class _Error(TypedDict):
+    type: Literal["error"]
+    error: NotRequired[_ErrorBody]
+
+
+_Message = Annotated[
+    _SessionUpdated | _Committed | _Intermediate | _Delta | _Completed | _Failed | _Error,
+    Field(discriminator="type"),
+]
+
+
+class _AudioFormat(TypedDict):
+    type: Literal["audio/pcm"]
+    rate: int
+
+
+class _Transcription(TypedDict):
+    model: str
+    language: NotRequired[str]
+
+
+class _AudioInput(TypedDict):
+    format: _AudioFormat
+    transcription: _Transcription
+    # null: the client commits each turn
+    turn_detection: None
+    noise_reduction: None
+
+
+class _Audio(TypedDict):
+    input: _AudioInput
+
+
+class _Session(TypedDict):
+    type: Literal["transcription"]
+    audio: _Audio
+
+
+class _SessionUpdate(TypedDict):
+    type: Literal["session.update"]
+    session: _Session
+
+
+class _Append(TypedDict):
+    type: Literal["input_audio_buffer.append"]
+    audio: str
+
+
+class _Commit(TypedDict):
+    type: Literal["input_audio_buffer.commit"]
+
+
+_Command = _SessionUpdate | _Append | _Commit
+
+
+@dataclass
+class _Item:
+    finalized: str = ""
+    hypothesis: str = ""
+    last_interim: str = ""
+
+
+def _provider_error(error: _ErrorBody) -> APIError:
+    status = error.get("status_code")
+    if status is None:
+        status = _ERROR_STATUS.get(error.get("code", ""))
+    if status is not None and 400 <= status < 600:
+        return status_error("STT", status)
+    # no provider message or body in the error: it can echo audio, text, URLs or keys
+    return APIError("Microsoft AI STT rejected the transcription request", kind="invalid_request")
+
+
+class SpeechStream(stt.WebSocketStream[_Message, _Command]):
+    """Audio appended in 50 ms frames, each turn committed at a flush or at the VAD's end of
+    speech; a turn's final transcript arrives on its item once committed. With a VAD only the
+    speech is appended: the service bills the audio it is sent."""
+
+    frame_ms = 50
+    truncate_silence = True
+    # nothing but the session.update goes until session.updated
+    awaits_ready = True
+    # a commit ends the turn; the core holds it open until its final
+    provider_vad = True
+
+    def __init__(self, *, stt: STT, language: str | None, conn_options: APIConnectOptions) -> None:
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE, vad=stt._vad)
+        self._owner = stt
         self._language_hint = language
         self._language = LanguageCode(language or "")
-        self._input_duration = 0.0
-        self._processed_samples = 0
-        self._segment_samples = 0
-        self._input_error: APIError | None = None
-        self._closed = False
-        self._speaking = False
-        self._item: _Item | None = None
-        self._commit_future: asyncio.Future[None] | None = None
-        self._committed_item_id: str | None = None
+        # audio appended since the last commit: an empty commit is an error
+        self._uncommitted = False
+        self._pending_commits = 0
+        self._audio_ended = False
+        self._items: dict[str, _Item] = {}
         self._finished_items: deque[str] = deque(maxlen=128)
         self._event_ids: deque[str] = deque(maxlen=256)
-        self._ws: _WebSocket | None = None
 
-    def push_frame(self, frame: rtc.AudioFrame) -> None:
-        self._check_input_not_ended()
-        self._check_not_closed()
-        if frame.num_channels != NUM_CHANNELS:
-            raise ValueError("Microsoft AI STT requires mono audio")
-        if frame.samples_per_channel <= 0 or frame.sample_rate <= 0:
-            raise ValueError("Microsoft AI STT requires nonempty audio frames")
-        buffered = self._input_duration - self._processed_samples / SAMPLE_RATE
-        if buffered + frame.duration > self._max_buffered_audio or self.input.qsize() >= 1024:
-            self._input_error = APIError(
-                "Microsoft AI STT audio buffer is full; pace input or raise max_buffered_audio",
-                kind="invalid_request",
-            )
-            self.input.close()
-            raise self._input_error
-        super().push_frame(frame)
-        self._input_duration += frame.duration
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
+        self._uncommitted = False
+        self._pending_commits = 0
+        self._items.clear()
+        return stt.WebSocketTarget(self._owner._client.url, headers=self._owner._client.headers)
 
-    def flush(self) -> None:
-        if self.input.qsize() >= 1024:
-            self._input_error = APIError(
-                "Microsoft AI STT input queue is full", kind="invalid_request"
-            )
-            self.input.close()
-            raise self._input_error
-        super().flush()
-
-    async def aclose(self) -> None:
-        self._closed = True
-        await super().aclose()
-
-    async def __anext__(self) -> stt.SpeechEvent:
-        if self._closed:
-            raise StopAsyncIteration
-        event = await super().__anext__()
-        if self._closed:
-            raise StopAsyncIteration
-        return event
-
-    async def _run(self) -> None:
-        if self._input_error is not None:
-            raise self._input_error
-        await self._attempt()
-
-    async def _attempt(self) -> None:
-        tasks = utils.aio.TaskSet()
-        try:
-            await self._handshake()
-            assert self._ws is not None
-            sender = tasks.spawn(self._send(self._ws))
-            receiver = tasks.spawn(self._receive(self._ws))
-            if await tasks.first_completed(sender, receiver) is receiver:
-                raise APIConnectionError("Microsoft AI STT receiver stopped unexpectedly")
-        except TimeoutError:
-            raise APITimeoutError("Microsoft AI STT operation timed out") from None
-        finally:
-            await tasks.aclose()
-            if self._commit_future is not None:
-                self._commit_future.cancel()
-                self._commit_future = None
-            if self._ws is not None:
-                try:
-                    await asyncio.wait_for(self._ws.close(), self._conn_options.total_timeout)
-                except (TimeoutError, ConnectionError):
-                    logger.warning("Microsoft AI STT socket cleanup failed")
-                self._ws = None
-
-    async def _handshake(self) -> None:
-        try:
-            ws = await self._client.session().ws_connect(
-                self._client.url,
-                headers=self._client.headers,
-                heartbeat=10.0,
-                max_msg_size=1024 * 1024,
-                conn_options=self._conn_options,
-            )
-        except APIStatusError as error:
-            raise status_error("STT", error.status_code) from None
-        self._ws = ws
-        await asyncio.wait_for(
-            self._await_event(ws, "session.created"), self._conn_options.read_timeout
-        )
-        await self._write(ws, _session_update(self._stt.model, self._language_hint))
-        await asyncio.wait_for(
-            self._await_event(ws, "session.updated"), self._conn_options.read_timeout
+    def setup(self) -> _SessionUpdate:
+        transcription = _Transcription(model=self._owner.model)
+        if self._language_hint is not None:
+            transcription["language"] = self._language_hint
+        return _SessionUpdate(
+            type="session.update",
+            session=_Session(
+                type="transcription",
+                audio=_Audio(
+                    input=_AudioInput(
+                        format=_AudioFormat(type="audio/pcm", rate=SAMPLE_RATE),
+                        transcription=transcription,
+                        turn_detection=None,
+                        noise_reduction=None,
+                    )
+                ),
+            ),
         )
 
-    async def _await_event(self, ws: _WebSocket, event_type: str) -> None:
-        while (await self._receive_event(ws)).type != event_type:
-            pass
+    def _commit(self) -> _Commit | None:
+        if not self._uncommitted:
+            return None
+        self._uncommitted = False
+        self._pending_commits += 1
+        # the committed audio is a turn that owes its final, even before any words of it
+        if not self.speaking:
+            self.report(stt.SpeechStarted())
+        self.report(stt.SpeechEnded())
+        return _Commit(type="input_audio_buffer.commit")
 
-    async def _receive_event(self, ws: _WebSocket) -> _Event:
-        while True:
-            message = await ws.receive()
-            if message.type is http.WebSocketMessageType.CLOSE:
-                raise ws.close_error("Microsoft AI STT connection closed unexpectedly")
-            if message.type is http.WebSocketMessageType.TEXT:
-                break
-        try:
-            event = _Event.model_validate_json(message.data)
-        except ValidationError as exc:
-            raise APIError(
-                "Microsoft AI STT sent malformed JSON", kind="protocol", detail=str(message.data)
-            ) from exc
-        if event.type in ("error", _TRANSCRIPTION + "failed"):
-            raise _provider_error(event.error)
-        return event
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> _Command | None:
+        match item:
+            case rtc.AudioFrame():
+                # with a VAD, audio goes only during speech: its first frame starts the turn
+                if self._owner._vad is not None and not self._uncommitted:
+                    self.report(stt.SpeechStarted())
+                self._uncommitted = True
+                return _Append(
+                    type="input_audio_buffer.append",
+                    audio=base64.b64encode(item.data).decode("ascii"),
+                )
+            case stt.Flush():
+                return self._commit()
+            case stt.EndOfAudio():
+                self._audio_ended = True
+                commit = self._commit()
+                if commit is None and not self._pending_commits:
+                    # every turn was transcribed: nothing more will come
+                    self.report(stt.SessionFinished())
+                return commit
+            case _:
+                assert_never(item)
 
-    async def _write(self, ws: _WebSocket, data: dict[str, object]) -> None:
-        await asyncio.wait_for(ws.send_json(data), self._conn_options.write_timeout)
-
-    async def _append(
-        self, ws: _WebSocket, frame: rtc.AudioFrame, *, account_input: bool = True
-    ) -> None:
-        await self._write(
-            ws,
-            {
-                "type": "input_audio_buffer.append",
-                "audio": base64.b64encode(frame.data).decode("ascii"),
-            },
-        )
-        if account_input:
-            self._processed_samples += frame.samples_per_channel
-        self._segment_samples += frame.samples_per_channel
-
-    async def _commit(self, ws: _WebSocket, buffer: utils.media.AudioByteStream) -> None:
-        for frame in buffer.flush():
-            await self._append(ws, frame)
-        if not self._segment_samples:
-            return
-        self._commit_future = asyncio.get_running_loop().create_future()
-        self._committed_item_id = None
-        try:
-            await self._write(ws, {"type": "input_audio_buffer.commit"})
-            await asyncio.wait_for(self._commit_future, self._conn_options.read_timeout)
-            self._segment_samples = 0
-        finally:
-            self._commit_future = None
-
-    async def _send(self, ws: _WebSocket) -> None:
-        buffer = utils.media.AudioByteStream(
-            sample_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS, samples_per_channel=800
-        )
-        if self._vad is None:
-            async for data in self.input:
-                if self._input_error is not None:
-                    raise self._input_error
-                if isinstance(data, self.Flush):
-                    await self._commit(ws, buffer)
-                else:
-                    for frame in buffer.push(data.data.cast("B")):
-                        await self._append(ws, frame)
-        else:
-            while True:
-                await self._send_vad_segment(ws, buffer, self._vad)
-                if self.input.closed and self.input.empty():
-                    break
-        if self._input_error is not None:
-            raise self._input_error
-
-    async def _send_vad_segment(
+    def on_message(
         self,
-        ws: _WebSocket,
-        buffer: utils.media.AudioByteStream,
-        detector: VAD,
+        message: _SessionUpdated
+        | _Committed
+        | _Intermediate
+        | _Delta
+        | _Completed
+        | _Failed
+        | _Error,
     ) -> None:
-        vad_stream = detector.stream()
-        pending = bytearray()
-        consumed_samples = 0
-        fed_samples = 0
-        feed_ended = False
-        speaking = False
-        committed_samples = 0
+        if message["type"] == "session.updated":
+            self.report(stt.Ready())
+            return
+        if (
+            message["type"] == "error"
+            or message["type"] == "conversation.item.input_audio_transcription.failed"
+        ):
+            raise _provider_error(message.get("error", _ErrorBody()))
+        # a resent event counts once
+        if event_id := message.get("event_id"):
+            if event_id in self._event_ids:
+                return
+            self._event_ids.append(event_id)
+        item_id = message["item_id"]
+        if item_id in self._finished_items:
+            return
+        item = self._items.setdefault(item_id, _Item())
+        if message["type"] == "input_audio_buffer.committed":
+            pass
+        elif message["type"] == "conversation.item.input_audio_transcription.intermediate":
+            # replaces the revisable hypothesis
+            item.hypothesis = message["intermediate"]
+            self._interim(item_id, item)
+        elif message["type"] == "conversation.item.input_audio_transcription.delta":
+            # finalized text: appended, and it clears the hypothesis
+            item.finalized += message["delta"]
+            item.hypothesis = ""
+            self._interim(item_id, item)
+        elif message["type"] == "conversation.item.input_audio_transcription.completed":
+            self._complete(item_id, message["transcript"])
+        else:
+            assert_never(message)
 
-        async def feed() -> None:
-            nonlocal fed_samples, feed_ended
-            async for data in self.input:
-                if self._input_error is not None:
-                    raise self._input_error
-                if isinstance(data, self.Flush):
-                    break
-                pending.extend(data.data.cast("B"))
-                fed_samples += data.samples_per_channel
-                vad_stream.push_frame(data)
-            if self._input_error is not None:
-                raise self._input_error
-            feed_ended = True
-            vad_stream.end_input()
-
-        async def drain(position: int) -> None:
-            nonlocal consumed_samples
-            if position < consumed_samples or position > fed_samples:
-                raise APIError(
-                    "Microsoft AI STT requires ordered, input-relative VAD timestamps",
-                    kind="invalid_request",
-                )
-            size = (position - consumed_samples) * 2
-            data = bytes(pending[:size]) if speaking else b""
-            del pending[:size]
-            consumed_samples = position
-            if speaking:
-                for frame in buffer.push(data):
-                    await self._append(ws, frame)
-            else:
-                self._processed_samples += size // 2
-
-        async def send_prefix(event: VADEvent, position: int) -> None:
-            if not event.frames or any(
-                frame.sample_rate != SAMPLE_RATE
-                or frame.num_channels != NUM_CHANNELS
-                or frame.samples_per_channel <= 0
-                for frame in event.frames
-            ):
-                raise APIError(
-                    "Microsoft AI STT requires nonempty mono 16kHz VAD start frames "
-                    "ending at the event timestamp to preserve the speech prefix",
-                    kind="invalid_request",
-                )
-            samples = sum(frame.samples_per_channel for frame in event.frames)
-            if samples > int(self._max_buffered_audio * SAMPLE_RATE):
-                raise APIError(
-                    "Microsoft AI STT VAD start prefix exceeds max_buffered_audio",
-                    kind="invalid_request",
-                )
-            if samples > position or position <= committed_samples:
-                raise APIError(
-                    "Microsoft AI STT received invalid VAD start timing", kind="invalid_request"
-                )
-            prefix = rtc.combine_audio_frames(event.frames).data.tobytes()
-            # The VAD may retain audio from the preceding committed turn. Never replay it.
-            overlap = max(0, committed_samples - (position - samples))
-            prefix = prefix[overlap * 2 :]
-            for frame in buffer.push(prefix):
-                await self._append(ws, frame, account_input=False)
-            # Prefix samples were already accounted as idle input. Keep them separate
-            # from subsequent, not-yet-accounted audio in the framing buffer.
-            for frame in buffer.flush():
-                await self._append(ws, frame, account_input=False)
-
-        async def consume() -> None:
-            nonlocal speaking, committed_samples
-            async for event in vad_stream:
-                if not math.isfinite(event.timestamp) or event.timestamp < 0:
-                    raise APIError(
-                        "Microsoft AI STT received an invalid VAD timestamp", kind="invalid_request"
-                    )
-                position = round(event.timestamp * SAMPLE_RATE)
-                await drain(position)
-                if event.type == VADEventType.START_OF_SPEECH:
-                    if speaking:
-                        raise APIError(
-                            "Microsoft AI STT received overlapping VAD speech starts",
-                            kind="invalid_request",
-                        )
-                    await send_prefix(event, position)
-                    speaking = True
-                    self._start_speaking()
-                elif event.type == VADEventType.END_OF_SPEECH:
-                    if not speaking:
-                        raise APIError(
-                            "Microsoft AI STT received a VAD end without a speech start",
-                            kind="invalid_request",
-                        )
-                    await self._commit(ws, buffer)
-                    committed_samples = position
-                    speaking = False
-            if not feed_ended:
-                raise APIError(
-                    "Microsoft AI STT VAD stopped before end of input", kind="invalid_request"
-                )
-            # A VAD's last inference window can be incomplete. Send the actual remaining
-            # samples, not invented silence, before the explicit final commit.
-            await drain(fed_samples)
-            if speaking:
-                await self._commit(ws, buffer)
-
-        tasks = utils.aio.TaskSet()
-        producer = tasks.spawn(feed())
-        consumer = tasks.spawn(consume())
-        try:
-            # shielded: the consumer keeps running after the producer ends
-            await tasks.first_completed(asyncio.shield(producer), asyncio.shield(consumer))
-            if producer.done():
-                # Finite input: the VAD's last results are a response the stream is waiting on.
-                await asyncio.wait_for(consumer, self._conn_options.read_timeout)
-            else:
-                # Live input may remain open indefinitely; surface the consumer's error now.
-                await consumer
-        finally:
-            await tasks.aclose()
-            await vad_stream.aclose()
-
-    def _start_speaking(self) -> None:
-        if not self._speaking:
-            self._speaking = True
-            self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
-
-    def _speech_event(self, type: stt.SpeechEventType, item: _Item, text: str) -> None:
-        self._start_speaking()
-        self.send(
-            stt.SpeechEvent(
-                type=type,
-                request_id=item.id,
-                alternatives=[stt.SpeechData(language=self._language, text=text)],
-            )
-        )
-
-    async def _receive(self, ws: _WebSocket) -> None:
-        while True:
-            event = await self._receive_event(ws)
-            if "event_id" in event.model_fields_set:
-                event_id = _string(event.event_id, "event_id", nonempty=True)
-                if event_id in self._event_ids:
-                    continue
-                self._event_ids.append(event_id)
-            event_type = event.type
-            if not (
-                event_type.startswith(_TRANSCRIPTION)
-                or event_type == "input_audio_buffer.committed"
-            ):
-                continue
-            item_id = _string(event.item_id, "item_id", nonempty=True)
-            if item_id in self._finished_items:
-                continue
-            if self._item is None:
-                self._item = _Item(id=item_id)
-            item = self._item
-            if item.id != item_id:
-                raise APIError("Microsoft AI STT changed item before completion", kind="protocol")
-            if event_type == "input_audio_buffer.committed":
-                if self._commit_future is None:
-                    raise APIError(
-                        "Microsoft AI STT acknowledged an unsolicited commit", kind="protocol"
-                    )
-                self._committed_item_id = item_id
-            elif event_type == _TRANSCRIPTION + "intermediate":
-                item.hypothesis = _string(event.intermediate, "intermediate")
-                self._interim(item)
-            elif event_type == _TRANSCRIPTION + "delta":
-                item.finalized += _string(event.delta, "delta")
-                item.hypothesis = ""
-                self._interim(item)
-            elif event_type == _TRANSCRIPTION + "completed":
-                self._complete(item, _string(event.transcript, "transcript"))
-
-    def _interim(self, item: _Item) -> None:
+    def _interim(self, item_id: str, item: _Item) -> None:
         text = item.finalized + item.hypothesis
-        if len(text) > _MAX_TEXT_LENGTH:
-            raise APIError("Microsoft AI STT transcript exceeds the text limit", kind="protocol")
         if text != item.last_interim:
             item.last_interim = text
-            self._speech_event(stt.SpeechEventType.INTERIM_TRANSCRIPT, item, text)
+            self.report(stt.Transcript(text, self._language, request_id=item_id))
 
-    def _complete(self, item: _Item, transcript: str) -> None:
-        if (
-            self._commit_future is None
-            or self._commit_future.done()
-            or self._committed_item_id != item.id
-        ):
-            raise APIError(
-                "Microsoft AI STT completed without an acknowledged commit", kind="protocol"
-            )
-        # A completion can retract the interim hypothesis: an empty final then clears it.
-        if transcript or item.last_interim:
-            self._speech_event(stt.SpeechEventType.FINAL_TRANSCRIPT, item, transcript)
-        if self._speaking:
-            self._speaking = False
-            self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=item.id))
-        self._finished_items.append(item.id)
-        self._item = None
-        self._commit_future.set_result(None)
+    def _complete(self, item_id: str, transcript: str) -> None:
+        del self._items[item_id]
+        self._finished_items.append(item_id)
+        # the completion is authoritative: an empty one after an interim retracts it
+        self.report(stt.Transcript(transcript, self._language, final=True, request_id=item_id))
+        self._pending_commits = max(0, self._pending_commits - 1)
+        if self._audio_ended and not self._pending_commits:
+            self.report(stt.SessionFinished())

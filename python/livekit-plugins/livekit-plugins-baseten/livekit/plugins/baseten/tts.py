@@ -14,11 +14,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import weakref
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from typing import TypedDict, assert_never
 
 from pydantic import JsonValue
 
@@ -35,17 +35,24 @@ from livekit.agents import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from ._qwen3_tts import NUM_CHANNELS, SAMPLE_RATE, Qwen3Backend
+from ._endpoint import resolve_endpoint
+from ._qwen3_tts import NUM_CHANNELS, SAMPLE_RATE, Qwen3Options, Qwen3Pool, Qwen3SynthesizeStream
 from .models import TTSModels
 
 _END_SENTINEL = "__END__"
 
 
 @dataclass
-class _TTSOptions:
+class _OrpheusOptions:
     language: str
     voice: str
     temperature: float
+    max_tokens: int
+    buffer_size: int
+
+
+class _OrpheusSetup(TypedDict):
+    voice: str
     max_tokens: int
     buffer_size: int
 
@@ -124,16 +131,28 @@ class TTS(tts.TTS):
             ValueError: If the API key or endpoint cannot be resolved, or if
                 ``model="qwen3-tts"`` without a ``voice``.
         """
+        api_key = api_key or os.environ.get("BASETEN_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "Baseten API key is required. "
+                "Pass one in via the `api_key` parameter, "
+                "or set it as the `BASETEN_API_KEY` environment variable"
+            )
         self._model_name = model
-        self._qwen3: Qwen3Backend | None = None
+        self._api_key = api_key
+        self._session = http_session
+        self._streams = weakref.WeakSet[tts.SynthesizeStream]()
+        self._opts: _OrpheusOptions | Qwen3Options
+        self._pool: Qwen3Pool | None = None
 
         if model == "qwen3-tts":
-            self._qwen3 = Qwen3Backend(
-                model_endpoint=model_endpoint,
-                model_id=model_id,
-                chain_id=chain_id,
-                api_key=api_key,
-                voice=voice if is_given(voice) else "",
+            endpoint = resolve_endpoint(
+                model_endpoint, model_id, chain_id, "BASETEN_MODEL_ENDPOINT"
+            )
+            if not is_given(voice) or not voice:
+                raise ValueError("`voice` is required: the Base checkpoint has no presets.")
+            self._opts = Qwen3Options(
+                voice=voice,
                 task_type=task_type,
                 language=language if is_given(language) else "Auto",
                 instructions=instructions,
@@ -143,57 +162,30 @@ class TTS(tts.TTS):
                 ref_audio=ref_audio,
                 ref_text=ref_text,
                 word_timestamps=word_timestamps,
-                extra_config=extra_config,
-                http_session=http_session,
+                extra_config=dict(extra_config or {}),
             )
-            super().__init__(
-                capabilities=tts.TTSCapabilities(
-                    streaming=True, aligned_transcript=word_timestamps
-                ),
-                sample_rate=SAMPLE_RATE,
-                num_channels=NUM_CHANNELS,
+            self._pool = Qwen3Pool(model_endpoint=endpoint, api_key=api_key, opts=self._opts)
+            capabilities = tts.TTSCapabilities(streaming=True, aligned_transcript=word_timestamps)
+        else:
+            endpoint = model_endpoint or os.environ.get("BASETEN_MODEL_ENDPOINT") or ""
+            if not endpoint:
+                raise ValueError(
+                    "model_endpoint is required. "
+                    "Provide it via the constructor or BASETEN_MODEL_ENDPOINT env var."
+                )
+            self._opts = _OrpheusOptions(
+                voice=voice if is_given(voice) else "tara",
+                language=language if is_given(language) else "en",
+                temperature=temperature,
+                max_tokens=max_tokens,
+                buffer_size=buffer_size,
             )
-            self._session = http_session
-            self._streams = weakref.WeakSet[tts.SynthesizeStream]()
-            return
-
-        api_key = api_key or os.environ.get("BASETEN_API_KEY")
-
-        if not api_key:
-            raise ValueError(
-                "Baseten API key is required. "
-                "Pass one in via the `api_key` parameter, "
-                "or set it as the `BASETEN_API_KEY` environment variable"
-            )
-
-        model_endpoint = model_endpoint or os.environ.get("BASETEN_MODEL_ENDPOINT")
-
-        if not model_endpoint:
-            raise ValueError(
-                "model_endpoint is required. "
-                "Provide it via the constructor or BASETEN_MODEL_ENDPOINT env var."
-            )
-
-        is_ws = model_endpoint.startswith(("wss://", "ws://"))
-
+            # a wss:// endpoint streams; an https:// one synthesizes each request whole
+            capabilities = tts.TTSCapabilities(streaming=endpoint.startswith(("wss://", "ws://")))
+        self._model_endpoint = endpoint
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=is_ws),
-            sample_rate=24000,
-            num_channels=1,
+            capabilities=capabilities, sample_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS
         )
-
-        self._api_key = api_key
-        self._model_endpoint = model_endpoint
-
-        self._opts = _TTSOptions(
-            voice=voice if is_given(voice) else "tara",
-            language=language if is_given(language) else "en",
-            temperature=temperature,
-            max_tokens=max_tokens,
-            buffer_size=buffer_size,
-        )
-        self._session = http_session
-        self._streams = weakref.WeakSet[tts.SynthesizeStream]()
 
     @property
     def model(self) -> str:
@@ -220,92 +212,91 @@ class TTS(tts.TTS):
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if self._qwen3 is not None:
-            self._qwen3.update_options(voice=voice, language=language)
-            return
-        if is_given(voice):
-            self._opts.voice = voice
-        if is_given(language):
-            self._opts.language = language
-        if is_given(temperature):
-            self._opts.temperature = temperature
-        if is_given(max_tokens):
-            self._opts.max_tokens = max_tokens
-        if is_given(buffer_size):
-            self._opts.buffer_size = buffer_size
+        """``temperature``, ``max_tokens`` and ``buffer_size`` are orpheus options; a qwen3-tts
+        socket takes the new voice and language from the next turn."""
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            opts = self._opts
+            if is_given(voice):
+                opts.voice = voice
+            if is_given(language):
+                opts.language = language
+            if isinstance(opts, _OrpheusOptions):
+                if is_given(temperature):
+                    opts.temperature = temperature
+                if is_given(max_tokens):
+                    opts.max_tokens = max_tokens
+                if is_given(buffer_size):
+                    opts.buffer_size = buffer_size
+        if (
+            not isinstance(opts, _OrpheusOptions)
+            and self._pool is not None
+            and (is_given(voice) or is_given(language))
+        ):
+            # the session config is sticky for a socket's life
+            self._pool.invalidate()
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> tts.ChunkedStream:
-        if self._qwen3 is not None:
-            # Qwen3-TTS is streaming-only; the framework helper disables retries
-            # on the inner stream and forwards timed transcripts.
-            return self._synthesize_with_stream(chunk, conn_options=conn_options)
-        return ChunkedStream(
-            tts=self,
-            input_text=chunk.text,
-            conn_options=conn_options,
-            opts=replace(self._opts),
-            ensure_session=self._ensure_session,
-            model_endpoint=self._model_endpoint,
-            api_key=self._api_key,
-        )
+        match self._opts:
+            case _OrpheusOptions():
+                return ChunkedStream(
+                    tts=self,
+                    input_text=chunk.text,
+                    conn_options=conn_options,
+                    opts=replace(self._opts),
+                )
+            case Qwen3Options():
+                # Qwen3-TTS is streaming-only
+                return self._synthesize_with_stream(chunk, conn_options=conn_options)
+            case _:
+                assert_never(self._opts)
 
     def _stream(self, *, conn_options: APIConnectOptions) -> tts.SynthesizeStream:
         stream: tts.SynthesizeStream
-        if self._qwen3 is not None:
-            stream = self._qwen3.make_stream(self, conn_options=conn_options)
-        else:
-            stream = SynthesizeStream(
-                tts=self,
-                conn_options=conn_options,
-                opts=replace(self._opts),
-                ensure_session=self._ensure_session,
-                model_endpoint=self._model_endpoint,
-                api_key=self._api_key,
-            )
+        match self._opts:
+            case _OrpheusOptions():
+                stream = SynthesizeStream(
+                    tts=self, conn_options=conn_options, opts=replace(self._opts)
+                )
+            case Qwen3Options():
+                assert self._pool is not None
+                stream = Qwen3SynthesizeStream(
+                    tts=self,
+                    pool=self._pool,
+                    word_timestamps=self._opts.word_timestamps,
+                    conn_options=conn_options,
+                )
+            case _:
+                assert_never(self._opts)
         self._streams.add(stream)
         return stream
+
+    def prewarm(self) -> None:
+        if self._pool is not None:
+            self._pool.prewarm()
 
     async def aclose(self) -> None:
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
-        if self._qwen3 is not None:
-            await self._qwen3.aclose()
+        if self._pool is not None:
+            await self._pool.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(
-        self,
-        *,
-        tts: TTS,
-        input_text: str,
-        conn_options: APIConnectOptions,
-        opts: _TTSOptions,
-        ensure_session: Callable[[], http.HttpSession],
-        model_endpoint: str,
-        api_key: str,
+        self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions, opts: _OrpheusOptions
     ) -> None:
-        super().__init__(
-            tts=tts,
-            input_text=input_text,
-            conn_options=conn_options,
-        )
-
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+        self._baseten = tts
         self._opts = opts
-        self._ensure_session = ensure_session
-        self._model_endpoint = model_endpoint
-        self._api_key = api_key
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            async with self._ensure_session().post(
-                self._model_endpoint,
-                headers={
-                    "Authorization": f"Api-Key {self._api_key}",
-                },
+            async with self._baseten._ensure_session().post(
+                self._baseten._model_endpoint,
+                headers={"Authorization": f"Api-Key {self._baseten._api_key}"},
                 json={
                     "prompt": self._input_text,
                     "voice": self._opts.voice,
@@ -318,8 +309,8 @@ class ChunkedStream(tts.ChunkedStream):
 
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
-                    sample_rate=24000,
-                    num_channels=1,
+                    sample_rate=SAMPLE_RATE,
+                    num_channels=NUM_CHANNELS,
                     mime_type="audio/pcm",
                 )
 
@@ -335,75 +326,46 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        conn_options: APIConnectOptions,
-        opts: _TTSOptions,
-        ensure_session: Callable[[], http.HttpSession],
-        model_endpoint: str,
-        api_key: str,
-    ) -> None:
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._opts = opts
-        self._ensure_session = ensure_session
-        self._model_endpoint = model_endpoint
-        self._api_key = api_key
+class SynthesizeStream(tts.WebSocketStream[bytes | str, _OrpheusSetup | str]):
+    """The Orpheus truss: a session per segment, its text as raw frames, ended by ``__END__``,
+    after which the server sends the audio and closes."""
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=24000,
-            num_channels=1,
-            mime_type="audio/pcm",
-            stream=True,
+    connection_per_segment = True
+
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions, opts: _OrpheusOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._baseten = tts
+        self._opts = opts
+        self._segment_id = ""
+
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        return tts.WebSocketTarget(
+            self._baseten._model_endpoint,
+            headers={"Authorization": f"Api-Key {self._baseten._api_key}"},
         )
 
-        read_deadline = self._core_attempts
+    def setup(self) -> _OrpheusSetup:
+        return _OrpheusSetup(
+            voice=self._opts.voice,
+            max_tokens=self._opts.max_tokens,
+            buffer_size=self._opts.buffer_size,
+        )
 
-        async def _send_task(ws: http.WebSocket) -> None:
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    continue
-                self.mark_started()
-                await ws.send_str(data.text + " ")
-                read_deadline.expect_response()
-            await ws.send_str(_END_SENTINEL)
-            read_deadline.expect_response(final=True)
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> str | None:
+        match item:
+            case tts.SegmentStart():
+                self._segment_id = item.segment_id
+                return None
+            case tts.SegmentText():
+                return f"{item.chunk.text} "
+            case tts.SegmentEnd():
+                return _END_SENTINEL
+            case tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-        async def _recv_task(ws: http.WebSocket) -> None:
-            output_emitter.start_segment(segment_id=request_id)
-            async for msg in ws:
-                if msg.type is http.WebSocketMessageType.BINARY:
-                    read_deadline.audio_received()
-                    output_emitter.push(msg.binary)
-            output_emitter.end_input()
-
-        try:
-            ws = await self._ensure_session().ws_connect(
-                self._model_endpoint,
-                headers={"Authorization": f"Api-Key {self._api_key}"},
-                conn_options=self._conn_options,
-            )
-            try:
-                await ws.send_json(
-                    {
-                        "voice": self._opts.voice,
-                        "max_tokens": self._opts.max_tokens,
-                        "buffer_size": self._opts.buffer_size,
-                    }
-                )
-
-                async with utils.aio.TaskSet() as tasks:
-                    await asyncio.gather(tasks.spawn(_send_task(ws)), tasks.spawn(_recv_task(ws)))
-            finally:
-                await ws.close()
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
+    def on_message(self, message: bytes | str) -> None:
+        # text frames carry nothing the stream reads
+        if isinstance(message, bytes):
+            self.report(tts.SegmentAudio(self._segment_id, message))

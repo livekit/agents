@@ -14,13 +14,12 @@ import base64
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit, urlunsplit
+from typing import TYPE_CHECKING
 
 import msgpack  # type: ignore[import-untyped]  # msgpack ships no type information
 import pytest
 
-from livekit.agents import APIConnectOptions, APIError, APITimeoutError, _core, http, tts
+from livekit.agents import APIConnectOptions, APIError, APITimeoutError, _core, tts
 from livekit.plugins import (
     asyncai,
     baseten,
@@ -207,20 +206,15 @@ def _neuphonic(_: Connection, message: str | bytes) -> list[Frame]:
     return [audio, {"data": {"stop": True, "context_id": context}}]
 
 
+def _palabra(_: Connection, message: str | bytes) -> list[Frame]:
+    packet = json.loads(message)
+    if packet["type"] != "text":  # the session's init
+        return []
+    data = {"audio": _b64(PCM), "generation_id": packet["generation_id"], "last_chunk": True}
+    return [{"message_type": "audio_chunk", "data": data}]
+
+
 # -- resemble .. xai answers
-class _ToPeer(http.HttpSession):
-    """The test's session, opening every websocket on the peer: for a plugin whose provider URL
-    is fixed, or must be wss://, the peer stands behind the provider's host."""
-
-    def __init__(self, peer: WsPeer) -> None:
-        vars(self).update(vars(http.http_session()))  # the fixture's pool, closed with it
-        self._peer = urlsplit(peer.ws_url)
-
-    async def ws_connect(self, url: str, **options: Any) -> http.WebSocket:  # Any: forwarded
-        target = urlsplit(url)._replace(scheme=self._peer.scheme, netloc=self._peer.netloc)
-        return await super().ws_connect(urlunsplit(target), **options)
-
-
 def _resemble(_: Connection, message: str | bytes) -> list[Frame]:
     request = json.loads(message)["request_id"]
     audio = {"type": "audio", "audio_content": _b64(TONE_MP3), "request_id": request}
@@ -233,22 +227,14 @@ def _respeecher(_: Connection, message: str | bytes) -> list[Frame]:
     return [{"context_id": packet["context_id"], **reply}]
 
 
-def _rime(_: Connection, message: str | bytes) -> list[Frame]:
-    packet = json.loads(message)
-    context = {"contextId": packet["contextId"]}
-    if "text" in packet:
-        return [{**context, "type": "chunk", "data": _b64(PCM)}]
-    return [{**context, "type": "done"}]  # a flush
-
-
-def _rime_v1_on(peer: WsPeer) -> tts.TTS:
+def _rime_on(peer: WsPeer) -> tts.TTS:
     peer.protocols = ("rime.v1.json",)
     peer.hello = [{"ready": {"protocol": 1, "languages": ["eng"]}}]
     url = peer.ws_url + "/coda/ws"
     return rime.TTS(api_key="key", websocket_url=url, websocket_protocol="json")
 
 
-def _rime_v1(_: Connection, message: str | bytes) -> list[Frame]:
+def _rime(_: Connection, message: str | bytes) -> list[Frame]:
     event = json.loads(message)
     context = event["contextId"]
     if "start" in event:
@@ -360,37 +346,29 @@ CASES: dict[str, TtsCase] = {
     ),
     # -- asyncai .. palabra
     "asyncai": TtsCase(
-        segments=False,
         make=lambda peer: asyncai.TTS(api_key="key", base_url=peer.url),
         answer=_asyncai,
     ),
     "baseten": TtsCase(
-        segments=False,
         make=lambda peer: baseten.TTS(api_key="key", model_endpoint=peer.ws_url),
         answer=_baseten,
     ),
     "baseten_qwen3": TtsCase(
-        segments=False,
         make=lambda peer: baseten.TTS(
             model="qwen3-tts", api_key="key", model_endpoint=peer.ws_url, voice="voice"
         ),
         answer=_baseten_qwen3,
-        loop_deadline="a flushed segment is read under asyncio.timeout(read_timeout)",
     ),
     "bland": TtsCase(
-        segments=False,
         make=lambda peer: bland.TTS(api_key="key", base_url=peer.url),
         answer=_bland,
         setup=1,
     ),
     "elevenlabs": TtsCase(
-        segments=False,
         make=lambda peer: elevenlabs.TTS(api_key="key", encoding="pcm_24000", base_url=peer.url),
         answer=_elevenlabs,
-        loop_deadline="a context's timeout is a loop.call_later(read_timeout) timer",
     ),
     "fishaudio": TtsCase(
-        segments=False,
         make=lambda peer: fishaudio.TTS(api_key="key", output_format="pcm", base_url=peer.url),
         answer=_fishaudio,
     ),
@@ -413,7 +391,6 @@ CASES: dict[str, TtsCase] = {
         answer=_inworld,
     ),
     "minimax": TtsCase(
-        segments=False,
         make=lambda peer: minimax.TTS(api_key="key", audio_format="pcm", base_url=peer.url),
         answer=_minimax,
     ),
@@ -427,9 +404,7 @@ CASES: dict[str, TtsCase] = {
         skip="Riva speaks gRPC through its own client",
     ),
     "palabra": TtsCase(
-        make=lambda _: palabra.TTS(),
-        answer=lambda _c, _m: [],
-        skip="the Palabra SDK picks its endpoint from a region, with no base URL",
+        make=lambda peer: palabra.TTS(api_key="key", base_url=peer.ws_url), answer=_palabra
     ),
     # -- resemble .. xai
     "resemble": TtsCase(
@@ -440,17 +415,12 @@ CASES: dict[str, TtsCase] = {
         make=lambda peer: respeecher.TTS(api_key="key", base_url=peer.url + "/"),
         answer=_respeecher,
     ),
-    "rime": TtsCase(make=lambda peer: rime.TTS(api_key="key", base_url=peer.ws_url), answer=_rime),
-    "rime_v1": TtsCase(
-        make=_rime_v1_on,
-        answer=_rime_v1,
-    ),
+    "rime": TtsCase(make=_rime_on, answer=_rime),
     "sarvam": TtsCase(
         make=lambda peer: sarvam.TTS(
             api_key="key", ws_url=peer.ws_url, output_audio_codec="linear16"
         ),
         answer=_sarvam,
-        loop_deadline="the receive loop reads with ws.receive(timeout=read_timeout)",
     ),
     # one bridge connection: slng.TTS chains them in a FallbackAdapter that retries each on its own
     "slng": TtsCase(
@@ -460,11 +430,13 @@ CASES: dict[str, TtsCase] = {
         answer=_slng,
         setup=1,
     ),
+    # continuations send no end of a segment: it is done once the text idles, on the core's clock
     "smallestai": TtsCase(
-        make=lambda peer: smallestai.TTS(api_key="key", ws_url=peer.ws_url), answer=_smallestai
+        segments=False,
+        make=lambda peer: smallestai.TTS(api_key="key", ws_url=peer.ws_url),
+        answer=_smallestai,
     ),
     "soniox": TtsCase(
-        segments=False,
         make=lambda peer: soniox.TTS(api_key="key", websocket_url=peer.ws_url),
         answer=_soniox,
     ),
@@ -482,10 +454,9 @@ CASES: dict[str, TtsCase] = {
         make=_vakyam_on,
         answer=_vakyam,
         setup=1,
-        loop_deadline="each utterance is read with ws.receive(timeout=read_timeout)",
     ),
     "xai": TtsCase(
-        make=lambda peer: xai.TTS(api_key="key", http_session=_ToPeer(peer)), answer=_xai
+        make=lambda peer: xai.TTS(api_key="key", websocket_url=peer.ws_url), answer=_xai
     ),
 }
 
@@ -497,12 +468,7 @@ KNOWN: dict[tuple[str, str], str] = {
 
 
 # (contract, plugin): what the contract's test cannot express for that plugin
-UNTESTABLE: dict[tuple[str, str], str] = {
-    ("idle_input", "gnani"): "the stream speaks the text up to its first flush and ends "
-    "(gnani/tts.py:435): its input never waits for more text",
-    ("idle_input", "smallestai"): "the continuations protocol ends a segment only after 0.6 s of "
-    "real-time silence: its answer is still owed when the test skips the core's clock",
-}
+UNTESTABLE: dict[tuple[str, str], str] = {}
 
 
 def _params(contract: str) -> list[object]:
@@ -563,6 +529,10 @@ async def test_an_open_input_waiting_for_text_never_times_out(name: str, ws_peer
         await until(lambda: spoken or run.failure(), "the first sentence is spoken")
         assert run.failure() is None
 
+        if not CASES[name].segments:
+            # its segment ends once the text idles: passed alone, before the read limit
+            _core.skip_host_time(1)
+            await until(lambda: metrics or run.failure(), "the text idle ends the segment")
         if loop_deadline:
             for _ in range(3):  # a deadline left armed on the loop's clock fires in this idle
                 await asyncio.sleep(0.05)

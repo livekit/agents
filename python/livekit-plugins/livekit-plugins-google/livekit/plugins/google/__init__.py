@@ -14,13 +14,16 @@
 
 """Google AI plugin for LiveKit Agents
 
-Supports Gemini, Cloud Speech-to-Text, and Cloud Text-to-Speech.
+Supports Gemini, Gemini Live, Gemini STT and TTS, Cloud Speech-to-Text, and Cloud
+Text-to-Speech.
 
 See https://docs.livekit.io/agents/integrations/stt/google/ for more information.
 """
 
-from . import beta, realtime, tools
+from . import realtime, tools
 from .aiplatform_llm import AIPlatformLLM
+from .gemini_stt import GeminiSTT
+from .gemini_tts import GeminiTTS
 from .llm import LLM
 from .models import EndpointingSensitivity
 from .stt import STT, SpeechStream
@@ -30,11 +33,12 @@ from .version import __version__
 __all__ = [
     "STT",
     "TTS",
+    "GeminiSTT",
+    "GeminiTTS",
     "realtime",
     "SpeechStream",
     "EndpointingSensitivity",
     "__version__",
-    "beta",
     "LLM",
     "AIPlatformLLM",
     "tools",

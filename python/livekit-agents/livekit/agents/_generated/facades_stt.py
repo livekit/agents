@@ -3,14 +3,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Generic, Literal, cast
 
 from .. import _bindings, _core
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN
 from ..utils import is_given
 from . import stt_availability
-from .stt import STT, RecognizeStream
+from .stt import STT, RecognizeStream, TEvent
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from .llm_fallback import AvailabilityChanged
 
 
-class FallbackAdapter(_core.FallbackStt, STT[Literal["stt_availability_changed"]]):
+class FallbackAdapter(_core.FallbackStt, STT[Literal["stt_availability_changed"] | TEvent], Generic[TEvent]):
     """`stt.FallbackAdapter`: several STT behind one; a failed one is skipped until it recovers."""
 
     if TYPE_CHECKING:

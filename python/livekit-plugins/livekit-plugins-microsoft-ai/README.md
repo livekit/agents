@@ -142,12 +142,11 @@ speech_to_text = microsoft_ai.STT(vad=detector, language="en")
 text_to_speech = microsoft_ai.TTS()
 ```
 
-`vad` is explicit. Pass a LiveKit VAD with ordered `INFERENCE_DONE` events even
-during silence, input-relative timestamps, and `START_OF_SPEECH.frames`
-containing the detected onset and prefix through that timestamp (the bundled
-Silero VAD provides these). Empty
-or incompatible start frames fail explicitly rather than clipping the onset.
-Alternatively, pass `vad=None` and call `flush()` / `end_input()` yourself.
+`vad` is explicit. Pass a LiveKit VAD (the bundled Silero VAD works): its start of
+speech opens the turn and its end of speech commits it. Only the speech it hears,
+led by the 300 ms before it, is uploaded: silence between turns is not sent, so it
+is not billed. Alternatively, pass `vad=None` and call `flush()` / `end_input()`
+yourself; every frame is then uploaded.
 **Configuring only VoiceSession's VAD is insufficient:** it does not commit
 native STT streams.
 
@@ -163,12 +162,14 @@ The client protocol is:
    `intermediate` replaces the revisable hypothesis. A `.delta` event's `delta`
    appends finalized text and clears the hypothesis. Both produce LiveKit
    interim results, not final utterances.
-5. Drain audio, send `input_audio_buffer.commit`, await
-   `input_audio_buffer.committed` with `item_id`, then `.completed` with the
-   authoritative `transcript`. Only this emits a LiveKit final transcript,
-   followed by end-of-speech. The completion may correct or retract earlier
-   hypotheses; an empty completion finishes the item without inventing user
-   text. The socket stays open for subsequent utterances.
+5. Send `input_audio_buffer.commit` to end a turn. The server answers
+   `input_audio_buffer.committed` with the turn's `item_id`, then `.completed`
+   with the authoritative `transcript`; audio for the next turn may be appended
+   meanwhile, since every event names its item. Only `.completed` emits a
+   LiveKit final transcript, followed by end-of-speech. The completion may
+   correct or retract earlier hypotheses; an empty completion withdraws the
+   interim without inventing user text. The socket stays open for subsequent
+   utterances.
 
 New deployments must be verified to implement these event fields and
 handshake/commit ordering. A short manual-commit smoke does not exercise every
@@ -178,20 +179,11 @@ transient status is supplied. The initial error mapping recognizes
 `error.status_code`, `invalid_api_key`, `rate_limit_exceeded`, `content_filter`
 and `safety_violation`; it never disables or works around safety checks.
 
-VAD inference timestamps serialize audio and turn boundaries, so later audio
-cannot overtake an earlier commit even if VAD processing or uploads are slow.
-Mono input at other sample rates is resampled by the SDK. Stereo is rejected.
-Transport frames are 50 ms; the final shorter frame and resampler/VAD remainder
-are sent without rounding away samples or adding synthetic padding.
-
-With VAD, idle inference windows are discarded locally, not uploaded to an
-uncommitted server buffer. At speech start, the VAD's actual frames restore
-the complete detected onset/prefix; no guessed pre-roll duration or private
-VAD settings are used. Only overlap with a previously committed turn is removed.
-The prefix is framed and flushed before subsequent audio so it is not counted
-twice for backpressure. Speech and the VAD's observed end-of-speech silence are
-uploaded in order, then committed; prolonged inter-turn silence sends neither
-audio nor empty commits. No provider clear/keepalive events are invented.
+Audio and commits go out on one socket in order, so later audio never overtakes
+an earlier commit. Mono input at other sample rates is resampled by the SDK.
+Transport frames are 50 ms. With a VAD only speech is appended; a commit
+is sent only when audio was appended since the last one, so no empty turn is
+committed. No provider clear/keepalive events are invented.
 
 **Tail limitation:** sending every byte and receiving `.completed` proves
 transport completion, not that the backend decoded an incomplete model chunk.
@@ -203,29 +195,14 @@ must verify the full expected transcript, particularly the last
 word, for both a short clip and a non-chunk-aligned tail. Obtain a documented
 backend drain/flush mechanism if commit does not decode the tail.
 
-After VAD detects speech, `flush()` drains its real audio tail and commits,
-waiting internally before processing subsequent input; it leaves the socket
-open. `end_input()` also waits for the acknowledged final and closes the socket.
-Flushing or ending idle VAD input produces no empty turn. To send a finite clip
-regardless of whether a VAD detects speech, use `vad=None`; that manual mode
-continues forwarding all input audio and requires caller-managed commits.
-`aclose()` cancels immediately without committing or exposing buffered events.
-Batch `recognize()` is unsupported and `offline_recognize=False`.
+`flush()` commits the audio appended so far and leaves the socket open.
+`end_input()` commits the rest, waits for the outstanding finals and closes the
+socket. `aclose()` cancels immediately without committing or exposing buffered
+events. Batch `recognize()` is unsupported and `offline_recognize=False`.
 
-`APIConnectOptions.timeout` bounds connection, handshake, writes and
-finalization. `max_retry` is a finite connection-only retry budget: after any
-audio is consumed, a disconnect/error is surfaced without replay or hidden
-reconnection. Reopening the stream is the caller's decision. Input is bounded
-by `max_buffered_audio` (default 5 seconds) and 1,024 queued entries; overflow
-fails explicitly. Each VAD start prefix is separately capped by the same
-duration and fails rather than being truncated if oversized. The adapter keeps
-no additional idle history; the VAD owns its bounded onset/prefix buffer.
-Idle samples count as processed, so ordinary silence does not consume the
-queued-audio allowance indefinitely. These bounds cover client lag/prefix
-retention, not the length of an active utterance at the provider. Pace
-prerecorded input rather than enqueueing entire files. Idle gating and delayed
-onset recovery are covered by hermetic tests, not an additional live-service
-accuracy or tail guarantee.
+`APIConnectOptions` bounds connection, handshake and the final wait. A server
+error close or a lost connection reconnects within `max_retry`, closing the
+open speech first; an error event or an auth/policy close fails the stream.
 
 ## Azure Speech TTS contract
 

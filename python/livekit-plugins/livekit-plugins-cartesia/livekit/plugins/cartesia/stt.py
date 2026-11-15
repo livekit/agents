@@ -17,59 +17,44 @@ from __future__ import annotations
 import asyncio
 import os
 import weakref
-from typing import TYPE_CHECKING
+from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
+from urllib.parse import urlencode
+
+from pydantic import Field
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectOptions,
+    APIStatusError,
     LanguageCode,
     http,
     stt,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN
+from livekit.agents.types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 
-from ._recognize_streams.auto_finalize_recognize_stream import AutoFinalizeRecognizeStream
-from ._recognize_streams.legacy_recognize_stream import LegacyRecognizeStream
+from .constants import API_AUTH_HEADER, API_VERSION, API_VERSION_HEADER, AUDIO_ENCODING, USER_AGENT
 from .log import logger
-
-if TYPE_CHECKING:
-    from typing import Literal, Never
-
-    from livekit.agents import APIConnectOptions
-    from livekit.agents.types import NotGivenOr
-
-    from .models import STTLanguages, STTModels
-
-    _ResolvedFinalTranscriptMode = Literal["auto", "legacy"]
+from .models import STTLanguages, STTModels
 
 
-def _is_whisper_model(model: STTModels | str) -> bool:
-    return str(model).startswith("ink-whisper")
-
-
-def _base_url_to_ws_base_url(base_url: str) -> str:
-    # If base_url already has a protocol, replace it, otherwise add wss://
+def _ws_base_url(base_url: str) -> str:
     if base_url.startswith(("http://", "https://")):
         return base_url.replace("http", "ws", 1)
-    else:
-        return f"wss://{base_url}"
+    return f"wss://{base_url}"
 
 
 class STT(stt.STT):
     """Cartesia speech to text.
 
-    Model ``ink-2`` supports:
-        - Streaming
-        - Turn detection
-        - Interim results
-
-    Model ``ink-whisper`` supports:
-        - Streaming
-        - Word aligned transcripts
+    Model ``ink-2`` streams on the turns endpoint, which detects turns itself and sends
+    interim results. Model ``ink-whisper`` streams on the manual endpoint, where a flush
+    finalizes the transcript, with word-aligned transcripts.
 
     See also:
         https://docs.cartesia.ai/build-with-cartesia/stt-models/latest
+        https://docs.cartesia.ai/use-the-api/compare-stt-endpoints
 
     Examples:
 
@@ -107,18 +92,6 @@ class STT(stt.STT):
         """
         Create a new instance of Cartesia STT.
 
-        Model ``ink-2`` supports:
-            - Streaming
-            - Turn detection
-            - Interim results
-
-        Model ``ink-whisper`` supports:
-            - Streaming
-            - Word aligned transcripts
-
-        See also:
-            https://docs.cartesia.ai/build-with-cartesia/stt-models/latest
-
         Args:
             model: The Cartesia STT model to use.
                 Defaults to ``ink-2`` if language is ``en``.
@@ -154,22 +127,6 @@ class STT(stt.STT):
             ValueError: If no API key is provided or found in environment variables,
                 or if a turn-detection parameter is passed with a model that does not
                 support turn detection (e.g. ``ink-whisper``).
-
-        Examples:
-
-            ```# Turn detecting
-            from livekit.agents import VoiceSession
-            from livekit.plugins import cartesia
-
-            session = VoiceSession(
-                stt=cartesia.STT(),
-                llm=LLM(),  # choose your favorite LLM
-                tts=cartesia.TTS(),
-                turn_handling={
-                    "turn_detection": "stt",
-                },
-            )
-            ```
         """
         resolved_api_key = api_key or os.environ.get("CARTESIA_API_KEY")
         if not resolved_api_key:
@@ -188,34 +145,28 @@ class STT(stt.STT):
         else:
             resolved_model = "ink-whisper"
 
-        is_whisper = _is_whisper_model(resolved_model)
-
-        resolved_final_transcript_mode: _ResolvedFinalTranscriptMode
-        if is_whisper:
-            resolved_final_transcript_mode = "legacy"
-        else:
-            resolved_final_transcript_mode = "auto"
-
-        if resolved_final_transcript_mode == "legacy":
-            _turns_only_params = {
+        # ink-whisper streams on the manual endpoint, every other model on the turns endpoint
+        self._turns = not resolved_model.startswith("ink-whisper")
+        if not self._turns:
+            turns_only = {
                 "turn_start_threshold": turn_start_threshold,
                 "turn_eager_end_threshold": turn_eager_end_threshold,
                 "turn_end_threshold": turn_end_threshold,
                 "turn_end_timeout_ms": turn_end_timeout_ms,
                 "keyterm": keyterm,
             }
-            for _param_name, _param_value in _turns_only_params.items():
-                if utils.is_given(_param_value):
+            for name, value in turns_only.items():
+                if utils.is_given(value):
                     raise ValueError(
-                        f"The {_param_name!r} parameter is only supported by turn-detecting"
+                        f"The {name!r} parameter is only supported by turn-detecting"
                         f" models (e.g. ink-2); model {resolved_model!r} does not support it."
                     )
 
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=resolved_final_transcript_mode != "legacy",
-                aligned_transcript="word" if is_whisper else False,
+                interim_results=self._turns,
+                aligned_transcript=False if self._turns else "word",
                 offline_recognize=False,
                 diarization=False,
             )
@@ -223,19 +174,18 @@ class STT(stt.STT):
 
         self._api_key = resolved_api_key
         self._audio_chunk_duration_ms = audio_chunk_duration_ms
-        self._final_transcript_mode: _ResolvedFinalTranscriptMode = resolved_final_transcript_mode
         self._language = language_code
         self._model = resolved_model
         self._sample_rate = sample_rate
         self._session = http_session
-        self._ws_base_url = _base_url_to_ws_base_url(base_url=base_url)
+        self._ws_base_url = _ws_base_url(base_url)
         self._turn_start_threshold = turn_start_threshold
         self._turn_eager_end_threshold = turn_eager_end_threshold
         self._turn_end_threshold = turn_end_threshold
         self._turn_end_timeout_ms = turn_end_timeout_ms
         self._keyterm = keyterm
 
-        self._streams = weakref.WeakSet[CartesiaRecognizeStream]()
+        self._streams = weakref.WeakSet[_TurnsStream | _ManualStream]()
 
         self._warn_on_unexpected_args(language=self._language)
 
@@ -263,51 +213,19 @@ class STT(stt.STT):
         *,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> CartesiaRecognizeStream:
-        if utils.is_given(language):
-            resolved_language = LanguageCode(language)
-        elif self._language is not None:
-            resolved_language = LanguageCode(self._language)
-        else:
-            resolved_language = None
-
+    ) -> stt.RecognizeStream:
+        resolved_language = LanguageCode(language) if utils.is_given(language) else self._language
         self._warn_on_unexpected_args(language=resolved_language)
 
-        stream: CartesiaRecognizeStream
-        match self._final_transcript_mode:
-            case "auto":
-                stream = AutoFinalizeRecognizeStream(
-                    stt=self,
-                    conn_options=conn_options,
-                    sample_rate=self._sample_rate,
-                    audio_chunk_duration_ms=self._audio_chunk_duration_ms,
-                    model=self._model,
-                    api_key=self._api_key,
-                    ws_base_url=self._ws_base_url,
-                    language=resolved_language or LanguageCode("en"),
-                    turn_start_threshold=self._turn_start_threshold,
-                    turn_eager_end_threshold=self._turn_eager_end_threshold,
-                    turn_end_threshold=self._turn_end_threshold,
-                    turn_end_timeout_ms=self._turn_end_timeout_ms,
-                    keyterm=self._keyterm,
-                )
-            case "legacy":
-                stream = LegacyRecognizeStream(
-                    stt=self,
-                    conn_options=conn_options,
-                    sample_rate=self._sample_rate,
-                    audio_chunk_duration_ms=self._audio_chunk_duration_ms,
-                    model=self._model,
-                    api_key=self._api_key,
-                    ws_base_url=self._ws_base_url,
-                    language=resolved_language,
-                )
-            case _:
-                _exhaustive_check: Never = self._final_transcript_mode
-                raise RuntimeError(
-                    f"Cartesia STT has unexpected final_transcript_mode={_exhaustive_check}"
-                )
-
+        stream: _TurnsStream | _ManualStream
+        if self._turns:
+            stream = _TurnsStream(
+                stt=self,
+                conn_options=conn_options,
+                language=resolved_language or LanguageCode("en"),
+            )
+        else:
+            stream = _ManualStream(stt=self, conn_options=conn_options, language=resolved_language)
         self._streams.add(stream)
         return stream
 
@@ -327,31 +245,358 @@ class STT(stt.STT):
         *,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
     ) -> None:
-        """Change Cartesia STT options.
-
-        Also propagates changes to all :class:`SpeechStream` created by :meth:`stream`.
+        """Change Cartesia STT options, for open streams too.
 
         Args:
-            language: Used to change the language to match what the user is speaking.
-                Ink 2 does not have multi-lingual support yet and only works with English.
+            language: The language the user speaks. ``ink-2`` only supports English; on
+                ``ink-whisper`` a new language reconnects open streams.
         """
-        if utils.is_given(language):
-            self._language = LanguageCode(language)
-            self._warn_on_unexpected_args(language=self._language)
-
+        if not utils.is_given(language):
+            return
+        self._language = LanguageCode(language)
+        self._warn_on_unexpected_args(language=self._language)
         for stream in self._streams:
-            stream.update_options(language=language)
+            stream.set_language(self._language)
+
+    def _target(self, path: str, params: list[tuple[str, str]]) -> stt.WebSocketTarget:
+        params = [
+            ("model", self._model),
+            ("sample_rate", str(self._sample_rate)),
+            ("encoding", AUDIO_ENCODING),
+            *params,
+        ]
+        return stt.WebSocketTarget(
+            f"{self._ws_base_url}{path}?{urlencode(params)}",
+            headers={
+                API_VERSION_HEADER: API_VERSION,
+                API_AUTH_HEADER: self._api_key,
+                "User-Agent": USER_AGENT,
+            },
+        )
 
     def _warn_on_unexpected_args(self, language: LanguageCode | None) -> None:
-        """Logs a warning when arguments are unexpected.
-
-        This is not necessarily an error since the API may support languages in the future.
-        """
-        if self._final_transcript_mode == "auto" and language and language.language != "en":
+        """Warn about a language ink-2 does not support yet: not an error, since the API may
+        support it in the future."""
+        if self._turns and language and language.language != "en":
             logger.warning(
-                f'Cartesia STT model="{self._model}" currently only supports English. You provided {language}, which may produce unexpected results.'
+                f'Cartesia STT model="{self._model}" currently only supports English. '
+                f"You provided {language}, which may produce unexpected results."
             )
 
 
-CartesiaRecognizeStream = AutoFinalizeRecognizeStream | LegacyRecognizeStream
-SpeechStream = CartesiaRecognizeStream
+def _status_error(
+    message: _TurnsError | _ManualError, status_code: int | None, detail: str | None
+) -> APIStatusError:
+    # an HTTP-style status: a 5xx is retried, a rejected request is not
+    return APIStatusError(
+        "Cartesia STT returned an error",
+        status_code=status_code or 500,
+        body=message,
+        detail=detail,
+    )
+
+
+# -- turns endpoint (/stt/turns/websocket)
+
+
+class _Connected(TypedDict):
+    """Fires once when the WebSocket connection is established; audio need not wait for it."""
+
+    type: Literal["connected"]
+    request_id: NotRequired[str]
+
+
+class _Turn(TypedDict):
+    """A user turn's progress.
+
+    ``turn.start`` and ``turn.resume`` carry no transcript; ``turn.update``, ``turn.eager_end``
+    and ``turn.end`` carry the cumulative text of the turn so far, not a delta.
+    """
+
+    transcript: NotRequired[str]
+    request_id: NotRequired[str]
+
+
+class _TurnStart(_Turn):
+    type: Literal["turn.start"]
+
+
+class _TurnUpdate(_Turn):
+    type: Literal["turn.update"]
+
+
+class _TurnEagerEnd(_Turn):
+    type: Literal["turn.eager_end"]
+
+
+class _TurnResume(_Turn):
+    type: Literal["turn.resume"]
+
+
+class _TurnEnd(_Turn):
+    type: Literal["turn.end"]
+
+
+class _TurnsError(TypedDict):
+    type: Literal["error"]
+    status_code: NotRequired[int]
+    title: NotRequired[str]
+    message: NotRequired[str]
+    request_id: NotRequired[str]
+
+
+_TurnsMessage = Annotated[
+    _Connected | _TurnStart | _TurnUpdate | _TurnEagerEnd | _TurnResume | _TurnEnd | _TurnsError,
+    Field(discriminator="type"),
+]
+
+
+class _Close(TypedDict):
+    type: Literal["close"]
+
+
+class _TurnsStream(stt.WebSocketStream[_TurnsMessage, _Close]):
+    """A recognition on the turns endpoint: the model detects the turns and finalizes each one
+    at its end, so a flush sends nothing.
+
+    See https://docs.cartesia.ai/api-reference/stt/turns/websocket
+    """
+
+    # turn.start and turn.end are Cartesia's own turn boundaries
+    provider_vad = True
+
+    def __init__(self, *, stt: STT, conn_options: APIConnectOptions, language: LanguageCode):
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._sample_rate)
+        self.frame_ms = stt._audio_chunk_duration_ms
+        self._owner = stt
+        self._language = language
+        self._request_id = ""
+        # cumulative transcript for the current turn; used to re-emit on turn.resume
+        self._current_transcript = ""
+
+    def set_language(self, language: LanguageCode) -> None:
+        # only the label: ink-2 takes no language
+        self._language = language
+
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
+        self._current_transcript = ""
+        owner = self._owner
+        params: list[tuple[str, str]] = []
+        if utils.is_given(owner._turn_start_threshold):
+            params.append(("turn_start_threshold", str(owner._turn_start_threshold)))
+        if utils.is_given(owner._turn_eager_end_threshold):
+            params.append(("turn_eager_end_threshold", str(owner._turn_eager_end_threshold)))
+        if utils.is_given(owner._turn_end_threshold):
+            params.append(("turn_end_threshold", str(owner._turn_end_threshold)))
+        if utils.is_given(owner._turn_end_timeout_ms):
+            params.append(("turn_end_timeout_ms", str(owner._turn_end_timeout_ms)))
+        if utils.is_given(owner._keyterm):
+            # keyterm repeats
+            params.extend(("keyterm", term) for term in owner._keyterm)
+        return owner._target("/stt/turns/websocket", params)
+
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | _Close | None:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush():
+                if not self.input.closed:
+                    logger.warning(
+                        "Cartesia STT stream.flush() was ignored: the turns endpoint "
+                        "finalizes each turn itself."
+                    )
+                return None
+            case stt.EndOfAudio():
+                return _Close(type="close")
+            case _:
+                assert_never(item)
+
+    def _transcript(
+        self, text: str, *, final: bool = False, preflight: bool = False
+    ) -> stt.Transcript:
+        return stt.Transcript(
+            text, self._language, final=final, preflight=preflight, request_id=self._request_id
+        )
+
+    def on_message(
+        self,
+        message: _Connected
+        | _TurnStart
+        | _TurnUpdate
+        | _TurnEagerEnd
+        | _TurnResume
+        | _TurnEnd
+        | _TurnsError,
+    ) -> None:
+        if request_id := message.get("request_id"):
+            self._request_id = request_id
+
+        if message["type"] == "connected":
+            return
+        if message["type"] == "error":
+            raise _status_error(
+                message, message.get("status_code"), message.get("message") or message.get("title")
+            )
+        if message["type"] == "turn.start":
+            if not self.speaking:
+                self._current_transcript = ""
+                self.report(stt.SpeechStarted())
+            return
+        if not self.speaking:
+            return
+        transcript = message.get("transcript", "")
+
+        if message["type"] == "turn.update":
+            # only an interim that changed: an unchanged one would cancel the preflight
+            if transcript and transcript != self._current_transcript:
+                self._current_transcript = transcript
+                self.report(self._transcript(transcript))
+        elif message["type"] == "turn.eager_end":
+            transcript = transcript or self._current_transcript
+            if transcript:
+                self._current_transcript = transcript
+                self.report(self._transcript(transcript, preflight=True))
+        elif message["type"] == "turn.resume":
+            # no transcript: the last one again as an interim, so the preflight is cancelled
+            if self._current_transcript:
+                self.report(self._transcript(self._current_transcript))
+        elif message["type"] == "turn.end":
+            transcript = transcript or self._current_transcript
+            self._current_transcript = ""
+            self.report(self._transcript(transcript, final=True))
+            self.report(stt.SpeechEnded())
+        else:
+            assert_never(message)
+
+
+# -- manual endpoint (/stt/websocket)
+
+
+class _Word(TypedDict):
+    """Word-level timestamp, in seconds."""
+
+    word: NotRequired[str]
+    start: NotRequired[float]
+    end: NotRequired[float]
+
+
+class _Transcript(TypedDict):
+    """A transcript chunk: a delta from the last final one, not the cumulative text."""
+
+    type: Literal["transcript"]
+    is_final: bool
+    text: str
+    request_id: NotRequired[str]
+    duration: NotRequired[float]
+    words: NotRequired[list[_Word]]
+
+
+class _FlushDone(TypedDict):
+    """Acknowledgment of ``finalize``."""
+
+    type: Literal["flush_done"]
+    request_id: NotRequired[str]
+
+
+class _Done(TypedDict):
+    """Acknowledgment of ``close``."""
+
+    type: Literal["done"]
+    request_id: NotRequired[str]
+
+
+class _ManualError(TypedDict):
+    type: Literal["error"]
+    code: NotRequired[int]
+    message: NotRequired[str]
+    request_id: NotRequired[str]
+
+
+_ManualMessage = Annotated[
+    _Transcript | _FlushDone | _Done | _ManualError, Field(discriminator="type")
+]
+
+
+class _ManualStream(stt.WebSocketStream[_ManualMessage, str]):
+    """A recognition on the manual endpoint: a flush finalizes the transcript so far.
+
+    See https://docs.cartesia.ai/api-reference/stt/stt
+    """
+
+    def __init__(
+        self, *, stt: STT, conn_options: APIConnectOptions, language: LanguageCode | None
+    ) -> None:
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._sample_rate)
+        self.frame_ms = stt._audio_chunk_duration_ms
+        self._owner = stt
+        self._language = language
+        self._request_id = ""
+        self._last_speech_end_time = 0.0
+
+    def set_language(self, language: LanguageCode) -> None:
+        # the endpoint takes the ISO 639-1 code: only a new one needs a new connection
+        changed = self._language is None or self._language.language != language.language
+        self._language = language
+        if changed:
+            self.reconnect("language changed")
+
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
+        self._last_speech_end_time = 0.0
+        params = [] if self._language is None else [("language", self._language.language)]
+        return self._owner._target("/stt/websocket", params)
+
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | str:
+        match item:
+            case rtc.AudioFrame():
+                return bytes(item.data)
+            case stt.Flush():
+                return "finalize"
+            case stt.EndOfAudio():
+                return "close"
+            case _:
+                assert_never(item)
+
+    def on_message(self, message: _Transcript | _FlushDone | _Done | _ManualError) -> None:
+        if request_id := message.get("request_id"):
+            self._request_id = request_id
+
+        if message["type"] == "flush_done":
+            logger.debug("Received flush_done acknowledgment from Cartesia STT")
+        elif message["type"] == "done":
+            # the answer to "close": every transcript came before it
+            self.report(stt.SessionFinished())
+        elif message["type"] == "error":
+            raise _status_error(message, message.get("code"), message.get("message"))
+        elif message["type"] == "transcript":
+            self._report_transcript(message)
+        else:
+            assert_never(message)
+
+    def _report_transcript(self, message: _Transcript) -> None:
+        offset = self.start_time_offset
+        # word timestamps are often within the audio window, so we track time separately
+        if self._last_speech_end_time == 0.0:
+            self._last_speech_end_time = offset
+        start_time = self._last_speech_end_time
+        end_time = start_time + message.get("duration", 0)
+        self._last_speech_end_time = end_time
+
+        self.report(
+            stt.Transcript(
+                message["text"],
+                self._language or LanguageCode("en"),
+                final=message["is_final"],
+                request_id=self._request_id,
+                start_time=start_time,
+                end_time=end_time,
+                words=[
+                    TranscriptChunk(
+                        text=word.get("word", ""),
+                        start_time=word.get("start", 0) + offset,
+                        end_time=word.get("end", 0) + offset,
+                        start_time_offset=offset,
+                    )
+                    for word in message.get("words", [])
+                ],
+            )
+        )

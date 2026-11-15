@@ -38,6 +38,11 @@ pub enum SpeechEventType {
     /// indicate the end of speech, emitted when the user stops speaking
     #[host(rename = "end_of_speech")]
     EndOfSpeech,
+    /// The provider ended this utterance, but its final transcript is still owed.
+    /// The normalized EndOfSpeech follows the final or a connection boundary. A session may
+    /// bound its wait and commit provisional words without changing this utterance's identity.
+    #[host(rename = "end_of_speech_pending")]
+    EndOfSpeechPending,
 }
 
 // `stt/stt.py:57`. `None` and `[]` are kept apart on the `source_*`/`target_*` lists. The
@@ -243,11 +248,13 @@ impl Transcript {
     }
 }
 
-/// One recognition's speech state: START_OF_SPEECH and END_OF_SPEECH are derived here from what
-/// the stream reports, the provider's own boundaries deduplicated, and open speech ends at each
-/// connection boundary.
-#[crate::host(class(name = "SpeechState", pid = false))]
-pub trait SpeechState: Send + Sized + 'static {
+/// Normalizes one recognition stream's provider observations into speech events.
+/// Owns both START_OF_SPEECH and END_OF_SPEECH: missing boundaries are synthesized, provider
+/// boundaries are deduplicated, and a connection boundary settles pending words and open speech.
+/// Utterances identify provider speech across transcript revisions, not conversational turns.
+/// Turn completion, interruption policy and provider I/O belong to their enclosing owners.
+#[crate::host(class(name = "SpeechNormalizer", pid = false))]
+pub trait SpeechNormalizer: Send + Sized + 'static {
     /// `provider_vad`: the provider detects speech itself, so its reported end closes the
     /// speech and a final transcript does not. `transcribes_after_speech_ends`: the
     /// `STTCapabilities` of that name.

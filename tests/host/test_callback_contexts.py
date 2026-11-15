@@ -234,6 +234,31 @@ class BoundApp:
     count: int = persisted(default=0)
 
 
+async def test_a_manual_save_persists_the_assigned_session_snapshot() -> None:
+    """Saving a detached result with application fields makes both available to a new context."""
+    store = ContextStore()
+    app = await store.load_context(BoundApp())
+    model = FakeLLM(["First.", "Second."])
+    session = TextSession(agent=Agent(name="desk", instructions="Help.", llm=model))
+    first = await session.run("hello", context=app)
+    assert (await store.load_session()).kind == "empty"
+    app.session = first.state
+    app.count = 1
+    await store.save_context(app)
+
+    restored = await store.load_context(BoundApp())
+    assert restored.count == 1
+    assert restored.session.session_id == first.state.session_id
+    await session.run("again", context=restored)
+    assert [item.text_content for item in model.requests[1].items if item.type == "message"][
+        -3:
+    ] == [
+        "hello",
+        "First.",
+        "again",
+    ]
+
+
 async def test_a_bound_run_updates_the_applications_own_session_state() -> None:
     """With `store.bind(app)`, tools get `app` itself and `app.session` follows the
     conversation in place; a snapshot loaded before does not."""

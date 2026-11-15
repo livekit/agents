@@ -11,6 +11,7 @@ import threading
 from collections.abc import Awaitable, Callable, Sequence
 from multiprocessing.context import BaseContext
 from multiprocessing.process import BaseProcess
+from multiprocessing.util import Finalize
 from types import ModuleType
 from typing import Any, Protocol, cast
 
@@ -192,45 +193,76 @@ def configure_forkserver(context: BaseContext, modules: Sequence[str]) -> None:
     context.set_forkserver_preload(inventory)
 
 
-def start_process(
-    process: BaseProcess, method: str, register: Callable[[int, int, list[int]], None]
-) -> None:
-    if sys.platform == "win32":
-        from multiprocessing.popen_spawn_win32 import Popen
-    elif method == "forkserver":
-        from multiprocessing.popen_forkserver import Popen
-    else:
-        from multiprocessing.popen_spawn_posix import Popen  # type: ignore[assignment]
+_Register = Callable[[int, int, list[int]], None]
 
-    class OwnedPopen(Popen):
-        def __init__(self, process_obj: BaseProcess) -> None:
+
+class _Launched(Protocol):
+    @property
+    def finalizer(self) -> Finalize: ...
+    @property
+    def pid(self) -> int: ...
+    @property
+    def sentinel(self) -> int: ...
+
+
+def _hand_over(
+    popen: _Launched, process_obj: BaseProcess, register: _Register, forkserver: bool
+) -> None:
+    # Upstream may fail after the OS launch but before BaseProcess.start assigns Popen; hand any
+    # started process to the core regardless.
+    try:
+        sentinel = popen.sentinel
+        finalizer = popen.finalizer
+    except AttributeError:
+        return  # no process was started
+    try:
+        pid = popen.pid
+    except AttributeError:
+        if not forkserver:
+            raise
+        pid = 0
+    process_obj._popen = popen  # type: ignore[attr-defined]
+    handles: Sequence[int] = finalizer._args  # type: ignore[attr-defined]
+    owned = [handle for handle in handles if handle != sentinel]
+    finalizer.cancel()
+    register(pid, sentinel, owned)
+
+
+if sys.platform == "win32":
+    from multiprocessing import popen_spawn_win32
+
+    class _SpawnPopen(popen_spawn_win32.Popen):
+        def __init__(self, process_obj: BaseProcess, register: _Register) -> None:
             try:
                 super().__init__(process_obj)
             finally:
-                # Upstream may fail after the OS launch but before BaseProcess.start assigns
-                # Popen; hand any started process to the core regardless.
-                try:
-                    sentinel = self.sentinel
-                    finalizer = self.finalizer
-                except AttributeError:
-                    pass  # no process was started
-                else:
-                    try:
-                        pid = self.pid
-                    except AttributeError:
-                        if method != "forkserver":
-                            raise
-                        pid = 0
-                    process_obj._popen = self  # type: ignore[attr-defined]
-                    handles: Sequence[int] = finalizer._args  # type: ignore[attr-defined]
-                    owned = [handle for handle in handles if handle != sentinel]
-                    finalizer.cancel()
-                    register(pid, sentinel, owned)
+                _hand_over(self, process_obj, register, forkserver=False)
 
-    def factory(process_obj: BaseProcess) -> OwnedPopen:
+else:
+    from multiprocessing import popen_forkserver, popen_spawn_posix
+
+    class _SpawnPopen(popen_spawn_posix.Popen):
+        def __init__(self, process_obj: BaseProcess, register: _Register) -> None:
+            try:
+                super().__init__(process_obj)
+            finally:
+                _hand_over(self, process_obj, register, forkserver=False)
+
+    class _ForkserverPopen(popen_forkserver.Popen):
+        def __init__(self, process_obj: BaseProcess, register: _Register) -> None:
+            try:
+                super().__init__(process_obj)
+            finally:
+                _hand_over(self, process_obj, register, forkserver=True)
+
+
+def start_process(process: BaseProcess, method: str, register: _Register) -> None:
+    def factory(process_obj: BaseProcess) -> _Launched:
         # The factory holds a native handle and must never enter the child pickle.
         del process_obj._Popen  # type: ignore[attr-defined]
-        return OwnedPopen(process_obj)
+        if sys.platform != "win32" and method == "forkserver":
+            return _ForkserverPopen(process_obj, register)
+        return _SpawnPopen(process_obj, register)
 
     process._Popen = factory  # type: ignore[attr-defined]
     try:

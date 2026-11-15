@@ -273,9 +273,13 @@ class _Created(TypedDict):
 
 
 class _Partial(_Result):
-    type: Literal["transcript.partial", "transcript.done"]
+    type: Literal["transcript.partial"]
     is_final: NotRequired[bool]
     speech_final: NotRequired[bool]
+
+
+class _Done(_Result):
+    type: Literal["transcript.done"]
 
 
 class _Error(TypedDict):
@@ -283,7 +287,7 @@ class _Error(TypedDict):
     message: NotRequired[str]
 
 
-_Message = Annotated[_Created | _Partial | _Error, Field(discriminator="type")]
+_Message = Annotated[_Created | _Partial | _Done | _Error, Field(discriminator="type")]
 
 
 class _AudioDone(TypedDict):
@@ -387,7 +391,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _AudioDone]):
             case _:
                 assert_never(item)
 
-    def on_message(self, message: _Created | _Partial | _Error) -> None:
+    def on_message(self, message: _Created | _Partial | _Done | _Error) -> None:
         if message["type"] == "transcript.created":
             self.report(stt.Ready())
         elif message["type"] == "error":
@@ -420,10 +424,10 @@ class SpeechStream(stt.WebSocketStream[_Message, _AudioDone]):
             self._emitted_chunk_final = False
             self.report(stt.SpeechEnded())
 
-    def _language(self, message: _Partial) -> LanguageCode:
+    def _language(self, message: _Result) -> LanguageCode:
         return LanguageCode(message.get("language") or self._opts.language)
 
-    def _transcript(self, message: _Partial, *, final: bool) -> stt.Transcript:
+    def _transcript(self, message: _Result, *, final: bool) -> stt.Transcript:
         data = _words_to_speech_data(
             message.get("words", []),
             message.get("text", ""),

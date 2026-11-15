@@ -63,6 +63,7 @@ from .session_wire import DefaultModelPlan, ExceededTurnReply
 from .stream_info import StreamInfo
 from .stt import SpeechEvent
 from .telemetry import RecordingOptions, ReportJob, SessionReport, SpanContext
+from .tool_context import RawFunctionDescription
 from .tool_options import ToolSpec
 from .tool_report import ToolReport
 from .transcript import TranscriptChunk
@@ -667,13 +668,13 @@ class VoiceSession:
         """An `AvatarSession`'s own measurements (its join and playback latency), recorded with the
         session's metrics.
         """
-    def set_audio_input(self, source: AudioInput | None) -> None:
+    def set_audio_input(self, source: AudioInput | RoomAudioInput | None) -> None:
         """`session.input.audio = ..` after `start()`; `None` detaches."""
-    def set_video_input(self, source: VideoInput | None) -> None:
+    def set_video_input(self, source: VideoInput | RoomVideoInput | None) -> None:
         """`session.input.video = ..` after `start()`: the video pump reads the new source, or stops
         on `None`.
         """
-    def set_audio_output(self, sink: AudioOutput | None) -> None:
+    def set_audio_output(self, sink: AudioOutput | DataStreamAudioOutput | None) -> None:
         """Select the destination for subsequent output segments. Current work retains its admitted
         binding, including when the same endpoint object is selected again.
         """
@@ -1249,7 +1250,7 @@ class WarmTransfer:
         """
     @property
     def instructions(self) -> str: ...
-    def tools(self) -> list[dict[str, object]]: ...
+    def tools(self) -> list[RawFunctionDescription]: ...
     async def run(self, host: _TransferHost, caller: _core_RoomSession) -> str: ...
     async def call_tool(self, name: str, arguments: object) -> None: ...
 

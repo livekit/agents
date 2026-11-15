@@ -44,6 +44,11 @@ from .log import logger
 
 MAX_DURATION_SECONDS = 14_400
 _SESSION_OBJECT = "avatar.livekit.session"
+# the session statuses known not to stream yet or anymore: a created session in one is refused
+_NOT_LIVE = frozenset({"pending", "terminated", "failed", "error"})
+# the ones known to still run: a delete answered with one did not end the session; any other
+# status (one Boson added since) reads as the usual case
+_LIVE = frozenset({"active", "pending"})
 
 
 class AvatarSession(BaseAvatarSession):
@@ -198,7 +203,7 @@ class AvatarSession(BaseAvatarSession):
             raise APIError("Boson Avatar API response is missing a session id", kind="protocol")
         if (
             data.get("object") != _SESSION_OBJECT
-            or data.get("status") != "active"
+            or data.get("status") in _NOT_LIVE
             or data.get("avatar_identity") != ctx.avatar_identity
         ):
             # the answer still names an allocated session: end it before failing
@@ -230,7 +235,7 @@ class AvatarSession(BaseAvatarSession):
             and (
                 data.get("id") != session_id
                 or data.get("object") != _SESSION_OBJECT
-                or data.get("status") != "terminated"
+                or data.get("status") in _LIVE
             )
         ):
             raise APIError(

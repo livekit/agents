@@ -3,6 +3,7 @@ use super::*;
 use crate::calibration::llm::{LLM_CHARS_PER_CHUNK, LLM_CHUNK_GAP, LLM_FIRST_CHUNK};
 
 pub use crate::calibration::stt::{STT_MODELS, SttModel};
+use crate::fakes::SttSpeech;
 
 /// The model's side: every chat request is answered on the model's own clock, as a real one
 /// answers -- the first chunk after a while, then token-sized pieces a few milliseconds apart,
@@ -171,6 +172,8 @@ impl Talk {
 /// The person's provider knobs a recogniser's verdicts depend on.
 #[derive(Clone, Copy)]
 pub(super) struct SttKnobs {
+    /// How the recogniser reports speech: its own start and end, and when it transcribes.
+    pub(super) reports: SttSpeech,
     /// In percent of the recorded delays.
     pub(super) latency: u64,
     /// How often the last final comes 1.5-3 s late (a provider under load, past what was
@@ -185,6 +188,12 @@ pub(super) struct SttKnobs {
 /// what it sends around each final (a usage report before it, the end of speech with it), and
 /// its quirks: AssemblyAI's second final for the same words, Flux's preflights. Measured from the
 /// speech's start.
+///
+/// A recogniser that detects speech itself reports its end either after the final or, as its own
+/// detector hears the person stop, before it: always so for one that transcribes a speech only
+/// once it ended, and otherwise only once it has words in hand (a provider that transcribes
+/// during the speech has sent some by its end). Without its own detection, its start and end are
+/// the case's bookkeeping only: the stream's speech starts with the words and ends with a final.
 pub(super) fn recogniser(
     model: &SttModel,
     text: &str,
@@ -193,7 +202,7 @@ pub(super) fn recogniser(
     knobs: SttKnobs,
     timing: &Timing,
 ) -> Vec<Verdict> {
-    let SttKnobs { latency, late_finals, revisions } = knobs;
+    let SttKnobs { reports, latency, late_finals, revisions } = knobs;
     let slow = |ms: u64| ms * latency / 100;
     let mut out = Vec::new();
     let words: Vec<&str> = text.split(' ').collect();
@@ -272,15 +281,31 @@ pub(super) fn recogniser(
                 out.push(Verdict { at_ms: final_at, word: Word::SttPreflight(piece.clone()) });
             }
         }
+        let worded = first_at < final_at;
+        let end_first = reports.provider_vad
+            && (reports.transcribes_after_speech_ends || (worded && rng.u8(0..100) < 40));
+        if end_first {
+            // Its detector's end, once the person stopped: after its start (and the first words
+            // it holds the end for), never after the final.
+            let heard_end = spoken_to + slow(rng.u64(VAD_END_MS));
+            let at_ms = heard_end.clamp(first_at.min(final_at), final_at);
+            out.push(Verdict { at_ms, word: Word::SttEnd });
+        }
         out.push(Verdict { at_ms: final_at, word: Word::SttUsage });
         out.push(Verdict { at_ms: final_at, word: Word::SttFinal(piece.clone()) });
-        out.push(Verdict { at_ms: final_at, word: Word::SttEnd });
+        if !end_first {
+            out.push(Verdict { at_ms: final_at, word: Word::SttEnd });
+        }
         last_end = final_at;
         // AssemblyAI's formatted turn: the same words again, a moment later, as an
         // utterance of their own.
         if rng.u64(0..of) < dup {
             let again = final_at + delay(rng, &model.duplicate_final_after, timing).max(1);
-            out.push(Verdict { at_ms: again, word: Word::SttStart });
+            // One that detects speech may send it with no start of its own: words outside its
+            // speech, its end after them.
+            if !reports.provider_vad || rng.bool() {
+                out.push(Verdict { at_ms: again, word: Word::SttStart });
+            }
             out.push(Verdict { at_ms: again, word: Word::SttUsage });
             out.push(Verdict { at_ms: again, word: Word::SttFinal(piece) });
             out.push(Verdict { at_ms: again, word: Word::SttEnd });
@@ -296,15 +321,19 @@ pub(super) fn recogniser_noise(
     model: &SttModel,
     dur: u64,
     rng: &mut Rng,
-    latency: u64,
+    knobs: SttKnobs,
     timing: &Timing,
 ) -> Vec<Verdict> {
     if !model.empty_finals {
         return Vec::new();
     }
-    let at_ms = dur + delay(rng, &model.final_after_end, timing) * latency / 100;
-    [Word::SttStart, Word::SttUsage, Word::SttFinal(String::new()), Word::SttEnd]
-        .into_iter()
-        .map(|word| Verdict { at_ms, word })
-        .collect()
+    let at_ms = dur + delay(rng, &model.final_after_end, timing) * knobs.latency / 100;
+    let usage = [Word::SttUsage, Word::SttFinal(String::new())];
+    // Its detector may close the noise before the empty final does.
+    let words: Vec<Word> = if knobs.reports.provider_vad && rng.bool() {
+        [Word::SttStart, Word::SttEnd].into_iter().chain(usage).collect()
+    } else {
+        [Word::SttStart].into_iter().chain(usage).chain([Word::SttEnd]).collect()
+    };
+    words.into_iter().map(|word| Verdict { at_ms, word }).collect()
 }

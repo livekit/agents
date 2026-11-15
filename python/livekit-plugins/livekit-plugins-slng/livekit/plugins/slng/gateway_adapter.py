@@ -6,15 +6,11 @@ from typing import cast
 
 from pydantic import JsonValue
 
-from livekit.agents import APIError
-
 _EXTERNAL_TRACKING_ID_RE = re.compile(r"[\x00-\x1f\x7f,]")
 _MODEL_IDENTIFIER_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)+"
     r"(?::[A-Za-z0-9][A-Za-z0-9._-]*)?$"
 )
-_RETRYABLE_CLIENT_STATUS_CODES = {408, 409, 425, 429}
-_ERROR_MESSAGE_MAX_LEN = 500
 
 BRIDGE_ERROR_CODE_STATUS: dict[str, int] = {
     "auth_error": 401,
@@ -191,48 +187,3 @@ def build_external_tracking_headers(
     if session_id is not None:
         headers["X-SLNG-Session-Id"] = session_id
     return headers
-
-
-def _safe_error_code(exc: BaseException) -> int | None:
-    for attr in ("status_code", "code"):
-        value = getattr(exc, attr, None)
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
-    return None
-
-
-def http_status_from_exception(exc: BaseException | None) -> int | None:
-    seen: set[int] = set()
-    current = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        for attr in ("status_code", "status"):
-            value = getattr(current, attr, None)
-            if isinstance(value, int) and not isinstance(value, bool) and 100 <= value < 600:
-                return value
-        current = current.__cause__ or current.__context__
-    return None
-
-
-def is_non_retryable_client_error(exc: BaseException | None) -> bool:
-    status = http_status_from_exception(exc)
-    if status is not None:
-        return 400 <= status < 500 and status not in _RETRYABLE_CLIENT_STATUS_CODES
-    return isinstance(exc, APIError) and not exc.retryable
-
-
-def is_payload_too_large(exc: BaseException | None) -> bool:
-    # 413 is terminal for the whole chain: every candidate receives the same
-    # oversized request body, so retrying or failing over cannot help.
-    return http_status_from_exception(exc) == 413
-
-
-def error_details(exc: BaseException | None) -> dict[str, str | int | None]:
-    if exc is None:
-        return {"error_type": None, "error_code": None, "error_message": None}
-    message = str(exc).strip() or type(exc).__name__
-    return {
-        "error_type": type(exc).__name__,
-        "error_code": http_status_from_exception(exc) or _safe_error_code(exc),
-        "error_message": message[:_ERROR_MESSAGE_MAX_LEN],
-    }

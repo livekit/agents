@@ -17,16 +17,18 @@ pub struct InterruptEndsTheReply;
 impl Rule for InterruptEndsTheReply {
     const CONTRACT: Contract = Contract {
         id: "interrupt_ends_the_reply",
-        guarantee: "An interrupted speech's reply ends on its own: the interruption watchdog ends it only while the reply awaits what an interrupt does not cancel, application code (one of its tool calls, or a host hook issued for it) or the voice partition_key it commits the person's turn to (its take, or its settle or abandon receipt).",
+        guarantee: "An interrupted speech never times out while an application tool is live. After tools finish, the generation cleanup watchdog may bound a host hook or a pending storage receipt; provider and playback waits end through interruption itself.",
         examples: &[
             ended_before_the_watchdog,
-            watchdog_ends_a_running_tool,
+            a_tool_survives_the_watchdog_bound,
             watchdog_ends_an_awaited_hook,
             watchdog_ends_a_partition_wait,
+            watchdog_ends_a_checkpoint_wait,
             watchdog_ends_a_receipt_wait,
             wait_ends_in_the_watchdogs_instant,
         ],
         counterexamples: &[
+            watchdog_ends_a_running_tool,
             watchdog_ends_a_stuck_reply,
             tool_ended_before_the_watchdog,
             hook_answered_before_the_watchdog,
@@ -57,25 +59,23 @@ impl Rule for InterruptEndsTheReply {
             let open_at_watchdog = |from: Observed, until: Option<Observed>| {
                 from < fired && until.is_none_or(|until| until.at_ms >= fired.at_ms)
             };
-            // An interrupt cuts every provider open and read, node call and playout wait of the
-            // reply. It does not cut application code (agents.md, "Cancellation and cleanup"): a
-            // tool call handed to the runner, or a host hook the reply awaits
-            // (`function_tools_executed`), runs on, and the watchdog is what cancels the speech's
-            // tasks (`SpeechTasks`). Nor the partition: the voice turn holds it to the commit of its
-            // reply (voice-session.md), an interrupted reply still commits the person's turn, and
-            // its storage receipt precedes its completion.
+            // Application tools outlive ordinary interruption; a cleanup timeout cannot
+            // end their owner. A host hook may still require bounded generation cleanup.
+            let live_tool = steps.iter().any(|(from, step)| {
+                let Step::Tool(ToolStep::CallStarted { speech: on, call_id, hosted: true, .. }) = step else { return false };
+                if on.0 != speech { return false; }
+                let ended = steps.iter().find_map(|(at, step)| {
+                    (from < at && matches!(step, Step::Tool(ToolStep::CallEnded { call_id: c, .. }) if c == call_id)).then_some(*at)
+                });
+                open_at_watchdog(*from, ended)
+            });
+            check.expect(Subject::Speech(speech), !live_tool,
+                "generation cleanup timed out an interrupted speech with a live application tool");
             let application_code = steps.iter().any(|(from, step)| {
                 let ended = |is_end: &dyn Fn(&Step) -> bool| {
                     steps.iter().find(|(at, step)| from < at && is_end(step)).map(|(at, _)| *at)
                 };
                 let until = match step {
-                    Step::Tool(ToolStep::CallStarted { speech: on, call_id, hosted: true, .. })
-                        if on.0 == speech =>
-                    {
-                        ended(&|step| {
-                            matches!(step, Step::Tool(ToolStep::CallEnded { call_id: c, .. }) if c == call_id)
-                        })
-                    }
                     Step::Handoff(HandoffStep::HookIssued { hook, speech: Some(on), .. })
                         if on.0 == speech =>
                     {
@@ -87,7 +87,8 @@ impl Rule for InterruptEndsTheReply {
                 };
                 open_at_watchdog(*from, until)
             });
-            // The partition's take and its settle or abandon receipt; observing its loss is no wait.
+            // The partition's take, a checkpoint and the settle or abandon receipt; observing its
+            // loss is no wait.
             let partition_key = storage.iter().any(|(asked, step)| {
                 let StorageStep::Requested { speech: s, operation } = step else { return false };
                 let answered = storage.iter().find_map(|(at, step)| match step {
@@ -172,7 +173,17 @@ fn ended_before_the_watchdog() -> Recording {
         .done()
 }
 
-/// The reply awaited its tool call, still running when the watchdog cancelled it.
+fn a_tool_survives_the_watchdog_bound() -> Recording {
+    Authored::new()
+        .journal(tool(1, "call_1", false))
+        .journal(interrupted(1))
+        .later(10_000)
+        .journal(tool(1, "call_1", true))
+        .speech_done(1, SpeechOutcome::Interrupted)
+        .done()
+}
+
+/// A generation watchdog must never cancel a running application tool.
 fn watchdog_ends_a_running_tool() -> Recording {
     Authored::new()
         .journal(tool(1, "call_1", false))
@@ -200,6 +211,17 @@ fn watchdog_ends_a_partition_wait() -> Recording {
     Authored::new()
         .storage(partition(StorageOperation::Acquire, false))
         .journal(interrupted(1))
+        .later(5_000)
+        .journal(watchdog(1))
+        .speech_done(1, SpeechOutcome::Interrupted)
+        .done()
+}
+
+/// The reply ended, and its save waits on a checkpoint a slow database has not answered.
+fn watchdog_ends_a_checkpoint_wait() -> Recording {
+    Authored::new()
+        .journal(interrupted(1))
+        .storage(partition(StorageOperation::Checkpoint, false))
         .later(5_000)
         .journal(watchdog(1))
         .speech_done(1, SpeechOutcome::Interrupted)

@@ -187,7 +187,9 @@ impl VoiceRuntime {
                     },
                     async move {
                         let result = match storage {
-                            Some(storage) => storage.checkpoint(checkpoint, agent, history).await,
+                            Some(storage) => {
+                                storage.checkpoint(speech.0, checkpoint, agent, history).await
+                            }
                             None => Ok(()),
                         };
                         let request = StorageRequest::Checkpoint(checkpoint);
@@ -198,8 +200,13 @@ impl VoiceRuntime {
             E::StorageAbort(speech) => {
                 self.storage_command(VoiceStorageCommand::Abort { speech: speech.0 })
             }
-            E::StorageCommit { speech, history } => {
-                self.storage_command(VoiceStorageCommand::Settle { speech: speech.0, history })
+            E::SaveConversation(progress) => self.save_conversation(*progress),
+            E::StorageCommit { speech, sequence, history } => {
+                self.storage_command(VoiceStorageCommand::Settle {
+                    speech: speech.0,
+                    sequence,
+                    history,
+                })
             }
             E::ChatContext(snapshot) => {
                 self.publications.chat_ctx.set(snapshot);

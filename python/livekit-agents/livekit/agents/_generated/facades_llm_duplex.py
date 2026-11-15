@@ -14,12 +14,18 @@ if TYPE_CHECKING:
     from livekit.agents.llm import AudioGate
     from livekit.agents.llm.duplex import AudioGate as HostAudioGate, DuplexModel
 
+    from .._core import AdaptiveNoiseGate, FixedGate
+
 
 class DuplexRealtimeAdapter(_core.DuplexRealtimeModel, RealtimeModel):
     """`llm.DuplexRealtimeAdapter`: runs a `DuplexModel` inside a `VoiceSession`. The core gates the
     model's continuous output, segments it into generations and attaches its transcript; output
     the model never transcribes still plays, it just has no chat item.
     """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.refuse_overrides(cls, ("session",), "session.llm_node")
 
     def __init__(
         self,

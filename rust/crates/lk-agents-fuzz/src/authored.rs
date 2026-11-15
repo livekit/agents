@@ -354,6 +354,18 @@ impl Authored {
         self
     }
 
+    /// The n-th recognition stream took a report and handed its reader `emitted`.
+    pub fn recognised(
+        mut self,
+        stt: u32,
+        report: crate::record::SttReport,
+        emitted: Vec<crate::record::Recognised>,
+    ) -> Self {
+        let at = self.next();
+        self.recording.record_recognition(at, stt, report, emitted);
+        self
+    }
+
     /// The n-th realtime socket's server refused a frame, or answered from the wrong state.
     pub fn breach(mut self, socket: u32, breach: Breach) -> Self {
         let at = self.next();

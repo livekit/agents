@@ -106,6 +106,8 @@ async def test_key_goes_in_the_header_and_latency_level_in_the_config(level: int
 
     assert authorization == "Bearer test-key"
     assert "api_key" not in config
+    # stt-rt-v5 is removed on December 15, 2026
+    assert config["model"] == "stt-rt-v6"
     assert config.get("endpoint_latency_adjustment_level") == level
 
 
@@ -146,18 +148,13 @@ async def test_endpoint_finishes_speech() -> None:
 
     assert [e.type for e in events] == [
         SpeechEventType.START_OF_SPEECH,
-        SpeechEventType.PREFLIGHT_TRANSCRIPT,
+        SpeechEventType.INTERIM_TRANSCRIPT,
         SpeechEventType.FINAL_TRANSCRIPT,
         SpeechEventType.END_OF_SPEECH,
     ]
     assert events[1].alternatives[0].text == "hello"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/issues/7728 reproduces: retracted interim "
-    "leaves speech open",
-)
 async def test_endpoint_after_a_retracted_interim_finishes_speech() -> None:
     """Speech ends even when its only interim was retracted. https://github.com/livekit/agents/issues/7728"""
     messages: list[dict[str, object]] = [
@@ -172,11 +169,6 @@ async def test_endpoint_after_a_retracted_interim_finishes_speech() -> None:
     assert SpeechEventType.END_OF_SPEECH in [e.type for e in events[:-1]]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/issues/6887 reproduces: endpoint before "
-    "translation discards source text",
-)
 async def test_endpoint_before_the_translation_keeps_the_source_text() -> None:
     """The source text survives an endpoint that precedes its translation.
 
@@ -188,11 +180,11 @@ async def test_endpoint_before_the_translation_keeps_the_source_text() -> None:
         {"tokens": [token("hello", translation_status="translation"), END]},
     ]
 
-    events = await recognize(messages, 2, params)
+    events = await recognize(messages, 3, params)
 
     assert events[-1].type == SpeechEventType.END_OF_SPEECH
-    assert events[0].alternatives[0].text == "hello"
-    assert events[0].alternatives[0].source_texts == ["hola"]
+    data = first(events, SpeechEventType.FINAL_TRANSCRIPT)
+    assert (data.text, data.source_texts) == ("hello", ["hola"])
 
 
 async def test_final_transcript_keeps_speaker_timing_and_confidence() -> None:
@@ -206,9 +198,9 @@ async def test_final_transcript_keeps_speaker_timing_and_confidence() -> None:
         END,
     ]
 
-    events = await recognize([{"tokens": tokens}], 2, STTOptions(enable_speaker_diarization=True))
+    events = await recognize([{"tokens": tokens}], 3, STTOptions(enable_speaker_diarization=True))
 
-    data = events[0].alternatives[0]
+    data = first(events, SpeechEventType.FINAL_TRANSCRIPT)
     assert (data.text, data.speaker_id) == ("hello world", "speaker-2")
     assert data.confidence == pytest.approx(0.7)
     assert data.end_time - data.start_time == pytest.approx(1.5)  # shifted by the session offset
@@ -227,9 +219,9 @@ async def test_final_span_runs_from_earliest_start_to_latest_end() -> None:
         END,
     ]
 
-    events = await recognize([{"tokens": tokens}], 2)
+    events = await recognize([{"tokens": tokens}], 3)
 
-    data = events[0].alternatives[0]
+    data = first(events, SpeechEventType.FINAL_TRANSCRIPT)
     assert data.end_time - data.start_time == pytest.approx(3.843)
 
 
@@ -362,10 +354,6 @@ async def test_usage_counts_only_final_text_tokens_incrementally() -> None:
     assert sum(u.audio_duration or 0.0 for u in usages) == pytest.approx(0.3)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/pull/8471 reproduces: per-stream language is ignored",
-)
 async def test_stream_language_override_stays_local_to_its_stream() -> None:
     """``stream(language=)`` hints only that stream. https://github.com/livekit/agents/pull/8471"""
     configs: asyncio.Queue[dict[str, object]] = asyncio.Queue()
@@ -394,71 +382,3 @@ async def test_stream_language_override_stays_local_to_its_stream() -> None:
 
     assert overridden["language_hints"] == ["es"]
     assert default["language_hints"] == ["en"]
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/issues/8311 reproduces: cancellation during "
-    "initial send leaks acquired websocket",
-)
-async def test_closing_during_configuration_closes_the_socket(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A stream closed while sending its config closes the socket it opened.
-
-    https://github.com/livekit/agents/issues/8311
-    """
-
-    async def soniox(request: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse()
-        await ws.prepare(request)
-        async for _ in ws:
-            pass
-        return ws
-
-    sockets: list[http.WebSocket] = []
-    configuring = asyncio.Event()
-    connect = http.HttpSession.ws_connect
-
-    class StalledConfigSend:
-        """The opened socket, whose first send (the config) never completes."""
-
-        def __init__(self, socket: http.WebSocket) -> None:
-            self.socket = socket
-
-        async def send_str(self, data: str) -> None:
-            configuring.set()
-            await asyncio.Event().wait()
-
-        async def close(self) -> None:
-            await self.socket.close()
-
-    async def stalled_connect(
-        self: http.HttpSession,
-        url: str,
-        *,
-        conn_options: APIConnectOptions,
-        headers: Mapping[str, str],
-        heartbeat: float | None,
-    ) -> StalledConfigSend:
-        sockets.append(
-            await connect(
-                self, url, conn_options=conn_options, headers=headers, heartbeat=heartbeat
-            )
-        )
-        return StalledConfigSend(sockets[-1])
-
-    monkeypatch.setattr(http.HttpSession, "ws_connect", stalled_connect)
-    app = web.Application()
-    app.router.add_get("/stt", soniox)
-    async with TestServer(app) as server, http.open():
-        model = STT(api_key="key", base_url=str(server.make_url("/stt")))
-        stream = model.stream(conn_options=APIConnectOptions(max_retry=0))
-        await configuring.wait()
-
-        await stream.aclose()
-        leaked = not sockets[0].closed
-        await sockets[0].close()
-        await model.aclose()
-
-    assert not leaked

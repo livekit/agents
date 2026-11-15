@@ -51,8 +51,9 @@ _SPEECH_CONFIG = {
     }
 }
 # speech.phrase statuses that recognized nothing; any other one but Success cancels
-_NO_MATCH = {"NoMatch", "InitialSilenceTimeout", "BabbleTimeout", "EndOfDictation"}
-_CANCEL_KINDS: dict[str, ErrorKind] = {
+# the phrase statuses that fail the recognition; any other but Success recognized nothing
+_FAILED: dict[str, ErrorKind] = {
+    "Error": "server",
     "BadRequest": "invalid_request",
     "Forbidden": "auth",
     "TooManyRequests": "rate_limit",
@@ -245,13 +246,20 @@ class _Language(TypedDict):
     Language: str
 
 
-class _Hypothesis(TypedDict):
-    path: Literal["speech.hypothesis", "speech.fragment"]
+class _Interim(TypedDict):
     request_id: str
     Text: str
     Offset: int
     Duration: int
     PrimaryLanguage: NotRequired[_Language]
+
+
+class _Hypothesis(_Interim):
+    path: Literal["speech.hypothesis"]
+
+
+class _Fragment(_Interim):
+    path: Literal["speech.fragment"]
 
 
 class _Phrase(TypedDict):
@@ -269,8 +277,8 @@ class _TurnEnd(TypedDict):
     request_id: str
 
 
-_Message = Annotated[_Hypothesis | _Phrase | _TurnEnd, Field(discriminator="path")]
-_MESSAGE: TypeAdapter[_Hypothesis | _Phrase | _TurnEnd] = TypeAdapter(_Message)
+_Message = Annotated[_Hypothesis | _Fragment | _Phrase | _TurnEnd, Field(discriminator="path")]
+_MESSAGE: TypeAdapter[_Hypothesis | _Fragment | _Phrase | _TurnEnd] = TypeAdapter(_Message)
 _PATHS = {"speech.hypothesis", "speech.fragment", "speech.phrase", "turn.end"}
 _BODY = TypeAdapter(dict[str, JsonValue])
 
@@ -476,7 +484,7 @@ class SpeechStream(stt.WebSocketStream[_Message, str]):
             case _:
                 assert_never(item)
 
-    def decode(self, frame: bytes | str) -> _Hypothesis | _Phrase | _TurnEnd | None:
+    def decode(self, frame: bytes | str) -> _Hypothesis | _Fragment | _Phrase | _TurnEnd | None:
         if isinstance(frame, bytes):
             return None
         head, separator, body = frame.partition("\r\n\r\n")
@@ -488,6 +496,8 @@ class SpeechStream(stt.WebSocketStream[_Message, str]):
         }
         path = headers.get("path", "").lower()
         if path not in _PATHS:
+            # a message the stream does not read (speech.startdetected, one added since)
+            stt.log_skipped("Azure STT", path)
             return None
         try:
             fields = _BODY.validate_json(body) if body.strip() else {}
@@ -497,7 +507,7 @@ class SpeechStream(stt.WebSocketStream[_Message, str]):
         except ValidationError as e:
             raise stt.protocol_error(self, f"{e}; frame: {frame}") from e
 
-    def on_message(self, message: _Hypothesis | _Phrase | _TurnEnd) -> None:
+    def on_message(self, message: _Hypothesis | _Fragment | _Phrase | _TurnEnd) -> None:
         if message["request_id"].upper() in self._ended_turns:
             return
         if message["path"] == "turn.end":
@@ -512,12 +522,10 @@ class SpeechStream(stt.WebSocketStream[_Message, str]):
                 self.send_now(frame)
         elif message["path"] == "speech.phrase":
             status = message["RecognitionStatus"]
-            if status != "Success" and status not in _NO_MATCH:
-                raise APIError(
-                    f"Azure STT canceled the recognition: {status}",
-                    kind=_CANCEL_KINDS.get(status, "server"),
-                )
-            # a phrase that recognized nothing retracts the interim it follows
+            if (kind := _FAILED.get(status)) is not None:
+                raise APIError(f"Azure STT canceled the recognition: {status}", kind=kind)
+            # a phrase that recognized nothing (NoMatch, a timeout, a status added since)
+            # retracts the interim it follows
             text = message.get("DisplayText", "") if status == "Success" else ""
             self.report(self._transcript(message, text, final=True))
         elif message["path"] == "speech.hypothesis" or message["path"] == "speech.fragment":
@@ -526,9 +534,7 @@ class SpeechStream(stt.WebSocketStream[_Message, str]):
         else:
             assert_never(message)
 
-    def _transcript(
-        self, message: _Hypothesis | _Phrase, text: str, *, final: bool
-    ) -> stt.Transcript:
+    def _transcript(self, message: _Interim | _Phrase, text: str, *, final: bool) -> stt.Transcript:
         start = self.start_time_offset + self._turn_start + message.get("Offset", 0) / _TICKS
         detected = message.get("PrimaryLanguage", {"Language": ""})["Language"]
         return stt.Transcript(

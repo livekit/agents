@@ -17,10 +17,12 @@ from .inference_stt import FallbackModels
 from .rtc_frames import AudioFrame
 from .stt import SpeechEvent, STTCapabilities, Transcript
 
-class SpeechState:
-    """One recognition's speech state: START_OF_SPEECH and END_OF_SPEECH are derived here from what
-    the stream reports, the provider's own boundaries deduplicated, and open speech ends at each
-    connection boundary.
+class SpeechNormalizer:
+    """Normalizes one recognition stream's provider observations into speech events.
+    Owns both START_OF_SPEECH and END_OF_SPEECH: missing boundaries are synthesized, provider
+    boundaries are deduplicated, and a connection boundary settles pending words and open speech.
+    Utterances identify provider speech across transcript revisions, not conversational turns.
+    Turn completion, interruption policy and provider I/O belong to their enclosing owners.
     """
     def __new__(cls, provider_vad: bool, transcribes_after_speech_ends: bool) -> Self:
         """`provider_vad`: the provider detects speech itself, so its reported end closes the

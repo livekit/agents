@@ -9,6 +9,8 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import timedelta
 from typing import Any, Self
 
+from pydantic import JsonValue
+
 from livekit.agents.llm import LLM, AudioGate, Toolset
 from livekit.agents.llm.duplex import DuplexModel
 from livekit.agents.llm.mcp import MCPToolset
@@ -25,7 +27,7 @@ from .duplex import DuplexInputItem
 from .llm import ChatChunk, SerializedImage
 from .llm_fallback import HostChatContext, HostTools, RealtimeLeg
 from .llm_provider_options import ProviderEndpoint, ResponseFormat
-from .mcp import MCPToolOptions, ResolvedToolOptions
+from .mcp import CallToolResult, MCPTool, MCPToolOptions, ResolvedToolOptions
 from .metrics import RealtimeModelMetrics
 from .provider_data import TOOL_BEHAVIOR, ProviderFormat, ToolSchema
 from .provider_format import ConvertedItem, ProviderMessages
@@ -134,7 +136,7 @@ class DuplexRealtimeModel:
         self,
         duplex_model: DuplexModel,
         *,
-        gate: Callable[[], AudioGate] | None = None,
+        gate: Callable[[], AudioGate | AdaptiveNoiseGate | FixedGate] | None = None,
         audio_timeout: float = 0.8,
     ) -> None:
         """Each session's gate is `gate`'s, else the model's own, else the adaptive gate.
@@ -326,15 +328,15 @@ class McpSession:
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
     ) -> None: ...
-    async def list_tools(self) -> object: ...
+    async def list_tools(self) -> list[MCPTool]: ...
     async def call_tool(
         self,
         name: str,
-        arguments: dict[str, object],
+        arguments: dict[str, JsonValue],
         timeout: float | None,
         progress: RunContext | None,
         host_context: object | None,
-    ) -> object: ...
+    ) -> CallToolResult: ...
     async def close(self) -> None: ...
 
 class _core_McpToolsetLifecycle:
@@ -360,14 +362,10 @@ class _core_McpToolsetLifecycle:
 
 def resolve_mcp_tool_options(config: MCPToolOptions | None) -> ResolvedToolOptions: ...
 
-def mcp_raw_schema(
-    name: str,
-    description: str | None,
-    input_schema: dict[str, object],
-    meta: dict[str, object] | None,
-) -> object: ...
+def mcp_raw_schema(tool: MCPTool) -> dict[str, JsonValue]:
+    """The schema a listed tool is offered to the model as."""
 
-def mcp_render_result(tool_name: str, result: object) -> str: ...
+def mcp_render_result(tool_name: str, result: CallToolResult) -> str: ...
 
 async def to_provider_format(
     format: ProviderFormat,

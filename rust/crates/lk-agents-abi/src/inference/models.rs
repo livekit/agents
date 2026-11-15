@@ -114,12 +114,10 @@ pub enum SttXaiModel {
     name = "SpeechmaticsModels"
 ))]
 pub enum SttSpeechmaticsModel {
-    #[host(rename = "speechmatics/enhanced")]
-    Enhanced,
-    #[host(rename = "speechmatics/standard")]
-    Standard,
     #[host(rename = "speechmatics/linden-1")]
     Linden1,
+    #[host(rename = "speechmatics/oak-1")]
+    Oak1,
 }
 
 #[crate::host(record(

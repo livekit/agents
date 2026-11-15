@@ -11,8 +11,11 @@ local SQLite store or the project's AgentDB, driven by a stock a2a-sdk client.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, aclosing
+from dataclasses import dataclass
+from typing import Literal
 
 import httpx
 import pytest
@@ -20,10 +23,12 @@ from a2a.client import Client
 from a2a.types import a2a_pb2 as pb
 from google.protobuf import json_format
 
-from livekit.agents import AgentServer
+from livekit.agents import Agent, AgentServer, SessionState, TextSession, persisted
 from livekit.agents._generated.a2a_metadata import REASON
 from livekit.agents.a2a import A2ASessionContext
+from livekit.agents.llm import ChatContext
 from livekit.agents.storage import AgentDBStorage, Storage, Thread
+from tests.fakes import FakeLLM, last_input
 
 from .drivers import ENDPOINT, Workers, answer, first_event, rpc, send, settled_task, stock_client
 from .resources import RecordingService, finish_cleanup, serving
@@ -187,6 +192,90 @@ async def stock_clients() -> AsyncIterator[StockClients]:
     yield make
     for client in made:
         await client.close()
+
+
+@dataclass
+class Conversation:
+    session: SessionState = persisted(default_factory=SessionState)
+    visits: int = persisted(default=0)
+
+
+@pytest.mark.parametrize("persistence", ["manual", "bound", "unsaved"])
+async def test_text_session_storage_survives_a_request_on_another_server(
+    two_servers: TwoServers,
+    stock_clients: StockClients,
+    thread_storages: tuple[Storage, Storage],
+    persistence: Literal["manual", "bound", "unsaved"],
+) -> None:
+    """Real HTTP/SQLite or AgentDB: fresh request contexts restore only explicitly saved or
+    bound conversations. Binding alone never saves ordinary application field mutations."""
+
+    def reply(history: ChatContext) -> str:
+        if last_input(history) != "recall":
+            return "noted"
+        return next(
+            (
+                item.text_content or ""
+                for item in history.items
+                if item.type == "message" and item.role == "user" and item.text_content != "recall"
+            ),
+            "nothing saved",
+        )
+
+    async def handler(ctx: A2ASessionContext) -> str:
+        app = await ctx.store.load_context(Conversation())
+        if ctx.message.text_content == "inspect":
+            messages = (
+                [
+                    item.text_content
+                    for item in app.session.frames[app.session.root_frame_id].history
+                    if item.type == "message"
+                ]
+                if app.session.kind == "text"
+                else []
+            )
+            return json.dumps({"messages": messages, "visits": app.visits})
+        # Nothing conversational survives in Python objects between requests or servers.
+        agent = Agent(name="desk", instructions="Remember the conversation.", llm=FakeLLM(reply))
+        app.visits += 1
+        turn = await TextSession(agent=agent).run(
+            ctx.message, context=ctx.store.bind(app) if persistence == "bound" else app
+        )
+        if persistence == "manual":
+            app.session = turn.state
+            await ctx.store.save_context(app)
+        assert turn.result.status == "completed"
+        return turn.result.output
+
+    async def request(
+        http: httpx.AsyncClient, client: Client, text: str, context_id: str = ""
+    ) -> pb.Task:
+        opened = await send(client, text, context_id=context_id)
+        task = await settled_task(http, opened.id, opened.context_id)
+        assert task.status.state == COMPLETED, task
+        return task
+
+    http_a, http_b = await two_servers(handler)
+    a, b = await stock_clients(http_a), await stock_clients(http_b)
+    opened = await send(a, "I am Alice")
+    try:
+        first = await settled_task(http_a, opened.id, opened.context_id)
+        assert first.status.state == COMPLETED, first
+        assert answer(first) == "noted"
+        saved = persistence != "unsaved"
+        visits = 1 if persistence == "manual" else 0
+        before = json.loads(answer(await request(http_b, b, "inspect", first.context_id)))
+        assert before == {"messages": ["I am Alice", "noted"] if saved else [], "visits": visits}
+
+        recalled = await request(http_b, b, "recall", first.context_id)
+        assert answer(recalled) == ("I am Alice" if saved else "nothing saved")
+        after = json.loads(answer(await request(http_a, a, "inspect", first.context_id)))
+        assert after == {
+            "messages": ["I am Alice", "noted", "recall", "I am Alice"] if saved else [],
+            "visits": 2 if persistence == "manual" else 0,
+        }
+    finally:
+        await finish_cleanup(thread_storages[0].threads.delete_thread(opened.context_id))
 
 
 async def test_a_thread_continues_on_another_server_with_its_history(

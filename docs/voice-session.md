@@ -37,6 +37,7 @@ again when left empty.
 | `min_consecutive_speech_delay` | seconds of silence between two of the agent's speeches; 0 by default |
 | `user_away_timeout` | seconds of silence after which the person's state becomes `away`; 15 by default, `None` never |
 | `transcription_timeout` | seconds to wait for a transcript after the person spoke before `user_transcription_timeout`; `None` (the default) never |
+| `final_transcript_timeout` | seconds to wait after STT reports an utterance ended but still owes final words; 2 by default. On expiry, available interim words may complete an automatic turn; a late final corrects the same user message. Manual mode still requires a host commit |
 | `session_close_transcript_timeout` | seconds the close waits for the last transcript; 2 by default |
 | `tools` | tools and toolsets every agent of the call is offered, besides its own; a name an agent's tool already has is refused (`ValueError`) when that agent runs, see [tools](tools.md#tools-on-an-agent) |
 | `context` | the application object; marked fields require explicit loading and saving |
@@ -63,7 +64,7 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 |---|---|
 | `start(agent, room=, room_options=, chat_ctx=)` | attach the session to the room (the job's when left out) with `agent` speaking; `room_options` is a `RoomOptions` of `audio_input` (`AudioInputOptions`), `audio_output` (`AudioOutputOptions`), `video_input` (`VideoInputOptions`), `text_input` (`TextInputOptions`, whose callback receives a `TextInputEvent`) and `transcription_output` (`TranscriptionOutputOptions`, the agent's words), each `True`/`False` or its options |
 | `say(text, audio=, allow_interruptions=, add_to_chat_ctx=True)`, `generate_reply(instructions=, user_input=, tools=, tool_choice=, allow_interruptions=, chat_ctx=)` | speak fixed words, or reply through the model; each returns the speech's `SpeechHandle`. `allow_interruptions` overrides the session's for this speech; `add_to_chat_ctx=False` keeps a `say` out of the history; `tool_choice` and `chat_ctx` (the context this reply works on, refused on a realtime model) apply to this reply only. `text` is a `str` or an async iterable of `str` read to its end; with `audio` (pre-synthesized frames, then `text` must be a `str`, else `ValueError`) the frames play instead of the TTS and `text` is still added to the history. `tools=` (names) offers only those of the driving agent's tools for that reply, plus its provider-owned tools; a realtime model refuses it. A reply asked from the agent's `on_enter` is that hook's reply: tools flagged `ToolFlag.IGNORE_ON_ENTER` are withheld from it |
-| `interrupt(force=False)` | stop the current speech and the queued ones up to the first uninterruptible one; returns a future that resolves when they are done, or with the refusal. A reply interrupted while its tools run is done at once and the person's next turn goes ahead: the tools finish in the background, their results join the history with no follow-up reply, and any still running 5 seconds after the interruption are cancelled |
+| `interrupt(force=False)` | stop the current speech and the queued ones up to the first uninterruptible one; returns a future that resolves when they are done, or with the refusal. A reply interrupted while its tools run is done at once and the person's next turn goes ahead. Running tools retain their original `RunContext.speech_handle` and are not cancelled by interruption; their results join history with no follow-up reply. Session shutdown owns their bounded cleanup |
 | `await set_participant(identity)` | listen to another room participant (their audio, transcript and keypad); `None` listens to no one. By default the session links the first participant who joins, or `RoomOptions(participant_identity=)` |
 | `update_agent(agent)`, `update_options(...)`, `override_options(...)` | see [updating a live session](#updating-a-live-session) |
 | `history` | the call's conversation, a new `ChatContext` over the session's items on each read; empty on a new thread and before `start()`; see [reading the session from a callback](#reading-the-session-from-a-callback) |
@@ -556,10 +557,19 @@ A text request using the same partition waits for that ownership. Before a later
 transport history is reconciled with committed changes from other requests. Application fields
 still require explicit load/save.
 
+While the person speaks, a bound voice session also checkpoints the latest recognized words,
+before an assistant reply exists. Unaccepted words remain pending input, separate from accepted
+conversation history. Accepting the turn keeps its item ID and clears that pending input,
+including when no reply is requested. Recovery reconciles pending words under the partition
+lease without inserting the same item twice. Bound TextSession execution uses the same storage
+run and checkpoint primitives at its own conversation boundaries; plain text context/state
+remains manually saved.
+
 When the person interrupts a reply while its tools run, the conversation is freed at once, as on
 a call without a thread: the reply's speech is done and the next turn is answered. Only
-persistence waits. The interrupted turn keeps its hold on the partition until its tools end, or
-the 5 second interruption bound cancels them, and its turn is committed or abandoned. The
+persistence waits. Ordinary interruption leaves tools running, including beyond the generation
+cleanup bound. The interrupted turn keeps its hold on the partition until its tools end and its
+turn is committed or abandoned; session shutdown owns bounded cleanup of remaining tools. The
 interrupted turn's late tool output is placed right after its call, in `session.history` and in
 the thread, before what was said since. The thread saves the call's items in the order the
 session holds them, its opening handoff first: every saved item stores its position in the

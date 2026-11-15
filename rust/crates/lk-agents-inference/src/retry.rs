@@ -71,6 +71,7 @@ pub async fn stream<T: Send + 'static>(
             delivered,
             observer,
             source,
+            closing: None,
             failed,
             ended: false,
             deadline,
@@ -92,6 +93,8 @@ struct State<T> {
     delivered: fn(&T) -> bool,
     observer: Observer,
     source: Option<Box<dyn ProviderStream<T>>>,
+    /// Cleanup survives cancellation of a pull; the stream's close joins the same future.
+    closing: Option<BoxFuture<'static, Closed>>,
     failed: Option<ProviderError>,
     ended: bool,
     deadline: Option<Ts>,
@@ -149,24 +152,18 @@ impl<T: Send + 'static> State<T> {
                         self.request.succeeded(attempt, now);
                         self.request.closed(attempt, now, &mut Vec::new());
                     }
-                    if let Some(source) = self.source.take() {
-                        source
-                            .close(
-                                self.clock
-                                    .now()
-                                    .saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT),
-                            )
-                            .await;
-                    }
+                    self.close_source(
+                        self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT),
+                    )
+                    .await;
                     return Ok(None);
                 }
                 Err(error) => error,
             };
-            if let Some(source) = self.source.take() {
-                source
-                    .close(self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT))
-                    .await;
-            }
+            self.close_source(
+                self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT),
+            )
+            .await;
             let now = self.clock.now();
             match self.request.attempt_failed(error.attempt_error(), now) {
                 Retry::At(backoff) => {
@@ -198,6 +195,19 @@ impl<T: Send + 'static> State<T> {
         }
         self.source = Some(source);
         Ok(())
+    }
+
+    async fn close_source(&mut self, deadline: Ts) -> Closed {
+        if self.closing.is_none() {
+            self.closing = self.source.take().map(|source| source.close(deadline));
+        }
+        let closed = match self.closing.as_mut() {
+            Some(closing) => AssertUnwindSafe(closing).catch_unwind().await,
+            None => Ok(Closed::Clean),
+        };
+        // A panicked close cannot be polled again when the outer pull's panic is caught.
+        self.closing = None;
+        closed.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     }
 }
 
@@ -244,8 +254,8 @@ impl<T: Send + 'static> StreamOutput<T> for Output<T> {
                 let (state, _) = pending.await;
                 self.state = Some(state);
             }
-            match self.state.take().and_then(|mut state| state.source.take()) {
-                Some(source) => source.close(deadline).await,
+            match self.state.take() {
+                Some(mut state) => state.close_source(deadline).await,
                 None => Closed::Clean,
             }
         })

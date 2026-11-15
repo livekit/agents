@@ -196,7 +196,7 @@ class VoiceSession:
         """Open a user turn now: it interrupts the agent, and only its `end()` or `cancel()` closes
         it, whatever the turn detection. Refused while another is open.
         """
-        return cast("HostUserTurn", self._running.start_user_turn())
+        return self._running.start_user_turn()
 
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         """`AgentSession.interrupt(force=)`: the current and queued speeches up to the first

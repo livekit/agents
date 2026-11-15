@@ -43,6 +43,8 @@ class SessionKwargs(TypedDict, total=False):
     """`None` disables the away timer."""
     transcription_timeout: float
     """`None` disables the timeout, `0` arms it with nothing left to wait."""
+    final_transcript_timeout: float
+    """Seconds to wait after STT ends while its final words are still owed."""
     session_close_transcript_timeout: float
 
 
@@ -142,6 +144,7 @@ class ResolvedSessionOptions(TypedDict):
     ivr_detection: bool
     user_away_timeout: float | None
     transcription_timeout: float | None
+    final_transcript_timeout: float
     aec_warmup_duration: float | None
     session_close_transcript_timeout: float
 

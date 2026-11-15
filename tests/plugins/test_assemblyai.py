@@ -13,7 +13,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, http, stt
+from livekit.agents import APIConnectOptions, APIError, APIStatusError, http, stt
 from livekit.agents.stt import SpeechEventType
 from livekit.plugins.assemblyai import STT
 from tests.fakes import until
@@ -185,9 +185,23 @@ async def test_interim_text_is_cumulative_within_a_turn(assemblyai: AssemblyAI) 
     assert interims[:3] == ["I need", "I need you to", "I need you to be honest"]
 
 
-async def test_provider_close_reason_reaches_the_caller() -> None:
-    """A provider error close surfaces with its code, its reason as the detail, never as an
-    HTTP status.
+# Catches: an untagged message AssemblyAI added since read as its untagged error, failing the
+# stream as a protocol error instead of being skipped.
+async def test_an_untagged_message_that_is_no_error_is_skipped(assemblyai: AssemblyAI) -> None:
+    assemblyai.events = [
+        {"warning": "audio is too quiet"},
+        _turn("yes", end_of_turn=True, transcript="yes"),
+    ]
+
+    events, _ = await _hear(STT(api_key="key", base_url=assemblyai.base_url))
+
+    finals = [e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [e.alternatives[0].text for e in finals] == ["yes"]
+
+
+async def test_a_refused_request_fails_for_good_with_the_provider_reason() -> None:
+    """AssemblyAI's error message (then its 3005 close) fails the stream as the invalid request
+    it is, never retried, never as an HTTP status, its reason as the detail.
 
     https://github.com/livekit/agents/pull/1499
     """
@@ -204,14 +218,15 @@ async def test_provider_close_reason_reaches_the_caller() -> None:
     async with TestServer(app) as server, http.open():
         model = STT(api_key="key", base_url=str(server.make_url("")))
 
-        with pytest.raises(APIConnectionError) as caught:
-            async with model.stream(conn_options=NO_RETRY) as stream:
+        with pytest.raises(APIError) as caught:
+            async with model.stream(conn_options=APIConnectOptions(max_retry=2)) as stream:
+                stream.push_frame(_audio())
                 async for _ in stream:
                     pass
         await model.aclose()
 
     assert not isinstance(caught.value, APIStatusError)
-    assert "(close code 3005)" in caught.value.message
+    assert (caught.value.kind, caught.value.retryable) == ("invalid_request", False)
     assert caught.value.detail == "Invalid audio encoding"
     assert "Invalid audio encoding" not in str(caught.value)
 

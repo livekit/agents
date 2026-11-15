@@ -45,8 +45,6 @@ _AUDIO_HEADERS = {
     ":event-type": "AudioEvent",
     ":message-type": "event",
 }
-# Transcribe ends a stream that received no audio for 15 s with this BadRequestException
-_IDLE_TIMEOUT = "Your request timed out"
 _EXCEPTION_KINDS: dict[str, ErrorKind] = {
     "BadRequestException": "invalid_request",
     "ConflictException": "invalid_request",
@@ -293,6 +291,8 @@ _JSON = TypeAdapter(dict[str, JsonValue])
 
 class SpeechStream(stt.WebSocketStream[_Event, bytes]):
     frame_ms = 50
+    # Transcribe fails a stream that received no audio for 15 s: a new one opens before
+    audio_idle = 14.0
 
     def __init__(self, *, stt: STT, opts: STTOptions, conn_options: APIConnectOptions) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
@@ -323,6 +323,9 @@ class SpeechStream(stt.WebSocketStream[_Event, bytes]):
             case _:
                 assert_never(item)
 
+    def on_audio_idle(self) -> None:
+        self.reconnect("no audio before Transcribe's idle timeout")
+
     def decode(self, frame: bytes | str) -> _TranscriptEvent | _Exception | None:
         if isinstance(frame, str):
             raise stt.protocol_error(self, f"an unexpected text frame: {frame}")
@@ -330,7 +333,7 @@ class SpeechStream(stt.WebSocketStream[_Event, bytes]):
             headers, payload = _eventstream.decode(frame)
             match headers.get(":message-type"), headers.get(":event-type"):
                 case "event", "TranscriptEvent":
-                    body = {"type": "TranscriptEvent", **_JSON.validate_json(payload)}
+                    body = {**_JSON.validate_json(payload), "type": "TranscriptEvent"}
                 case "exception", _:
                     # the exception's text is "Message" in its JSON payload
                     body = {
@@ -344,7 +347,9 @@ class SpeechStream(stt.WebSocketStream[_Event, bytes]):
                         "name": headers.get(":error-code", ""),
                         "Message": headers.get(":error-message", ""),
                     }
-                case _:
+                case message_type, event_type:
+                    # an event Transcribe added since: skipped, named once
+                    stt.log_skipped("Amazon Transcribe", f"{message_type}/{event_type}")
                     return None
             return _EVENT.validate_python(body)
         except (ValueError, ValidationError) as e:
@@ -352,15 +357,10 @@ class SpeechStream(stt.WebSocketStream[_Event, bytes]):
 
     def on_message(self, message: _TranscriptEvent | _Exception) -> None:
         if message["type"] == "exception":
-            text = message.get("Message", "")
-            if message["name"] == "BadRequestException" and text.startswith(_IDLE_TIMEOUT):
-                # no audio reached Transcribe for 15 s: a new stream waits for the next audio
-                self.reconnect("Transcribe idle timeout")
-                return
             raise APIError(
                 f"Amazon Transcribe {message['name']}",
                 kind=_EXCEPTION_KINDS.get(message["name"], "server"),
-                detail=text or None,
+                detail=message.get("Message") or None,
             )
         elif message["type"] == "TranscriptEvent":
             for result in message["Transcript"]["Results"]:

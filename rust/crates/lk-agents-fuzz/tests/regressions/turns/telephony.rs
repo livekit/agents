@@ -489,3 +489,56 @@ mod dtmf_debounce_follows_user_state {
         });
     }
 }
+
+mod amd_classifier_retry {
+    //! The detector's classifier is no speech's request: a retry of it is the provider's recoverable
+    //! `error` event with no speech retry behind it, also when the detector runs from the start and
+    //! the host never sends it anything.
+    use lk_agents_fuzz::drive::{AmdAnswer, AmdSetup, Case, Setup, run};
+    use lk_agents_fuzz::input::{Input, Millis, Ref, ToolArgs, TurnMode, UserText};
+
+    // Catches: survey seeds 2793 and 3691. The rule set the classifier's legs aside only when the
+    // host had sent the detector an input, so a detector attached at start whose classifier was
+    // retried read as a speech retry nobody armed.
+    #[test]
+    fn a_retried_classifier_is_no_speech_retry() {
+        let setup = Setup {
+            vad: true,
+            stt: true,
+            turn: TurnMode::Stt,
+            tools: Vec::new(),
+            amd: Some(AmdSetup { answer: AmdAnswer::Track, ..AmdSetup::default() }),
+            ..Setup::default()
+        };
+        let inputs = vec![
+            Input::VadStart { vad: Ref::new(0), speech_ms: Millis(300) },
+            Input::SttStart { stt: Ref::new(0) },
+            Input::Advance { ms: Millis(300) },
+            Input::SttFinal {
+                utterance: Ref::new(0),
+                text: UserText("hi you have reached the voicemail of theo".into()),
+                speaker: None,
+            },
+            Input::SttEnd { utterance: Ref::new(0) },
+            Input::VadEnd { vad: Ref::new(0), silence_ms: Millis(500) },
+            Input::Advance { ms: Millis(20) },
+            // The classifier's first attempt fails; the retry answers.
+            Input::LlmFail { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(3_000) },
+            Input::LlmToolCall {
+                chat: Ref::new(1),
+                name: "save_prediction".into(),
+                args: ToolArgs(r#"{"label":"machine-vm"}"#.into()),
+            },
+            Input::LlmEnd { chat: Ref::new(1) },
+            Input::Advance { ms: Millis(3_000) },
+        ];
+        let outcome = run(Case { setup, inputs, ..Case::default() });
+        let failed: Vec<_> = outcome
+            .failures
+            .iter()
+            .filter(|f| f.contract == "provider_reports_each_failure_once")
+            .collect();
+        assert!(failed.is_empty(), "{failed:?}");
+    }
+}

@@ -142,8 +142,8 @@ impl SessionHooks for ScriptedHooks {
     fn function_tools_executed(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        _: Vec<lk_agents_abi::ChatItem>,
-        outputs: Vec<lk_agents_abi::ChatItem>,
+        _: Vec<lk_agents_abi::FunctionCall>,
+        outputs: Vec<lk_agents_abi::FunctionCallOutput>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Vec<bool>, HostError>> {
         Box::pin(async move { self.result(vec![false; outputs.len()]) })
     }

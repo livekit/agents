@@ -417,6 +417,23 @@ async def test_invalid_created_session_is_refused_and_deleted(
     assert boson.methods() == methods
 
 
+# Catches: a session status Boson added since failing start as a broken contract (and deleting
+# the session), or a delete answered with one leaving the session for a later close.
+async def test_session_statuses_boson_added_since_read_as_the_usual_case(
+    avatar_host: AvatarHost, boson: Boson
+) -> None:
+    ended = {**ACTIVE, "status": "terminating"}
+    boson.outcomes = [(201, {**ACTIVE, "status": "streaming"}), (200, ended)]
+    avatar = _avatar()
+
+    await _start(avatar, avatar_host)
+    assert avatar.session_id == "avatar-session-1"
+    await avatar.aclose()
+
+    assert boson.methods() == ["POST", "DELETE"]
+    assert avatar.session_id is None
+
+
 async def test_start_refuses_an_avatar_identity_equal_to_the_agent(
     avatar_host: AvatarHost, boson: Boson
 ) -> None:

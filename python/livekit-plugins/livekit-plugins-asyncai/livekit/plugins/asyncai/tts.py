@@ -14,39 +14,20 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import binascii
-import json
 import os
-import uuid
 import weakref
-from dataclasses import dataclass, replace
-from typing import cast
+from dataclasses import dataclass
+from typing import Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode
 
-from livekit.agents import (
-    APIConnectOptions,
-    APIError,
-    http,
-    tokenize,
-    tts,
-    utils,
-)
+from livekit.agents import APIConnectOptions, APIError, http, tokenize, tts
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .constants import (
-    API_AUTH_HEADER,
-    API_VERSION,
-    API_VERSION_HEADER,
-)
-from .log import logger
-from .models import (
-    TTSDefaultVoiceId,
-    TTSEncoding,
-    TTSModels,
-)
+from .constants import API_AUTH_HEADER, API_VERSION, API_VERSION_HEADER
+from .models import TTSDefaultVoiceId, TTSEncoding, TTSModels
 
 
 @dataclass
@@ -54,16 +35,55 @@ class _TTSOptions:
     model: TTSModels | str
     encoding: TTSEncoding
     sample_rate: int
-    voice: str | list[float]
+    voice: str
     api_key: str
     language: str | None
     base_url: str
 
-    def get_http_url(self, path: str) -> str:
-        return f"{self.base_url}{path}"
 
-    def get_ws_url(self, path: str) -> str:
-        return f"{self.base_url.replace('http', 'ws', 1)}{path}"
+# Async's websocket: each segment is one context, ended by closeContext. No message carries a
+# tag, so one declares every field read: audio and finals name their context, errors none.
+
+
+class _Message(TypedDict, total=False):
+    context_id: str
+    audio: str
+    final: bool
+    error_code: str
+    message: str
+
+
+class _Voice(TypedDict):
+    mode: Literal["id"]
+    id: str
+
+
+class _OutputFormat(TypedDict):
+    container: Literal["raw"]
+    encoding: str
+    sample_rate: int
+
+
+class _Init(TypedDict):
+    model_id: str
+    voice: _Voice
+    output_format: _OutputFormat
+    language: NotRequired[str]
+
+
+class _Text(TypedDict):
+    context_id: str
+    transcript: str
+    force: bool
+
+
+class _CloseContext(TypedDict):
+    context_id: str
+    transcript: str
+    close_context: bool
+
+
+_Command = _Init | _Text | _CloseContext
 
 
 class TTS(tts.TTS):
@@ -119,13 +139,7 @@ class TTS(tts.TTS):
             api_key=async_api_key,
             base_url=base_url,
         )
-        self._session = http_session
-        self._pool = utils.ConnectionPool[http.WebSocket](
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-            max_session_duration=300,
-            mark_refreshed_on_get=True,
-        )
+        self._mux = _Mux(self._opts)
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
     @property
@@ -136,38 +150,8 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "AsyncAI"
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
-        session = self._ensure_session()
-        query = urlencode({API_AUTH_HEADER: self._opts.api_key, API_VERSION_HEADER: API_VERSION})
-        url = self._opts.get_ws_url(f"/text_to_speech/websocket/ws?{query}")
-
-        init_payload = {
-            "model_id": self._opts.model,
-            "voice": {"mode": "id", "id": self._opts.voice},
-            "output_format": {
-                "container": "raw",
-                "encoding": self._opts.encoding,
-                "sample_rate": self._opts.sample_rate,
-            },
-        }
-
-        if self._opts.language is not None:
-            init_payload["language"] = self._opts.language
-        ws = await session.ws_connect(url, conn_options=conn_options)
-        await ws.send_str(json.dumps(init_payload))
-        return ws
-
-    async def _close_ws(self, ws: http.WebSocket) -> None:
-        await ws.close()
-
-    def _ensure_session(self) -> http.HttpSession:
-        if not self._session:
-            self._session = http.http_session()
-
-        return self._session
-
     def prewarm(self) -> None:
-        self._pool.prewarm()
+        self._mux.prewarm()
 
     def update_options(
         self,
@@ -193,33 +177,24 @@ class TTS(tts.TTS):
             pacing (tts.SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or
                 ``None`` to send each chunk as soon as it is split.
         """
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        connection_params_changed = False
-        if is_given(model):
-            self._opts.model = model
-            connection_params_changed = True
-        if is_given(language):
-            self._opts.language = language
-            connection_params_changed = True
-        if is_given(voice):
-            self._opts.voice = cast(str | list[float], voice)
-            connection_params_changed = True
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            connection_params_changed = False
+            if is_given(model):
+                self._opts.model = model
+                connection_params_changed = True
+            if is_given(language):
+                self._opts.language = language
+                connection_params_changed = True
+            if is_given(voice):
+                self._opts.voice = voice
+                connection_params_changed = True
 
         if connection_params_changed:
-            # model, voice and language are sent once, in the init payload _connect_ws
-            # writes immediately after the handshake, so a pooled connection keeps
-            # synthesising with the previous settings. mark_refreshed_on_get=True resets
-            # max_session_duration on every acquire, so under steady use that connection
-            # can outlive the change indefinitely.
-            self._pool.invalidate()
+            # model, voice and language are sent once, in each socket's init payload
+            self._mux.invalidate()
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            pool=self._pool,
-            opts=replace(self._opts),
-            tts=self,
-            conn_options=conn_options,
-        )
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
@@ -233,105 +208,85 @@ class TTS(tts.TTS):
             await stream.aclose()
 
         self._streams.clear()
-        await self._pool.aclose()
+        await self._mux.aclose()
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        pool: utils.ConnectionPool[http.WebSocket],
-        opts: _TTSOptions,
-        tts: TTS,
-        conn_options: APIConnectOptions,
-    ):
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
+class _Mux(tts.WebSocketMultiplexer[_Message, _Command]):
+    """One Async socket carries every stream's segments, each its own context; its init payload
+    fixes the model, voice and format."""
+
+    max_session_duration = 300
+
+    def __init__(self, opts: _TTSOptions) -> None:
         self._opts = opts
-        self._pool = pool
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-            mime_type="audio/pcm",
-            stream=True,
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        query = urlencode({API_AUTH_HEADER: self._opts.api_key, API_VERSION_HEADER: API_VERSION})
+        base_url = self._opts.base_url.replace("http", "ws", 1)
+        return tts.WebSocketTarget(f"{base_url}/text_to_speech/websocket/ws?{query}")
+
+    def setup(self) -> _Init:
+        init = _Init(
+            model_id=self._opts.model,
+            voice=_Voice(mode="id", id=self._opts.voice),
+            output_format=_OutputFormat(
+                container="raw", encoding=self._opts.encoding, sample_rate=self._opts.sample_rate
+            ),
         )
+        if self._opts.language is not None:
+            init["language"] = self._opts.language
+        return init
 
-        input_sent_event = asyncio.Event()
-        input_done = False
-        # reads time out only while a response is owed, never while waiting for more text
-        read_deadline = self._core_attempts
+    def route(self, message: _Message) -> str | None:
+        if "error_code" in message:
+            # an error names no context: it fails every stream on the socket
+            raise _error(message)
+        return message.get("context_id")
 
-        async def _send_task(ws: http.WebSocket, asyncai_context_id: str) -> None:
-            nonlocal input_done
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    continue
+    def close_context(self, context_id: str) -> _CloseContext:
+        return _CloseContext(context_id=context_id, transcript="", close_context=True)
 
-                token_pkt = {
-                    "transcript": data.text + " ",
-                    "context_id": asyncai_context_id,
-                    "force": True,
-                }
-                self.mark_started()
-                await ws.send_str(json.dumps(token_pkt))
-                read_deadline.expect_response()
-                input_sent_event.set()
 
-            input_done = True
-            end_pkt = {"transcript": "", "context_id": asyncai_context_id}
-            await ws.send_str(json.dumps(end_pkt))
-            read_deadline.expect_response(final=True)
-            input_sent_event.set()
+class SynthesizeStream(tts.WebSocketStream[_Message, _Command]):
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self.multiplexer = tts._mux
+        # segments whose context was closed: a final before that ends a text, not the segment
+        self._closed: set[str] = set()
 
-        async def _recv_task(ws: http.WebSocket, asyncai_context_id: str) -> None:
-            current_segment_id: str | None = None
-            await input_sent_event.wait()
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Command | None:
+        match item:
+            case tts.SegmentStart() | tts.EndOfText():
+                return None
+            case tts.SegmentText():
+                return _Text(
+                    context_id=item.segment_id, transcript=f"{item.chunk.text} ", force=True
+                )
+            case tts.SegmentEnd():
+                self._closed.add(item.segment_id)
+                return _CloseContext(context_id=item.segment_id, transcript="", close_context=True)
+            case _:
+                assert_never(item)
 
-            while True:
-                msg = await ws.receive()
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise ws.close_error("Async connection closed unexpectedly")
+    def on_message(self, message: _Message) -> None:
+        if "error_code" in message:
+            raise _error(message)
+        if (context_id := message.get("context_id")) is None:
+            return
+        if audio := message.get("audio"):
+            try:
+                data = base64.b64decode(audio, validate=True)
+            except binascii.Error as e:
+                raise tts.protocol_error(self, f"malformed audio: {audio}") from e
+            self.report(tts.SegmentAudio(context_id, data))
+        if message.get("final") and context_id in self._closed:
+            self._closed.discard(context_id)
+            self.report(tts.SegmentDone(context_id))
 
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    logger.warning("unexpected Async message type %s", msg.type)
-                    continue
 
-                data = json.loads(msg.data)
-                segment_id = data.get("context_id")
-                if current_segment_id is None:
-                    current_segment_id = segment_id
-                    output_emitter.start_segment(segment_id=segment_id)
-                final = data.get("final")
-                if isinstance(final, bool) and final:
-                    if input_done:
-                        output_emitter.end_input()
-                        break
-                    read_deadline.complete_response()
-                elif (audio := data.get("audio")) is not None:
-                    if not audio:
-                        continue
-                    try:
-                        b64data = base64.b64decode(audio, validate=True)
-                    except binascii.Error as e:
-                        raise APIError(
-                            "Async sent malformed audio", kind="protocol", detail=str(audio)
-                        ) from e
-                    read_deadline.audio_received()
-                    output_emitter.push(b64data)
-                else:
-                    logger.warning("unexpected message", extra={"lk.pii.data": data})
-
-        async_context_id = str(uuid.uuid4())
-        async with self._pool.connection(conn_options=self._conn_options) as ws:
-            async with utils.aio.TaskSet() as tasks:
-                try:
-                    await asyncio.gather(
-                        tasks.spawn(_send_task(ws, async_context_id)),
-                        tasks.spawn(_recv_task(ws, async_context_id)),
-                    )
-                finally:
-                    input_sent_event.set()
+def _error(message: _Message) -> APIError:
+    return APIError(
+        f"Async returned an error ({message.get('error_code')})",
+        kind="invalid_request",
+        detail=message.get("message"),
+    )

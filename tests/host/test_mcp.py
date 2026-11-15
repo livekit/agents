@@ -35,7 +35,7 @@ INTERNAL = "An internal error occurred"
 RECONNECT_BACKOFF_MAX = 30
 """Seconds of the longest reconnect backoff: skipping them lets a reconnect through at once."""
 INTERRUPTION_WATCHDOG = 5
-"""Seconds an interrupted call may run on before its watchdog cancels it."""
+"""Generation cleanup bound; ordinary interruption does not cancel application tools."""
 
 
 # --- Surfaces --------------------------------------------------------------------------------
@@ -354,12 +354,13 @@ async def test_slow_calls_in_one_step_run_concurrently(converse: Surface, peer: 
 async def test_a_call_slower_than_its_timeout_fails_and_the_reply_goes_on(
     converse: Surface, peer: HttpPeer
 ) -> None:
-    model = calling(("slow", {"seconds": 30}))
-    toolset = MCPToolset(id="peer", mcp_server=MCPServerHTTP(peer.url, request_timeout=0.05))
-    started = time.monotonic()
-    reply = await converse(agent_with(model, toolset), "go")
+    model = calling(("slow", {"seconds": 60}))
+    toolset = MCPToolset(id="peer", mcp_server=MCPServerHTTP(peer.url, request_timeout=30))
+    turn = asyncio.ensure_future(converse(agent_with(model, toolset), "go"))
+    await peer.journal.until("call", timeout=5)
+    _core.skip_host_time(30)
+    reply = await turn
 
-    assert time.monotonic() - started < 3
     [slow] = reply.outputs()
     assert (slow.is_error, slow.text) == (True, INTERNAL)
     assert reply.output == "Done."
@@ -687,13 +688,13 @@ async def test_a_cancelled_text_turn_cancels_its_call_on_the_server(peer: HttpPe
     await peer.journal.until("settled", timeout=5)
 
 
-async def test_an_interruption_frees_the_conversation_and_the_watchdog_cancels_the_call(
+async def test_an_interruption_frees_the_conversation_and_shutdown_cancels_the_call(
     peer: HttpPeer,
 ) -> None:
     """A hung MCP server never holds the conversation: the person interrupts and the next turn
-    is answered at once, while the call runs on until the 5s interruption watchdog cancels it
+    is answered at once. The call survives the generation cleanup bound; shutdown cancels it
     on the server."""
-    model = FakeLLM([tool_call("wait"), "Yes, I'm here."])
+    model = FakeLLM([tool_call("wait"), "Yes, I'm here.", "Still here."])
     toolset = MCPToolset(id="peer", mcp_server=MCPServerHTTP(peer.url, request_timeout=None))
     session = VoiceSession(
         llm=model, vad=None, tts=FakeTTS(seconds=0.05), turn_handling={"turn_detection": None}
@@ -708,7 +709,9 @@ async def test_an_interruption_frees_the_conversation_and_the_watchdog_cancels_t
             await speech
             later = await session._run(user_input="are you there?")
         _core.skip_host_time(INTERRUPTION_WATCHDOG)
-        await peer.journal.until("settled", timeout=1)
+        await session._run(user_input="still here?")
+        assert not peer.journal.entries("settled")
+    await peer.journal.until("settled", timeout=1)
     assert speech.interrupted
     assert _reply(later).output == "Yes, I'm here."
 

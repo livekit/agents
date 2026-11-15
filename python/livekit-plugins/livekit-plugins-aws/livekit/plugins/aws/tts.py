@@ -142,15 +142,15 @@ class TTS(tts.TTS):
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if is_given(voice):
-            self._opts.voice = voice
-        if is_given(language):
-            self._opts.language = LanguageCode(language)
-        if is_given(speech_engine):
-            self._opts.speech_engine = speech_engine
-        if is_given(text_type):
-            self._opts.text_type = text_type
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            if is_given(voice):
+                self._opts.voice = voice
+            if is_given(language):
+                self._opts.language = LanguageCode(language)
+            if is_given(speech_engine):
+                self._opts.speech_engine = speech_engine
+            if is_given(text_type):
+                self._opts.text_type = text_type
 
 
 class ChunkedStream(tts.ChunkedStream):

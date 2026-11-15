@@ -450,6 +450,7 @@ async def test_realtime_words_finalized_after_the_vad_ended_the_speech_stay_in_i
 
     assert [e.type for e in events if e.type != stt.SpeechEventType.RECOGNITION_USAGE] == [
         stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.END_OF_SPEECH_PENDING,
         stt.SpeechEventType.FINAL_TRANSCRIPT,
         stt.SpeechEventType.END_OF_SPEECH,
     ]

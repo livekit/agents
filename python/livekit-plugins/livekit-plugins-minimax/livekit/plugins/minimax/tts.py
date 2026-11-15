@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 import weakref
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Literal, NotRequired, TypedDict, assert_never
+
+from pydantic import TypeAdapter, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
@@ -19,8 +18,6 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
-
-from .log import logger
 
 TTSModel = Literal[
     "speech-2.8-hd",
@@ -142,17 +139,6 @@ DEFAULT_BASE_URL = (
 )
 
 
-def _decode(raw: str | bytes) -> dict[str, Any]:
-    """A provider message, which must be a JSON object."""
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        data = None
-    if not isinstance(data, dict):
-        raise APIError("MiniMax sent a malformed message", kind="protocol", detail=str(raw))
-    return data
-
-
 @dataclass
 class _TTSOptions:
     api_key: str
@@ -172,6 +158,127 @@ class _TTSOptions:
     intensity: int | None
     timbre: int | None
     audio_format: TTSAudioFormat
+
+    def validate(self) -> None:
+        if not (0.5 <= self.speed <= 2.0):
+            raise ValueError(f"speed must be between 0.5 and 2.0, but got {self.speed}")
+        if self.intensity is not None and not (-100 <= self.intensity <= 100):
+            raise ValueError(f"intensity must be between -100 and 100, but got {self.intensity}")
+        if self.timbre is not None and not (-100 <= self.timbre <= 100):
+            raise ValueError(f"timbre must be between -100 and 100, but got {self.timbre}")
+        if self.emotion == "fluent" and not self.model.startswith("speech-2.6"):
+            raise ValueError(
+                f'"fluent" emotion is only supported by speech-2.6-* models, '
+                f'but got model "{self.model}". Please use speech-2.6-hd or speech-2.6-turbo.'
+            )
+
+
+# MiniMax's request options, shared by the HTTP body and the websocket's task_start
+
+
+class _VoiceSetting(TypedDict):
+    voice_id: str
+    speed: float
+    vol: float
+    pitch: int
+    emotion: NotRequired[str]
+
+
+class _AudioSetting(TypedDict):
+    sample_rate: int
+    bitrate: int
+    format: str
+    channel: int
+
+
+class _VoiceModify(TypedDict, total=False):
+    intensity: int
+    timbre: int
+
+
+class _Options(TypedDict):
+    model: str
+    voice_setting: _VoiceSetting
+    audio_setting: _AudioSetting
+    text_normalization: bool
+    language_boost: NotRequired[str]
+    pronunciation_dict: NotRequired[dict[str, list[str]]]
+    voice_modify: NotRequired[_VoiceModify]
+
+
+class _StreamOptions(TypedDict):
+    exclude_aggregated_audio: bool
+
+
+class _HttpRequest(_Options):
+    text: str
+    stream: bool
+    stream_options: _StreamOptions
+
+
+class _TaskStart(_Options):
+    event: Literal["task_start"]
+
+
+class _TaskContinue(TypedDict):
+    event: Literal["task_continue"]
+    text: str
+
+
+class _TaskFinish(TypedDict):
+    event: Literal["task_finish"]
+
+
+_Command = _TaskStart | _TaskContinue | _TaskFinish
+
+
+# MiniMax's answers, on the websocket and the HTTP stream: each declares only the fields read.
+
+
+class _BaseResp(TypedDict, total=False):
+    status_code: int
+    status_msg: str
+    trace_id: str
+
+
+class _AudioData(TypedDict, total=False):
+    audio: str
+
+
+class _ExtraInfo(TypedDict, total=False):
+    usage_characters: int
+
+
+class _Answer(TypedDict, total=False):
+    trace_id: str
+    base_resp: _BaseResp | None
+    data: _AudioData | None
+    is_final: bool
+    extra_info: _ExtraInfo | None
+
+
+class _Connected(_Answer):
+    event: Literal["connected_success"]
+
+
+class _Started(_Answer):
+    event: Literal["task_started"]
+
+
+class _Continued(_Answer):
+    event: Literal["task_continued"]
+
+
+class _Finished(_Answer):
+    event: Literal["task_finished"]
+
+
+class _Failed(_Answer):
+    event: Literal["task_failed"]
+
+
+_Message = _Connected | _Started | _Continued | _Finished | _Failed
+_HTTP_ANSWER = TypeAdapter(_Answer)
 
 
 class TTS(tts.TTS):
@@ -222,7 +329,7 @@ class TTS(tts.TTS):
             api_key (str | None, optional): The Minimax API key. Defaults to None.
             base_url (NotGivenOr[str], optional): The base URL for the Minimax API. Defaults to NOT_GIVEN.
             http_session (http.HttpSession | None, optional): An existing HttpSession to use. If not provided, the job's shared session is used.
-        """
+        """  # noqa: E501
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=False),
             sample_rate=sample_rate,
@@ -240,20 +347,6 @@ class TTS(tts.TTS):
             raise ValueError(
                 "MiniMax API key is required, either as argument or set"
                 " MINIMAX_API_KEY environment variable"
-            )
-
-        if not (0.5 <= speed <= 2.0):
-            raise ValueError(f"speed must be between 0.5 and 2.0, but got {speed}")
-        if intensity is not None and not (-100 <= intensity <= 100):
-            raise ValueError(f"intensity must be between -100 and 100, but got {intensity}")
-        if timbre is not None and not (-100 <= timbre <= 100):
-            raise ValueError(f"timbre must be between -100 and 100, but got {timbre}")
-
-        # Validate fluent emotion is only used with speech-2.6-* models
-        if emotion == "fluent" and not model.startswith("speech-2.6"):
-            raise ValueError(
-                f'"fluent" emotion is only supported by speech-2.6-* models, '
-                f'but got model "{model}". Please use speech-2.6-hd or speech-2.6-turbo.'
             )
 
         self._opts = _TTSOptions(
@@ -274,6 +367,7 @@ class TTS(tts.TTS):
             intensity=intensity,
             audio_format=audio_format,
         )
+        self._opts.validate()
 
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -304,294 +398,152 @@ class TTS(tts.TTS):
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
-        """Update the TTS configuration options."""
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if utils.is_given(model):
-            self._opts.model = model
-
-        if utils.is_given(voice):
-            self._opts.voice_id = voice
-
-        if utils.is_given(emotion):
-            self._opts.emotion = emotion
-
-        if utils.is_given(speed):
-            self._opts.speed = speed
-
-        if utils.is_given(vol):
-            self._opts.vol = vol
-
-        if utils.is_given(pitch):
-            self._opts.pitch = pitch
-
-        if utils.is_given(text_normalization):
-            self._opts.text_normalization = text_normalization
-
-        if utils.is_given(audio_format):
-            self._opts.audio_format = audio_format
-
-        if utils.is_given(pronunciation_dict):
-            self._opts.pronunciation_dict = pronunciation_dict
-
-        if utils.is_given(intensity):
-            self._opts.intensity = intensity
-
-        if utils.is_given(timbre):
-            self._opts.timbre = timbre
-
-        if utils.is_given(language_boost):
-            self._opts.language_boost = language_boost
+        """Update the TTS configuration options; an invalid combination is refused and changes
+        nothing."""
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            opts = replace(self._opts)
+            if utils.is_given(model):
+                opts.model = model
+            if utils.is_given(voice):
+                opts.voice_id = voice
+            if utils.is_given(emotion):
+                opts.emotion = emotion
+            if utils.is_given(speed):
+                opts.speed = speed
+            if utils.is_given(vol):
+                opts.vol = vol
+            if utils.is_given(pitch):
+                opts.pitch = pitch
+            if utils.is_given(text_normalization):
+                opts.text_normalization = text_normalization
+            if utils.is_given(audio_format):
+                opts.audio_format = audio_format
+            if utils.is_given(pronunciation_dict):
+                opts.pronunciation_dict = pronunciation_dict
+            if utils.is_given(intensity):
+                opts.intensity = intensity
+            if utils.is_given(timbre):
+                opts.timbre = timbre
+            if utils.is_given(language_boost):
+                opts.language_boost = language_boost
+            opts.validate()
+        self._opts = opts
 
     def _ensure_session(self) -> http.HttpSession:
         if not self._session:
             self._session = http.http_session()
-
         return self._session
-
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
-        url = self._opts.base_url
-        if url.startswith("http"):
-            url = url.replace("http", "ws", 1)
-        url = f"{url}/ws/v1/t2a_v2"
-
-        headers = {"Authorization": f"Bearer {self._opts.api_key}"}
-        session = self._ensure_session()
-        ws = await session.ws_connect(url, headers=headers, conn_options=conn_options)
-
-        # Log WebSocket connection establishment
-        logger.debug(f"MiniMax WebSocket connected to {url}")
-
-        return ws
-
-    async def _close_ws(self, ws: http.WebSocket) -> None:
-        await ws.close()
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
-            get_session=self._ensure_session,
-            opts=replace(self._opts),
-            tts=self,
-            input_text=chunk.text,
-            conn_options=conn_options,
+            tts=self, opts=replace(self._opts), input_text=chunk.text, conn_options=conn_options
         )
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            connect_ws=self._connect_ws,
-            close_ws=self._close_ws,
-            opts=replace(self._opts),
-            tts=self,
-            conn_options=conn_options,
-        )
+        stream = SynthesizeStream(opts=replace(self._opts), tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
     async def aclose(self) -> None:
         for stream in list(self._streams):
             await stream.aclose()
-
         self._streams.clear()
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        connect_ws: Callable[[APIConnectOptions], Awaitable[http.WebSocket]],
-        close_ws: Callable[[http.WebSocket], Awaitable[None]],
-        opts: _TTSOptions,
-        tts: TTS,
-        conn_options: APIConnectOptions,
-    ):
+class SynthesizeStream(tts.WebSocketStream[_Message, _Command]):
+    """Each segment is one MiniMax task on its own connection: ``task_start`` (its setup),
+    a ``task_continue`` per text, ``task_finish`` at its end, answered by ``task_finished``."""
+
+    connection_per_segment = True
+    awaits_ready = True
+
+    def __init__(self, *, opts: _TTSOptions, tts: TTS, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
         self._opts = opts
-        self._connect_ws = connect_ws
-        self._close_ws = close_ws
+        self.mime_type = f"audio/{opts.audio_format}"
+        self._segment = ""
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        # Initialize with temporary ID, will be updated from WebSocket messages
-        request_id = utils.shortuuid()
-        trace_id = request_id  # Use trace_id directly instead of creating a dict
-
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-            mime_type=f"audio/{self._opts.audio_format}",
-            stream=True,
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        url = self._opts.base_url.replace("http", "ws", 1)
+        return tts.WebSocketTarget(
+            f"{url}/ws/v1/t2a_v2", headers={"Authorization": f"Bearer {self._opts.api_key}"}
         )
 
-        task_started = asyncio.Future[None]()
+    def setup(self) -> _TaskStart:
+        return {**_to_minimax_options(self._opts), "event": "task_start"}
 
-        read_deadline = self._core_attempts
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Command | None:
+        match item:
+            case tts.SegmentStart():
+                self._segment = item.segment_id
+                return None
+            case tts.SegmentText():
+                return _TaskContinue(event="task_continue", text=item.chunk.text)
+            case tts.SegmentEnd():
+                return _TaskFinish(event="task_finish")
+            case tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-        async def _send_task(ws: http.WebSocket) -> None:
-            start_msg = _to_minimax_options(self._opts)
-            start_msg["event"] = "task_start"
-            await ws.send_str(json.dumps(start_msg))
-
-            read_deadline.expect_response()
-            await task_started
-
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    continue
-                self.mark_started()
-                await ws.send_str(json.dumps({"event": "task_continue", "text": data.text}))
-                read_deadline.expect_response()
-
-            await ws.send_str(json.dumps({"event": "task_finish"}))
-            read_deadline.expect_response(final=True)
-
-        async def _recv_task(ws: http.WebSocket) -> None:
-            # Initialize trace_id to ensure it's available in all code paths
-            current_trace_id = trace_id
-
-            while True:
-                msg = await ws.receive()
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    raise ws.close_error(
-                        f"MiniMax connection closed unexpectedly (trace_id: {current_trace_id})"
-                    )
-
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    logger.warning("unexpected Minimax message type %s", msg.type)
-                    continue
-
-                data = _decode(msg.data)
-
-                # Extract trace_id (priority: root.trace_id > base_resp.trace_id)
-                # api.minimax.io returns trace_id in root.trace_id, api.minimaxi.com may return in base_resp.trace_id
-                msg_trace_id = data.get("trace_id") or data.get("base_resp", {}).get("trace_id")
-                if msg_trace_id and msg_trace_id != current_trace_id:
-                    current_trace_id = msg_trace_id
-                    logger.debug(f"MiniMax WebSocket trace_id updated: {msg_trace_id}")
-
-                base_resp = data.get("base_resp", {})
-                status_code = base_resp.get("status_code", 0)
-                if status_code != 0:
-                    raise _status_error(
-                        status_code,
-                        base_resp.get("status_msg"),
-                        msg_trace_id or current_trace_id,
-                        data,
-                    )
-
-                if data.get("event") == "connected_success":
-                    logger.debug(f"MiniMax WebSocket connected, trace_id={current_trace_id}")
-
-                elif data.get("event") == "task_started":
-                    read_deadline.complete_response()
-                    task_started.set_result(None)
-                    session_id = data.get("session_id", "")
-                    logger.debug(
-                        f"MiniMax WebSocket task_started, session_id={session_id}, trace_id={current_trace_id}"
-                    )
-                    output_emitter.start_segment(segment_id=session_id)
-
-                elif data.get("event") == "task_continued":
-                    audio = data.get("data", {}).get("audio")
-                    if audio:
-                        read_deadline.audio_received()
-                        output_emitter.push(bytes.fromhex(audio))
-                    if data.get("is_final"):
-                        _report_billed_characters(output_emitter, data)
-                        output_emitter.flush()
-
-                elif data.get("event") == "task_finished":
-                    output_emitter.end_input()
-                    break
-
-                elif data.get("event") == "task_failed":
-                    raise APIError(
-                        f"MiniMax returned task failed (trace_id: {current_trace_id})",
-                        kind="invalid_request",
-                        detail=str(msg.data),
-                    )
-
-                else:
-                    logger.warning("unexpected Minimax message", extra={"lk.pii.data": msg.data})
-
-        try:
-            ws = await self._connect_ws(self._conn_options)
-            async with utils.aio.TaskSet() as tasks:
-                try:
-                    await asyncio.gather(tasks.spawn(_send_task(ws)), tasks.spawn(_recv_task(ws)))
-                finally:
-                    await self._close_ws(ws)
-
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError(
-                f"WebSocket connection failed: {type(e).__name__}: {e} (trace_id: {trace_id})"
-            ) from e
-
-    async def aclose(self) -> None:
-        await super().aclose()
+    def on_message(self, message: _Message) -> None:
+        trace_id = message.get("trace_id") or (message.get("base_resp") or {}).get("trace_id")
+        if trace_id and trace_id != self.request_id:
+            self.report(tts.ProviderRequestId(trace_id))
+        _raise_status(message, trace_id)
+        if message["event"] == "connected_success":
+            pass
+        elif message["event"] == "task_started":
+            self.report(tts.Ready())
+        elif message["event"] == "task_continued":
+            if audio := (message.get("data") or {}).get("audio"):
+                self.report(tts.SegmentAudio(self._segment, bytes.fromhex(audio)))
+            if (billed := (message.get("extra_info") or {}).get("usage_characters")) is not None:
+                self.report(tts.SegmentUsage(self._segment, characters_count=billed))
+        elif message["event"] == "task_finished":
+            self.report(tts.SegmentDone(self._segment))
+        elif message["event"] == "task_failed":
+            raise APIError(
+                f"MiniMax returned task failed (trace_id: {trace_id})",
+                kind="invalid_request",
+                body=message,
+            )
+        else:
+            assert_never(message)
 
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(
-        self,
-        *,
-        get_session: Callable[[], http.HttpSession],
-        opts: _TTSOptions,
-        tts: TTS,
-        input_text: str,
-        conn_options: APIConnectOptions,
+        self, *, tts: TTS, opts: _TTSOptions, input_text: str, conn_options: APIConnectOptions
     ):
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = opts
-        self._get_session = get_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         if not self._input_text.strip():
             return
 
-        url = self._opts.base_url + "/v1/t2a_v2"
-        msg = _to_minimax_options(self._opts)
-        msg.update(
-            {
-                "text": self._input_text,
-                "stream": True,
-                "stream_options": {
-                    "exclude_aggregated_audio": True,  # don't include complete audio in last chunk
-                },
-            }
-        )
+        body: _HttpRequest = {
+            **_to_minimax_options(self._opts),
+            "text": self._input_text,
+            "stream": True,
+            # the last chunk does not repeat the whole audio
+            "stream_options": {"exclude_aggregated_audio": True},
+        }
         try:
-            async with self._get_session().post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {self._opts.api_key}",
-                },
-                json=msg,
+            async with self._tts._ensure_session().post(
+                self._opts.base_url + "/v1/t2a_v2",
+                headers={"Authorization": f"Bearer {self._opts.api_key}"},
+                json=body,
                 conn_options=self._conn_options,
             ) as resp:
                 await resp.raise_for_status()
-
-                # Extract trace_id from response headers (all requests have this)
-                # Note: api.minimax.io also returns trace_id in response body root.trace_id
                 trace_id = resp.headers.get("Trace-Id") or resp.headers.get("X-Trace-Id")
-                minimax_request_id = resp.headers.get("Minimax-Request-Id")
-
-                if trace_id:
-                    logger.debug(
-                        f"MiniMax HTTP stream request started, trace_id={trace_id}, minimax_request_id={minimax_request_id}"
-                    )
-                else:
-                    trace_id = utils.shortuuid()
-                    logger.warning(
-                        f"No Trace-Id in response headers, using generated ID: {trace_id}"
-                    )
-
                 output_emitter.initialize(
-                    request_id=trace_id,
+                    request_id=trace_id or utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=1,
                     mime_type=f"audio/{self._opts.audio_format}",
@@ -599,33 +551,20 @@ class ChunkedStream(tts.ChunkedStream):
 
                 async for chunk in resp.iter_lines():
                     line = chunk.decode().strip()
-                    if not line:
-                        continue
                     if not line.startswith("data:"):
-                        logger.warning("unexpected Minimax message", extra={"lk.pii.data": line})
                         continue
-
-                    data = _decode(line[5:])
-
-                    # api.minimax.io returns trace_id in response body root level
-                    body_trace_id = data.get("trace_id")
-                    if body_trace_id and body_trace_id != trace_id:
-                        logger.debug(f"Found trace_id in response body: {body_trace_id}")
-
-                    _report_billed_characters(output_emitter, data)
-                    if audio := data.get("data", {}).get("audio"):
+                    try:
+                        data = _HTTP_ANSWER.validate_json(line[5:])
+                    except ValidationError as e:
+                        raise APIError(
+                            "MiniMax sent a malformed message", kind="protocol", detail=line
+                        ) from e
+                    _raise_status(data, data.get("trace_id") or trace_id)
+                    extra_info = data.get("extra_info") or {}
+                    if (billed := extra_info.get("usage_characters")) is not None:
+                        output_emitter.report_usage(characters_count=billed)
+                    if audio := (data.get("data") or {}).get("audio"):
                         output_emitter.push(bytes.fromhex(audio))
-                    else:
-                        base_resp = data.get("base_resp", {})
-                        status_code = base_resp.get("status_code", 0)
-                        if status_code != 0:
-                            # trace_id priority: response body top level > response headers
-                            raise _status_error(
-                                status_code,
-                                base_resp.get("status_msg"),
-                                body_trace_id or trace_id,
-                                data,
-                            )
                 output_emitter.flush()
 
         except APIError:
@@ -650,59 +589,45 @@ _STATUS_KINDS: dict[int, ErrorKind] = {
 }
 
 
-def _status_error(
-    status_code: int, status_msg: str | None, trace_id: str | None, body: object
-) -> APIStatusError:
-    return APIStatusError(
-        f"MiniMax error [{status_code}] (trace_id: {trace_id})",
-        request_id=trace_id,
-        status_code=status_code,
-        body=body,
-        kind=_STATUS_KINDS.get(status_code, "invalid_request"),
-        detail=status_msg,
+def _raise_status(answer: _Answer, trace_id: str | None) -> None:
+    base_resp = answer.get("base_resp") or {}
+    if status_code := base_resp.get("status_code", 0):
+        raise APIStatusError(
+            f"MiniMax error [{status_code}] (trace_id: {trace_id})",
+            request_id=trace_id,
+            status_code=status_code,
+            body=answer,
+            kind=_STATUS_KINDS.get(status_code, "invalid_request"),
+            detail=base_resp.get("status_msg"),
+        )
+
+
+def _to_minimax_options(opts: _TTSOptions) -> _Options:
+    voice_setting = _VoiceSetting(
+        voice_id=opts.voice_id, speed=opts.speed, vol=opts.vol, pitch=opts.pitch
     )
-
-
-def _to_minimax_options(opts: _TTSOptions) -> dict[str, Any]:
-    config: dict[str, Any] = {
-        "model": opts.model,
-        "voice_setting": {
-            "voice_id": opts.voice_id,
-            "speed": opts.speed,
-            "vol": opts.vol,
-            "pitch": opts.pitch,
-        },
-        "audio_setting": {
-            "sample_rate": opts.sample_rate,
-            "bitrate": opts.bitrate,
-            "format": opts.audio_format,
-            "channel": 1,
-        },
-        "text_normalization": opts.text_normalization,
-    }
-
     if opts.emotion is not None:
-        config["voice_setting"]["emotion"] = opts.emotion
-
+        voice_setting["emotion"] = opts.emotion
+    config = _Options(
+        model=opts.model,
+        voice_setting=voice_setting,
+        audio_setting=_AudioSetting(
+            sample_rate=opts.sample_rate,
+            bitrate=opts.bitrate,
+            format=opts.audio_format,
+            channel=1,
+        ),
+        text_normalization=opts.text_normalization,
+    )
     if opts.language_boost is not None:
         config["language_boost"] = opts.language_boost
-
     if opts.pronunciation_dict:
         config["pronunciation_dict"] = opts.pronunciation_dict
-
-    voice_modify: dict[str, Any] = {}
+    voice_modify = _VoiceModify()
     if opts.intensity is not None:
         voice_modify["intensity"] = opts.intensity
     if opts.timbre is not None:
         voice_modify["timbre"] = opts.timbre
-
     if voice_modify:
         config["voice_modify"] = voice_modify
-
     return config
-
-
-def _report_billed_characters(output_emitter: tts.AudioEmitter, data: dict[str, Any]) -> None:
-    """A request's last message carries ``extra_info.usage_characters``, once per request."""
-    if (billed := (data.get("extra_info") or {}).get("usage_characters")) is not None:
-        output_emitter.report_usage(characters_count=billed)

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-from collections.abc import AsyncGenerator, Mapping
-from dataclasses import dataclass, field, replace
-from typing import Any, Literal, cast
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from typing import Literal, TypedDict
+from urllib.parse import urlparse
 
 import httpx2 as httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -17,7 +18,6 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
-    ProviderAttempts,
     TokenUsage,
     http,
     llm,
@@ -48,11 +48,10 @@ from openai.types.responses import (
     ResponseOutputMessage,
     ResponseTextConfig,
     ResponseTextDeltaEvent,
-    ToolParam,
     response_create_params,
 )
 from openai.types.responses.response_stream_event import ResponseStreamEvent
-from openai.types.shared_params import ResponsesModel
+from openai.types.shared_params import Reasoning as ReasoningParam, ResponsesModel
 
 from ..log import logger
 from ..models import supports_reasoning_effort
@@ -66,19 +65,119 @@ OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 
 # ws ping interval; keeps idle pooled sockets warm and lets the client detect dead peers
 _WS_HEARTBEAT = 30.0
-# max connections to try when a reused socket is stale, before the outer retry takes over
-_WS_SEND_MAX_ATTEMPTS = 6
-_WS_EVENT = TypeAdapter(dict[str, JsonValue])
+
+
+class _ResponseCreate(TypedDict):
+    """A ``response.create`` frame's own fields; the request's params go beside them. The
+    framework's tool schemas include provider tools the SDK's types do not name."""
+
+    type: Literal["response.create"]
+    tools: list[dict[str, object]]
+
+
+class _ErrorBody(TypedDict, total=False):
+    code: str | None
+    type: str | None
+    message: str
+
+
+class _ErrorFrame(TypedDict, total=False):
+    """An ``error`` frame: the request failed without a response. OpenAI nests the error under
+    ``error`` beside the HTTP ``status``; gateways put its fields at the top level."""
+
+    status: int
+    error: _ErrorBody
+    code: str | None
+    message: str
+
+
+_FRAME = TypeAdapter(dict[str, JsonValue])
+_ERROR_FRAME = TypeAdapter(_ErrorFrame)
+_REASONING = TypeAdapter(ReasoningParam)
+# the events the stream reads; it skips the others, since the API adds event types
+_EVENTS: dict[
+    str,
+    type[ResponseCreatedEvent]
+    | type[ResponseOutputItemDoneEvent]
+    | type[ResponseTextDeltaEvent]
+    | type[ResponseCompletedEvent]
+    | type[ResponseFailedEvent]
+    | type[ResponseIncompleteEvent],
+] = {
+    "response.created": ResponseCreatedEvent,
+    "response.output_item.done": ResponseOutputItemDoneEvent,
+    "response.output_text.delta": ResponseTextDeltaEvent,
+    "response.completed": ResponseCompletedEvent,
+    "response.failed": ResponseFailedEvent,
+    "response.incomplete": ResponseIncompleteEvent,
+}
+
+
+def _json_default(o: object) -> object:
+    if isinstance(o, openai.BaseModel):
+        # a caller's field given as an SDK model goes as the SDK sends it over HTTP: only the
+        # fields set, since the API rejects an explicit null on an enum field
+        return o.model_dump(mode="json", exclude_unset=True, by_alias=True)
+    raise TypeError(f"{type(o).__name__} is not JSON serializable")
+
+
+def _decode(message: http.WebSocketMessage) -> ResponseStreamEvent | None:
+    """A received frame as the event the stream reads, ``None`` for one it does not read."""
+    if message.type is not http.WebSocketMessageType.TEXT:
+        raise APIError(
+            "OpenAI Responses sent a binary frame", kind="protocol", detail=repr(message.data)
+        )
+    text = message.text
+    try:
+        frame = _FRAME.validate_json(text)
+        tag = frame.get("type")
+        if tag == "error":
+            raise _frame_error(_ERROR_FRAME.validate_python(frame))
+        event = _EVENTS.get(tag) if isinstance(tag, str) else None
+        return event.model_validate(frame) if event is not None else None
+    except ValidationError:
+        raise APIError(
+            "OpenAI Responses sent a malformed event", kind="protocol", detail=text
+        ) from None
+
+
+def _frame_error(frame: _ErrorFrame) -> APIError:
+    body = frame.get("error", {})
+    message = body.get("message") or frame.get("message") or "OpenAI Responses failed the request"
+    code = body.get("code") or frame.get("code") or body.get("type")
+    status = frame.get("status")
+    if status is None and code is not None and code.isdigit():
+        status = int(code)
+    if status is None:
+        return APIError(message, kind=error_kind(code))
+    # what OpenAI's code says failed, when it says, else what the status says
+    kind = error_kind(code)
+    return APIStatusError(
+        message, status_code=status, kind=kind if kind != "invalid_request" else None
+    )
+
+
+async def _still_open(ws: http.WebSocket) -> bool:
+    """Whether an idle socket is still open: one the peer closed while idle has its close
+    already queued, and any other frame is one no request is owed."""
+    if ws.closed:
+        return False
+    try:
+        await ws.receive(timeout=0)
+    except APITimeoutError:
+        return True
+    except APIConnectionError:
+        return False
+    return False
 
 
 class _ResponsesWebsocket:
+    """Sockets for the Responses API's WebSocket mode, each carrying one response at a time."""
+
     def __init__(
-        self, api_key: str | None, timeout: float | None, model: str, base_url: str | None = None
+        self, api_key: str, timeout: float | None, model: str, base_url: str | None = None
     ) -> None:
         self._api_key = api_key
-        self._timeout = (
-            timeout if timeout is not None else DEFAULT_API_CONNECT_OPTIONS.connect_timeout
-        )
         url = URL(base_url if base_url else OPENAI_RESPONSES_WS_URL)
         if url.scheme in ("http", "https"):
             url = url.with_scheme("ws" if url.scheme == "http" else "wss")
@@ -87,31 +186,30 @@ class _ResponsesWebsocket:
             # payload; gateways need it on the upgrade URL to route the
             # connection before the first frame.
             url = url.update_query(model=model)
-        self.base_url = str(url)
-
+        self.url = url
         self._session: http.HttpSession | None = None
-
         self._pool = utils.ConnectionPool[http.WebSocket](
-            connect_cb=self._create_ws,
-            close_cb=self._close_ws,
+            connect_cb=self._connect,
+            close_cb=self._close,
             max_session_duration=3600,
-            conn_options=APIConnectOptions(connect_timeout=self._timeout),
+            conn_options=APIConnectOptions(
+                connect_timeout=(
+                    timeout if timeout is not None else DEFAULT_API_CONNECT_OPTIONS.connect_timeout
+                )
+            ),
         )
 
-    def _ensure_http_session(self) -> http.HttpSession:
+    async def _connect(self, conn_options: APIConnectOptions) -> http.WebSocket:
         if self._session is None:
             self._session = http.http_session()
-        return self._session
-
-    async def _create_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
-        return await self._ensure_http_session().ws_connect(
-            self.base_url,
+        return await self._session.ws_connect(
+            str(self.url),
             headers={"Authorization": f"Bearer {self._api_key}"},
             heartbeat=_WS_HEARTBEAT,
             conn_options=conn_options,
         )
 
-    async def _close_ws(self, ws: http.WebSocket) -> None:
+    async def _close(self, ws: http.WebSocket) -> None:
         await ws.close()
 
     def prewarm(self) -> None:
@@ -120,102 +218,29 @@ class _ResponsesWebsocket:
     async def aclose(self) -> None:
         await self._pool.aclose()
 
-    async def generate_response(
-        self,
-        msg: Mapping[str, object],
-        *,
-        attempts: ProviderAttempts,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> AsyncGenerator[dict[str, JsonValue], None]:
-        """Send ``msg`` and yield its events; ``attempts`` runs the read deadline."""
-
-        def _default(o: object) -> object:
-            if isinstance(o, openai.BaseModel):
-                # exclude_none is load-bearing, not cosmetic. This hand-rolled WS
-                # transport serializes request models itself instead of going
-                # through the openai SDK (which omits unset fields). Without
-                # exclude_none, every Optional field the model defaults to None
-                # is emitted as an explicit `null` on the wire. The Responses API
-                # rejects explicit nulls on fields that expect an enum: e.g. after
-                # openai-python added `Reasoning.mode` (default None), a plain
-                # `Reasoning(effort=...)` began serializing `"mode": null`, which
-                # the API 400s with "Invalid type for 'reasoning.mode': expected
-                # one of 'standard' or 'pro', but got null instead." Omitting None
-                # mirrors the SDK's on-the-wire shape and is forward-compatible
-                # with future Optional additions to these models.
-                return o.model_dump(mode="json", exclude_none=True)
-            raise TypeError(f"unexpected type {type(o)}")
-
+    @asynccontextmanager
+    async def exchange(
+        self, request: str, conn_options: APIConnectOptions
+    ) -> AsyncIterator[http.WebSocket]:
+        """A socket that carried ``request``, for its response: back to the pool when the block
+        exits (the response completed), closed when it raises."""
+        ws = await self._open_socket(conn_options)
         try:
-            data = json.dumps(msg, default=_default)
-        except TypeError as e:
-            raise APIConnectionError(f"failed to serialize request: {e}") from e
+            await ws.send_str(request)
+            yield ws
+        except BaseException:
+            self._pool.remove(ws)
+            raise
+        self._pool.put(ws)
 
-        ws = await self._acquire_and_send(data, conn_options)
-        attempts.expect_response()
-        completed = False
-        try:
-            while True:
-                raw_msg = await ws.receive()
-                if raw_msg.type is http.WebSocketMessageType.CLOSE:
-                    raise ws.close_error(
-                        "OpenAI Responses WebSocket connection closed unexpectedly"
-                    )
-                if raw_msg.type is not http.WebSocketMessageType.TEXT:
-                    continue
-
-                try:
-                    event = _WS_EVENT.validate_json(raw_msg.data)
-                except ValidationError:
-                    raise APIError(
-                        "OpenAI Responses sent a malformed event",
-                        kind="protocol",
-                        detail=raw_msg.text,
-                    ) from None
-                attempts.progress()
-                yield event
-                if event.get("type") in [
-                    "response.completed",
-                    "response.failed",
-                    "response.incomplete",
-                    "error",
-                ]:
-                    attempts.complete_response()
-                    completed = True
-                    return
-        finally:
-            # only a cleanly completed exchange is safe to reuse; discard on any error
-            if completed:
-                self._pool.put(ws)
-            else:
-                self._pool.remove(ws)
-
-    async def _acquire_and_send(
-        self, data: str, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> http.WebSocket:
-        # a socket closed while idle surfaces only as a send failure on reuse
-        last_exc: Exception | None = None
-        for _ in range(_WS_SEND_MAX_ATTEMPTS):
+    async def _open_socket(self, conn_options: APIConnectOptions) -> http.WebSocket:
+        # a pooled socket the peer closed while it sat idle is replaced before the request
+        # goes, so no retry is spent on it; a new socket ends the search
+        while True:
             ws = await self._pool.get(conn_options=conn_options)
-            reused = self._pool.last_connection_reused
-            try:
-                async with asyncio.timeout(conn_options.write_timeout):
-                    await ws.send_str(data)
+            if not self._pool.last_connection_reused or await _still_open(ws):
                 return ws
-            except (TimeoutError, APITimeoutError) as e:
-                self._pool.remove(ws)
-                raise APITimeoutError(
-                    "OpenAI Responses WebSocket write timed out", timeout="write"
-                ) from e
-            except Exception as e:
-                self._pool.remove(ws)  # discard the failed socket
-                last_exc = e
-                if not reused:
-                    break  # a fresh connection failing to send is a real error, not staleness
-            except BaseException:
-                self._pool.remove(ws)  # cancellation: discard the socket, don't leak it
-                raise
-        raise APIConnectionError("failed to send request over WebSocket") from last_exc
+            self._pool.remove(ws)
 
 
 @dataclass
@@ -231,7 +256,6 @@ class _LLMOptions:
     service_tier: NotGivenOr[ServiceTier]
     verbosity: NotGivenOr[Verbosity]
     max_output_tokens: NotGivenOr[int]
-    use_websocket: bool
 
 
 @dataclass
@@ -339,7 +363,6 @@ class LLM(llm.LLM):
             service_tier=service_tier,
             verbosity=verbosity,
             max_output_tokens=max_output_tokens,
-            use_websocket=use_websocket,
         )
         self._client = client
         self._owns_client = client is None
@@ -398,10 +421,8 @@ class LLM(llm.LLM):
 
     @property
     def provider(self) -> str:
-        if self._opts.use_websocket and self._ws is not None:
-            from urllib.parse import urlparse
-
-            return urlparse(self._ws.base_url).netloc
+        if self._ws is not None:
+            return urlparse(str(self._ws.url)).netloc
         if self._client is not None:
             return self._client.base_url.netloc.decode("utf-8")
         return ""
@@ -416,74 +437,77 @@ class LLM(llm.LLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, object]] = NOT_GIVEN,
     ) -> LLMStream:
-        extra: dict[str, Any] = {}
-
-        if is_given(extra_kwargs):
-            extra.update(extra_kwargs)
-
-        if is_given(self._opts.metadata):
-            extra["metadata"] = self._opts.metadata
-
-        if is_given(self._opts.user):
-            extra["user"] = self._opts.user
-
-        if is_given(self._opts.temperature):
-            extra["temperature"] = self._opts.temperature
-
-        if is_given(self._opts.store):
-            extra["store"] = self._opts.store
-
-        if is_given(self._opts.reasoning):
-            extra["reasoning"] = self._opts.reasoning
-
-        if is_given(self._opts.service_tier):
-            extra["service_tier"] = self._opts.service_tier
-
-        if is_given(self._opts.verbosity):
-            text_cfg = ResponseTextConfig.model_validate(extra.get("text") or {})
-            text_cfg.verbosity = self._opts.verbosity
-            extra["text"] = text_cfg.model_dump(by_alias=True, exclude_unset=True)
-
-        if is_given(self._opts.max_output_tokens):
-            extra["max_output_tokens"] = self._opts.max_output_tokens
+        opts = self._opts
+        # the caller's own fields; an option this model sets replaces one of the same name
+        extra: dict[str, object] = dict(extra_kwargs) if is_given(extra_kwargs) else {}
+        params: response_create_params.ResponseCreateParamsBase = {}
+        if is_given(opts.metadata):
+            params["metadata"] = opts.metadata
+        if is_given(opts.user):
+            params["user"] = opts.user
+        if is_given(opts.temperature):
+            params["temperature"] = opts.temperature
+        if is_given(opts.store):
+            params["store"] = opts.store
+        if is_given(opts.reasoning):
+            # unset fields are left out: the API rejects an explicit null on an enum field
+            params["reasoning"] = _REASONING.validate_python(
+                opts.reasoning.model_dump(mode="json", exclude_none=True)
+            )
+        if is_given(opts.service_tier):
+            params["service_tier"] = opts.service_tier
+        if is_given(opts.max_output_tokens):
+            params["max_output_tokens"] = opts.max_output_tokens
 
         parallel_tool_calls = (
-            parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
+            parallel_tool_calls if is_given(parallel_tool_calls) else opts.parallel_tool_calls
         )
         if is_given(parallel_tool_calls):
-            extra["parallel_tool_calls"] = parallel_tool_calls
+            params["parallel_tool_calls"] = parallel_tool_calls
 
-        tool_choice = (
-            tool_choice if not isinstance(tool_choice, NotGiven) else self._opts.tool_choice
-        )
+        tool_choice = tool_choice if not isinstance(tool_choice, NotGiven) else opts.tool_choice
         if not isinstance(tool_choice, NotGiven):
-            oai_tool_choice: response_create_params.ToolChoice
             if not isinstance(tool_choice, str):
-                oai_tool_choice = {
+                params["tool_choice"] = {
                     "type": "function",
                     "name": tool_choice["function"]["name"],
                 }
-                extra["tool_choice"] = oai_tool_choice
             elif tool_choice in ("auto", "required", "none"):
-                oai_tool_choice = tool_choice
-                extra["tool_choice"] = oai_tool_choice
+                params["tool_choice"] = tool_choice
+
+        if is_given(opts.verbosity):
+            # verbosity joins the caller's text format, which keeps its wire field names
+            text_cfg = ResponseTextConfig.model_validate(extra.get("text") or {})
+            text_cfg.verbosity = opts.verbosity
+            extra["text"] = text_cfg.model_dump(by_alias=True, exclude_unset=True)
 
         input_chat_ctx = chat_ctx
-        if self._opts.store is not False:
+        if opts.store is not False:
             input_chat_ctx, previous_response_id = self._response_cache.prepare(chat_ctx)
             if previous_response_id is not None:
-                extra["previous_response_id"] = previous_response_id
+                params["previous_response_id"] = previous_response_id
+
+        # what the model refuses at its reasoning effort is left out; of the options, that can
+        # only be the temperature
+        view: dict[str, object] = {**extra, **params}
+        if is_given(opts.reasoning):
+            view["reasoning"] = opts.reasoning
+        kept = drop_unsupported_params(opts.model, view)
+        if "temperature" not in kept:
+            params.pop("temperature", None)
+        extra = {k: v for k, v in extra.items() if k in kept and k not in params}
+
         return LLMStream(
             self,
-            model=self._opts.model,
+            model=opts.model,
             strict_tool_schema=True,
-            client=self._client if self._client else None,
+            client=self._client,
             chat_ctx=input_chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
-            extra_kwargs=extra,
+            params=params,
+            extra=extra,
             full_chat_ctx=chat_ctx,
-            options=replace(self._opts),
             websocket=self._ws,
             cache=self._response_cache,
             provider_tool_type=self._provider_tool_type,
@@ -501,9 +525,9 @@ class LLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         tools: list[Tool],
         conn_options: APIConnectOptions,
-        extra_kwargs: Mapping[str, object],
+        params: response_create_params.ResponseCreateParamsBase,
+        extra: dict[str, object],
         full_chat_ctx: llm.ChatContext,
-        options: _LLMOptions,
         websocket: _ResponsesWebsocket | None,
         cache: _ResponseCache,
         provider_tool_type: type[llm.ProviderTool],
@@ -516,11 +540,11 @@ class LLMStream(llm.LLMStream):
         self._pending_tool_calls = set[str]()
 
         self._client = client
-        self._options = options
         self._websocket = websocket
         self._cache = cache
         self._provider_tool_type = provider_tool_type
-        self._extra_kwargs = drop_unsupported_params(model, dict(extra_kwargs))
+        self._params = params
+        self._extra = extra
         self._full_chat_ctx = full_chat_ctx.copy()
 
     async def _run(self) -> None:
@@ -534,116 +558,62 @@ class LLMStream(llm.LLMStream):
         self._response_completed = False
         chat_ctx, _ = await self._chat_ctx.to_provider_format(format="openai.responses")
         self._tool_ctx = llm.ToolContext(self.tools)
-        tool_schemas = cast(
-            list[ToolParam],
-            self._tool_ctx.parse_function_tools(
-                "openai.responses",
-                strict=self._strict_tool_schema,
-                provider_tool_type=self._provider_tool_type,
-            ),
+        tool_schemas = self._tool_ctx.parse_function_tools(
+            "openai.responses",
+            strict=self._strict_tool_schema,
+            provider_tool_type=self._provider_tool_type,
         )
 
-        if self._options.use_websocket is not False:
-            try:
-                if self._websocket is None:
-                    raise RuntimeError("use_websocket is True but _ws is None")
+        request = self._params.copy()
+        request["model"] = self._model
+        request["input"] = chat_ctx
 
-                payload = {
-                    "type": "response.create",
-                    "model": self._model,
-                    "input": chat_ctx,
-                    "tools": tool_schemas,
-                    **self._extra_kwargs,
-                }
-                async for raw_event in self._websocket.generate_response(
-                    payload, attempts=self._core_attempts, conn_options=self._conn_options
-                ):
-                    try:
-                        parsed = self._parse_ws_event(raw_event)
-                    except ValidationError:
-                        raise APIError(
-                            "OpenAI Responses sent a malformed event",
-                            kind="protocol",
-                            detail=json.dumps(raw_event),
-                        ) from None
-                    self._process_event(parsed)
+        if self._websocket is not None:
+            create: _ResponseCreate = {"type": "response.create", "tools": tool_schemas}
+            frame = json.dumps({**create, **request, **self._extra}, default=_json_default)
+            await self._run_websocket(self._websocket, frame)
+            return
 
-                if not self._response_completed:
-                    raise APIConnectionError()
-            except APIError:
-                raise
-            except Exception as e:
-                raise APIConnectionError() from e
+        assert self._client is not None
+        try:
+            stream = await self._client.with_options(max_retries=0).responses.create(
+                **request,
+                stream=True,
+                timeout=http_timeout(self._conn_options),
+                # the framework's tool schemas include provider tools the SDK's types do not name
+                extra_body={"tools": tool_schemas, **self._extra},
+            )
+            async with stream:
+                async for event in stream:
+                    self._process_event(event)
+        # only what the SDK reports of the transport and the API; anything else is a bug
+        except openai.APITimeoutError as e:
+            raise APITimeoutError() from e
+        except openai.APIConnectionError as e:
+            raise APIConnectionError() from e
+        except openai.APIStatusError as e:
+            raise APIStatusError(
+                e.message, status_code=e.status_code, request_id=e.request_id, body=e.body
+            ) from None
+        except openai.APIResponseValidationError as e:
+            raise APIError(
+                "OpenAI Responses sent a malformed response", kind="protocol", detail=e.message
+            ) from None
+        except openai.APIError as e:
+            # an error the API reported mid-stream
+            raise APIError(e.message, kind=error_kind(e.code or e.type), body=e.body) from None
 
-        else:
-            assert self._client is not None
-            timeout = http_timeout(self._conn_options)
-            self._oai_stream: openai.AsyncStream[ResponseStreamEvent] | None = None
-            try:
-                self._oai_stream = stream = await self._client.with_options(
-                    max_retries=0
-                ).responses.create(
-                    model=self._model,
-                    tools=tool_schemas,
-                    input=chat_ctx,
-                    stream=True,
-                    timeout=timeout,
-                    **self._extra_kwargs,
-                )
-
-                async with stream:
-                    async for event in stream:
-                        self._process_event(event)
-
-            except openai.APITimeoutError:
-                raise APITimeoutError()  # noqa: B904
-            except openai.APIStatusError as e:
-                raise APIStatusError(  # noqa: B904
-                    e.message,
-                    status_code=e.status_code,
-                    request_id=e.request_id,
-                    body=e.body,
-                )
-            except APIError:
-                raise
-            except Exception as e:
-                raise APIConnectionError() from e
-
-    def _parse_ws_event(self, event: dict[str, JsonValue]) -> ResponseStreamEvent | None:
-        # Strip prompt_cache_retention from any response object before validation:
-        # the OpenAI SDK Pydantic type doesn't match actual API values (e.g. "in_memory"
-        # vs "in-memory"). We don't use this field so dropping it is safe.
-        response = event.get("response")
-        if isinstance(response, dict) and "prompt_cache_retention" in response:
-            event = {
-                **event,
-                "response": {k: v for k, v in response.items() if k != "prompt_cache_retention"},
-            }
-
-        event_type = event.get("type", "")
-        if event_type == "error":
-            # Top-level protocol error frames (e.g. a request-validation 400) do
-            # NOT carry `sequence_number`, which ResponseErrorEvent marks required.
-            # Validating them as-is raises a pydantic ValidationError that masks
-            # the real API message ("... 1 validation error ... sequence_number
-            # Field required ..."). Default the field so the genuine error
-            # surfaces as a clean APIStatusError via _handle_error instead.
-            error = event.get("error")
-            merged = {"sequence_number": -1, **(error if isinstance(error, dict) else {}), **event}
-            return ResponseErrorEvent.model_validate(merged)
-        elif event_type == "response.created":
-            return ResponseCreatedEvent.model_validate(event)
-        elif event_type == "response.output_item.done":
-            return ResponseOutputItemDoneEvent.model_validate(event)
-        elif event_type == "response.output_text.delta":
-            return ResponseTextDeltaEvent.model_validate(event)
-        elif event_type == "response.completed":
-            return ResponseCompletedEvent.model_validate(event)
-        elif event_type == "response.failed":
-            return ResponseFailedEvent.model_validate(event)
-        elif event_type == "response.incomplete":
-            return ResponseIncompleteEvent.model_validate(event)
-        return None
+    async def _run_websocket(self, websocket: _ResponsesWebsocket, request: str) -> None:
+        attempts = self._core_attempts
+        async with websocket.exchange(request, self._conn_options) as ws:
+            attempts.expect_response()
+            while not self._response_completed:
+                message = await ws.receive()
+                if message.type is http.WebSocketMessageType.CLOSE:
+                    raise ws.close_error("OpenAI Responses closed the connection mid-response")
+                attempts.progress()
+                self._process_event(_decode(message))
+            attempts.complete_response()
 
     def _process_event(self, event: ResponseStreamEvent | None) -> llm.ChatChunk | None:
         """Handle one stream event, returning the chunk it sent to the caller, if any."""

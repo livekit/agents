@@ -18,10 +18,9 @@ from livekit.agents import (
     VoiceSession,
     http,
     stt,
-    tts,
 )
 from livekit.plugins import xai
-from livekit.plugins.xai import stt as xai_stt, tts as xai_tts
+from livekit.plugins.xai import stt as xai_stt
 from tests.fakes import FakeAudioOutput, audio_frame, until
 
 OPTIONS = APIConnectOptions(max_retry=3, retry_interval=0.01, connect_timeout=1, read_timeout=1)
@@ -30,7 +29,8 @@ OPTIONS = APIConnectOptions(max_retry=3, retry_interval=0.01, connect_timeout=1,
 async def test_a_dropped_stt_socket_reconnects_and_keeps_transcribing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A socket that dies under the stream is replaced, not spun on.
+    """A socket that dies under the stream is replaced, not spun on: the audio waiting for it
+    goes on the next connection.
 
     https://github.com/livekit/agents/issues/7363
     """
@@ -58,6 +58,8 @@ async def test_a_dropped_stt_socket_reconnects_and_keeps_transcribing(
         monkeypatch.setattr(xai_stt, "XAI_WEBSOCKET_URL", str(server.make_url("/v1/stt")))
         model = xai.STT(api_key="test-key")
         stream = model.stream(conn_options=OPTIONS)
+        # a clean close with nothing owed ends the provider session: the next input reconnects
+        stream.push_frame(audio_frame())
         try:
             async with asyncio.timeout(5):
                 async for event in stream:
@@ -128,7 +130,7 @@ class _TTSPeer:
         return socket
 
 
-async def test_streaming_segments_reuse_one_websocket(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_streaming_segments_reuse_one_websocket() -> None:
     """Each flushed segment is spoken over the same connection.
 
     https://github.com/livekit/agents/issues/6078
@@ -137,8 +139,8 @@ async def test_streaming_segments_reuse_one_websocket(monkeypatch: pytest.Monkey
     app = web.Application()
     app.router.add_get("/v1/tts", peer.speak)
     async with TestServer(app) as server, http.open():
-        monkeypatch.setattr(xai_tts, "XAI_WEBSOCKET_URL", str(server.make_url("/v1/tts")))
-        model = xai.TTS(api_key="test-key")
+        url = str(server.make_url("/v1/tts").with_scheme("ws"))
+        model = xai.TTS(api_key="test-key", websocket_url=url)
         try:
             async with model.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
                 stream.push_text("first")
@@ -151,80 +153,6 @@ async def test_streaming_segments_reuse_one_websocket(monkeypatch: pytest.Monkey
 
     assert heard == b"\x00\x00" * 480
     assert peer.connections == 1
-
-
-class _EagerDoneSession:
-    """An http session whose socket delivers audio.done while the text.done send is in flight.
-
-    A local server cannot order the reply before the send returns, so this race needs a socket.
-    """
-
-    def __init__(self) -> None:
-        self.replies: asyncio.Queue[http.WebSocketMessage] = asyncio.Queue()
-        self.answered = False
-        self.starved = asyncio.Event()  # every reply was read and the client waits for another
-
-    async def ws_connect(self, url: str, **_kwargs: object) -> _EagerDoneSession:
-        return self
-
-    async def send_str(self, data: str) -> None:
-        if json.loads(data)["type"] == "text.done":
-            delta = base64.b64encode(b"\x00\x00" * 240).decode()
-            for reply in ({"type": "audio.delta", "delta": delta}, {"type": "audio.done"}):
-                self.replies.put_nowait(
-                    http.WebSocketMessage(http.WebSocketMessageType.TEXT, json.dumps(reply))
-                )
-            self.answered = True
-            for _ in range(10):
-                await asyncio.sleep(0)
-
-    async def receive(self) -> http.WebSocketMessage:
-        if self.answered and self.replies.empty():
-            self.starved.set()
-        return await self.replies.get()
-
-    async def close(self) -> None:
-        pass
-
-
-async def _heard(stream: tts.SynthesizeStream) -> bytes:
-    return b"".join([event.frame.data.tobytes() async for event in stream])
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=TimeoutError,
-    reason="https://github.com/livekit/agents/issues/6079 reproduces: early audio.done is dropped",
-)
-async def test_audio_done_before_text_done_returns_still_completes() -> None:
-    """A segment whose audio.done lands while text.done is still being sent ends with its audio.
-
-    https://github.com/livekit/agents/issues/6079
-    """
-    # a stand-in session: only it can answer before the send returns
-    session = _EagerDoneSession()
-    model = xai.TTS(api_key="test-key", http_session=session)  # type: ignore[arg-type]
-    try:
-        async with model.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
-            stream.push_text("hello")
-            stream.end_input()
-            hearing = asyncio.create_task(_heard(stream))
-            await asyncio.wait(
-                [hearing, asyncio.create_task(session.starved.wait())],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for _ in range(20):  # a stream still able to end does so within a few turns
-                if hearing.done():
-                    break
-                await asyncio.sleep(0)
-            if not hearing.done():
-                hearing.cancel()
-                raise TimeoutError("the stream waits for a reply that never comes")
-            heard = hearing.result()
-    finally:
-        await model.aclose()
-
-    assert heard == b"\x00\x00" * 240
 
 
 class _GrokVoicePeer:

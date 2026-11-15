@@ -4,9 +4,9 @@ import asyncio
 import base64
 import binascii
 import json
-import os
 import time
 import weakref
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -26,9 +26,10 @@ from livekit.agents.utils import is_given, media as images
 
 from ..log import logger
 from ..utils import (
-    auth,
+    GeminiBackend,
     create_function_response,
     create_tools_config,
+    gemini_backend,
     get_tool_results_for_realtime,
 )
 from .api_proto import (
@@ -126,13 +127,10 @@ def _warn_vertex_scheduling_unsupported() -> None:
 @dataclass
 class _RealtimeOptions:
     model: LiveAPIModels | str
-    api_key: str | None
+    backend: GeminiBackend
     voice: Voice | str
     language: NotGivenOr[LanguageCode]
     response_modalities: list[types.Modality]
-    vertexai: bool
-    project: str | None
-    location: str | None
     candidate_count: int
     temperature: NotGivenOr[float]
     max_output_tokens: NotGivenOr[int]
@@ -157,7 +155,6 @@ class _RealtimeOptions:
     tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
     session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
-    credentials: google.auth.credentials.Credentials | None = None
 
 
 @dataclass
@@ -234,29 +231,27 @@ class RealtimeModel(llm.RealtimeModel):
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
-        credentials: google.auth.credentials.Credentials | None = None,
+        credentials: NotGivenOr[google.auth.credentials.Credentials] = NOT_GIVEN,
+        credentials_info: NotGivenOr[Mapping[str, object]] = NOT_GIVEN,
+        credentials_file: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
 
-        Environment Requirements:
-        - For VertexAI: Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of the service account key file or use any of the other Google Cloud auth methods.
-        The Google Cloud project and location can be set via `project` and `location` arguments or the environment variables
-        `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. By default, the project is inferred from the service account key file,
-        and the location defaults to "us-central1".
-        - For Google Gemini API: Set the `api_key` argument or the `GOOGLE_API_KEY` environment variable.
-
         Args:
             instructions (str, optional): Initial system instructions for the model. Defaults to "".
-            api_key (str, optional): Google Gemini API key. If None, will attempt to read from the environment variable GOOGLE_API_KEY.
+            api_key (str, optional): Gemini API key. Defaults to the `GOOGLE_API_KEY` environment variable.
             modalities (list[Modality], optional): Modalities to use, such as ["TEXT", "AUDIO"]. Defaults to ["AUDIO"].
             model (str, optional): The name of the model to use. Defaults to "gemini-2.5-flash-native-audio-preview-12-2025" or "gemini-live-2.5-flash-native-audio" (vertexai).
             voice (api_proto.Voice, optional): Voice setting for audio outputs. Defaults to "Puck".
             language (str, optional): The language(BCP-47 Code) to use for the API. supported languages - https://ai.google.dev/gemini-api/docs/live#supported-languages
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
-            vertexai (bool, optional): Whether to use VertexAI for the API. Defaults to False.
-                project (str, optional): The project id to use for the API. Defaults to None. (for vertexai)
-                location (str, optional): The location to use for the API. Defaults to None. (for vertexai)
+            vertexai (bool, optional): Whether to use Vertex AI. Defaults to `GOOGLE_GENAI_USE_VERTEXAI`, else to Vertex AI when credentials, a project or a location are given.
+            project (str, optional): Google Cloud project for Vertex AI. Defaults to `GOOGLE_CLOUD_PROJECT`, then the credentials' project.
+            location (str, optional): Google Cloud region for Vertex AI. Defaults to `GOOGLE_CLOUD_LOCATION`, then "us-central1".
+            credentials (Credentials, optional): Credentials for Vertex AI.
+            credentials_info (dict, optional): Service account info for Vertex AI.
+            credentials_file (str, optional): Path to a service account JSON file for Vertex AI.
             candidate_count (int, optional): The number of candidate responses to generate. Defaults to 1.
             top_p (float, optional): The top-p value for response generation
             top_k (int, optional): The top-k value for response generation
@@ -293,11 +288,17 @@ class RealtimeModel(llm.RealtimeModel):
         ):
             server_turn_detection = False
         modalities = modalities if is_given(modalities) else [types.Modality.AUDIO]
-        use_vertexai = (
-            vertexai
-            if is_given(vertexai)
-            else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
+        backend = gemini_backend(
+            api_key=api_key,
+            vertexai=vertexai,
+            project=project,
+            location=location,
+            credentials=credentials,
+            credentials_info=credentials_info,
+            credentials_file=credentials_file,
+            default_location="us-central1",
         )
+        use_vertexai = backend.vertexai
         if use_vertexai and is_given(tool_response_scheduling):
             _warn_vertex_scheduling_unsupported()
         if not is_given(model):
@@ -322,37 +323,6 @@ class RealtimeModel(llm.RealtimeModel):
             )
         )
 
-        gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
-        gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
-        gcp_location: str | None = (
-            location
-            if is_given(location)
-            else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
-        )
-
-        if use_vertexai:
-            if not gcp_project:
-                _, gcp_project = auth.default(
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
-                )
-            if not gcp_project or not gcp_location:
-                raise ValueError(
-                    "Project is required for VertexAI via project kwarg or GOOGLE_CLOUD_PROJECT environment variable"  # noqa: E501
-                )
-            gemini_api_key = None  # VertexAI does not require an API key
-        else:
-            gcp_project = None
-            gcp_location = None
-            if credentials is not None:
-                logger.warning(
-                    "'credentials' is only applicable to VertexAI and will be ignored for the Gemini API"
-                )
-                credentials = None
-            if not gemini_api_key:
-                raise ValueError(
-                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
-                )
-
         _warn_model_api_mismatch(model, use_vertexai)
 
         if (
@@ -368,12 +338,9 @@ class RealtimeModel(llm.RealtimeModel):
 
         self._opts = _RealtimeOptions(
             model=model,
-            api_key=gemini_api_key,
+            backend=backend,
             voice=voice,
             response_modalities=modalities,
-            vertexai=use_vertexai,
-            project=gcp_project,
-            location=gcp_location,
             candidate_count=candidate_count,
             temperature=temperature,
             max_output_tokens=max_output_tokens,
@@ -400,7 +367,6 @@ class RealtimeModel(llm.RealtimeModel):
             media_resolution=media_resolution,
             thinking_config=thinking_config,
             session_resumption=session_resumption,
-            credentials=credentials,
         )
 
         self._sessions = weakref.WeakSet[RealtimeSession]()
@@ -411,7 +377,7 @@ class RealtimeModel(llm.RealtimeModel):
 
     @property
     def provider(self) -> str:
-        if self._opts.vertexai:
+        if self._opts.backend.vertexai:
             return "Vertex AI"
         else:
             return "Gemini"
@@ -493,15 +459,15 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
         if (
             not api_version
             and (self._opts.enable_affective_dialog or self._opts.proactivity)
-            and not self._opts.vertexai
+            and not self._opts.backend.vertexai
         ):
             api_version = "v1alpha"
         self._endpoint = LiveEndpoint(
-            vertexai=self._opts.vertexai,
-            api_key=self._opts.api_key,
-            project=self._opts.project,
-            location=self._opts.location,
-            credentials=self._opts.credentials,
+            vertexai=self._opts.backend.vertexai,
+            api_key=self._opts.backend.api_key,
+            project=self._opts.backend.project,
+            location=self._opts.backend.location,
+            credentials=self._opts.backend.credentials,
             http_options=self._opts.http_options if is_given(self._opts.http_options) else None,
             api_version=api_version,
         )
@@ -644,11 +610,11 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
         # only to resume, or on Vertex AI when the caller configured resumption
         configured = self._opts.session_resumption
         handle = self._session_resumption_handle
-        if handle is not None or (self._opts.vertexai and is_given(configured)):
+        if handle is not None or (self._opts.backend.vertexai and is_given(configured)):
             transparent = configured.transparent if is_given(configured) else None
             setup["sessionResumption"] = dump(
                 types.SessionResumptionConfig(
-                    handle=handle, transparent=transparent if self._opts.vertexai else None
+                    handle=handle, transparent=transparent if self._opts.backend.vertexai else None
                 )
             )
         if is_given(self._opts.instructions):
@@ -730,7 +696,8 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
 
         # vertex drops `scheduling`, and Gemini reads it only on NON_BLOCKING tools
         supports_silent_scheduling = (
-            not self._opts.vertexai and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
+            not self._opts.backend.vertexai
+            and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
         )
         if not supports_silent_scheduling and (
             silenced := [
@@ -763,11 +730,12 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
     def _tool_results(self, chat_ctx: llm.ChatContext) -> types.LiveClientToolResponse | None:
         return get_tool_results_for_realtime(
             chat_ctx,
-            vertexai=self._opts.vertexai,
+            vertexai=self._opts.backend.vertexai,
             tool_response_scheduling=self._opts.tool_response_scheduling,
             # vertex drops `scheduling`, and Gemini reads it only on NON_BLOCKING tools
             supports_silent_scheduling=(
-                not self._opts.vertexai and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
+                not self._opts.backend.vertexai
+                and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
             ),
             synthetic_call_ids=self._synthetic_call_ids,
         )
@@ -799,7 +767,7 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
             and self._opts.tool_response_scheduling != tool_response_scheduling
         ):
             self._opts.tool_response_scheduling = tool_response_scheduling
-            if self._opts.vertexai:
+            if self._opts.backend.vertexai:
                 _warn_vertex_scheduling_unsupported()
 
         if is_given(tool_choice):
@@ -833,7 +801,7 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
                     # Vertex AI reads a mid-session "system" turn as the new instructions. The
                     # Gemini API refuses that role, and 3.1 and 3.8 close with 1007 on a turn
                     # without one: "model" is what it accepts.
-                    role="system" if self._opts.vertexai else "model",
+                    role="system" if self._opts.backend.vertexai else "model",
                 )
             ],
             turn_complete=False,
@@ -1160,6 +1128,8 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
             if (text := part.get("text")) and forward_model_text:
                 current_gen.push_text(text)
             if inline_data := part.get("inlineData"):
+                if not inline_data.get("mimeType", "audio/").startswith("audio/"):
+                    continue  # a modality the session does not play
                 if current_gen.audio_ch.closed:
                     # generation_complete already closed the audio stream; a turn should not
                     # emit more audio, so drop any late frame
@@ -1294,7 +1264,7 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
                     output="Tool calls are disabled for this turn, respond to the user directly.",
                     is_error=True,
                 ),
-                vertexai=self._opts.vertexai,
+                vertexai=self._opts.backend.vertexai,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
                 send_id=bool(call.get("id")),
             )

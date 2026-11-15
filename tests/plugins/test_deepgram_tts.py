@@ -87,6 +87,7 @@ async def test_stream_drains_the_final_audio_or_raises_the_error_before_closing(
             assert await _speak(model, "Hello world.") == PCM
         await model.aclose()
 
+    # Close ends the provider session, so none lingers against the concurrency limit
     assert wire[-2:] == ["Flush", "Close"]
 
 
@@ -122,7 +123,9 @@ async def test_flux_turn_ends_on_speech_metadata_and_the_pooled_socket_speaks_ag
         return ws
 
     async with _server(peer) as server, http.open():
-        model = deepgram.TTSv2(api_key="test", base_url=str(server.make_url("/speak")))
+        model = deepgram.TTS(
+            model="flux-alexis-en", api_key="test", base_url=str(server.make_url("/speak"))
+        )
         first = await _speak(model, "hello world")
         second = await _speak(model, "hello again")
         await model.aclose()

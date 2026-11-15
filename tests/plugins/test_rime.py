@@ -154,7 +154,7 @@ async def test_v1_interruption_cancels_the_turn_and_reuses_the_socket() -> None:
     assert len(sockets) == 1
 
 
-@pytest.mark.parametrize("model", ["mistv2", "coda"])
+@pytest.mark.parametrize("model", ["mistv3", "coda"])
 async def test_http_returns_raw_pcm_with_the_updated_speed(model: str) -> None:
     """HTTP synthesis plays raw PCM unchanged and sends the speed set by ``update_options``.
 
@@ -179,7 +179,7 @@ async def test_http_returns_raw_pcm_with_the_updated_speed(model: str) -> None:
             base_url=str(server.make_url("/custom/tts")),
             allow_custom_endpoint=True,
         )
-        tts.update_options(speed_alpha=1.2)
+        tts.update_options(time_scale_factor=1.2)
 
         async with tts.synthesize("Hello.", conn_options=APIConnectOptions(max_retry=0)) as stream:
             audio = b"".join([bytes(ev.frame.data) async for ev in stream])
@@ -189,7 +189,7 @@ async def test_http_returns_raw_pcm_with_the_updated_speed(model: str) -> None:
     assert not any(audio[len(pcm) :])
     [(accept, body)] = requests
     assert accept == "audio/pcm"
-    assert body["speedAlpha"] == 1.2
+    assert body["timeScaleFactor"] == 1.2
     assert body["samplingRate"] == 24000
 
 

@@ -206,11 +206,7 @@ fn end_unheard(r: &Recording, answered: Observed) -> bool {
     else {
         return false;
     };
-    let accepted = r.applied().iter().filter(|a| a.accepted && a.at > began && a.at <= answered);
-    let restarted = accepted.clone().find(|a| matches!(a.input, Input::SttStart { .. }));
-    restarted.is_some_and(|start| {
-        accepted.clone().any(|a| a.at > start.at && matches!(a.input, Input::SttEnd { .. }))
-    })
+    r.whole_speech_since(began)
 }
 
 /// One of the speech's tool calls started by `answered` and had not ended.

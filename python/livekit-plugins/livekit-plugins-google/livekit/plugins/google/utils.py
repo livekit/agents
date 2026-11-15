@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping, Sequence, Set
 from copy import deepcopy
+from dataclasses import dataclass
 from types import GenericAlias, UnionType
 from typing import Any, ClassVar, Protocol, TypeVar, cast
 
@@ -62,6 +64,95 @@ class ServiceAccountClient(Protocol[ClientT]):
 
 
 auth = cast(Auth, google.auth)
+
+_CLOUD_PLATFORM_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+
+
+@dataclass(frozen=True)
+class GeminiBackend:
+    """Where a Gemini request goes: the Gemini API with a key, or Vertex AI with a project."""
+
+    vertexai: bool
+    api_key: str | None
+    project: str | None
+    location: str | None
+    credentials: Credentials | None
+
+
+def gemini_backend(
+    *,
+    api_key: NotGivenOr[str],
+    vertexai: NotGivenOr[bool],
+    project: NotGivenOr[str],
+    location: NotGivenOr[str],
+    credentials: NotGivenOr[Credentials],
+    credentials_info: NotGivenOr[Mapping[str, object]],
+    credentials_file: NotGivenOr[str],
+    default_location: str,
+) -> GeminiBackend:
+    """Resolve the Gemini backend from the arguments, then the environment.
+
+    `GOOGLE_API_KEY` supplies the key, and `GOOGLE_GENAI_USE_VERTEXAI` picks Vertex AI. Without
+    either, explicit credentials, a project or a location pick Vertex AI. On Vertex AI the
+    project comes from `project`, `GOOGLE_CLOUD_PROJECT`, the credentials, or Application
+    Default Credentials, and the location from `location` or `GOOGLE_CLOUD_LOCATION`.
+    """
+    key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
+    creds: Credentials | None = None
+    creds_project: str | None = None
+    if is_given(credentials):
+        creds = credentials
+    elif is_given(credentials_info):
+        creds, creds_project = auth.load_credentials_from_dict(
+            credentials_info, scopes=_CLOUD_PLATFORM_SCOPES
+        )
+    elif is_given(credentials_file):
+        creds, creds_project = auth.load_credentials_from_file(
+            credentials_file, scopes=_CLOUD_PLATFORM_SCOPES
+        )
+
+    if is_given(vertexai):
+        use_vertexai = vertexai
+    elif "GOOGLE_GENAI_USE_VERTEXAI" in os.environ:
+        use_vertexai = os.environ["GOOGLE_GENAI_USE_VERTEXAI"].lower() in ("true", "1")
+    else:
+        use_vertexai = not is_given(api_key) and (
+            creds is not None or is_given(project) or is_given(location)
+        )
+
+    if not use_vertexai:
+        if creds is not None:
+            raise ValueError("credentials authenticate Vertex AI only; pass vertexai=True")
+        if not key:
+            raise ValueError(
+                "a Gemini API key is required: pass api_key or set GOOGLE_API_KEY, or use "
+                "Vertex AI with vertexai=True"
+            )
+        return GeminiBackend(
+            vertexai=False, api_key=key, project=None, location=None, credentials=None
+        )
+
+    gcp_project = (
+        project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT") or creds_project
+    )
+    if not gcp_project:
+        _, gcp_project = auth.default(scopes=_CLOUD_PLATFORM_SCOPES)
+    if not gcp_project:
+        raise ValueError(
+            "a Google Cloud project is required for Vertex AI: pass project or set "
+            "GOOGLE_CLOUD_PROJECT"
+        )
+    return GeminiBackend(
+        vertexai=True,
+        api_key=None,
+        project=gcp_project,
+        location=location
+        if is_given(location)
+        else os.environ.get("GOOGLE_CLOUD_LOCATION") or default_location,
+        credentials=creds,
+    )
+
+
 ResponseSchema = types.Schema | dict[str, object] | type[object] | GenericAlias | UnionType
 
 

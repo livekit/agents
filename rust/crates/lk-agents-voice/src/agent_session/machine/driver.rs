@@ -82,6 +82,11 @@ pub enum VoiceEvent {
     },
     /// The partition's lease was lost: not an answer, an observation.
     StorageLost(crate::agent_session::machine::activity::scheduling::SpeechId),
+    ConversationSaved {
+        sequence: u64,
+        read: Vec<lk_agents_abi::ChatItem>,
+        result: Result<Vec<lk_agents_abi::ChatItem>, lk_agents_abi::storage::StorageError>,
+    },
     Realtime(crate::agent_session::machine::activity::realtime::RealtimeWake),
     Eot(
         lk_agents_abi::turn::detector::ReqId,
@@ -115,6 +120,22 @@ pub enum VoiceEvent {
 /// components in sequence: the `AgentSession`, its running
 /// [`AgentActivity`](crate::agent_session::machine::activity::AgentActivity), and the [`AgentInput`](crate::agent_session::machine::activity::io::AgentInput) legs. Every
 /// decision is journalled, dated on the session clock.
+///
+/// Ownership map:
+/// - `input` owns installed stream identities, pending replacements and input gates.
+/// - `activity.audio_recognition` owns transcript accumulation and user-turn endpointing;
+///   STT has already normalized provider utterances before these observations arrive.
+/// - `activity.speech_scheduler` owns the floor, speech eligibility and handle state.
+/// - `activity.paused_speech` owns false-interruption pause/recovery state.
+/// - `activity.tools.replies` composes each reply's shared AgentRun and correlated tool outcomes.
+/// - `session.output_bindings` owns the exact audio/text bindings, including late settlement.
+/// - `session.chat_ctx` owns item identity, logical order, revisions and agent views.
+/// - `session.storage` owns outstanding persistence requests and their receipts. A user
+///   TurnId, a SpeechId, a ChatItem ID and a database run are different identities.
+///
+/// Components communicate synchronously within one transition. Only external work becomes a
+/// VoiceEffect; its result returns as an identified VoiceEvent. An interruption changes the
+/// originating speech, not whichever speech is active when a tool or playback report returns.
 pub struct VoiceDriver {
     pub(crate) session: VoiceSessionState,
     pub(crate) activity: crate::agent_session::machine::activity::AgentActivity,
@@ -382,6 +403,9 @@ impl VoiceDriver {
                 self.storage_answered(now, speech, request, result)
             }
             Some(VoiceEvent::StorageLost(speech)) => self.storage_lost(now, speech),
+            Some(VoiceEvent::ConversationSaved { sequence, read, result }) => {
+                self.conversation_saved(now, sequence, read, result);
+            }
             Some(VoiceEvent::Realtime(ev)) => self.on_realtime(now, ev),
             Some(VoiceEvent::Eot(req, p, thresholds)) => {
                 let (observations, effects) = self.activity.on_eot(now, req, p, thresholds);
@@ -575,6 +599,7 @@ impl VoiceDriver {
                 Timer::EotPredictionTimeout
                 | Timer::EndpointingDelay
                 | Timer::TranscriptionTimeout
+                | Timer::FinalTranscriptTimeout
                 | Timer::BackchannelBoundary
                 | Timer::UserTurnDuration => {
                     let effects = self.activity.recognition_timer(now, timer);

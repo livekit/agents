@@ -12,24 +12,21 @@ pip install livekit-plugins-speechmatics
 
 ## Model
 
-`model` selects the transcription model and defaults to `linden-1`, currently the only Agent STT
-model. Pass it as a string or as `speechmatics.Model.LINDEN_1`.
-
-The RT operating points `enhanced` and `standard` are not Agent STT models; a model name Agent STT
-does not accept falls back to the default model with a warning. `operating_point` was removed; pass
-`model`.
+`model` selects the transcription model and defaults to `linden-1`
+(`speechmatics.Model.LINDEN_1`). It is sent as given. `operating_point`, which Speechmatics
+deprecated in favour of `model`, is not accepted.
 
 ## Turn detection modes
 
 The `turn_detection_mode` parameter controls how end-of-turn (endpointing) is detected:
 
-- `VAD` (default) — Speechmatics runs its own VAD and closes turns itself (service-side
+- `VAD` — Speechmatics runs its own VAD and closes turns itself (service-side
   endpointing). No `vad` is required. Pair it with `turn_detection="stt"` in the `VoiceSession`'s `turn_handling`,
   otherwise the session's own turn detector decides and Speechmatics' end-of-turn is ignored.
-- `EXTERNAL` — Speechmatics does not endpoint on its own. Turns close when the caller
-  calls `finalize()`. In practice you pass a `vad` to the plugin and its end-of-speech drives
-  `finalize()`; LiveKit does **not** call `finalize()` for you, and no VAD is auto-loaded. Without a
-  `vad` (and without calling `finalize()` yourself) turns never close, so nothing is finalized.
+- `EXTERNAL` (default) — Speechmatics does not endpoint on its own. Turns close when the caller
+  calls `finalize()`. The plugin's `vad` drives `finalize()` on end-of-speech; when none is passed,
+  `livekit-plugins-silero` is loaded if it is installed. LiveKit does **not** call `finalize()` for
+  you, so with `vad=None` (and without calling `finalize()` yourself) turns never close.
   The session's own turn detector decides when the user's turn ends; `finalize()` only makes
   Speechmatics flush what it has as a final segment.
 
@@ -40,7 +37,7 @@ service-side endpointing strategy, so select `VAD` or `EXTERNAL`. There is no re
 too, and `diarization_sensitivity`, `enable_partials` and `speaker_active_format` are now
 `speaker_sensitivity`, `include_partials` and `speaker_format`.
 
-## Usage — service-side endpointing (`VAD`, default)
+## Usage — service-side endpointing (`VAD`)
 
 Let Speechmatics detect turns and tell the session to act on them:
 
@@ -49,13 +46,13 @@ from livekit.agents import TurnHandlingOptions, VoiceSession
 from livekit.plugins import speechmatics
 
 session = VoiceSession(
-    stt=speechmatics.STT(),
+    stt=speechmatics.STT(turn_detection_mode=speechmatics.TurnDetectionMode.VAD),
     turn_handling=TurnHandlingOptions(turn_detection="stt"),
     ...
 )
 ```
 
-## Usage — caller-driven endpointing (`EXTERNAL`)
+## Usage — caller-driven endpointing (`EXTERNAL`, default)
 
 Pass a `vad` to the plugin; its end-of-speech drives `finalize()`. `VoiceSession` loads its own VAD
 when none is given, so pass the same instance to both and a single VAD serves the session and the

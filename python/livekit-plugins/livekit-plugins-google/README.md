@@ -19,6 +19,25 @@ To use the STT and TTS API, you'll need to enable the respective services for yo
 - Cloud Speech-to-Text API
 - Cloud Text-to-Speech API
 
+## Speech-to-Text and Text-to-Speech
+
+The plugin has two speech products, each with its own class:
+
+- `google.STT` and `google.TTS`: Cloud Speech-to-Text (V2 API) and Cloud Text-to-Speech, over gRPC
+  with Google Cloud credentials.
+- `google.GeminiSTT` and `google.GeminiTTS`: transcription over a Gemini Live session, and speech
+  generation through the Gemini API, with a Gemini API key or Vertex AI. `GeminiTTS` supports
+  multi-speaker voices and per-sentence delivery styles.
+
+`google.STT` speaks the Speech-to-Text V2 API only. `model` takes a V2 model (`long`, the
+default, `short`, `telephony`, `telephony_short`, `medical_dictation`, `medical_conversation`,
+`chirp`, `chirp_2`, `chirp_3`, `chirp_telephony`); V1-only names such as `latest_long` are not
+accepted. Recognition needs a Google Cloud project, from `project`, the credentials, or
+Application Default Credentials.
+
+`google.GeminiTTS` defaults to `gemini-3.8-flash-tts`; `gemini-3.8-flash-lite-tts` is the faster,
+cheaper option.
+
 ## Live API model support
 
 LiveKit supports the Gemini Live API through both the Gemini Developer API and Vertex AI. Model availability and behavior differ between APIs. Some models, such as `gemini-3.8-live`, are available on both.

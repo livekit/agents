@@ -128,7 +128,7 @@ pub trait Implementations: 'static {
             View = Self::PersistedSessionState,
         >;
     type VoiceStore: ::lk_agents_abi::storage::voice::VoiceStore<ContextActivation = Self::ContextActivation>;
-    type SpeechState: ::lk_agents_abi::stt::events::SpeechState;
+    type SpeechNormalizer: ::lk_agents_abi::stt::events::SpeechNormalizer;
     type FallbackStt: ::lk_agents_abi::stt::fallback::FallbackStt;
     type InferenceStt: ::lk_agents_abi::stt::inference::InferenceStt;
     type SttStreamAdapter: ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter;
@@ -390,7 +390,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<storage::CorePersistedSessionState>()?;
     m.add_class::<storage::CoreSessionBinding>()?;
     m.add_class::<storage::CoreVoiceStore>()?;
-    m.add_class::<stt::SpeechState>()?;
+    m.add_class::<stt::SpeechNormalizer>()?;
     m.add_class::<stt::FallbackStt>()?;
     m.add_class::<stt::FallbackRecognizeStream>()?;
     m.add_class::<stt::InferenceStt>()?;

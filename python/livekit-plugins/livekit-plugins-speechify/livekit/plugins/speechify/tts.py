@@ -243,17 +243,17 @@ class TTS(tts.TTS):
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if is_given(voice_id):
-            self._opts.voice_id = voice_id
-        if is_given(model):
-            self._opts.model = model
-        if is_given(language):
-            self._opts.language = language
-        if is_given(loudness_normalization):
-            self._opts.loudness_normalization = loudness_normalization
-        if is_given(text_normalization):
-            self._opts.text_normalization = text_normalization
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            if is_given(voice_id):
+                self._opts.voice_id = voice_id
+            if is_given(model):
+                self._opts.model = model
+            if is_given(language):
+                self._opts.language = language
+            if is_given(loudness_normalization):
+                self._opts.loudness_normalization = loudness_normalization
+            if is_given(text_normalization):
+                self._opts.text_normalization = text_normalization
         _warn_voice_model_compat(self._opts.voice_id, self._opts.model)
 
     def _synthesize(

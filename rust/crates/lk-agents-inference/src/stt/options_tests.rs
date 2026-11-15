@@ -93,22 +93,15 @@ fn keyterms_are_deduplicated_in_first_seen_order() {
     assert_eq!(got["keyterm"], json!(["b", "a", "c"]));
 }
 
-// Catches: rebuilding Speechmatics' additional_vocab from scratch (losing `sounds_like`).
+// Catches: sending oak-1 keyterms as `additional_vocab`, which the model does not take, or
+// claiming word timings for it before they are verified.
 #[test]
-fn speechmatics_keeps_existing_vocabulary_entries_verbatim() {
-    let extra =
-        map(&[("additional_vocab", json!([{"content": "gnocchi", "sounds_like": ["nyohki"]}]))]);
-    let got = keyterms_extra_for_model(
-        Some("speechmatics/enhanced"),
-        Some(&extra),
-        &["gnocchi".into(), "livekit".into()],
-    )
-    .unwrap();
-    assert_eq!(
-        got["additional_vocab"],
-        json!([{"content": "gnocchi", "sounds_like": ["nyohki"]}, {"content": "livekit"}]),
-        "the already-present term is not re-added"
-    );
+fn speechmatics_oak_takes_no_keyterms_and_claims_no_word_timings() {
+    let model = Some("speechmatics/oak-1");
+    assert!(keyterms_extra_for_model(model, None, &["livekit".into()]).is_none());
+    let capabilities = capabilities(model, &[], None);
+    assert!(!capabilities.keyterms);
+    assert_eq!(capabilities.aligned_transcript, AlignedTranscript::None);
 }
 
 // Catches: advertising keyterms (a `Some(empty map)`) for a provider that has none.
@@ -140,11 +133,12 @@ fn speechmatics_and_openai_use_a_client_side_vad() {
         resolve_vad_for_model(Some("openai/gpt-live-transcribe"), true),
         VadResolution::Keep
     );
+    // oak-1 closes turns only on the client VAD's finalize.
     assert_eq!(
-        resolve_vad_for_model(Some("speechmatics/enhanced"), false),
+        resolve_vad_for_model(Some("speechmatics/oak-1"), false),
         VadResolution::CreateDefault
     );
-    assert_eq!(resolve_vad_for_model(Some("speechmatics/enhanced"), true), VadResolution::Keep);
+    assert_eq!(resolve_vad_for_model(Some("speechmatics/oak-1"), true), VadResolution::Keep);
     assert_eq!(resolve_vad_for_model(Some("deepgram/nova-3"), true), VadResolution::DropAndWarn);
     assert_eq!(resolve_vad_for_model(Some("deepgram/nova-3"), false), VadResolution::None);
     assert_eq!(resolve_vad_for_model(None, false), VadResolution::None);

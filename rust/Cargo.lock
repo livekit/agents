@@ -1864,6 +1864,7 @@ dependencies = [
 name = "lk-agents-voice"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
  "livekit-protocol",
  "lk-agents-abi",
  "lk-agents-core",

@@ -9,9 +9,9 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal, NotRequired, TypedDict, assert_never
+from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
 
-from pydantic import Field, TypeAdapter
+from pydantic import Field, JsonValue, TypeAdapter
 
 from livekit.agents import (
     APIConnectionError,
@@ -172,13 +172,13 @@ class TTS(tts.TTS):
             pacing: A ``SentenceStreamPacer``, or ``None`` to send each chunk as soon as it is
                 split.
         """
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if is_given(voice_id):
-            self._opts.voice_settings.voice_id = voice_id
-        if is_given(output_format):
-            self._opts.voice_settings.output_format = output_format
-            # G.711 is 8 kHz: the stream's audio follows the format
-            self._sample_rate = _sample_rate(output_format)
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            if is_given(voice_id):
+                self._opts.voice_settings.voice_id = voice_id
+            if is_given(output_format):
+                self._opts.voice_settings.output_format = output_format
+                # G.711 is 8 kHz: the stream's audio follows the format
+                self._sample_rate = _sample_rate(output_format)
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
@@ -250,6 +250,7 @@ class _Error(TypedDict):
 _Message = Annotated[_Audio | _AudioEnd | _Error, Field(discriminator="type")]
 _MESSAGE: TypeAdapter[_Audio | _AudioEnd | _Error] = TypeAdapter(_Message)
 _Inbound = _Ping | _Connected | _Refused | _Disconnected | _Audio | _AudioEnd | _Error
+_JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 
 class SynthesizeStream(tts.WebSocketStream[_Inbound, str]):
@@ -303,20 +304,30 @@ class SynthesizeStream(tts.WebSocketStream[_Inbound, str]):
         if packet is None:
             return None  # the open packet, another namespace
         body = frame[len(prefix.format(packet)) :]
+        if packet == _SIO_CONNECT:
+            return {"type": "connected"}
+        if packet == _SIO_DISCONNECT:
+            return {"type": "disconnected"}
         try:
-            data: Any = json.loads(body) if body else None
-            if packet == _SIO_CONNECT:
-                return {"type": "connected"}
+            data = _JSON.validate_json(body) if body else None
             if packet == _SIO_CONNECT_ERROR:
                 return {"type": "refused", "data": data}
-            if packet == _SIO_DISCONNECT:
-                return {"type": "disconnected"}
-            name, message = data
-            if name != "message" or message.get("type") not in ("audio", "audio_end", "error"):
-                return None
-            return _MESSAGE.validate_python(message)
-        except (ValueError, TypeError, AttributeError) as e:
+            # an event is its name, then its arguments: Uplift's messages ride on "message"
+            if not isinstance(data, list) or not data or not isinstance(data[0], str):
+                raise ValueError("an event without a name")
+            if data[0] == "message":
+                if len(data) < 2 or not isinstance(message := data[1], dict):
+                    raise ValueError("a message event without its message")
+                tag = message.get("type")
+                if tag in ("audio", "audio_end", "error"):
+                    return _MESSAGE.validate_python(message)
+            else:
+                tag = data[0]
+        except ValueError as e:
             raise tts.protocol_error(self, f"{e}; frame: {frame}") from e
+        # an event or message type the stream does not read (one Uplift added since): named once
+        tts.log_skipped("Uplift", str(tag))
+        return None
 
     def on_message(self, message: _Inbound) -> None:
         if message["type"] == "ping":

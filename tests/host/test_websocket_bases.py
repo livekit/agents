@@ -7,7 +7,7 @@ import asyncio
 import json
 import struct
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any, ClassVar
+from typing import Any, ClassVar, NotRequired, TypedDict
 
 import aiohttp
 import pytest
@@ -15,6 +15,7 @@ from aiohttp import web
 
 from livekit import rtc
 from livekit.agents import Agent, APIConnectOptions, APIError, VoiceSession, _core, stt, tts
+from livekit.agents._websocket import _Decoder
 from tests.fakes import until
 from tests.type_checks.websocket_protocols import (
     CodecSttStream,
@@ -143,7 +144,8 @@ async def test_an_open_speech_at_the_drains_read_limit_fails_with_a_read_timeout
 
 
 # Catches: a stream failed by what the plugin never reads: a new event type the provider added,
-# or a field it sends beyond the declared ones.
+# a tag that is a list or an object (an uncaught TypeError), a field it sends beyond the declared
+# ones, or a value it added to a field the plugin reads.
 async def test_unknown_message_types_are_skipped_and_extra_fields_ignored(
     peer: Callable[[Handler], Awaitable[str]],
 ) -> None:
@@ -152,9 +154,11 @@ async def test_unknown_message_types_are_skipped_and_extra_fields_ignored(
             if kind == "close":
                 await ws.send_json({"type": "speech_started_v2", "at": 1.5})
                 await ws.send_json({"type": "speech_started_v2", "at": 2.5})
+                await ws.send_json({"type": ["transcript"]})
+                await ws.send_json({"type": {"name": "transcript"}})
                 transcript = {"type": "transcript", "text": "hello", "final": True}
                 await ws.send_json({**transcript, "words": [], "meta": {"x": 1}})
-                await ws.send_json({"type": "finished", "request_id": "r-1"})
+                await ws.send_json({"type": "finished", "reason": "drained", "request_id": "r-1"})
 
     stream = LoopbackStt(await peer(provider)).stream(conn_options=NO_RETRY)
     stream.push_frame(audio(50))
@@ -162,6 +166,40 @@ async def test_unknown_message_types_are_skipped_and_extra_fields_ignored(
     got = await events(stream)
     finals = [e for e in got if e.type is stt.SpeechEventType.FINAL_TRANSCRIPT]
     assert [e.alternatives[0].text for e in finals] == ["hello"]
+
+
+class _Untagged(TypedDict):
+    text: NotRequired[str]
+
+
+class _UntaggedRequired(TypedDict):
+    text: str
+
+
+class _TypedFields(TypedDict):
+    final: NotRequired[bool]
+    confidence: NotRequired[float]
+
+
+@pytest.mark.parametrize("frame", ['{"final": "false"}', '{"confidence": "0.9"}'])
+def test_read_fields_are_validated_without_coercing_the_provider_payload(frame: str) -> None:
+    with pytest.raises(APIError) as failed:
+        _Decoder(_TypedFields).decode(frame, "loopback")
+    assert failed.value.kind == "protocol"
+
+
+# Catches: an untagged message type with a required field, which fails a stream with protocol on
+# the first message of a shape the provider added; an all-optional one decodes any object and
+# skips a JSON value that is no object.
+def test_an_untagged_inbound_declares_every_field_optional() -> None:
+    with pytest.raises(TypeError):
+        _Decoder(_UntaggedRequired)
+    decoder = _Decoder(_Untagged)
+    assert decoder.decode('{"event": "new"}', "loopback") == {}
+    assert decoder.decode("[1, 2]", "loopback") is None
+    with pytest.raises(APIError) as failed:
+        decoder.decode('{"text": 5}', "loopback")
+    assert failed.value.kind == "protocol"
 
 
 # Catches: a declared message whose read field is malformed logged and dropped, or retried as if
@@ -319,8 +357,42 @@ class LimitedRealtime(LoopbackRealtime):
     def session(self, *, turn_detection_disabled: bool = False) -> LoopbackRealtimeSession:
         session = LoopbackRealtimeSession(self)
         session.max_session_duration = 60.0
+        # a skip past the limit steps through each ping's answer deadline before a real socket
+        # could carry the pong
+        session.ping_interval = None
         self.sessions.append(session)
         return session
+
+
+async def test_a_reply_requested_after_reconnect_goes_on_the_new_connection(
+    peer: Callable[[Handler], Awaitable[str]],
+) -> None:
+    opened: list[str] = []
+    seen: list[tuple[str, str]] = []
+
+    async def provider(ws: web.WebSocketResponse, request: web.Request) -> None:
+        instructions = request.query["instructions"]
+        opened.append(instructions)
+        async for message in ws:
+            if message.type is aiohttp.WSMsgType.TEXT:
+                packet = json.loads(message.data)
+                seen.append((instructions, packet["type"]))
+                if packet["type"] == "say":
+                    await ws.send_json({"type": "said", "text": "hello"})
+                    await ws.send_json({"type": "done"})
+
+    session = LoopbackRealtime(await peer(provider), NO_RETRY).session()
+    try:
+        await until(lambda: opened == [""], "the first connection opens")
+        await session.update_instructions("new instructions")
+        request = session.generate_reply(instructions="hello")
+        await until(
+            lambda: session.heard == ["hello"], "the reply requested after reconnect arrives"
+        )
+        await request
+        assert seen == [("new instructions", "say")]
+    finally:
+        await session.aclose()
 
 
 # Catches: a realtime session past its limit replaced while a reply is still generating, which
@@ -672,53 +744,53 @@ async def test_a_pooled_socket_is_reused_only_after_a_stream_that_ended_cleanly(
     await model.mux.aclose()
 
 
-class KeptMux(LoopbackMux):
-    context_keepalive = 10.0
-    keep_warm = True
-
-    def keep_context(self, context_id: str) -> Any:
-        return {"context_id": context_id, "text": "", "final": False, "keep_alive": True}
-
-
-# Catches: an open context the provider drops after its inactivity limit (no per-context
-# keepalive), or a warm socket the provider closed while idle leaving the next stream to pay the
-# connect.
-async def test_open_contexts_are_kept_alive_and_a_warm_socket_is_reopened(
-    peer: Callable[..., Awaitable[str]],
+# Catches: a context the provider expired while the LLM was slow between sentences failing the
+# stream (its end read as a protocol violation), or the context kept alive by frames sent through
+# the gap: the next sentence opens a new context on the same socket.
+async def test_a_context_the_provider_expired_in_a_gap_reopens_on_the_next_sentence(
+    peer: Callable[..., Awaitable[str]], caplog: pytest.LogCaptureFixture
 ) -> None:
     sockets: list[web.WebSocketResponse] = []
-    kept: list[str] = []
-    spoken: list[str] = []
+    received: list[tuple[str, str]] = []
 
     async def provider(ws: web.WebSocketResponse, request: web.Request) -> None:
         sockets.append(ws)
         async for msg in ws:
             command = json.loads(msg.data)
-            spoken.append(command["text"])
-            if command.get("keep_alive"):
-                kept.append(command["context_id"])
-            elif command["final"]:
-                await ws.send_bytes(_tone(command["context_id"], 1))
+            await ws.send_bytes(_tone(command["context_id"], 1))
+            received.append((command["context_id"], command["text"].strip()))
+            if command["final"]:
                 await ws.send_json({"type": "done", "context_id": command["context_id"]})
 
-    url = await peer(provider)
-    model = _model(url, LoopbackTtsStream, as_pushed=True)
-    model.mux = KeptMux(url)
-    model.mux.prewarm()
-    await until(lambda: len(sockets) == 1, "prewarmed")
-    _core.skip_host_time(2)
-    await sockets[0].close()
-    await until(lambda: len(sockets) == 2, "warm again")
-
+    model = _model(await peer(provider), LoopbackTtsStream, as_pushed=True)
     stream = model.stream(conn_options=NO_RETRY)
+    heard: list[tts.SynthesizedAudio] = []
+
+    async def read() -> None:
+        async for audio in stream:
+            heard.append(audio)
+
     async with stream:
-        stream.push_text("one fish. two ")
-        await until(lambda: spoken, "a segment open on the warm socket")
-        _core.skip_host_time(10)
-        await until(lambda: kept, "the open context kept alive")
+        reader = asyncio.create_task(read())
+        stream.push_text("one fish. ")
+        await until(lambda: received, "the first sentence answered")
+        first = received[0][0]
+        # the LLM is slow: the provider expires the open context
+        _core.skip_host_time(30)
+        await sockets[0].send_json({"type": "done", "context_id": first})
+        await until(
+            lambda: "context expired" in caplog.text or reader.done(), "the context's end read"
+        )
+        stream.push_text("two fish.")
         stream.end_input()
-        assert [audio async for audio in stream]
-    assert len(sockets) == 2
+        await until(reader.done, "the stream ends")
+        reader.result()
+    second = received[1][0]
+    assert second != first
+    assert received == [(first, "one fish."), (second, "two fish."), (second, "")]
+    assert heard
+    assert len(sockets) == 1
+    assert caplog.text.count("context expired") == 1, "one warning"
     await model.mux.aclose()
 
 
@@ -841,6 +913,9 @@ async def test_a_websocket_stt_and_tts_retry_emits_the_recoverable_error_event(
 
 class ReconnectingStt(LoopbackSttStream):
     max_session_duration = 60.0
+    # a skip past the limit steps through each ping's answer deadline before a real socket could
+    # carry the pong
+    ping_interval = None
 
 
 # Catches: a connection that reached its maximum session replaced only at a flush, so a stream

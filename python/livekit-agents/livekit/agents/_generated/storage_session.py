@@ -10,10 +10,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from inspect import get_annotations
-from typing import Any, Generic, Literal, TypeAlias
+from typing import TYPE_CHECKING, Generic, Literal, TypeAlias
 
 from typing_extensions import TypeVar
+
+if TYPE_CHECKING:
+    from livekit.agents.storage.context import ContextStore
 
 Context_T = TypeVar("Context_T")
 
@@ -26,8 +28,7 @@ class BoundContext(Generic[Context_T]):
     """An inert execution declaration; tools receive the original context object."""
 
     context: Context_T
-    store: Any
+    store: ContextStore
 
 
-BoundContext.__annotations__ = get_annotations(BoundContext, eval_str=True)
 BoundContext.__module__ = "livekit.agents.storage.session_state"

@@ -74,6 +74,26 @@ use std::time::Duration;
 use crate::agent_session::machine::activity::io::VadMetricsFold;
 
 impl super::AgentActivity {
+    /// Recognition still accumulating and decided turns still awaiting their hook are drafts.
+    /// They retain independent identities when a newer turn arrives during a parked hook.
+    pub(crate) fn pending_user_inputs(&self) -> Vec<(TurnId, Option<Ts>, String)> {
+        let mut inputs = Vec::new();
+        for info in self
+            .pending_turn
+            .iter()
+            .map(|turn| &turn.info)
+            .chain(self.waiting_turns.iter().map(|turn| &turn.info))
+        {
+            inputs.push((
+                info.turn_id,
+                info.metrics.started_speaking_at,
+                info.new_transcript.clone(),
+            ));
+        }
+        inputs.extend(self.audio_recognition.pending_input());
+        inputs
+    }
+
     /// Decide from one activity snapshot and fold that exact verdict into recognition.
     fn admit_user_turn(
         &mut self,
@@ -248,6 +268,7 @@ impl VoiceDriver {
             | SpeechEventType::StartOfSpeech
             | SpeechEventType::PreflightTranscript
             | SpeechEventType::RecognitionUsage
+            | SpeechEventType::EndOfSpeechPending
             | SpeechEventType::EndOfSpeech => {}
         }
     }
@@ -280,7 +301,7 @@ impl VoiceDriver {
             && let Some(promoted) = self.activity.promoted.take()
         {
             let text = ev.best_alternative().map_or("", |a| a.text.trim());
-            if !text.is_empty() {
+            if !text.is_empty() && text != promoted.words.trim() {
                 self.correct_user_words(now, &promoted, text);
             }
         }

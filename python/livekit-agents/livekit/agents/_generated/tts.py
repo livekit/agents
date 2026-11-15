@@ -7,7 +7,8 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import cached_property
 from inspect import get_annotations
@@ -314,6 +315,22 @@ class TTS(
         )
         paced = pacing if is_given(pacing) else cell.pacing
         cell.set(tokenizer, paced)
+
+    @contextmanager
+    def _updating_options(
+        self,
+        *,
+        sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        pacing: NotGivenOr[SentenceStreamPacer | None] = NOT_GIVEN,
+    ) -> Iterator[None]:
+        """A plugin's ``update_options``, all or nothing: its body validates and builds the
+        plugin's new options, and the text options change only once it finished. A body that
+        raises changes nothing; the plugin applies what it built after the block.
+
+        ``with self._updating_options(sentence_tokenizer=..., pacing=...):``
+        """
+        yield
+        TTS.update_options(self, sentence_tokenizer=sentence_tokenizer, pacing=pacing)
 
     def synthesize(
         self, text: str, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN

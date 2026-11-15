@@ -207,12 +207,6 @@ async def test_realtime_reports_the_detected_language(empty_code: str | None) ->
     assert (final.alternatives[0].text, final.alternatives[0].language) == ("bonjour, hello", "fr")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="https://github.com/livekit/agents/pull/7828 reproduces: per-call language leaks into "
-    "later transcription requests",
-)
 async def test_a_language_override_applies_only_to_its_request() -> None:
     """A per-call language does not stick to the next transcription.
 
@@ -225,7 +219,9 @@ async def test_a_language_override_applies_only_to_its_request() -> None:
         return web.json_response({"text": "hello"})
 
     async with _serve(("POST", "/v1/audio/transcriptions", transcribe)) as base_url:
-        model = openai_stt.STT(api_key="test", base_url=base_url, language="en")
+        model = openai_stt.STT(
+            api_key="test", base_url=base_url, model="gpt-4o-mini-transcribe", language="en"
+        )
         try:
             first = await model.recognize(_silence(), language="fr")
             second = await model.recognize(_silence())
@@ -282,6 +278,7 @@ async def test_realtime_keeps_turn_boundaries_and_late_final_transcripts(local_v
         model = openai_stt.STT(
             api_key="test",
             base_url=base_url,
+            model="gpt-transcribe",
             use_realtime=True,
             detect_language=True,
             vad=FakeVAD() if local_vad else None,
@@ -365,6 +362,7 @@ async def test_realtime_words_transcribed_after_the_speech_ended_stay_in_that_sp
 
     assert [e.type for e in events if e.type != stt.SpeechEventType.RECOGNITION_USAGE] == [
         stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.END_OF_SPEECH_PENDING,
         stt.SpeechEventType.INTERIM_TRANSCRIPT,
         stt.SpeechEventType.FINAL_TRANSCRIPT,
         stt.SpeechEventType.END_OF_SPEECH,

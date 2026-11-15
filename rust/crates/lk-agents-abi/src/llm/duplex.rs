@@ -336,6 +336,8 @@ pub trait DuplexRealtimeModel: Send + Sync + Sized + 'static {
     name = "DuplexRealtimeAdapter",
     base = "llm.realtime.RealtimeModel",
     native = DuplexRealtimeModel,
+    refuse(session),
+    node = "session.llm_node",
     base_args(capabilities)
 ))]
 pub trait DuplexRealtimeAdapterFacade {

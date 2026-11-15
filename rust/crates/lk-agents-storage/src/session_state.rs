@@ -18,8 +18,15 @@ struct Envelope {
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum State {
     Empty,
-    Text { state: TextSessionState },
-    Voice { agent: String, history_ids: Vec<String> },
+    Text {
+        state: TextSessionState,
+    },
+    Voice {
+        agent: String,
+        history_ids: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pending_user_turns: Vec<livekit_protocol::agent::chat_context::ChatItem>,
+    },
 }
 
 #[derive(Clone)]
@@ -63,8 +70,72 @@ pub(crate) fn voice_value(
     agent: String,
     history_ids: Vec<String>,
 ) -> Result<serde_json::Value, StorageError> {
-    serde_json::to_value(Envelope { version: 1, state: State::Voice { agent, history_ids } })
-        .map_err(invalid)
+    serde_json::to_value(Envelope {
+        version: 1,
+        state: State::Voice { agent, history_ids, pending_user_turns: Vec::new() },
+    })
+    .map_err(invalid)
+}
+
+/// Writes recognition progress explicitly, including `[]` when the pending turn was accepted
+/// or cancelled. Ordinary host view updates omit this field and cannot erase live input.
+pub(crate) fn voice_progress_value(
+    agent: String,
+    history_ids: Vec<String>,
+    pending: &[lk_agents_abi::ChatMessage],
+) -> Result<serde_json::Value, StorageError> {
+    let mut state = voice_value(agent, history_ids)?;
+    let items: Vec<_> = pending
+        .iter()
+        .map(|message| {
+            lk_agents_abi::llm::chat_context::protocol::encode_chat_item(
+                &lk_agents_abi::ChatItem::Message(message.clone()),
+            )
+        })
+        .collect();
+    state["pending_user_turns"] = serde_json::to_value(items).map_err(invalid)?;
+    Ok(state)
+}
+
+pub(crate) fn pending_voice_inputs(
+    state: &serde_json::Value,
+) -> Result<Vec<lk_agents_abi::ChatMessage>, StorageError> {
+    let Some(value) = state.get("pending_user_turns") else { return Ok(Vec::new()) };
+    let encoded: Vec<livekit_protocol::agent::chat_context::ChatItem> =
+        serde_json::from_value(value.clone()).map_err(invalid)?;
+    encoded
+        .into_iter()
+        .map(|item| match lk_agents_abi::llm::chat_context::protocol::decode_chat_item(item)? {
+            lk_agents_abi::ChatItem::Message(message)
+                if message.role == lk_agents_abi::Role::User =>
+            {
+                Ok(message)
+            }
+            _ => Err(invalid("pending voice input must be a user message")),
+        })
+        .collect()
+}
+
+/// A host session projection updates its public fields without erasing private live input.
+/// Explicit recognition snapshots include the pending field, so an empty list clears it.
+pub(crate) fn merge_projection(
+    incoming: &mut serde_json::Value,
+    current: Option<&serde_json::Value>,
+) -> Result<(), StorageError> {
+    if incoming.get("pending_user_turns").is_some() {
+        return Ok(());
+    }
+    let next: Envelope = serde_json::from_value(incoming.clone()).map_err(invalid)?;
+    if !matches!(next.state, State::Voice { .. }) {
+        return Ok(());
+    }
+    let Some(current) = current else { return Ok(()) };
+    let previous: Envelope = serde_json::from_value(current.clone()).map_err(invalid)?;
+    if let State::Voice { pending_user_turns, .. } = previous.state {
+        incoming["pending_user_turns"] =
+            serde_json::to_value(pending_user_turns).map_err(invalid)?;
+    }
+    Ok(())
 }
 
 fn invalid(error: impl std::fmt::Display) -> StorageError {
@@ -168,7 +239,7 @@ impl PersistedSessionState for SessionState {
         encode(State::Text { state })
     }
     fn _from_voice(agent: String, history_ids: Vec<String>) -> Result<String, StorageError> {
-        encode(State::Voice { agent, history_ids })
+        encode(State::Voice { agent, history_ids, pending_user_turns: Vec::new() })
     }
 }
 

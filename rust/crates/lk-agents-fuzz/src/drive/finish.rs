@@ -111,14 +111,39 @@ impl Run {
                 });
             }
         }
+        // A recogniser whose speech still owes something the case never sent (a final after its
+        // end, the end after its words) ends it the way a provider's connection does at last.
+        let live = self.record.live();
+        let owing: Vec<u32> = self
+            .controls
+            .iter()
+            .filter_map(|(slot, control)| match control {
+                Control::Stt(provider) if !provider.settled() => Some(slot.nth),
+                _ => None,
+            })
+            .filter(|stt| live.has(Kind::Stt, *stt))
+            .filter(|stt| {
+                !self.utterances.iter().any(|(u, on)| on == stt && live.has(Kind::Utterance, *u))
+            })
+            .collect();
+        out.extend(owing.iter().map(|stt| Input::SttDrop { stt: Ref::new(*stt) }));
         // A recogniser swapped out mid-utterance took that utterance with it, and the driver still
         // hears the person speaking: the new recogniser hears them out, an utterance the next
-        // round ends.
-        if self.recogniser_left_speaking()
-            && self.record.live().of(Kind::Utterance).is_empty()
-            && let Some(stt) = self.record.live().of(Kind::Stt).first().copied()
+        // round ends. One without its own detection starts and ends a speech only with words.
+        if owing.is_empty()
+            && self.recogniser_left_speaking()
+            && live.of(Kind::Utterance).is_empty()
+            && let Some(stt) = live.of(Kind::Stt).first().copied()
         {
             out.push(Input::SttStart { stt: Ref::new(stt) });
+            if !self.setup.stt_speech.provider_vad {
+                let utterance = Ref::new(live.opened(Kind::Utterance));
+                out.push(Input::SttFinal {
+                    utterance,
+                    text: UserText("okay".into()),
+                    speaker: None,
+                });
+            }
         }
         // A running tool is answered; one that detached is ended by the host's final update.
         for nth in self.record.live().of(Kind::Tool) {
@@ -252,7 +277,7 @@ impl Run {
     /// Whether the driver armed a deadline the clock has not reached: a speech queued behind
     /// `min_consecutive_speech_delay`, or a retry waiting out its backoff, waits on the driver's
     /// own clock, not on the case, so a round that leaves one ahead is not quiet, as is a storage
-    /// answer still in its latency (seed 13626). The recorder's
+    /// answer still in its latency (seed 13626) or owed by a resend (seed 1626). The recorder's
     /// flush re-arms for as long as the session lives and owes nobody anything.
     fn deadline_ahead(&self) -> bool {
         let now = self.record.now().at_ms;
@@ -329,13 +354,9 @@ impl Run {
         else {
             return false;
         };
-        // A whole utterance since, started and ended, that did not end the speech: the driver
-        // does not take the recogniser's word for it.
-        let accepted = self.record.applied().iter().filter(|a| a.accepted && a.at > began);
-        let restarted = accepted.clone().find(|a| matches!(a.input, Input::SttStart { .. }));
-        !restarted.is_some_and(|start| {
-            accepted.clone().any(|a| a.at > start.at && matches!(a.input, Input::SttEnd { .. }))
-        })
+        // A whole speech since, started and ended on a recogniser's stream, that did not end
+        // the driver's: the driver does not take the recogniser's word for it.
+        !self.record.whole_speech_since(began)
     }
 
     /// Whether the driver is still holding a turn open.
@@ -482,6 +503,7 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
     let mut quiet = 0;
     let mut rounds = 0;
     let mut backlog = 0;
+    let mut refused = false;
     while quiet < QUIET_ROUNDS {
         // The backlogs are bounded too: a driver that never ran out of steps or audio is a finding.
         if rounds >= MAX_RELEASE_ROUNDS || backlog >= 10 * MAX_RELEASE_ROUNDS {
@@ -510,8 +532,14 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
         let avatar_before = run.avatar.as_ref().map(|w| w.progress());
         let mut offered = run.releases();
         let releases = offered.len();
-        // Advance regardless, so an armed deadline with nothing else to do still fires.
-        offered.push(run.release_advance());
+        // Advance regardless, so an armed deadline with nothing else to do still fires. A session
+        // that refused every release waits on a clock of its own the run cannot read (a paced
+        // voice holding its next sentences until what it sent has played down): a whole step.
+        offered.push(if refused {
+            Input::Advance { ms: Millis(RELEASE_CAP_MS) }
+        } else {
+            run.release_advance()
+        });
         for input in offered {
             outcome.case.inputs.push(input.clone());
             run.apply(&input).await;
@@ -535,6 +563,7 @@ pub async fn finish(mut run: Run, mut outcome: Outcome) -> Outcome {
         } else {
             quiet = 0;
         }
+        refused = releases > 0 && !taken && quiet == 0;
         let (spoken, created) = run.speech_progress();
         let stepped = (spoken > spoken_before || draining) && created == created_before;
         if run.granted_queued_hold(grants_before) {
@@ -732,6 +761,13 @@ fn dump_journal(record: &crate::record::Recording) {
             .iter()
             .map(|(at, step)| (at.seq, format!("{:>6} {:>7}ms S {step:?}", at.seq, at.at_ms))),
     );
+    lines.extend(record.recognition().iter().map(|r| {
+        let line = format!(
+            "{:>6} {:>7}ms R stt#{} {:?} -> {:?}",
+            r.at.seq, r.at.at_ms, r.stt, r.report, r.emitted
+        );
+        (r.at.seq, line)
+    }));
     lines.extend(record.applied().iter().map(|a| {
         let mark = if a.accepted { ">" } else { "x" };
         (a.at.seq, format!("{:>6} {:>7}ms {mark} {:?}", a.at.seq, a.at.at_ms, a.input))

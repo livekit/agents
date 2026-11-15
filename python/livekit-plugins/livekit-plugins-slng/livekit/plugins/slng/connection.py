@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
@@ -9,14 +8,6 @@ from urllib.parse import urlparse
 from pydantic import JsonValue
 
 from .gateway_adapter import validate_model_identifier
-
-
-@dataclass(frozen=True)
-class STTConnectionConfig:
-    endpoint: str
-    model: str | None = None
-    headers: Mapping[str, str] = field(default_factory=dict[str, str])
-    init: Mapping[str, JsonValue] | None = None
 
 
 @dataclass(frozen=True)
@@ -34,36 +25,6 @@ class PluginEvent:
     component: Literal["stt", "tts"]
     level: Literal["info", "warning", "error"] = "info"
     data: Mapping[str, object] = field(default_factory=dict[str, object])
-
-
-class CandidateState:
-    def __init__(self, count: int, recovery_cooldown_s: float) -> None:
-        self._count = count
-        self._cooldown = max(0.0, recovery_cooldown_s)
-        self._active = 0
-        self._primary_failed_at: float | None = None
-
-    def start(self) -> int:
-        if (
-            self._active != 0
-            and self._primary_failed_at is not None
-            and time.monotonic() - self._primary_failed_at >= self._cooldown
-        ):
-            self._active = 0
-            self._primary_failed_at = None
-        return self._active
-
-    def advance(self, index: int) -> int | None:
-        if index == 0:
-            self._primary_failed_at = time.monotonic()
-        next_index = index + 1
-        if next_index >= self._count:
-            return None
-        self._active = next_index
-        return next_index
-
-    def select(self, index: int) -> None:
-        self._active = index
 
 
 def bridge_endpoint(base_url: str, service: Literal["stt", "tts"], model: str) -> str:

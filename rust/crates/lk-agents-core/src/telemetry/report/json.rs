@@ -210,6 +210,7 @@ mod tests {
             ivr_detection: false,
             user_away_timeout: Some(15.0),
             transcription_timeout: None,
+            final_transcript_timeout: 2.0,
             aec_warmup_duration: Some(3.0),
             session_close_transcript_timeout: 2.0,
         };

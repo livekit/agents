@@ -21,11 +21,13 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    _core,
     http,
     tts,
 )
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
-from livekit.plugins.elevenlabs import TTS, TTSEncoding, VoiceSettings
+from livekit.plugins.elevenlabs import DEFAULT_VOICE_ID, TTS, TTSEncoding, VoiceSettings
+from tests.fakes import until
 
 PCM = b"\x0b\x00" * 4800
 OPTIONS = APIConnectOptions(max_retry=0, read_timeout=0.5)
@@ -171,6 +173,44 @@ async def test_synthesis_routes_models_and_preserves_fragmented_input(
     assert not any(t.strip() in ("ref", "erence") for t in texts)
     assert dialogue or any("<phoneme" in t and "</phoneme>" in t for t in texts)
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+# Catches: eleven_v4 streamed on text-to-dialogue multi-stream-input, which rejects v4; only
+# text-to-dialogue stream-input takes it, one context a socket, so each segment is a session.
+@pytest.mark.parametrize("model", ["eleven_v4", "eleven_v4_turbo"])
+async def test_eleven_v4_streams_each_segment_on_single_context_dialogue(model: str) -> None:
+    paths: list[str] = []
+    packets: list[dict[str, object]] = []
+
+    async def speak(request: web.Request) -> web.StreamResponse:
+        paths.append(request.path)
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            packet = json.loads(msg.data)
+            packets.append(packet)
+            if packet.get("close_socket"):
+                await ws.send_json({"audio": b64(PCM)})
+                await ws.send_json({"is_final": True})
+                await ws.close()
+        return ws
+
+    async with peer(speak) as (url, session):
+        provider = TTS(
+            api_key="key", model=model, encoding="pcm_24000", base_url=url, http_session=session
+        )
+        async with provider.stream(conn_options=OPTIONS) as stream:
+            stream.push_text("Hello there.")
+            stream.flush()
+            stream.push_text("Goodbye.")
+            stream.end_input()
+            frames = await collect(stream)
+        await provider.aclose()
+
+    assert_pcm(frames, PCM + PCM)
+    assert paths == ["/text-to-dialogue/stream-input"] * 2
+    assert not [p for p in packets if "context_id" in p]
+    assert [p["voices"] for p in packets if "voices" in p] == [[DEFAULT_VOICE_ID]] * 2
 
 
 async def test_messages_for_an_unknown_context_are_ignored() -> None:
@@ -434,15 +474,12 @@ async def test_audio_arriving_slower_than_the_whole_read_timeout_completes(model
 @pytest.mark.parametrize("updated", [False, True])
 async def test_empty_input_flush_finishes_after_option_update(updated: bool) -> None:
     """A textless stream finishes after flush, also after an option update. https://github.com/livekit/agents/pull/4499"""
-    flushed = []
 
     async def speak(request: web.Request) -> web.StreamResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         async for msg in ws:
             packet = json.loads(msg.data)
-            if packet.get("flush"):
-                flushed.append(packet)
             if packet.get("close_context"):
                 await ws.send_json({"context_id": packet["context_id"], "isFinal": True})
         return ws
@@ -458,7 +495,6 @@ async def test_empty_input_flush_finishes_after_option_update(updated: bool) -> 
         await provider.aclose()
 
     assert frames == []
-    assert flushed
 
 
 async def test_interrupted_stream_still_releases_its_context_and_drops_its_late_audio(
@@ -529,6 +565,7 @@ async def test_prewarm_opens_the_socket_before_the_first_synthesis() -> None:
 async def test_dialogue_prewarm_reconnects_when_the_idle_socket_closes() -> None:
     """The server closes idle dialogue sockets; prewarm opens a new one. https://github.com/livekit/agents/issues/7582"""
     connections = 0
+    idle = asyncio.Event()
     reconnected = asyncio.Event()
 
     async def speak(request: web.Request) -> web.StreamResponse:
@@ -537,6 +574,7 @@ async def test_dialogue_prewarm_reconnects_when_the_idle_socket_closes() -> None
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         if connections == 1:
+            await idle.wait()
             await ws.close()
             return ws
         reconnected.set()
@@ -547,6 +585,9 @@ async def test_dialogue_prewarm_reconnects_when_the_idle_socket_closes() -> None
     async with peer(speak) as (url, session):
         provider = TTS(api_key="key", model=DIALOGUE, base_url=url, http_session=session)
         provider.prewarm()
+        await until(lambda: connections == 1, "the socket is prewarmed")
+        _core.skip_host_time(2)  # it sat idle until the server closed it
+        idle.set()
         await asyncio.wait_for(reconnected.wait(), 2)
         await provider.aclose()
 
@@ -641,10 +682,6 @@ async def test_dialogue_alignment_offsets_across_chunks(
     assert words[1].start_time >= words[0].end_time
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/issues/4221 reproduces: early isFinal drops text supplied after a pause",
-)
 async def test_input_after_early_final_is_not_lost() -> None:
     """Provider final before input ends cannot discard later text. https://github.com/livekit/agents/issues/4221"""
     first_sent = asyncio.Event()

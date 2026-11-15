@@ -97,6 +97,7 @@ impl ContextActivation {
         identity: &str,
         revision: i64,
         fields: &[ContextField],
+        session: Option<Value>,
     ) -> Result<ContextValues, StorageError> {
         self.ensure_open()?;
         if self.read_only {
@@ -124,7 +125,11 @@ impl ContextActivation {
             StorageError::Invalid(format!("context scope {scope_id} exhausted its revision"))
         })?;
         check_state_size(
-            self.routing_state.as_ref().map(crate::session_snapshot::routing_budget).as_ref(),
+            session
+                .as_ref()
+                .or(self.routing_state.as_ref())
+                .map(crate::session_snapshot::routing_budget)
+                .as_ref(),
             self.scopes.values().filter(|other| other.scope_id != scope_id).chain([&scope]),
         )?;
         let values = ContextValues { revision: scope.revision, fields: scope.fields.clone() };
@@ -134,6 +139,9 @@ impl ContextActivation {
         };
         self.scopes.insert(scope_id.to_owned(), scope);
         self.writes.insert(scope_id.to_owned(), write);
+        if let Some(session) = session {
+            self.routing_state = Some(session);
+        }
         Ok(values)
     }
 
@@ -364,7 +372,7 @@ mod tests {
         let second = vec![field("draft", json!("second"))];
         for (id, fields) in [("booking_a", &first), ("booking_b", &second)] {
             let loaded = activation.load(id, "Booking", fields).unwrap();
-            activation.save(id, "Booking", loaded.revision, fields).unwrap();
+            activation.save(id, "Booking", loaded.revision, fields, None).unwrap();
         }
         let scopes = activation.writes().into_iter().map(|write| write.scope).collect();
         let mut restored = ContextActivation::new(scopes, None, false).unwrap();
@@ -372,9 +380,9 @@ mod tests {
         let b = restored.load("booking_b", "Booking", &first).unwrap();
         assert_eq!((a.revision, a.fields["draft"].clone()), (1, json!("first")));
         assert_eq!((b.revision, b.fields["draft"].clone()), (1, json!("second")));
-        restored.save("booking_a", "Booking", a.revision, &second).unwrap();
+        restored.save("booking_a", "Booking", a.revision, &second, None).unwrap();
         assert!(matches!(
-            restored.save("booking_a", "Booking", a.revision, &first),
+            restored.save("booking_a", "Booking", a.revision, &first, None),
             Err(StorageError::VersionConflict { .. })
         ));
         assert_eq!(restored.writes()[0].expected_revision, 1);
@@ -396,11 +404,11 @@ mod tests {
         let mut activation = ContextActivation::new(Vec::new(), None, false).unwrap();
         let fields = vec![field("draft", json!("é\\\"".repeat(6000)))];
         let a = activation.load("a", "Booking", &fields).unwrap();
-        activation.save("a", "Booking", a.revision, &fields).unwrap();
+        activation.save("a", "Booking", a.revision, &fields, None).unwrap();
         let before = activation.writes();
         let b = activation.load("b", "Booking", &fields).unwrap();
         assert!(matches!(
-            activation.save("b", "Booking", b.revision, &fields),
+            activation.save("b", "Booking", b.revision, &fields, None),
             Err(StorageError::TooLarge { .. })
         ));
         assert_eq!(activation.writes(), before);
@@ -440,7 +448,7 @@ mod tests {
         };
         let mut activation = ContextActivation::new(Vec::new(), None, false).unwrap();
         activation.load("root", "Booking", std::slice::from_ref(&field)).unwrap();
-        activation.save("root", "Booking", 0, &[field]).unwrap();
+        activation.save("root", "Booking", 0, &[field], None).unwrap();
         let first = activation.writes().remove(0);
         batch(&mut conn, &[scope_write("desk", &first, None).unwrap()]).unwrap();
         let saved = scopes_from_rows(

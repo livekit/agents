@@ -18,6 +18,7 @@ from livekit.agents import (
     VoiceSession,
     VoiceTask,
     VoiceTaskFailed,
+    _core,
 )
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.metrics import VADMetrics
@@ -35,6 +36,48 @@ from tests.fakes import (
 )
 
 IN_PROGRESS = "The tool call is still in progress."
+
+
+async def test_an_interrupted_tool_keeps_its_originating_handle_after_a_new_reply() -> None:
+    """A tool survives the cleanup bound and sees its own interrupted speech after B replies."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    observations: list[tuple[str, bool]] = []
+    model = FakeLLM([tool_call("lookup", call_id="old-call"), "New reply."])
+    agent = Agent(instructions="Help.")
+
+    @agent.tool
+    async def lookup(ctx: RunContext) -> str:
+        """Look up a value."""
+        origin = ctx.speech_handle
+        observations.append((origin.id, origin.interrupted))
+        entered.set()
+        await release.wait()
+        assert ctx.speech_handle.id == origin.id
+        observations.append((origin.id, origin.interrupted))
+        return "late result"
+
+    async with VoiceSession(llm=model, vad=None) as session:
+        await session.start(agent)
+        first = session.generate_reply(user_input="look it up")
+        await until(entered.is_set, "the first tool started")
+        await session.interrupt()
+        await first
+        _core.skip_host_time(10)
+        second = session.generate_reply(user_input="another question")
+        await second
+        release.set()
+        await until(lambda: len(observations) == 2, "the original tool survived interruption")
+        await until(
+            lambda: any(i.type == "function_call_output" for i in session.history.items),
+            "the late output reached its original conversation",
+        )
+        output = next(i for i in session.history.items if i.type == "function_call_output")
+        assert output.call_id == "old-call" and output.output == "late result"
+        assert not output.reply_required
+        assert observations == [(first.id, False), (first.id, True)]
+        assert second.id != first.id
+        assert len(model.requests) == 2
 
 
 def _messages(session: VoiceSession) -> list[tuple[str, str | None]]:

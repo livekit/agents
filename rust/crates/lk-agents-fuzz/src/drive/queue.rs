@@ -169,6 +169,7 @@ fn label(event: &VoiceRuntimeEvent) -> &'static str {
             VoiceEvent::StorageReloaded { .. } => "StorageReloaded",
             VoiceEvent::StorageAnswered { .. } => "StorageAnswered",
             VoiceEvent::StorageLost(_) => "StorageLost",
+            VoiceEvent::ConversationSaved { .. } => "ConversationSaved",
         },
     }
 }

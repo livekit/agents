@@ -1,7 +1,7 @@
 use super::{
-    AudioRecognition, Detector, InterruptionSignal, MIN_LANGUAGE_DETECTION_LENGTH,
-    MIN_SILENCE_DURATION, NON_SPECIFIC_LANGUAGE_CODES, OverlapVerdict, Phase, Prediction,
-    ServerSpeech, Start, TurnDetectionMode, user_transcript,
+    AudioRecognition, Detector, FinalTranscriptWait, InterruptionSignal,
+    MIN_LANGUAGE_DETECTION_LENGTH, MIN_SILENCE_DURATION, NON_SPECIFIC_LANGUAGE_CODES,
+    OverlapVerdict, Phase, Prediction, ServerSpeech, Start, TurnDetectionMode, user_transcript,
 };
 use crate::agent_session::effects::{StreamKind, Timer};
 use crate::audio_recognition::Utterance;
@@ -28,6 +28,35 @@ impl AudioRecognition {
         if self.closed {
             eff.extend(self.accumulate_closed(now, stream, ev));
             return eff;
+        }
+        // An owed final is a provider fact, not a transcript to hold behind overlap judging.
+        // The deadline starts once, at the explicit end, and is never extended by interims.
+        if ev.kind == SpeechEventType::EndOfSpeechPending {
+            if let Some(n) = ev.utterance {
+                let utterance = Utterance { stream, n };
+                if self.pending_final.as_ref().is_none_or(|held| held.utterance() != utterance) {
+                    eff.extend(self.cancel_final_wait());
+                    self.pending_final =
+                        Some(FinalTranscriptWait::Waiting { utterance, ended_at: now });
+                    eff.push(AudioRecognitionEffect::SetDeadline(
+                        Timer::FinalTranscriptTimeout,
+                        now.saturating_add(self.cfg.final_transcript_timeout),
+                    ));
+                }
+            }
+            return eff;
+        }
+        let matches_pending = self.pending_final.as_ref().is_some_and(|held| {
+            held.utterance().stream == stream && ev.utterance == Some(held.utterance().n)
+        });
+        if ev.kind == SpeechEventType::StartOfSpeech
+            || matches_pending
+                && matches!(
+                    ev.kind,
+                    SpeechEventType::FinalTranscript | SpeechEventType::EndOfSpeech
+                )
+        {
+            eff.extend(self.cancel_final_wait());
         }
         // In manual mode a committed turn stops accepting transcripts, unless a countdown still
         // runs and this is not an interim (the commit is waiting on that final).
@@ -99,7 +128,7 @@ impl AudioRecognition {
                     eff.extend(self.on_stt_start_of_speech(now, ev, stt_last_speaking_time));
                 }
             }
-            SpeechEventType::RecognitionUsage => {}
+            SpeechEventType::RecognitionUsage | SpeechEventType::EndOfSpeechPending => {}
         }
         eff
     }
@@ -135,6 +164,7 @@ impl AudioRecognition {
             }
             SpeechEventType::PreflightTranscript
             | SpeechEventType::EndOfSpeech
+            | SpeechEventType::EndOfSpeechPending
             | SpeechEventType::StartOfSpeech
             | SpeechEventType::RecognitionUsage => {}
         }
@@ -255,7 +285,7 @@ impl AudioRecognition {
     }
 
     #[must_use = "recognition effects must be applied before the next transition"]
-    fn on_stt_end_of_speech(
+    pub(super) fn on_stt_end_of_speech(
         &mut self,
         now: Ts,
         stt_last_speaking_time: Ts,
@@ -286,6 +316,40 @@ impl AudioRecognition {
         }
         eff.extend(self.run_eou_detection(now, Start::Auto { declared: true }));
         eff
+    }
+
+    /// Retire only the deadline belonging to this exact stream, never its replacement's.
+    pub fn retire_stt_stream(&mut self, stream: ResourceId) -> Vec<AudioRecognitionEffect> {
+        if self.pending_final.as_ref().is_some_and(|held| held.utterance().stream == stream) {
+            self.cancel_final_wait()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub(super) fn cancel_final_wait(&mut self) -> Vec<AudioRecognitionEffect> {
+        match self.pending_final.take() {
+            Some(FinalTranscriptWait::Waiting { .. }) => {
+                vec![AudioRecognitionEffect::ClearDeadline(Timer::FinalTranscriptTimeout)]
+            }
+            Some(FinalTranscriptWait::Expired { .. }) | None => Vec::new(),
+        }
+    }
+
+    pub(super) fn final_transcript_timed_out(&mut self, now: Ts) -> Vec<AudioRecognitionEffect> {
+        let Some(FinalTranscriptWait::Waiting { utterance, ended_at }) = self.pending_final.take()
+        else {
+            return Vec::new();
+        };
+        self.pending_final = Some(FinalTranscriptWait::Expired { utterance });
+        match self.cfg.turn_detection_mode {
+            TurnDetectionMode::Manual | TurnDetectionMode::RealtimeLlm => Vec::new(),
+            TurnDetectionMode::Stt => self.on_stt_end_of_speech(now, ended_at),
+            TurnDetectionMode::Vad if !self.user_speaking() => {
+                self.run_eou_detection(now, Start::FinalTranscriptTimeout)
+            }
+            TurnDetectionMode::Vad => Vec::new(),
+        }
     }
 
     #[must_use = "recognition effects must be applied before the next transition"]

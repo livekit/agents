@@ -12,11 +12,13 @@ from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, http, stt
+from livekit.agents import APIConnectOptions, APIError, _core, http, stt, tts
 from livekit.agents.llm import ChatContext
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.plugins.baseten import LLM, STT
+from livekit.plugins.baseten import LLM, STT, TTS, list_voices, register_voice
 from livekit.plugins.baseten.models import STTModels
+from tests.fakes import until
+from tests.plugins.conftest import Connection, Frame, WsPeer
 
 # Any: decoded wire JSON, indexed by the provider's documented shape
 Wire = dict[str, Any]
@@ -216,3 +218,60 @@ async def test_per_turn_instructions_are_inlined_for_single_system_models(model:
     assert [m["role"] for m in messages] == ["system", "assistant", "user", "user"]
     assert messages[0] == {"role": "system", "content": PREAMBLE}
     assert messages[-1] == {"role": "user", "content": INLINED}
+
+
+async def _qwen3_say(model: tts.TTS, text: str) -> bytes:
+    async with model.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+        stream.push_text(text)
+        stream.end_input()
+        return b"".join([event.frame.data.tobytes() async for event in stream])
+
+
+# Catches: a parked qwen3 socket left to the server's 30 s idle drop (the next turn then pays a
+# connect and a config round trip), or its warm-keep flush sent while a turn holds the socket.
+async def test_qwen3_keeps_a_parked_socket_warm_with_an_empty_flush(ws_peer: WsPeer) -> None:
+    def answer(_c: Connection, message: str | bytes) -> list[Frame]:
+        if json.loads(message).get("type") != "input.done":
+            return []
+        return [{"type": "audio.start"}, b"\x01\x02" * 2400, {"type": "session.done"}]
+
+    ws_peer.reply = answer
+    model = TTS(model="qwen3-tts", api_key="key", model_endpoint=ws_peer.ws_url, voice="voice")
+    try:
+        assert await _qwen3_say(model, "Hello there.")
+        connection = await ws_peer.connected()
+
+        def flushes() -> list[str]:
+            return [m for m in connection.texts if json.loads(m)["type"] == "input.done"]
+
+        assert len(flushes()) == 1, "the turn's own flush only"
+        _core.skip_host_time(15)
+        await until(lambda: len(flushes()) == 2, "the parked socket's warm-keep")
+        assert await _qwen3_say(model, "Again.")
+        assert len(ws_peer.connections) == 1, "the next turn takes the warm socket"
+    finally:
+        await model.aclose()
+
+
+# Catches: a voice-control reply that is not a JSON object, or a refused voice.add/voice.list,
+# surfacing as an untyped RuntimeError or pydantic error a caller cannot branch on.
+@pytest.mark.parametrize(
+    ("reply", "kind"),
+    [
+        ('["not", "an", "object"]', "protocol"),
+        (b"\x00", "protocol"),
+        ({"type": "error", "message": "consent missing"}, "server"),
+    ],
+)
+async def test_qwen3_voice_control_failures_are_typed(
+    ws_peer: WsPeer, reply: Frame, kind: str
+) -> None:
+    ws_peer.reply = lambda _c, _m: [reply]
+    with pytest.raises(APIError) as listed:
+        await list_voices(model_endpoint=ws_peer.ws_url, api_key="key")
+    assert listed.value.kind == kind
+    with pytest.raises(APIError) as added:
+        await register_voice(
+            model_endpoint=ws_peer.ws_url, name="v", ref_audio_path=__file__, api_key="key"
+        )
+    assert added.value.kind == kind

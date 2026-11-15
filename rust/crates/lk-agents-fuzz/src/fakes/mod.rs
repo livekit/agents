@@ -7,7 +7,7 @@ use std::{
 };
 
 use lk_agents_abi::{
-    AudioFrame, EotPrediction, LlmChunk, SpeechEvent, Ts, VadEvent, errors::ProviderError,
+    AudioFrame, EotPrediction, LlmChunk, Ts, VadEvent, errors::ProviderError,
     utils::stream::StreamInput,
 };
 use lk_agents_runtime::voice::VoiceSession;
@@ -53,7 +53,7 @@ pub use output::{
 pub use realtime::{FakeDuplex, FakeRealtime, RealtimeDelays, ServerSetup, Vad as RealtimeVad};
 pub use recorder::FakeRecorder;
 pub use storage::{FakeStore, death_resends, storage_faults, worker_deaths};
-pub use stt::FakeStt;
+pub use stt::{FakeStt, SttSpeech};
 pub use tools::{FakeTools, TEMPLATED_REPLY, TEMPLATED_TOOL, completion_value, frame};
 pub use tts::{FakeTts, HELD_INPUT, MS_PER_WORD, TtsOptions};
 pub use vad::FakeVad;
@@ -111,9 +111,8 @@ pub struct Slot {
 pub enum Control {
     Chat(mpsc::UnboundedSender<Result<LlmChunk, ProviderError>>),
     Tts(Arc<tts::Synthesis>),
-    /// A recognition stream, when it opened, and when its utterance began: the instants a
-    /// transcript's `start_time`/`end_time` are measured from.
-    Stt(mpsc::UnboundedSender<Result<SpeechEvent, ProviderError>>, Ts, Option<Ts>),
+    /// A recognition stream: the provider behind it, and the speech rules its reports go through.
+    Stt(Box<stt::Provider>),
     Vad(mpsc::UnboundedSender<Result<VadEvent, ProviderError>>),
     Prediction(oneshot::Sender<Result<EotPrediction, ProviderError>>),
     Interruption(Arc<interruption::FakeInterruption>),
@@ -222,6 +221,13 @@ pub enum Record {
         socket: u32,
         items: Vec<(u32, u64)>,
     },
+    /// A recogniser's report, and what its stream handed the reader for it.
+    Recognition {
+        at: Observed,
+        stt: u32,
+        report: crate::record::SttReport,
+        emitted: Vec<crate::record::Recognised>,
+    },
     /// The driver ended a provider stream's input: it is owed no audio from here.
     InputEnded {
         at: Observed,
@@ -286,6 +292,7 @@ pub fn boundary_of(input: &Input) -> Option<Kind> {
         | Input::SttFinal { .. }
         | Input::SttEnd { .. }
         | Input::SttUsage { .. }
+        | Input::SttDrop { .. }
         | Input::SttFail { .. } => Kind::Stt,
         Input::VadInference { .. } | Input::VadStart { .. } | Input::VadEnd { .. } => Kind::Vad,
         Input::EotAnswer { .. } | Input::EotFail { .. } => Kind::Prediction,
@@ -641,6 +648,16 @@ impl Registry {
         self.write(Record::Delivered { at, slot });
     }
 
+    pub(super) fn record_recognition(
+        &self,
+        slot: Slot,
+        report: crate::record::SttReport,
+        emitted: Vec<crate::record::Recognised>,
+    ) {
+        let at = self.stamps.next();
+        self.write(Record::Recognition { at, stt: slot.nth, report, emitted });
+    }
+
     pub(super) fn record_failed(&self, kind: Kind, recoverable: bool) {
         let at = self.stamps.next();
         self.write(Record::ProviderFailed { at, kind, recoverable });
@@ -683,17 +700,14 @@ impl Registry {
                 let done = matches!(input, Input::TtsFail { .. });
                 (accepted, (!done).then_some(Control::Tts(synthesis)))
             }
-            Control::Stt(sender, opened, started) => {
-                let now = self.stamps.ts();
-                let started = match input {
-                    Input::SttStart { .. } => Some(now),
-                    _ => started,
-                };
-                let clock = stt::Clock { opened, started, now };
-                let accepted = stt::deliver(&sender, input, clock);
+            Control::Stt(mut provider) => {
+                let (accepted, report) = provider.deliver(input, self.stamps.ts());
+                if let Some((report, emitted)) = report {
+                    self.record_recognition(slot, report, emitted);
+                }
                 // A failed recogniser is spent, exactly as a failed model request is.
                 let done = matches!(input, Input::SttFail { .. });
-                (accepted, (!done).then_some(Control::Stt(sender, opened, started)))
+                (accepted, (!done).then_some(Control::Stt(provider)))
             }
             Control::Vad(sender) => (vad::deliver(&sender, input), Some(Control::Vad(sender))),
             Control::Prediction(sender) => (eot::deliver(sender, input), None),

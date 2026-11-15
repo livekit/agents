@@ -29,6 +29,7 @@ from aws_sdk_bedrock_runtime.models import (  # pyright: ignore[reportMissingTyp
     BidirectionalInputPayloadPart,
     InvokeModelWithBidirectionalStreamInputChunk,
     InvokeModelWithBidirectionalStreamOutputChunk,
+    InvokeModelWithBidirectionalStreamOutputUnknown,
     ModelErrorException,
     ModelNotReadyException,
     ModelStreamErrorException,
@@ -53,12 +54,14 @@ from livekit.agents import (
     llm,
     utils,
 )
+from livekit.agents.llm import realtime as llm_realtime
 from livekit.agents.metrics import Metadata, RealtimeModelMetrics
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 from ...log import logger
 from .events import (
+    SAMPLE_RATE_HERTZ,
     SonicEventBuilder as seb,
     SonicOutputEvent,
     Tool,
@@ -71,7 +74,7 @@ from .turn_tracker import TurnTracker
 from .types import MODALITIES, REALTIME_MODELS, SONIC1_VOICES, SONIC2_VOICES, TURN_DETECTION
 
 DEFAULT_INPUT_SAMPLE_RATE = 16000
-DEFAULT_OUTPUT_SAMPLE_RATE = 24000
+DEFAULT_OUTPUT_SAMPLE_RATE: SAMPLE_RATE_HERTZ = 24000
 DEFAULT_CHANNELS = 1
 DEFAULT_CHUNK_SIZE = 512
 DEFAULT_TEMPERATURE = 0.7
@@ -918,7 +921,7 @@ class RealtimeSession(  # noqa: F811
 
             init_events, history_events = self._event_builder.create_prompt_start_block(
                 voice_id=self._opts.voice,
-                sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,  # type: ignore
+                sample_rate=DEFAULT_OUTPUT_SAMPLE_RATE,
                 system_content=self._instructions,
                 chat_ctx=restart_ctx,
                 tool_configuration=self._serialize_tool_config(),
@@ -1459,6 +1462,10 @@ class RealtimeSession(  # noqa: F811
                         # Stream closed, exit gracefully
                         logger.debug("[SESSION] Stream returned None, exiting")
                         break
+                    if isinstance(result, InvokeModelWithBidirectionalStreamOutputUnknown):
+                        # an event variant Bedrock added since: skipped
+                        llm_realtime.log_skipped("Nova Sonic", "an unknown output event")
+                        continue
                     if not isinstance(result, InvokeModelWithBidirectionalStreamOutputChunk):
                         raise APIError(
                             "unexpected Nova Sonic output event",

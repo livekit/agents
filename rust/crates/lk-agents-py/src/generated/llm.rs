@@ -1610,7 +1610,16 @@ impl McpSession {
             let out = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::list_tools(&this, )
                 .await.map_err(|e: ::lk_agents_abi::llm::mcp::McpError| <::lk_agents_abi::llm::mcp::McpError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
-                ::pyo3::IntoPyObjectExt::into_py_any(crate::py_values::value_to_py(py, &out)?, py)
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    ::pyo3::types::PyList::new(
+                        py,
+                        out.into_iter()
+                            .map(|x| crate::generated::records::mcp::mcp_tool_to_py(py, x))
+                            .collect::<PyResult<Vec<_>>>()?,
+                    )?
+                    .into_any(),
+                    py,
+                )
             })
         })
     }
@@ -1627,13 +1636,11 @@ impl McpSession {
         host_context: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let arguments = match crate::py_values::value_from_py(arguments.as_any(), "arguments")? {
-            ::serde_json::Value::Object(map) => Ok(map),
-            _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!(
-                "arguments",
-                ": expected a dict"
-            ))),
-        }?;
+        let arguments =
+            crate::generated::records::from_representation::<
+                ::lk_agents_abi::llm::mcp::JsonObject,
+                ::serde_json::Value,
+            >(crate::py_values::value_from_py(arguments.as_any(), "arguments")?)?;
         let progress = progress
             .map(|v| crate::generated::llm::McpProgressProxy::from_host(v.as_any()))
             .transpose()?;
@@ -1656,7 +1663,10 @@ impl McpSession {
                 )
             })?;
             Python::attach(|py| {
-                ::pyo3::IntoPyObjectExt::into_py_any(crate::py_values::value_to_py(py, &out)?, py)
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::mcp::call_tool_result_to_py(py, out)?,
+                    py,
+                )
             })
         })
     }
@@ -1771,41 +1781,17 @@ pub fn resolve_mcp_tool_options<'py>(
     crate::generated::records::mcp::resolved_tool_options_to_py(py, out)
 }
 
+/// The schema a listed tool is offered to the model as.
 #[pyfunction]
-#[pyo3(signature = (name, description, input_schema, meta))]
-pub fn mcp_raw_schema<'py>(
-    py: Python<'py>,
-    name: ::std::string::String,
-    description: ::std::option::Option<::std::string::String>,
-    input_schema: Bound<'_, PyAny>,
-    meta: Option<Bound<'_, PyAny>>,
-) -> PyResult<Bound<'py, PyAny>> {
+#[pyo3(signature = (tool))]
+pub fn mcp_raw_schema<'py>(py: Python<'py>, tool: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
-    let input_schema = match crate::py_values::value_from_py(input_schema.as_any(), "input_schema")?
-    {
-        ::serde_json::Value::Object(map) => Ok(map),
-        _ => Err(::pyo3::exceptions::PyTypeError::new_err(concat!(
-            "input_schema",
-            ": expected a dict"
-        ))),
-    }?;
-    let meta = meta
-        .map(|v| match crate::py_values::value_from_py(v.as_any(), "meta")? {
-            ::serde_json::Value::Object(map) => Ok(map),
-            _ => {
-                Err(::pyo3::exceptions::PyTypeError::new_err(concat!("meta", ": expected a dict")))
-            }
-        })
-        .transpose()?;
-    let out = py.detach(|| {
-        <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::raw_schema(
-            name,
-            description,
-            input_schema,
-            meta,
-        )
-    });
-    crate::py_values::value_to_py(py, &out)
+    let tool = crate::generated::records::mcp::mcp_tool_from_py(tool.as_any())?;
+    let out = py.detach(|| <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::raw_schema(tool));
+    ::pyo3::PyResult::Ok({
+        let scalar: ::serde_json::Value = out.into();
+        crate::py_values::value_to_py(py, &scalar)?
+    })
 }
 
 #[pyfunction]
@@ -1816,7 +1802,7 @@ pub fn mcp_render_result(
     result: Bound<'_, PyAny>,
 ) -> PyResult<::std::string::String> {
     crate::py_calls::check_pid()?;
-    let result = crate::py_values::value_from_py(result.as_any(), "result")?;
+    let result = crate::generated::records::mcp::call_tool_result_from_py(result.as_any())?;
     let out = py
         .detach(|| {
             <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::render_result(tool_name, result)
@@ -5370,7 +5356,7 @@ pub struct ToolsetHooksProxy {
 }
 
 impl ToolsetHooksProxy {
-    /// A registered native class as itself, any other host object behind this proxy, held weakly.
+    /// A registered native class as itself, any other host object behind this proxy.
     pub fn from_host(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::toolsets::ToolsetHooks>> {
@@ -5379,7 +5365,7 @@ impl ToolsetHooksProxy {
         {
             return Ok(native);
         }
-        Ok(::std::sync::Arc::new(Self::take(obj, None, false)?))
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
     }
 
     /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.

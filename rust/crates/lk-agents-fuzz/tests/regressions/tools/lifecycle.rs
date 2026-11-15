@@ -455,7 +455,7 @@ mod interrupted_during_tools_frees_the_floor {
     use lk_agents_abi::ChatItem;
     use lk_agents_fuzz::drive::{Policy, Run, Setup, StorageSetup, simulate_with};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs, UserText};
-    use lk_agents_fuzz::record::{Kind, StorageOperation, StorageStep};
+    use lk_agents_fuzz::record::{Detail, Kind, StorageOperation, StorageStep};
     use lk_agents_voice::events::SessionEvent;
     use lk_agents_voice::trace::{SpeechStep, Step};
 
@@ -576,6 +576,29 @@ mod interrupted_during_tools_frees_the_floor {
         );
     }
 
+    // Ordinary interruption cannot cancel an application operation merely because it takes
+    // longer than generation's cleanup bound. Its original call still receives the outcome.
+    #[test]
+    fn an_interrupted_tool_survives_the_generation_watchdog() {
+        let run = run(&[
+            Input::Advance { ms: Millis(10_000) },
+            Input::ToolAnswered {
+                tool: Ref::new(0),
+                answer: ToolAnswer::Value,
+                text: AgentText("reservation confirmed".into()),
+            },
+            Input::Advance { ms: Millis(1_000) },
+        ]);
+        assert_eq!(outputs(&run), ["reservation confirmed"]);
+        assert_eq!(
+            run.record.resources(Kind::Chat).count(),
+            2,
+            "no follow-up for the interrupted reply"
+        );
+        let done = done_at(&run);
+        assert!(done.len() == 2 && done[0] < 1_000, "the tool did not hold the floor: {done:?}");
+    }
+
     // Catches: a cut landing while the step's end was still on its way, which reached the tools
     // already cut and was held to the watchdog. Every cut point in the step's first 50 ms, under
     // each queue policy: the race is the executor's.
@@ -600,13 +623,14 @@ mod interrupted_during_tools_frees_the_floor {
         }
     }
 
-    // Catches: a tool that never answers outliving the reply that gave the floor back: the
-    // watchdog still ends it, with one output.
+    // A tool that never answers remains application work until session shutdown. Generation's
+    // cleanup deadline must not manufacture a cancelled result for a live operation.
     #[test]
-    fn the_watchdog_still_ends_a_hung_tool() {
+    fn an_interrupted_hung_tool_remains_live_until_shutdown() {
         let run = run(&[Input::Advance { ms: Millis(6_000) }]);
         assert!(done_at(&run).first().is_some_and(|at| *at < 1_000), "{:?}", done_at(&run));
-        assert_eq!(outputs(&run).len(), 1, "outputs: {:?}", outputs(&run));
+        assert!(outputs(&run).is_empty(), "outputs: {:?}", outputs(&run));
+        assert_eq!(run.record.live().of(Kind::Tool).len(), 1);
         assert_eq!(run.record.live().opened(Kind::Chat), 2);
     }
     /// Each turn's storage requests and answers, in order: `(speech, operation, answered)`.
@@ -694,10 +718,10 @@ mod interrupted_during_tools_frees_the_floor {
         assert!(exercised >= 12, "the scenario ran in only {exercised} of 24 runs");
     }
 
-    // Catches: an interrupted turn whose tool hangs to the watchdog blocking the next turn's commit
-    // forever, or ending twice.
+    // An interrupted application's live tool must neither block a newer speech's save nor be
+    // cancelled by an unrelated generation deadline. Its own turn remains open until it answers.
     #[test]
-    fn on_a_thread_a_turn_ended_by_the_watchdog_lets_the_next_commit() {
+    fn on_a_thread_a_live_interrupted_tool_does_not_block_the_next_save() {
         let mut exercised = 0;
         for policy in [Policy::Arrival, Policy::BasicPos, Policy::TaskBridge] {
             for schedule in 0..8 {
@@ -708,13 +732,13 @@ mod interrupted_during_tools_frees_the_floor {
                 }
                 exercised += 1;
                 let done = done_at(&run);
-                // The watchdog ends the first turn at 5300 ms; neither speech waits for it.
+                // Neither speech's floor ownership waits for the first one's tool.
                 assert!(
                     done.len() == 2 && done[0] < 1_000 && done[1] < 4_000,
                     "{policy:?} {schedule}: speeches done at {done:?} ms"
                 );
-                assert_eq!(outputs(&run).len(), 1, "{policy:?} {schedule}: {:?}", outputs(&run));
-                assert_each_turn_saved_once(&run);
+                assert!(outputs(&run).is_empty(), "{policy:?} {schedule}: {:?}", outputs(&run));
+                assert_eq!(run.record.live().of(Kind::Tool).len(), 1);
                 let order = run.record.speech_order();
                 let second = turns(&run).into_iter().filter(|t| !t.2).max_by_key(|t| order[&t.0]);
                 assert!(
@@ -835,6 +859,103 @@ mod interrupted_during_tools_frees_the_floor {
                 exercised += 1;
                 let order = failures_of(&run, "storage_saves_the_conversation_in_order");
                 assert_eq!(order, Vec::<String>::new(), "{policy:?} {schedule}");
+            }
+        }
+        assert!(exercised >= 12, "the scenario ran in only {exercised} of 24 runs");
+    }
+
+    // Catches (seed 606 TaskBridge): the tools changed while a step's call ran. The update was
+    // held by its instant between the call and its output, a history a provider refuses; it
+    // applies from the next step, after the step's output.
+    #[test]
+    fn tools_changed_while_a_call_runs_follow_its_output() {
+        let inputs = [
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(100) },
+            Input::LlmToolCall {
+                chat: Ref::new(0),
+                name: "lookup".into(),
+                args: ToolArgs("{}".into()),
+            },
+            Input::LlmEnd { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(200) },
+            Input::UpdateTools { tools: vec!["lookup".into(), "cancel".into()] },
+            Input::Advance { ms: Millis(200) },
+            Input::ToolAnswered {
+                tool: Ref::new(0),
+                answer: ToolAnswer::Value,
+                text: AgentText("found".into()),
+            },
+            Input::Advance { ms: Millis(300) },
+        ];
+        for policy in [Policy::Arrival, Policy::BasicPos, Policy::TaskBridge] {
+            for schedule in 0..8 {
+                let setup = Setup { tools: vec!["lookup".into()], ..Setup::default() };
+                let run = run_setup(&setup, &inputs, &[], schedule, policy);
+                let chats: Vec<_> = run.record.resources(Kind::Chat).collect();
+                let Some(Detail::Chat { ctx_ids, .. }) = chats.get(1).map(|chat| chat.detail())
+                else {
+                    panic!("{policy:?} {schedule}: the step after the tool asks the model")
+                };
+                let output = ctx_ids.iter().position(|id| id.ends_with("/fnc_0_out"));
+                let call = ctx_ids.iter().position(|id| id.ends_with("/fnc_0"));
+                assert!(
+                    output.is_some() && output == call.map(|call| call + 1),
+                    "{policy:?} {schedule}: the output is not right after its call: {ctx_ids:?}"
+                );
+            }
+        }
+    }
+
+    // Catches (seed 1242 TaskBridge): the person took a turn while a step's call ran. The call
+    // sat with its turn and the output, stamped when the step ended, after the person's words,
+    // so the next request split the call from its output, a history a provider refuses. The
+    // output sits right after its call; what was said while the tool ran follows it.
+    #[test]
+    fn a_turn_taken_while_a_call_runs_follows_its_output() {
+        let inputs = [
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(100) },
+            Input::LlmToolCall {
+                chat: Ref::new(0),
+                name: "lookup".into(),
+                args: ToolArgs("{}".into()),
+            },
+            Input::LlmEnd { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(200) },
+            Input::GenerateReply {
+                user_input: Some(UserText("are you there?".into())),
+                instructions: None,
+                allow: None,
+            },
+            Input::Advance { ms: Millis(200) },
+            Input::ToolAnswered {
+                tool: Ref::new(0),
+                answer: ToolAnswer::Value,
+                text: AgentText("found".into()),
+            },
+            Input::Advance { ms: Millis(300) },
+        ];
+        let mut exercised = 0;
+        for policy in [Policy::Arrival, Policy::BasicPos, Policy::TaskBridge] {
+            for schedule in 0..8 {
+                let setup = Setup { tools: vec!["lookup".into()], ..Setup::default() };
+                let run = run_setup(&setup, &inputs, &[], schedule, policy);
+                for chat in run.record.resources(Kind::Chat) {
+                    let Detail::Chat { ctx_ids, .. } = chat.detail() else { continue };
+                    let Some(output) = ctx_ids.iter().position(|id| id.ends_with("/fnc_0_out"))
+                    else {
+                        continue;
+                    };
+                    let call = ctx_ids.iter().position(|id| id.ends_with("/fnc_0"));
+                    assert_eq!(
+                        call.map(|call| call + 1),
+                        Some(output),
+                        "{policy:?} {schedule}: the output is not right after its call: {ctx_ids:?}"
+                    );
+                    // The person's words, committed while the call ran, follow it.
+                    exercised += usize::from(ctx_ids.len() > output + 1);
+                }
             }
         }
         assert!(exercised >= 12, "the scenario ran in only {exercised} of 24 runs");

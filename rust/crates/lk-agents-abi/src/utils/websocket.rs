@@ -15,7 +15,8 @@ pub enum WsFrame {
 
 /// Where the framework opens a provider WebSocket: through the job's HTTP proxy, pinging so a
 /// half-open socket is noticed. A rejected handshake's request id is read from
-/// `request_id_header`.
+/// `request_id_header`. `max_message_size`: the largest message (and frame) the provider may
+/// send, in bytes; `None` keeps the transport's limit.
 #[crate::host(record(
     module = "websocket",
     path = "livekit.agents._websocket",
@@ -33,14 +34,18 @@ pub struct WebSocketTarget {
     pub protocols: Vec<String>,
     #[host(default = None)]
     pub request_id_header: Option<String>,
+    #[host(default = None)]
+    pub max_message_size: Option<u64>,
 }
 
-/// A frame sent once nothing else was sent for `interval` seconds.
+/// A frame sent once nothing else was sent for `interval` seconds. `only_while_unused`: on a
+/// multiplexer's socket, sent only while no stream holds it.
 #[crate::host(record(module = "websocket", extract))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct WebSocketKeepaliveFrame {
     pub interval: f64,
     pub frame: WsFrame,
+    pub only_while_unused: bool,
 }
 
 /// One connection as the protocol asks for it, read at each connection: options changed since
@@ -61,11 +66,12 @@ pub struct WebSocketConnection {
     /// The provider must signal `ready` before anything but the setup is sent; it has the
     /// connect limit to say so, else the attempt fails with a timeout.
     pub awaits_ready: bool,
-    /// Seconds without input after which the stream's input-idle frames go, once per silence.
-    pub input_idle: Option<f64>,
-    /// A shared socket's: seconds without a send on a context after which the stream's open
-    /// contexts are kept alive.
-    pub context_keepalive: Option<f64>,
+    /// The frames that ask the provider to end its session, sent when a replacement is due
+    /// (`max_session_duration`) and when the input ends: the connection then takes no more input
+    /// and ends, or is replaced, once the provider finished its session or closed cleanly, or the
+    /// read limit passed. Empty: it ends or is replaced at once. A shared socket's own goodbye is
+    /// its multiplexer's.
+    pub goodbye: Vec<WsFrame>,
 }
 
 /// One input item's frames, encoded, and the seconds they play for, which real-time pacing
@@ -96,11 +102,14 @@ pub enum WebSocketSignal {
 pub struct WebSocketRead {
     pub signal: Option<WebSocketSignal>,
     pub request_id: Option<String>,
+    /// Response data arrived; control frames and unknown messages are not progress.
+    pub response: bool,
 }
 
 /// Where a shared socket's received frame goes: to `context` as `message` (decoded once, by the
 /// multiplexer), or to the socket itself (`None`); `ready`: the socket's provider session is ready
-/// for streams.
+/// for streams; `ended_context`: the context the message ends, the provider's last word on it
+/// (what a cancel waits for).
 #[crate::host(record(module = "websocket", extract))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WebSocketMuxRoute {
@@ -108,14 +117,29 @@ pub struct WebSocketMuxRoute {
     #[host(annotation = "object")]
     pub message: Option<crate::HostRef>,
     pub ready: bool,
+    pub ended_context: Option<String>,
+}
+
+/// The frames that cancel the contexts a stream left before the provider finished them, and
+/// those contexts.
+#[crate::host(record(module = "websocket", extract))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WebSocketContextsCancel {
+    pub contexts: Vec<String>,
+    pub frames: Vec<WsFrame>,
 }
 
 /// How a multiplexer shares its sockets. `max_contexts`: streams one socket carries at once.
 /// `max_sockets`: sockets open at once; a stream finding none with room waits for one within
-/// the pool limit. `idle_timeout`: seconds a socket with no stream stays open. `keep_warm`: an
-/// idle socket the provider closed is opened again. `routed`: each frame is routed to its
-/// context; an unrouted socket carries one stream, gets every frame, and is reused only after a
-/// stream that ended cleanly.
+/// the pool limit. `idle_timeout`: seconds a socket with no stream stays open. `keep_warm`: a
+/// socket with room is kept open as a standby: one opens when a stream takes the last, and an
+/// idle one the provider closed is opened again. `routed`: each frame is routed to its context;
+/// an unrouted socket carries one stream, gets every frame, and is reused only after a stream
+/// that ended cleanly. `reuses_sockets`: `false` closes a socket once its stream left it, so
+/// each stream (each session, with a connection per segment) has a fresh one.
+/// `reads_cancel_end`: an unrouted socket a stream left mid-answer is cancelled with the stream's
+/// frames and reused once the route reads the end of every context cancelled, within
+/// [`CANCELLED_ANSWER_WAIT`]; otherwise it is closed.
 #[crate::host(record(module = "websocket", extract))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct WebSocketMuxOptions {
@@ -124,7 +148,13 @@ pub struct WebSocketMuxOptions {
     pub idle_timeout: Option<f64>,
     pub keep_warm: bool,
     pub routed: bool,
+    pub reuses_sockets: bool,
+    pub reads_cancel_end: bool,
 }
+
+/// How long a pooled socket a stream left mid-answer waits for the provider to end the cancelled
+/// contexts before it is closed instead of reused: a cancel is answered in a round trip.
+pub const CANCELLED_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// One stream's WebSocket protocol, as the executor drives one connection after another: the
 /// plugin's hooks and its kind's terms, behind an object of its own. Its hooks run on the host
@@ -164,27 +194,37 @@ pub trait WebSocketHost: Send + Sync {
         message: Option<crate::HostRef>,
     ) -> crate::BoxFuture<'_, Result<WebSocketRead, ProviderError>>;
 
-    /// No input went out for the connection's `input_idle`: the frames the stream sends then,
-    /// which are not input.
+    /// Seconds without input after which the stream's `input_idle` frames go, once per silence;
+    /// read at each connection.
+    #[host(call, name = "_core_input_idle_after")]
+    fn input_idle_after(&self) -> Result<Option<f64>, HostError>;
+
+    /// No input went out for `input_idle_after`: the frames the stream sends then, which are not
+    /// input.
     #[host(await, name = "_core_input_idle")]
     fn input_idle(
         &self,
         cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>>;
 
-    /// The frames that end the contexts a shared stream left before the provider finished them.
-    #[host(await, name = "_core_close_context")]
-    fn close_context(
+    /// Seconds of silence after response data and the latest input, once per silence.
+    #[host(call, name = "_core_response_idle_after")]
+    fn response_idle_after(&self) -> Result<Option<f64>, HostError>;
+
+    /// Response data went silent; no callback runs before the first response.
+    #[host(await, name = "_core_response_idle")]
+    fn response_idle(
         &self,
         cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>>;
 
-    /// The frames that keep a shared stream's open contexts alive.
-    #[host(await, name = "_core_keep_context")]
-    fn keep_context(
+    /// The frames that end the contexts a shared stream left before the provider finished them,
+    /// and those contexts.
+    #[host(await, name = "_core_close_context")]
+    fn close_context(
         &self,
         cx: &crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>>;
+    ) -> crate::BoxFuture<'_, Result<WebSocketContextsCancel, ProviderError>>;
 
     /// A connection opened; `request_id` is the provider's id for it, from the handshake.
     #[host(notify, name = "_core_opened")]
@@ -242,6 +282,14 @@ pub trait WebSocketMuxHost: Send + Sync {
         &self,
         cx: &crate::telemetry::Cx,
         context_id: String,
+    ) -> crate::BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>>;
+
+    /// The frames sent on a healthy socket the multiplexer closes (idle, stale, spent or at its
+    /// close), ahead of the close: the provider session's own end.
+    #[host(await, name = "_core_goodbye")]
+    fn goodbye(
+        &self,
+        cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>>;
 }
 

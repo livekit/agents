@@ -14,32 +14,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import contextlib
-import json
 import os
 import time
 import weakref
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, replace
-from typing import Any
+from dataclasses import dataclass, field
+from typing import NotRequired, TypedDict, assert_never
 
-from livekit.agents import (
-    APIConnectionError,
-    APIConnectOptions,
-    APIError,
-    APIStatusError,
-    ProviderAttempts,
-    http,
-    tokenize,
-    tts,
-    utils,
-)
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents import APIConnectOptions, APIError, APIStatusError, tokenize, tts, utils
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
-
-from .log import logger
 
 WEBSOCKET_URL = "wss://tts-rt.soniox.com/tts-websocket"
 NUM_CHANNELS = 1
@@ -49,20 +33,11 @@ DEFAULT_VOICE = "Maya"
 DEFAULT_AUDIO_FORMAT = "pcm_s16le"
 DEFAULT_SAMPLE_RATE = 24000
 DEFAULT_SPEED = 1.0
-# Speaking rate bounds accepted by the Soniox TTS API (values below 1.0 slow
-# speech down, above 1.0 speed it up).
 MIN_SPEED = 0.7
 MAX_SPEED = 1.3
 KEEPALIVE_INTERVAL = 10  # seconds
-KEEPALIVE_MESSAGE = json.dumps({"keep_alive": True})
-# Must stay under Soniox's observed ~8-18s per-stream timeout (livekit/agents#6225).
 DEFAULT_STREAM_IDLE_TIMEOUT = 5.0  # seconds
-# Rotate to a fresh stream at a sentence boundary
-# well before Soniox's fixed 2-minute per-stream cap.
-MAX_STREAM_AGE = 90.0  # seconds
-# Models that report supports_silence_reduction: false in the List models API
-# (https://soniox.com/docs/api-reference/tts/get_tts_models). Newer models are
-# assumed to support reduce_silence; the server still rejects unknown models.
+MAX_STREAM_AGE = 90.0  # seconds, under the provider stream's 2-minute lifespan
 MODELS_WITHOUT_SILENCE_REDUCTION = frozenset({"tts-rt-v1", "tts-rt-v1-preview"})
 
 
@@ -81,6 +56,66 @@ def _audio_format_to_mime_type(audio_format: str) -> str:
     if audio_format == "mp3":
         return "audio/mpeg"
     return f"audio/{audio_format}"
+
+
+@dataclass
+class _TTSOptions:
+    model: str
+    language: str
+    voice: str
+    reduce_silence: bool
+    audio_format: str
+    sample_rate: int
+    bitrate: int | None
+    speed: float
+    websocket_url: str
+    api_key: str
+    stream_idle_timeout: float
+
+
+# Soniox's socket carries provider streams keyed by `stream_id`: each opened by its config, fed
+# text, ended by `text_end` and closed by `terminated`. Messages carry no tag; each field read
+# is declared.
+
+
+class _Message(TypedDict, total=False):
+    stream_id: str | None
+    audio: str | None
+    audio_end: bool | None
+    terminated: bool | None
+    error_code: int | None
+    error_message: str | None
+    request_id: str | None
+
+
+class _Config(TypedDict):
+    model: str
+    language: str
+    voice: str
+    audio_format: str
+    sample_rate: int
+    speed: float
+    stream_id: str
+    bitrate: NotRequired[int]
+    reduce_silence: NotRequired[bool]
+
+
+class _Text(TypedDict):
+    stream_id: str
+    text: NotRequired[str]
+    text_end: NotRequired[bool]
+
+
+class _Cancel(TypedDict):
+    stream_id: str
+    cancel: bool
+
+
+class _KeepAlive(TypedDict):
+    keep_alive: bool
+
+
+_Command = _Config | _Text | _Cancel | _KeepAlive
 
 
 class TTS(tts.TTS):
@@ -105,7 +140,6 @@ class TTS(tts.TTS):
         reduce_silence: bool = False,
         api_key: str | None = None,
         websocket_url: str = WEBSOCKET_URL,
-        http_session: http.HttpSession | None = None,
         stream_idle_timeout: float = DEFAULT_STREAM_IDLE_TIMEOUT,
     ) -> None:
         """Initialize instance of Soniox Text-to-Speech API service.
@@ -124,7 +158,6 @@ class TTS(tts.TTS):
                 rejects it on other models. Defaults to False.
             api_key (str): Soniox API key. If not provided, will look for SONIOX_API_KEY env variable.
             websocket_url (str): Base WebSocket URL for Soniox TTS API.
-            http_session (http.HttpSession): Optional HttpSession to use for requests.
             stream_idle_timeout (float): Seconds without a new sentence before the current
                 stream is finalized; the next sentence starts a fresh stream. Prevents slow
                 LLM gaps from hitting the server's per-stream timeout (observed ~8-18s).
@@ -161,15 +194,8 @@ class TTS(tts.TTS):
             api_key=api_key,
             stream_idle_timeout=stream_idle_timeout,
         )
-        self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
-
-        # One persistent connection shared across streams (see _Connection).
-        self.__current_connection: _Connection | None = None
-        # the prewarm, and the closes of retired connections draining their last streams
-        self._tasks = utils.aio.TaskSet()
-        self._prewarm_task: asyncio.Task[None] | None = None
-        self.__conn_lock = asyncio.Lock()
+        self._mux = _Mux(self._opts)
 
     @property
     def model(self) -> str:
@@ -178,35 +204,6 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Soniox"
-
-    def _ensure_session(self) -> http.HttpSession:
-        if not self._session:
-            self._session = http.http_session()
-        return self._session
-
-    async def _current_connection(
-        self, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> _Connection:
-        """Return the live connection, creating one if needed."""
-        async with self.__conn_lock:
-            conn = self.__current_connection
-            if (
-                conn is not None
-                and conn.is_current
-                and not conn.closed
-                and conn.conn_options == conn_options
-            ):
-                return conn
-
-            # Discard any stale connection reference so it can drain and close
-            # itself once any outstanding streams finish.
-            if conn is not None and not conn.closed:
-                conn.mark_non_current()
-
-            new_conn = _Connection(self._opts, self._ensure_session(), conn_options, self._tasks)
-            await new_conn.connect()
-            self.__current_connection = new_conn
-            return new_conn
 
     def update_options(
         self,
@@ -233,11 +230,17 @@ class TTS(tts.TTS):
             pacing: A ``SentenceStreamPacer``, or ``None`` to send each chunk as soon as it is
                 split.
         """
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        _validate_reduce_silence(
-            model if is_given(model) else self._opts.model,
-            reduce_silence if is_given(reduce_silence) else self._opts.reduce_silence,
-        )
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            _validate_reduce_silence(
+                model if is_given(model) else self._opts.model,
+                reduce_silence if is_given(reduce_silence) else self._opts.reduce_silence,
+            )
+            if is_given(speed) and not MIN_SPEED <= speed <= MAX_SPEED:
+                raise ValueError(
+                    f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}"
+                )
+            if is_given(stream_idle_timeout) and stream_idle_timeout <= 0:
+                raise ValueError(f"stream_idle_timeout must be > 0, but got {stream_idle_timeout}")
         if is_given(model):
             self._opts.model = model
         if is_given(language):
@@ -245,18 +248,12 @@ class TTS(tts.TTS):
         if is_given(voice):
             self._opts.voice = voice
         if is_given(speed):
-            if not MIN_SPEED <= speed <= MAX_SPEED:
-                raise ValueError(
-                    f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}"
-                )
             self._opts.speed = speed
         if is_given(reduce_silence):
             self._opts.reduce_silence = reduce_silence
         if is_given(stream_idle_timeout):
-            if stream_idle_timeout <= 0:
-                raise ValueError(f"stream_idle_timeout must be > 0, but got {stream_idle_timeout}")
+            # the streams made next finalize their provider stream after it
             self._opts.stream_idle_timeout = stream_idle_timeout
-            # Live streams read this setting when they wait for the next segment.
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
@@ -264,601 +261,183 @@ class TTS(tts.TTS):
         return self._synthesize_with_stream(chunk, conn_options=conn_options)
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            tts=self,
-            conn_options=conn_options,
-            opts=replace(self._opts),
-            current_connection=self._current_connection,
-            idle_timeout=lambda: self._opts.stream_idle_timeout,
-        )
+        stream = SynthesizeStream(tts=self, opts=self._opts, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
     def prewarm(self) -> None:
-        """Pre-warm the persistent connection in the background."""
-
-        async def _task() -> None:
-            try:
-                await self._current_connection()
-            except Exception as e:
-                logger.debug("Soniox TTS prewarm failed", exc_info=e)
-
-        try:
-            # Don't start a second prewarm while one is in flight, nor one after close.
-            if not self._tasks.closed and (self._prewarm_task is None or self._prewarm_task.done()):
-                self._prewarm_task = self._tasks.spawn(_task(), name="soniox-tts-prewarm")
-        except RuntimeError:
-            # No running event loop (e.g. called outside async context) — skip.
-            pass
+        self._mux.prewarm()
 
     async def aclose(self) -> None:
-        """Close all streams and the persistent connection."""
-        # Cancel first: the prewarm task calls _current_connection, which opens a new
-        # connection when there is none. A prewarm still in flight here would otherwise
-        # reconnect after close, leaving a live WebSocket nothing owns.
-        if self._prewarm_task is not None:
-            await utils.aio.cancel_and_wait(self._prewarm_task)
-            self._prewarm_task = None
-
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
-
-        if self.__current_connection is not None:
-            await self.__current_connection.aclose()
-            self.__current_connection = None
-        await self._tasks.aclose()
+        await self._mux.aclose()
 
 
 @dataclass
-class _ActiveStream:
-    """One provider stream carrying a batch of sentences."""
+class _Segment:
+    """A segment's provider streams: the one taking its text, and those not yet terminated."""
 
-    connection: _Connection
-    stream_id: str
-    waiter: asyncio.Future[None]
-    opened_at: float
+    current: str | None = None
+    latest: str | None = None
+    opened_at: float = 0.0
+    live: set[str] = field(default_factory=set[str])
+    spoken: set[str] = field(default_factory=set[str])
+    ended: bool = False
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    """Streaming TTS implementation on a shared _Connection."""
+class _Mux(tts.WebSocketMultiplexer[_Message, _Command]):
+    """One Soniox socket carries every stream's segments, each segment a provider stream (a new
+    one after the text idles ``stream_idle_timeout``, before the server times the stream out)."""
 
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        conn_options: APIConnectOptions,
-        opts: _TTSOptions,
-        current_connection: Callable[[APIConnectOptions], Awaitable[_Connection]],
-        idle_timeout: Callable[[], float],
-    ) -> None:
-        super().__init__(tts=tts, conn_options=conn_options)
+    keepalive = tts.Keepalive(every=KEEPALIVE_INTERVAL, frame=_KeepAlive(keep_alive=True))
+
+    def __init__(self, opts: _TTSOptions) -> None:
         self._opts = opts
-        self._current_connection = current_connection
-        self._idle_timeout = idle_timeout
-        self._stream_id: str = ""
-        self._connection: _Connection | None = None
-        self._cancelled = asyncio.Event()
+        # each open segment, and the segment each provider stream speaks for
+        self.segments: dict[str, _Segment] = {}
+        self.provider_streams: dict[str, str] = {}
 
-    async def aclose(self) -> None:
-        """Close the stream, signalling cancel to the server if still active.
-
-        Cancelling only affects this stream's ``stream_id``; the underlying
-        WebSocket stays alive for subsequent streams.
-        """
-        if self._cancelled.is_set():
-            await super().aclose()
-            return
-
-        self._cancelled.set()
-        if self._connection is not None and not self._connection.closed and self._stream_id:
-            self._connection.cancel_stream(self._stream_id)
-            logger.debug(
-                "Sent cancellation for Soniox TTS stream",
-                extra={"stream_id": self._stream_id},
-            )
-
-        await super().aclose()
-
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        """Feed sentences into a shared stream, rotating on idle gaps and age.
-
-        Soniox keeps prosody continuous only within a stream, so sentences are
-        pushed into one open stream while the LLM produces them steadily. When
-        no sentence arrives for ``stream_idle_timeout``, the stream is
-        finalized (text_end) before the server's own timer can kill it
-        mid-synthesis; the next sentence starts a fresh stream. Only complete
-        sentences are ever sent, so every rotation lands on a natural boundary.
-        """
-        request_id = utils.shortuuid()
-
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=NUM_CHANNELS,
-            mime_type=_audio_format_to_mime_type(self._opts.audio_format),
-            stream=True,
-        )
-        output_emitter.start_segment(segment_id=utils.shortuuid())
-
-        active: _ActiveStream | None = None
-        failure: APIError | None = None
-        tasks = utils.aio.TaskSet()
-        next_task: asyncio.Task[tts.SpeechChunk | SynthesizeStream.Flush] | None = None
-        input_iter = self.input.__aiter__()
-
-        try:
-            while not self._cancelled.is_set():
-                if next_task is None:
-                    next_task = tasks.spawn(input_iter.__anext__())
-
-                waiters: list[asyncio.Future[Any]] = [next_task]
-                if active is not None:
-                    waiters.append(active.waiter)
-                # shielded, and its outcome read below: whatever did not finish keeps waiting
-                with contextlib.suppress(Exception):
-                    async with asyncio.timeout(
-                        self._idle_timeout() if active is not None else None
-                    ):
-                        await tasks.first_completed(*(asyncio.shield(w) for w in waiters))
-
-                if active is not None and active.waiter.done():
-                    failure = await self._settle_stream(active, output_emitter) or failure
-                    active = None
-                    continue
-
-                if not next_task.done():
-                    # LLM stalled: finalize before the server times the stream out
-                    if active is not None:
-                        failure = await self._finalize_stream(active, output_emitter) or failure
-                        active = None
-                    continue
-
-                try:
-                    chunk = next_task.result()
-                except StopAsyncIteration:
-                    break
-                finally:
-                    next_task = None
-
-                if isinstance(chunk, self.Flush):
-                    continue
-
-                self.mark_started()
-
-                # rotate to a new stream before the fixed 2-minute stream lifespan
-                if active is not None and time.monotonic() - active.opened_at > MAX_STREAM_AGE:
-                    failure = await self._finalize_stream(active, output_emitter) or failure
-                    active = None
-
-                if active is None:
-                    active = await self._open_stream(output_emitter, request_id)
-
-                # the stream concatenates its text, so each chunk ends with a space
-                active.connection.send_text(active.stream_id, chunk.text + " ", text_end=False)
-
-            if active is not None and not self._cancelled.is_set():
-                failure = await self._finalize_stream(active, output_emitter) or failure
-                active = None
-            if failure is not None:
-                raise failure
-        finally:
-            await tasks.aclose()
-            if active is not None:
-                active.connection.cancel_stream(active.stream_id)
-                active.connection.unregister_stream(active.stream_id)
-            output_emitter.end_segment()
-
-    async def _open_stream(
-        self, output_emitter: tts.AudioEmitter, request_id: str
-    ) -> _ActiveStream:
-        try:
-            connection = await self._current_connection(self._conn_options)
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
-
-        self._connection = connection
-        self._stream_id = stream_id = utils.shortuuid()
-
-        waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
-        connection.register_stream(
-            stream_id, output_emitter, waiter, opts=self._opts, read_deadline=self._core_attempts
-        )
-        return _ActiveStream(
-            connection=connection,
-            stream_id=stream_id,
-            waiter=waiter,
-            opened_at=time.monotonic(),
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        return tts.WebSocketTarget(
+            self._opts.websocket_url, headers={"Authorization": f"Bearer {self._opts.api_key}"}
         )
 
-    async def _finalize_stream(
-        self, active: _ActiveStream, output_emitter: tts.AudioEmitter
-    ) -> APIError | None:
-        """End the provider stream and wait for its terminal event."""
-        active.connection.send_text(active.stream_id, "", text_end=True)
-        return await self._settle_stream(active, output_emitter)
-
-    async def _settle_stream(
-        self, active: _ActiveStream, output_emitter: tts.AudioEmitter
-    ) -> APIError | None:
-        try:
-            await active.waiter
-        except asyncio.CancelledError:
-            active.connection.cancel_stream(active.stream_id)
-            raise
-        except APIError as error:
-            if not error.retryable or output_emitter.pushed_duration() == 0:
-                raise
-            # Soniox has no audio/text offsets: submitted text cannot safely be replayed.
-            # Keep the failure while later, unsent sentences get a fresh provider stream.
-            return error
-        finally:
-            active.connection.unregister_stream(active.stream_id)
-            self._core_attempts.complete_response()
+    def route(self, message: _Message) -> str | None:
+        if stream_id := message.get("stream_id"):
+            return self.provider_streams.get(stream_id)
+        if error_code := message.get("error_code"):
+            # an error naming no stream fails every stream on the socket
+            raise _error("Soniox TTS connection error", error_code, message)
         return None
 
-
-@dataclass
-class _TTSOptions:
-    model: str
-    language: str
-    voice: str
-    reduce_silence: bool
-    audio_format: str
-    sample_rate: int
-    bitrate: int | None
-    speed: float
-    websocket_url: str
-    api_key: str
-    stream_idle_timeout: float
+    def close_context(self, context_id: str) -> _Cancel | None:
+        # the stream left mid-segment: its provider stream taking text is cancelled; one ended
+        # by an idle terminates on its own
+        segment = self.segments.pop(context_id, None)
+        if segment is None:
+            return None
+        for stream_id in segment.live:
+            self.provider_streams.pop(stream_id, None)
+        if (latest := segment.latest) is None or latest not in segment.live:
+            return None
+        return _Cancel(stream_id=latest, cancel=True)
 
 
-@dataclass
-class _StartConfig:
-    stream_id: str
-    opts: _TTSOptions
+class SynthesizeStream(tts.WebSocketStream[_Message, _Command]):
+    """A stream on the shared Soniox socket: each segment is a provider stream, which keeps its
+    sentences' prosody continuous; its config goes with its first text, since the server times
+    a stream from its config."""
 
-
-@dataclass
-class _SendText:
-    stream_id: str
-    text: str
-    text_end: bool
-
-
-@dataclass
-class _CancelStream:
-    stream_id: str
-
-
-_OutboundMsg = _StartConfig | _SendText | _CancelStream
-
-
-@dataclass
-class _StreamData:
-    emitter: tts.AudioEmitter
-    waiter: asyncio.Future[None]
-    opts: _TTSOptions
-    read_deadline: ProviderAttempts
-    audio_ended: bool = False
-    # Client cancel and server abort produce identical `terminated` messages.
-    # This flag is how recv loop tells them apart.
-    cancel_sent: bool = False
-    config_sent: bool = False
-
-
-class _Connection:
-    """Persistent Soniox TTS WebSocket connection with multi stream support.
-
-    The connection is independent of any single ``SynthesizeStream``: cancelling
-    a stream only sends ``{"cancel": true}`` for that ``stream_id`` — the
-    WebSocket stays open and remains available for subsequent streams.
-    """
-
-    def __init__(
-        self,
-        opts: _TTSOptions,
-        session: http.HttpSession,
-        conn_options: APIConnectOptions,
-        owner: utils.aio.TaskSet,
-    ) -> None:
+    def __init__(self, *, tts: TTS, opts: _TTSOptions, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self.multiplexer = tts._mux
+        self._mux = tts._mux
         self._opts = opts
-        self._session = session
-        self.conn_options = conn_options
-        self._ws: http.WebSocket | None = None
-        self._streams: dict[str, _StreamData] = {}
-        self._input_queue = utils.aio.Chan[_OutboundMsg]()
-        self._tasks = utils.aio.TaskSet()  # the send, receive and keepalive loops
-        self._owner = owner  # the TTS's tasks, which hold this connection's self-close
-        self._close_task: asyncio.Task[None] | None = None
-        self._is_current = True
-        self._closed = False
-        self._error: BaseException | None = None
+        self.mime_type = _audio_format_to_mime_type(opts.audio_format)
+        # the text stalled this long: its provider stream ends before the server times it out
+        self.text_idle = opts.stream_idle_timeout
+        self._segment_ids: list[str] = []
 
-    @property
-    def is_current(self) -> bool:
-        return self._is_current
+    def on_text_idle(self) -> None:
+        # the stream's segments still open: a done one left the multiplexer
+        self._segment_ids = [i for i in self._segment_ids if i in self._mux.segments]
+        for segment_id in self._segment_ids:
+            segment = self._mux.segments.get(segment_id)
+            if segment is not None and segment.current is not None:
+                current, segment.current = segment.current, None
+                self.send_now(_Text(stream_id=current, text_end=True))
 
-    @property
-    def closed(self) -> bool:
-        return self._closed
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Command | None:
+        match item:
+            case tts.SegmentStart():
+                self._mux.segments[item.segment_id] = _Segment()
+                self._segment_ids.append(item.segment_id)
+                return None
+            case tts.SegmentText():
+                segment = self._mux.segments[item.segment_id]
+                if segment.current is not None and time.monotonic() - segment.opened_at > (
+                    MAX_STREAM_AGE
+                ):
+                    self.send_now(_Text(stream_id=segment.current, text_end=True))
+                    segment.current = None
+                if segment.current is None:
+                    segment.current = self._open(item.segment_id, segment)
+                # the stream concatenates its text, so each chunk ends with a space
+                return _Text(stream_id=segment.current, text=item.chunk.text + " ")
+            case tts.SegmentEnd():
+                segment = self._mux.segments[item.segment_id]
+                segment.ended = True
+                if segment.current is not None:
+                    current, segment.current = segment.current, None
+                    return _Text(stream_id=current, text_end=True)
+                if not segment.live:
+                    self._done(item.segment_id)
+                return None
+            case tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-    @property
-    def num_active_streams(self) -> int:
-        return len(self._streams)
-
-    def _schedule_close(self, name: str) -> None:
-        """Close in the background, on a task the TTS owns and joins when it closes."""
-        if (self._close_task is not None and not self._close_task.done()) or self._owner.closed:
-            return
-        self._close_task = self._owner.spawn(self.aclose(), name=name)
-
-    def mark_non_current(self) -> None:
-        """Flag this connection to be replaced; self-closes once idle."""
-        self._is_current = False
-        if not self._streams and not self._closed:
-            self._schedule_close("soniox-tts-conn-drain-close")
-
-    async def connect(self) -> None:
-        """Open the WebSocket and start the send/recv/keepalive loops."""
-        if self._ws is not None or self._closed:
-            return
-
-        try:
-            self._ws = await self._session.ws_connect(
-                self._opts.websocket_url,
-                conn_options=self.conn_options,
-                headers={"Authorization": f"Bearer {self._opts.api_key}"},
-            )
-        except Exception:
-            self._closed = True
-            self._is_current = False
-            raise
-
-        logger.debug("Soniox TTS WebSocket connection established!")
-        self._tasks.spawn(self._send_loop(), name="soniox-tts-send")
-        self._tasks.spawn(self._recv_loop(), name="soniox-tts-recv")
-        self._tasks.spawn(self._keepalive_loop(), name="soniox-tts-keepalive")
-
-    def register_stream(
-        self,
-        stream_id: str,
-        emitter: tts.AudioEmitter,
-        waiter: asyncio.Future[None],
-        *,
-        opts: _TTSOptions,
-        read_deadline: ProviderAttempts,
-    ) -> None:
-        """Register a new stream and queue its config message."""
-        if self._closed or self._error is not None:
-            if not waiter.done():
-                waiter.set_exception(
-                    self._error or APIConnectionError("Soniox TTS connection is closed")
-                )
-            return
-
-        if stream_id in self._streams:
-            raise ValueError(f"stream_id {stream_id} already registered")
-
-        # Server starts a per-stream timeout on _StartConfig receipt; we queue it lazily in send_text.
-        self._streams[stream_id] = _StreamData(
-            emitter=emitter, waiter=waiter, opts=opts, read_deadline=read_deadline
+    def _open(self, segment_id: str, segment: _Segment) -> str:
+        stream_id = utils.shortuuid()
+        opts = self._opts
+        config = _Config(
+            model=opts.model,
+            language=opts.language,
+            voice=opts.voice,
+            audio_format=opts.audio_format,
+            sample_rate=opts.sample_rate,
+            speed=opts.speed,
+            stream_id=stream_id,
         )
+        if opts.bitrate is not None:
+            config["bitrate"] = opts.bitrate
+        if opts.reduce_silence:
+            config["reduce_silence"] = True
+        self.send_now(config)
+        segment.opened_at = time.monotonic()
+        segment.live.add(stream_id)
+        segment.latest = stream_id
+        self._mux.provider_streams[stream_id] = segment_id
+        return stream_id
 
-    def unregister_stream(self, stream_id: str) -> None:
-        self._streams.pop(stream_id, None)
-        # If flagged non-current and idle, self-close.
-        if not self._is_current and not self._streams and not self._closed:
-            self._schedule_close("soniox-tts-conn-drain-close")
-
-    def send_text(self, stream_id: str, text: str, *, text_end: bool = False) -> None:
-        if self._closed or stream_id not in self._streams:
+    def on_message(self, message: _Message) -> None:
+        stream_id = message.get("stream_id") or ""
+        segment_id = self._mux.provider_streams.get(stream_id, "")
+        if error_code := message.get("error_code"):
+            raise _error(f"Soniox TTS stream error (stream_id={stream_id})", error_code, message)
+        if audio := message.get("audio"):
+            self.report(tts.SegmentAudio(segment_id, base64.b64decode(audio)))
+        segment = self._mux.segments.get(segment_id)
+        if segment is None:
             return
+        if message.get("audio_end"):
+            segment.spoken.add(stream_id)
+        if message.get("terminated"):
+            if stream_id not in segment.spoken:
+                # the server aborted on its own: raised, so the turn is not silent
+                raise APIError(
+                    "Soniox TTS stream terminated without producing audio",
+                    kind="server",
+                    body=f"stream_id={stream_id}",
+                )
+            segment.live.discard(stream_id)
+            del self._mux.provider_streams[stream_id]
+            if segment.ended and not segment.live:
+                self._done(segment_id)
 
-        stream = self._streams[stream_id]
+    def _done(self, segment_id: str) -> None:
+        self._mux.segments.pop(segment_id, None)
+        self.report(tts.SegmentDone(segment_id))
 
-        # Empty text would make the server hallucinate audio; handle the two cases locally.
-        if not text:
-            if not text_end:
-                return
-            if not stream.config_sent:
-                # Server doesn't know about this stream; resolve locally.
-                if not stream.waiter.done():
-                    stream.waiter.set_result(None)
-                self._streams.pop(stream_id, None)
-                return
 
-        if not stream.config_sent:
-            stream.config_sent = True
-            self._input_queue.send_nowait(_StartConfig(stream_id=stream_id, opts=stream.opts))
-        self._input_queue.send_nowait(_SendText(stream_id=stream_id, text=text, text_end=text_end))
-
-    def cancel_stream(self, stream_id: str) -> None:
-        if self._closed:
-            return
-        stream = self._streams.get(stream_id)
-        if stream is None:
-            return
-        if not stream.config_sent:
-            # Server doesn't know about this stream; resolve locally.
-            if not stream.waiter.done():
-                stream.waiter.set_result(None)
-            self._streams.pop(stream_id, None)
-            return
-        self._streams[stream_id].cancel_sent = True
-        self._input_queue.send_nowait(_CancelStream(stream_id=stream_id))
-
-    async def _send_loop(self) -> None:
-        try:
-            async for msg in self._input_queue:
-                if self._ws is None or self._ws.closed:
-                    break
-
-                if isinstance(msg, _StartConfig):
-                    config: dict[str, Any] = {
-                        "model": msg.opts.model,
-                        "language": msg.opts.language,
-                        "voice": msg.opts.voice,
-                        "audio_format": msg.opts.audio_format,
-                        "sample_rate": msg.opts.sample_rate,
-                        "speed": msg.opts.speed,
-                        "stream_id": msg.stream_id,
-                    }
-                    if msg.opts.bitrate is not None:
-                        config["bitrate"] = msg.opts.bitrate
-                    if msg.opts.reduce_silence:
-                        config["reduce_silence"] = True
-                    await self._ws.send_str(json.dumps(config))
-                elif isinstance(msg, _SendText):
-                    payload: dict[str, Any] = {"stream_id": msg.stream_id}
-                    if msg.text:
-                        payload["text"] = msg.text
-                    if msg.text_end:
-                        payload["text_end"] = True
-                    await self._ws.send_str(json.dumps(payload))
-                    if stream := self._streams.get(msg.stream_id):
-                        stream.read_deadline.expect_response(final=msg.text_end)
-                else:
-                    await self._ws.send_str(
-                        json.dumps({"stream_id": msg.stream_id, "cancel": True})
-                    )
-        except Exception as e:
-            logger.warning("Soniox TTS send loop error", exc_info=e)
-            self._fail_all(APIConnectionError("Soniox TTS send loop error"))
-        finally:
-            if not self._closed:
-                self._schedule_close("soniox-tts-conn-fail-close")
-
-    async def _recv_loop(self) -> None:
-        try:
-            while not self._closed and self._ws is not None and not self._ws.closed:
-                msg = await self._ws.receive()
-
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    self._fail_all(
-                        self._ws.close_error("Soniox TTS WebSocket connection closed unexpectedly")
-                    )
-                    break
-
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    continue
-
-                resp = json.loads(msg.data)
-                stream_id = resp.get("stream_id")
-
-                if not stream_id:
-                    # Connection-level message (only errors are expected here).
-                    if resp.get("error_code"):
-                        self._fail_all(
-                            APIStatusError(
-                                "Soniox TTS connection error",
-                                status_code=resp["error_code"],
-                                request_id=resp.get("request_id"),
-                                body=resp,
-                                detail=resp.get("error_message"),
-                            )
-                        )
-                        break
-                    continue
-
-                stream = self._streams.get(stream_id)
-                if stream is None:
-                    logger.debug(f"Ignoring message for unknown stream {stream_id}")
-                    continue
-
-                # Per-stream error.
-                if resp.get("error_code"):
-                    if not stream.waiter.done():
-                        stream.waiter.set_exception(
-                            APIStatusError(
-                                f"Soniox TTS stream error (stream_id={stream_id})",
-                                status_code=resp.get("error_code", 500),
-                                body=resp,
-                                detail=resp.get("error_message"),
-                            )
-                        )
-                    continue
-
-                audio_b64 = resp.get("audio")
-                if audio_b64:
-                    stream.read_deadline.audio_received()
-                    stream.emitter.push(base64.b64decode(audio_b64))
-
-                if resp.get("audio_end"):
-                    stream.read_deadline.progress()
-                    stream.audio_ended = True
-                    # end_segment() is called from SynthesizeStream._run's finally
-                    # block (covers cancel/error paths too).
-
-                if resp.get("terminated"):
-                    # Don't clobber an exception already raised on the error_code path.
-                    if not stream.waiter.done():
-                        # Server aborted on its own - no audio_end, no cancel from us.
-                        server_error = not stream.audio_ended and not stream.cancel_sent
-                        if server_error:
-                            # Raise so the framework retries, otherwise the
-                            # turn completes with no audio (silent muteness).
-                            logger.warning(
-                                "Soniox TTS stream terminated without audio_end",
-                                extra={"stream_id": stream_id},
-                            )
-                            stream.waiter.set_exception(
-                                APIError(
-                                    "Soniox TTS stream terminated without producing audio",
-                                    kind="server",
-                                    body=f"stream_id={stream_id}",
-                                )
-                            )
-                        else:
-                            # Normal end: audio_end seen, or our own cancel landed.
-                            stream.waiter.set_result(None)
-                    self._streams.pop(stream_id, None)
-        except Exception as e:
-            logger.warning("Soniox TTS recv loop error", exc_info=e)
-            self._fail_all(APIConnectionError("Soniox TTS recv loop error"))
-        finally:
-            if not self._closed:
-                self._schedule_close("soniox-tts-conn-fail-close")
-
-    async def _keepalive_loop(self) -> None:
-        try:
-            while not self._closed and self._ws is not None and not self._ws.closed:
-                await asyncio.sleep(KEEPALIVE_INTERVAL)
-                if not self._ws.closed:
-                    await self._ws.send_str(KEEPALIVE_MESSAGE)
-        except Exception as e:
-            logger.warning(f"Soniox TTS keepalive error: {e}")
-
-    def _fail_all(self, err: BaseException) -> None:
-        """Fail all registered streams and mark the connection non-current."""
-        self._error = self._error or err
-        for stream in list(self._streams.values()):
-            if not stream.waiter.done():
-                stream.waiter.set_exception(self._error)
-        self._streams.clear()
-        self._is_current = False
-
-    async def aclose(self) -> None:
-        """Close the connection, failing any remaining streams."""
-        if self._closed:
-            return
-        self._closed = True
-        self._is_current = False
-
-        for stream in list(self._streams.values()):
-            if not stream.waiter.done():
-                stream.waiter.set_exception(APIConnectionError("Soniox TTS connection closed"))
-        self._streams.clear()
-
-        self._input_queue.close()
-
-        if self._ws is not None and not self._ws.closed:
-            try:
-                await self._ws.close()
-            except Exception as e:
-                logger.debug(f"Error closing Soniox TTS WebSocket: {e}")
-
-        # a loop closing its own connection is not cancelled
-        await self._tasks.aclose()
+def _error(message: str, status: int, body: _Message) -> APIStatusError:
+    return APIStatusError(
+        message,
+        status_code=status,
+        request_id=body.get("request_id"),
+        body=body,
+        detail=body.get("error_message"),
+    )

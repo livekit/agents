@@ -215,17 +215,19 @@ class TTS(tts.TTS):
         pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """Update TTS options"""
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if is_given(model) and model != self._opts.model:
-            self._opts.model = model
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            model_changed = is_given(model) and model != self._opts.model
+            if is_given(model):
+                self._opts.model = model
+            if is_given(voice_id):
+                self._opts.voice_id = voice_id
+            if is_given(voice_settings):
+                self._opts.voice_settings = voice_settings
+
+        if model_changed:
             # the model is part of the socket URL: idle sockets close now, busy ones once
             # their streams ended
             self._mux.invalidate()
-
-        if is_given(voice_id):
-            self._opts.voice_id = voice_id
-        if is_given(voice_settings):
-            self._opts.voice_settings = voice_settings
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions

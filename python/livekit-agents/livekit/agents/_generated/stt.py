@@ -55,6 +55,11 @@ class SpeechEventType(StrEnum):
     """usage event, emitted periodically to indicate usage metrics"""
     END_OF_SPEECH = "end_of_speech"
     """indicate the end of speech, emitted when the user stops speaking"""
+    END_OF_SPEECH_PENDING = "end_of_speech_pending"
+    """The provider ended this utterance, but its final transcript is still owed.
+    The normalized EndOfSpeech follows the final or a connection boundary. A session may
+    bound its wait and commit provisional words without changing this utterance's identity.
+    """
 
 
 @dataclass
@@ -479,7 +484,7 @@ class RecognizeStream(ABC):
         self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
             "stt_stream", attempted, self
         )
-        self._core_speech = _core.SpeechState(
+        self._core_speech = _core.SpeechNormalizer(
             self.provider_vad, stt.capabilities.transcribes_after_speech_ends
         )
         self._core_attempt_task: asyncio.Task[None] | None = None

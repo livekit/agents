@@ -12,47 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Palabra realtime text-to-speech plugin for LiveKit Agents.
-
-Transport is the official ``palabra-ai`` SDK (``palabra_ai.TtsSession``).
-This module is the LiveKit adapter on top of it.
-Each stream owns its ``TtsSession`` so SDK cancellation cannot interrupt another stream.
-"""
+"""Palabra realtime text-to-speech plugin for LiveKit Agents, over Palabra's TTS socket."""
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
+import base64
 import os
-import sys
 import weakref
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
+from typing import Literal, NotRequired, TypedDict, assert_never
 
-from palabra_ai import (
-    AuthError,
-    Palabra,
-    PalabraError,
-    ServerError,
-    SessionError,
-    TaskError,
-    TtsChunk,
-    TtsSession,
-)
-
-from livekit.agents import (
-    APIConnectionError,
-    APIConnectOptions,
-    APIError,
-    APIStatusError,
-    APITimeoutError,
-    tokenize,
-    tts,
-    utils,
-)
+from livekit.agents import APIConnectOptions, APIError, tokenize, tts
 from livekit.agents.types import NOT_GIVEN, ErrorKind, NotGivenOr
 from livekit.agents.utils import is_given
 
-from .log import logger
 from .models import (
     DEFAULT_DEACCENT_STRENGTH,
     DEFAULT_LANGUAGE,
@@ -62,16 +35,21 @@ from .models import (
     TTSModels,
 )
 
+# Palabra's realtime TTS endpoint in each region
+TTS_URLS: dict[str, str] = {
+    "eu": "wss://stream.palabra.ai/tts-api/v1/text-to-speech/stream",
+    "us": "wss://stream.us.palabra.ai/tts-api/v1/text-to-speech/stream",
+}
+
 # A server error code's kind; any other code refused the request.
 _ERROR_KINDS: dict[str, ErrorKind] = {
     "SERVICE_UNAVAILABLE": "server",
     "RATE_LIMIT_EXCEEDED": "rate_limit",
 }
 
-# The server accepts at most 20 text messages per second per identity.
-# Above that it replies with a RATE_LIMIT_EXCEEDED error frame and does not synthesize the text.
-# A base-class retry replays all buffered text at once, so every send is spaced by this interval.
-# 0.06 s is ~16 messages per second, one step below the cap.
+# The server accepts at most 20 text messages per second per identity; above that it refuses
+# the text with RATE_LIMIT_EXCEEDED. Every stream of a TTS spaces its texts by this interval
+# (~16 messages per second, one step below the cap).
 _MIN_SEND_INTERVAL = 0.06
 
 
@@ -85,10 +63,58 @@ class _TTSOptions:
     sample_rate: int
 
 
-@dataclass
-class _SendRate:
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    last_send: float = 0.0
+# Palabra's TTS socket: its init, then each text a generation (`is_eos`) answered with audio
+# chunks, the last one marked. Each message declares only the fields read.
+
+
+class _ChunkData(TypedDict):
+    audio: NotRequired[str | None]
+    generation_id: NotRequired[str]
+    last_chunk: NotRequired[bool]
+
+
+class _AudioChunk(TypedDict):
+    message_type: Literal["audio_chunk"]
+    data: _ChunkData
+
+
+class _ErrorData(TypedDict):
+    code: NotRequired[str]
+    desc: NotRequired[str]
+
+
+class _Error(TypedDict):
+    message_type: Literal["error"]
+    data: NotRequired[_ErrorData | None]
+
+
+_Message = _AudioChunk | _Error
+
+
+class _VoiceOptions(TypedDict):
+    voice_id: str
+    deaccent_strength: float
+    speed: NotRequired[float]
+
+
+class _Output(TypedDict):
+    format: Literal["pcm"]
+    sample_rate: int
+
+
+class _Init(TypedDict):
+    type: Literal["init"]
+    language: str
+    model: str
+    voice_options: _VoiceOptions
+    output: _Output
+
+
+class _Text(TypedDict):
+    type: Literal["text"]
+    text: str
+    is_eos: bool
+    generation_id: str
 
 
 class TTS(tts.TTS):
@@ -103,6 +129,7 @@ class TTS(tts.TTS):
         model: TTSModels | str = DEFAULT_MODEL,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         region: str | None = None,
+        base_url: str | None = None,
     ) -> None:
         """Create a new instance of Palabra realtime TTS.
 
@@ -119,9 +146,11 @@ class TTS(tts.TTS):
             sample_rate: Output sample rate in Hz (``8000``-``48000``). Defaults to ``24000``.
             region: Palabra region (``"eu"`` / ``"us"``). Falls back to the
                 ``PALABRA_REGION`` environment variable, then ``"eu"``.
+            base_url: The TTS socket's URL, in place of the region's.
 
         Raises:
-            ValueError: no ``api_key`` argument and no ``PALABRA_API_KEY`` in the environment.
+            ValueError: no ``api_key`` argument and no ``PALABRA_API_KEY`` in the environment,
+                or an unknown region.
         """
         super().__init__(
             # the server caps a single text message at 1024 characters
@@ -135,8 +164,12 @@ class TTS(tts.TTS):
                 "Palabra api_key is required, either as an argument or set the"
                 " PALABRA_API_KEY environment variable"
             )
+        region = (region or os.environ.get("PALABRA_REGION") or "eu").lower()
+        if base_url is None and region not in TTS_URLS:
+            raise ValueError(f"Unknown Palabra region {region!r}; one of {', '.join(TTS_URLS)}")
 
-        self._client = Palabra(api_key, region=region)
+        self._api_key = api_key
+        self._url = base_url or TTS_URLS[region]
         self._opts = _TTSOptions(
             language=language,
             voice_id=voice_id,
@@ -145,8 +178,7 @@ class TTS(tts.TTS):
             model=model,
             sample_rate=sample_rate,
         )
-        self._send_rate = _SendRate()
-        self._closed = False
+        self._pacing = tts.WebSocketPacing(min_interval=_MIN_SEND_INTERVAL)
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
     @property
@@ -175,17 +207,17 @@ class TTS(tts.TTS):
         Each new stream receives the new settings. Streams already running keep
         the options they were created with.
         """
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if is_given(language):
-            self._opts.language = language
-        if is_given(voice_id):
-            self._opts.voice_id = voice_id
-        if is_given(speed):
-            self._opts.speed = speed
-        if is_given(deaccent_strength):
-            self._opts.deaccent_strength = deaccent_strength
-        if is_given(model):
-            self._opts.model = model
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            if is_given(language):
+                self._opts.language = language
+            if is_given(voice_id):
+                self._opts.voice_id = voice_id
+            if is_given(speed):
+                self._opts.speed = speed
+            if is_given(deaccent_strength):
+                self._opts.deaccent_strength = deaccent_strength
+            if is_given(model):
+                self._opts.model = model
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
@@ -193,174 +225,92 @@ class TTS(tts.TTS):
         return self._synthesize_with_stream(chunk, conn_options=conn_options)
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
-        if self._closed:
-            raise APIError("palabra tts is closed", kind="invalid_request")
-        stream = SynthesizeStream(
-            tts=self,
-            client=self._client,
-            opts=replace(self._opts),
-            send_rate=self._send_rate,
-            conn_options=conn_options,
-        )
+        stream = SynthesizeStream(tts=self, opts=replace(self._opts), conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
     async def aclose(self) -> None:
         """Close all active streams and their realtime TTS sessions."""
-        self._closed = True
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    """One streaming synthesis request with its own SDK ``TtsSession``.
+class SynthesizeStream(tts.WebSocketStream[_Message, _Init | _Text]):
+    """A stream on its own Palabra session: each text is a generation, and a segment is done
+    once its text ended and each of its generations sent its last chunk."""
 
-    Created by ``TTS.stream()`` / ``TTS.synthesize()``; not instantiated directly.
-    """
-
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        client: Palabra,
-        opts: _TTSOptions,
-        send_rate: _SendRate,
-        conn_options: APIConnectOptions,
-    ) -> None:
+    def __init__(self, *, tts: TTS, opts: _TTSOptions, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._client = client
+        self._palabra = tts
         self._opts = opts
-        self._send_rate = send_rate
+        self.pacing = tts._pacing
+        # the segment of each generation not yet finished, and the segments whose text ended
+        self._generations: dict[str, str] = {}
+        self._ended: set[str] = set()
+        self._count = 0
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-            mime_type="audio/pcm",
-            stream=True,
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        self._generations.clear()
+        self._ended.clear()
+        # the key authorizes the socket as its token
+        return tts.WebSocketTarget(self._palabra._url, params={"token": self._palabra._api_key})
+
+    def setup(self) -> _Init:
+        opts = self._opts
+        voice = _VoiceOptions(voice_id=opts.voice_id, deaccent_strength=opts.deaccent_strength)
+        if opts.speed is not None:
+            voice["speed"] = opts.speed
+        return _Init(
+            type="init",
+            language=opts.language,
+            model=str(opts.model),
+            voice_options=voice,
+            output=_Output(format="pcm", sample_rate=opts.sample_rate),
         )
 
-        send_complete = asyncio.Event()
-        generation_changed = asyncio.Event()
-        pending_gens: set[str] = set()
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Text | None:
+        match item:
+            case tts.SegmentStart() | tts.EndOfText():
+                return None
+            case tts.SegmentText():
+                self._count += 1
+                generation = f"{item.segment_id}-{self._count}"
+                self._generations[generation] = item.segment_id
+                return _Text(
+                    type="text", text=item.chunk.text, is_eos=True, generation_id=generation
+                )
+            case tts.SegmentEnd():
+                self._ended.add(item.segment_id)
+                self._complete(item.segment_id)
+                return None
+            case _:
+                assert_never(item)
 
-        async def _send_task(session: TtsSession) -> None:
-            loop = asyncio.get_running_loop()
-            async for chunk in self.input:
-                if not isinstance(chunk, tts.SpeechChunk):
-                    continue
-                # Each text message is a separate generation on the server.
-                gen_id = utils.shortuuid("PLBR_")
-                try:
-                    async with self._send_rate.lock:
-                        slot = max(self._send_rate.last_send + _MIN_SEND_INTERVAL, loop.time())
-                        self._send_rate.last_send = slot
-                    delay = slot - loop.time()
-                    if delay > 0:
-                        await asyncio.sleep(delay)
-                    # Audio can arrive before send_text returns.
-                    pending_gens.add(gen_id)
-                    generation_changed.set()
-                    self.mark_started()
-                    try:
-                        async with asyncio.timeout(self._conn_options.write_timeout):
-                            await session.send_text(chunk.text, eos=True, generation_id=gen_id)
-                    except TimeoutError:
-                        raise APITimeoutError(timeout="write") from None
-                except BaseException:
-                    pending_gens.discard(gen_id)
-                    raise
-            send_complete.set()
-            generation_changed.set()
-
-        async def _recv_task() -> None:
-            got_audio = False
-            segment_started = False
-            while not (send_complete.is_set() and not pending_gens):
-                if not pending_gens:
-                    await generation_changed.wait()
-                    generation_changed.clear()
-                    continue
-                try:
-                    event = await session.receive(timeout=self._conn_options.read_timeout)
-                except TimeoutError:
-                    # Preserve partial audio when the provider omits its final marker.
-                    if got_audio:
-                        break
-                    raise APITimeoutError(timeout="read") from None
-                if event is None:
-                    raise APIConnectionError("palabra tts session closed unexpectedly")
-                if isinstance(event, ServerError):
-                    raise APIError(
-                        f"palabra tts error: {event.code}",
-                        kind=_ERROR_KINDS.get(event.code, "invalid_request"),
-                    )
-                if not isinstance(event, TtsChunk) or event.generation_id not in pending_gens:
-                    continue
-                if event.audio:
-                    got_audio = True
-                    if not segment_started:
-                        # One segment per stream: the agent opens a fresh stream() per reply.
-                        output_emitter.start_segment(segment_id=request_id)
-                        segment_started = True
-                    output_emitter.push(event.audio)
-                if event.last_chunk:
-                    pending_gens.discard(event.generation_id)
-            output_emitter.end_input()
-
-        session = self._client.tts(
-            language=self._opts.language,
-            voice_id=self._opts.voice_id,
-            speed=self._opts.speed,
-            deaccent_strength=self._opts.deaccent_strength,
-            model=self._opts.model,
-            format="pcm",
-            sample_rate=self._opts.sample_rate,
-        )
-        try:
-            try:
-                async with asyncio.timeout(self._conn_options.connect_timeout):
-                    await session.__aenter__()
-            except TimeoutError:
-                raise APITimeoutError(timeout="connect") from None
-            async with utils.aio.TaskSet() as tasks:
-                await asyncio.gather(tasks.spawn(_send_task(session)), tasks.spawn(_recv_task()))
-        except asyncio.CancelledError:
-            if pending_gens:
-                with contextlib.suppress(Exception):
-                    async with asyncio.timeout(self._conn_options.write_timeout):
-                        await session.cancel()
-            raise
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except AuthError as e:
-            raise APIStatusError(str(e), status_code=401, request_id=None, body=None) from None
-        except TaskError as e:
-            # `code` is a short server enum (e.g. VALIDATION_ERROR); `desc` is free-form
-            # server text.
+    def on_message(self, message: _Message) -> None:
+        if message["message_type"] == "audio_chunk":
+            data = message["data"]
+            # a generation not of this session (or already finished) is not played
+            segment = self._generations.get(data.get("generation_id", ""))
+            if segment is None:
+                return
+            if audio := data.get("audio"):
+                self.report(tts.SegmentAudio(segment, base64.b64decode(audio)))
+            if data.get("last_chunk"):
+                del self._generations[data.get("generation_id", "")]
+                self._complete(segment)
+        elif message["message_type"] == "error":
+            error = message.get("data") or _ErrorData()
+            code = error.get("code", "UNKNOWN_ERROR")
             raise APIError(
-                f"palabra tts error: {e.code}",
-                kind=_ERROR_KINDS.get(e.code, "invalid_request"),
-                detail=e.desc,
-            ) from None
-        except (SessionError, PalabraError) as e:
-            # The SDK interpolates the underlying websockets error into its message, and the
-            # connect URL carries the API key as a ?token= query parameter -- so neither
-            # str(e) nor the __cause__ chain is safe to surface.
-            raise APIConnectionError(type(e).__name__) from None
-        finally:
-            primary = sys.exception()
-            cleanup_error: BaseException | None = None
-            try:
-                await session.close()
-            except BaseException as error:
-                if primary is None:
-                    cleanup_error = error
-                else:
-                    # SDK exceptions can include the URL's auth token; report only the class.
-                    logger.error("palabra TTS cleanup failed (%s)", type(error).__name__)
-            if cleanup_error is not None:
-                raise cleanup_error
+                f"palabra tts error: {code}",
+                kind=_ERROR_KINDS.get(code, "invalid_request"),
+                detail=error.get("desc"),
+            )
+        else:
+            assert_never(message)
+
+    def _complete(self, segment_id: str) -> None:
+        if segment_id in self._ended and segment_id not in self._generations.values():
+            self._ended.discard(segment_id)
+            self.report(tts.SegmentDone(segment_id))

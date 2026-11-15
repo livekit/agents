@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator
+from pydantic import BaseModel
 
 TTSModels = Literal[
     "eleven_monolingual_v1",
@@ -16,13 +16,18 @@ TTSModels = Literal[
     "eleven_v4_turbo",
 ]
 
-# Synthesized via text-to-dialogue instead of text-to-speech (see tts.py).
-DIALOGUE_TTS_MODEL_PREFIXES = ("eleven_v3", "eleven_v4")
+# The websocket a model streams on: text-to-speech multi-stream-input for the speech models,
+# text-to-dialogue multi-stream-input for eleven_v3, and text-to-dialogue stream-input (one
+# context a socket) for eleven_v4, which text-to-dialogue multi-stream-input does not accept.
+TTSEndpoint = Literal["speech", "dialogue", "dialogue_single"]
 
 
-def is_dialogue_model(model: str) -> bool:
-    """Whether `model` must be synthesized via the text-to-dialogue API."""
-    return model.startswith(DIALOGUE_TTS_MODEL_PREFIXES)
+def tts_endpoint(model: str) -> TTSEndpoint:
+    if model.startswith("eleven_v4"):
+        return "dialogue_single"
+    if model.startswith("eleven_v3"):
+        return "dialogue"
+    return "speech"
 
 
 # https://elevenlabs.io/docs/api-reference/text-to-speech/convert#request.query.output_format
@@ -72,35 +77,3 @@ class STTBatchResponse(BaseModel):
     text: str
     language_code: str | None = None
     words: list[STTWord] | None = None
-
-
-class TTSAlignment(BaseModel):
-    chars: list[str] | None = None
-    starts_ms: list[float] | None = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "charStartTimesMs", "charsStartTimesMs", "char_start_times_ms"
-        ),
-    )
-    durations_ms: list[float] | None = Field(
-        default=None,
-        validation_alias=AliasChoices("charDurationsMs", "charsDurationsMs", "char_durations_ms"),
-    )
-
-
-class TTSFrame(BaseModel):
-    # the multi-stream API spells its keys in camelCase, text-to-dialogue in snake_case
-    context_id: str | None = Field(
-        default=None, validation_alias=AliasChoices("contextId", "context_id")
-    )
-    audio: str | None = None
-    error: object = None
-    is_final: bool = Field(default=False, validation_alias=AliasChoices("isFinal", "is_final"))
-    alignment: TTSAlignment | None = None
-    normalized_alignment: TTSAlignment | None = Field(default=None, alias="normalizedAlignment")
-
-    @field_validator("is_final", mode="before")
-    @classmethod
-    def _null_is_not_final(cls, value: object) -> object:
-        # ElevenLabs sends `"isFinal": null` on every frame but the last
-        return False if value is None else value

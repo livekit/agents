@@ -12,8 +12,10 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectOptions, APIError, http
+from livekit.agents import APIConnectOptions, APIError, _core, http
+from livekit.agents.tts import SentenceStreamPacer
 from livekit.plugins.sarvam import tts as sarvam_tts
+from tests.fakes import FakeSentenceTokenizer, until
 
 NO_RETRY = APIConnectOptions(max_retry=0)
 PCM = b"\x34\x12" * 1100
@@ -33,10 +35,10 @@ def _speaking_peer(
     keys: list[str] | None = None,
     *,
     audio: bytes = PCM,
-    close_when_done: bool = False,
     closed: asyncio.Event | None = None,
 ) -> Handler:
-    """Answers every flush with `audio` and a final event, recording configs and API keys."""
+    """Answers every flush with `audio` and a final event, recording configs and API keys; with
+    `closed`, drops the socket at its first keepalive ping, as Sarvam drops an idle socket."""
 
     async def handle(request: web.Request) -> web.WebSocketResponse:
         if keys is not None:
@@ -51,10 +53,9 @@ def _speaking_peer(
                 encoded = base64.b64encode(audio).decode()
                 await ws.send_json({"type": "audio", "data": {"audio": encoded}})
                 await ws.send_json({"type": "event", "data": {"event_type": "final"}})
-                if close_when_done:  # Sarvam drops a connection once it sits idle
-                    await ws.close()
-                    if closed is not None:
-                        closed.set()
+            elif message["type"] == "ping" and closed is not None:
+                await ws.close()
+                closed.set()
         return ws
 
     return handle
@@ -101,7 +102,7 @@ async def test_v3_config_matches_the_model_and_codec_and_language_updates_apply(
     https://github.com/livekit/agents/pull/3413 https://github.com/livekit/agents/pull/5086
     """
     configs: list[dict[str, object]] = []
-    async with _ws_url(_speaking_peer(configs, close_when_done=True)) as url:
+    async with _ws_url(_speaking_peer(configs)) as url:
         model = _tts(url)
         first = await _speak(model, "Hello there.")
         model.update_options(target_language_code="hi-IN")
@@ -122,10 +123,11 @@ async def test_reconnects_after_the_server_drops_an_idle_socket() -> None:
     """
     keys: list[str] = []
     closed = asyncio.Event()
-    async with _ws_url(_speaking_peer(keys=keys, close_when_done=True, closed=closed)) as url:
+    async with _ws_url(_speaking_peer(keys=keys, closed=closed)) as url:
         model = _tts(url)
         first = await _speak(model, "Hello there.")
-        await closed.wait()  # the pooled socket acknowledged the server's close
+        _core.skip_host_time(31)  # the idle socket's keepalive ping goes; Sarvam drops it
+        await until(closed.is_set, "Sarvam drops the idle socket")
         second = await _speak(model, "Hello again.")
         await model.aclose()
 
@@ -235,10 +237,6 @@ async def test_an_error_frame_status_decides_retryability_and_hides_provider_tex
     assert caught.value.detail == frame["message"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/issues/6774 reproduces: v3 accepts the v2 pace range",
-)
 def test_bulbul_v3_refuses_a_pace_the_api_rejects() -> None:
     """A pace outside bulbul:v3's 0.5-2.0 fails locally, not as a 400 on every request.
 
@@ -246,3 +244,25 @@ def test_bulbul_v3_refuses_a_pace_the_api_rejects() -> None:
     """
     with pytest.raises(ValueError, match="pace"):
         sarvam_tts.TTS(api_key="sk_test", model="bulbul:v3", pace=2.5)
+
+
+async def test_a_refused_update_changes_nothing() -> None:
+    """A language beside a pace bulbul:v3 refuses is not applied, nor the text options given
+    with them: the next socket is configured as before."""
+    configs: list[dict[str, object]] = []
+    async with _ws_url(_speaking_peer(configs)) as url:
+        model = _tts(url)
+        before = model.options
+        with pytest.raises(ValueError, match="pace"):
+            model.update_options(
+                target_language_code="hi-IN",
+                pace=2.5,
+                sentence_tokenizer=FakeSentenceTokenizer(),
+                pacing=SentenceStreamPacer(min_remaining_audio=1.25),
+            )
+        await _speak(model, "Hello there.")
+        await model.aclose()
+
+    assert [c["target_language_code"] for c in configs] == ["en-IN"]
+    assert model.options.sentence_tokenizer is before.sentence_tokenizer
+    assert model.options.pacing == before.pacing

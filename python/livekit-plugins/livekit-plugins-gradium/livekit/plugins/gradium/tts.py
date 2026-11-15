@@ -161,13 +161,13 @@ class TTS(tts.TTS):
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if is_given(voice):
-            self._opts.voice = voice
-        if is_given(voice_id):
-            self._opts.voice_id = voice_id
-        if is_given(json_config):
-            self._opts.json_config = json_config
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            if is_given(voice):
+                self._opts.voice = voice
+            if is_given(voice_id):
+                self._opts.voice_id = voice_id
+            if is_given(json_config):
+                self._opts.json_config = json_config
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         return SynthesizeStream(tts=self, opts=replace(self._opts), conn_options=conn_options)

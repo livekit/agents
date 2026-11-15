@@ -167,17 +167,17 @@ class TTS(tts.TTS):
             pacing (SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or ``None`` to
                 send each chunk as soon as it is split.
         """
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        connection_params_changed = False
-        if is_given(lang_code):
-            self._opts.lang_code = LanguageCode(lang_code)
-            connection_params_changed = True
-        if is_given(voice_id):
-            self._opts.voice_id = voice_id
-            connection_params_changed = True
-        if is_given(speed):
-            self._opts.speed = speed
-            connection_params_changed = True
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            connection_params_changed = False
+            if is_given(lang_code):
+                self._opts.lang_code = LanguageCode(lang_code)
+                connection_params_changed = True
+            if is_given(voice_id):
+                self._opts.voice_id = voice_id
+                connection_params_changed = True
+            if is_given(speed):
+                self._opts.speed = speed
+                connection_params_changed = True
 
         if connection_params_changed:
             # lang_code, voice_id and speed are part of the socket URL
@@ -325,11 +325,12 @@ def _parse_sse_message(message: str) -> _Response | None:
     - `data: { "status_code": 200, "data": {"audio": ... } }`
     """
     message = message.strip()
-
-    if not message or "data" not in message:
+    # only a data line carries a response: an event name (one Neuphonic added since), an id or
+    # a comment is not read
+    if not message.startswith("data:"):
         return None
 
-    _, value = message.split(": ", 1)
+    value = message[len("data:") :].strip()
     try:
         message_dict = _RESPONSE.validate_json(value)
     except ValidationError as error:

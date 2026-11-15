@@ -14,7 +14,7 @@ import contextvars
 import copy
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Generic, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
 
 from typing_extensions import Unpack
 
@@ -36,6 +36,8 @@ from .._generated.voice_session import UpdateAgentArgs
 from ..llm import (
     ChatContext,
     ChatItem,
+    Tool,
+    Toolset,
 )
 from ..stt import STT
 from ..tts import TTS
@@ -87,7 +89,6 @@ if TYPE_CHECKING:
     from ..storage.context import ContextStore, _SessionBinding
     from ..storage.session_state import BoundContext
     from ._session_bindings import SessionHost
-    from ._session_callbacks import _AgentHooks
     from .amd import AMD
     from .io import TurnHandlingOptions
 
@@ -102,14 +103,14 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     _thread: Thread | None
     _execution_id: str
     _conn_options: SessionConnectOptions
-    _options: _core.SessionOptions
+    _session_options: _core.SessionOptions
     _native: _core._core_SessionOwner
     # the native owner holds these weakly: they reach the session, which owns it
     _host: SessionHost | None
     _hooks: _AgentHooks | None
     _stt_context: STTContextOptions | None
     _llm: llm.LLM | llm.RealtimeModel | None
-    _tools: list[llm.Tool | llm.Toolset]
+    _tools: list[Tool | Toolset]
     _default_vad: VAD | None
     _turn_detector: Any
     _video_sampler: VoiceActivityVideoSampler | None
@@ -136,7 +137,7 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         vad: NotGivenOr[VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[llm.LLM | llm.RealtimeModel | str] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | str] = NOT_GIVEN,
-        tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool | Toolset]] = NOT_GIVEN,
         context: Context_T | BoundContext[Context_T] | None = None,
         thread: Thread | None = None,
         video_sampler: NotGivenOr[VoiceActivityVideoSampler | None] = NOT_GIVEN,
@@ -204,7 +205,7 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         return self._llm
 
     @property
-    def tools(self) -> list[llm.Tool | llm.Toolset]:
+    def tools(self) -> list[Tool | Toolset]:
         return list(self._tools)
 
     @property
@@ -251,6 +252,10 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     def user_state(self) -> UserState:
         """``"listening"`` until the person's first state change; read as ``history`` is."""
         return self._state.user_state
+
+    @property
+    def _options(self) -> _core.SessionOptions:
+        return self._session_options
 
     @property
     def _core(self) -> _NativeSession:
@@ -313,7 +318,7 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         *,
         room: NotGivenOr[rtc.Room | None] = NOT_GIVEN,
         room_options: NotGivenOr[RoomOptions] = NOT_GIVEN,
-        chat_ctx: llm.ChatContext | None = None,
+        chat_ctx: ChatContext | None = None,
     ) -> None:
         """Start the session on ``room`` (the job's room by default, an offline room without
         one) with ``agent`` driving.
@@ -471,9 +476,16 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         self, event: EventTypes, callback: None = None
     ) -> Callable[[_CallbackT], _CallbackT]: ...
 
+    @overload
     def on(
-        self, event: EventTypes, callback: _CallbackT | None = None
-    ) -> _CallbackT | Callable[[_CallbackT], _CallbackT]:
+        self, event: EventTypes, callback: Callable[..., object] | None = None
+    ) -> Callable[..., object]: ...
+
+    def on(
+        self,
+        event: EventTypes | Literal["metrics_collected"],
+        callback: Callable[..., object] | None = None,
+    ) -> Callable[..., object]:
         if event == "metrics_collected":
             raise ValueError(
                 "VoiceSession has no 'metrics_collected' event in 2.0: use "
@@ -491,11 +503,12 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     def _recorded_events(self) -> list[dict[str, Any]]:
         return [copy.deepcopy(event) for event in self._report_event_snapshots()]
 
-    def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore[override]
+    def emit(self, event: EventTypes, *args: AgentEvent) -> None:
         from ._session_callbacks import record_snapshot
 
-        record_snapshot(self, arg)
-        super().emit(event, arg)
+        for arg in args:
+            record_snapshot(self, arg)
+        super().emit(event, *args)
 
 
 class VoiceTask(Generic[Output_T, Context_T]):

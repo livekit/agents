@@ -415,8 +415,8 @@ impl VoiceDriver {
             None => self.step.wall(),
         };
         let text = text.unwrap_or(&info.new_transcript);
-        let mut user =
-            ChatMessage::text(self.session.ids.mint("item"), Role::User, text, created_at);
+        let id = self.user_input_item_id(info.turn_id);
+        let mut user = ChatMessage::text(id, Role::User, text, created_at);
         user.transcript_confidence = Some(info.transcript_confidence);
         // The reply's `e2e_latency` is measured from here.
         let m = &info.metrics;
@@ -1114,7 +1114,8 @@ impl VoiceDriver {
 
     /// A reply the person cut whose words are out and whose tools still run is done now, and the
     /// floor is free: the person is not held for a tool. Its reply run stays, so a result that
-    /// lands later commits (with no follow-up), and its watchdog still cancels what hangs. Not
+    /// lands later commits (with no follow-up). Application tools are not subject to generation's
+    /// interruption watchdog; session shutdown owns their bounded cleanup. Not
     /// while a VoiceTask awaits the speech. With storage, only persistence waits: the turn keeps
     /// its hold on the partition and commits in turn order.
     pub(crate) fn release_to_running_tools(&mut self, now: Ts, speech: SpeechId) {
@@ -1128,15 +1129,9 @@ impl VoiceDriver {
         if !in_tools {
             return;
         }
-        let watchdog = Timer::InterruptionTimeout(speech);
-        let at = self.deadline(watchdog);
         self.activity.outliving_tools.insert(speech);
         self.record_trace(SpeechStep::ReleasedToTools { speech });
         self.release_speech(now, speech);
-        if let Some(at) = at {
-            self.set_deadline(watchdog, at);
-            self.record_trace(SpeechStep::WatchdogArmed { speech, at });
-        }
     }
 
     /// The end of a reply released at its interruption: its run and watchdog go too.

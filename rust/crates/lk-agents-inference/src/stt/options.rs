@@ -23,8 +23,6 @@ const WORD_ALIGNED_MODELS: &[&str] = &[
     "assemblyai/universal-3-5-pro",
     "assemblyai/universal-3-6-pro",
     "xai/stt-1",
-    "speechmatics/enhanced",
-    "speechmatics/standard",
 ];
 
 /// Models that natively carry `agent_context` (the AssemblyAI U3 Pro family).
@@ -33,6 +31,10 @@ const ASSEMBLYAI_CARRYOVER_MODELS: &[&str] =
 
 /// Speechmatics' model that detects turns server-side: no client VAD, no keyterm prompting.
 const SPEECHMATICS_SERVER_TURNS: &str = "speechmatics/linden-1";
+
+/// Speechmatics' medical model: turns close on the client VAD's finalize, and it takes no
+/// keyterms (`additional_vocab`).
+const SPEECHMATICS_OAK: &str = "speechmatics/oak-1";
 
 const DIARIZATION_EXTRA_KEYS: &[&str] = &[
     "diarize",        // Deepgram, xAI
@@ -82,7 +84,7 @@ pub fn keyterms_extra_for_model(
     let extra = extra_kwargs.unwrap_or(&empty);
 
     let key = match InferenceProvider::of_model(model)? {
-        _ if model == SPEECHMATICS_SERVER_TURNS => return None,
+        _ if model == SPEECHMATICS_SERVER_TURNS || model == SPEECHMATICS_OAK => return None,
         InferenceProvider::Deepgram => "keyterm",
         InferenceProvider::Cartesia if model == "cartesia/ink-2" => "keyterm",
         InferenceProvider::Assemblyai => "keyterms_prompt",

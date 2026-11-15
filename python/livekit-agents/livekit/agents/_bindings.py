@@ -95,7 +95,7 @@ def refuse_overrides(cls: type, hooks: tuple[str, ...], node: str) -> None:
         return
     owner = next(base for base in cls.__mro__ if _framework(base))
     for name in hooks:
-        if getattr(cls, name) is not getattr(owner, name):
+        if getattr(cls, name, None) is not getattr(owner, name, None):
             raise TypeError(
                 f"{cls.__qualname__} overrides {name}, which {owner.__qualname__} runs natively;"
                 f" customize its output in {node} instead"

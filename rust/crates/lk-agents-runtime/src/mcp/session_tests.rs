@@ -6,6 +6,7 @@
 use super::*;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
+use lk_agents_abi::llm::mcp::McpContent;
 use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
 use rmcp::model::*;
 use rmcp::service::RoleClient;
@@ -28,6 +29,8 @@ pub(super) struct Peer {
     lost: Notify,
     cancelled: Notify,
     silent: bool,
+    /// Tool list pages answered after two seconds.
+    slow_lists: bool,
     /// Tool list pages served.
     lists: AtomicUsize,
 }
@@ -40,6 +43,8 @@ pub(crate) struct Server {
     silent: AtomicBool,
     /// Connections refused while set.
     pub(crate) refuse: AtomicBool,
+    /// Tool list pages answered late while set.
+    slow_lists: AtomicBool,
     attempts: AtomicUsize,
 }
 
@@ -61,6 +66,7 @@ impl Server {
             lost: Notify::new(),
             cancelled: Notify::new(),
             silent: self.silent.load(Ordering::SeqCst),
+            slow_lists: self.slow_lists.load(Ordering::SeqCst),
             lists: AtomicUsize::new(0),
         });
         self.peers.lock().push(peer.clone());
@@ -120,10 +126,10 @@ impl Peer {
                 result.server_info = Implementation::new("regression", "1");
                 ServerResult::InitializeResult(result)
             }
-            ClientRequest::ListToolsRequest(request) => {
+            ClientRequest::ListToolsRequest(list) => {
                 self.lists.fetch_add(1, Ordering::SeqCst);
-                let second = request.params.and_then(|p| p.cursor).as_deref() == Some("second");
-                ServerResult::ListToolsResult(ListToolsResult {
+                let second = list.params.and_then(|p| p.cursor).as_deref() == Some("second");
+                let page = ServerResult::ListToolsResult(ListToolsResult {
                     tools: vec![Tool::new(
                         if second { "second" } else { "first" },
                         "test tool",
@@ -131,7 +137,16 @@ impl Peer {
                     )],
                     next_cursor: (!second).then(|| "second".into()),
                     ..Default::default()
-                })
+                });
+                if self.slow_lists {
+                    let (send, id) = (self.send.clone(), request.id);
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        let _ = send.send(reply(id, page)).await;
+                    });
+                    return;
+                }
+                page
             }
             ClientRequest::CallToolRequest(call) => {
                 self.called.notify_one();
@@ -223,7 +238,15 @@ async fn connected_with_timeout(request: Option<f64>) -> (Arc<McpSession>, Arc<S
     (session, server)
 }
 
-async fn call(session: &McpSession, name: &str) -> Result<serde_json::Value, McpError> {
+/// A result's lone text block.
+fn text_of(result: &McpCallResult) -> &str {
+    match &result.content[..] {
+        [McpContent::Text(block)] => &block.text,
+        other => panic!("not one text block: {other:?}"),
+    }
+}
+
+async fn call(session: &McpSession, name: &str) -> Result<McpCallResult, McpError> {
     session.call_tool(name.into(), Default::default(), None, None, None).await
 }
 
@@ -260,7 +283,7 @@ async fn discovery_follows_the_next_cursor() {
     let (session, _) = connected().await;
     let tools = session.list_tools().await.unwrap();
     session.close().await;
-    assert_eq!(tools.as_array().unwrap().len(), 2, "discovery must include the second page");
+    assert_eq!(tools.len(), 2, "discovery must include the second page");
 }
 
 #[tokio::test]
@@ -309,7 +332,7 @@ async fn a_lost_connection_reconnects_on_the_next_call() {
     let (session, server) = connected().await;
     assert!(call(&session, "lose").await.is_err());
     let result = call(&session, "echo").await.unwrap();
-    assert_eq!(result["content"][0]["text"], "hello");
+    assert_eq!(text_of(&result), "hello");
     assert_eq!(server.attempts.load(Ordering::SeqCst), 2);
     session.close().await;
 }
@@ -328,7 +351,7 @@ async fn a_failed_reconnect_fails_calls_fast_until_its_backoff_ends() {
     assert!(session.retry_in() > 0.0);
     server.refuse.store(false, Ordering::SeqCst);
     tokio::time::sleep(Duration::from_secs_f64(session.retry_in())).await;
-    assert_eq!(call(&session, "echo").await.unwrap()["content"][0]["text"], "hello");
+    assert_eq!(text_of(&call(&session, "echo").await.unwrap()), "hello");
     session.close().await;
 }
 
@@ -352,8 +375,42 @@ async fn init_timeout_bounds_a_silent_handshake() {
 #[tokio::test(start_paused = true)]
 async fn progress_resets_the_request_timeout() {
     let (session, _) = connected_with_timeout(Some(1.0)).await;
-    let result = call(&session, "slow").await.unwrap();
-    assert_eq!(result["content"][0]["text"], "done");
+    assert_eq!(text_of(&call(&session, "slow").await.unwrap()), "done");
+    session.close().await;
+}
+
+// Catches: a listing cut off by `request_timeout`, a call's limit, emptying the toolset of a server
+// that lists within `init_timeout`.
+#[tokio::test(start_paused = true)]
+async fn init_timeout_bounds_a_listing_slower_than_the_request_timeout() {
+    let server = Arc::new(Server::default());
+    server.slow_lists.store(true, Ordering::SeqCst);
+    let session = McpSession::new(&ProcessEnv::current_runtime(), 5.0, Some(1.0), None).unwrap();
+    let factory = server.clone();
+    session.connect_fake(move || factory.connect()).await.unwrap();
+    assert_eq!(session.list_tools().await.unwrap().len(), 2);
+    session.close().await;
+}
+
+// Catches: a call's limit timed by real time instead of the session's clock, which a host that
+// skips time (`_core.skip_host_time`) or a virtual-time test cannot move.
+#[tokio::test]
+async fn the_request_timeout_runs_on_the_session_clock() {
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let env = ProcessEnv { clock: clock.clone(), ..ProcessEnv::current_runtime() };
+    let session = Arc::new(McpSession::new(&env, 5.0, Some(30.0), None).unwrap());
+    let server = Arc::new(Server::default());
+    let factory = server.clone();
+    session.connect_fake(move || factory.connect()).await.unwrap();
+    let caller = session.clone();
+    let call = tokio::spawn(async move { call(&caller, "wait").await });
+    server.peer().called.notified().await;
+    clock.advance(Duration::from_secs(30));
+    let result = tokio::time::timeout(Duration::from_secs(1), call).await;
+    assert!(
+        matches!(result, Ok(Ok(Err(McpError::Timeout { .. })))),
+        "a skipped limit left the call waiting: {result:?}"
+    );
     session.close().await;
 }
 
@@ -386,11 +443,11 @@ async fn a_dropped_call_is_cancelled_on_the_server() {
 #[tokio::test(start_paused = true)]
 async fn listing_keeps_the_last_tools_while_the_server_is_unreachable() {
     let (session, server) = connected().await;
-    assert_eq!(session.list_tools().await.unwrap().as_array().unwrap().len(), 2);
+    assert_eq!(session.list_tools().await.unwrap().len(), 2);
     server.refuse.store(true, Ordering::SeqCst);
     assert!(call(&session, "lose").await.is_err());
     let tools = session.list_tools().await.unwrap();
-    assert_eq!(tools.as_array().unwrap().len(), 2);
+    assert_eq!(tools.len(), 2);
     session.close().await;
 }
 
@@ -456,9 +513,8 @@ mod lifecycle {
     use std::time::Duration;
 
     use crate::mcp::McpSession;
-    use lk_agents_abi::llm::mcp::{McpError, McpSession as _};
+    use lk_agents_abi::llm::mcp::{JsonObject, McpError, McpSession as _};
     use lk_agents_net::env::ProcessEnv;
-    use serde_json::Map;
 
     type Result<T = ()> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -509,11 +565,13 @@ mod lifecycle {
 
     async fn exercise(session: Arc<McpSession>, peer: &Peer) -> Result {
         let tools = session.list_tools().await?;
-        let names: Vec<_> = tools.as_array().unwrap().iter().map(|tool| &tool["name"]).collect();
-        assert!(names.contains(&&"echo".into()), "first page: {names:?}");
-        assert!(names.contains(&&"exit".into()), "second page: {names:?}");
-        let error =
-            session.call_tool("reject".into(), Map::new(), None, None, None).await.unwrap_err();
+        let names: Vec<_> = tools.iter().map(|tool| tool.name.as_str()).collect();
+        assert!(names.contains(&"echo"), "first page: {names:?}");
+        assert!(names.contains(&"exit"), "second page: {names:?}");
+        let error = session
+            .call_tool("reject".into(), JsonObject::default(), None, None, None)
+            .await
+            .unwrap_err();
         match &error {
             McpError::Protocol { code, data, cause, .. } => {
                 assert_eq!(*code, -32602);
@@ -524,7 +582,7 @@ mod lifecycle {
         }
         let caller = session.clone();
         let call = tokio::spawn(async move {
-            caller.call_tool("wait".into(), Map::new(), None, None, None).await
+            caller.call_tool("wait".into(), JsonObject::default(), None, None, None).await
         });
         peer.receipt_when("journal.jsonl", |text| text.contains(r#""event": "entered""#)).await?;
         session.close().await;

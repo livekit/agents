@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import _MISSING_TYPE, MISSING, dataclass, field, fields, is_dataclass
@@ -145,9 +146,23 @@ class ContextStore(_context_facades.ContextStore):
                 validated[name] = value
             except Exception as exc:
                 raise NotSerializable(f"persisted field `{name}`: {exc}") from exc
+        session_name = _session_field(context)
+        session = getattr(context, session_name) if session_name is not None else None
+        hydrated = self._sessions.get(id(context))
+        if session is not None and not isinstance(session, SessionState):
+            raise TypeError("a session field must contain SessionState")
+        replacement = session if hydrated is not None and session is not hydrated[1] else None
+        if replacement is not None and self._session_binding is not None:
+            raise ValueError("cannot replace session state while it is bound")
         values = await self._activation.save(
-            self._scope_id, _identity(context), loaded.revision, declarations
+            self._scope_id,
+            _identity(context),
+            loaded.revision,
+            declarations,
+            json.loads(replacement._to_json()) if replacement is not None else None,
         )
+        if replacement is not None:
+            self._sessions[id(context)] = (context, replacement)
         self._publish(validated, values.revision)
 
     def _session_history(self) -> list[ChatItem] | None:

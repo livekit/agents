@@ -1,3 +1,11 @@
+//! Decides whether user activity or a host command pauses or interrupts eligible speeches.
+//!
+//! Owns interruption guards, false-interruption recovery and interruption waiters. Decisions
+//! target explicit speech IDs; generation stopping and output clearing return their own facts.
+//! Ordinary interruption does not cancel running tool bodies. Each body retains its original
+//! SpeechHandle, so observing interruption never follows the session's newer active speech.
+//! Close and cleanup bounds are separate lifecycle inputs, not repeated interruption policy.
+
 use crate::agent_session::effects::{AudioOp, VoiceEffect};
 use crate::agent_session::effects::{GateCause, GateOp, Timer};
 use crate::agent_session::machine::activity::scheduling::{PreemptiveDiscard, SpeechId, Status};
@@ -372,11 +380,8 @@ impl VoiceDriver {
         // No watchdog after the close: every handle is interrupted there and the loop exits. Nor
         // for a turn already reported: its save's answer ends the speech.
         let closing = self.session.closing_past_edge();
-        let watchdog = Timer::InterruptionTimeout(speech);
-        if !closing && !self.storage_awaits_save(speech) && self.deadline(watchdog).is_none() {
-            let at = now.saturating_add(HOST_TEARDOWN_TIMEOUT);
-            self.set_deadline(watchdog, at);
-            self.record_trace(SpeechStep::WatchdogArmed { speech, at });
+        if !closing {
+            self.arm_generation_cleanup(now, speech);
         }
         // A realtime server keeps generating (into its own mirror) until told not to.
         if realtime {
@@ -391,6 +396,22 @@ impl VoiceDriver {
             self.release_to_running_tools(now, speech);
         }
         InterruptOutcome::Now
+    }
+
+    /// Bounds interrupted generation cleanup, never application tools or acknowledged saves.
+    /// A tool that finishes last starts a fresh cleanup bound for the remaining framework work.
+    pub(crate) fn arm_generation_cleanup(&mut self, now: Ts, speech: SpeechId) {
+        let watchdog = Timer::InterruptionTimeout(speech);
+        if self.session.closing_past_edge()
+            || self.storage_awaits_save(speech)
+            || self.activity.tools.live(speech).next().is_some()
+            || self.deadline(watchdog).is_some()
+        {
+            return;
+        }
+        let at = now.saturating_add(HOST_TEARDOWN_TIMEOUT);
+        self.set_deadline(watchdog, at);
+        self.record_trace(SpeechStep::WatchdogArmed { speech, at });
     }
 
     /// The one place the loop moves the playout sink. No sink, no op.

@@ -1,5 +1,6 @@
 use crate::workflows::effects::{TransferEffects, TransferToolEffect};
 use crate::workflows::render;
+use lk_agents_abi::llm::provider_format::tools::RawFunctionDescription;
 use lk_agents_abi::voice::workflows::{InstructionsArg, IoEnableState, TwilioDial};
 use lk_agents_abi::{ChatContext, Maybe};
 use serde_json::{Value, json};
@@ -73,22 +74,21 @@ pub enum Origination {
 }
 
 /// `connect_to_caller`, `decline_transfer` and `voicemail_detected`, as raw function schemas.
-pub fn transfer_tools() -> Vec<BTreeMap<String, Value>> {
+pub fn transfer_tools() -> Vec<RawFunctionDescription> {
     let tool = |name: &str, description: &str, reason: Option<&str>| {
         let properties = reason
             .map_or(json!({}), |d| json!({ "reason": { "type": "string", "description": d } }));
         let required = if reason.is_some() { json!(["reason"]) } else { json!([]) };
-        let parameters = json!({
-            "type": "object",
-            "properties": properties,
-            "required": required,
-            "additionalProperties": false,
-        });
-        BTreeMap::from([
-            ("name".to_owned(), Value::String(name.to_owned())),
-            ("description".to_owned(), Value::String(description.to_owned())),
-            ("parameters".to_owned(), parameters),
-        ])
+        RawFunctionDescription {
+            name: name.to_owned(),
+            description: Some(description.to_owned()),
+            parameters: json!({
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": false,
+            }),
+        }
     };
     vec![
         tool(CONNECT_TOOL, CONNECT_DESC, None),

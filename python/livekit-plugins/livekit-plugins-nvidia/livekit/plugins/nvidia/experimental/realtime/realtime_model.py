@@ -205,9 +205,11 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, bytes]):
         )
 
     def decode(self, frame: bytes | str) -> ServerMessage | None:
-        if isinstance(frame, str):
-            raise llm_realtime.protocol_error(self, f"a text frame: {frame}")
         if not frame:
+            return None
+        if isinstance(frame, str):
+            # the server speaks binary frames: a text one (one it added since) is not read
+            llm_realtime.log_skipped("PersonaPlex", "a text frame")
             return None
         kind, payload = frame[0], frame[1:]
         if kind == MSG_HANDSHAKE:
@@ -224,6 +226,8 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, bytes]):
                 raise llm_realtime.protocol_error(
                     self, f"a text token that is not UTF-8: {e}"
                 ) from e
+        # a frame type the server added since: skipped, named once
+        llm_realtime.log_skipped("PersonaPlex", f"frame type {kind}")
         return None
 
     def encode(self, item: rtc.AudioFrame) -> bytes | None:

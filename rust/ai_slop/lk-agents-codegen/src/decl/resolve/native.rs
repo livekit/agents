@@ -17,8 +17,11 @@ impl Resolver<'_> {
         // A class the registration shell registers itself: no ABI declaration names it.
         let classes = match voc::text(at, &native.nested, "class")? {
             Some(class) => vec![format!("livekit.agents._core.{class}")],
-            None => self.native_classes(module, item, at)?,
+            None => self.native_classes(module, item, true, at)?,
         };
+        if classes.is_empty() {
+            return Err(format!("{at}: a native-only trait needs a registered host class"));
+        }
         let refused = match voc::text(at, &native.nested, "refused")? {
             Some(refused) => refused,
             None => format!("expected native {}", classes.join(" or ")),
@@ -30,9 +33,16 @@ impl Resolver<'_> {
         })
     }
 
-    /// The dotted host classes registered for the native trait: a declared class's
-    /// `native = Trait`, or a legacy object's `as_dyn(Trait = ..)`.
-    fn native_classes(&self, module: usize, item: usize, at: &str) -> Result<Vec<String>, String> {
+    /// The dotted host classes registered for the trait: a declared class's `native = Trait`, or
+    /// a legacy object's `as_dyn(Trait = ..)`; the host passes each as itself. Without `built`,
+    /// a class built by `#[host(init)]` is left out: the host subclasses it.
+    pub(super) fn native_classes(
+        &self,
+        module: usize,
+        item: usize,
+        built: bool,
+        at: &str,
+    ) -> Result<Vec<String>, String> {
         let wanted = Found::Item { module, item };
         let mut hosts = Vec::new();
         for (index, origin) in self.krate.modules.iter().enumerate() {
@@ -77,6 +87,7 @@ impl Resolver<'_> {
                 if let Some(class) = voc::find(&entries, "class")
                     && let Some(syn::Type::Path(native)) = voc::rust(at, &class.nested, "native")?
                     && self.krate.resolve(index, &native.path).is_ok_and(|found| found == wanted)
+                    && (built || !initialized(candidate))
                 {
                     let name =
                         voc::text(at, &class.nested, "name")?.unwrap_or_else(|| match candidate {
@@ -91,9 +102,15 @@ impl Resolver<'_> {
         }
         hosts.sort();
         hosts.dedup();
-        if hosts.is_empty() {
-            return Err(format!("{at}: a native-only trait needs a registered host class"));
-        }
         Ok(hosts)
     }
+}
+
+/// A class trait with a `#[host(init)]` constructor: the host subclasses it.
+fn initialized(candidate: &syn::Item) -> bool {
+    let syn::Item::Trait(tr) = candidate else { return false };
+    tr.items.iter().any(|inner| {
+        matches!(inner, syn::TraitItem::Fn(f)
+            if voc::read(&f.attrs).is_ok_and(|e| voc::find(&e, "init").is_some()))
+    })
 }

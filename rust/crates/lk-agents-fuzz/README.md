@@ -115,7 +115,7 @@ do not duplicate those rules in a generator or fake.
 
 | Port implementation | Controls and observations | Timing, cancellation and limits |
 | --- | --- | --- |
-| [STT](src/fakes/stt.rs) | Case delivers recognition events, end and errors; records forwarded audio and opening identity | Reopening creates a new invocation; late delivery targets the old one and can be rejected. No acoustic recognition |
+| [STT](src/fakes/stt.rs) | Case delivers the provider's reports (transcripts, its own start and end of speech, connection drops, errors) through the production speech rules (`stt::speech::Speech`); records each report with what the stream emitted, forwarded audio and opening identity | Provider VAD and `transcribes_after_speech_ends` vary by seed. Reopening creates a new invocation; late delivery targets the old one and can be rejected. No acoustic recognition |
 | [VAD](src/fakes/vad.rs) | Case delivers speech/inference events; records microphone fan-out | Results are case-controlled, not inferred from audio; stream close ends delivery |
 | [EOT](src/fakes/eot.rs) | Each predict call records audio/request and waits for its correlated answer | Unanswered prediction lets production timeout run; no prediction model |
 | [Interruption](src/fakes/interruption.rs) | Records overlap/speaking signals and audio; case selects verdict | Production owns interruption policy; no learned overlap classifier |

@@ -10,6 +10,8 @@ from .. import _bindings, _core
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from .mcp import MCPTool
+
 
 class MCPServerStdio:
     """`MCPServerStdio`: an MCP server run as a child process, over its stdio; restarted if it exits."""
@@ -48,7 +50,7 @@ class MCPServerStdio:
         """Start the server and complete the MCP handshake."""
         await self._native.connect_stdio(self._command, self._args, self._env, self._cwd)
 
-    async def list_tools(self) -> object:
+    async def list_tools(self) -> list[MCPTool]:
         """The server's tool listing, every page."""
         return await self._native.list_tools()
 
@@ -84,7 +86,7 @@ class MCPServerHTTP:
         """Whether the server is connected."""
         return self._native.connected
 
-    async def list_tools(self) -> object:
+    async def list_tools(self) -> list[MCPTool]:
         """The server's tool listing, every page."""
         return await self._native.list_tools()
 

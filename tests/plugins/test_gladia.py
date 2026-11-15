@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Literal
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
+from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     http,
 )
 from livekit.plugins.gladia import STT
+from tests.fakes import until
+from tests.plugins.conftest import Close, WsPeer
 
 
 async def test_startup_timeout_reaches_consumer() -> None:
@@ -162,3 +167,53 @@ async def test_translation_update_rejects_missing_targets_without_mutation() -> 
             assert requests[1]["translation"] is False
         finally:
             await model.aclose()
+
+
+# Catches: audio after a flush sent into the session stop_recording ended, where Gladia
+# transcribes nothing more.
+async def test_audio_after_a_flush_goes_to_a_new_session(ws_peer: WsPeer) -> None:
+    """stop_recording ends Gladia's session: the next audio initializes a new one."""
+
+    async def initialize(request: web.Request) -> web.StreamResponse:
+        return web.json_response({"id": "session", "url": ws_peer.ws_url + "/session"})
+
+    ws_peer.http = initialize
+    ws_peer.reply = lambda _, message: (
+        [{"type": "post_final_transcript"}] if "stop_recording" in str(message) else []
+    )
+    model = STT(api_key="key", base_url=ws_peer.url + "/v2/live")
+    frame = rtc.AudioFrame(b"\0\0" * 1600, 16000, 1, 1600)
+
+    async with model.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+        stream.push_frame(frame)
+        stream.flush()
+        stream.push_frame(frame)
+        second = await ws_peer.connected(2)
+        await until(lambda: second.received, "the audio after the flush")
+    await model.aclose()
+
+    first = ws_peer.connections[0]
+    assert [json.loads(m)["type"] for m in first.received] == ["audio_chunk", "stop_recording"]
+    assert json.loads(second.received[0])["type"] == "audio_chunk"
+
+
+# Catches: a recognition whose socket Gladia closed on a server error returning an empty
+# transcript as if it succeeded.
+async def test_a_recognition_cut_by_a_server_close_fails_by_its_code(ws_peer: WsPeer) -> None:
+    """recognize() fails with the kind Gladia's close code names, never an empty transcript."""
+
+    async def initialize(request: web.Request) -> web.StreamResponse:
+        return web.json_response({"id": "session", "url": ws_peer.ws_url + "/session"})
+
+    ws_peer.http = initialize
+    ws_peer.reply = lambda _, message: [Close(1011)] if "stop_recording" in str(message) else []
+    model = STT(api_key="key", base_url=ws_peer.url + "/v2/live")
+    frame = rtc.AudioFrame(b"\0\0" * 1600, 16000, 1, 1600)
+
+    try:
+        with pytest.raises(APIError) as failure:
+            await model.recognize(frame, conn_options=APIConnectOptions(max_retry=0))
+    finally:
+        await model.aclose()
+
+    assert failure.value.kind == "server"

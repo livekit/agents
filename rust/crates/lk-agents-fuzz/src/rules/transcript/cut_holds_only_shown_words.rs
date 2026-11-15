@@ -23,7 +23,11 @@ impl Rule for CutHoldsOnlyShownWords {
     const CONTRACT: Contract = Contract {
         id: "cut_holds_only_shown_words",
         guarantee: "A synthesised speech cut through a synchroniser after its transcript started is remembered as no more than the words the transcript showed, reported or not.",
-        examples: &[remembered_as_shown_unreported, remembered_as_heard_unreported],
+        examples: &[
+            remembered_as_shown_unreported,
+            remembered_as_heard_unreported,
+            remembered_across_a_segment_cut_short,
+        ],
         counterexamples: &[remembered_whole_unreported, remembered_past_the_shown_words],
         probe: None,
     };
@@ -57,10 +61,21 @@ impl Rule for CutHoldsOnlyShownWords {
                 continue;
             }
             let (mut shown, mut remembered) = (String::new(), None::<String>);
+            // A segment cut short ends on a whole word: the next segment's text does not continue
+            // it, whatever its text began with.
+            let mut cut_short = false;
             for (_, step) in trace.steps() {
                 match step {
                     Step::Playout(PlayoutStep::TranscriptShown { text, .. }) => {
+                        if std::mem::take(&mut cut_short)
+                            && lk_agents_voice::transcription::continues_word(&shown, text)
+                        {
+                            shown.push(' ');
+                        }
                         shown.push_str(text)
+                    }
+                    Step::Playout(PlayoutStep::PlaybackFinished { interrupted, .. }) => {
+                        cut_short = *interrupted;
                     }
                     // A tool follow-up: the steps before it committed their own text.
                     Step::Tool(ToolStep::StepStarted { .. }) => shown.clear(),
@@ -134,4 +149,30 @@ fn remembered_whole_unreported() -> Recording {
 
 fn remembered_past_the_shown_words() -> Recording {
     cut_unreported("two three")
+}
+
+/// "one at" shown, the segment cut short there, then the next segment's "st?": two words heard.
+fn remembered_across_a_segment_cut_short() -> Recording {
+    Authored::new()
+        .transcript(TranscriptSetup { synchronized: true, ..TranscriptSetup::default() })
+        .journal(Step::Generation(GenerationStep::TtsRequested {
+            speech: SpeechId(1),
+            segment: 0,
+            text: "one at".into(),
+        }))
+        .journal(shown("one", 0.0))
+        .journal(shown(" at", 0.1))
+        .journal(Step::Playout(PlayoutStep::PlaybackFinished {
+            speech: SpeechId(1),
+            position: std::time::Duration::from_millis(200),
+            interrupted: true,
+        }))
+        .journal(shown("st?", 0.0))
+        .journal(Step::Speech(SpeechStep::ReplyFinished {
+            speech: SpeechId(1),
+            text: "one at st?".into(),
+            interrupted: true,
+        }))
+        .speech(1, Handle::finished().interrupted())
+        .done()
 }

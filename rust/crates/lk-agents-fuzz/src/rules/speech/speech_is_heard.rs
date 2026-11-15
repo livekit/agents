@@ -16,7 +16,8 @@ use crate::{
     check::{Check, Contract, Rule, Subject},
     input::{Input, RoomIn, RtEvent},
     record::{
-        Fault, Handle, Kind, Observed, Recording, Site, SpeechView, StorageOperation, StorageStep,
+        Fault, Handle, Kind, Observed, Recognised, Recording, Site, SpeechView, StorageOperation,
+        StorageStep,
     },
 };
 
@@ -47,6 +48,7 @@ impl Rule for SpeechIsHeard {
             waited_on_its_storage_receipt,
             waited_on_a_voice_open_never_answered,
             waited_on_its_voices_read_never_answered,
+            waited_on_an_output_holding_its_frame,
         ],
         counterexamples: &[
             silent_behind_a_paused_speech,
@@ -207,6 +209,15 @@ fn speaking_at(onsets: &[Observed], offsets: &[Observed], at: Observed) -> bool 
 /// between two instants: spoke into a detector or recogniser (the session's or the realtime
 /// server's), typed, pressed a key, or had their turn committed or claimed.
 fn person_acted(r: &Recording, from: u64, to: u64) -> bool {
+    // A recogniser handing over their words on its own, as one whose connection drops does with
+    // the final it owed (seeds 1722 and 1868).
+    let words = r.recognition().iter().filter(|rec| from <= rec.at.at_ms && rec.at.at_ms <= to);
+    if words.flat_map(|rec| &rec.emitted).any(|e| {
+        matches!(e, Recognised::Interim(t) | Recognised::Preflight(t) | Recognised::Final(t)
+            if !t.trim().is_empty())
+    }) {
+        return true;
+    }
     r.applied().iter().filter(|a| a.accepted && from <= a.at.at_ms && a.at.at_ms <= to).any(|a| {
         matches!(
             a.input,
@@ -309,6 +320,13 @@ fn waits_on(r: &Recording, speech: u64, made: u64, deadline: u64) -> Option<&'st
     });
     if hung_open {
         return Some("a provider open never answered");
+    }
+    // The audio output holding one of its frames: the speech waits on that output until it is cut.
+    let output_held = r.faults().iter().any(|(at, site, fault)| {
+        *fault == Fault::Hang && *site == Site::Capture && (made..=deadline).contains(&at.at_ms)
+    });
+    if output_held {
+        return Some("an audio output holding its frame");
     }
     // A model or voice stream opened for it whose read never answered (stress seed 29's voice, hung
     // after its first chunk): a read is unbounded at the port, its provider's transport bounds it
@@ -517,14 +535,11 @@ fn waits_on(r: &Recording, speech: u64, made: u64, deadline: u64) -> Option<&'st
     // The recogniser's view: an utterance it opened and has not ended. Without a VAD the session
     // never reports the person speaking (the reference takes the recogniser's onset only when it
     // detects turns), yet that utterance is what pauses the speech playing (seed 8893).
-    let mut stt_speaking = false;
-    for a in r.applied().iter().filter(|a| a.accepted && before(&a.at)) {
-        match a.input {
-            Input::SttStart { .. } => stt_speaking = true,
-            Input::SttEnd { .. } => stt_speaking = false,
-            _ => {}
-        }
-    }
+    let stt_speaking = r
+        .recognised_edges()
+        .filter(|(at, ..)| before(at))
+        .last()
+        .is_some_and(|(_, _, start)| start);
     let allowance = super::pause_resolves::allowance_ms(r.journal(), deadline);
     if paused
         && (vad_speaking
@@ -657,6 +672,11 @@ fn waited_on_a_voice_open_never_answered() -> Recording {
     silent_say_with_a_hang(Site::TtsOpen)
 }
 
+/// The same, the hang in the audio output's capture: the speech waits on that output.
+fn waited_on_an_output_holding_its_frame() -> Recording {
+    silent_say_with_a_hang(Site::Capture)
+}
+
 /// The same, the hang on the recogniser's open: nothing this speech waits on.
 fn silent_beside_a_recogniser_open_never_answered() -> Recording {
     silent_say_with_a_hang(Site::SttOpen)
@@ -746,16 +766,16 @@ fn silent_behind_a_paused_speech() -> Recording {
 
 /// The same, the recogniser still hearing the person at the bound: the reply waits on them.
 fn waited_behind_the_persons_utterance() -> Recording {
-    use crate::input::Ref;
-    behind_a_paused_speech(Authored::new().sent(Input::SttStart { stt: Ref::new(0) }))
+    use crate::record::{Recognised, SttReport};
+    behind_a_paused_speech(Authored::new().recognised(0, SttReport::Started, vec![Recognised::Start]))
 }
 
 /// The same, the recogniser's utterance ended long before the bound.
 fn silent_after_the_persons_utterance() -> Recording {
-    use crate::input::Ref;
+    use crate::record::{Recognised, SttReport};
     let heard = Authored::new()
-        .sent(Input::SttStart { stt: Ref::new(0) })
-        .sent(Input::SttEnd { utterance: Ref::new(0) });
+        .recognised(0, SttReport::Started, vec![Recognised::Start])
+        .recognised(0, SttReport::Ended, vec![Recognised::End]);
     behind_a_paused_speech(heard)
 }
 

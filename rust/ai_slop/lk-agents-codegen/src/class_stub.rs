@@ -571,8 +571,17 @@ pub(crate) fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -
                 imports.add(&format!(".{module}"), name);
                 name.clone()
             }
-            // Two modules' models of one name are told apart by an alias.
-            HostForm::Record { module, name } => imports.external(&format!(".{module}"), name),
+            // Two modules' models of one name are told apart by an alias. A generic model without a
+            // default holds whatever host object the native was handed: `object`.
+            HostForm::Record { module, name } => {
+                let local = imports.external(&format!(".{module}"), name);
+                let open = imports.records.iter().any(|record| {
+                    record.rust == r.rust
+                        && record.generic.is_some()
+                        && record.generic_default.is_none()
+                });
+                if open { format!("{local}[object]") } else { local }
+            }
             HostForm::WireStrs | HostForm::Str | HostForm::Wire => {
                 imports.annotation(&r.wire_annotation(), &r.rust)
             }
@@ -581,7 +590,7 @@ pub(crate) fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -
             | HostForm::Via { host: text, .. } => imports.annotation(text, &r.rust),
         },
         Ty::This => this.to_owned(),
-        Ty::Proxy { host, generic, declared, .. } => {
+        Ty::Proxy { host, generic, declared, natives, .. } => {
             if host == "collections.abc.Callable"
                 && let Some((family, name)) = declared
                 && let Some(method) = imports
@@ -625,13 +634,17 @@ pub(crate) fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -
                     annotation(this, item, Dir::ProxyResult, imports)
                 );
             }
-            // A dotted class, with its type arguments when it is generic (`aio.Chan[..]`).
-            let name = imports.annotation(host, "");
-            if *generic == 0 {
-                return name;
+            // A dotted class, with its type arguments when it is generic (`aio.Chan[..]`), or a
+            // native class the host passes as itself.
+            let mut name = imports.annotation(host, "");
+            if *generic > 0 {
+                imports.add("typing", "Any");
+                name = format!("{name}[{}]", vec!["Any"; *generic].join(", "));
             }
-            imports.add("typing", "Any");
-            format!("{name}[{}]", vec!["Any"; *generic].join(", "))
+            std::iter::once(name)
+                .chain(native_classes(natives, imports))
+                .collect::<Vec<_>>()
+                .join(" | ")
         }
         Ty::Source { class, .. } | Ty::Sink { class, .. } | Ty::Duplex { class, .. } => {
             class.clone()
@@ -654,19 +667,22 @@ pub(crate) fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -
             imports.add(".._core", class);
             class.clone()
         }
-        Ty::Native { classes, .. } => classes
-            .iter()
-            .map(|class| {
-                let (module, name) = class.rsplit_once('.').expect("a host class is dotted");
-                // A `_core` class: relative, so a family stub never imports the class it defines.
-                let module =
-                    if module == lk_agents_bindgen::DEFAULT_MODULE { ".._core" } else { module };
-                imports.add(module, name);
-                name
-            })
-            .collect::<Vec<_>>()
-            .join(" | "),
+        Ty::Native { classes, .. } => native_classes(classes, imports).join(" | "),
     }
+}
+
+/// The local names of native host classes, imported from `_core`.
+fn native_classes(classes: &[String], imports: &mut Imports) -> Vec<String> {
+    classes
+        .iter()
+        .map(|class| {
+            let (_, name) = class.rsplit_once('.').expect("a host class is dotted");
+            // Every native class is a `_core` class, whatever public module re-exports it:
+            // relative, so a family stub never imports the class it defines.
+            imports.add(".._core", name);
+            name.to_owned()
+        })
+        .collect()
 }
 
 pub(crate) fn py_literal(d: &Literal) -> String {

@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use lk_agents_abi::llm::mcp::{
-    McpError, McpTimeout, McpToolOptions, McpToolOptionsPatch, McpTools as McpToolsPort,
+    JsonObject, McpCallResult, McpContent, McpError, McpTimeout, McpTool, McpToolOptions,
+    McpToolOptionsPatch, McpTools as McpToolsPort,
 };
 use serde_json::{Map, Value, json};
 
@@ -25,17 +26,16 @@ pub fn resolve_tool_options(
     })
 }
 
-pub fn raw_schema(
-    name: &str,
-    description: Option<&str>,
-    input_schema: &Map<String, Value>,
-    meta: Option<&Map<String, Value>>,
-) -> Value {
+/// The schema a listed tool is offered to the model as.
+pub fn raw_schema(tool: &McpTool) -> Map<String, Value> {
     // MCP makes a tool's description optional; a tool spec's is a string.
-    let description = description.unwrap_or_default();
-    let mut schema = json!({"name": name, "description": description, "parameters": input_schema});
-    if let Some(meta) = meta.filter(|m| !m.is_empty()) {
-        schema["meta"] = json!(meta);
+    let description = tool.description.as_deref().unwrap_or_default();
+    let mut schema = Map::new();
+    schema.insert("name".into(), json!(tool.name));
+    schema.insert("description".into(), json!(description));
+    schema.insert("parameters".into(), Value::Object(tool.input_schema.clone()));
+    if let Some(meta) = tool.meta.as_ref().filter(|m| !m.is_empty()) {
+        schema.insert("meta".into(), Value::Object(meta.clone()));
     }
     schema
 }
@@ -109,7 +109,7 @@ impl ConnectionSettlement {
 /// each new connection, and the last complete listing while a refetch cannot complete.
 #[derive(Debug, Default)]
 pub struct ToolListing {
-    cache: Option<Vec<Value>>,
+    cache: Option<Vec<McpTool>>,
     stale: bool,
 }
 
@@ -120,12 +120,12 @@ pub enum ListStep {
     /// [`ToolListing::page`] with `pages`.
     Fetch { pages: ToolPages, cursor: Option<String> },
     /// The tools the session exposes.
-    Done(Vec<Value>),
+    Done(Vec<McpTool>),
 }
 
 /// The pages one fresh listing has fetched so far.
 #[derive(Debug, Default)]
-pub struct ToolPages(Vec<Value>);
+pub struct ToolPages(Vec<McpTool>);
 
 impl ToolListing {
     /// A new connection: its server may list other tools.
@@ -139,7 +139,7 @@ impl ToolListing {
         }
     }
     /// The last complete listing, for a refetch that failed.
-    pub fn last_known(&self) -> Option<Vec<Value>> {
+    pub fn last_known(&self) -> Option<Vec<McpTool>> {
         self.cache.clone()
     }
     /// One fetched page. The complete listing is cached unless its connection is closing: a
@@ -147,7 +147,7 @@ impl ToolListing {
     pub fn page(
         &mut self,
         mut pages: ToolPages,
-        tools: Vec<Value>,
+        tools: Vec<McpTool>,
         next_cursor: Option<String>,
         closing: bool,
     ) -> ListStep {
@@ -195,49 +195,33 @@ pub fn progress_message(message: Option<&str>) -> Option<&str> {
     message.filter(|m| !m.is_empty())
 }
 
-fn decode_error(message: impl Into<String>) -> McpError {
-    let error: Box<dyn std::error::Error + Send + Sync> = message.into().into();
-    McpError::Decode(Arc::from(error))
-}
-
-/// A `CallToolResult` as the SDK serializes it: its content blocks and error flag.
-fn content(result: &Value) -> Result<&[Value], McpError> {
-    let malformed = || decode_error("a tool result is an object of `content` blocks and `isError`");
-    let result = result.as_object().ok_or_else(malformed)?;
-    let content = match result.get("content") {
-        None => None,
-        Some(content) => Some(content.as_array().ok_or_else(malformed)?),
-    };
-    let is_error = result.get("isError");
-    if is_error.is_some_and(|flag| !flag.is_null() && !flag.is_boolean()) {
-        return Err(malformed());
-    }
-    if is_error.and_then(Value::as_bool) == Some(true) {
-        let parts = content.into_iter().flatten().map(|part| match part.get("text") {
-            Some(Value::String(text)) if part.get("type") == Some(&json!("text")) => text.clone(),
-            _ => part.to_string(),
-        });
-        return Err(McpError::ToolFailed(parts.collect::<Vec<_>>().join("\n")));
-    }
-    Ok(content.map(Vec::as_slice).unwrap_or_default())
-}
-
 /// A scalar MCP deadline within the shared connection-policy duration range.
 pub fn timeout_duration(field: McpTimeout, seconds: f64) -> Result<std::time::Duration, McpError> {
     lk_agents_abi::types::connect::duration_from_seconds(seconds)
         .ok_or(McpError::InvalidTimeout(field))
 }
 
-/// What the model reads: a lone text block as its text; other content as its JSON blocks.
-pub fn render_result(tool_name: &str, result: &Value) -> Result<String, McpError> {
-    Ok(match content(result)? {
+/// What the model reads: a lone text block as its text; other content as its JSON blocks. An
+/// error result fails the tool with its content, text blocks as their text.
+pub fn render_result(tool_name: &str, result: &McpCallResult) -> Result<String, McpError> {
+    if result.is_error {
+        let parts = result.content.iter().map(|block| match block {
+            McpContent::Text(text) => text.text.clone(),
+            other => json(other),
+        });
+        return Err(McpError::ToolFailed(parts.collect::<Vec<_>>().join("\n")));
+    }
+    Ok(match result.content.as_slice() {
         [] => return Err(McpError::EmptyResult(tool_name.into())),
-        [one] => match (one.get("type").and_then(Value::as_str), one.get("text")) {
-            (Some("text"), Some(Value::String(text))) => text.clone(),
-            _ => one.to_string(),
-        },
-        many => Value::from(many.to_vec()).to_string(),
+        [McpContent::Text(text)] => text.text.clone(),
+        [one] => json(one),
+        many => json(&many),
     })
+}
+
+/// A block as the server sent it; MCP content is plain JSON data.
+fn json(blocks: &impl serde::Serialize) -> String {
+    serde_json::to_string(blocks).expect("MCP content serializes")
 }
 
 pub struct McpTools;
@@ -247,15 +231,10 @@ impl McpToolsPort for McpTools {
     ) -> Result<McpToolOptions, McpError> {
         resolve_tool_options(config.as_ref())
     }
-    fn raw_schema(
-        name: String,
-        description: Option<String>,
-        input_schema: Map<String, Value>,
-        meta: Option<Map<String, Value>>,
-    ) -> Value {
-        raw_schema(&name, description.as_deref(), &input_schema, meta.as_ref())
+    fn raw_schema(tool: McpTool) -> JsonObject {
+        JsonObject(raw_schema(&tool))
     }
-    fn render_result(tool_name: String, result: Value) -> Result<String, McpError> {
+    fn render_result(tool_name: String, result: McpCallResult) -> Result<String, McpError> {
         render_result(&tool_name, &result)
     }
 }
@@ -264,14 +243,18 @@ impl McpToolsPort for McpTools {
 mod tests {
     use super::*;
 
+    fn result(wire: Value) -> McpCallResult {
+        serde_json::from_value(wire).unwrap()
+    }
+
     /// MCP text and resource results reach the model as literal Unicode.
     /// https://github.com/livekit/agents/pull/7565
     #[test]
     fn results_keep_unicode_literal() {
-        let many = json!({"content": [
+        let many = result(json!({"content": [
             {"type": "text", "text": "réservé à Zürich"},
             {"type": "text", "text": "予約済み"},
-        ]});
+        ]}));
         let rendered = render_result("book", &many).unwrap();
         assert!(
             rendered.contains("réservé à Zürich") && rendered.contains("予約済み"),
@@ -279,9 +262,9 @@ mod tests {
         );
         assert!(!rendered.contains("\\u"), "no ASCII escaping: {rendered}");
 
-        let resource = json!({"content": [
+        let resource = result(json!({"content": [
             {"type": "resource", "resource": {"uri": "file:///menu", "text": "crème brûlée"}},
-        ]});
+        ]}));
         let rendered = render_result("menu", &resource).unwrap();
         assert!(rendered.contains("crème brûlée") && !rendered.contains("\\u"), "{rendered}");
     }
@@ -290,10 +273,10 @@ mod tests {
     /// https://github.com/livekit/agents/pull/4582
     #[test]
     fn an_error_result_fails_with_its_content() {
-        let failed = json!({"isError": true, "content": [
+        let failed = result(json!({"isError": true, "content": [
             {"type": "text", "text": "date indisponible"},
             {"type": "image", "data": "AA==", "mimeType": "image/png"},
-        ]});
+        ]}));
         match render_result("book", &failed) {
             Err(McpError::ToolFailed(text)) => {
                 let mut lines = text.lines();
@@ -303,5 +286,22 @@ mod tests {
             }
             other => panic!("expected ToolFailed, got {other:?}"),
         }
+    }
+
+    /// A block the model reads as JSON keeps the wire form the server sent, every field in place.
+    #[test]
+    fn a_block_renders_as_its_wire_form() {
+        let link = json!({
+            "type": "resource_link",
+            "uri": "booking://ABC/receipt",
+            "name": "receipt",
+            "mimeType": "application/pdf",
+            "size": 2048,
+            "icons": [{"src": "https://example.com/r.png", "sizes": ["48x48"], "theme": "dark"}],
+            "_meta": {"trace": "t-1"},
+            "annotations": {"audience": ["user"], "priority": 0.5, "lastModified": "2026-01-01T00:00:00Z"},
+        });
+        let rendered = render_result("receipt", &result(json!({"content": [link.clone()]})));
+        assert_eq!(rendered.unwrap(), link.to_string());
     }
 }

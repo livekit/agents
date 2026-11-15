@@ -202,7 +202,9 @@ impl VoiceDriver {
             (ClosePhase::Draining, _) if self.activity.speech_queue_empty() => {
                 self.close_edge(now);
             }
-            (ClosePhase::Edge, reason) if self.activity.speech_queue_empty() => {
+            (ClosePhase::Edge, reason)
+                if self.activity.speech_queue_empty() && !self.conversation_save_pending() =>
+            {
                 let timers = &self.session.config.effective().timers;
                 let timeout = timers.session_close_transcript_timeout();
                 if reason != CloseReason::Error && self.transcript_pending(now) {
@@ -211,10 +213,14 @@ impl VoiceDriver {
                     self.close_legs_begin(now);
                 }
             }
-            (ClosePhase::Committing, _) if !self.activity.has_pending_commit() => {
+            (ClosePhase::Committing, _)
+                if !self.activity.has_pending_commit() && !self.conversation_save_pending() =>
+            {
                 self.close_legs_begin(now);
             }
-            (ClosePhase::ClosingActivity { closed: true }, _) => {
+            (ClosePhase::ClosingActivity { closed: true }, _)
+                if !self.conversation_save_pending() =>
+            {
                 self.close_legs(now);
             }
             (
@@ -488,6 +494,7 @@ impl VoiceDriver {
             Timer::EotPredictionTimeout,
             Timer::EndpointingDelay,
             Timer::TranscriptionTimeout,
+            Timer::FinalTranscriptTimeout,
             Timer::BackchannelBoundary,
             Timer::FalseInterruption,
             Timer::AecWarmup,

@@ -21,18 +21,20 @@ chunk because Vakyam expects one complete utterance per message. One-shot
 
 from __future__ import annotations
 
-import asyncio
 import os
 import weakref
-from collections.abc import Awaitable, Callable
-from contextlib import suppress
+from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, replace
+from typing import Literal, NotRequired, TypedDict, assert_never
+
+from pydantic import JsonValue
 
 from livekit.agents import (
-    APIConnectionError,
     APIConnectOptions,
     APIError,
     APIStatusError,
+    __version__ as livekit_version,
     http,
     tokenize,
     tts,
@@ -41,14 +43,15 @@ from livekit.agents import (
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from ._utils import (
+    WS_ERROR_KINDS,
     http_stream_url,
     normalize_base_url,
+    normalize_voice,
     raise_http_error,
     speech_payload,
     validate_tts_options,
+    websocket_url,
 )
-from ._websocket import AsyncStreamingTTSSession, TTSSessionConfig
-from .log import logger
 from .models import (
     DEFAULT_BASE_URL,
     DEFAULT_LANGUAGE,
@@ -65,6 +68,7 @@ from .models import (
 from .version import __version__
 
 NUM_CHANNELS = 1
+USER_AGENT = f"LiveKit-Agents-Vakyam/{__version__} livekit-agents/{livekit_version}"
 
 
 @dataclass
@@ -148,9 +152,7 @@ class TTS(tts.TTS):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._pools: dict[TTSSessionConfig, utils.ConnectionPool[AsyncStreamingTTSSession]] = {}
-        self._ws_keepalive_tasks: dict[AsyncStreamingTTSSession, asyncio.Task[None]] = {}
-        self._tasks = utils.aio.TaskSet()
+        self._mux = _Pool(self)
 
     @property
     def model(self) -> str:
@@ -177,28 +179,31 @@ class TTS(tts.TTS):
         pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """Update synthesis options for streams created after this call."""
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        next_opts = replace(self._opts)
-        next_sample_rate = self._sample_rate
-        if model is not None:
-            next_opts.model = model
-        if voice is not None:
-            next_opts.voice = voice
-        if language is not None:
-            next_opts.language = language
-        if sample_rate is not None:
-            next_opts.sample_rate = sample_rate
-            next_sample_rate = int(sample_rate)
-        if speed is not None:
-            next_opts.speed = speed
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            next_opts = replace(self._opts)
+            next_sample_rate = self._sample_rate
+            if model is not None:
+                next_opts.model = model
+            if voice is not None:
+                next_opts.voice = voice
+            if language is not None:
+                next_opts.language = language
+            if sample_rate is not None:
+                next_opts.sample_rate = sample_rate
+                next_sample_rate = int(sample_rate)
+            if speed is not None:
+                next_opts.speed = speed
 
-        validate_tts_options(
-            model=str(next_opts.model),
-            language=str(next_opts.language),
-            sample_rate=int(next_opts.sample_rate),
-            speed=next_opts.speed,
-            voice=next_opts.voice,
-        )
+            validate_tts_options(
+                model=str(next_opts.model),
+                language=str(next_opts.language),
+                sample_rate=int(next_opts.sample_rate),
+                speed=next_opts.speed,
+                voice=next_opts.voice,
+            )
+        # a socket is configured once, when it opens: a change reaches the sockets opened next
+        if next_opts != self._opts:
+            self._mux.invalidate()
         self._opts = next_opts
         self._sample_rate = next_sample_rate
 
@@ -214,148 +219,18 @@ class TTS(tts.TTS):
         )
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
-        opts = replace(self._opts)
-        stream = SynthesizeStream(
-            tts=self,
-            opts=opts,
-            pool=self._pool_for(opts),
-            start_keepalive=self._start_keepalive,
-            stop_keepalive=self._stop_keepalive,
-            reuse_after_cancel=self._reuse_after_cancel,
-            conn_options=conn_options,
-        )
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
     def prewarm(self) -> None:
-        self._pool_for(self._opts).prewarm()
+        self._mux.prewarm()
 
     async def aclose(self) -> None:
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
-        # keepalives and cancel drains first: each hands its socket back to its pool
-        await self._tasks.aclose()
-        for pool in self._pools.values():
-            await pool.aclose()
-        self._pools.clear()
-
-    def _session_config(self, opts: _TTSOptions) -> TTSSessionConfig:
-        return TTSSessionConfig(
-            model=str(opts.model),
-            voice=opts.voice,
-            language=str(opts.language),
-            sample_rate=int(opts.sample_rate),
-            speed=opts.speed,
-            output_format="pcm",
-        )
-
-    def _pool_for(self, opts: _TTSOptions) -> utils.ConnectionPool[AsyncStreamingTTSSession]:
-        config = self._session_config(opts)
-        existing_pool = self._pools.get(config)
-        if existing_pool is not None:
-            return existing_pool
-
-        pool_ref: utils.ConnectionPool[AsyncStreamingTTSSession] | None = None
-
-        async def _connect(conn_options: APIConnectOptions) -> AsyncStreamingTTSSession:
-            session = AsyncStreamingTTSSession(
-                api_key=opts.api_key,
-                base_url=opts.base_url,
-                allow_insecure_base_url=opts.allow_insecure_base_url,
-                config=config,
-                session=self._ensure_session(),
-            )
-            await session.connect(conn_options)
-            assert pool_ref is not None
-            self._start_keepalive(session, pool_ref)
-            return session
-
-        pool = utils.ConnectionPool(
-            connect_cb=_connect,
-            close_cb=self._close_ws,
-            max_session_duration=3600,
-            mark_refreshed_on_get=False,
-        )
-        pool_ref = pool
-        self._pools[config] = pool
-        return pool
-
-    async def _close_ws(self, session: AsyncStreamingTTSSession) -> None:
-        await self._stop_keepalive(session)
-        await session.close()
-
-    def _start_keepalive(
-        self,
-        session: AsyncStreamingTTSSession,
-        pool: utils.ConnectionPool[AsyncStreamingTTSSession],
-    ) -> None:
-        task = self._ws_keepalive_tasks.get(session)
-        if (task is not None and not task.done()) or self._tasks.closed:
-            return
-        self._ws_keepalive_tasks[session] = self._tasks.spawn(
-            self._keepalive_loop(session, pool), name="vakyam-tts-ws-keepalive"
-        )
-
-    def _reuse_after_cancel(
-        self,
-        session: AsyncStreamingTTSSession,
-        pool: utils.ConnectionPool[AsyncStreamingTTSSession],
-        timeout: float | None,
-    ) -> None:
-        """Returns a socket whose utterance was cancelled to its pool once Vakyam acknowledges
-        the cancel. The model owns the drain, so closing the stream never waits on it."""
-        if self._tasks.closed:
-            pool.remove(session)
-            return
-
-        async def _drain() -> None:
-            try:
-                await session.abort(timeout=timeout)
-            except BaseException:
-                pool.remove(session)
-                raise
-            if session.last_result is not None and session.last_result.cancelled:
-                pool.put(session)
-                self._start_keepalive(session, pool)
-            else:
-                pool.remove(session)
-
-        self._tasks.spawn(_drain(), name="vakyam-tts-cancel-drain")
-
-    async def _stop_keepalive(self, session: AsyncStreamingTTSSession) -> None:
-        task = self._ws_keepalive_tasks.pop(session, None)
-        if task is None:
-            return
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
-
-    async def _keepalive_loop(
-        self,
-        session: AsyncStreamingTTSSession,
-        pool: utils.ConnectionPool[AsyncStreamingTTSSession],
-    ) -> None:
-        try:
-            while True:
-                await asyncio.sleep(KEEPALIVE_INTERVAL_SECONDS)
-                if not session.connected:
-                    return
-                try:
-                    await session.ping()
-                except Exception as exc:
-                    logger.debug(
-                        "Vakyam TTS keepalive failed (%s); evicting session",
-                        type(exc).__name__,
-                    )
-                    pool.remove(session)
-                    return
-        except asyncio.CancelledError:
-            return
-        finally:
-            current = asyncio.current_task()
-            if self._ws_keepalive_tasks.get(session) is current:
-                self._ws_keepalive_tasks.pop(session, None)
+        await self._mux.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -424,141 +299,182 @@ class ChunkedStream(tts.ChunkedStream):
             output_emitter.flush()
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    """Streaming synthesis over a persistent WebSocket, one request per chunk."""
+# Vakyam's socket: connected, then its config answered by configured; then one utterance at a
+# time, a text answered by binary audio and end_of_utterance. Each message declares only the
+# fields read.
 
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        opts: _TTSOptions,
-        pool: utils.ConnectionPool[AsyncStreamingTTSSession],
-        start_keepalive: Callable[
-            [AsyncStreamingTTSSession, utils.ConnectionPool[AsyncStreamingTTSSession]], None
-        ],
-        stop_keepalive: Callable[[AsyncStreamingTTSSession], Awaitable[None]],
-        reuse_after_cancel: Callable[
-            [
-                AsyncStreamingTTSSession,
-                utils.ConnectionPool[AsyncStreamingTTSSession],
-                float | None,
-            ],
-            None,
-        ],
-        conn_options: APIConnectOptions,
-    ) -> None:
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._opts = opts
-        self._pool = pool
-        self._start_keepalive = start_keepalive
-        self._stop_keepalive = stop_keepalive
-        self._reuse_after_cancel = reuse_after_cancel
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
-        request_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=int(self._opts.sample_rate),
-            num_channels=NUM_CHANNELS,
-            mime_type="audio/pcm",
-            stream=True,
-            frame_size_ms=50,
+class _Connected(TypedDict):
+    type: Literal["connected"]
+
+
+class _Configured(TypedDict):
+    type: Literal["configured"]
+
+
+class _Pong(TypedDict):
+    type: Literal["pong"]
+
+
+class _Error(TypedDict):
+    type: Literal["error"]
+    error: NotRequired[JsonValue]
+
+
+class _EndOfUtterance(TypedDict):
+    type: Literal["end_of_utterance"]
+    characters_used: int
+    truncated: NotRequired[bool]
+
+
+class _Cancellation(TypedDict):
+    type: Literal["cancellation"]
+
+
+_Message = bytes | _Connected | _Configured | _Pong | _Error | _EndOfUtterance | _Cancellation
+
+
+class _Config(TypedDict):
+    type: Literal["config"]
+    model_id: str
+    voice: str
+    language: str
+    output_format: str
+    sample_rate: int
+    speed: float
+
+
+class _Text(TypedDict):
+    type: Literal["text"]
+    text: str
+
+
+class _Control(TypedDict):
+    type: Literal["ping", "cancel"]
+
+
+_Command = _Config | _Text | _Control
+
+
+class _Pool(tts.WebSocketMultiplexer[_Message, _Command]):
+    """Vakyam sockets, one stream at a time each, configured with the TTS's options when they
+    open and reused by the next stream."""
+
+    routed = False
+    awaits_ready = True
+    keepalive = tts.Keepalive(every=KEEPALIVE_INTERVAL_SECONDS, frame=_Control(type="ping"))
+    max_session_duration = 3600
+
+    def __init__(self, tts: TTS) -> None:
+        self._tts = tts
+
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        opts = self._tts._opts
+        return tts.WebSocketTarget(
+            websocket_url(opts.base_url),
+            headers={"Authorization": f"Bearer {opts.api_key}", "User-Agent": USER_AGENT},
         )
 
-        async def _split_segments() -> None:
-            segment: utils.aio.Chan[str] | None = None
-            async for data in self.input:
-                if isinstance(data, tts.SpeechChunk):
-                    if segment is None:
-                        segment = utils.aio.Chan[str]()
-                        segments_ch.send_nowait(segment)
-                    segment.send_nowait(data.text)
-                elif segment is not None:
-                    segment.close()
-                    segment = None
-            if segment is not None:
-                segment.close()
-            segments_ch.close()
+    def setup(self) -> _Config:
+        opts = self._tts._opts
+        return _Config(
+            type="config",
+            model_id=str(opts.model),
+            voice=normalize_voice(opts.voice),
+            language=str(opts.language),
+            output_format="pcm",
+            sample_rate=int(opts.sample_rate),
+            speed=opts.speed,
+        )
 
-        async def _process_segments() -> None:
-            async for segment in segments_ch:
-                await self._run_segment(segment, output_emitter)
+    def ready(self, message: _Message) -> bool:
+        return not isinstance(message, bytes) and message["type"] == "configured"
 
-        try:
-            async with utils.aio.TaskSet() as tasks:
-                await asyncio.gather(
-                    tasks.spawn(_split_segments()), tasks.spawn(_process_segments())
-                )
-        except APIError:
-            raise
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            raise APIConnectionError(f"Vakyam TTS stream failed: {exc}") from exc
-        finally:
-            output_emitter.end_input()
+    def route(self, message: _Message) -> None:
+        # a socket's own message: its config refused
+        if not isinstance(message, bytes) and message["type"] == "error":
+            raise _error(message)
 
-    async def _run_segment(
-        self, segment: utils.aio.Chan[str], output_emitter: tts.AudioEmitter
-    ) -> None:
-        segment_id = utils.shortuuid()
-        output_emitter.start_segment(segment_id=segment_id)
-        pool = self._pool
-        deferred_error: APIStatusError | None = None
+    def close_context(self, context_id: str) -> _Control:
+        return _Control(type="cancel")
 
-        session = await pool.get(conn_options=self._conn_options)
-        speaking = False
-        try:
-            await self._stop_keepalive(session)
-            started = False
-            async for text in segment:
-                if not started:
-                    self.mark_started()
-                    started = True
 
-                speaking = True
-                async for chunk in session.synthesize_stream(
-                    text, timeout=self._conn_options.read_timeout
-                ):
-                    output_emitter.push(chunk)
-                speaking = False
+class SynthesizeStream(tts.WebSocketStream[_Message, _Command]):
+    """A stream on a pooled Vakyam socket. Vakyam speaks one utterance at a time, so each text
+    waits for the end of the one before."""
 
-                if session.last_result:
-                    output_emitter.report_usage(
-                        characters_count=session.last_result.characters_used
-                    )
-                if session.last_result and session.last_result.cancelled:
-                    logger.debug("Vakyam TTS utterance cancelled")
-                    break
-                if session.last_result and session.last_result.truncated:
-                    deferred_error = APIStatusError(
-                        "Vakyam TTS utterance was truncated",
-                        status_code=500,
-                    )
-                    break
-        except asyncio.CancelledError:
-            if speaking:
-                self._reuse_after_cancel(session, pool, self._conn_options.read_timeout)
-            else:
-                pool.put(session)
-                self._start_keepalive(session, pool)
-            raise
-        except APIStatusError as exc:
-            # Only JSON per-message errors leave the WebSocket open. Close-code
-            # status errors represent a dead transport and must be evicted.
-            match exc.body:
-                case {"type": "error"}:
-                    deferred_error = exc
-                case _:
-                    pool.remove(session)
-                    raise
-        except BaseException:
-            pool.remove(session)
-            raise
-        pool.put(session)
-        self._start_keepalive(session, pool)
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self.multiplexer = tts._mux
+        # the texts not yet sent, the utterance being spoken, and the segments whose text ended
+        self._queued = deque[tuple[str, str]]()
+        self._speaking: str | None = None
+        self._ended: set[str] = set()
 
-        if deferred_error is not None:
-            raise deferred_error
-        output_emitter.end_segment()
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Text | None:
+        match item:
+            case tts.SegmentStart() | tts.EndOfText():
+                return None
+            case tts.SegmentText():
+                self._queued.append((item.segment_id, item.chunk.text))
+                return self._next() if self._speaking is None else None
+            case tts.SegmentEnd():
+                self._ended.add(item.segment_id)
+                self._complete(item.segment_id)
+                return None
+            case _:
+                assert_never(item)
+
+    def _next(self) -> _Text | None:
+        if not self._queued:
+            return None
+        self._speaking, text = self._queued.popleft()
+        return _Text(type="text", text=text)
+
+    def _complete(self, segment_id: str) -> None:
+        """The segment is done once its text ended and each of its utterances was spoken."""
+        if (
+            segment_id in self._ended
+            and self._speaking != segment_id
+            and all(queued != segment_id for queued, _ in self._queued)
+        ):
+            self._ended.discard(segment_id)
+            self.report(tts.SegmentDone(segment_id))
+
+    def on_message(self, message: _Message) -> None:
+        segment = self._speaking or ""
+        if isinstance(message, bytes):
+            if message:
+                self.report(tts.SegmentAudio(segment, message))
+        elif message["type"] == "end_of_utterance":
+            if message.get("truncated"):
+                raise APIStatusError("Vakyam TTS utterance was truncated", status_code=500)
+            self.report(tts.SegmentUsage(segment, characters_count=message["characters_used"]))
+            self._speaking = None
+            if (text := self._next()) is not None:
+                self.send_now(text)
+            self._complete(segment)
+        elif message["type"] == "error":
+            raise _error(message)
+        elif message["type"] == "cancellation":
+            raise APIError("Vakyam TTS cancelled an utterance", kind="server")
+        elif (
+            message["type"] == "connected"
+            or message["type"] == "configured"
+            or message["type"] == "pong"
+        ):
+            pass
+        else:
+            assert_never(message)
+
+
+def _error(message: _Error) -> APIError:
+    detail = message.get("error")
+    code = detail.get("code") if isinstance(detail, dict) else None
+    error_code = None if code is None else str(code)
+    return APIError(
+        "Vakyam TTS WebSocket request failed"
+        + (f" (error code: {error_code})" if error_code else ""),
+        kind=WS_ERROR_KINDS.get(error_code or "", "invalid_request"),
+        body={"type": "error", "code": error_code} if error_code else {"type": "error"},
+    )

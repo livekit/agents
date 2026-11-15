@@ -89,6 +89,7 @@ pub trait SessionStateFacade: Sized {
     module = "storage_session",
     path = "livekit.agents.storage.session_state",
     dataclass,
+    deferred,
     emit,
     frozen,
     generic = "Context_T"
@@ -97,7 +98,7 @@ pub trait SessionStateFacade: Sized {
 pub struct BoundContext {
     #[host(annotation = "Context_T")]
     pub context: crate::HostRef,
-    #[host(annotation = "typing.Any")]
+    #[host(annotation = "livekit.agents.storage.context.ContextStore")]
     pub store: crate::HostRef,
 }
 

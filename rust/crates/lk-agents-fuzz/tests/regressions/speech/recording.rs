@@ -149,3 +149,62 @@ mod a_recorder_attached_while_a_segment_is_held {
         assert!(progressed, "the speaker reported the held segment playing");
     }
 }
+
+mod a_recorder_attached_while_a_segment_waits_for_audio {
+    //! A segment whose speaker played all the audio it took, still open for the rest (a realtime
+    //! model or an audio stream that has not sent it yet), goes on playing after a recorder
+    //! attaches: the recording holds what follows, where the speaker reports it played.
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{AgentText, Count, Input, Millis, Ref, SayInput};
+    use lk_agents_fuzz::record::{RecorderCall, Sink};
+
+    // Catches: survey seeds 123 and 776. The attach skipped the segment as played to its end, so
+    // the recorder never joined it: the speaker's later reports, at the segment's own offsets,
+    // placed nothing, and the recording was silent where the person heard the rest.
+    #[test]
+    fn the_rest_of_the_segment_is_recorded() {
+        let stream = Ref::new(0);
+        let segment = Ref::new(0);
+        let inputs = [
+            Input::Say {
+                text: AgentText("Let me check that for you.".into()),
+                input: SayInput::Audio,
+                allow: None,
+                to_ctx: true,
+            },
+            Input::FeedAudio { stream, chunks: Count(20) },
+            Input::Advance { ms: Millis(100) },
+            Input::PlayoutStarted { segment },
+            // All it took played; the segment waits for the rest.
+            Input::PlayoutProgressed { segment, ms: Millis(60_000) },
+            Input::Advance { ms: Millis(3_000) },
+            Input::Recorder { attach: true },
+            Input::Advance { ms: Millis(100) },
+            Input::FeedAudio { stream, chunks: Count(40) },
+            Input::Advance { ms: Millis(100) },
+            Input::PlayoutProgressed { segment, ms: Millis(60_000) },
+            Input::Advance { ms: Millis(3_000) },
+            Input::FeedEnd { stream },
+            Input::Advance { ms: Millis(100) },
+            Input::PlayoutFinished { segment },
+            Input::Advance { ms: Millis(5_000) },
+        ];
+        let run = simulate(async {
+            let mut run = Run::start(&Setup::default(), 0, Default::default()).await;
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            run
+        });
+        let told = run
+            .record
+            .sink()
+            .iter()
+            .any(|(_, s)| *s == Sink::Recorder(RecorderCall::PlaybackProgressed));
+        assert!(told, "the recorder was told the rest played");
+        let (failures, _) = lk_agents_fuzz::check::check_all(&run.record);
+        let unheard: Vec<_> =
+            failures.iter().filter(|f| f.contract == "recording_is_what_played").collect();
+        assert!(unheard.is_empty(), "{unheard:?}");
+    }
+}

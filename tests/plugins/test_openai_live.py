@@ -23,11 +23,13 @@ from livekit.agents import (
     ErrorEvent,
     NotGivenOr,
     VoiceSession,
+    _core,
     function_tool,
     http,
     llm,
 )
-from livekit.plugins.openai.realtime import ResponsesDelegationOptions
+from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
+from livekit.plugins.openai.realtime import ResponsesDelegationOptions, gpt_live_types
 from livekit.plugins.openai.realtime.gpt_live_model import (
     GPTLiveDelegation,
     GPTLiveModel,
@@ -37,13 +39,33 @@ from tests.fakes import FakeAudioOutput, audio_frame, until
 
 
 class _Model(GPTLiveModel):
-    """Keeps the session the VoiceSession opens, to reach its mute and append methods."""
+    """Keeps the session the VoiceSession opens, to reach its mute and append methods, and the
+    metrics it reports from its creation on."""
 
     live: GPTVoiceSession
+    metrics: list[RealtimeModelMetrics | LLMMetrics]
 
     def session(self) -> GPTVoiceSession:
         self.live = super().session()
+        self.metrics = []
+        self.live.on("metrics_collected", self.metrics.append)
         return self.live
+
+    def acquired(self) -> list[RealtimeModelMetrics]:
+        """The connection metrics: each one a session the service started."""
+        return [
+            m
+            for m in self.metrics
+            if isinstance(m, RealtimeModelMetrics) and m.acquire_time is not None
+        ]
+
+    def used(self) -> list[float]:
+        """The session seconds each usage report added."""
+        return [
+            m.connection_duration
+            for m in self.metrics
+            if isinstance(m, RealtimeModelMetrics) and m.connection_duration is not None
+        ]
 
 
 class _Tool(TypedDict):
@@ -59,10 +81,20 @@ class _Delegation(TypedDict):
     responses: _Responses
 
 
+class _Part(TypedDict):
+    text: str
+
+
+class _Input(TypedDict):
+    role: str
+    content: list[_Part]
+
+
 class _Session(TypedDict):
     instructions: str
     audio: dict[str, object]
     delegation: _Delegation
+    input: list[_Input]
 
 
 class _Start(TypedDict):
@@ -76,8 +108,9 @@ class _Peer:
     """A Live API endpoint: answers session.start and session.close, and keeps every event each
     connection sent, audio aside."""
 
-    def __init__(self, *, start: bool = True) -> None:
+    def __init__(self, *, start: bool = True, closed_seconds: float = 0) -> None:
         self.start = start
+        self.closed_seconds = closed_seconds
         self.connections: list[list[dict[str, object]]] = []
         self.starts: list[_Start] = []
         self.audio: list[bytes] = []
@@ -100,8 +133,9 @@ class _Peer:
             if event["type"] == "session.start" and self.start:
                 await socket.send_json({"type": "session.started", "session": {"id": "live_1"}})
             elif event["type"] == "session.close":
+                usage = {"seconds": self.closed_seconds}
                 await socket.send_json(
-                    {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+                    {"type": "session.closed", "reason": "close_requested", "usage": usage}
                 )
         return socket
 
@@ -135,10 +169,11 @@ async def _voice(
     agent: Agent,
     *,
     output: FakeAudioOutput | None = None,
-    voice: str | dict[str, object] = "marin",
+    voice: str | gpt_live_types.CustomVoice = "marin",
     responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
     conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     delegation: Literal["responses", "client"] = "responses",
+    max_session_duration: float | None = None,
 ) -> AsyncIterator[_Model]:
     app = web.Application()
     app.router.add_get("/v1/live/sessions", peer.handle)
@@ -150,6 +185,7 @@ async def _voice(
             responses_options=responses_options,
             conn_options=conn_options,
             delegation=delegation,
+            max_session_duration=max_session_duration,
         )
         session = VoiceSession(llm=llm.DuplexRealtimeAdapter(model), vad=None)
         session.output.audio = output or FakeAudioOutput()
@@ -516,3 +552,152 @@ async def test_client_delegation_refuses_tools_it_could_never_call() -> None:
     assert not error.error.recoverable
     assert "no tool channel" in str(error.error.error) and "lookup" in str(error.error.error)
     assert not peer.starts
+
+
+async def _lose_the_connection(peer: _Peer, model: _Model) -> None:
+    """Close the peer's socket and wait for the session to retry, with nothing reconnecting
+    until the test skips the retry interval."""
+    retried: list[llm.RealtimeModelError] = []
+    model.live.on("error", retried.append)
+    await peer.socket.close()
+    await until(lambda: retried, "the lost connection was not retried")
+    assert retried[0].recoverable
+
+
+async def test_commands_for_a_lost_session_never_reach_the_next() -> None:
+    """A tool result answered while the connection is down starts the next session as history.
+
+    https://github.com/livekit/agents/pull/7230
+    """
+    # Catches: commands queued for a session that ended sent to the next one, whose backend
+    # never made the call: the service refuses the response.item.create.
+    peer = _Peer()
+    lookups = _Lookups("a")
+    options = APIConnectOptions(max_retry=1, retry_interval=5)
+    async with _voice(peer, lookups.agent, conn_options=options) as model:
+        queued: list[gpt_live_types.ClientEvent] = []
+        model.live.on("openai_client_event_queued", queued.append)
+        await peer.backend(_created("resp_1"), _call("call_1", "a"), _completed("resp_1"))
+        await until(lambda: lookups.calls, "the tool did not run")
+        await _lose_the_connection(peer, model)
+
+        lookups.gates["a"].set()
+        await until(lambda: any(e["type"] == "response.create" for e in queued), "no result")
+        _core.skip_host_time(10)  # past the retry interval
+        await until(lambda: len(peer.starts) == 2, "no reconnect")
+        await peer.barrier(model)
+
+        assert peer.sent(1) == []
+    history = [
+        part["text"] for item in peer.starts[1]["session"]["input"] for part in item["content"]
+    ]
+    assert any(text.endswith(" returned a") for text in history)
+
+
+async def test_appends_while_disconnected_start_the_next_session() -> None:
+    """Instructions and commentary added while the connection is down are in the next start."""
+    # Catches: an append made between sessions replayed after the next one started, out of
+    # order with the history it was added after, or lost with the session it was queued for.
+    peer = _Peer()
+    options = APIConnectOptions(max_retry=1, retry_interval=5)
+    async with _voice(peer, Agent(instructions="Answer."), conn_options=options) as model:
+        await _lose_the_connection(peer, model)
+        model.live.append_instructions("Speak French.")
+        model.live.append_commentary("The order shipped.")
+        _core.skip_host_time(10)  # past the retry interval
+        await until(lambda: len(peer.starts) == 2, "no reconnect")
+        await peer.barrier(model)
+
+        assert peer.sent(1) == []
+    history = [
+        part["text"] for item in peer.starts[1]["session"]["input"] for part in item["content"]
+    ]
+    assert history[-2:] == ["Speak French.", "The order shipped."]
+
+
+async def test_an_append_after_the_service_ended_the_session_starts_the_next_one() -> None:
+    """An append made after the service closed its session is in the next session's start, which
+    the next audio opens."""
+    # Catches: a command queued once the session was over holding back the audio that opens the
+    # next one, so the conversation never resumed, or sent to the next session after its start.
+    peer = _Peer()
+    async with _voice(peer, Agent(instructions="Answer.")) as model:
+        await until(model.acquired, "the session did not start")
+        closed = {"reason": "idle_timeout", "usage": {"seconds": 1}}
+        await peer.socket.send_json({"type": "session.closed", **closed})
+        await until(lambda: 1 in model.used(), "the session's end was not read")
+        model.live.append_instructions("Speak French.")
+        model.live.push_audio(audio_frame(0.1))
+        await until(lambda: len(peer.starts) == 2, "no new session")
+        await peer.barrier(model)
+
+        assert peer.sent(1) == []
+    history = [
+        part["text"] for item in peer.starts[1]["session"]["input"] for part in item["content"]
+    ]
+    assert history[-1:] == ["Speak French."]
+
+
+async def test_the_connection_is_acquired_once_the_session_started() -> None:
+    """The acquire time covers the handshake and the session's start, the wait before input."""
+    # Catches: the acquire time measured at the handshake, before session.start even went, so
+    # a slow session start never showed in the metric.
+    peer = _Peer(start=False)
+    async with _voice(peer, Agent(instructions="Answer.")) as model:
+        # the peer holds session.start, sent after the handshake
+        assert model.acquired() == []
+
+        await peer.socket.send_json({"type": "session.started", "session": {"id": "live_1"}})
+        await until(model.acquired, "the connection was never reported acquired")
+
+
+async def test_a_session_past_its_duration_is_closed_then_replaced() -> None:
+    """At max_session_duration the session is asked to close, its final usage kept, then a new
+    one starts from the conversation so far."""
+    # Catches: a replacement that drops the socket without session.close, losing the session's
+    # final usage, or that leaves the session running past its duration.
+    peer = _Peer(closed_seconds=30)
+    async with _voice(peer, Agent(instructions="Answer."), max_session_duration=20) as model:
+        await until(model.acquired, "the session did not start")
+        _core.skip_host_time(25)  # past the duration
+        await until(lambda: "session.close" in peer.sent(0), "the session was not closed")
+        # the next session opens for the next input
+        model.live.push_audio(audio_frame(0.1))
+        await until(lambda: len(peer.starts) == 2, "no new session")
+
+        assert 30 in model.used()
+
+
+async def test_closing_ends_the_session_and_keeps_its_final_usage() -> None:
+    """Closing asks the service to close the session and reports the usage it closes with."""
+    # Catches: a close that drops the socket at once, losing the usage session.closed carries.
+    peer = _Peer(closed_seconds=12)
+    async with _voice(peer, Agent(instructions="Answer.")) as model:
+        await until(model.acquired, "the session did not start")
+
+    assert peer.sent(0)[-1] == "session.close"
+    assert 12 in model.used()
+
+
+async def test_every_server_frame_reaches_the_application_unknown_ones_included() -> None:
+    """Each frame is handed to the application as received; one the session does not read is
+    skipped, as is a field it does not know."""
+    # Catches: a new event type or field from the service failing a live session, or never
+    # reaching the application's raw event handler.
+    peer = _Peer()
+    async with _voice(peer, Agent(instructions="Answer.")) as model:
+        frames: list[str | bytes] = []
+        errors: list[llm.RealtimeModelError] = []
+        model.live.on("openai_server_event_received", frames.append)
+        model.live.on("error", errors.append)
+        await peer.socket.send_json({"type": "session.future_event", "payload": 1})
+        delta = {"type": "session.output_transcript.delta", "delta": "Hi", "speaker": "agent"}
+        await peer.socket.send_json(delta)
+        await until(lambda: len(frames) >= 2, "the frames did not reach the application")
+        await peer.barrier(model)
+
+    read = [json.loads(frame)["type"] for frame in frames]
+    # the close reads the answer to its session.close last
+    unknown, known = "session.future_event", "session.output_transcript.delta"
+    assert read[-3:] == [unknown, known, "session.closed"]
+    assert errors == []

@@ -7,9 +7,10 @@ use crate::telemetry;
 use crate::trace::{
     CloseAct, CloseStep, InterruptCause, InterruptStep, PauseRefusal, SpeechStep, TurnStep,
 };
+use indexmap::IndexMap;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::{AgentState, SpeechSource};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use speech_scheduler::{NextSpeech, Requeue, SchedulingPass};
@@ -79,7 +80,8 @@ mod speech_scheduler {
     /// live speech's state.
     #[derive(Debug)]
     pub struct SpeechScheduler {
-        speeches: BTreeMap<SpeechId, Entry>,
+        /// In the order they were created: a speech's id says nothing of when.
+        speeches: IndexMap<SpeechId, Entry>,
         /// Every speech has the same priority, so this is a plain queue.
         speech_q: VecDeque<SpeechId>,
         step: SchedulingStep,
@@ -114,7 +116,7 @@ mod speech_scheduler {
     impl SpeechScheduler {
         pub fn new() -> Self {
             SpeechScheduler {
-                speeches: BTreeMap::new(),
+                speeches: IndexMap::new(),
                 speech_q: VecDeque::new(),
                 step: SchedulingStep::Idle,
                 last_playout: None,
@@ -378,7 +380,7 @@ mod speech_scheduler {
             speech: SpeechId,
             now: Ts,
         ) -> Option<(bool, Option<telemetry::AgentTurnSpan>)> {
-            let mut entry = self.speeches.remove(&speech)?;
+            let mut entry = self.speeches.shift_remove(&speech)?;
             let last = entry.state.take_updates().into_iter().chain([SpeechUpdate::Released]);
             self.released.extend(last.map(|u| (speech, u)));
             self.retiring.insert(speech);
@@ -1118,5 +1120,23 @@ impl super::AgentActivity {
 
     pub(crate) fn is_realtime_speech(&self, speech: SpeechId) -> bool {
         self.speech_scheduler.kind(speech) == Some(SpeechKind::Realtime)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Catches: speeches held by id, so "the newest reply" a late final makes again was the one
+    /// with the largest id, and a correction cut an older turn's reply still waiting on its tool.
+    #[test]
+    fn speeches_are_held_oldest_first_whatever_their_ids() {
+        let mut scheduler = SpeechScheduler::new();
+        for id in [9, 3, 7] {
+            let state = SpeechState::new(true);
+            scheduler.admit(SpeechId(id), state, SpeechKind::TurnReply, true, Status::Queued);
+        }
+        let held: Vec<u64> = scheduler.speeches().map(|(id, _)| id.0).collect();
+        assert_eq!(held, [9, 3, 7]);
     }
 }

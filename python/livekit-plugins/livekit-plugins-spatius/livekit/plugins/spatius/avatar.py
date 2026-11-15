@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import TypedDict
+from typing import Never, TypedDict
 
 from pydantic import TypeAdapter
 
@@ -38,7 +38,13 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import ErrorKind
-from livekit.agents.voice.avatar import AudioSegmentEnd, AvatarStart, ForwardingAvatarSession
+from livekit.agents.voice.avatar import (
+    AudioSegmentEnd,
+    AvatarStart,
+    AvatarWebSocket,
+    ForwardingAvatarSession,
+    WebSocketTarget,
+)
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from . import _ogg_opus, _proto
@@ -205,6 +211,43 @@ def _server_error(message: _proto.ServerError) -> APIError:
     )
 
 
+class _Ingress(AvatarWebSocket[_proto.ConfirmSession | _proto.ServerError, Never]):
+    """The ingress socket: the session's configuration first, then nothing until Spatius
+    confirms the session; a server error at any point fails it by its code."""
+
+    awaits_ready = True
+
+    def __init__(self, target: WebSocketTarget, configuration: bytes) -> None:
+        super().__init__("Spatius")
+        self._target = target
+        self._configuration = configuration
+        self.connection_id = ""
+
+    async def connect(self, conn_options: APIConnectOptions) -> WebSocketTarget:
+        return self._target
+
+    def setup(self) -> bytes:
+        return self._configuration
+
+    def decode(self, frame: bytes | str) -> _proto.ConfirmSession | _proto.ServerError | None:
+        if isinstance(frame, str):
+            raise APIError("Spatius sent a text frame", kind="protocol", detail=frame)
+        try:
+            return _proto.decode(frame)
+        except ValueError as e:
+            raise APIError(
+                "Spatius sent a malformed message", kind="protocol", detail=str(e)
+            ) from e
+
+    def on_message(self, message: _proto.ConfirmSession | _proto.ServerError) -> None:
+        if message["type"] == "error":
+            raise _server_error(message)
+        if not message["connection_id"]:
+            raise APIError("Spatius confirmed a session without its id", kind="protocol")
+        self.connection_id = message["connection_id"]
+        self.ready()
+
+
 class AvatarSession(ForwardingAvatarSession):
     """A Spatius avatar session.
 
@@ -286,7 +329,7 @@ class AvatarSession(ForwardingAvatarSession):
         self._extra_params = dict(extra_params or {})
         self._opus_frame_duration_ms = opus_frame_duration_ms
         self._opus_application = opus_application
-        self._ws: http.WebSocket | None = None
+        self._ingress: _Ingress | None = None
         # the request being sent, its encoder, and the last request, which a clear interrupts
         self._request: str | None = None
         self._encoder: _ogg_opus.OggOpusEncoder | None = None
@@ -341,80 +384,53 @@ class AvatarSession(ForwardingAvatarSession):
         )
         scheme, _, rest = ingress_url.rstrip("/").partition("://")
         scheme = {"http": "ws", "https": "wss"}.get(scheme, scheme)
-        ws = await http.http_session().ws_connect(
-            f"{scheme}://{rest}/websocket",
-            params={"id": self._avatar_id},
-            headers={"X-App-ID": self._app_id, "X-Session-Key": token},
-            conn_options=ctx.conn_options,
+        ingress = _Ingress(
+            WebSocketTarget(
+                f"{scheme}://{rest}/websocket",
+                headers={"X-App-ID": self._app_id, "X-Session-Key": token},
+                params={"id": self._avatar_id},
+            ),
+            _proto.configure_session(
+                sample_rate=sample_rate,
+                bitrate=self._bitrate,
+                audio_format=_PROTO_FORMATS[self._audio_format],
+                extra_params=self._extra_params,
+                url=ctx.livekit_url,
+                api_token=egress_token,
+                room_name=ctx.room.name,
+                publisher_id=ctx.avatar_identity,
+                extra_attributes={
+                    ATTRIBUTE_PUBLISH_ON_BEHALF: ctx.agent_identity,
+                    _LIVEKIT_AGENT_IDENTITY_ATTRIBUTE: ctx.agent_identity,
+                },
+                idle_timeout=self._idle_timeout_seconds,
+            ),
         )
         try:
-            await ws.send_bytes(
-                _proto.configure_session(
-                    sample_rate=sample_rate,
-                    bitrate=self._bitrate,
-                    audio_format=_PROTO_FORMATS[self._audio_format],
-                    extra_params=self._extra_params,
-                    url=ctx.livekit_url,
-                    api_token=egress_token,
-                    room_name=ctx.room.name,
-                    publisher_id=ctx.avatar_identity,
-                    extra_attributes={
-                        ATTRIBUTE_PUBLISH_ON_BEHALF: ctx.agent_identity,
-                        _LIVEKIT_AGENT_IDENTITY_ATTRIBUTE: ctx.agent_identity,
-                    },
-                    idle_timeout=self._idle_timeout_seconds,
-                )
-            )
-            confirmed = await self._read(ws, ctx.conn_options.read_timeout)
-            if confirmed["type"] == "error":
-                raise _server_error(confirmed)
-            if not confirmed["connection_id"]:
-                raise APIError("Spatius confirmed a session without its id", kind="protocol")
+            await ingress.open(ctx.conn_options)
         except BaseException:
-            await ws.close()
+            await ingress.aclose()
             raise
-        self._ws, self._request, self._encoder, self._last_request = ws, None, None, None
+        self._ingress, self._request, self._encoder, self._last_request = ingress, None, None, None
         participant = ctx.room.local_participant
         participant.register_rpc_method(_RPC_PLAYBACK_STARTED, self._on_playback_started_rpc)
         participant.register_rpc_method(_RPC_PLAYBACK_FINISHED, self._on_playback_finished_rpc)
-        return confirmed["connection_id"]
+        return ingress.connection_id
 
     async def end_session(self, session_id: str) -> None:
-        ws, self._ws = self._ws, None
+        ingress, self._ingress = self._ingress, None
         if self._room is not None:
             self._room.local_participant.unregister_rpc_method(_RPC_PLAYBACK_STARTED)
             self._room.local_participant.unregister_rpc_method(_RPC_PLAYBACK_FINISHED)
-        if ws is not None:
-            await ws.close()
+        if ingress is not None:
+            await ingress.aclose()
 
     async def receive(self) -> None:
-        assert self._ws is not None
-        while True:
-            message = await self._read(self._ws, None)
-            if message["type"] == "error":
-                raise _server_error(message)
-
-    async def _read(
-        self, ws: http.WebSocket, timeout: float | None
-    ) -> _proto.ConfirmSession | _proto.ServerError:
-        """The next server message the plugin reads; a close fails by its code."""
-        while True:
-            msg = await ws.receive(timeout)
-            if msg.type is http.WebSocketMessageType.CLOSE:
-                raise ws.close_error("Spatius closed the avatar session")
-            if msg.type is not http.WebSocketMessageType.BINARY:
-                raise APIError("Spatius sent a text frame", kind="protocol", detail=msg.text)
-            try:
-                message = _proto.decode(msg.binary)
-            except ValueError as e:
-                raise APIError(
-                    "Spatius sent a malformed message", kind="protocol", detail=str(e)
-                ) from e
-            if message is not None:
-                return message
+        assert self._ingress is not None
+        await self._ingress.run(self._conn_options)
 
     async def forward(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
-        assert self._ws is not None
+        assert self._ingress is not None
         end = isinstance(frame, AudioSegmentEnd)
         pcm = b"" if isinstance(frame, AudioSegmentEnd) else bytes(frame.data)
         if self._request is None:
@@ -431,14 +447,14 @@ class AvatarSession(ForwardingAvatarSession):
             pcm = self._encoder.encode(pcm, end=end)
             if not pcm and not end:
                 return
-        await self._ws.send_bytes(_proto.audio_input(self._request, pcm, end=end))
+        self._ingress.send(_proto.audio_input(self._request, pcm, end=end))
         if end:
             self._request = self._encoder = None
 
     async def clear(self) -> None:
-        if self._ws is None or self._last_request is None:
+        if self._ingress is None or self._last_request is None:
             return
-        await self._ws.send_bytes(_proto.interrupt(self._last_request))
+        self._ingress.send(_proto.interrupt(self._last_request))
         self._request = self._encoder = None
 
     def _on_playback_started_rpc(self, data: rtc.RpcInvocationData) -> str:

@@ -1,3 +1,5 @@
+/// Stable-ID revisions and insertion rules for ordered conversation items.
+pub mod ordering;
 pub mod protocol;
 
 use std::sync::Arc;

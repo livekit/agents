@@ -13,7 +13,7 @@ from google.protobuf import empty_pb2
 from google.protobuf.unknown_fields import UnknownFieldSet
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, VoiceSession, http
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError, VoiceSession, http
 from livekit.agents.voice.avatar import QueueAudioOutput
 from livekit.plugins import spatius
 from livekit.plugins.spatius import avatar as spatius_avatar, warmup
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from tests.plugins.conftest import AvatarHost
 
 OPTIONS = APIConnectOptions(max_retry=0, connect_timeout=1, read_timeout=1)
+HEARTBEAT = 0.05  # the ingress socket's ping interval, scaled down from its 30 s
 # Message{type: SERVER_CONFIRM_SESSION, server_confirm_session: {connection_id: "conn-1"}}
 CONFIRM = b"\x08\x02\x1a\x08\x0a\x06conn-1"
 
@@ -55,6 +56,8 @@ class Spatius:
         self.handshake = CONFIRM
         self.messages: list[dict[int, list[Any]]] = []
         self.socket: web.WebSocketResponse | None = None
+        self.autoping = True
+        """Whether the ingress answers pings; ``False`` is a peer gone silent."""
 
     async def token(self, request: web.Request) -> web.Response:
         self.token_posts += 1
@@ -62,12 +65,13 @@ class Spatius:
 
     async def ingress(self, request: web.Request) -> web.WebSocketResponse:
         self.upgrade = request
-        socket = self.socket = web.WebSocketResponse()
+        socket = self.socket = web.WebSocketResponse(autoping=self.autoping)
         await socket.prepare(request)
         self.configuration = await socket.receive_bytes()
         await socket.send_bytes(self.handshake)
         async for message in socket:
-            self.messages.append(fields(message.data))
+            if message.type is web.WSMsgType.BINARY:
+                self.messages.append(fields(message.data))
         return socket
 
     def audio(self) -> list[tuple[str, bool, bytes]]:
@@ -211,6 +215,22 @@ async def test_a_server_error_fails_the_avatar_by_its_code(
     error = avatar_host.lifecycle.fail.call_args.args[0]
     assert isinstance(error, APIError)
     assert (error.kind, error.detail) == ("auth", "unauthorized egress")
+
+
+async def test_a_silent_ingress_fails_the_avatar_as_lost(
+    provider: Spatius, avatar_host: AvatarHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ingress that stops answering pings fails the avatar with a connection error instead
+    of leaving it sending into a half-open socket."""
+    provider.autoping = False
+    monkeypatch.setattr(spatius_avatar._Ingress, "ping_interval", HEARTBEAT)
+    session, _ = await start(provider, avatar_host)
+    try:
+        await until(lambda: avatar_host.lifecycle.fail.called, "the avatar fails")
+    finally:
+        await session.aclose()
+
+    assert isinstance(avatar_host.lifecycle.fail.call_args.args[0], APIConnectionError)
 
 
 async def test_a_refused_handshake_fails_start_by_its_code(

@@ -1,6 +1,16 @@
+//! The authoritative session conversation and each agent's view of it.
+//!
+//! Stable IDs update existing items in place. New items use their logical instant, ties after;
+//! tool results stay with their call group even when another turn happened while they ran.
+//! Generation/receipt arrival order therefore does not define conversation order. Interrupted
+//! speech contributes its accepted heard prefix and interruption flag, not its generated tail.
+//! Acceptance here is distinct from durability: unsaved edits survive reload until the save
+//! carrying them is acknowledged. Storage reconciliation preserves unseen foreign items.
+
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::audio_recognition::TurnId;
 use crate::generation::INSTRUCTIONS_MESSAGE_ID;
+use lk_agents_abi::llm::chat_context::ordering::insertion_index;
 pub use lk_agents_abi::voice::events::Visibility;
 use lk_agents_abi::{ChatContext, ChatItem, Vocabulary};
 use std::collections::{BTreeMap, BTreeSet};
@@ -223,7 +233,7 @@ impl SessionChatCtx {
         }
         let id = entry.item.id();
         let outcome = if self.ids.insert(id.to_owned()) {
-            let idx = self.find_insertion_index(&entry.item);
+            let idx = self.find_insertion_index(&mut entry.item);
             self.items.insert(idx, entry.clone());
             CommitOutcome::Added
         } else {
@@ -245,7 +255,7 @@ impl SessionChatCtx {
                 // Joining the history, it takes its place there by its own instant, as an item
                 // added now would: one the model saw earlier carried an earlier stamp.
                 self.items.remove(idx);
-                let at = self.find_insertion_index(&entry.item);
+                let at = self.find_insertion_index(&mut entry.item);
                 self.items.insert(at, Committed { visibility, ..entry.clone() });
                 CommitOutcome::Added
             } else {
@@ -300,13 +310,13 @@ impl SessionChatCtx {
         // A row the turn read that the record does not hold is the request's own (its prompt, its
         // new message): never the partition's to add.
         for row in partition.into_iter().flatten().filter(|row| !read.contains_key(row.id())) {
-            let entry = Committed {
+            let mut entry = Committed {
                 item: row,
                 source: Source::HostCtx,
                 visibility: Visibility::Both,
                 agent: agent.to_owned(),
             };
-            let at = self.find_insertion_index(&entry.item);
+            let at = self.find_insertion_index(&mut entry.item);
             self.ids.insert(entry.item.id().to_owned());
             self.items.insert(at, entry);
         }
@@ -410,20 +420,8 @@ impl SessionChatCtx {
         self.contains(id).then(|| self.items.iter().find(|c| c.item.id() == id)).flatten()
     }
 
-    /// When `call_id`'s group ends on the record: its call and the calls and outputs right after
-    /// it. `None` while the call is not on the record.
-    pub fn call_group_end(&self, call_id: &str) -> Option<std::time::SystemTime> {
-        let call = self.items.iter().position(
-            |c| matches!(&c.item, ChatItem::FunctionCall(call) if call.call_id == call_id),
-        )?;
-        let group = self.items[call..].iter().take_while(|c| {
-            matches!(c.item, ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_))
-        });
-        group.map(|c| c.item.created_at()).max()
-    }
-
-    /// After the last item stamped at or before this one: ties go after.
-    fn find_insertion_index(&self, item: &ChatItem) -> usize {
+    /// Where `item` joins the record, an output stamped at its call's group.
+    fn find_insertion_index(&self, item: &mut ChatItem) -> usize {
         insertion_index(self.items.iter().map(|c| &c.item), item)
     }
 
@@ -442,7 +440,7 @@ impl SessionChatCtx {
             if let Some(speech) = speech {
                 with_its_turn(&mut item, speech, items.iter().map(|(i, s)| (i, *s)));
             }
-            let at = insertion_index(items.iter().map(|(i, _)| i), &item);
+            let at = insertion_index(items.iter().map(|(i, _)| i), &mut item);
             items.insert(at, (item, speech));
         }
         items.into_iter().map(|(item, _)| item).collect()
@@ -462,38 +460,6 @@ fn with_its_turn<'a>(
     if let Some((turn, _)) = held.rfind(|(_, of)| *of == Some(speech)) {
         call.created_at = turn.created_at();
     }
-}
-
-/// `item` committed to `items` as the record commits it: in place of its earlier telling, else
-/// after the last item stamped at or before it (ties go after).
-pub fn commit_by_instant(items: &mut Vec<ChatItem>, item: ChatItem) {
-    match items.iter_mut().find(|held| held.id() == item.id()) {
-        Some(held) => *held = item,
-        None => {
-            let at = insertion_index(items.iter(), &item);
-            items.insert(at, item);
-        }
-    }
-}
-
-/// When `call_id`'s group ends in `items`: its call and the calls and outputs right after it.
-pub fn call_group_end(items: &[ChatItem], call_id: &str) -> Option<std::time::SystemTime> {
-    let call = items
-        .iter()
-        .position(|item| matches!(item, ChatItem::FunctionCall(call) if call.call_id == call_id))?;
-    let group = items[call..].iter().take_while(|item| {
-        matches!(item, ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_))
-    });
-    group.map(ChatItem::created_at).max()
-}
-
-/// After the last item stamped at or before `item`: ties go after.
-fn insertion_index<'a>(
-    mut items: impl DoubleEndedIterator<Item = &'a ChatItem> + ExactSizeIterator,
-    item: &ChatItem,
-) -> usize {
-    let at = item.created_at();
-    items.rposition(|held| held.created_at() <= at).map_or(0, |i| i + 1)
 }
 
 #[cfg(test)]
@@ -667,9 +633,9 @@ mod tests {
         for item in calls {
             commit(&mut ctx, item, Source::ToolCall { speech, step: 1 });
         }
+        // each output stamped when it landed, after the person spoke
         for id in ["a", "b"] {
-            let end = ctx.call_group_end(id).expect("held");
-            let output = FunctionCallOutput::new(format!("{id}_out"), id, "", false, end);
+            let output = FunctionCallOutput::new(format!("{id}_out"), id, "", false, at(60_000));
             commit(&mut ctx, output.into(), Source::ToolOutput { speech, step: 1 });
         }
         let ids: Vec<_> = ctx.history().map(|item| item.id().to_owned()).collect();

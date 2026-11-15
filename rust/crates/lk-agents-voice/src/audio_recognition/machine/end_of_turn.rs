@@ -154,7 +154,7 @@ impl AudioRecognition {
     /// also leaves `Committed`, and forgets the declaration.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub(super) fn retire(&mut self, now: Ts) -> Vec<AudioRecognitionEffect> {
-        let mut eff = Vec::new();
+        let mut eff = self.cancel_final_wait();
         let speaking = self.user_speaking();
         self.deferred_opportunity = None;
         eff.extend(self.abandon());
@@ -216,6 +216,9 @@ impl AudioRecognition {
     pub fn on_timer(&mut self, now: Ts, timer: Timer) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
         match timer {
+            Timer::FinalTranscriptTimeout => {
+                eff.extend(self.final_transcript_timed_out(now));
+            }
             Timer::EotPredictionTimeout => {
                 if let Phase::Awaiting { run, req, .. } = &self.phase {
                     let (run, req) = (*run, *req);
@@ -308,7 +311,7 @@ impl AudioRecognition {
     /// manual commit; the STT stream is left as it is.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub fn reset_user_turn(&mut self, now: Ts) -> Vec<AudioRecognitionEffect> {
-        let mut eff = Vec::new();
+        let mut eff = self.cancel_final_wait();
         self.audio_transcript.clear();
         self.interim_transcript.clear();
         self.interim_utterance = None;
@@ -419,10 +422,10 @@ impl AudioRecognition {
         if let Some(text) = text.filter(|t| !t.is_empty()) {
             eff.extend(self.host_words(text));
         }
-        // Past the close's edge nothing waits: commit what the turn holds, or nothing; a manual
-        // turn completes even with no words.
+        // Manual mode can complete its first empty turn. After a turn was consumed, shutdown
+        // must not invent another user item just because physical speech has not ended yet.
         let manual = self.cfg.turn_detection_mode == super::TurnDetectionMode::Manual;
-        if self.closed && self.current_transcript().is_empty() && !manual {
+        if self.closed && self.current_transcript().is_empty() && (!manual || self.turn_seq > 0) {
             return eff;
         }
         eff.extend(self.run_eou_detection(now, Start::Manual { skip_reply }));
@@ -499,7 +502,7 @@ impl AudioRecognition {
     /// close). Nothing happens in `Awaiting`: the inference wait ignores the close.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub fn on_closing(&mut self, now: Ts, commit: bool) -> Vec<AudioRecognitionEffect> {
-        let mut eff = Vec::new();
+        let mut eff = self.cancel_final_wait();
         self.closed = true;
         if self.turn_limit_timer_armed {
             self.turn_limit_timer_armed = false;
@@ -675,12 +678,15 @@ impl AudioRecognition {
         let mut eff = Vec::new();
         let manual = matches!(start, Start::Manual { .. } | Start::Released { .. });
         let declared = match start {
-            Start::Manual { .. } | Start::Released { .. } => true,
+            Start::Manual { .. } | Start::Released { .. } | Start::FinalTranscriptTimeout => true,
             Start::Auto { declared } => declared || self.declared(),
         };
         // No transcript yet: the turn doesn't start, but the owner's declaration is remembered so
         // the words commit at once when they land.
-        if self.cfg.stt_enabled && self.audio_transcript.is_empty() && !manual {
+        let provisional =
+            matches!(self.pending_final, Some(super::FinalTranscriptWait::Expired { .. }))
+                && !self.interim_transcript.trim().is_empty();
+        if self.cfg.stt_enabled && self.audio_transcript.is_empty() && !manual && !provisional {
             let next = match self.phase {
                 Phase::Idle => Some(Phase::Ended {
                     anchor: self.last_speaking_time.unwrap_or(now),
@@ -718,7 +724,7 @@ impl AudioRecognition {
                 speech_start_time: snapshot_turn_start,
             },
             skip_reply: match start {
-                Start::Auto { .. } => false,
+                Start::Auto { .. } | Start::FinalTranscriptTimeout => false,
                 Start::Manual { skip_reply } | Start::Released { skip_reply } => skip_reply,
             },
             min_delay: self.endpointing.min_delay(),

@@ -1,5 +1,7 @@
 // The generated module globs this one to resolve field types.
 pub use crate::llm::provider_format::tools::{DuplicateMode, DuplicateScope, ToolFlag};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 #[crate::host(file(module = "mcp"))]
 const _: () = ();
@@ -50,6 +52,281 @@ pub struct McpToolOptionsPatch {
     /// ``request_timeout``.
     #[host(default = None)]
     pub timeout: Option<f64>,
+}
+
+/// A JSON object MCP carries as it is: a tool's arguments, or the schema it is offered as.
+#[crate::host(codec(
+    extract,
+    emit,
+    host = "dict[str, pydantic.JsonValue]",
+    via = serde_json::Value
+))]
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct JsonObject(pub Map<String, Value>);
+
+impl TryFrom<Value> for JsonObject {
+    type Error = crate::errors::Invalid;
+    fn try_from(value: Value) -> Result<Self, crate::errors::Invalid> {
+        match value {
+            Value::Object(map) => Ok(Self(map)),
+            other => Err(crate::errors::Invalid(format!("expected a JSON object, got {other}"))),
+        }
+    }
+}
+
+impl From<JsonObject> for Value {
+    fn from(object: JsonObject) -> Self {
+        Value::Object(object.0)
+    }
+}
+
+/// A tool an MCP server lists.
+#[crate::host(record(
+    module = "mcp",
+    path = "livekit.agents.llm.mcp",
+    name = "MCPTool",
+    dataclass,
+    frozen,
+    emit,
+    extract
+))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpTool {
+    pub name: String,
+    /// What the tool does, which MCP leaves optional.
+    pub description: Option<String>,
+    /// The JSON Schema of its arguments.
+    pub input_schema: Map<String, Value>,
+    /// The server's `_meta` for the tool.
+    pub meta: Option<Map<String, Value>>,
+}
+
+/// A tool call's result as the server sent it: its content blocks, and whether the tool failed.
+#[crate::host(record(module = "mcp", name = "CallToolResult", dataclass, frozen, emit, extract))]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpCallResult {
+    #[serde(default)]
+    pub content: Vec<McpContent>,
+    #[serde(default)]
+    pub is_error: bool,
+}
+
+/// One block of a tool's result, in MCP's wire form.
+#[crate::host(record(module = "mcp", name = "ContentBlock", transparent, emit, extract))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum McpContent {
+    Text(McpText),
+    Image(McpImage),
+    Audio(McpAudio),
+    Resource(McpEmbeddedResource),
+    ResourceLink(McpResourceLink),
+}
+
+#[crate::host(record(
+    module = "mcp",
+    name = "TextContent",
+    dataclass,
+    frozen,
+    constant(type = "text"),
+    emit,
+    extract
+))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpText {
+    pub text: String,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Map<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<McpAnnotations>,
+}
+
+#[crate::host(record(
+    module = "mcp",
+    name = "ImageContent",
+    dataclass,
+    frozen,
+    constant(type = "image"),
+    emit,
+    extract
+))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpImage {
+    /// Base64.
+    pub data: String,
+    pub mime_type: String,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Map<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<McpAnnotations>,
+}
+
+#[crate::host(record(
+    module = "mcp",
+    name = "AudioContent",
+    dataclass,
+    frozen,
+    constant(type = "audio"),
+    emit,
+    extract
+))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpAudio {
+    /// Base64.
+    pub data: String,
+    pub mime_type: String,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Map<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<McpAnnotations>,
+}
+
+/// A resource's contents, inline in the result.
+#[crate::host(record(
+    module = "mcp",
+    name = "EmbeddedResource",
+    dataclass,
+    frozen,
+    constant(type = "resource"),
+    emit,
+    extract
+))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpEmbeddedResource {
+    pub resource: McpResourceContents,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Map<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<McpAnnotations>,
+}
+
+/// A resource's contents: text, or a base64 blob.
+#[crate::host(record(module = "mcp", name = "ResourceContents", transparent, emit, extract))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum McpResourceContents {
+    Text(McpTextResource),
+    Blob(McpBlobResource),
+}
+
+#[crate::host(record(
+    module = "mcp",
+    name = "TextResourceContents",
+    dataclass,
+    frozen,
+    emit,
+    extract
+))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpTextResource {
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    pub text: String,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Map<String, Value>>,
+}
+
+#[crate::host(record(
+    module = "mcp",
+    name = "BlobResourceContents",
+    dataclass,
+    frozen,
+    emit,
+    extract
+))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpBlobResource {
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Base64.
+    pub blob: String,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Map<String, Value>>,
+}
+
+/// A link to a resource the client may read.
+#[crate::host(record(
+    module = "mcp",
+    name = "ResourceLink",
+    dataclass,
+    frozen,
+    constant(type = "resource_link"),
+    emit,
+    extract
+))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpResourceLink {
+    pub uri: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Bytes, before encoding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<McpIcon>>,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Map<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<McpAnnotations>,
+}
+
+#[crate::host(record(module = "mcp", name = "Icon", dataclass, frozen, emit, extract))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpIcon {
+    pub src: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Each `WxH`, or `any`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sizes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<McpIconTheme>,
+}
+
+/// The background an icon is drawn for.
+#[crate::host(record(module = "mcp", name = "IconTheme", emit, extract))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpIconTheme {
+    Light,
+    Dark,
+}
+
+/// How a client may use a block: who it is for, how much it matters, and when it last changed.
+#[crate::host(record(module = "mcp", name = "Annotations", dataclass, frozen, emit, extract))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpAnnotations {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience: Option<Vec<McpRole>>,
+    /// From 0, least important, to 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<f64>,
+    /// An ISO 8601 timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
+}
+
+#[crate::host(record(module = "mcp", name = "Role", emit, extract))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpRole {
+    User,
+    Assistant,
 }
 
 /// Seconds a connection stays open after its toolset's last run ends, for the next run to reuse:
@@ -178,16 +455,16 @@ pub trait McpSession: Send + Sync + Sized + 'static {
         #[host(default = None)] cwd: Option<String>,
     ) -> Result<(), McpError>;
     #[host(await)]
-    async fn list_tools(&self) -> Result<serde_json::Value, McpError>;
+    async fn list_tools(&self) -> Result<Vec<McpTool>, McpError>;
     #[host(await)]
     async fn call_tool(
         &self,
         name: String,
-        arguments: serde_json::Map<String, serde_json::Value>,
+        arguments: JsonObject,
         timeout: Option<f64>,
         progress: Option<std::sync::Arc<dyn McpProgress>>,
         host_context: Option<crate::utils::host_ref::HostRef>,
-    ) -> Result<serde_json::Value, McpError>;
+    ) -> Result<McpCallResult, McpError>;
     #[host(await)]
     async fn close(&self);
 }
@@ -230,7 +507,7 @@ pub trait McpServerStdioFacade {
     async fn initialize(&self) -> Result<(), McpError>;
 
     /// The server's tool listing, every page.
-    async fn list_tools(&self) -> Result<serde_json::Value, McpError>;
+    async fn list_tools(&self) -> Result<Vec<McpTool>, McpError>;
 
     #[host(native = close)]
     async fn aclose(&self);
@@ -265,7 +542,7 @@ pub trait McpServerHttpFacade {
     fn initialized(&self) -> bool;
 
     /// The server's tool listing, every page.
-    async fn list_tools(&self) -> Result<serde_json::Value, McpError>;
+    async fn list_tools(&self) -> Result<Vec<McpTool>, McpError>;
 
     #[host(native = close)]
     async fn aclose(&self);
@@ -345,13 +622,9 @@ pub trait McpTools {
     fn resolve_tool_options(
         config: Option<McpToolOptionsPatch>,
     ) -> Result<McpToolOptions, McpError>;
+    /// The schema a listed tool is offered to the model as.
     #[host(function, name = "mcp_raw_schema")]
-    fn raw_schema(
-        name: String,
-        description: Option<String>,
-        input_schema: serde_json::Map<String, serde_json::Value>,
-        meta: Option<serde_json::Map<String, serde_json::Value>>,
-    ) -> serde_json::Value;
+    fn raw_schema(tool: McpTool) -> JsonObject;
     #[host(function, name = "mcp_render_result")]
-    fn render_result(tool_name: String, result: serde_json::Value) -> Result<String, McpError>;
+    fn render_result(tool_name: String, result: McpCallResult) -> Result<String, McpError>;
 }

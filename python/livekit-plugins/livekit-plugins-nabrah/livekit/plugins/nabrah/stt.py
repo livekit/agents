@@ -15,8 +15,8 @@
 """Nabrah STT plugin for LiveKit Agents.
 
 The backend relays recognizer output with minimal interpretation, so the plugin
-handles token stripping, EOT detection, debounce, cross-utterance accumulation,
-word conversion, and audio-position tracking.
+handles token stripping, EOT detection, its confirmation, cross-utterance accumulation
+and word conversion.
 
 Wire contract (server -> client):
     {"type": "ready"}
@@ -31,37 +31,26 @@ Two facts drive the whole design:
   turn-level  one spoken sentence routinely produces a dozen  so a final is
   only a diff-cursor reset here, never a turn boundary.
 - `audio_processed` is cumulative seconds of audio the recognizer has actually
-  consumed. It is the authoritative audio clock; a send-side count runs ahead
-  of realtime when input arrives in bursts. The key may be absent on older
-  backends, so the local counter stays as a fallback.
+  consumed on the connection: the usage reported. The key may be absent on older
+  backends.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
-import time
 from dataclasses import dataclass
-from typing import Annotated, Literal, Self
-
-from pydantic import BaseModel, Field, JsonValue, StrictBool, StrictStr, model_validator
+from typing import Literal, NotRequired, TypedDict, assert_never
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
     APIError,
     LanguageCode,
-    http,
     stt,
-    utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 from livekit.agents.utils import is_given
-
-from .log import logger
 
 DEFAULT_BASE_URL = "wss://api.nabrah.ai/api/ext/stt/ws"
 
@@ -71,14 +60,12 @@ EOT_TOKEN = "<eot>"
 EOT_PUNCTUATION = (".", "?", "!", "؟")
 _NO_SPACE_BEFORE = frozenset(".,?!:;،؛؟")
 
-_WATCHDOG_POLL_SECONDS = 0.1
-
 
 def _strip_and_detect_eot(new_text: str) -> tuple[str, bool]:
     """Strip <eot> from a transcript diff and flag an end-of-turn candidate.
 
     Detection runs on the raw diff so a trailing token isn't lost by its own
-    removal. The token becomes a SPACE, never ""  the recognizer doesn't
+    removal. The token becomes a SPACE, never ""; the recognizer doesn't
     reliably pad it, and stripping to empty glues the neighbours together
     ("الله" + "تعالى" -> "اللهتعالى").
     """
@@ -100,41 +87,53 @@ def _append_text(existing: str, new: str) -> str:
     return _normalize_whitespace(existing + separator + new)
 
 
-_NonnegativeNumber = Annotated[float, Field(strict=True, ge=0, allow_inf_nan=False)]
+class _Word(TypedDict):
+    word: NotRequired[str]
+    start_time: NotRequired[float]
+    end_time: NotRequired[float]
+    confidence: NotRequired[float]
 
 
-class _Word(BaseModel):
-    word: StrictStr = ""
-    start_time: _NonnegativeNumber = 0.0
-    end_time: _NonnegativeNumber = 0.0
-    confidence: _NonnegativeNumber | None = None
-
-    @model_validator(mode="after")
-    def _check_timestamps(self) -> Self:
-        if self.end_time < self.start_time:
-            raise ValueError("nabrah word end_time must not precede start_time")
-        return self
+class _Ready(TypedDict):
+    type: Literal["ready"]
 
 
-class _Message(BaseModel):
-    type: str | None = None
-    text: StrictStr = ""
-    is_final: StrictBool = False
-    audio_processed: _NonnegativeNumber | None = None
-    words: list[_Word] | None = None
+class _Error(TypedDict):
+    type: Literal["error"]
+
+
+class _Transcript(TypedDict):
+    type: Literal["transcript"]
+    text: NotRequired[str]
+    is_final: NotRequired[bool]
+    audio_processed: NotRequired[float]
+    words: NotRequired[list[_Word]]
+
+
+class _Config(TypedDict):
+    api_key: str
+    recognition_model: str
+    end_of_utterance_silence_ms: int
+    disable_number_normalization: bool
+    priority_words: list[str]
+    priority_words_strength: float
+
+
+class _Eof(TypedDict):
+    type: Literal["eof"]
 
 
 def _word_text(word: _Word) -> str:
-    return word.word.replace(EOT_TOKEN, "").strip()
+    return word.get("word", "").replace(EOT_TOKEN, "").strip()
 
 
 def _timed_word(word: _Word, offset: float) -> TranscriptChunk:
     """One backend word entry as a TranscriptChunk. Timestamps arrive in ms."""
     return TranscriptChunk(
         _word_text(word),
-        start_time=word.start_time / 1000.0 + offset,
-        end_time=word.end_time / 1000.0 + offset,
-        confidence=word.confidence,
+        start_time=word.get("start_time", 0.0) / 1000.0 + offset,
+        end_time=word.get("end_time", 0.0) / 1000.0 + offset,
+        confidence=word.get("confidence"),
     )
 
 
@@ -166,8 +165,14 @@ class STT(stt.STT):
         priority_words_strength: float = 0.5,
         max_transcript_inactivity_seconds: float | None = None,
         end_of_turn_confirm_delay_seconds: float | None = 0.4,
-        http_session: http.HttpSession | None = None,
     ) -> None:
+        """
+        Args:
+            max_transcript_inactivity_seconds: Seconds of audio after the last new words that
+                end the turn; ``None`` waits for the end-of-turn token.
+            end_of_turn_confirm_delay_seconds: Seconds of audio without new words that confirm
+                an end-of-turn token; ``None`` ends the turn at the token.
+        """
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -198,7 +203,6 @@ class STT(stt.STT):
             max_transcript_inactivity_seconds=max_transcript_inactivity_seconds,
             end_of_turn_confirm_delay_seconds=end_of_turn_confirm_delay_seconds,
         )
-        self._session = http_session
         self._label = "nabrah.STT (nabrah-stt-v1)"
 
     @property
@@ -208,11 +212,6 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "nabrah"
-
-    def _ensure_session(self) -> http.HttpSession:
-        if not self._session:
-            self._session = http.http_session()
-        return self._session
 
     async def _recognize_impl(
         self,
@@ -228,213 +227,105 @@ class STT(stt.STT):
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> stt.RecognizeStream:
+    ) -> SpeechStream:
         lang = language if is_given(language) else self._opts.language
-        return SpeechStream(
-            stt_instance=self,
-            opts=self._opts,
-            conn_options=conn_options,
-            language=lang,
-            http_session=self._ensure_session(),
-        )
+        return SpeechStream(stt=self, opts=self._opts, conn_options=conn_options, language=lang)
 
 
-class SpeechStream(stt.RecognizeStream):
-    _utt_raw: str = ""
-    _utt_clean: str = ""
-    _utt_closed: bool = False
-    _utt_flushed_clean: str = ""
-    _utt_flushed_chars: int = 0
-    _input_done: bool = False
-    _turn_words: tuple[TranscriptChunk, ...] = ()
-    _utt_words: tuple[TranscriptChunk, ...] = ()
-    _utt_flushed_words: int = 0
-    _utt_raw_seen: int = 0
+class SpeechStream(stt.WebSocketStream[_Ready | _Error | _Transcript, _Config | _Eof]):
+    awaits_ready = True
 
     def __init__(
-        self,
-        *,
-        stt_instance: STT,
-        opts: _STTOptions,
-        conn_options: APIConnectOptions,
-        language: str,
-        http_session: http.HttpSession,
+        self, *, stt: STT, opts: _STTOptions, conn_options: APIConnectOptions, language: str
     ) -> None:
-        super().__init__(stt=stt_instance, conn_options=conn_options, sample_rate=16000)
+        super().__init__(stt=stt, conn_options=conn_options, sample_rate=16000)
         self._opts = opts
         self._language = LanguageCode(language)
-        self._session = http_session
+        # the audio after the last new words (or an end-of-turn token) that ends the turn; the
+        # same silence with no audio at all ends it too
+        waits = [
+            wait
+            for wait in (
+                opts.end_of_turn_confirm_delay_seconds,
+                opts.max_transcript_inactivity_seconds,
+            )
+            if wait is not None
+        ]
+        self.audio_idle = min(waits) if waits else None
+        self._reset()
 
-        self._is_speaking = False
-
+    def _reset(self) -> None:
+        """A connection's recognizer starts from nothing: its utterances, words and clock."""
         self._turn_text = ""
-        self._utt_clean = ""
+        self._turn_words: tuple[TranscriptChunk, ...] = ()
         self._utt_raw = ""
+        self._utt_clean = ""
         self._utt_closed = False
         self._utt_flushed_clean = ""
         self._utt_flushed_chars = 0
-        self._turn_words = ()
-        self._utt_words = ()
+        self._utt_words: tuple[TranscriptChunk, ...] = ()
         self._utt_flushed_words = 0
         self._utt_raw_seen = 0
+        # seconds of audio sent on the connection, at the last new words and at the pending
+        # end-of-turn token
+        self._audio_sent = 0.0
+        self._progress_at = 0.0
+        self._eot_at: float | None = None
+        self._reported_audio = 0.0
 
-        self._segment_start_time: float = 0.0
-        self._segment_end_time: float = 0.0
-        self._request_id: str = ""
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
+        self._reset()
+        return stt.WebSocketTarget(self._opts.base_url)
 
-        self._last_progress_at: float = 0.0
-        self._pending_eot_at: float | None = None
+    def setup(self) -> _Config:
+        return _Config(
+            api_key=self._opts.api_key,
+            recognition_model=self._opts.recognition_model,
+            end_of_utterance_silence_ms=self._opts.end_of_utterance_silence_ms,
+            disable_number_normalization=self._opts.disable_number_normalization,
+            priority_words=self._opts.priority_words,
+            priority_words_strength=self._opts.priority_words_strength,
+        )
 
-        self._latest_audio_processed: float | None = None
-        self._audio_position: float = 0.0
-        self._reported_audio_position: float = 0.0
-        self._last_message_position: float = 0.0
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | _Eof | None:
+        match item:
+            case rtc.AudioFrame():
+                self._audio_sent += item.duration
+                self._end_turn_if_due(self._audio_sent)
+                return bytes(item.data)
+            case stt.Flush():
+                return None
+            case stt.EndOfAudio():
+                return _Eof(type="eof")
+            case _:
+                assert_never(item)
 
-    def _config_frame(self) -> dict[str, JsonValue]:
-        return {
-            "api_key": self._opts.api_key,
-            "recognition_model": self._opts.recognition_model,
-            "end_of_utterance_silence_ms": self._opts.end_of_utterance_silence_ms,
-            "disable_number_normalization": self._opts.disable_number_normalization,
-            "priority_words": list[JsonValue](self._opts.priority_words),
-            "priority_words_strength": self._opts.priority_words_strength,
-        }
+    def on_audio_idle(self) -> None:
+        # no audio for the shortest wait: the recognizer hears nothing more
+        self._end_turn_if_due(float("inf"))
 
-    async def _connect_ws(self) -> http.WebSocket:
-        return await self._session.ws_connect(self._opts.base_url, conn_options=self._conn_options)
+    def _end_turn_if_due(self, audio: float) -> None:
+        confirm = self._opts.end_of_turn_confirm_delay_seconds
+        inactivity = self._opts.max_transcript_inactivity_seconds
+        if (
+            confirm is not None and self._eot_at is not None and audio - self._eot_at >= confirm
+        ) or (
+            inactivity is not None
+            and self._current_text()
+            and audio - self._progress_at >= inactivity
+        ):
+            self._end_turn()
 
-    async def _run(self) -> None:
-        self._latest_audio_processed = None
-        self._audio_position = 0.0
-        self._reported_audio_position = 0.0
-        self._last_message_position = 0.0
-        self._input_done = False
-
-        ws = await self._connect_ws()
-        try:
-            try:
-                await ws.send_str(json.dumps(self._config_frame()))
-            except Exception as e:
-                raise APIConnectionError(
-                    f"nabrah STT configuration send failed ({type(e).__name__})"
-                ) from None
-
-            async def _await_ready() -> None:
-                while True:
-                    try:
-                        msg = await ws.receive()
-                    except Exception as e:
-                        raise APIConnectionError(
-                            f"nabrah STT ready handshake failed ({type(e).__name__})"
-                        ) from None
-                    if msg.type is not http.WebSocketMessageType.TEXT:
-                        raise APIConnectionError("nabrah STT closed before ready")
-                    try:
-                        payload = _Message.model_validate_json(msg.data)
-                    except ValueError as e:
-                        raise APIError(
-                            "nabrah STT sent an invalid ready response",
-                            kind="protocol",
-                            detail=str(msg.data),
-                        ) from e
-                    if payload.type == "error":
-                        raise APIError(
-                            "nabrah STT rejected the configuration", kind="invalid_request"
-                        )
-                    if payload.type == "ready":
-                        return
-
-            try:
-                await asyncio.wait_for(_await_ready(), self._conn_options.read_timeout)
-            except TimeoutError as e:
-                raise APIConnectionError("nabrah STT never sent ready") from e
-
-            tasks = utils.aio.TaskSet()
-            tasks.spawn(self._eot_watchdog(), name="nabrah-stt-watchdog")
-            try:
-                await asyncio.gather(
-                    tasks.spawn(self._send_task(ws)), tasks.spawn(self._recv_task(ws))
-                )
-            finally:
-                await tasks.aclose()
-                if (
-                    self._current_text()
-                    or self._is_speaking
-                    or self._audio_clock() > self._reported_audio_position
-                ):
-                    self._flush_eos()
-        finally:
-            await ws.close()
-
-    async def _eot_watchdog(self) -> None:
-        inactivity_timeout = self._opts.max_transcript_inactivity_seconds
-        confirm_delay = self._opts.end_of_turn_confirm_delay_seconds
-        while True:
-            await asyncio.sleep(_WATCHDOG_POLL_SECONDS)
-            now = time.monotonic()
-            if (
-                confirm_delay is not None
-                and self._pending_eot_at is not None
-                and now - self._pending_eot_at >= confirm_delay
-            ):
-                self._flush_eos()
-                continue
-            if (
-                inactivity_timeout is not None
-                and self._current_text()
-                and now - self._last_progress_at >= inactivity_timeout
-            ):
-                self._flush_eos()
-
-    async def _send_task(self, ws: http.WebSocket) -> None:
-        try:
-            async for data in self.input:
-                if isinstance(data, rtc.AudioFrame):
-                    audio_bytes = data.data.tobytes()
-                    if audio_bytes:
-                        self._audio_position += data.samples_per_channel / data.sample_rate
-                        await ws.send_bytes(audio_bytes)
-            self._input_done = True
-            await ws.send_str(json.dumps({"type": "eof"}))
-        except Exception as e:
-            raise APIConnectionError(f"nabrah STT send failed ({type(e).__name__})") from None
-
-    async def _recv_task(self, ws: http.WebSocket) -> None:
-        while True:
-            try:
-                msg = await ws.receive()
-            except Exception as e:
-                raise APIConnectionError(
-                    f"nabrah STT receive failed ({type(e).__name__})"
-                ) from None
-            if msg.type is http.WebSocketMessageType.CLOSE:
-                if not self._input_done:
-                    raise ws.close_error("nabrah STT closed unexpectedly")
-                return
-            if msg.type is not http.WebSocketMessageType.TEXT:
-                continue
-            try:
-                self._process_message(_Message.model_validate_json(msg.data))
-            except APIError:
-                raise
-            except Exception:
-                # Never attach an exception or payload here: malformed messages can
-                # contain customer transcripts. Later cumulative results can recover.
-                logger.warning("nabrah STT returned malformed data")
-
-    def _emit(self, event: stt.SpeechEvent) -> None:
-        self.send(event)
-
-    def _audio_clock(self) -> float:
-        """Audio-stream position for this connection, in seconds.
-
-        The backend's audio_processed is what the recognizer actually consumed,
-        so it cannot run ahead of realtime the way a send-side count does when
-        input arrives in bursts. Falls back to audio pushed if absent.
-        """
-        if self._latest_audio_processed is not None:
-            return self._latest_audio_processed
-        return self._audio_position
+    def on_message(self, message: _Ready | _Error | _Transcript) -> None:
+        if message["type"] == "ready":
+            self.report(stt.Ready())
+        elif message["type"] == "error":
+            # its message can hold the customer's words: never attached
+            raise APIError("nabrah STT reported an error", kind="invalid_request")
+        elif message["type"] == "transcript":
+            self._transcript(message)
+        else:
+            assert_never(message)
 
     def _turn_word_list(self) -> tuple[TranscriptChunk, ...]:
         """Every word in the turn so far: committed utterances plus the open one."""
@@ -443,115 +334,47 @@ class SpeechStream(stt.RecognizeStream):
     def _current_text(self) -> str:
         return _append_text(self._turn_text, self._utt_clean)
 
-    def _flush_eos(self) -> None:
-        text = self._current_text()
-        end_time = self._segment_end_time or (self._audio_clock() + self.start_time_offset)
-        start_time = min(self._segment_start_time, end_time)
+    def _turn(self, *, final: bool = False, preflight: bool = False) -> stt.Transcript:
+        words = self._turn_word_list()
+        return stt.Transcript(
+            self._current_text(),
+            self._language,
+            final=final,
+            preflight=preflight,
+            start_time=words[0].start_time or 0.0 if words else 0.0,
+            end_time=words[-1].end_time or 0.0 if words else 0.0,
+            words=list(words) or None,
+        )
 
-        if text:
-            self._emit(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    request_id=self._request_id,
-                    alternatives=[
-                        stt.SpeechData(
-                            language=self._language,
-                            text=text,
-                            start_time=start_time,
-                            end_time=end_time,
-                            words=list(self._turn_word_list()) or None,
-                        )
-                    ],
-                )
-            )
-
-        processed = self._latest_audio_processed
-        if processed is not None and processed > self._reported_audio_position:
-            self._emit(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.RECOGNITION_USAGE,
-                    recognition_usage=stt.RecognitionUsage(
-                        audio_duration=processed - self._reported_audio_position,
-                    ),
-                )
-            )
-            self._reported_audio_position = processed
-
-        if self._is_speaking:
-            self._emit(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.END_OF_SPEECH,
-                    alternatives=[
-                        stt.SpeechData(
-                            language=self._language,
-                            text="",
-                            start_time=start_time,
-                            end_time=end_time,
-                        )
-                    ],
-                )
-            )
-
+    def _end_turn(self) -> None:
+        if self._current_text():
+            self.report(self._turn(final=True))
         self._utt_flushed_clean = _append_text(self._utt_flushed_clean, self._utt_clean)
         self._utt_flushed_chars = len(self._utt_flushed_clean)
         # index into the backend's raw `words` list, so count raw entries consumed,
         # not the filtered survivors, or blank entries shift the cursor backwards
         # and already-emitted words get replayed.
         self._utt_flushed_words = self._utt_raw_seen
-
         self._turn_text = ""
         self._utt_clean = ""
         self._turn_words = ()
         self._utt_words = ()
-        self._is_speaking = False
-        self._pending_eot_at = None
-        self._segment_start_time = 0.0
-        self._segment_end_time = 0.0
-        self._request_id = ""
+        self._eot_at = None
 
-    def _emit_preflight(self) -> None:
-        text = self._current_text()
-        if not text:
-            return
-
-        self._emit(
-            stt.SpeechEvent(
-                type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
-                request_id=self._request_id,
-                alternatives=[
-                    stt.SpeechData(
-                        language=self._language,
-                        text=text,
-                        start_time=self._segment_start_time,
-                        end_time=self._segment_end_time,
-                    )
-                ],
+    def _transcript(self, message: _Transcript) -> None:
+        processed = message.get("audio_processed")
+        if processed is not None and processed > self._reported_audio:
+            self.send(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                    recognition_usage=stt.RecognitionUsage(
+                        audio_duration=processed - self._reported_audio
+                    ),
+                )
             )
-        )
+            self._reported_audio = processed
 
-    def _process_message(self, data: _Message) -> None:
-        msg_type = data.type
-
-        if msg_type == "error":
-            raise APIError("nabrah STT reported an error", kind="invalid_request")
-
-        if msg_type != "transcript":
-            return
-
-        text = data.text
-        utt_final = data.is_final
-
-        previous_audio_position = self._last_message_position
-        reported = data.audio_processed
-        if reported is not None:
-            reported_seconds = reported
-            if (
-                self._latest_audio_processed is None
-                or reported_seconds > self._latest_audio_processed
-            ):
-                self._latest_audio_processed = reported_seconds
-        self._last_message_position = self._audio_clock()
-
+        text = message.get("text", "")
         if not text:
             return
 
@@ -569,7 +392,7 @@ class SpeechStream(stt.RecognizeStream):
             self._utt_raw_seen = 0
         self._utt_closed = False
 
-        raw_words = data.words or []
+        raw_words = message.get("words", [])
         if raw_words:
             self._utt_words = tuple(
                 _timed_word(w, self.start_time_offset)
@@ -582,57 +405,21 @@ class SpeechStream(stt.RecognizeStream):
         _, is_eot = _strip_and_detect_eot(new_text)
         self._utt_clean = clean_now[self._utt_flushed_chars :]
         self._utt_raw = text
-        if utt_final:
+        # is_final closes one recognizer utterance, never the turn
+        if message.get("is_final", False):
             self._utt_closed = True
 
         if not new_text:
             return
-
-        has_real_progress = bool(new_text.replace(EOT_TOKEN, "").strip())
-
-        if has_real_progress:
-            self._last_progress_at = time.monotonic()
-            self._pending_eot_at = None
-
-            turn_words = self._turn_word_list()
-
-            word_start = turn_words[0].start_time if turn_words else None
-            word_end = turn_words[-1].end_time if turn_words else None
-
-            if not self._is_speaking:
-                self._is_speaking = True
-                self._segment_start_time = (
-                    word_start
-                    if word_start is not None
-                    else min(previous_audio_position, self._audio_clock()) + self.start_time_offset
-                )
-                self._emit(
-                    stt.SpeechEvent(
-                        type=stt.SpeechEventType.START_OF_SPEECH,
-                        speech_start_time=(
-                            self.start_time - self.start_time_offset + self._segment_start_time
-                        ),
-                    )
-                )
-            self._segment_end_time = (
-                word_end if word_end is not None else self._audio_clock() + self.start_time_offset
-            )
-
-        if not self._request_id:
-            self._request_id = utils.shortuuid("nabrah-")
-
-        current = self._current_text()
-        if current:
-            self._emit(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=[stt.SpeechData(language=self._language, text=current)],
-                )
-            )
-
+        if new_text.replace(EOT_TOKEN, "").strip():
+            self._progress_at = self._audio_sent
+            self._eot_at = None
+        if self._current_text():
+            self.report(self._turn())
         if is_eot:
             if self._opts.end_of_turn_confirm_delay_seconds is None:
-                self._flush_eos()
-            elif self._pending_eot_at is None:
-                self._pending_eot_at = time.monotonic()
-                self._emit_preflight()
+                self._end_turn()
+            elif self._eot_at is None:
+                self._eot_at = self._audio_sent
+                if self._current_text():
+                    self.report(self._turn(preflight=True))

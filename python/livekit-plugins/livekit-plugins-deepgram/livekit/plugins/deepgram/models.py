@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 DeepgramModels = Literal[
     "nova-general",
@@ -37,10 +37,10 @@ DeepgramModels = Literal[
     "whisper-small",
     "whisper-medium",
     "whisper-large",
-    "flux-general-en",
 ]
 
-V2Models = Literal["flux-general-en", "flux-general-multi"]
+# served on /v2/listen
+FluxModels = Literal["flux-general-en", "flux-general-multi"]
 
 # https://developers.deepgram.com/docs/models-languages-overview
 DeepgramLanguages = Literal[
@@ -155,8 +155,6 @@ FluxTTSModels = Literal["flux-alexis-en"]
 
 
 class TranscriptionWord(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     word: str = ""
     punctuated_word: str | None = None
     start: float = 0.0
@@ -166,8 +164,6 @@ class TranscriptionWord(BaseModel):
 
 
 class TranscriptionAlternative(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     transcript: str
     confidence: float
     words: list[TranscriptionWord] = Field(default_factory=list[TranscriptionWord])
@@ -175,8 +171,6 @@ class TranscriptionAlternative(BaseModel):
 
 
 class TranscriptionChannel(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     alternatives: list[TranscriptionAlternative] = Field(
         default_factory=list[TranscriptionAlternative]
     )
@@ -184,19 +178,13 @@ class TranscriptionChannel(BaseModel):
 
 
 class TranscriptionMetadata(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     request_id: str = ""
 
 
 class TranscriptionResults(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     channels: list[TranscriptionChannel] = Field(default_factory=list[TranscriptionChannel])
 
 
 class TranscriptionResponse(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     metadata: TranscriptionMetadata = Field(default_factory=TranscriptionMetadata)
     results: TranscriptionResults = Field(default_factory=TranscriptionResults)

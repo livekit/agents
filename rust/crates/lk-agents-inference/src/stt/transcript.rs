@@ -1,4 +1,4 @@
-use crate::stt::speech::Speech;
+use crate::stt::normalizer::SpeechNormalizer;
 use crate::stt::wire::{Incoming, Transcript};
 use lk_agents_abi::{RecognitionUsage, SpeechEvent, SpeechEventType, TranscriptChunk};
 
@@ -15,7 +15,7 @@ pub(super) struct Processed {
 
 #[derive(Debug, Clone)]
 pub(super) struct TranscriptMachine {
-    speech: Speech,
+    speech: SpeechNormalizer,
     speech_duration: f64,
     /// `self._request_id`, a `shortuuid("stt_request_")` replaced by the connection's session id
     /// once the socket reports one.
@@ -28,7 +28,7 @@ impl TranscriptMachine {
     pub fn new(request_id: impl Into<String>, language: Option<&str>) -> Self {
         TranscriptMachine {
             // the gateway reports onsets, but each final ends the turn
-            speech: Speech::new(false, false),
+            speech: SpeechNormalizer::new(false, false),
             speech_duration: 0.0,
             request_id: request_id.into(),
             // `self._opts.language or "en"`.

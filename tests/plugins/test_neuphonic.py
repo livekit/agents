@@ -13,7 +13,8 @@ from livekit.plugins.neuphonic import TTS
 
 
 async def test_null_sse_audio_keeps_synthesis_successful() -> None:
-    """An SSE event with null audio is skipped; the synthesis still succeeds."""
+    """An SSE event with null audio is skipped, as are an event name Neuphonic added since and
+    a comment; the synthesis still succeeds."""
     pcm = b"\x01\x00" * 480
     requests = 0
 
@@ -21,7 +22,8 @@ async def test_null_sse_audio_keeps_synthesis_successful() -> None:
         nonlocal requests
         requests += 1
         return web.Response(
-            text='data: {"data": {"audio": null}}\n\n'
+            text="event: metadata\n: keep-alive with data\n"
+            + 'data: {"data": {"audio": null}}\n\n'
             + "data: "
             + json.dumps({"data": {"audio": base64.b64encode(pcm).decode()}})
             + "\n\n",

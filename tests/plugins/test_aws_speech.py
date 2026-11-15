@@ -14,13 +14,13 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, stt
+from livekit.agents import APIConnectOptions, APIError, _core, stt
 from livekit.plugins import aws
 from livekit.plugins.aws import _eventstream, stt as aws_stt
+from tests.fakes import until
 from tests.plugins.conftest import Close, Connection, WsPeer
 
 OPTIONS = APIConnectOptions(max_retry=0, retry_interval=0, connect_timeout=0.5, read_timeout=0.5)
-IDLE_TIMEOUT = "Your request timed out because no new audio was received for 15 seconds."
 
 # 0.2 s of a 440 Hz tone, 16 kHz mono MP3 (ffmpeg, no ID3/Xing headers)
 TONE_MP3 = base64.b64decode(
@@ -196,23 +196,27 @@ async def test_stream_language_applies_to_that_stream_only(ws_peer: WsPeer) -> N
     assert [query(ws_peer, i)["language-code"] for i in range(2)] == ["fr-FR", "en-US"]
 
 
-async def test_idle_timeout_reopens_and_keeps_transcribing(ws_peer: WsPeer) -> None:
-    """Transcribe's 15 s idle timeout opens a new stream without spending a retry, and the new
-    one keeps transcribing.
+async def test_silent_audio_reconnects_before_the_idle_timeout(ws_peer: WsPeer) -> None:
+    """No audio for 14 s opens a new stream before Transcribe fails the idle one at 15 s,
+    without spending a retry or reporting an error, and the new one keeps transcribing.
 
     https://github.com/livekit/agents/issues/5938 https://github.com/livekit/agents/issues/2099
     """
     provider = transcribe(ws_peer)
+    errors: list[stt.STTError] = []
+    provider.on("error", errors.append)
 
     async with provider, provider.stream(conn_options=OPTIONS) as stream:
         stream.push_frame(frame(100))
-        await ws_peer.connected()
-        await ws_peer.send(exception_event("BadRequestException", IDLE_TIMEOUT), Close(1000))
+        first = await ws_peer.connected()
+        await until(lambda: first.received, "the audio")
+        _core.skip_host_time(14.0)
         await ws_peer.connected(2)
         await ws_peer.send(transcript_event("still here"))
         final = await next_final(stream)
 
     assert final.alternatives[0].text == "still here"
+    assert errors == []
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,5 @@
-use lk_agents_voice::trace::{GenerationStep, ProviderKind, Step};
+use lk_agents_abi::voice::events::Leg;
+use lk_agents_voice::trace::{GenerationStep, InputStep, ProviderKind, Step};
 
 use crate::{
     authored::Authored,
@@ -30,7 +31,12 @@ impl Rule for ProviderReportsEachFailureOnce {
             (Kind::Chat, ProviderKind::Llm, NodeUse::Llm),
             (Kind::Tts, ProviderKind::Tts, NodeUse::Tts),
         ];
-        let amd = r.inputs_view().sent().iter().any(|sent| matches!(sent.input, Input::Amd { .. }));
+        // The detector asks its classifier with or without the host's input: a session that
+        // attaches it at start never sends one.
+        let amd = r.inputs_view().sent().iter().any(|sent| matches!(sent.input, Input::Amd { .. }))
+            || r.journal().iter().any(|(_, step)| {
+                matches!(step, Step::Input(InputStep::LegRequested { leg: Leg::Amd, .. }))
+            });
         for (kind, leg, node) in legs {
             if r.inference_view().nodes().any(|(_, _, used)| used == node)
                 || (leg == ProviderKind::Llm && amd)

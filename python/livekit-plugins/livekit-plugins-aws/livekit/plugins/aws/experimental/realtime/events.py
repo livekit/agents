@@ -19,7 +19,7 @@ CHANNEL_COUNT = Literal[1]  # only supports monochannel audio
 
 
 class BaseModel(_BaseModel):
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class InferenceConfiguration(BaseModel):
@@ -232,7 +232,7 @@ class Event(BaseModel):
 
 
 class SonicOutputModel(_BaseModel):
-    model_config = ConfigDict(strict=True, extra="allow")
+    model_config = ConfigDict(extra="allow")
 
 
 class SonicContentStart(SonicOutputModel):

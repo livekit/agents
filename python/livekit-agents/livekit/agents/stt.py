@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import abstractmethod
+from collections import deque
 from dataclasses import dataclass, replace
 from typing import Any, ClassVar, TypeAlias, assert_never
 
@@ -11,6 +12,8 @@ from . import utils
 from ._generated import facades_stt as _facades, public_stt as _public
 from ._generated.public_stt import *  # noqa: F403
 from ._generated.public_stt import SpeechEnded, SpeechStarted, Transcript
+from ._generated.stt import TEvent
+from ._generated.vad import VAD, VADEventType, VADStream
 from ._generated.websocket import WsFrame
 from ._websocket import (
     Batch,
@@ -24,6 +27,7 @@ from ._websocket import (
     WebSocketProtocol,
     WebSocketTarget,
     frames_of,
+    log_skipped,
     protocol_error,
 )
 from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -33,6 +37,7 @@ __all__ = [
     "EndOfAudio",
     "Flush",
     "Keepalive",
+    "PRE_ROLL",
     "Ready",
     "Report",
     "SessionFinished",
@@ -42,13 +47,15 @@ __all__ = [
     "WebSocketTarget",
     "StreamAdapter",
     "FallbackAdapter",
+    "log_skipped",
     "protocol_error",
 ]
 __all__ += _public.__all__
 
 
-class FallbackAdapter(_facades.FallbackAdapter):
-    """Several STT behind one: a failed one is skipped until it recovers."""
+class FallbackAdapter(_facades.FallbackAdapter[TEvent]):
+    """Several STT behind one: a failed one is skipped until it recovers. A subclass that relays
+    its members' own events names them: ``FallbackAdapter[Literal["my_event"]]``."""
 
     def _core_retries_itself(self) -> bool:
         return True
@@ -155,6 +162,11 @@ class WebSocketStream(
     connection."""
     audio_idle: float | None = None
     """Seconds without audio after which ``on_audio_idle`` runs, once per silence."""
+    truncate_silence: ClassVar[bool] = False
+    """Audio goes out only while the stream's ``vad`` hears speech, led by the ``PRE_ROLL``
+    before it so a turn's start is not clipped, and each speech's end is a ``Flush``. For a
+    provider that bills the audio sent and detects no speech itself; without a ``vad`` every
+    frame goes."""
 
     def __init__(
         self,
@@ -162,9 +174,19 @@ class WebSocketStream(
         stt: STT,
         conn_options: APIConnectOptions,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        vad: VAD | None = None,
     ) -> None:
+        """
+        Args:
+            vad: What hears the speech ``truncate_silence`` lets through.
+        """
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
-        self._websocket = WebSocketHost(self, _Recognition(self))
+        self._gate = _SilenceGate(vad) if self.truncate_silence and vad is not None else None
+        # the audio the gate lets through is the usage, not the audio pushed
+        self._measures_sent = self._core_measured and self._gate is not None
+        if self._gate is not None:
+            self._core_measured = False
+        self._websocket = WebSocketHost(self, _Recognition(self, self._gate))
 
     @abstractmethod
     def on_message(self, message: InboundT) -> None:
@@ -191,18 +213,139 @@ class WebSocketStream(
             case _:
                 assert_never(report)
 
+    def _websocket_count_sent_audio(self, seconds: float) -> None:
+        if self._measures_sent and seconds > 0:
+            if (usage := self._core_attempts.audio_taken(seconds)) is not None:
+                self.send(usage)
+
     async def _run(self) -> None:
         # the stream's attempts own the retries: the socket runs once
-        await self._websocket.run(replace(self._conn_options, max_retry=0))
+        socket = self._websocket.run(replace(self._conn_options, max_retry=0))
+        if self._gate is None:
+            await socket
+            return
+        vad_stream = self._gate.open()
+        try:
+            async with aio.TaskSet() as tasks:
+                await tasks.first_completed(socket, self._gate.listen(vad_stream))
+        finally:
+            await vad_stream.aclose()
+
+
+PRE_ROLL = 0.3
+"""Seconds of audio before a speech that ``truncate_silence`` sends with it."""
+# how long the VAD may take to report a speech start after the speech began
+_START_LAG = 0.5
+# float slack when comparing audio times summed in different orders
+_EPSILON = 1e-6
+
+
+@dataclass
+class _Speech:
+    """One speech the VAD heard, in seconds of the audio its stream was given."""
+
+    start: float
+    end: float | None = None
+
+    def covers(self, start: float, end: float) -> bool:
+        """Whether audio from ``start`` to ``end`` belongs to it or to its pre-roll."""
+        return self.start - PRE_ROLL < end - _EPSILON and (
+            self.end is None or start < self.end - _EPSILON
+        )
+
+
+class _SilenceGate:
+    """The audio of a ``truncate_silence`` stream: each frame held until its VAD classified it,
+    then sent if it belongs to a speech (or its pre-roll), else dropped once no late speech start
+    can claim it. A speech still open lets its frames through at once."""
+
+    def __init__(self, vad: VAD) -> None:
+        self._vad = vad
+        self._vad_stream: VADStream | None = None
+        # the frames not yet decided, each with where it starts in the VAD stream's audio
+        self._held: deque[tuple[float, rtc.AudioFrame]] = deque()
+        self._given = 0.0
+        self._classified = 0.0
+        self._speeches: deque[_Speech] = deque()
+        # the speech the last frame sent belongs to: its end flushes the segment
+        self._sending: _Speech | None = None
+
+    def open(self) -> VADStream:
+        """The VAD stream of an attempt: the frames still held are classified again on it."""
+        self._vad_stream = self._vad.stream()
+        self._given = self._classified = 0.0
+        self._speeches.clear()
+        self._sending = None
+        held = [frame for _, frame in self._held]
+        self._held.clear()
+        self._hold(held)
+        return self._vad_stream
+
+    async def listen(self, vad_stream: VADStream) -> None:
+        """Reads the VAD's verdicts until its stream ends."""
+        async for event in vad_stream:
+            self._classified = max(self._classified, event.timestamp)
+            match event.type:
+                case VADEventType.START_OF_SPEECH:
+                    self._speeches.append(_Speech(event.timestamp - event.speech_duration))
+                case VADEventType.END_OF_SPEECH:
+                    if self._speeches and self._speeches[-1].end is None:
+                        self._speeches[-1].end = event.timestamp
+                case VADEventType.INFERENCE_DONE:
+                    pass
+                case _:
+                    assert_never(event.type)
+
+    def _hold(self, audio: list[rtc.AudioFrame]) -> None:
+        assert self._vad_stream is not None, "a gate holds audio only during an attempt"
+        for frame in audio:
+            self._held.append((self._given, frame))
+            self._given += frame.duration
+            self._vad_stream.push_frame(frame)
+
+    def take(self, audio: list[rtc.AudioFrame]) -> list[rtc.AudioFrame | Flush]:
+        """``audio`` held, then the frames decided to go, in order, up to the first speech's
+        end (a ``Flush``): what follows it goes on the next call."""
+        self._hold(audio)
+        out: list[rtc.AudioFrame | Flush] = []
+        while True:
+            sending = self._sending
+            if (
+                sending is not None
+                and sending.end is not None
+                and (not self._held or self._held[0][0] >= sending.end - _EPSILON)
+            ):
+                self._sending = None
+                out.append(Flush())
+                break
+            if not self._held:
+                break
+            start, frame = self._held[0]
+            end = start + frame.duration
+            speech = next((s for s in self._speeches if s.covers(start, end)), None)
+            if speech is not None:
+                self._sending = speech
+                out.append(frame)
+            elif end > self._classified - PRE_ROLL - _START_LAG + _EPSILON:
+                # not classified yet, or a pre-roll a late start may still claim
+                break
+            self._held.popleft()
+        while self._speeches and self._speeches[0] is not self._sending:
+            first = self._speeches[0]
+            if first.end is None or (self._held and first.end > self._held[0][0]):
+                break
+            self._speeches.popleft()
+        return out
 
 
 class _Recognition(WebSocketKind[rtc.AudioFrame | Flush | EndOfAudio]):
-    """The recognition's terms for its socket: audio in, re-chunked; a speech in progress is
-    never cut by a replacement; a provider that ends its session at a flush holds the audio after
-    it until it did."""
+    """The recognition's terms for its socket: audio in, re-chunked (and gated to speech with
+    ``truncate_silence``); a speech in progress is never cut by a replacement; a provider that
+    ends its session at a flush holds the audio after it until it did."""
 
-    def __init__(self, stream: WebSocketStream[Any, Any]) -> None:
+    def __init__(self, stream: WebSocketStream[Any, Any], gate: _SilenceGate | None) -> None:
         self._stream = stream
+        self._gate = gate
         self._chunks: utils.media.AudioChunker | None = None
         self._ended = False
         # audio went out since the provider last finished a session, and whether a flush asked it
@@ -219,35 +362,65 @@ class _Recognition(WebSocketKind[rtc.AudioFrame | Flush | EndOfAudio]):
     def _held(self) -> list[rtc.AudioFrame]:
         return self._chunks.flush() if self._chunks is not None else []
 
+    def _admit(self, audio: list[rtc.AudioFrame]) -> list[rtc.AudioFrame | Flush]:
+        """What of ``audio`` goes now: all of it, or what the silence gate let through."""
+        if self._gate is None:
+            return list(audio)
+        admitted = self._gate.take(audio)
+        self._stream._websocket_count_sent_audio(
+            sum(item.duration for item in admitted if isinstance(item, rtc.AudioFrame))
+        )
+        return admitted
+
+    def _batch(self, items: list[rtc.AudioFrame | Flush], fresh: float) -> Batch:
+        """``items`` to send, paced by no more than the ``fresh`` seconds of input they came
+        with."""
+        sent = sum(item.duration for item in items if isinstance(item, rtc.AudioFrame))
+        self._audio_in_session |= sent > 0
+        if any(isinstance(item, Flush) for item in items):
+            self._ending_flush()
+        return Batch(list(items), min(sent, fresh))
+
+    def _ending_flush(self) -> None:
+        if self._stream.new_session_per_flush:
+            self._ending_session = True
+            self._session_over.clear()
+
     async def take(self) -> Batch | None:
         stream = self._stream
         if self._ended:
             return None
         await self._session_over.wait()
+        if self._gate is not None and (decided := self._admit([])):
+            return self._batch(decided, 0.0)
         try:
             item = await stream.input.recv()
         except aio.ChanClosed:
             self._ended = True
-            if not self._audio_in_session:
+            if not self._audio_in_session and self._gate is None:
                 # the provider holds no session to say goodbye to
                 return None
-            held = self._held()
-            return Batch([*held, EndOfAudio()], sum(audio.duration for audio in held))
+            held = self._admit(self._held())
+            self._audio_in_session |= any(isinstance(i, rtc.AudioFrame) for i in held)
+            if not self._audio_in_session:
+                return None
+            pace = sum(i.duration for i in held if isinstance(i, rtc.AudioFrame))
+            return Batch([*held, EndOfAudio()], pace)
         match item:
             case rtc.AudioFrame():
                 if self._chunks is None:
                     self._chunks = utils.media.AudioChunker(stream.frame_ms)
                 audio = self._chunks.push(item)
-                self._audio_in_session |= bool(audio)
-                return Batch(list(audio), sum(frame.duration for frame in audio))
+                return self._batch(self._admit(audio), sum(frame.duration for frame in audio))
             case Flush():
-                held = self._held()
+                raw = self._held()
+                held = self._admit(raw)
                 if not (self._audio_in_session or held):
                     return Batch([])
-                if stream.new_session_per_flush:
-                    self._ending_session = True
-                    self._session_over.clear()
-                return Batch([*held, item], sum(audio.duration for audio in held))
+                if held and isinstance(held[-1], Flush):
+                    # the speech's end already ended the segment
+                    return self._batch(held, sum(frame.duration for frame in raw))
+                return self._batch([*held, item], sum(frame.duration for frame in raw))
             case _:
                 assert_never(item)
 

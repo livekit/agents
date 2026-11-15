@@ -197,6 +197,8 @@ pub struct TurnConfig {
     pub interruption_enabled: bool,
     /// `None` disables it.
     pub transcription_timeout: Option<Duration>,
+    /// Bounds words owed after an explicit STT end, independently of silence endpointing.
+    pub final_transcript_timeout: Duration,
     pub user_turn_limit: UserTurnLimit,
     /// Normalised to a start/end pair.
     pub backchannel_boundary: Option<(Duration, Duration)>,

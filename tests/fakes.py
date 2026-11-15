@@ -327,11 +327,12 @@ class _RecognizeStream(stt.RecognizeStream):
 
 class FakeVAD(VAD):
     """Hears loud audio as speech; ``PAUSE`` seconds of quiet end it. ``error`` fails every
-    stream as it starts."""
+    stream as it starts. ``heard`` is the seconds of audio its last stream has judged."""
 
     def __init__(self, *, error: Exception | None = None) -> None:
         super().__init__(capabilities=VADCapabilities(update_interval=0.1))
         self.error = error
+        self.heard = 0.0
 
     def stream(self) -> VADStream:
         return _VADStream(self)
@@ -371,6 +372,7 @@ class _VADStream(VADStream):
                 )
             if heard == "end":
                 ear.speech = None
+            self._vad.heard = ear.heard
 
 
 # -- TTS

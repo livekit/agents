@@ -357,6 +357,9 @@ pub struct SessionKwargs {
     /// `None` disables the timeout, `0` arms it with nothing left to wait.
     #[host(default = None)]
     pub transcription_timeout: Option<f64>,
+    /// Seconds to wait after STT ends while its final words are still owed.
+    #[host(default = 2.0)]
+    pub final_transcript_timeout: f64,
     #[host(default = 2.0)]
     pub session_close_transcript_timeout: f64,
 }
@@ -413,7 +416,7 @@ debug_record!(TurnHandlingKwargs {
 debug_record!(SessionKwargs {
     turn_handling, max_tool_steps, min_consecutive_speech_delay,
     ivr_detection, user_away_timeout, transcription_timeout,
-    session_close_transcript_timeout;
+    final_transcript_timeout, session_close_transcript_timeout;
     aec_warmup_duration, expressive
 });
 
@@ -566,6 +569,7 @@ pub struct ResolvedSessionOptions {
     pub ivr_detection: bool,
     pub user_away_timeout: Option<f64>,
     pub transcription_timeout: Option<f64>,
+    pub final_transcript_timeout: f64,
     pub aec_warmup_duration: Option<f64>,
     pub session_close_transcript_timeout: f64,
 }

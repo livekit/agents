@@ -8,9 +8,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Self
 
-from livekit.agents import ProviderAttempts
-from livekit.agents.tts import TTS, AudioEmitter
+from livekit.agents.tts import TTS
 
+from .._core import AudioEmitter, ProviderAttempts
 from .connect import APIConnectOptions
 from .expressive import SpeechSteeringOptions
 from .stream_pacer import SentenceStreamPacer

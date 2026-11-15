@@ -19,7 +19,9 @@ pub trait LeaseGroup: Any + Send + Sync {
     fn close(&self) -> BoxFuture<'_, Result<(), HostError>>;
 }
 
-#[crate::host(proxy(host = "livekit.agents.llm.Toolset"))]
+/// A group retains its authored toolsets through setup and close, even when the caller passed
+/// temporary wrappers with no other host owner.
+#[crate::host(proxy(host = "livekit.agents.llm.Toolset", owns))]
 pub trait ToolsetHooks: Send + Sync {
     #[host(read_once, getter = "_lifetime")]
     fn lifetime(&self) -> &Arc<dyn Lifetime>;

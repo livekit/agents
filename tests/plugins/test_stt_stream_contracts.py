@@ -14,15 +14,16 @@ import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pytest
 from aiohttp import web
+from google.genai import types
 from mistralai.client import Mistral
 from palabra_ai.client import REGIONS, Region
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, http, stt
+from livekit.agents import APIConnectOptions, APIError, stt
 from livekit.plugins import (
     assemblyai,
     aws,
@@ -55,7 +56,6 @@ from livekit.plugins import (
     xai,
 )
 from livekit.plugins.aws import stt as aws_stt
-from livekit.plugins.google.beta import GeminiSTT
 from tests.fakes import FakeVAD, until
 from tests.plugins.test_aws_speech import exception_event, transcript_event
 
@@ -106,20 +106,6 @@ def _gladia(peer: WsPeer) -> stt.STT:
 
     peer.http = init_session
     return gladia.STT(api_key="key", base_url=peer.url + "/v2/live")
-
-
-def _meta(peer: WsPeer) -> stt.STT:
-    """Muse takes only wss:// URLs: the session connects them to the peer's plain socket."""
-    session = http.http_session()
-    connect = session.ws_connect
-
-    # Any: ws_connect's keyword options, forwarded untouched
-    async def local_tls_terminator(url: str, **kwargs: Any) -> http.WebSocket:
-        return await connect(url.replace("wss://", "ws://", 1), **kwargs)
-
-    session.ws_connect = local_tls_terminator  # type: ignore[method-assign]
-    url = peer.url.replace("http://", "wss://", 1) + "/v1/asr/realtime"
-    return meta.STT(api_key="key", url=url, http_session=session)
 
 
 def _microsoft_ai_interim(text: str) -> Frame:
@@ -188,8 +174,10 @@ CASES: dict[str, SttCase] = {
         speech=[{"type": "turn.start", "request_id": "request"}],
         error=[{"type": "error", "status_code": 400, "message": "invalid audio"}],
     ),
-    "deepgram_v2": SttCase(
-        make=lambda peer: deepgram.STTv2(api_key="key", base_url=peer.ws_url + "/v2/listen"),
+    "deepgram_flux": SttCase(
+        make=lambda peer: deepgram.STT(
+            api_key="key", model="flux-general-en", base_url=peer.ws_url + "/v2/listen"
+        ),
         speech=[{"type": "TurnInfo", "event": "StartOfTurn", "transcript": "", "words": []}],
         error=[{"type": "Error", "code": "INVALID_AUDIO", "description": "invalid audio"}],
     ),
@@ -210,10 +198,6 @@ CASES: dict[str, SttCase] = {
         make=_gladia,
         speech=[{"type": "transcript", "data": {"is_final": False, "utterance": {"text": "hi"}}}],
         error=[{"type": "error", "data": {"message": "invalid audio"}}],
-        racy={
-            "usage": "a close during a send reconnects, a close between sends ends the "
-            "recognition (gladia/stt.py:900)"
-        },
     ),
     "gnani": SttCase(
         make=lambda peer: gnani.STT(api_key="key", base_url=peer.url),
@@ -228,7 +212,9 @@ CASES: dict[str, SttCase] = {
         skip="Cloud Speech streams over gRPC, not a websocket",
     ),
     "google_gemini": SttCase(
-        make=lambda peer: GeminiSTT(api_key="key", http_options={"base_url": peer.url}),
+        make=lambda peer: google.GeminiSTT(
+            api_key="key", http_options=types.HttpOptions(base_url=peer.url)
+        ),
         speech=[],
         error=None,
     ),
@@ -244,7 +230,7 @@ CASES: dict[str, SttCase] = {
         error=None,
     ),
     "meta": SttCase(
-        make=_meta,
+        make=lambda peer: meta.STT(api_key="key", url=peer.ws_url + "/v1/asr/realtime"),
         speech=[{"type": "speechStart", "turnId": "turn-1"}],
         error=[{"type": "error", "errorCode": "invalid_request", "message": "invalid audio"}],
         hello=[{"sessionId": "session"}],
@@ -307,15 +293,7 @@ CASES: dict[str, SttCase] = {
         skip="the client dials openapi.vito.ai and takes no base URL",
     ),
     "sarvam": SttCase(
-        make=lambda _: sarvam.STT(api_key="key"),
-        speech=[],
-        error=None,
-        skip="stream() dials Sarvam's module URL and never base_url",
-    ),
-    "sarvam_streaming": SttCase(
-        make=lambda peer: sarvam.STTRealtime(
-            api_key="key", language="hi-IN", base_url=peer.ws_url + "/ws"
-        ),
+        make=lambda peer: sarvam.STT(api_key="key", language="hi-IN", base_url=peer.ws_url + "/ws"),
         speech=[{"event": "vad.speech_start", "utterance_idx": 0}],
         error=[
             {
@@ -371,42 +349,11 @@ CASES: dict[str, SttCase] = {
 
 # (contract, plugin): what reproduces a known product bug, as a strict xfail
 KNOWN: dict[tuple[str, str], str] = {
-    ("speech_reconnect", "assemblyai"): (
-        "a reconnect after SpeechStarted sends no END_OF_SPEECH: the plugin keeps no speaking "
-        "state, so the new socket's SpeechStarted opens a second speech inside the first"
-    ),
     # -- aws .. microsoft_ai
-    ("reconnect", "gladia"): (
-        "the receive loop iterates the socket (gladia/stt.py:900), which ends silently on a close: "
-        "the recognition ends instead of reconnecting"
-    ),
-    ("speech_reconnect", "gladia"): (
-        "a 1011 close mid-speech ends the recognition instead of reconnecting (gladia/stt.py:900)"
-    ),
-    ("speech_reconnect", "meta"): (
-        "a reconnect keeps the open turn in _turns (meta/stt.py:384) without ending it: no "
-        "END_OF_SPEECH, and the new socket's speechStart never opens a speech"
-    ),
-    ("speech_reconnect", "microsoft_ai"): (
-        "a reconnect keeps _speaking set (microsoft_ai/stt.py:342) without END_OF_SPEECH, so "
-        "the new socket's transcript never starts a speech"
-    ),
     # -- mistralai .. xai
-    ("speech_reconnect", "nabrah"): (
-        "a close after the first transcript fails the stream instead of reconnecting "
-        "(nabrah/stt.py:308)"
-    ),
     ("speech_reconnect", "palabra"): (
         "an utterance started on the old socket is dropped with its registry: no END_OF_SPEECH "
         "before the new socket's START_OF_SPEECH (palabra/stt.py:230)"
-    ),
-    ("speech_reconnect", "slng"): (
-        "the internal same-endpoint replay keeps speech_started across sockets: no END_OF_SPEECH, "
-        "and the new socket's speech never starts (slng/stt.py:1089)"
-    ),
-    ("speech_reconnect", "soniox"): (
-        "is_speaking is local to one connection's receive task: a reconnect drops it without "
-        "END_OF_SPEECH (soniox/stt.py:410)"
     ),
 }
 

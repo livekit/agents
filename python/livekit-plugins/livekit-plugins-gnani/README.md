@@ -70,7 +70,6 @@ session = VoiceSession(
         voice="Nalini",
         model="timbre-v2.5",
         language="en-IN",
-        synthesize_method="websocket",
     ),
     vad=silero.VAD.load(),
 )
@@ -85,7 +84,7 @@ await session.start(
 )
 ```
 
-Set `use_streaming=False` (STT) or swap `synthesize_method` (TTS) for REST variants — see below. WebSocket STT + TTS is the default for lowest latency.
+Set `use_streaming=False` (STT) for REST — see below. TTS streams over WebSocket and synthesizes one-shot text over REST.
 
 ## Service Construction
 
@@ -114,30 +113,7 @@ stt = STT(
 )
 ```
 
-### Text-to-Speech (REST)
-
-```python
-from livekit.plugins.gnani import TTS
-
-tts = TTS(
-    voice="Pranav",
-    model="timbre-v2.0",
-    synthesize_method="rest",
-)
-```
-
-### Text-to-Speech (SSE Streaming)
-
-```python
-from livekit.plugins.gnani import TTS
-
-tts = TTS(
-    voice="Pranav",
-    synthesize_method="sse",
-)
-```
-
-### Text-to-Speech (WebSocket Streaming)
+### Text-to-Speech
 
 ```python
 from livekit.plugins.gnani import TTS
@@ -146,11 +122,10 @@ tts = TTS(
     voice="Nalini",
     model="timbre-v2.5",
     language="hi-IN",
-    synthesize_method="websocket",
 )
 ```
 
-The `stream()` method always uses WebSocket regardless of `synthesize_method`.
+`synthesize()` uses REST; `stream()` uses WebSocket, one connection per segment.
 
 ## Services
 
@@ -180,9 +155,8 @@ Frames must be sent at **real-time cadence**. See **[STT Realtime — PCM Specif
 
 | Mode | Parameter | Transport | Description |
 |------|-----------|-----------|-------------|
-| REST | `synthesize_method="rest"` | POST `/api/v1/tts/inference` | Single-request batch synthesis. Default for `synthesize()`. |
-| SSE | `synthesize_method="sse"` | POST `/api/v1/tts/sse` | Chunked synthesis via Server-Sent Events. |
-| WebSocket | `synthesize_method="websocket"` or `stream()` | `wss://api.vachana.ai/api/v1/tts` | Lowest latency; `stream()` always uses WebSocket. |
+| REST | `synthesize()` | POST `/api/v1/tts/inference` | Single-request synthesis. |
+| WebSocket | `stream()` | `wss://api.vachana.ai/api/v1/tts` | One request per segment. |
 
 ## Full Constructor Reference
 
@@ -216,7 +190,6 @@ tts = TTS(
     container="wav",               # Default: "wav" (also: "raw", "mp3", "ogg")
     num_channels=1,                # Default: 1
     bitrate=None,                  # Default: None (also: "96k", "128k", "192k")
-    synthesize_method="rest",      # Default: "rest" (also: "sse", "websocket")
     api_key=None,                  # Default: None (reads GNANI_API_KEY env var)
     base_url="https://api.vachana.ai",
 )

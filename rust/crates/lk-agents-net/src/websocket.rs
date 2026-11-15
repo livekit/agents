@@ -181,16 +181,19 @@ fn response_reason(status: i64) -> String {
 
 pub struct TungsteniteTransport;
 
-/// [`TungsteniteTransport`] through the job's HTTP proxy, when it has one.
+/// [`TungsteniteTransport`] through the job's HTTP proxy, when it has one, reading messages up to
+/// `max_message_size` bytes (`None`: the transport default).
 pub struct ProxiedTransport {
     pub proxy: Option<String>,
+    pub max_message_size: Option<usize>,
 }
 
 #[async_trait]
 impl WsTransport for ProxiedTransport {
     /// Unbounded: the caller bounds it on its session clock.
     async fn connect(&self, url: &str, headers: Headers) -> Result<Halves, TransportError> {
-        let (stream, response) = handshake(url, headers, None, self.proxy.as_deref()).await?;
+        let (stream, response) =
+            handshake(url, headers, self.max_message_size, self.proxy.as_deref()).await?;
         split(stream, response)
     }
 }

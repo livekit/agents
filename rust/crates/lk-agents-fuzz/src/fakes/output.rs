@@ -16,7 +16,7 @@ use lk_agents_abi::{AudioFrame, Ts};
 use super::{Control, Registry};
 use crate::{
     input::Input,
-    record::{Detail, Kind, Sink, Tag},
+    record::{Detail, Fault, Kind, Sink, Site, Tag},
 };
 
 // Each attached output carries its own index, so sink calls on a replaced instance are
@@ -504,6 +504,7 @@ impl AudioOutput for FakeAudioOutput {
             };
             match self.fault {
                 Some(CaptureFault { at, hangs: true }) if at == nth => {
+                    self.registry.struck(Site::Capture, Fault::Hang, None);
                     std::future::pending::<()>().await;
                 }
                 Some(CaptureFault { at, hangs: false }) if at == nth => {

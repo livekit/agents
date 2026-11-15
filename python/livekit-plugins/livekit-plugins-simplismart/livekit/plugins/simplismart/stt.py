@@ -319,6 +319,14 @@ class SpeechStream(stt.WebSocketStream[bytes, _Config]):
             case _:
                 assert_never(item)
 
+    def decode(self, frame: bytes | str) -> bytes | None:
+        if isinstance(frame, str):
+            # transcripts come as binary frames: a text one (a notice Simplismart added since)
+            # is not read
+            stt.log_skipped("Simplismart", "a text frame")
+            return None
+        return frame
+
     def on_message(self, message: bytes) -> None:
         try:
             text = message.decode("utf-8")

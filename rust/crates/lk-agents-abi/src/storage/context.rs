@@ -82,7 +82,8 @@ pub trait ContextActivation: Send + Sync + Sized + 'static {
         fields: Vec<ContextField>,
     ) -> Result<ContextValues, StorageError>;
 
-    /// Stage the validated fields; a stale activation cannot overwrite a newer revision.
+    /// Stage validated fields and an explicitly assigned detached session snapshot together;
+    /// a stale activation cannot overwrite either part of a newer revision.
     #[host(await)]
     async fn save(
         &self,
@@ -90,6 +91,7 @@ pub trait ContextActivation: Send + Sync + Sized + 'static {
         identity: String,
         revision: i64,
         fields: Vec<ContextField>,
+        #[host(default = None)] session: Option<Value>,
     ) -> Result<ContextValues, StorageError>;
 
     /// A detached read of committed routing state; never starts an execution.

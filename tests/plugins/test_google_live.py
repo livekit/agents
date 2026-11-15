@@ -15,7 +15,7 @@ from google.oauth2.credentials import Credentials
 from livekit import rtc
 from livekit.agents import APIConnectOptions, _core, llm, stt
 from livekit.agents.metrics import RealtimeModelMetrics
-from livekit.plugins.google.beta import GeminiSTT
+from livekit.plugins.google import GeminiSTT
 from livekit.plugins.google.realtime import RealtimeModel
 from livekit.plugins.google.realtime.realtime_api import RealtimeSession
 from tests.fakes import until
@@ -464,10 +464,14 @@ async def test_vertex_sessions_authenticate_with_workload_credentials(
     ambient = Credentials(token="ambient-token")  # type: ignore[no-untyped-call]  # google-auth is untyped
     monkeypatch.setattr(google.auth, "default", lambda *a, **kw: (ambient, "workload-project"))
     explicit_token = Credentials(token="explicit-token")  # type: ignore[no-untyped-call]  # google-auth is untyped
-    credentials = explicit_token if explicit else None
-    session = RealtimeModel(
-        vertexai=True, credentials=credentials, http_options=gemini_live.http_options
-    ).session()
+    model = (
+        RealtimeModel(
+            vertexai=True, credentials=explicit_token, http_options=gemini_live.http_options
+        )
+        if explicit
+        else RealtimeModel(vertexai=True, http_options=gemini_live.http_options)
+    )
+    session = model.session()
     try:
         pending = session.generate_reply()
         await gemini_live.send(
@@ -484,6 +488,26 @@ async def test_vertex_sessions_authenticate_with_workload_credentials(
     token = "explicit-token" if explicit else "ambient-token"
     assert gemini_live.headers[0]["Authorization"] == f"Bearer {token}"
     assert gemini_live.setups[0]["model"].startswith("projects/workload-project/")
+
+
+async def test_credentials_without_vertexai_flag_open_a_vertex_session(
+    gemini_live: LivePeer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Credentials pick Vertex AI, as they do for Gemini STT and TTS, rather than being dropped
+    for the Gemini API."""
+    for name in ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT", "GOOGLE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    credentials = Credentials(token="explicit-token")  # type: ignore[no-untyped-call]  # google-auth is untyped
+    session = RealtimeModel(
+        credentials=credentials, project="explicit-project", http_options=gemini_live.http_options
+    ).session()
+    try:
+        await until(lambda: gemini_live.setups, "the session sets up")
+    finally:
+        await session.aclose()
+
+    assert gemini_live.headers[0]["Authorization"] == "Bearer explicit-token"
+    assert gemini_live.setups[0]["model"].startswith("projects/explicit-project/")
 
 
 # ---- Gemini STT

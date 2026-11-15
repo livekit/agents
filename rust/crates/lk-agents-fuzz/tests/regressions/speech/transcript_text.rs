@@ -225,3 +225,62 @@ fn a_leading_expression_reaches_the_room_transcript_as_lk_expression() {
         );
     }
 }
+
+/// Catches (seed 1574): an output reset cut a segment short on a word ("at"), and the reply went
+/// on with its next segment, whose text began mid-word ("st?"). The history joined the two into
+/// one word the person never heard ("atst?"): they heard "at", then "st?" in another segment.
+#[test]
+fn a_segment_cut_short_ends_on_a_whole_word() {
+    let setup = Setup {
+        sync_transcription: true,
+        tts_alignment: TtsAlignment::Words,
+        tools: Vec::new(),
+        ..Setup::default()
+    };
+    let run = simulate(async {
+        let mut run = Run::start(&setup, 0, Default::default()).await;
+        let text = |t: &str| Input::LlmText { chat: Ref::new(0), text: AgentText(t.into()) };
+        for input in [
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(20) },
+            text("We have Wednesday a"),
+            text("t two thirty, or Friday at noon, which works best for you"),
+            Input::LlmToolCall {
+                chat: Ref::new(0),
+                name: "transfer".into(),
+                args: lk_agents_fuzz::input::ToolArgs("{}".into()),
+            },
+            text("s"),
+            text("t? Shall I book one of them for you right now?"),
+            Input::LlmEnd { chat: Ref::new(0) },
+        ] {
+            run.apply(&input).await;
+        }
+        crate::playout::apply_with_playout(&mut run, &Input::Advance { ms: Millis(1_200) }).await;
+        run.apply(&Input::SinkReset { output: Ref::new(0) }).await;
+        crate::playout::apply_with_playout(&mut run, &Input::Advance { ms: Millis(1_500) }).await;
+        run.apply(&Input::Interrupt { force: true, wait: false }).await;
+        run.apply(&Input::Advance { ms: Millis(3_000) }).await;
+        run
+    });
+    let said: Vec<String> = run
+        .record
+        .host_view()
+        .events()
+        .into_iter()
+        .filter_map(|(_, event)| match event {
+            SessionEvent::ConversationItemAdded { item, .. } => item
+                .as_message()
+                .filter(|m| m.role == Role::Assistant)
+                .and_then(|m| m.raw_text_content()),
+            _ => None,
+        })
+        .collect();
+    let [said] = said.as_slice() else { panic!("one reply: {said:?}") };
+    assert!(said.starts_with("We have Wednesday at st?"), "{said:?}");
+    let rule = "cut_holds_only_shown_words";
+    let (failures, expectations) = check_all(&run.record);
+    assert!(expectations.get(rule).is_some_and(|n| *n > 0), "{rule} judged no speech");
+    let failed: Vec<_> = failures.iter().filter(|f| f.contract == rule).collect();
+    assert!(failed.is_empty(), "{failed:?}");
+}

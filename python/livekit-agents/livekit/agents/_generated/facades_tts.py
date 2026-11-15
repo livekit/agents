@@ -3,12 +3,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Generic, Literal
 
 from .. import _bindings, _core
 from ..log import logger
 from . import tts_availability
-from .tts import TTS
+from .tts import TTS, TEvent
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from .llm_fallback import AvailabilityChanged
 
 
-class FallbackAdapter(_core.FallbackTts, TTS[Literal["tts_availability_changed"]]):
+class FallbackAdapter(_core.FallbackTts, TTS[Literal["tts_availability_changed"] | TEvent], Generic[TEvent]):
     """`tts.FallbackAdapter`: several TTS behind one; a failed one is skipped until it recovers."""
 
     if TYPE_CHECKING:

@@ -116,7 +116,8 @@ impl FakeStore {
         .expect("an empty voice session state stages");
         let voice = Arc::new(voice);
         database.state.lock().armed = true;
-        let port = Arc::new(RecordedStore { store: voice.clone(), registry });
+        let port =
+            Arc::new(RecordedStore { store: voice.clone(), registry, database: database.clone() });
         Self { voice, port, database, _dir: dir }
     }
 
@@ -175,6 +176,14 @@ struct State {
     stolen: Vec<String>,
     /// Batches a worker death left `Uncertain`, until a resend of one is answered.
     uncertain: Vec<Vec<Statement>>,
+}
+
+/// When a transport stops waiting for an answer `latency` away: then, unless the operation's
+/// deadline comes first. Whether the answer came in time.
+fn answer_at(clock: &dyn Clock, latency: Duration) -> (Ts, bool) {
+    let deadline = lk_agents_runtime::storage::deadline::or_default(clock);
+    let answer = clock.now().saturating_add(latency);
+    (answer.min(deadline), answer <= deadline)
 }
 
 /// What one request meets: its latency on either side of the apply, and how it fails.
@@ -274,10 +283,13 @@ impl FakeDatabase {
                 _ => {}
             }
         }
-        let scheduled = self
-            .setup
-            .outage
-            .is_some_and(|(from, len)| (from..from + len).contains(&(now.as_nanos() / 1_000_000)));
+        let within = |window: Option<(u64, u64)>| {
+            window.is_some_and(|(from, len)| {
+                (from..from + len).contains(&(now.as_nanos() / 1_000_000))
+            })
+        };
+        plan.answer_lost |= write && within(self.setup.lost_answers);
+        let scheduled = within(self.setup.outage);
         if scheduled || now < state.down_until {
             plan.refused = Some(StorageError::Unavailable("the database is unreachable".into()));
         }
@@ -308,13 +320,24 @@ impl FakeDatabase {
         }
     }
 
-    async fn wait(&self, latency: Duration) {
-        if latency.is_zero() {
-            return;
+    /// A request refused or left unacknowledged is sent again by storage's own resend, on its
+    /// clock and never past its operation's deadline: the store owes the answer until then.
+    fn owe_resend<T>(&self, result: &Result<T, StorageError>) {
+        if matches!(result, Err(StorageError::Unavailable(_) | StorageError::Uncertain(_))) {
+            let deadline = lk_agents_runtime::storage::deadline::or_default(&*self.clock);
+            self.registry.storage_due(deadline);
         }
-        let until = self.clock.now().saturating_add(latency);
+    }
+
+    /// Waits `latency` as the transport does: whether the answer came in time.
+    async fn wait(&self, latency: Duration) -> bool {
+        if latency.is_zero() {
+            return true;
+        }
+        let (until, in_time) = answer_at(&*self.clock, latency);
         self.registry.storage_due(until);
         self.clock.wait_until(until).await;
+        in_time
     }
 
     /// The lease holding the partition now, as `(token, until)` in database milliseconds.
@@ -372,7 +395,10 @@ impl FakeDatabase {
                     payload: encode_chat_item(item),
                 })
                 .collect();
-            let _ = run.commit(CommitOptions::default()).await;
+            // A failed foreign commit establishes no new baseline.
+            if run.commit(CommitOptions::default()).await.is_ok() {
+                self.registry.record_storage(StorageStep::ForeignCommitted { items });
+            }
         }
         thread.close().await;
     }
@@ -391,17 +417,11 @@ impl FakeDatabase {
         self.registry.record_storage(StorageStep::PartitionSettled { unended, held, faulted });
         // The thread reads its rows back in their positions in the conversation.
         let rows = partition_key.history().await.unwrap_or_default();
-        let user_texts = rows
-            .iter()
-            .filter_map(|row| match decode_chat_item(row.payload.clone()).ok()? {
-                ChatItem::Message(m) if m.role == lk_agents_abi::Role::User => {
-                    Some((row.id.clone(), m.raw_text_content().unwrap_or_default()))
-                }
-                _ => None,
-            })
+        let items = rows
+            .into_iter()
+            .map(|row| decode_chat_item(row.payload).expect("a saved conversation item decodes"))
             .collect();
-        let items = rows.into_iter().map(|row| row.id).collect();
-        self.registry.record_storage(StorageStep::Saved { items, user_texts });
+        self.registry.record_storage(StorageStep::Saved { items });
     }
 }
 
@@ -423,19 +443,41 @@ impl Drop for Taking<'_> {
 #[async_trait::async_trait]
 impl ThreadDbConnection for FakeConnection {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
-        let db = &self.db;
-        let plan = db.plan(false, false, None);
-        let layer = db.layer(false, false);
-        db.wait(plan.before).await;
-        if let Some(error) = plan.refused.or(layer.refused) {
-            return Err(error);
-        }
-        let rows = self.inner.query(statement).await;
-        db.wait(plan.after).await;
+        let rows = self.query_once(statement).await;
+        self.db.owe_resend(&rows);
         rows
     }
 
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
+        let result = self.batch_once(statements).await;
+        self.db.owe_resend(&result);
+        result
+    }
+
+    async fn close(&self) {
+        self.inner.close().await;
+    }
+}
+
+impl FakeConnection {
+    async fn query_once(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
+        let db = &self.db;
+        let plan = db.plan(false, false, None);
+        let layer = db.layer(false, false);
+        if !db.wait(plan.before).await {
+            return Err(StorageError::Unavailable("the operation's deadline passed".into()));
+        }
+        if let Some(error) = plan.refused.or(layer.refused) {
+            return Err(error);
+        }
+        let rows = self.inner.query(statement).await;
+        if !db.wait(plan.after).await {
+            return Err(StorageError::Uncertain(Unacknowledged::sent("the deadline passed")));
+        }
+        rows
+    }
+
+    async fn batch_once(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         let db = &self.db;
         let takes: Vec<Statement> = statements
             .iter()
@@ -465,7 +507,9 @@ impl ThreadDbConnection for FakeConnection {
         if let Some(steal) = layer.intrude {
             db.registry.world.spawn_detached(db.clone().intrude(steal));
         }
-        db.wait(plan.before).await;
+        if !db.wait(plan.before).await {
+            return Err(StorageError::Unavailable("the operation's deadline passed".into()));
+        }
         if let Some(error) = plan.refused.or(layer.refused) {
             return Err(error);
         }
@@ -493,15 +537,10 @@ impl ThreadDbConnection for FakeConnection {
             let ms = plan.after.as_millis() as u64;
             db.registry.record_storage(StorageStep::Slowed { ms });
         }
-        db.wait(plan.after).await;
-        if plan.answer_lost && result.is_ok() {
+        if !db.wait(plan.after).await || plan.answer_lost && result.is_ok() {
             return Err(StorageError::Uncertain(Unacknowledged::sent("the answer was lost")));
         }
         result
-    }
-
-    async fn close(&self) {
-        self.inner.close().await;
     }
 }
 
@@ -509,14 +548,78 @@ impl ThreadDbConnection for FakeConnection {
 struct RecordedStore {
     store: Arc<VoiceStore>,
     registry: Arc<Registry>,
+    database: Arc<FakeDatabase>,
+}
+
+impl RecordedStore {
+    async fn record_checkpoint(&self, sequence: u64) {
+        let thread = self.database.thread().await.expect("the checkpoint observer opens");
+        let partition = thread.partition(PARTITION_KEY);
+        let items = partition
+            .history()
+            .await
+            .expect("the checkpoint rows read")
+            .into_iter()
+            .map(|row| decode_chat_item(row.payload).expect("a checkpoint row decodes"))
+            .collect();
+        let state =
+            partition.info().await.expect("the checkpoint state reads").and_then(|info| info.state);
+        let pending_user_turns = state
+            .as_ref()
+            .and_then(|state| state.get("pending_user_turns"))
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|item| {
+                let encoded = serde_json::from_value(item.clone())
+                    .expect("pending input encodes a chat item");
+                match decode_chat_item(encoded).expect("pending input decodes") {
+                    ChatItem::Message(message) => message,
+                    _ => panic!("pending input is a message"),
+                }
+            })
+            .collect();
+        self.registry.record_storage(StorageStep::ConversationCheckpoint {
+            sequence,
+            items,
+            pending_user_turns,
+        });
+        thread.close().await;
+    }
 }
 
 impl VoiceStorage for RecordedStore {
+    fn conversation(
+        &self,
+        progress: lk_agents_abi::storage::voice::VoiceConversationProgress,
+    ) -> StorageWork<'_, Vec<ChatItem>> {
+        let sequence = progress.sequence;
+        self.registry
+            .record_storage(StorageStep::ConversationRequested { progress: progress.clone() });
+        Box::pin(async move {
+            let result = self.store.conversation(progress).await;
+            if result.is_ok() {
+                self.record_checkpoint(sequence).await;
+            }
+            self.registry.record_storage(StorageStep::ConversationAnswered {
+                sequence,
+                result: result.as_ref().map(|_| ()).map_err(Clone::clone),
+            });
+            result
+        })
+    }
     fn dispatch(
         self: Arc<Self>,
         command: VoiceStorageCommand,
         events: Arc<dyn StreamInput<VoiceStorageEvent>>,
     ) -> Result<(), StorageError> {
+        if let VoiceStorageCommand::Settle { speech, sequence, history } = &command {
+            self.registry.record_storage(StorageStep::HistorySubmitted {
+                speech: *speech,
+                sequence: *sequence,
+                history: history.clone(),
+            });
+        }
         let requested = match &command {
             VoiceStorageCommand::Settle { speech, .. } => Some((*speech, StorageOperation::Settle)),
             VoiceStorageCommand::Abort { speech } => Some((*speech, StorageOperation::Abandon)),
@@ -548,11 +651,31 @@ impl VoiceStorage for RecordedStore {
 
     fn checkpoint(
         &self,
+        speech: u64,
         sequence: u64,
         agent: String,
         history: Vec<ChatItem>,
     ) -> StorageWork<'_, ()> {
-        self.store.checkpoint(sequence, agent, history)
+        let operation = StorageOperation::Checkpoint;
+        self.registry.record_storage(StorageStep::HistorySubmitted {
+            speech,
+            sequence,
+            history: history.clone(),
+        });
+        self.registry.record_storage(StorageStep::Requested { speech, operation });
+        Box::pin(async move {
+            let result = self.store.checkpoint(speech, sequence, agent, history).await;
+            if result.is_ok() {
+                self.record_checkpoint(sequence).await;
+            }
+            self.registry.record_storage(StorageStep::Answered {
+                speech,
+                operation,
+                result: result.clone(),
+                delivered: true,
+            });
+            result
+        })
     }
 
     fn lease_lost(&self) -> bool {

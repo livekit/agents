@@ -249,8 +249,6 @@ pub struct Speechmatics {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript_filtering_config: Option<Map<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub operating_point: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub language_hints: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit_preflight_on_finalized: Option<bool>,
@@ -397,6 +395,13 @@ mod tests {
             let options = Options::parse("deepgram/flux-general-multi", extra).unwrap();
             assert_eq!(serde_json::to_value(options).unwrap(), json!({"language_hint": hint}));
         }
+    }
+
+    #[test]
+    fn speechmatics_oak_sends_its_language_hints() {
+        let extra = serde_json::from_value(json!({"language_hints": ["en", "fr"]})).unwrap();
+        let options = Options::parse("speechmatics/oak-1", extra).unwrap();
+        assert_eq!(serde_json::to_value(options).unwrap(), json!({"language_hints": ["en", "fr"]}));
     }
 
     #[test]

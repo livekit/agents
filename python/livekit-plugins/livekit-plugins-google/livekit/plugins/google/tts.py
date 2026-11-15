@@ -251,20 +251,22 @@ class TTS(tts.TTS):
             pacing (tts.SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or
                 ``None`` to send each chunk as soon as it is split.
         """
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        params: dict[str, Any] = {}
-        if is_given(language):
-            params["language_code"] = LanguageCode(language)
-        if is_given(gender):
-            params["ssml_gender"] = _gender_from_str(str(gender))
-        if is_given(voice_name):
-            params["name"] = voice_name
-        if is_given(model_name):
-            params["model_name"] = model_name
-            self._opts.model_name = model_name
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            params: dict[str, Any] = {}
+            if is_given(language):
+                params["language_code"] = LanguageCode(language)
+            if is_given(gender):
+                params["ssml_gender"] = _gender_from_str(str(gender))
+            if is_given(voice_name):
+                params["name"] = voice_name
+            if is_given(model_name):
+                params["model_name"] = model_name
+            voice = texttospeech.VoiceSelectionParams(**params) if params else None
 
-        if params:
-            self._opts.voice = texttospeech.VoiceSelectionParams(**params)
+        if is_given(model_name):
+            self._opts.model_name = model_name
+        if voice is not None:
+            self._opts.voice = voice
 
         if is_given(speaking_rate):
             self._opts.speaking_rate = speaking_rate

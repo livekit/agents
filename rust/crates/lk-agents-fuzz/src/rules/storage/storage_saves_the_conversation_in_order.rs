@@ -4,12 +4,12 @@ use crate::{
     record::{Recording, StorageStep},
 };
 use lk_agents_abi::{
-    AgentHandoffItem, ChatContent, ChatItem, ChatMessage, FunctionCall, FunctionCallOutput, Role,
+    AgentConfigUpdate, AgentHandoffItem, ChatContent, ChatItem, ChatMessage, FunctionCall,
+    FunctionCallOutput, Role,
 };
 use lk_agents_voice::agent::{Source, Visibility};
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_voice::events::SessionEvent;
-use lk_agents_voice::trace::{SpeechStep, Step};
 use std::time::{Duration, SystemTime};
 
 pub struct StorageSavesTheConversationInOrder;
@@ -17,60 +17,25 @@ pub struct StorageSavesTheConversationInOrder;
 impl Rule for StorageSavesTheConversationInOrder {
     const CONTRACT: Contract = Contract {
         id: "storage_saves_the_conversation_in_order",
-        guarantee: "The thread saves the call's conversation in the order the session holds it: each turn's items together, in the order they happened, a handoff where it happened. A turn the person cut while its tools ran keeps its calls and their late outputs together, right after what was said before them and before the next turn. A save may stop short (an abandoned turn, a lost partition); a thread another writer shares, or a faulted store, is not judged.",
-        examples: &[saved_as_held, saved_short],
-        counterexamples: &[handoff_saved_late, output_saved_after_the_next_turn, output_held_late],
+        guarantee: "Persisted conversation items have unique IDs. The call's saved items retain their relative conversation order, including when foreign items share the partition or a fault leaves only a saved subset. Tool outputs remain with their call group even when they arrive after a newer turn.",
+        examples: &[a_reloaded_call_keeps_its_late_output, saved_as_held, saved_short, tools_updated_while_they_ran, output_landed_late, shared_with_another_writer, fault_kept_a_prefix],
+        counterexamples: &[a_reloaded_call_does_not_excuse_misplaced_output, handoff_saved_late, output_saved_after_the_next_turn, foreign_item_hides_reordering, duplicate_saved_item],
         probe: None,
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
         let held = conversation(r);
-        let cut: Vec<SpeechId> = r
-            .journal()
-            .iter()
-            .filter_map(|(_, step)| match step {
-                Step::Speech(SpeechStep::ReleasedToTools { speech }) => Some(*speech),
-                _ => None,
-            })
-            .collect();
-        // A cut turn's tool outputs follow their call's group: only calls and outputs between.
-        for (at, (item, source)) in held.iter().enumerate() {
-            let ChatItem::FunctionCallOutput(output) = item else { continue };
-            if !source.speech().is_some_and(|speech| cut.contains(&speech)) {
-                continue;
-            }
-            let Some(call) = held.iter().position(
-                |(c, _)| matches!(c, ChatItem::FunctionCall(call) if call.call_id == output.call_id),
-            ) else {
-                continue;
-            };
-            let together = call < at
-                && held[call..at].iter().all(|(between, _)| {
-                    matches!(between, ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_))
-                });
-            check.expect_with(Subject::Session, together, || {
-                format!(
-                    "the output of {} is not right after its call: {:?}",
-                    output.call_id,
-                    ids(&held)
-                )
-            });
-        }
         let stored: Vec<&str> =
-            held.iter().filter(|(item, _)| saved_kind(item)).map(|(item, _)| item.id()).collect();
-        let faulted =
-            r.host_view().storage().iter().any(|(_, step)| {
-                matches!(step, StorageStep::PartitionSettled { faulted: true, .. })
-            });
+            held.iter().filter(|item| saved_kind(item)).map(ChatItem::id).collect();
         for (_, step) in r.host_view().storage() {
             let StorageStep::Saved { items, .. } = step else { continue };
-            // Only this call's rows, from a store that met no fault: their order is the call's.
-            if faulted || items.iter().any(|id| !stored.contains(&id.as_str())) {
-                continue;
-            }
+            let unique: std::collections::BTreeSet<_> = items.iter().map(ChatItem::id).collect();
+            check.expect(Subject::Session, unique.len() == items.len(), "saved duplicate item IDs");
+            // Foreign rows have their own writer's order; project this call's rows without
+            // excluding the whole recording. A failed save may leave any earlier subset.
             let order: Vec<&str> =
-                stored.iter().copied().filter(|id| items.iter().any(|saved| saved == id)).collect();
-            let saved: Vec<&str> = items.iter().map(String::as_str).collect();
+                stored.iter().copied().filter(|id| items.iter().any(|saved| saved.id() == *id)).collect();
+            let saved: Vec<&str> = items.iter().map(ChatItem::id).filter(|id| stored.contains(id)).collect();
             check.expect_with(Subject::Session, saved == order, || {
                 format!("saved {saved:?}, the conversation holds {stored:?}")
             });
@@ -79,25 +44,54 @@ impl Rule for StorageSavesTheConversationInOrder {
 }
 
 /// The session's history as the host holds it: each item inserted after the last one created no
-/// later, a told-again item replacing its earlier telling.
-fn conversation(r: &Recording) -> Vec<(ChatItem, Source)> {
-    let mut held: Vec<(ChatItem, Source)> = Vec::new();
-    for (_, event) in r.host_view().events() {
-        let SessionEvent::ConversationItemAdded { item, visibility, source, .. } = event else {
+/// later, a told-again item replacing its earlier telling, and nothing between a call and its
+/// output. An output sits right after its call's group, ahead of what was said, heard or changed
+/// while its tool ran, whatever instant it carries.
+fn conversation(r: &Recording) -> Vec<ChatItem> {
+    let mut held: Vec<ChatItem> = Vec::new();
+    let through = super::storage_preserves_item_payloads::durable_through(r);
+    for (at, event) in r.host_view().events() {
+        if through.is_some_and(|through| at > through) { break; }
+        if let SessionEvent::HistoryReloaded { items } = event {
+            // The host replaces its ledger on a reload, including calls restored from a
+            // checkpoint before their late outputs arrive. The oracle must do the same.
+            held = items.clone();
+            continue;
+        }
+        let SessionEvent::ConversationItemAdded { item, visibility, .. } = event else {
             continue;
         };
         if !visibility.history() {
             continue;
         }
-        if let Some(told) = held.iter_mut().find(|(told, _)| told.id() == item.id()) {
-            told.0 = item.as_ref().clone();
+        if let Some(told) = held.iter_mut().find(|told| told.id() == item.id()) {
+            *told = item.as_ref().clone();
             continue;
         }
-        let at = held
-            .iter()
-            .rposition(|(i, _)| i.created_at() <= item.created_at())
-            .map_or(0, |i| i + 1);
-        held.insert(at, (item.as_ref().clone(), source.clone()));
+        let tool = |i: &ChatItem| matches!(i, ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_));
+        let group_end = |held: &[ChatItem], from: usize| {
+            from + held[from..].iter().take_while(|i| tool(i)).count()
+        };
+        let call = match item.as_ref() {
+            ChatItem::FunctionCallOutput(output) => held.iter().position(
+                |i| matches!(i, ChatItem::FunctionCall(call) if call.call_id == output.call_id),
+            ),
+            _ => None,
+        };
+        let at = match call {
+            Some(call) => group_end(&held, call),
+            None => {
+                let at = held
+                    .iter()
+                    .rposition(|i| i.created_at() <= item.created_at())
+                    .map_or(0, |i| i + 1);
+                let inside = at > 0
+                    && tool(&held[at - 1])
+                    && matches!(held.get(at), Some(ChatItem::FunctionCallOutput(_)));
+                if inside { group_end(&held, at) } else { at }
+            }
+        };
+        held.insert(at, item.as_ref().clone());
     }
     held
 }
@@ -109,10 +103,6 @@ fn saved_kind(item: &ChatItem) -> bool {
         ChatItem::Message(message) => !matches!(message.role, Role::System | Role::Developer),
         _ => true,
     }
-}
-
-fn ids(items: &[(ChatItem, Source)]) -> Vec<&str> {
-    items.iter().map(|(item, _)| item.id()).collect()
 }
 
 fn at(ms: u64) -> SystemTime {
@@ -136,9 +126,8 @@ fn message(id: &str, ms: u64) -> ChatItem {
     ChatItem::Message(ChatMessage::new(id, Role::User, vec![ChatContent::Text(id.into())], at(ms)))
 }
 
-/// A handoff at 0, the cut turn's message and call, the next turn, and the call's late output,
-/// stamped as `output_at`.
-fn held_with(output_at: u64) -> Authored {
+/// A handoff at 0, then a turn's message and its reply's call.
+fn cut_call() -> Authored {
     let handoff = AgentHandoffItem {
         id: "handoff".into(),
         old_agent_id: None,
@@ -154,21 +143,25 @@ fn held_with(output_at: u64) -> Authored {
         extra: Default::default(),
         group_id: None,
     };
-    let output = FunctionCallOutput::new("output", "c1", "booked", false, at(output_at));
-    let cut = SpeechId(1);
     Authored::new()
-        .journal(Step::Speech(SpeechStep::ReleasedToTools { speech: cut }))
         .session(added(ChatItem::AgentHandoff(handoff)))
         .session(added(message("book it", 100)))
         .session(added_from(
             ChatItem::FunctionCall(call),
-            Source::ToolCall { speech: cut, step: 1 },
+            Source::ToolCall { speech: SpeechId(1), step: 1 },
         ))
+}
+
+/// The call's turn, the next turn taken while the tool ran, and the call's output, stamped as
+/// `output_at`.
+fn held_with(output_at: u64) -> Authored {
+    let output = FunctionCallOutput::new("output", "c1", "booked", false, at(output_at));
+    cut_call()
         .session(added(message("are you there?", 400)))
         .session(added(message("Yes.", 500)))
         .session(added_from(
             ChatItem::FunctionCallOutput(output),
-            Source::ToolOutput { speech: cut, step: 1 },
+            Source::ToolOutput { speech: SpeechId(1), step: 1 },
         ))
 }
 
@@ -178,8 +171,7 @@ fn held() -> Authored {
 
 fn saved(items: &[&str]) -> StorageStep {
     StorageStep::Saved {
-        items: items.iter().map(|id| (*id).to_owned()).collect(),
-        user_texts: Vec::new(),
+        items: items.iter().map(|id| message(id, 0)).collect(),
     }
 }
 
@@ -194,10 +186,32 @@ fn saved_short() -> Recording {
     held().storage(saved(&["handoff", "book it", "call", "output"])).done()
 }
 
-/// The late output was stamped when it landed: the session holds it after the next turn.
-fn output_held_late() -> Recording {
+/// The tools changed while the step's call ran: the update sits after the step's output.
+fn tools_updated_while_they_ran() -> Recording {
+    let update = AgentConfigUpdate {
+        id: "update".into(),
+        instructions: None,
+        tools_added: Some(vec!["cancel".into()]),
+        tools_removed: None,
+        created_at: at(300),
+        tools: None,
+    };
+    let output = FunctionCallOutput::new("output", "c1", "booked", false, at(350));
+    cut_call()
+        .session(added_from(ChatItem::AgentConfigUpdate(update), Source::ConfigUpdate))
+        .session(added_from(
+            ChatItem::FunctionCallOutput(output),
+            Source::ToolOutput { speech: SpeechId(1), step: 1 },
+        ))
+        .storage(saved(&["handoff", "book it", "call", "output"]))
+        .done()
+}
+
+/// The output was stamped when it landed, after the turn the person took while the tool ran: it
+/// still sits right after its call, the turn after it (seed 1242).
+fn output_landed_late() -> Recording {
     held_with(600)
-        .storage(saved(&["handoff", "book it", "call", "are you there?", "Yes.", "output"]))
+        .storage(saved(&["handoff", "book it", "call", "output", "are you there?", "Yes."]))
         .done()
 }
 
@@ -208,7 +222,43 @@ fn handoff_saved_late() -> Recording {
 }
 
 fn output_saved_after_the_next_turn() -> Recording {
-    held()
+    held_with(600)
         .storage(saved(&["handoff", "book it", "call", "are you there?", "Yes.", "output"]))
         .done()
+}
+
+fn shared_with_another_writer() -> Recording {
+    held().storage(saved(&["foreign", "handoff", "book it", "call", "output", "are you there?", "Yes."])).done()
+}
+
+fn fault_kept_a_prefix() -> Recording {
+    held()
+        .storage(StorageStep::PartitionSettled { unended: 0, held: false, faulted: true })
+        .storage(saved(&["handoff", "book it", "call", "output"]))
+        .done()
+}
+
+fn foreign_item_hides_reordering() -> Recording {
+    held().storage(saved(&["foreign", "book it", "handoff", "call", "output"])).done()
+}
+
+fn duplicate_saved_item() -> Recording {
+    held().storage(saved(&["handoff", "book it", "book it"])).done()
+}
+
+fn reloaded_call() -> Authored {
+    let call = ChatItem::FunctionCall(FunctionCall {
+        id: "restored".into(), call_id: "c1".into(), name: "lookup".into(),
+        arguments: "{}".into(), created_at: at(10), extra: Default::default(), group_id: None,
+    });
+    Authored::new().session(SessionEvent::HistoryReloaded { items: vec![call, message("newer", 20)] })
+        .session(added(ChatItem::FunctionCallOutput(FunctionCallOutput::new("late", "c1", "done", false, at(30)))))
+}
+
+fn a_reloaded_call_keeps_its_late_output() -> Recording {
+    reloaded_call().storage(saved(&["restored", "late", "newer"])).done()
+}
+
+fn a_reloaded_call_does_not_excuse_misplaced_output() -> Recording {
+    reloaded_call().storage(saved(&["restored", "newer", "late"])).done()
 }

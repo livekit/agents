@@ -47,6 +47,9 @@ pub struct AudioRecognition {
     interim_transcript: String,
     /// The utterance the interim is of, when its stream numbers them.
     interim_utterance: Option<Utterance>,
+    /// An explicit provider end whose final is owed. A newer start, matching final/end,
+    /// stream retirement or close cancels its deadline. Interim revisions never extend it.
+    pending_final: Option<FinalTranscriptWait>,
     preflight_transcript: String,
     final_confidences: Vec<f64>,
     last_language: Option<LanguageCode>,
@@ -106,6 +109,7 @@ impl AudioRecognition {
             // Without an adaptive detector, transcripts over agent speech reach the turn at once.
             interruption_enabled: i.detection_enabled(),
             transcription_timeout: cfg.timers.transcription_timeout(),
+            final_transcript_timeout: cfg.timers.final_transcript_timeout(),
             user_turn_limit: user_turn_limit(cfg),
             backchannel_boundary: i.backchannel_boundary(),
             detector: match legs.detector {
@@ -128,6 +132,7 @@ impl AudioRecognition {
             committed_words: BTreeMap::new(),
             interim_transcript: String::new(),
             interim_utterance: None,
+            pending_final: None,
             preflight_transcript: String::new(),
             final_confidences: Vec::new(),
             last_language: None,
@@ -195,6 +200,16 @@ impl AudioRecognition {
     /// This turn's final words.
     pub fn audio_transcript(&self) -> &str {
         &self.audio_transcript
+    }
+
+    /// Recognition evidence for the next uncommitted conversational turn. Persisting this
+    /// draft does not expose it to a model or imply that endpointing accepted it.
+    pub(crate) fn pending_input(&self) -> Option<(TurnId, Option<Ts>, String)> {
+        if self.cfg.turn_detection_mode == TurnDetectionMode::RealtimeLlm {
+            return None;
+        }
+        let text = self.current_transcript();
+        (!text.is_empty()).then_some((TurnId(self.turn_seq + 1), self.speech_start_time, text))
     }
 
     /// A countdown is in flight; `Committed` is not open.
@@ -289,6 +304,7 @@ impl AudioRecognition {
     /// The option leaves the turn reads at each use, refreshed after a live configuration change.
     pub fn set_options(&mut self, cfg: &AgentSessionOptions) {
         self.cfg.transcription_timeout = cfg.timers.transcription_timeout();
+        self.cfg.final_transcript_timeout = cfg.timers.final_transcript_timeout();
         self.cfg.user_turn_limit = user_turn_limit(cfg);
         self.cfg.backchannel_boundary = cfg.turn.interruption.backchannel_boundary();
     }
@@ -326,10 +342,25 @@ impl AudioRecognition {
 enum Start {
     /// A speech end or a final. `declared`: the STT's own end of speech, as opposed to a VAD end.
     Auto { declared: bool },
+    /// The provider ended but failed to supply its final by the bounded wait.
+    FinalTranscriptTimeout,
     /// `commit_user_turn`.
     Manual { skip_reply: bool },
     /// A user turn's `end()`: what the turn holds commits now.
     Released { skip_reply: bool },
+}
+
+enum FinalTranscriptWait {
+    Waiting { utterance: Utterance, ended_at: Ts },
+    Expired { utterance: Utterance },
+}
+
+impl FinalTranscriptWait {
+    fn utterance(&self) -> Utterance {
+        match *self {
+            Self::Waiting { utterance, .. } | Self::Expired { utterance } => utterance,
+        }
+    }
 }
 
 fn user_transcript(ev: &SpeechEvent, is_final: bool, speaking: Option<bool>) -> SessionEvent {

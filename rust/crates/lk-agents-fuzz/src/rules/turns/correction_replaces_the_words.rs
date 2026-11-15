@@ -180,9 +180,10 @@ fn saved_text(r: &Recording, id: &str) -> Option<String> {
         return None;
     }
     storage.iter().rev().find_map(|(_, step)| match step {
-        StorageStep::Saved { user_texts, .. } => {
-            user_texts.iter().find(|(saved, _)| saved == id).map(|(_, text)| text.clone())
-        }
+        StorageStep::Saved { items } => items.iter().find_map(|item| match item {
+            ChatItem::Message(m) if m.id == id && m.role == Role::User => m.raw_text_content(),
+            _ => None,
+        }),
         _ => None,
     })
 }
@@ -419,8 +420,9 @@ fn settled(answered: bool) -> StorageStep {
 
 fn saved(text: &str) -> StorageStep {
     StorageStep::Saved {
-        items: vec!["item_1".into()],
-        user_texts: vec![("item_1".into(), text.into())],
+        items: vec![ChatItem::Message(lk_agents_abi::ChatMessage::text(
+            "item_1", Role::User, text, std::time::UNIX_EPOCH,
+        ))],
     }
 }
 

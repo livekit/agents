@@ -1,7 +1,14 @@
 use lk_agents_abi::stt::events::{SpeechData, Transcript};
 use lk_agents_abi::{SpeechEvent, SpeechEventType};
 
-/// Whether the person is speaking, from what a recognition reports. Every stream's
+/// Normalizes recognition observations into one consistent speech-event stream.
+///
+/// Owns both start and end boundaries, including those missing from a provider's protocol.
+/// It does not decide conversational turn completion or whether the agent is interrupted.
+/// This synchronous state machine owns no tasks, clocks or connections; its provider supplies
+/// observations and executes connection lifecycle outside it.
+///
+/// Every stream's
 /// START_OF_SPEECH and END_OF_SPEECH come from here: the first words start a speech, a final ends
 /// it (unless the provider detects speech itself), the provider's own boundaries are deduplicated
 /// and a connection boundary ends the open speech, its pending interim made final.
@@ -11,7 +18,7 @@ use lk_agents_abi::{SpeechEvent, SpeechEventType};
 /// transcribes after the speech ends): the speech stays open until a final, a new speech or the
 /// connection's end, so the final is still that utterance's.
 #[derive(Debug, Clone, Default)]
-pub struct Speech {
+pub struct SpeechNormalizer {
     provider_vad: bool,
     /// The provider transcribes a speech after its end and always sends a final for it.
     transcribes_after_speech_ends: bool,
@@ -28,9 +35,13 @@ pub struct Speech {
     utterance: u64,
 }
 
-impl Speech {
+impl SpeechNormalizer {
     pub fn new(provider_vad: bool, transcribes_after_speech_ends: bool) -> Self {
-        Speech { provider_vad, transcribes_after_speech_ends, ..Speech::default() }
+        SpeechNormalizer {
+            provider_vad,
+            transcribes_after_speech_ends,
+            ..SpeechNormalizer::default()
+        }
     }
 
     pub fn speaking(&self) -> bool {
@@ -60,7 +71,13 @@ impl Speech {
     pub fn ended(&mut self, out: &mut Vec<SpeechEvent>) -> bool {
         let owed = self.interim.is_some() || (self.transcribes_after_speech_ends && !self.heard);
         if self.provider_vad && self.speaking && owed {
-            self.ending = true;
+            if !self.ending {
+                self.ending = true;
+                out.push(self.mark(SpeechEvent {
+                    request_id: self.request_id.clone(),
+                    ..SpeechEvent::new(SpeechEventType::EndOfSpeechPending)
+                }));
+            }
             return false;
         }
         self.end(out)
@@ -180,9 +197,9 @@ fn event(kind: SpeechEventType, transcript: Transcript) -> SpeechEvent {
     }
 }
 
-impl lk_agents_abi::stt::events::SpeechState for Speech {
+impl lk_agents_abi::stt::events::SpeechNormalizer for SpeechNormalizer {
     fn new(provider_vad: bool, transcribes_after_speech_ends: bool) -> Self {
-        Speech::new(provider_vad, transcribes_after_speech_ends)
+        SpeechNormalizer::new(provider_vad, transcribes_after_speech_ends)
     }
 
     fn speaking(&self) -> bool {
@@ -190,34 +207,34 @@ impl lk_agents_abi::stt::events::SpeechState for Speech {
     }
 
     fn settled(&self) -> bool {
-        Speech::settled(self)
+        SpeechNormalizer::settled(self)
     }
 
     fn transcript(&mut self, transcript: Transcript) -> Vec<SpeechEvent> {
         let mut out = Vec::new();
-        Speech::transcript(self, transcript, &mut out);
+        SpeechNormalizer::transcript(self, transcript, &mut out);
         out
     }
 
     fn started(&mut self, speech_start_time: Option<f64>) -> Vec<SpeechEvent> {
         let mut out = Vec::new();
-        Speech::started(self, speech_start_time, &mut out);
+        SpeechNormalizer::started(self, speech_start_time, &mut out);
         out
     }
 
     fn ended(&mut self) -> Vec<SpeechEvent> {
         let mut out = Vec::new();
-        Speech::ended(self, &mut out);
+        SpeechNormalizer::ended(self, &mut out);
         out
     }
 
     fn boundary(&mut self) -> Vec<SpeechEvent> {
         let mut out = Vec::new();
-        Speech::boundary(self, &mut out);
+        SpeechNormalizer::boundary(self, &mut out);
         out
     }
 }
 
 #[cfg(test)]
-#[path = "speech_tests.rs"]
+#[path = "normalizer_tests.rs"]
 mod tests;

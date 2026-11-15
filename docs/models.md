@@ -257,10 +257,18 @@ the connect limit), close codes, `reconnect(reason)`, retries and the bounded cl
 `max_session_duration` replaces the connection at the first moment the stream has nothing in
 progress (STT: no open speech; TTS: no open segment; realtime: no reply being generated). A
 provider that ends its session (the kind's `SessionFinished`, a segment's `SegmentDone` with
-`connection_per_segment`, or a clean close after the stream asked for it) gets a new connection
-when more input comes. `send_now(message, first=False)` sends a control message on the open
+`connection_per_segment`, a clean close after the stream asked for it, or a clean close while
+nothing it was sent is unanswered) gets a new connection when more input comes; a clean close
+with something still owed fails the attempt. `WebSocketTarget.max_message_size` raises the
+largest message the provider may send (bytes). A keepalive is a covariant `Keepalive`, so a
+frame of one of the protocol's messages fits its `Outbound` union. A stream's input-idle timer
+(`text_idle`, `audio_idle`) runs on a multiplexed stream as on its own socket. Tests advance the
+host clock with `_core.skip_host_time`; when one timer arms another, await the first timer's
+observable result before advancing through the next deadline.
+`send_now(message, first=False)` sends a control message on the open
 connection, ahead of input not yet sent; one sent while no connection is open is dropped unless
-sent from that connection's `connect`. The provider's request id, read from the handshake
+sent from that connection's `connect`. A command queued after `reconnect()` is requested waits
+for the replacement connection. The provider's request id, read from the handshake
 (`WebSocketTarget.request_id_header`) or reported, is the stream's `request_id`, and every error
 the stream raises carries it. `pacing=WebSocketPacing(min_interval=, real_time=)` spaces the
 frames (real time by the duration the kind computes); one instance on several streams paces them
@@ -270,8 +278,19 @@ together. Each kind's module exports the shared names its plugins write: `WebSoc
 | Base | `encode` takes | `report` takes | Its own class attributes |
 | --- | --- | --- | --- |
 | `stt.WebSocketStream` | `rtc.AudioFrame` (re-chunked to `frame_ms`), `stt.Flush`, `stt.EndOfAudio` | `Transcript`, `SpeechStarted`, `SpeechEnded`, `stt.Ready`, `stt.SessionFinished` | `frame_ms`; `provider_vad`; `new_session_per_flush`: the provider ends its session at each flush, the audio after it waits for that, then goes on a new connection; `audio_idle` with `on_audio_idle()`: a frame sent once the audio stayed silent. A transcript naming no request id carries the stream's |
-| `tts.WebSocketStream` | `SegmentStart`, `SegmentText`, `SegmentEnd`, `tts.EndOfText` | `SegmentAudio`, `SegmentWords`, `SegmentUsage` (what the provider billed for the segment), `SegmentDone` (also from `encode`, for a provider that answers each text on its own), `tts.Ready`, `tts.ProviderRequestId` | `connection_per_segment`: each segment its own session, ended by its `SegmentDone` or the provider's close; `text_idle` with `on_text_idle()`; `mime_type` |
+| `tts.WebSocketStream` | `SegmentStart`, `SegmentText`, `SegmentEnd`, `tts.EndOfText` | `SegmentAudio`, `SegmentWords`, `SegmentUsage` (what the provider billed for the segment), `SegmentDone` (also from `encode`, for a provider that answers each text on its own), `tts.Ready`, `tts.ProviderRequestId` | `connection_per_segment`: each segment its own session, ended by its `SegmentDone` or the provider's close; `text_idle` with `on_text_idle()`; `audio_idle` with `on_audio_idle()`; `mime_type` |
 | `llm.RealtimeWebSocketSession` | `rtc.AudioFrame` from `push_audio` (no end item) | `llm.realtime.Ready` (its events it emits itself) | `frame_ms`. A due replacement waits until no reply it requested or the provider started is still generating |
+| `llm.duplex.DuplexWebSocketSession` | `rtc.AudioFrame`, `DuplexInputGap`, `DuplexInputMute` | `llm.duplex.Ready`, `llm.duplex.SessionFinished`; the plugin emits its session events | `frame_ms`; `goodbye()` asks the provider to finish before replacement or close |
+| `voice.avatar.AvatarWebSocket` | `bytes` or the protocol's outbound message, queued with `send()` | The plugin handles received messages and calls `ready()` | `awaits_ready`; `open()` waits for readiness, `run()` propagates failure; no retry |
+
+A TTS's `audio_idle` timer waits until response data has arrived, then measures silence from
+the later of the latest input and response. Received audio, words and completion reports restart
+it; control messages and unknown frames do not. It fires once per silence, including on a pooled
+socket. It does not replace the read timeout for a provider that never sends audio.
+
+SmallestAI continuations use this timer because the protocol supplies no final-context marker.
+Each segment uses its own socket because responses omit the context id. Completion inferred
+from silence remains a heuristic: an audio gap longer than the interval can end a segment early.
 
 `stt.WebSocketMultiplexer` and `tts.WebSocketMultiplexer` (one class) share sockets across streams:
 `connect`, `route` (a received message's context), `ready` (whether a message says the socket's
@@ -280,8 +299,20 @@ stream left early), `max_contexts`, `max_session_duration`, `prewarm()` and `inv
 message `route` decoded reaches its stream as decoded. A pool (`routed = False`) carries one
 stream a socket, hands it every frame, and gives the socket to the next stream only after one that
 ended cleanly; `max_sockets` caps the sockets (a stream waits for room within `pool_timeout`),
-`idle_timeout` closes a socket no stream holds, `keep_warm` opens again an idle socket the provider
-closed, and `context_keepalive` with `keep_context(id)` keeps each open context alive.
+`idle_timeout` closes a socket no stream holds. Nothing keeps an open context alive while the
+LLM is slow between sentences: a `SegmentDone` before the segment's text ended is the provider
+ending its context early, so the segment is done with what it said, one warning is logged, and
+the rest of its text opens a new segment (a new context). A pool whose multiplexer reads `context_ended(message)` (the context
+a message ends) cancels a stream left mid-answer with `close_context` and gives the socket to the
+next stream once the provider ended every cancelled context, within a second, else closes it; a
+stream finding no room waits for that rather than opening another. `reuses_sockets = False` gives
+each stream (each session, with `connection_per_segment`) a fresh socket, closed after it.
+`keep_warm` keeps a socket with room open as a standby: one opens when a stream takes the last,
+and an idle one the provider closed opens again, so a direct provider that wants `prewarm()` or a
+warm standby for its next segment declares a single-use warm pool. `goodbye()` is the frame sent
+on a socket the multiplexer closes (idle, replaced, spent or at `aclose()`), ahead of the close:
+the provider session's own end. `Keepalive(..., only_while_unused=True)` goes only while no
+stream holds the socket, keeping a parked one off the provider's idle timeout.
 
 ### HTTP and WebSockets
 

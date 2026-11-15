@@ -184,14 +184,15 @@ def _kept(
     return make_and_keep
 
 
-async def test_reasoning_is_sent_without_null_fields() -> None:
+@pytest.mark.parametrize("transport", ["websocket", "http"])
+async def test_reasoning_is_sent_without_null_fields(transport: str) -> None:
     """A reasoning setting goes out with only the fields set; the API rejects explicit nulls.
 
     https://github.com/livekit/agents/pull/6385
     """
     peer = _Peer()
     async with _serve(peer) as base_url:
-        model = _llm(base_url, model="gpt-5.4", reasoning=Reasoning(effort="none"))
+        model = _llm(base_url, transport, model="gpt-5.4", reasoning=Reasoning(effort="none"))
         try:
             await _reply(model, _hi())
         finally:
@@ -215,6 +216,66 @@ async def test_an_error_frame_fails_the_request_with_its_message() -> None:
                 await _reply(model, _hi())
         finally:
             await model.aclose()
+
+
+async def test_a_server_error_frame_is_retried() -> None:
+    """OpenAI's error frame nests its error beside the HTTP status; a 500 is a server failure,
+    retried, not a refused request. The nested ``type`` and the ``status`` were dropped, so it
+    failed the turn as ``invalid_request``."""
+    error = {
+        "type": "error",
+        "status": 500,
+        "error": {"type": "server_error", "code": None, "message": "The server had an error"},
+    }
+    peer = _Peer([error], [CREATED, TEXT, _completed()])
+    async with _serve(peer) as base_url:
+        model = _llm(base_url)
+        try:
+            chunks = await _reply(model, _hi(), APIConnectOptions(max_retry=1, retry_interval=0))
+        finally:
+            await model.aclose()
+
+    assert "".join(c.delta.content or "" for c in chunks if c.delta) == "hello"
+    assert len(peer.requests) == 2
+
+
+@pytest.mark.parametrize("transport", ["websocket", "http"])
+async def test_a_request_that_cannot_be_encoded_is_not_retried(transport: str) -> None:
+    """A caller option JSON cannot carry is a bug in the caller: its ``TypeError`` reaches them
+    without reaching the API. It was taken for a connection error and retried until the
+    retries ran out."""
+    peer = _Peer()
+    async with _serve(peer) as base_url:
+        model = _llm(base_url, transport)
+        try:
+            with pytest.raises(TypeError):
+                await _reply(
+                    model,
+                    _hi(),
+                    APIConnectOptions(max_retry=2, retry_interval=0),
+                    extra_kwargs={"metadata": {"at": object()}},
+                )
+        finally:
+            await model.aclose()
+
+    assert peer.requests == []
+
+
+async def test_an_error_the_api_reports_mid_stream_keeps_its_kind() -> None:
+    """An error payload in the HTTP event stream is the API refusing the request: final, with
+    its message. It was taken for a connection error and retried."""
+    error = {"type": "error", "error": {"code": "context_length_exceeded", "message": "too long"}}
+    peer = _Peer([CREATED, error])
+    async with _serve(peer) as base_url:
+        model = _llm(base_url, "http")
+        try:
+            with pytest.raises(APIError) as caught:
+                await _reply(model, _hi(), APIConnectOptions(max_retry=2, retry_interval=0))
+        finally:
+            await model.aclose()
+
+    assert (caught.value.kind, caught.value.message) == ("invalid_request", "too long")
+    assert len(peer.requests) == 1
 
 
 async def test_a_socket_closed_while_idle_is_replaced_without_a_retry() -> None:

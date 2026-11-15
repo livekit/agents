@@ -28,6 +28,7 @@ from .duplex import (
     DuplexOutputTranscriptDelta,
     DuplexRealtimeAdapter,
     DuplexSession,
+    DuplexWebSocketSession,
     FixedGate,
 )
 from .realtime import (
@@ -109,6 +110,7 @@ __all__ = [
     "utils",
     "DuplexModel",
     "DuplexSession",
+    "DuplexWebSocketSession",
     "DuplexCapabilities",
     "DuplexAudioFrame",
     "DuplexInputGap",

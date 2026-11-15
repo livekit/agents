@@ -36,12 +36,16 @@ use pacing::Pacer;
 /// hold for its acknowledgement, its readiness.
 const DEFAULT_WAIT: Duration = Duration::from_secs(10);
 
-/// Opens a direct socket through the job's proxy (a test hands its fake).
-pub type Transports = Arc<dyn Fn(Option<String>) -> Arc<dyn WsTransport> + Send + Sync>;
+/// Opens a direct socket through the job's proxy, reading messages up to the size limit it is
+/// given (a test hands its fake).
+pub type Transports =
+    Arc<dyn Fn(Option<String>, Option<usize>) -> Arc<dyn WsTransport> + Send + Sync>;
 
 /// The real transport, through the proxy it is given.
 pub fn proxied() -> Transports {
-    Arc::new(|proxy| Arc::new(lk_agents_net::websocket::ProxiedTransport { proxy }))
+    Arc::new(|proxy, max_message_size| {
+        Arc::new(lk_agents_net::websocket::ProxiedTransport { proxy, max_message_size })
+    })
 }
 
 /// What a connection reads: a frame (with the message a multiplexer decoded from it), or the
@@ -77,7 +81,13 @@ async fn open_direct(
     if !target.protocols.is_empty() {
         headers.insert("Sec-WebSocket-Protocol", target.protocols.join(", "));
     }
-    let transport = transports(env.http_proxy());
+    let max_message_size = match target.max_message_size {
+        Some(size) => Some(usize::try_from(size).map_err(|_| {
+            ApiError::new(ErrorKind::InvalidRequest, "max_message_size does not fit in memory")
+        })?),
+        None => None,
+    };
+    let transport = transports(env.http_proxy(), max_message_size);
     let deadline = conn_options.connect_deadline(clock.now());
     within(clock, deadline, transport.connect(url.as_str(), headers)).await.map_err(|error| {
         match error {

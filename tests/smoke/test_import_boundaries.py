@@ -107,6 +107,7 @@ WEBSOCKET_LAYER = [
     AGENTS / "stt.py",
     AGENTS / "tts.py",
     AGENTS / "llm" / "realtime.py",
+    AGENTS / "llm" / "duplex.py",
     AGENTS / "llm" / "openai_protocol.py",
     *_sources(AGENTS / "http"),
 ]
@@ -164,6 +165,7 @@ SHARED_NAMES = {
     "WebSocketMultiplexer",
     "WebSocketPacing",
     "WebSocketTarget",
+    "log_skipped",
     "protocol_error",
 }
 

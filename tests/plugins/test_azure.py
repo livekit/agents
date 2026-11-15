@@ -291,6 +291,32 @@ async def test_a_canceled_phrase_fails_the_stream_by_its_status(
     assert caught.value.kind == kind
 
 
+# Catches: a phrase status the service added since failing the stream as a canceled
+# recognition, or a message path it added since reaching the stream, instead of reading as a
+# phrase that recognized nothing and a message the stream does not read.
+async def test_an_unknown_phrase_status_and_message_path_do_not_fail_the_stream(
+    ws_peer: WsPeer,
+) -> None:
+    def reply(connection: Connection, message: str | bytes) -> list[Frame]:
+        if not ends_audio(message):
+            return []
+        return [
+            service("speech.keyword.v2", connection, {"Text": 5}),
+            phrase(connection, "unheard", status="SpeechEndedEarly"),
+            phrase(connection, "hello"),
+            service("turn.end", connection),
+        ]
+
+    ws_peer.reply = reply
+    provider = azure(ws_peer)
+    async with provider.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(frame(100, 16000))
+        stream.end_input()
+        final = await finals(stream)
+
+    assert [speech.text for speech in final if speech.text] == ["hello"]
+
+
 async def test_a_turn_the_service_ends_is_followed_by_a_new_one(ws_peer: WsPeer) -> None:
     """While audio still flows, a turn.end opens the next turn on the same connection: a new
     request id with its speech.context and wave header; that turn's phrases are read and a late
@@ -299,6 +325,7 @@ async def test_a_turn_the_service_ends_is_followed_by_a_new_one(ws_peer: WsPeer)
     async with provider.stream(conn_options=OPTIONS) as stream:
         stream.push_frame(frame(100, 16000))
         connection = await ws_peer.connected()
+        await until_turns(connection, 1)
         first = request_id(connection)
         await ws_peer.send(service("turn.end", connection))
         await until_turns(connection, 2)

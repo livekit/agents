@@ -89,7 +89,9 @@ Output_T = TypeVar("Output_T", default=Any)
 _Context = TypeVar("_Context")
 
 # the voice session or text run executing the current agent callback
-_BindingContextVar: contextvars.ContextVar[Any] = contextvars.ContextVar("lk_agent_binding")
+_BindingContextVar: contextvars.ContextVar[_VoiceBinding | _TextRun[Any] | None] = (
+    contextvars.ContextVar("lk_agent_binding")
+)
 
 
 class _VoiceBinding(NamedTuple):

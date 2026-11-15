@@ -149,6 +149,7 @@ pub struct TimerOptions {
     pub transcription_timeout: Maybe<Option<Duration>>,
     /// `None` is no warmup at all (an outbound SIP call).
     pub aec_warmup: Maybe<Option<Duration>>,
+    pub final_transcript_timeout: Option<Duration>,
     pub session_close_transcript_timeout: Option<Duration>,
 }
 
@@ -156,6 +157,7 @@ option_group!(TimerOptions {
     user_away: Option<Duration>,
     transcription_timeout: Option<Duration>,
     aec_warmup: Option<Duration>,
+    final_transcript_timeout: Duration,
     session_close_transcript_timeout: Duration,
 });
 
@@ -213,6 +215,7 @@ pub const fn defaults(legs: &SessionLegs) -> AgentSessionOptions {
             user_away: Maybe::Given(Some(Duration::from_millis(15_000))),
             transcription_timeout: Maybe::Given(None),
             aec_warmup: Maybe::Given(Some(Duration::from_millis(3000))),
+            final_transcript_timeout: Some(Duration::from_secs(2)),
             session_close_transcript_timeout: Some(Duration::from_millis(2000)),
         },
     }
@@ -309,6 +312,7 @@ pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
         ivr_detection,
         user_away_timeout,
         transcription_timeout,
+        final_transcript_timeout,
         session_close_transcript_timeout,
     } = kw.clone();
 
@@ -319,6 +323,7 @@ pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
     o.timers.user_away = Maybe::Given(user_away_timeout.map(secs));
     o.timers.transcription_timeout = Maybe::Given(transcription_timeout.map(secs));
     o.timers.aec_warmup = nullable(aec_warmup_duration, secs);
+    o.timers.final_transcript_timeout = Some(secs(final_transcript_timeout));
     o.timers.session_close_transcript_timeout = Some(secs(session_close_transcript_timeout));
     o
 }
@@ -379,6 +384,7 @@ pub fn resolved_session_options(
                 user_away,
                 transcription_timeout,
                 aec_warmup,
+                final_transcript_timeout,
                 session_close_transcript_timeout,
             },
     } = *cfg;
@@ -425,6 +431,7 @@ pub fn resolved_session_options(
         ivr_detection: ivr_detection.resolved(),
         user_away_timeout: user_away.resolved().map(secs),
         transcription_timeout: transcription_timeout.resolved().map(secs),
+        final_transcript_timeout: secs(final_transcript_timeout.resolved()),
         aec_warmup_duration: aec_warmup.resolved().map(secs),
         session_close_transcript_timeout: secs(session_close_transcript_timeout.resolved()),
     }

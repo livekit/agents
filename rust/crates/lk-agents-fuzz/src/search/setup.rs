@@ -92,6 +92,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         avatar_fps: 25,
         avatar_latency_ms: 20,
         stt_model: 0,
+        stt_speech: Default::default(),
         tts_latency: None,
         conn: None,
         chunked_tts: false,
@@ -213,6 +214,13 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     setup.expressive_model = !setup.tts_markup.is_empty();
     // pacing, as production runs it by default, drawn after the dialect for the same reason
     setup.tts_pacing = rng.bool();
+    // How the recogniser reports speech, drawn after pacing for the same reason: with its own
+    // detection or without; one with it may transcribe a speech only once it ended.
+    let provider_vad = rng.u8(0..100) < 70;
+    setup.stt_speech = crate::fakes::SttSpeech {
+        provider_vad,
+        transcribes_after_speech_ends: provider_vad && rng.u8(0..100) < 35,
+    };
     if let Some(seed) = setup.stress {
         misbehaving_sink(&mut setup, &mut Rng::with_seed(seed ^ 0x7369_6e6b));
     }

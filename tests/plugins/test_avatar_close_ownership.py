@@ -62,7 +62,8 @@ class _Provider:
         return web.json_response({"data": {"session_id": "S1", "session_token": "token"}})
 
     async def liveavatar_start(self, _: web.Request) -> web.Response:
-        return web.json_response({"data": {"ws_url": self.url + "/events"}})
+        ws_url = self.url.replace("http://", "ws://", 1) + "/events"
+        return web.json_response({"data": {"ws_url": ws_url}})
 
     async def liveavatar_stop(self, _: web.Request) -> web.Response:
         return web.json_response({"code": 100})

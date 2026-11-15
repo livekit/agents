@@ -1,6 +1,7 @@
 """Resource ownership behind search/proxy tool lists, through the Cargo-linked runtime."""
 
 import asyncio
+import gc
 from typing import Annotated
 
 import pytest
@@ -56,6 +57,7 @@ async def test_hidden_children_close_after_last_shared_owner(
     child = _Child("reservations")
     left = _core._core_ToolsetGroup([wrapper(id="left", tools=[child, child])])
     right = _core._core_ToolsetGroup([wrapper(id="right", tools=[child])])
+    gc.collect()  # the groups own the temporary wrappers, including their reference cycles
     async with asyncio.timeout(5):
         try:
             await left.start()

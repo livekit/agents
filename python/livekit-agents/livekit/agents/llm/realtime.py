@@ -22,6 +22,7 @@ from .._websocket import (
     WebSocketKind,
     WebSocketProtocol,
     WebSocketTarget,
+    log_skipped,
     protocol_error,
 )
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
@@ -46,6 +47,7 @@ __all__ = [
     "RealtimeModelError",
     "RealtimeModelFallbackAdapter",
     "WebSocketTarget",
+    "log_skipped",
     "protocol_error",
 ]
 __all__ += _public.__all__

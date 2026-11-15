@@ -233,6 +233,7 @@ impl VoiceDriver {
     /// The recogniser's turn `turn` ended with no message (the hook stopped it, or it was
     /// dropped behind an uninterruptible speech).
     pub(crate) fn user_turn_dropped(&mut self, turn: TurnId) {
+        self.forget_user_input(turn);
         if self.ending_mut().is_some_and(|ending| ending.decided == Some(turn)) {
             self.settle_user_turn(None, false);
         }

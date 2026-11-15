@@ -14,6 +14,7 @@ from typing import (
     ClassVar,
     Generic,
     Literal,
+    Protocol,
     Self,
     TypeGuard,
     get_type_hints,
@@ -143,11 +144,16 @@ _P = ParamSpec("_P", default=...)
 
 _R = TypeVar("_R", default=object, covariant=True)
 
+# the function a `function_tool` decorator is applied to
+_DecoratedP = ParamSpec("_DecoratedP")
+_DecoratedR = TypeVar("_DecoratedR")
+
 
 class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
     def __init__(self, func: Callable[_P, _R], info: _InfoT, instance: Any = None) -> None:
         functools.update_wrapper(self, func)
-        self._func = func
+        # bound to `instance`, it takes the instance first
+        self._func: Callable[..., _R] = func
         self._info: _InfoT = info
         self._instance = instance
 
@@ -183,6 +189,22 @@ class RawFunctionTool(_BaseFunctionTool[RawFunctionToolInfo, _P, _R]):
     """Wrapper for a function decorated with @function_tool(raw_schema=...)"""
 
 
+class _RawToolDecorator(Protocol):
+    """``@function_tool(raw_schema=..)``: turns the function it decorates into a raw tool."""
+
+    def __call__(
+        self, func: Callable[_DecoratedP, _DecoratedR], /
+    ) -> RawFunctionTool[_DecoratedP, _DecoratedR]: ...
+
+
+class _FunctionToolDecorator(Protocol):
+    """``@function_tool(..)``: turns the function it decorates into a tool."""
+
+    def __call__(
+        self, func: Callable[_DecoratedP, _DecoratedR], /
+    ) -> FunctionTool[_DecoratedP, _DecoratedR]: ...
+
+
 @overload
 def function_tool(
     f: Callable[_P, _R],
@@ -204,7 +226,7 @@ def function_tool(
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
     retries: int | None = None,
-) -> Callable[[Callable[_P, _R]], RawFunctionTool[_P, _R]]: ...
+) -> _RawToolDecorator: ...
 
 
 @overload
@@ -232,7 +254,7 @@ def function_tool(
     duplicate_scope: DuplicateScope = "name",
     needs_approval: bool | ReadBack = False,
     retries: int | None = None,
-) -> Callable[[Callable[_P, _R]], FunctionTool[_P, _R]]: ...
+) -> _FunctionToolDecorator: ...
 
 
 @overload
@@ -255,7 +277,8 @@ def function_tool(
 ) -> (
     FunctionTool[..., object]
     | RawFunctionTool[..., object]
-    | Callable[[Callable[..., object]], FunctionTool[..., object] | RawFunctionTool[..., object]]
+    | _RawToolDecorator
+    | _FunctionToolDecorator
 ):
     """Turn a function into a tool the model can call.
 
@@ -272,8 +295,8 @@ def function_tool(
         raise ValueError(f"retries must be a non-negative integer, got {retries!r}")
 
     def deco_raw(
-        func: Callable[_P, _R],
-    ) -> RawFunctionTool[_P, _R]:
+        func: Callable[_DecoratedP, _DecoratedR],
+    ) -> RawFunctionTool[_DecoratedP, _DecoratedR]:
         assert raw_schema is not None
 
         if needs_approval:
@@ -299,7 +322,9 @@ def function_tool(
         )
         return RawFunctionTool(func, info)
 
-    def deco_func(func: Callable[_P, _R]) -> FunctionTool[_P, _R]:
+    def deco_func(
+        func: Callable[_DecoratedP, _DecoratedR],
+    ) -> FunctionTool[_DecoratedP, _DecoratedR]:
         from docstring_parser import parse_from_object
 
         wrapped: Callable[..., Any] = func

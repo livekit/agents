@@ -169,12 +169,15 @@ class _core_ContextActivation:
         identity: str,
         revision: int,
         fields: Sequence[ContextField],
+        session: object | None = None,
     ) -> ContextValues:
-        """Stage the validated fields; a stale activation cannot overwrite a newer revision."""
+        """Stage validated fields and an explicitly assigned detached session snapshot together;
+        a stale activation cannot overwrite either part of a newer revision.
+        """
     async def load_session(self) -> object | None:
         """A detached read of committed routing state; never starts an execution."""
     async def load_session_snapshot(self) -> str: ...
-    def declare_binding(self, context: object, store: object) -> BoundContext: ...
+    def declare_binding(self, context: object, store: object) -> BoundContext[object]: ...
     async def flush_bound_session(self, history: Sequence[ChatItem] | None) -> None: ...
     def set_session_sink(self, sink: _core_HandlerTurn) -> None:
         """The managed turn's checkpoint channel, owned by the run holding the lease."""

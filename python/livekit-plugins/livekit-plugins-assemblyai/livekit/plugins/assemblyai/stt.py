@@ -15,68 +15,94 @@
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import json
 import os
 import time
 import weakref
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NotRequired, TypedDict, assert_never, final
 from urllib.parse import urlencode
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
     APIError,
-    APITimeoutError,
     LanguageCode,
-    http,
     stt,
-    utils,
 )
-from livekit.agents.types import (
-    NOT_GIVEN,
-    ErrorKind,
-    NotGivenOr,
-)
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TranscriptChunk
 
 from .log import logger
 
 
-class _Word(BaseModel):
-    model_config = ConfigDict(strict=True)
-
-    text: str = ""
-    start: float = 0.0
-    end: float = 0.0
-    confidence: float = 0.0
+class _Word(TypedDict):
+    text: str
+    start: float
+    end: float
+    confidence: float
 
 
-class _StreamEvent(BaseModel):
-    model_config = ConfigDict(strict=True)
+@final
+class _Begin(TypedDict):
+    type: Literal["Begin"]
+    id: str
+    expires_at: int
 
-    type: str = ""
-    id: str | None = None
-    expires_at: int | None = None
-    timestamp: float | None = None
-    audio_duration_seconds: float | None = None
-    session_duration_seconds: float | None = None
-    words: list[_Word] = Field(default_factory=list[_Word])
-    end_of_turn: bool = False
-    end_of_turn_confidence: float | None = None
-    turn_is_formatted: bool = False
-    utterance: str = ""
-    transcript: str = ""
-    language_code: str = "en"
-    language_confidence: float | None = None
-    speaker_label: str | None = None
+
+@final
+class _SpeechStarted(TypedDict):
+    type: Literal["SpeechStarted"]
+    timestamp: NotRequired[float]
+
+
+@final
+class _Turn(TypedDict):
+    type: Literal["Turn"]
+    words: list[_Word]
+    end_of_turn: NotRequired[bool]
+    end_of_turn_confidence: NotRequired[float]
+    turn_is_formatted: NotRequired[bool]
+    utterance: NotRequired[str]
+    transcript: NotRequired[str]
+    language_code: NotRequired[str]
+    language_confidence: NotRequired[float]
+    speaker_label: NotRequired[str]
+
+
+@final
+class _Termination(TypedDict):
+    type: Literal["Termination"]
+
+
+@final
+class _Error(TypedDict):
+    """The error AssemblyAI sends, untagged, before it closes with 3005."""
+
+    type: NotRequired[Literal[None]]
+    error: str
+
+
+_OBJECT: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
+
+
+class _Out(TypedDict):
+    type: Literal["Terminate", "ForceEndpoint", "UpdateConfiguration"]
+    prompt: NotRequired[str]
+    agent_context: NotRequired[str]
+    keyterms_prompt: NotRequired[list[str]]
+    language_codes: NotRequired[list[str]]
+    max_turn_silence: NotRequired[int]
+    min_turn_silence: NotRequired[int]
+    end_of_turn_confidence_threshold: NotRequired[float]
+    continuous_partials: NotRequired[bool]
+    interruption_delay: NotRequired[int]
+    vad_threshold: NotRequired[float]
 
 
 @dataclass
@@ -118,9 +144,6 @@ class STTOptions:
 # interruption_delay, voice_focus, voice_focus_threshold) and connect-time
 # defaults. Mirrors the server-side `SpeechModel.is_u3_pro`.
 _U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro")
-
-# AssemblyAI's own close codes: 3005 follows an in-band error, the request it refused.
-_CLOSE_CODES: dict[int, ErrorKind] = {3005: "invalid_request"}
 
 # Server-side cap on the number of steering codes, mirrored client-side so bad
 # input fails at construction/update time instead of as a websocket error.
@@ -202,7 +225,6 @@ class STT(stt.STT):
         voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN,
         voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN,
         mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN,
-        http_session: http.HttpSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
     ):
@@ -368,7 +390,6 @@ class STT(stt.STT):
             voice_focus_threshold=voice_focus_threshold,
             mode=mode,
         )
-        self._session = http_session
         # user keyterms; _opts.keyterms_prompt holds the effective set (user + session)
         self._user_keyterms: list[str] = list(keyterms_prompt or [])
         self._session_keyterms: list[str] = []
@@ -381,12 +402,6 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "AssemblyAI"
-
-    @property
-    def session(self) -> http.HttpSession:
-        if not self._session:
-            self._session = http.http_session()
-        return self._session
 
     async def _recognize_impl(
         self,
@@ -409,7 +424,6 @@ class STT(stt.STT):
             conn_options=conn_options,
             opts=config,
             api_key=self._api_key,
-            http_session=self.session,
             base_url=self._base_url,
         )
         self._streams.add(stream)
@@ -507,9 +521,11 @@ class STT(stt.STT):
             self.update_options(agent_context=text)
 
 
-class SpeechStream(stt.RecognizeStream):
-    # Used to close websocket
-    _CLOSE_MSG: str = json.dumps({"type": "Terminate"})
+class SpeechStream(
+    stt.WebSocketStream[_Begin | _SpeechStarted | _Turn | _Termination | _Error, _Out]
+):
+    # SpeechStarted and end_of_turn are AssemblyAI's own speech boundaries
+    provider_vad = True
 
     def __init__(
         self,
@@ -518,20 +534,17 @@ class SpeechStream(stt.RecognizeStream):
         opts: STTOptions,
         conn_options: APIConnectOptions,
         api_key: str,
-        http_session: http.HttpSession,
         base_url: str,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
-
         self._opts = opts
         self._api_key = api_key
-        self._session = http_session
         self._base_url = base_url
+        self.frame_ms = round(opts.buffer_size_seconds * 1000)
         self._last_preflight_start_time: float = 0
-        self._config_update_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
         self._session_id: str | None = None
         self._expires_at: int | None = None
-        self._last_frame_sent_at: float | None = None
+        self._anchored = False
 
     @property
     def session_id(self) -> str | None:
@@ -573,6 +586,7 @@ class SpeechStream(stt.RecognizeStream):
         if is_given(agent_context):
             _validate_agent_context(agent_context)
 
+        # the audio already chunked keeps its size
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
         if is_given(end_of_turn_confidence_threshold):
@@ -596,159 +610,36 @@ class SpeechStream(stt.RecognizeStream):
         if is_given(interruption_delay):
             self._opts.interruption_delay = interruption_delay
 
-        # Send UpdateConfiguration message over the active websocket
-        config_msg: dict[str, object] = {"type": "UpdateConfiguration"}
+        # applied live on the open connection; the next one connects with them
+        update = _Out(type="UpdateConfiguration")
         if is_given(prompt):
-            config_msg["prompt"] = prompt
+            update["prompt"] = prompt
         if is_given(agent_context):
-            config_msg["agent_context"] = agent_context
+            update["agent_context"] = agent_context
         if is_given(keyterms_prompt):
-            config_msg["keyterms_prompt"] = keyterms_prompt
+            update["keyterms_prompt"] = keyterms_prompt
         if is_given(language_codes):
-            config_msg["language_codes"] = language_codes
+            update["language_codes"] = language_codes
         if is_given(max_turn_silence):
-            config_msg["max_turn_silence"] = max_turn_silence
+            update["max_turn_silence"] = max_turn_silence
         if is_given(min_turn_silence):
-            config_msg["min_turn_silence"] = min_turn_silence
+            update["min_turn_silence"] = min_turn_silence
         if is_given(end_of_turn_confidence_threshold):
-            config_msg["end_of_turn_confidence_threshold"] = end_of_turn_confidence_threshold
+            update["end_of_turn_confidence_threshold"] = end_of_turn_confidence_threshold
         if is_given(continuous_partials):
-            config_msg["continuous_partials"] = continuous_partials
+            update["continuous_partials"] = continuous_partials
         if is_given(interruption_delay):
-            config_msg["interruption_delay"] = interruption_delay
+            update["interruption_delay"] = interruption_delay
         if is_given(vad_threshold):
-            config_msg["vad_threshold"] = vad_threshold
-
-        if len(config_msg) > 1:
-            self._config_update_queue.put_nowait(config_msg)
+            update["vad_threshold"] = vad_threshold
+        if len(update) > 1:
+            self.send_now(update)
 
     def force_endpoint(self) -> None:
         """Force-finalize the current turn immediately."""
-        self._config_update_queue.put_nowait({"type": "ForceEndpoint"})
+        self.send_now(_Out(type="ForceEndpoint"))
 
-    async def _run(self) -> None:
-        """Run a single websocket connection to AssemblyAI."""
-        closing_ws = False
-
-        async def send_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-            anchored = False
-
-            samples_per_buffer = self._opts.sample_rate // round(1 / self._opts.buffer_size_seconds)
-            audio_bstream = utils.media.AudioByteStream(
-                sample_rate=self._opts.sample_rate,
-                num_channels=1,
-                samples_per_channel=samples_per_buffer,
-            )
-
-            # forward inputs to AssemblyAI
-            # if we receive a close message, signal it to AssemblyAI and break.
-            # the recv task will then make sure to process the remaining audio and stop
-            try:
-                async for data in self.input:
-                    if isinstance(data, self.Flush):
-                        frames = audio_bstream.flush()
-                    else:
-                        frames = audio_bstream.push(data.data.tobytes())
-
-                    for frame in frames:
-                        if not anchored:
-                            # Anchor the stream's wall-clock to the moment just
-                            # before the first frame is sent — aligned with the
-                            # server's stream-relative zero used by
-                            # SpeechStarted.timestamp.
-                            self.start_time = time.time()
-                            anchored = True
-                        await ws.send_bytes(frame.data.tobytes())
-                        self._last_frame_sent_at = time.time()
-
-                closing_ws = True
-                logger.debug("AssemblyAI sending close message session=%s", self._session_id)
-                await ws.send_str(SpeechStream._CLOSE_MSG)
-            except APIConnectionError as e:
-                if closing_ws or self._session.closed:
-                    return
-                raise APIConnectionError("AssemblyAI connection closed unexpectedly") from e
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            nonlocal closing_ws
-            consecutive_timeouts = 0
-            while True:
-                try:
-                    msg = await ws.receive(timeout=5)
-                    consecutive_timeouts = 0
-                except APITimeoutError:
-                    if closing_ws:
-                        break
-                    consecutive_timeouts += 1
-                    # First warning at 15s, then every 15s while silence continues.
-                    # `session=None` here means WS connected but AAI never sent `Begin`.
-                    if consecutive_timeouts % 3 == 0:
-                        logger.warning(
-                            "AssemblyAI no messages received for %ds session=%s",
-                            consecutive_timeouts * 5,
-                            self._session_id,
-                        )
-                        # If the send side is also idle, the stall is upstream
-                        # of this plugin (no audio reaching us). Otherwise
-                        # frames are flowing and the stall is downstream.
-                        if self._last_frame_sent_at is not None:
-                            send_idle_s = time.time() - self._last_frame_sent_at
-                            if send_idle_s >= 15:
-                                logger.warning(
-                                    "AssemblyAI no audio frames sent for %.0fs session=%s",
-                                    send_idle_s,
-                                    self._session_id,
-                                )
-                    continue
-
-                if msg.type is http.WebSocketMessageType.CLOSE:
-                    if closing_ws:  # close is expected, see SpeechStream.aclose
-                        return
-
-                    raise ws.close_error(
-                        f"AssemblyAI connection closed unexpectedly session={self._session_id}",
-                        _CLOSE_CODES,
-                    )
-
-                if msg.type is not http.WebSocketMessageType.TEXT:
-                    logger.error(
-                        "unexpected AssemblyAI message type=%s session=%s",
-                        msg.type,
-                        self._session_id,
-                    )
-                    continue
-
-                try:
-                    data = json.loads(msg.data)
-                    if isinstance(data, dict) and "error" in data:
-                        continue  # the close that follows carries it as its reason
-                    event = _StreamEvent.model_validate(data)
-                except ValueError as e:
-                    raise APIError(
-                        "AssemblyAI sent a malformed message",
-                        kind="protocol",
-                        detail=str(msg.data),
-                    ) from e
-                self._process_stream_event(event)
-
-        async def send_config_task(ws: http.WebSocket) -> None:
-            """Send config updates and control messages immediately, independent of audio."""
-            while True:
-                config_msg = await self._config_update_queue.get()
-                await ws.send_str(json.dumps(config_msg))
-
-        ws: http.WebSocket | None = None
-        try:
-            ws = await self._connect_ws()
-            async with utils.aio.TaskSet() as tasks:
-                tasks.spawn(send_config_task(ws))
-                await asyncio.gather(tasks.spawn(send_task(ws)), tasks.spawn(recv_task(ws)))
-        finally:
-            if ws is not None:
-                await ws.close()
-
-    async def _connect_ws(self) -> http.WebSocket:
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         # Universal-3 Pro family defaults: min=100, max=min (so both 100 unless overridden).
         # When a `mode` preset is selected, leave them unset (None) unless the
         # caller set them explicitly, so the server's per-mode silence tuning is
@@ -824,237 +715,172 @@ class SpeechStream(stt.RecognizeStream):
             else None,
             "mode": self._opts.mode if is_given(self._opts.mode) else None,
         }
-
-        headers = {
-            "Authorization": self._api_key,
-            "Content-Type": "application/json",
-            "User-Agent": "AssemblyAI/1.0 (integration=Livekit)",
-        }
-
         filtered_config = {
             k: ("true" if v else "false") if isinstance(v, bool) else v
             for k, v in live_config.items()
             if v is not None
         }
-        url = f"{self._base_url}/v3/ws?{urlencode(filtered_config)}"
-        logger.debug(
-            "connecting to AssemblyAI model=%s base_url=%s",
-            self._opts.speech_model,
-            self._base_url,
+        # SpeechStarted's timestamp counts from this connection's first audio
+        self._anchored = False
+        base_url = self._base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
+        return stt.WebSocketTarget(
+            f"{base_url}/v3/ws?{urlencode(filtered_config)}",
+            headers={
+                "Authorization": self._api_key,
+                "Content-Type": "application/json",
+                "User-Agent": "AssemblyAI/1.0 (integration=Livekit)",
+            },
         )
-        ws = await self._session.ws_connect(url, headers=headers, conn_options=self._conn_options)
-        logger.debug(
-            "AssemblyAI WebSocket connected",
-        )
-        return ws
 
-    def _process_stream_event(self, event: _StreamEvent) -> None:
-        message_type = event.type
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | _Out | None:
+        match item:
+            case rtc.AudioFrame():
+                if not self._anchored:
+                    self.start_time = time.time()
+                    self._anchored = True
+                return bytes(item.data)
+            case stt.Flush():
+                return None
+            case stt.EndOfAudio():
+                return _Out(type="Terminate")
+            case _:
+                assert_never(item)
 
-        if message_type == "Begin":
-            self._session_id = event.id
-            self._expires_at = event.expires_at
+    def decode(
+        self, frame: bytes | str
+    ) -> _Begin | _SpeechStarted | _Turn | _Termination | _Error | None:
+        # an untagged message is the error only when it carries one: another (one AssemblyAI
+        # added since) is skipped, named once by its keys
+        if isinstance(frame, str):
+            try:
+                fields = _OBJECT.validate_json(frame)
+            except ValidationError as e:
+                raise stt.protocol_error(self, f"{e}; frame: {frame}") from e
+            if "type" not in fields and "error" not in fields:
+                stt.log_skipped("AssemblyAI", f"untagged: {','.join(sorted(fields))}")
+                return None
+        return super().decode(frame)
+
+    def on_message(self, message: _Begin | _SpeechStarted | _Turn | _Termination | _Error) -> None:
+        if "error" in message:
+            # a refused request: the close that follows (3005) carries the same reason
+            raise APIError(
+                "AssemblyAI refused the request", kind="invalid_request", detail=message["error"]
+            )
+        elif message["type"] == "Begin":
+            self._session_id = message["id"]
+            self._expires_at = message["expires_at"]
             logger.info(
                 "AssemblyAI session started id=%s expires_at=%s",
                 self._session_id,
                 self._expires_at,
             )
-            return
-
-        if message_type == "SpeechStarted":
-            # SpeechStarted can arrive well after actual speech onset. The
-            # `timestamp` field carries the server VAD's onset time in stream-
-            # relative ms. Convert to wall-clock by adding self.start_time
-            # (the stream's wall-clock anchor) so the framework records an
-            # accurate _speech_start_time instead of message arrival.
-            timestamp_ms = event.timestamp
-            speech_start_time: float | None = None
-            if timestamp_ms is not None:
-                speech_start_time = self.start_time + timestamp_ms / 1000
-            self.send(
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.START_OF_SPEECH,
-                    speech_start_time=speech_start_time,
+        elif message["type"] == "SpeechStarted":
+            # SpeechStarted can arrive well after the speech onset: its stream-relative ms are
+            # the server VAD's onset, from the connection's first audio
+            timestamp = message.get("timestamp")
+            self.report(
+                stt.SpeechStarted(
+                    speech_start_time=self.start_time + timestamp / 1000
+                    if timestamp is not None
+                    else None
                 )
             )
-            return
+        elif message["type"] == "Termination":
+            self.report(stt.SessionFinished())
+        elif message["type"] == "Turn":
+            self._turn(message)
+        else:
+            assert_never(message)
 
-        if message_type == "Termination":
-            audio_duration = event.audio_duration_seconds
-            session_duration = event.session_duration_seconds
-            logger.debug(
-                "AssemblyAI session terminated session=%s audio_duration=%ss session_duration=%ss",
-                self._session_id,
-                audio_duration,
-                session_duration,
-            )
-            return
-
-        if message_type != "Turn":
-            logger.debug(
-                "AssemblyAI unhandled message type=%s session=%s",
-                message_type,
-                self._session_id,
-            )
-            return
-        words = event.words
-        end_of_turn = event.end_of_turn
-        end_of_turn_confidence = event.end_of_turn_confidence
-        turn_is_formatted = event.turn_is_formatted
-        utterance = event.utterance
-        transcript = event.transcript
-        language = LanguageCode(event.language_code)
-        language_confidence = event.language_confidence
-
-        # Extract speaker label for diarization (returns "A", "B", ... or "UNKNOWN")
-        speaker_label = event.speaker_label
+    def _turn(self, message: _Turn) -> None:
+        language = LanguageCode(message.get("language_code", "en"))
+        # "A", "B", ... or "UNKNOWN"
+        speaker_label = message.get("speaker_label")
         speaker_id = speaker_label if speaker_label and speaker_label != "UNKNOWN" else None
 
-        # Surface the server's per-turn scores on SpeechData.metadata, reachable
-        # from the SpeechEvent stream (e.g. in an `stt_node` override) without
-        # subclassing the stream. Note that UserInputTranscribedEvent does not
-        # carry metadata, so session-level listeners won't see these. Each key is
-        # attached only when the message carries it, so models that don't emit a
-        # field are unaffected.
-        #
-        # end_of_turn_confidence: on Universal-3.5 Pro (and later) this rises from 0
-        # toward 1 across the partials emitted while a turn is held open between
-        # min_turn_silence and max_turn_silence, letting callers threshold it to
-        # trigger preemptive/eager LLM generation before the final arrives; it is 1.0
-        # on the final.
-        #
-        # language_confidence: sent when the `language_detection` connection param is
-        # on (this plugin's default for the multilingual and U3 Pro models) and scores
-        # the `language_code` on the same message. The confidence score for the detected
-        # language, between 0 (low confidence) and 1 (high confidence). Only populated when
-        # language detection is enabled and an utterance is complete or turn is final.
+        # the server's per-turn scores ride the transcripts' metadata. end_of_turn_confidence
+        # rises from 0 toward 1 across the partials of a turn held open between
+        # min_turn_silence and max_turn_silence (1.0 on the final); language_confidence scores
+        # the language_code when language detection is on
         turn_metadata: dict[str, JsonValue] = {}
-        if end_of_turn_confidence is not None:
+        if (end_of_turn_confidence := message.get("end_of_turn_confidence")) is not None:
             turn_metadata["end_of_turn_confidence"] = end_of_turn_confidence
-        if language_confidence is not None:
+        if (language_confidence := message.get("language_confidence")) is not None:
             turn_metadata["language_confidence"] = language_confidence
-        speech_metadata = turn_metadata or None
+        metadata = turn_metadata or None
 
-        # transcript (final) and words (interim) are cumulative
-        # utterance (preflight) is chunk based
-        start_time: float = 0
-        end_time: float = 0
-        confidence: float = 0
         # word timestamps are in milliseconds
         # https://www.assemblyai.com/docs/api-reference/streaming-api/streaming-api#receive.receiveTurn.words
-        timed_words: list[TranscriptChunk] = [
+        offset = self.start_time_offset
+        words = [
             TranscriptChunk(
-                text=word.text,
-                start_time=word.start / 1000 + self.start_time_offset,
-                end_time=word.end / 1000 + self.start_time_offset,
-                start_time_offset=self.start_time_offset,
-                confidence=word.confidence,
+                text=word["text"],
+                start_time=word["start"] / 1000 + offset,
+                end_time=word["end"] / 1000 + offset,
+                start_time_offset=offset,
+                confidence=word["confidence"],
             )
-            for word in words
+            for word in message["words"]
         ]
+        start_time = words[0].start_time or 0.0 if words else 0.0
+        end_time = words[-1].end_time or 0.0 if words else 0.0
+        confidence = sum(w.confidence or 0.0 for w in words) / len(words) if words else 0.0
 
-        # words are cumulative
-        if timed_words:
-            interim_text = " ".join(word.text for word in timed_words)
-            start_time = timed_words[0].start_time or start_time
-            end_time = timed_words[-1].end_time or end_time
-            confidence = sum(word.confidence or 0.0 for word in timed_words) / len(timed_words)
-
-            interim_event = stt.SpeechEvent(
-                type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                alternatives=[
-                    stt.SpeechData(
-                        language=language,
-                        text=interim_text,
-                        start_time=start_time,
-                        end_time=end_time,
-                        words=timed_words,
-                        confidence=confidence,
-                        speaker_id=speaker_id,
-                        metadata=speech_metadata,
-                    )
-                ],
-            )
-            self.send(interim_event)
-            logger.debug(
-                "interim transcript session=%s end_of_turn_confidence=%s",
-                self._session_id,
-                end_of_turn_confidence,
+        # words (interim) and transcript (final) are cumulative; utterance (preflight) is a chunk
+        if words:
+            self.report(
+                stt.Transcript(
+                    " ".join(w.text for w in words),
+                    language,
+                    start_time=start_time,
+                    end_time=end_time,
+                    confidence=confidence,
+                    speaker_id=speaker_id,
+                    words=words,
+                    metadata=metadata,
+                )
             )
 
-        if utterance:
+        if utterance := message.get("utterance"):
             if self._last_preflight_start_time == 0.0:
                 self._last_preflight_start_time = start_time
-
-            # utterance is chunk based so we need to filter the words to
-            # only include the ones that are part of the current utterance
-            utterance_words = [
-                word
-                for word in timed_words
-                if word.start_time is not None
-                and word.start_time >= self._last_preflight_start_time
+            chunk = [
+                w
+                for w in words
+                if w.start_time is not None and w.start_time >= self._last_preflight_start_time
             ]
-            utterance_confidence = sum(word.confidence or 0.0 for word in utterance_words) / max(
-                len(utterance_words), 1
-            )
-
-            final_event = stt.SpeechEvent(
-                type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
-                alternatives=[
-                    stt.SpeechData(
-                        language=language,
-                        text=utterance,
-                        start_time=self._last_preflight_start_time,
-                        end_time=end_time,
-                        words=utterance_words,
-                        confidence=utterance_confidence,
-                        speaker_id=speaker_id,
-                        metadata=speech_metadata,
-                    )
-                ],
-            )
-            self.send(final_event)
-            logger.debug(
-                "preflight transcript session=%s end_of_turn_confidence=%s",
-                self._session_id,
-                end_of_turn_confidence,
+            self.report(
+                stt.Transcript(
+                    utterance,
+                    language,
+                    preflight=True,
+                    start_time=self._last_preflight_start_time,
+                    end_time=end_time,
+                    confidence=sum(w.confidence or 0.0 for w in chunk) / max(len(chunk), 1),
+                    speaker_id=speaker_id,
+                    words=chunk,
+                    metadata=metadata,
+                )
             )
             self._last_preflight_start_time = end_time
 
-        if end_of_turn and (
-            not (is_given(self._opts.format_turns) and self._opts.format_turns) or turn_is_formatted
+        formatted = message.get("turn_is_formatted", False)
+        if message.get("end_of_turn", False) and (
+            not (is_given(self._opts.format_turns) and self._opts.format_turns) or formatted
         ):
-            final_event = stt.SpeechEvent(
-                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                alternatives=[
-                    stt.SpeechData(
-                        language=language,
-                        text=transcript,
-                        start_time=start_time,
-                        end_time=end_time,
-                        words=timed_words,
-                        confidence=confidence,
-                        speaker_id=speaker_id,
-                        metadata=speech_metadata,
-                    )
-                ],
-            )
-            self.send(final_event)
-            logger.debug(
-                "final transcript session=%s end_of_turn_confidence=%s",
-                self._session_id,
-                end_of_turn_confidence,
-            )
-
-            if words:
-                first_word_start = words[0].start
-                last_word_end = words[-1].end
-                logger.debug(
-                    "turn speech_duration=%.3fs session=%s (from word timestamps)",
-                    (last_word_end - first_word_start) / 1000,
-                    self._session_id,
+            self.report(
+                stt.Transcript(
+                    message.get("transcript", ""),
+                    language,
+                    final=True,
+                    start_time=start_time,
+                    end_time=end_time,
+                    confidence=confidence,
+                    speaker_id=speaker_id,
+                    words=words,
+                    metadata=metadata,
                 )
-
-            self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-
+            )
+            self.report(stt.SpeechEnded())
             self._last_preflight_start_time = 0.0

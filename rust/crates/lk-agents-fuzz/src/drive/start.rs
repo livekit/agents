@@ -335,8 +335,9 @@ impl Run {
             use lk_agents_abi::voice::amd::{AmdConfigKwargs, AmdFunctions, TranscriptSource};
             use lk_agents_voice::amd::machine::classifier::AmdRules;
             let llm = fakes::FakeLlm::new(registry.clone());
-            let stt =
-                amd.own_stt.then(|| fakes::FakeStt::for_amd(registry.clone(), connect) as Arc<Stt>);
+            let stt = amd.own_stt.then(|| {
+                fakes::FakeStt::for_amd(registry.clone(), connect, setup.stt_speech) as Arc<Stt>
+            });
             let activity = api.resolved_options().map(|o| o.endpointing.max_delay);
             let cfg = AmdConfigKwargs {
                 max_endpointing_delay: Some(AmdRules::amd_resolve_max_endpointing_delay(
@@ -652,6 +653,7 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
         ivr_detection: setup.ivr == Some(true),
         user_away_timeout: Some(15.0),
         transcription_timeout: setup.transcription_timeout_ms.map(secs),
+        final_transcript_timeout: 2.0,
         session_close_transcript_timeout: 2.0,
     }
 }
@@ -810,9 +812,9 @@ fn plain_frame(
 /// The session's recogniser: one that takes keyterms when the setup's detection says so.
 pub(super) fn session_stt(setup: &Setup, registry: &Arc<Registry>, connect: Duration) -> Arc<Stt> {
     if setup.keyterm_detection.is_some_and(|k| k.stt_takes_keyterms) {
-        fakes::FakeStt::taking_keyterms(registry.clone(), connect)
+        fakes::FakeStt::taking_keyterms(registry.clone(), connect, setup.stt_speech)
     } else {
-        fakes::FakeStt::new(registry.clone(), connect)
+        fakes::FakeStt::new(registry.clone(), connect, setup.stt_speech)
     }
 }
 

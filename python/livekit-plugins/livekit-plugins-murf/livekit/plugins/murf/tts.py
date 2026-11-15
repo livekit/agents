@@ -181,17 +181,17 @@ class TTS(tts.TTS):
             pacing (SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or ``None`` to
                 send each chunk as soon as it is split.
         """
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if is_given(locale):
-            self._opts.locale = locale
-        if is_given(voice):
-            self._opts.voice = voice
-        if is_given(style):
-            self._opts.style = style
-        if is_given(speed):
-            self._opts.speed = speed
-        if is_given(pitch):
-            self._opts.pitch = pitch
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            if is_given(locale):
+                self._opts.locale = locale
+            if is_given(voice):
+                self._opts.voice = voice
+            if is_given(style):
+                self._opts.style = style
+            if is_given(speed):
+                self._opts.speed = speed
+            if is_given(pitch):
+                self._opts.pitch = pitch
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions

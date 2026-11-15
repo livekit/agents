@@ -102,9 +102,9 @@ class TTS(tts.TTS):
             pacing (SentenceStreamPacer | None): A ``SentenceStreamPacer``, or ``None`` to send each
                 chunk as soon as it is split.
         """
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if is_given(voice):
-            self._opts.voice = voice
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            if is_given(voice):
+                self._opts.voice = voice
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions

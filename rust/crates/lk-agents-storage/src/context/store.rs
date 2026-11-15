@@ -122,10 +122,19 @@ impl Database {
     /// A direct save, one fenced run. One whose outcome stayed unknown at its deadline is
     /// `Uncertain`; its dropped run's lease is released by token, which fences it out if it
     /// never applied.
-    async fn commit(&self, writes: Vec<ContextScopeWrite>) -> Result<(), StorageError> {
+    async fn commit(
+        &self,
+        writes: Vec<ContextScopeWrite>,
+        session: Option<Value>,
+    ) -> Result<(), StorageError> {
         let thread = self.open().await?;
         let out = match self.stage(&thread, writes).await {
-            Ok(mut run) => run.commit(CommitOptions::default()).await.map(drop),
+            Ok(mut run) => {
+                if let Some(session) = session {
+                    run.set_state(session);
+                }
+                run.commit(CommitOptions::default()).await.map(drop)
+            }
             Err(error) => Err(error),
         };
         thread.close().await;
@@ -328,16 +337,31 @@ impl HostContextActivation for ContextStore {
         identity: String,
         revision: i64,
         fields: Vec<ContextField>,
+        session: Option<Value>,
     ) -> Result<ContextValues, StorageError> {
         let _operation = self.operation.lock().await;
         let direct = self.database.as_ref().filter(|_| !self.managed.load(Ordering::Acquire));
         if let Some(database) = direct {
             self.settle_lost_save(database).await?;
         }
-        let values = self.activation.lock().save(&scope_id, &identity, revision, &fields)?;
+        if let Some(state) = &session {
+            crate::session_state::SessionState::from_value(state.clone())?;
+            if self.session_view.lock().is_some() {
+                return Err(StorageError::Invalid(
+                    "cannot replace session state while it is bound".into(),
+                ));
+            }
+        }
+        let values = self.activation.lock().save(
+            &scope_id,
+            &identity,
+            revision,
+            &fields,
+            session.clone(),
+        )?;
         if let Some(database) = direct {
             let writes = self.activation.lock().writes();
-            match database.commit(writes).await {
+            match database.commit(writes, session).await {
                 Ok(()) => self.activation.lock().acknowledge(),
                 Err(StorageError::Uncertain(why)) => {
                     self.lost_save.store(true, Ordering::Release);
@@ -350,6 +374,8 @@ impl HostContextActivation for ContextStore {
                     return Err(error);
                 }
             }
+        } else if self.database.is_none() && session.is_some() {
+            self.activation.lock().acknowledge_session();
         }
         Ok(values)
     }
@@ -421,13 +447,14 @@ impl HostContextActivation for ContextStore {
         Ok(())
     }
 
-    fn stage_session(&self, state: Value) -> Result<(), StorageError> {
+    fn stage_session(&self, mut state: Value) -> Result<(), StorageError> {
         let view = self.session_view.lock().clone();
+        let mut activation = self.activation.lock();
+        crate::session_state::merge_projection(&mut state, activation.session_state().as_ref())?;
         let checked = view
             .as_ref()
             .map(|_| crate::session_state::SessionState::from_value(state.clone()))
             .transpose()?;
-        let mut activation = self.activation.lock();
         activation.stage_session(state)?;
         if self.database.is_none() {
             activation.acknowledge_session();

@@ -157,15 +157,15 @@ class TTS(tts.TTS):
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        if is_given(model):
-            self._opts.model = model
-        if is_given(voice):
-            self._opts.voice = voice
-        if is_given(speed):
-            self._opts.speed = speed
-        if is_given(instructions):
-            self._opts.instructions = instructions
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            if is_given(model):
+                self._opts.model = model
+            if is_given(voice):
+                self._opts.voice = voice
+            if is_given(speed):
+                self._opts.speed = speed
+            if is_given(instructions):
+                self._opts.instructions = instructions
 
     @staticmethod
     def with_azure(

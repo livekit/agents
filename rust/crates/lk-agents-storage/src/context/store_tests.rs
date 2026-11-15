@@ -31,6 +31,7 @@ async fn standalone_session_owns_a_run_and_settles_only_explicit_app_saves() {
             "App".into(),
             values.revision,
             vec![field("draft", json!("saved"))],
+            None,
         )
         .await
         .unwrap();
@@ -53,6 +54,7 @@ async fn standalone_session_owns_a_run_and_settles_only_explicit_app_saves() {
             "App".into(),
             values.revision,
             vec![field("draft", json!("discard"))],
+            None,
         )
         .await
         .unwrap();
@@ -84,8 +86,17 @@ async fn direct_context_saves_survive_reload_and_refuse_stale_activations(backen
     let fields = vec![field("draft", json!("first"))];
     let a = first.load("root:desk".into(), "Booking".into(), fields.clone()).await.unwrap();
     let b = stale.load("root:desk".into(), "Booking".into(), fields.clone()).await.unwrap();
-    let saved =
-        first.save("root:desk".into(), "Booking".into(), a.revision, fields.clone()).await.unwrap();
+    let session = crate::session_state::voice_value("desk".into(), vec![]).unwrap();
+    let saved = first
+        .save(
+            "root:desk".into(),
+            "Booking".into(),
+            a.revision,
+            fields.clone(),
+            Some(session.clone()),
+        )
+        .await
+        .unwrap();
     assert_eq!(saved.revision, 1);
     assert!(first.writes().is_empty(), "returning success means the direct save committed");
     first.close();
@@ -104,19 +115,22 @@ async fn direct_context_saves_survive_reload_and_refuse_stale_activations(backen
         .unwrap();
     assert_eq!(loaded.fields["draft"], json!("first"));
     assert_eq!(loaded.revision, 1);
+    assert_eq!(restored.load_session().await.unwrap(), Some(session.clone()));
     assert!(matches!(
         stale
             .save(
                 "root:desk".into(),
                 "Booking".into(),
                 b.revision,
-                vec![field("draft", json!("stale"))]
+                vec![field("draft", json!("stale"))],
+                Some(crate::session_state::voice_value("stale".into(), vec![]).unwrap())
             )
             .await,
         Err(StorageError::VersionConflict { .. })
     ));
     let unchanged = restored.load("root:desk".into(), "Booking".into(), fields).await.unwrap();
     assert_eq!(unchanged.fields["draft"], json!("first"));
+    assert_eq!(restored.load_session().await.unwrap(), Some(session));
     let refreshed = stale
         .load("root:desk".into(), "Booking".into(), vec![field("draft", json!("default"))])
         .await
@@ -141,7 +155,7 @@ async fn several_context_declarations_share_one_direct_scope(backend: Backend) {
     let preferences = vec![field("language", json!("fr"))];
     let a = store.load("root:desk".into(), "Booking".into(), draft.clone()).await.unwrap();
     store.load("root:desk".into(), "Preferences".into(), preferences).await.unwrap();
-    store.save("root:desk".into(), "Booking".into(), a.revision, draft).await.unwrap();
+    store.save("root:desk".into(), "Booking".into(), a.revision, draft, None).await.unwrap();
     assert!(store.load("root:desk".into(), "Booking".into(), Vec::new()).await.is_err());
     store.close();
     fixture.cleanup(&[]).await;
@@ -280,11 +294,12 @@ async fn a_direct_save_unknown_at_its_deadline_is_reloaded_by_the_next_save() {
     let outage = crate::deadline::REQUEST_WAIT * 2;
     faulty.fail_next_commit(WriteFault::LoseAckAfter);
     faulty.unreachable_after_commit_for(outage);
-    let lost = store.save("root:desk".into(), "Booking".into(), loaded.revision, first).await;
+    let lost = store.save("root:desk".into(), "Booking".into(), loaded.revision, first, None).await;
     assert!(matches!(lost, Err(StorageError::Uncertain(_))), "{lost:?}");
     tokio::time::sleep(outage).await;
     let second = vec![field("draft", json!("second"))];
-    let saved = store.save("root:desk".into(), "Booking".into(), loaded.revision + 1, second).await;
+    let saved =
+        store.save("root:desk".into(), "Booking".into(), loaded.revision + 1, second, None).await;
     assert_eq!(saved.expect("the lost save committed; this one builds on it").revision, 2);
     let fields = vec![field("draft", json!("default"))];
     let reloaded = store.load("root:desk".into(), "Booking".into(), fields).await.unwrap();
@@ -302,7 +317,8 @@ async fn a_refused_direct_save_keeps_none_of_its_values() {
     let loaded = store.load("root:desk".into(), "Booking".into(), fields.clone()).await.unwrap();
     faulty.fail_next_commit(WriteFault::Refuse);
     faulty.unreachable_after_commit_for(std::time::Duration::from_secs(20));
-    let refused = store.save("root:desk".into(), "Booking".into(), loaded.revision, fields).await;
+    let refused =
+        store.save("root:desk".into(), "Booking".into(), loaded.revision, fields, None).await;
     assert!(refused.is_err(), "{refused:?}");
     assert!(store.writes().is_empty(), "the refused values stayed staged");
 }

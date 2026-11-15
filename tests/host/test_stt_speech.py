@@ -48,14 +48,14 @@ async def test_an_end_before_the_final_waits_for_it_however_long() -> None:
         ]
         for report in heard:
             provider.reports.put_nowait(report)
-        await until(lambda: len(events) == 2, "the interim")
+        await until(lambda: len(events) == 3, "the interim and pending end")
         # a timer releasing the end would make the interim final before the provider's final
         _core.skip_host_time(5.0)
         assert stream.speaking, "the end waits for the final"
         provider.reports.put_nowait(
             stt.Transcript("book a flight to Paris", EN, final=True, request_id="r1")
         )
-        await until(lambda: len(events) == 4, "the final and the end")
+        await until(lambda: len(events) == 5, "the final and the end")
     finally:
         await stream.aclose()
         await reader
@@ -63,12 +63,13 @@ async def test_an_end_before_the_final_waits_for_it_however_long() -> None:
     assert [(e.type, e.alternatives[0].text if e.alternatives else "") for e in events] == [
         (SOS, ""),
         (INTERIM, "book a flight to Par"),
+        (stt.SpeechEventType.END_OF_SPEECH_PENDING, ""),
         (FINAL, "book a flight to Paris"),
         (EOS, ""),
     ]
     assert events[0].speech_start_time == 12.5
     assert {e.utterance for e in events} == {1}, "the late final is the same utterance's"
-    assert events[2].request_id == events[3].request_id == "r1"
+    assert events[3].request_id == events[4].request_id == "r1"
 
 
 async def _collect(stream: stt.RecognizeStream, events: list[stt.SpeechEvent]) -> None:

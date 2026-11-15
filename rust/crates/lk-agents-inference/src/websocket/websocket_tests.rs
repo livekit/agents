@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ErrorKind, HostError};
 use lk_agents_abi::utils::websocket::{
-    WebSocketInput, WebSocketKeepaliveFrame, WebSocketMuxRoute, WebSocketRead, WebSocketSignal,
-    WebSocketTarget,
+    WebSocketContextsCancel, WebSocketInput, WebSocketKeepaliveFrame, WebSocketMuxRoute,
+    WebSocketRead, WebSocketSignal, WebSocketTarget,
 };
 use lk_agents_abi::{BoxFuture, VirtualClock};
 use parking_lot::Mutex;
@@ -63,7 +63,9 @@ struct Provider {
 impl Provider {
     fn transports(&self) -> Transports {
         let provider = self.clone();
-        Arc::new(move |_proxy| Arc::new(provider.clone()) as Arc<dyn WsTransport>)
+        Arc::new(move |_proxy, _max_message_size| {
+            Arc::new(provider.clone()) as Arc<dyn WsTransport>
+        })
     }
 
     fn socket(&self, index: usize) -> Arc<FakeSocket> {
@@ -191,6 +193,8 @@ struct Protocol {
     nothing_pending: AtomicBool,
     expects_close: AtomicBool,
     can_reconnect: AtomicBool,
+    /// Seconds without input after which its input-idle frames go.
+    input_idle: Mutex<Option<f64>>,
     /// The provider's ids the connections opened with, and the sessions the provider finished.
     opened: Mutex<Vec<Option<String>>>,
     finished_sessions: AtomicUsize,
@@ -214,6 +218,7 @@ impl Protocol {
             nothing_pending: AtomicBool::new(false),
             expects_close: AtomicBool::new(false),
             can_reconnect: AtomicBool::new(true),
+            input_idle: Mutex::new(None),
             opened: Mutex::new(Vec::new()),
             finished_sessions: AtomicUsize::new(0),
         };
@@ -278,20 +283,37 @@ impl WebSocketHost for Protocol {
                 _ => None,
             };
             let request_id = payload.strip_prefix("request ").map(str::to_owned);
-            Ok(WebSocketRead { signal, request_id })
+            Ok(WebSocketRead { signal, request_id, response: false })
         })
+    }
+
+    fn input_idle_after(&self) -> Result<Option<f64>, HostError> {
+        Ok(*self.input_idle.lock())
     }
 
     fn input_idle(&self, _cx: &Cx) -> BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>> {
         Box::pin(async move { Ok(frames(&["idle"])) })
     }
 
-    fn close_context(&self, _cx: &Cx) -> BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>> {
-        Box::pin(async move { Ok(vec![WsFrame::Text("cancel mine".into())]) })
+    fn response_idle_after(&self) -> Result<Option<f64>, HostError> {
+        Ok(None)
     }
 
-    fn keep_context(&self, _cx: &Cx) -> BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>> {
-        Box::pin(async move { Ok(vec![WsFrame::Text("keep mine".into())]) })
+    fn response_idle(&self, _cx: &Cx) -> BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>> {
+        Box::pin(async move { Ok(Vec::new()) })
+    }
+
+    /// Its one open context, `mine`, which the provider ends with `mine:cancelled`.
+    fn close_context(
+        &self,
+        _cx: &Cx,
+    ) -> BoxFuture<'_, Result<WebSocketContextsCancel, ProviderError>> {
+        Box::pin(async move {
+            Ok(WebSocketContextsCancel {
+                contexts: vec!["mine".into()],
+                frames: frames(&["cancel mine"]),
+            })
+        })
     }
 
     fn opened(&self, request_id: Option<String>) {
@@ -331,17 +353,18 @@ fn connection() -> WebSocketConnection {
             params: BTreeMap::new(),
             protocols: Vec::new(),
             request_id_header: None,
+            max_message_size: None,
         },
         keepalive: Some(WebSocketKeepaliveFrame {
             interval: 5.0,
             frame: WsFrame::Text("keepalive".into()),
+            only_while_unused: false,
         }),
         max_session_duration: None,
         ping_interval: None,
         setup: Vec::new(),
         awaits_ready: false,
-        input_idle: None,
-        context_keepalive: None,
+        goodbye: Vec::new(),
     }
 }
 
@@ -385,6 +408,8 @@ fn routed(max_contexts: Option<u32>) -> WebSocketMuxOptions {
         idle_timeout: None,
         keep_warm: false,
         routed: true,
+        reuses_sockets: true,
+        reads_cancel_end: false,
     }
 }
 
@@ -521,6 +546,8 @@ async fn an_unexpected_close_is_retried_on_a_new_connection_and_reported() {
     input.send(item("audio")).unwrap();
     input.send(end()).unwrap();
     until("sent", || provider.socket(1).sent() == ["audio"]).await;
+    // the provider answered the audio, then closes: the stream's end
+    protocol.nothing_pending.store(true, Ordering::SeqCst);
     provider.socket(1).close(Some(1000), None);
     run.ended().await.unwrap();
 }
@@ -684,13 +711,15 @@ impl WebSocketMuxHost for Contexts {
         Box::pin(async move {
             let WsFrame::Text(text) = frame else { return Ok(WebSocketMuxRoute::default()) };
             if text == "socket ready" {
-                return Ok(WebSocketMuxRoute { context: None, message: None, ready: true });
+                return Ok(WebSocketMuxRoute { ready: true, ..WebSocketMuxRoute::default() });
             }
-            Ok(WebSocketMuxRoute {
-                context: text.split_once(':').map(|(context, _)| context.to_owned()),
-                message: None,
-                ready: false,
-            })
+            let (context, payload) = match text.split_once(':') {
+                Some((context, payload)) => (Some(context.to_owned()), payload),
+                None => (None, ""),
+            };
+            // `<context>:cancelled`: the provider ended a cancelled context
+            let ended_context = context.clone().filter(|_| payload == "cancelled");
+            Ok(WebSocketMuxRoute { context, message: None, ready: false, ended_context })
         })
     }
 
@@ -700,6 +729,10 @@ impl WebSocketMuxHost for Contexts {
         context_id: String,
     ) -> BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>> {
         Box::pin(async move { Ok(vec![WsFrame::Text(format!("open {context_id}"))]) })
+    }
+
+    fn goodbye(&self, _cx: &Cx) -> BoxFuture<'_, Result<Vec<WsFrame>, ProviderError>> {
+        Box::pin(async move { Ok(frames(&["goodbye"])) })
     }
 }
 
@@ -951,8 +984,8 @@ async fn after_a_finished_session_the_next_connection_opens_only_for_the_next_in
 async fn the_input_idle_frames_go_once_per_silence() {
     let clock = Arc::new(VirtualClock::new());
     let provider = Provider::default();
-    let idle = WebSocketConnection { input_idle: Some(2.0), ..quiet() };
-    let (protocol, input) = Protocol::new(idle);
+    let (protocol, input) = Protocol::new(quiet());
+    *protocol.input_idle.lock() = Some(2.0);
     let run = start(&protocol, &provider, &clock, 0);
     input.send(item("audio")).unwrap();
     until("sent", || provider.count() == 1 && provider.socket(0).sent() == ["audio"]).await;

@@ -20,6 +20,8 @@ lk-agents-telemetry = { path = "../lk-agents-telemetry" }
 # Audio framing, resampling, the endpointing filter and the pre-connect audio decode.
 lk-agents-media = { path = "../lk-agents-media" }
 log.workspace = true
+# The speech scheduler keeps its speeches in the order they were created.
+indexmap.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 # `remote_session` (`voice/remote_session.py`): the `livekit.agent` package's

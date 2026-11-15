@@ -424,8 +424,8 @@ class LLMStream(llm.LLMStream):
                     id=self._request_id,
                     delta=llm.ChoiceDelta(content=text, role="assistant"),
                 )
-            elif delta.type == "input_json_delta":
-                assert self._fnc_raw_arguments is not None
+            elif delta.type == "input_json_delta" and self._fnc_raw_arguments is not None:
+                # a block the stream does not read (a server tool's) streams its input too
                 self._fnc_raw_arguments += delta.partial_json
 
         elif event.type == "content_block_stop":

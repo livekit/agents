@@ -122,7 +122,7 @@ def _lenient(value: object) -> object:
 class _LogFormatter(logging.Formatter):
     def __init__(self, style: LogStyle, *, ensure_ascii: bool) -> None:
         super().__init__()
-        self._line_style = style
+        self._line_style: LogStyle = style
         self._ensure_ascii = ensure_ascii
 
     def format(self, record: logging.LogRecord) -> str:

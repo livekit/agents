@@ -632,7 +632,7 @@ impl Run {
             Input::TtsHold { tts } | Input::TtsRelease { tts } | Input::TtsFail { tts } => {
                 (Slot { kind: Kind::Tts, nth: tts.nth }, None)
             }
-            Input::SttStart { stt } | Input::SttFail { stt } => {
+            Input::SttStart { stt } | Input::SttFail { stt } | Input::SttDrop { stt } => {
                 (Slot { kind: Kind::Stt, nth: stt.nth }, None)
             }
             Input::SttInterim { utterance, .. }
@@ -699,14 +699,15 @@ impl Run {
                 let nth = self.record.open(at, Kind::Utterance, Id::Slot(slot.nth), Detail::None);
                 self.utterances.insert(nth, slot.nth);
             }
-            // A final transcript does not end the utterance: a real provider sends its
-            // end-of-speech after the final, and the driver must see both in that order.
+            // The provider is done with the utterance. What its stream does with that is the
+            // speech rules': a final may still come after it, and is still the utterance's.
             Input::SttEnd { .. } => {
-                if let Some(nth) = utterance {
+                if let Some(nth) = utterance.filter(|u| self.record.live().has(Kind::Utterance, *u))
+                {
                     self.record.close(at, Kind::Utterance, nth);
                 }
             }
-            Input::SttFail { .. } => self.end_utterances_on(at, slot.nth),
+            Input::SttFail { .. } | Input::SttDrop { .. } => self.end_utterances_on(at, slot.nth),
             Input::ToolAnswered { answer: ToolAnswer::Detached, .. }
                 if self.tool_call_ended(slot.nth) =>
             {

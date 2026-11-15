@@ -18,7 +18,8 @@ from typing import Literal, TypeAlias
 class WebSocketTarget:
     """Where the framework opens a provider WebSocket: through the job's HTTP proxy, pinging so a
     half-open socket is noticed. A rejected handshake's request id is read from
-    `request_id_header`.
+    `request_id_header`. `max_message_size`: the largest message (and frame) the provider may
+    send, in bytes; `None` keeps the transport's limit.
     """
 
     url: str
@@ -26,14 +27,18 @@ class WebSocketTarget:
     params: dict[str, str] = field(default_factory=dict)
     protocols: list[str] = field(default_factory=list)
     request_id_header: str | None = None
+    max_message_size: int | None = None
 
 
 @dataclass(kw_only=True, slots=True)
 class WebSocketKeepaliveFrame:
-    """A frame sent once nothing else was sent for `interval` seconds."""
+    """A frame sent once nothing else was sent for `interval` seconds. `only_while_unused`: on a
+    multiplexer's socket, sent only while no stream holds it.
+    """
 
     interval: float
     frame: WsFrame
+    only_while_unused: bool
 
 
 @dataclass(kw_only=True, slots=True)
@@ -58,11 +63,12 @@ class WebSocketConnection:
     """The provider must signal `ready` before anything but the setup is sent; it has the
     connect limit to say so, else the attempt fails with a timeout.
     """
-    input_idle: float | None
-    """Seconds without input after which the stream's input-idle frames go, once per silence."""
-    context_keepalive: float | None
-    """A shared socket's: seconds without a send on a context after which the stream's open
-    contexts are kept alive.
+    goodbye: list[WsFrame]
+    """The frames that ask the provider to end its session, sent when a replacement is due
+    (`max_session_duration`) and when the input ends: the connection then takes no more input
+    and ends, or is replaced, once the provider finished its session or closed cleanly, or the
+    read limit passed. Empty: it ends or is replaced at once. A shared socket's own goodbye is
+    its multiplexer's.
     """
 
 
@@ -84,28 +90,47 @@ class WebSocketRead:
 
     signal: Literal["ready", "session_finished"] | None
     request_id: str | None
+    response: bool
+    """Response data arrived; control frames and unknown messages are not progress."""
 
 
 @dataclass(kw_only=True, slots=True)
 class WebSocketMuxRoute:
     """Where a shared socket's received frame goes: to `context` as `message` (decoded once, by the
     multiplexer), or to the socket itself (`None`); `ready`: the socket's provider session is ready
-    for streams.
+    for streams; `ended_context`: the context the message ends, the provider's last word on it
+    (what a cancel waits for).
     """
 
     context: str | None
     message: object
     ready: bool
+    ended_context: str | None
+
+
+@dataclass(kw_only=True, slots=True)
+class WebSocketContextsCancel:
+    """The frames that cancel the contexts a stream left before the provider finished them, and
+    those contexts.
+    """
+
+    contexts: list[str]
+    frames: list[WsFrame]
 
 
 @dataclass(kw_only=True, slots=True)
 class WebSocketMuxOptions:
     """How a multiplexer shares its sockets. `max_contexts`: streams one socket carries at once.
     `max_sockets`: sockets open at once; a stream finding none with room waits for one within
-    the pool limit. `idle_timeout`: seconds a socket with no stream stays open. `keep_warm`: an
-    idle socket the provider closed is opened again. `routed`: each frame is routed to its
-    context; an unrouted socket carries one stream, gets every frame, and is reused only after a
-    stream that ended cleanly.
+    the pool limit. `idle_timeout`: seconds a socket with no stream stays open. `keep_warm`: a
+    socket with room is kept open as a standby: one opens when a stream takes the last, and an
+    idle one the provider closed is opened again. `routed`: each frame is routed to its context;
+    an unrouted socket carries one stream, gets every frame, and is reused only after a stream
+    that ended cleanly. `reuses_sockets`: `false` closes a socket once its stream left it, so
+    each stream (each session, with a connection per segment) has a fresh one.
+    `reads_cancel_end`: an unrouted socket a stream left mid-answer is cancelled with the stream's
+    frames and reused once the route reads the end of every context cancelled, within
+    [`CANCELLED_ANSWER_WAIT`]; otherwise it is closed.
     """
 
     max_contexts: int | None
@@ -113,6 +138,8 @@ class WebSocketMuxOptions:
     idle_timeout: float | None
     keep_warm: bool
     routed: bool
+    reuses_sockets: bool
+    reads_cancel_end: bool
 
 
 WsFrame: TypeAlias = str | bytes

@@ -147,7 +147,7 @@ class RTZROpenAPIClient:
             await resp.raise_for_status()
             body = await resp.json()
         try:
-            token = _TOKEN.validate_python(body, strict=True)
+            token = _TOKEN.validate_python(body)
         except ValidationError as e:
             raise APIError(
                 "RTZR sent an invalid token response", kind="protocol", detail=str(body)

@@ -18,7 +18,15 @@ from livekit.agents.voice.io import SpeechHandle
 from ..types import NOT_GIVEN
 
 if TYPE_CHECKING:
-    from livekit.agents._core import AgentNodes, ConsoleIo, JobRun, VoiceAgent, _core_VoiceStore
+    from livekit.agents._core import (
+        AgentNodes,
+        ConsoleIo,
+        JobRun,
+        RoomAudioInput,
+        RoomVideoInput,
+        VoiceAgent,
+        _core_VoiceStore,
+    )
     from livekit.agents._generated.expressive import ExpressiveOptions
     from livekit.agents.inference import AdaptiveInterruptionDetector, TurnDetectorStream
     from livekit.agents.job import JobContext
@@ -28,6 +36,7 @@ if TYPE_CHECKING:
     from livekit.agents.vad import VAD
     from livekit.agents.voice._session_bindings import RemoteSessionAccess
     from livekit.agents.voice.agent_session import VoiceSession, _AgentHooks, _DynamicInstructions
+    from livekit.agents.voice.avatar import DataStreamAudioOutput
     from livekit.agents.voice.io import AudioInput, AudioOutput, TranscriptionOutput, VideoInput
 
     from ..types import NotGivenOr
@@ -174,10 +183,10 @@ class VoiceSessionArgs:
     llm_node: AgentNodes | None = None
     tts_node: AgentNodes | None = None
     stt_node: AgentNodes | None = None
-    host_audio_input: AudioInput | None = None
+    host_audio_input: AudioInput | RoomAudioInput | None = None
     """The host's own io legs, replacing the room's."""
-    host_audio_output: AudioOutput | None = None
-    host_video_input: VideoInput | None = None
+    host_audio_output: AudioOutput | DataStreamAudioOutput | None = None
+    host_video_input: VideoInput | RoomVideoInput | None = None
     video_sampler: VoiceActivityVideoSampler | None = None
     """How often camera frames reach the model; `None`: every frame."""
     host_video_sampler: bool = False

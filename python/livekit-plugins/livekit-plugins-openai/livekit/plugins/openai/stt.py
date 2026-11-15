@@ -21,11 +21,11 @@ import time
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal, NotRequired, TypedDict, assert_never
+from typing import Annotated, Final, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode, urlparse
 
 import httpx2 as httpx
-from pydantic import Field, TypeAdapter
+from pydantic import Field
 
 import openai
 from livekit import rtc
@@ -50,27 +50,16 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from openai.types.audio import Transcription, TranscriptionVerbose
-from openai.types.beta.realtime.transcription_session_update_param import (
-    SessionTurnDetection,
+from openai.types.audio import Transcription, TranscriptionDiarized, TranscriptionVerbose
+from openai.types.realtime import (
+    AudioTranscriptionParam,
+    NoiseReductionType,
+    RealtimeTranscriptionSessionAudioInputParam,
+    RealtimeTranscriptionSessionAudioInputTurnDetectionParam,
+    RealtimeTranscriptionSessionCreateRequestParam,
 )
-from openai.types.realtime import NoiseReductionType
-from openai.types.realtime.audio_transcription import AudioTranscription
-from openai.types.realtime.realtime_audio_formats import AudioPCM
-from openai.types.realtime.realtime_transcription_session_audio import (
-    RealtimeTranscriptionSessionAudio,
-)
-from openai.types.realtime.realtime_transcription_session_audio_input import (
-    NoiseReduction,
-    RealtimeTranscriptionSessionAudioInput,
-)
-from openai.types.realtime.realtime_transcription_session_audio_input_turn_detection import (
-    RealtimeTranscriptionSessionAudioInputTurnDetection,
-)
-from openai.types.realtime.realtime_transcription_session_create_request import (
-    RealtimeTranscriptionSessionCreateRequest,
-)
-from openai.types.realtime.session_update_event import SessionUpdateEvent
+from openai.types.realtime.realtime_audio_formats_param import AudioPCM
+from openai.types.realtime.realtime_transcription_session_audio_input_param import NoiseReduction
 
 from .log import logger
 from .models import STTModels
@@ -81,12 +70,8 @@ from .utils import AsyncAzureADTokenProvider, error_kind, http_timeout
 _max_session_duration = 10.0 * 60
 # emit interim transcriptions every 0.5 seconds
 _delta_transcript_interval = 0.5
-SAMPLE_RATE = 24000
+SAMPLE_RATE: Final = 24000
 NUM_CHANNELS = 1
-# turn_detection is a discriminated union, so a plain dict needs an adapter to validate
-_TURN_DETECTION: TypeAdapter[RealtimeTranscriptionSessionAudioInputTurnDetection] = TypeAdapter(
-    RealtimeTranscriptionSessionAudioInputTurnDetection
-)
 
 # realtime-only, and with no server-side endpointing: they reject turn_detection and emit no
 # speech_started/stopped, so the client commits the buffer to close a segment
@@ -110,13 +95,6 @@ def _as_languages(language: str | list[str]) -> list[str]:
     return [code for code in language if code]
 
 
-def _as_turn_detection(
-    turn_detection: SessionTurnDetection,
-) -> RealtimeTranscriptionSessionAudioInputTurnDetection:
-    """Validate a turn-detection dict, filling in the `type` the union is tagged on."""
-    return _TURN_DETECTION.validate_python({"type": "server_vad", **turn_detection})
-
-
 def _validate_context(model: str, languages: list[str], keywords: list[str]) -> None:
     """Raise when keywords or several languages go to a model that takes neither."""
     if _supports_context_hints(model):
@@ -138,51 +116,45 @@ class _STTOptions:
     model: STTModels | str
     languages: list[str]
     detect_language: bool
-    turn_detection: RealtimeTranscriptionSessionAudioInputTurnDetection
+    turn_detection: RealtimeTranscriptionSessionAudioInputTurnDetectionParam
     keywords: list[str] = field(default_factory=list[str])
     prompt: NotGivenOr[str] = NOT_GIVEN
     noise_reduction_type: NotGivenOr[NoiseReductionType] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
 
 
-def _transcription(opts: _STTOptions) -> AudioTranscription:
+def _transcription(opts: _STTOptions) -> AudioTranscriptionParam:
     """The transcription config: `languages` and `keywords`, or a single `language`."""
-    transcription = AudioTranscription(model=opts.model)
+    transcription = AudioTranscriptionParam(model=opts.model)
     # a field left out of a session.update keeps its previous value, so anything that can
     # be cleared is always sent
     if is_given(opts.prompt):
-        transcription.prompt = opts.prompt
+        transcription["prompt"] = opts.prompt
     if _supports_context_hints(opts.model):
-        transcription.keywords = opts.keywords
+        transcription["keywords"] = opts.keywords
         # `languages` rejects both an empty array and null, so it can only be replaced
         if opts.languages:
-            transcription.languages = list(
+            transcription["languages"] = list(
                 dict.fromkeys(LanguageCode(lang).language for lang in opts.languages)
             )
     elif opts.languages:
-        transcription.language = LanguageCode(opts.languages[0]).language
+        transcription["language"] = LanguageCode(opts.languages[0]).language
     return transcription
 
 
-def _session_update(opts: _STTOptions) -> SessionUpdateEvent:
-    """The `session.update` event for the current config."""
-    audio_input = RealtimeTranscriptionSessionAudioInput(
+def _session(opts: _STTOptions) -> RealtimeTranscriptionSessionCreateRequestParam:
+    """The transcription session for the current config."""
+    audio_input = RealtimeTranscriptionSessionAudioInputParam(
         format=AudioPCM(rate=SAMPLE_RATE, type="audio/pcm"),
         transcription=_transcription(opts),
     )
     # leave the field unset for models that reject it; the rest get server-side VAD
     if not _is_realtime_only(opts.model):
-        audio_input.turn_detection = opts.turn_detection
-
+        audio_input["turn_detection"] = opts.turn_detection
     if opts.noise_reduction_type:
-        audio_input.noise_reduction = NoiseReduction(type=opts.noise_reduction_type)
-
-    return SessionUpdateEvent(
-        type="session.update",
-        session=RealtimeTranscriptionSessionCreateRequest(
-            type="transcription",
-            audio=RealtimeTranscriptionSessionAudio(input=audio_input),
-        ),
+        audio_input["noise_reduction"] = NoiseReduction(type=opts.noise_reduction_type)
+    return RealtimeTranscriptionSessionCreateRequestParam(
+        type="transcription", audio={"input": audio_input}
     )
 
 
@@ -192,10 +164,12 @@ class STT(stt.STT):
         *,
         language: str | list[str] = "en",
         detect_language: bool = False,
-        model: STTModels | str = "gpt-4o-mini-transcribe",
+        model: STTModels | str = "gpt-live-transcribe",
         prompt: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[str]] = NOT_GIVEN,
-        turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
+        turn_detection: NotGivenOr[RealtimeTranscriptionSessionAudioInputTurnDetectionParam] = (
+            NOT_GIVEN
+        ),
         noise_reduction_type: NotGivenOr[NoiseReductionType] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -211,7 +185,8 @@ class STT(stt.STT):
             language: The language code to use for transcription (e.g., "en" for English).
                 gpt-transcribe and gpt-live-transcribe accept a list for code-switched audio.
             detect_language: Whether to automatically detect the language.
-            model: The OpenAI model to use for transcription.
+            model: The OpenAI model to use for transcription. Defaults to
+                `gpt-live-transcribe`, served over the realtime API only.
             prompt: Optional free-form description of the audio, such as its topic or setting.
             keywords: Literal terms to expect, such as product names or acronyms. Only for
                 gpt-transcribe and gpt-live-transcribe, and only a hint.
@@ -235,7 +210,7 @@ class STT(stt.STT):
                 When not provided and the model requires it, the bundled Silero VAD is used with
                 default settings. Pass `vad=None` to opt out and drive
                 `input_audio_buffer.commit` yourself.
-        """  # noqa: E501
+        """
 
         if not is_given(use_realtime):
             use_realtime = _is_realtime_only(model)
@@ -288,7 +263,7 @@ class STT(stt.STT):
             model=model,
             prompt=prompt,
             keywords=resolved_keywords,
-            turn_detection=_as_turn_detection(turn_detection),
+            turn_detection=turn_detection,
             temperature=temperature,
         )
         if is_given(noise_reduction_type):
@@ -338,10 +313,13 @@ class STT(stt.STT):
         *,
         language: str | list[str] = "en",
         detect_language: bool = False,
+        # Azure's /realtime transcription session is unverified: https://learn.microsoft.com/en-us/answers/a/12769224
         model: STTModels | str = "gpt-4o-mini-transcribe",
         prompt: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[str]] = NOT_GIVEN,
-        turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
+        turn_detection: NotGivenOr[RealtimeTranscriptionSessionAudioInputTurnDetectionParam] = (
+            NOT_GIVEN
+        ),
         noise_reduction_type: NotGivenOr[NoiseReductionType] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         azure_endpoint: str | None = None,
@@ -367,23 +345,39 @@ class STT(stt.STT):
         - `azure_ad_token` from `AZURE_OPENAI_AD_TOKEN`
         - `api_version` from `OPENAI_API_VERSION`
         - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
-        """  # noqa: E501
+        """
 
-        azure_client = openai.AsyncAzureOpenAI(
-            max_retries=0,
-            azure_endpoint=azure_endpoint,
-            azure_deployment=azure_deployment,
-            api_version=api_version,
-            api_key=api_key,
-            azure_ad_token=azure_ad_token,
-            azure_ad_token_provider=azure_ad_token_provider,
-            organization=organization,
-            project=project,
-            base_url=base_url,
-            timeout=timeout
-            if timeout
-            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
-        )  # type: ignore
+        timeout = timeout or httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0)
+        azure_endpoint = azure_endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT")
+        if base_url is not None:
+            azure_client = openai.AsyncAzureOpenAI(
+                max_retries=0,
+                base_url=base_url,
+                api_version=api_version,
+                api_key=api_key,
+                azure_ad_token=azure_ad_token,
+                azure_ad_token_provider=azure_ad_token_provider,
+                organization=organization,
+                project=project,
+                timeout=timeout,
+            )
+        elif azure_endpoint is not None:
+            azure_client = openai.AsyncAzureOpenAI(
+                max_retries=0,
+                azure_endpoint=azure_endpoint,
+                azure_deployment=azure_deployment,
+                api_version=api_version,
+                api_key=api_key,
+                azure_ad_token=azure_ad_token,
+                azure_ad_token_provider=azure_ad_token_provider,
+                organization=organization,
+                project=project,
+                timeout=timeout,
+            )
+        else:
+            raise ValueError(
+                "pass azure_endpoint (or set AZURE_OPENAI_ENDPOINT) or base_url for Azure OpenAI"
+            )
 
         return STT(
             language=language,
@@ -459,7 +453,9 @@ class STT(stt.STT):
         detect_language: NotGivenOr[bool] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[str]] = NOT_GIVEN,
-        turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
+        turn_detection: NotGivenOr[RealtimeTranscriptionSessionAudioInputTurnDetectionParam] = (
+            NOT_GIVEN
+        ),
         noise_reduction_type: NotGivenOr[NoiseReductionType] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
@@ -478,7 +474,7 @@ class STT(stt.STT):
             turn_detection: When using realtime, this controls how model detects the user is done speaking.
             noise_reduction_type: Type of noise reduction to apply. "near_field" or "far_field"
             temperature: Sampling temperature between 0 and 1. Not supported for realtime transcription.
-        """  # noqa: E501
+        """
         # resolve first: an unsupported combination must raise before anything is applied
         resolved_model = model if is_given(model) else self._opts.model
         if is_given(language):
@@ -540,7 +536,7 @@ class STT(stt.STT):
         if is_given(prompt):
             self._opts.prompt = prompt
         if is_given(turn_detection):
-            self._opts.turn_detection = _as_turn_detection(turn_detection)
+            self._opts.turn_detection = turn_detection
         if is_given(noise_reduction_type):
             self._opts.noise_reduction_type = noise_reduction_type
         if is_given(temperature):
@@ -574,40 +570,52 @@ class STT(stt.STT):
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
         timeout = http_timeout(conn_options)
+        # a language given here is this request's alone
+        opts = self._opts
         if is_given(language):
-            languages = _as_languages(language)
-            _validate_context(self._opts.model, languages, self._opts.keywords)
-            self._opts.languages = languages
+            opts = dataclasses.replace(opts, languages=_as_languages(language))
+            _validate_context(opts.model, opts.languages, opts.keywords)
 
         try:
             data = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
-            format = "json"
-            if self._opts.model == "whisper-1":
-                # verbose_json returns language and other details, only supported for whisper-1
-                format = "verbose_json"
-
-            transcription = _transcription(self._opts)
-            resp = await self._client.with_options(max_retries=0).audio.transcriptions.create(
-                file=(
-                    "file.wav",
-                    data,
-                    "audio/wav",
-                ),
-                model=self._opts.model,  # type: ignore
-                language=transcription.language or openai.omit,
-                languages=transcription.languages or openai.omit,
-                keywords=transcription.keywords or openai.omit,
-                prompt=transcription.prompt or openai.omit,
-                response_format=format,
-                temperature=self._opts.temperature
-                if is_given(self._opts.temperature)
-                else openai.omit,
-                timeout=timeout,
-            )
+            transcription = _transcription(opts)
+            create = self._client.with_options(max_retries=0).audio.transcriptions.create
+            file = ("file.wav", data, "audio/wav")
+            language_hint = transcription.get("language") or openai.omit
+            languages = transcription.get("languages") or openai.omit
+            keywords = transcription.get("keywords") or openai.omit
+            prompt = transcription.get("prompt") or openai.omit
+            temperature = opts.temperature if is_given(opts.temperature) else openai.omit
+            resp: Transcription | TranscriptionDiarized | TranscriptionVerbose
+            if opts.model == "whisper-1":
+                # verbose_json returns the language, only supported for whisper-1
+                resp = await create(
+                    file=file,
+                    model=opts.model,
+                    response_format="verbose_json",
+                    language=language_hint,
+                    languages=languages,
+                    keywords=keywords,
+                    prompt=prompt,
+                    temperature=temperature,
+                    timeout=timeout,
+                )
+            else:
+                resp = await create(
+                    file=file,
+                    model=opts.model,
+                    response_format="json",
+                    language=language_hint,
+                    languages=languages,
+                    keywords=keywords,
+                    prompt=prompt,
+                    temperature=temperature,
+                    timeout=timeout,
+                )
 
             # the detected language beats the hint, dominant code first; an empty list keeps it
-            sd = stt.SpeechData(text=resp.text, language=_transcript_language(self._opts.languages))
+            sd = stt.SpeechData(text=resp.text, language=_transcript_language(opts.languages))
             if isinstance(resp, TranscriptionVerbose) and resp.language:
                 sd.language = LanguageCode(resp.language)
             elif isinstance(resp, Transcription) and resp.languages:
@@ -700,7 +708,7 @@ class _Commit(TypedDict):
 
 class _SessionUpdate(TypedDict):
     type: Literal["session.update"]
-    session: dict[str, Any]
+    session: RealtimeTranscriptionSessionCreateRequestParam
 
 
 _Command = _Append | _Commit | _SessionUpdate
@@ -805,11 +813,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
         )
 
     def setup(self) -> _SessionUpdate:
-        event = _session_update(self._opts)
-        return _SessionUpdate(
-            type="session.update",
-            session=event.session.model_dump(by_alias=True, exclude_unset=True),
-        )
+        return _SessionUpdate(type="session.update", session=_session(self._opts))
 
     def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> _Command | None:
         match item:

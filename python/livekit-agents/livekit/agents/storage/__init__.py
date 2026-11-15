@@ -9,7 +9,6 @@ from .. import _core
 from .._generated import facades_storage as _facades, public_storage as _public
 from .._generated.public_storage import *  # noqa: F403
 from .._generated.storage_class import LocalStorageOptions
-from .._generated.storage_constants import DEFAULT_PARTITION_KEY
 from ..llm import ChatContext
 from ..log import logger
 from .context import (

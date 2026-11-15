@@ -5,27 +5,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import json
-import weakref
-from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import NotRequired, TypedDict, assert_never
 
-from pydantic import BaseModel, ValidationError
+from livekit.agents import APIConnectOptions, tts
 
-from livekit.agents import (
-    APIConnectionError,
-    APIConnectOptions,
-    APIError,
-    APITimeoutError,
-    http,
-    tts,
-    utils,
-)
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-
-from .common import NUM_CHANNELS, SAMPLE_RATE, TTS_ENDPOINT, SessionManager, get_api_key
+from .common import NUM_CHANNELS, SAMPLE_RATE, TTS_ENDPOINT, get_api_key
 
 
 @dataclass
@@ -35,8 +21,16 @@ class _TTSOptions:
     base_url: str
 
 
-class _AudioMessage(BaseModel):
-    audio: str | None = None
+# Telnyx's websocket: one segment a connection, its text then an empty text; the server sends
+# the audio (MP3) and closes once it is spoken.
+
+
+class _Audio(TypedDict):
+    audio: NotRequired[str | None]
+
+
+class _Text(TypedDict):
+    text: str
 
 
 class TTS(tts.TTS):
@@ -46,21 +40,13 @@ class TTS(tts.TTS):
         voice: str = "Telnyx.NaturalHD.astra",
         api_key: str | None = None,
         base_url: str = TTS_ENDPOINT,
-        http_session: http.HttpSession | None = None,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=SAMPLE_RATE,
             num_channels=NUM_CHANNELS,
         )
-
-        self._opts = _TTSOptions(
-            voice=voice,
-            api_key=get_api_key(api_key),
-            base_url=base_url,
-        )
-        self._session_manager = SessionManager(http_session)
-        self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._opts = _TTSOptions(voice=voice, api_key=get_api_key(api_key), base_url=base_url)
 
     @property
     def model(self) -> str:
@@ -76,136 +62,43 @@ class TTS(tts.TTS):
         return self._synthesize_with_stream(chunk, conn_options=conn_options)
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            tts=self,
-            conn_options=conn_options,
-            opts=self._opts,
-            ensure_session=self._session_manager.ensure_session,
-        )
-        self._streams.add(stream)
-        return stream
-
-    async def aclose(self) -> None:
-        for stream in list(self._streams):
-            await stream.aclose()
-        self._streams.clear()
-        await self._session_manager.close()
+        return SynthesizeStream(tts=self, opts=replace(self._opts), conn_options=conn_options)
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        opts: _TTSOptions,
-        ensure_session: Callable[[], http.HttpSession],
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> None:
+class SynthesizeStream(tts.WebSocketStream[_Audio, _Text]):
+    connection_per_segment = True
+    mime_type = "audio/mp3"
+
+    def __init__(self, *, tts: TTS, opts: _TTSOptions, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._opts = opts
-        self._ensure_session = ensure_session
+        self._segment = ""
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        self._segments_ch = utils.aio.Chan[str]()
-        request_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=SAMPLE_RATE,
-            num_channels=NUM_CHANNELS,
-            mime_type="audio/pcm",
-            stream=True,
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        return tts.WebSocketTarget(
+            self._opts.base_url,
+            headers={"Authorization": f"Bearer {self._opts.api_key}"},
+            params={"voice": self._opts.voice},
         )
 
-        async def _collect_segments() -> None:
-            segment: list[str] = []
-            async for input_data in self.input:
-                if isinstance(input_data, tts.SpeechChunk):
-                    segment.append(input_data.text)
-                elif segment:
-                    self._segments_ch.send_nowait(" ".join(segment))
-                    segment = []
-            self._segments_ch.close()
+    def setup(self) -> _Text:
+        return _Text(text=" ")
 
-        async def _run_segments() -> None:
-            async for text in self._segments_ch:
-                await self._run_ws(text, output_emitter)
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Text | None:
+        match item:
+            case tts.SegmentStart():
+                self._segment = item.segment_id
+                return None
+            case tts.SegmentText():
+                return _Text(text=item.chunk.text)
+            case tts.SegmentEnd():
+                # the end of the text: the server closes once it is spoken
+                return _Text(text="")
+            case tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-        try:
-            async with utils.aio.TaskSet() as tasks:
-                await asyncio.gather(tasks.spawn(_collect_segments()), tasks.spawn(_run_segments()))
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
-
-    async def _run_ws(self, text: str, output_emitter: tts.AudioEmitter) -> None:
-        segment_id = utils.shortuuid()
-        output_emitter.start_segment(segment_id=segment_id)
-
-        url = f"{self._opts.base_url}?voice={self._opts.voice}"
-        headers = {"Authorization": f"Bearer {self._opts.api_key}"}
-
-        decoder = utils.media.AudioStreamDecoder(
-            sample_rate=SAMPLE_RATE,
-            num_channels=NUM_CHANNELS,
-            format="audio/mp3",
-        )
-
-        read_deadline = self._core_attempts
-
-        async def send_task(ws: http.WebSocket) -> None:
-            await ws.send_str(json.dumps({"text": " "}))
-            self.mark_started()
-            await ws.send_str(json.dumps({"text": text}))
-            await ws.send_str(json.dumps({"text": ""}))
-            read_deadline.expect_response(final=True)
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            async for msg in ws:
-                if msg.type is http.WebSocketMessageType.TEXT:
-                    try:
-                        data = _AudioMessage.model_validate_json(msg.data)
-                        audio_data = data.audio
-                        if audio_data:
-                            audio_bytes = base64.b64decode(audio_data)
-                            if audio_bytes:
-                                read_deadline.progress()
-                                decoder.push(audio_bytes)
-                    except ValidationError as exc:
-                        raise APIError(
-                            "Invalid Telnyx audio message", kind="protocol", detail=str(msg.data)
-                        ) from exc
-
-            decoder.end_input()
-
-        async def decode_task() -> None:
-            async for frame in decoder:
-                output_emitter.push(frame.data.tobytes())
-
-        try:
-            ws = await self._ensure_session().ws_connect(
-                url, headers=headers, conn_options=self._conn_options
-            )
-            try:
-                async with utils.aio.TaskSet() as tasks:
-                    await asyncio.gather(
-                        tasks.spawn(send_task(ws)),
-                        tasks.spawn(recv_task(ws)),
-                        tasks.spawn(decode_task()),
-                    )
-                # the segment is spoken: nothing is owed until the next one
-                read_deadline.complete_response()
-            finally:
-                await ws.close()
-
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
-        finally:
-            await decoder.aclose()
-            output_emitter.end_segment()
+    def on_message(self, message: _Audio) -> None:
+        if audio := message.get("audio"):
+            self.report(tts.SegmentAudio(self._segment, base64.b64decode(audio)))

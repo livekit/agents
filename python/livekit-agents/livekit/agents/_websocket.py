@@ -12,7 +12,7 @@ import types
 import typing
 import weakref
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Annotated, Any, ClassVar, Generic, Literal, NamedTuple, TypeVar, Union
 
 import pydantic_core
@@ -23,6 +23,7 @@ from ._bindings import APIError
 from ._core import WebSocketPacing
 from ._generated.websocket import (
     WebSocketConnection,
+    WebSocketContextsCancel,
     WebSocketInput,
     WebSocketKeepaliveFrame,
     WebSocketMuxOptions,
@@ -39,22 +40,38 @@ __all__ = [
     "WebSocketMultiplexer",
     "WebSocketPacing",
     "WebSocketTarget",
+    "log_skipped",
     "protocol_error",
 ]
 
 ItemT = TypeVar("ItemT")
 InboundT = TypeVar("InboundT")
 OutboundT = TypeVar("OutboundT")
+# a keepalive only carries its frame: one of a narrower message type fits a protocol's wider one
+FrameT_co = TypeVar("FrameT_co", covariant=True)
 
 Signal = Literal["ready", "session_finished"]
 
 
 @dataclass(frozen=True, kw_only=True)
-class Keepalive(Generic[OutboundT]):
-    """``frame``, sent once nothing else was sent for ``every`` seconds."""
+class Keepalive(Generic[FrameT_co]):
+    """``frame``, sent once nothing else was sent for ``every`` seconds. ``only_while_unused``:
+    a multiplexer's, sent only while no stream holds the socket (a parked socket kept off the
+    provider's idle timeout)."""
 
     every: float
-    frame: bytes | str | OutboundT
+    frame: bytes | str | FrameT_co
+    only_while_unused: bool = False
+
+
+def _keepalive_frame(keepalive: Keepalive[object] | None) -> WebSocketKeepaliveFrame | None:
+    if keepalive is None:
+        return None
+    return WebSocketKeepaliveFrame(
+        interval=keepalive.every,
+        frame=_frame(keepalive.frame),
+        only_while_unused=keepalive.only_while_unused,
+    )
 
 
 def _frame(value: object) -> WsFrame:
@@ -76,9 +93,14 @@ class _Decoder:
     its frames as they are; every other member is a message read from JSON, once.
 
     Lenient where the plugin does not read: a message's undeclared keys are ignored, and a
-    message whose tag (the union's discriminator) names no declared type is skipped, since
-    providers add event types. Strict where it reads: a declared message missing a required
-    field or holding a wrong-typed one fails with ``protocol``.
+    message whose tag (the union's discriminator) names no declared type, or is no scalar, is
+    skipped, since providers add event types. Strict where it reads: a declared message missing a
+    required field or holding a wrong-typed one fails with ``protocol``.
+
+    A message type with no tag cannot tell a new shape from a malformed one, so every field it
+    declares is optional (refused with ``TypeError`` otherwise): an object of a shape it does not
+    read decodes with none of its fields, a JSON value that is no object is skipped, and only a
+    read field of the wrong type fails.
     """
 
     def __init__(self, inbound: Any) -> None:
@@ -111,9 +133,15 @@ class _Decoder:
                 for value in typing.get_args(tag):
                     self._by_tag[value] = adapter
         elif parsed:
+            for member in parsed:
+                try:
+                    TypeAdapter(member).validate_python({})
+                except ValidationError as e:
+                    raise TypeError(
+                        f"{member!r} has no tag, so every field it declares is NotRequired: {e}"
+                    ) from e
             body: Any = parsed[0] if len(parsed) == 1 else Union[tuple(parsed)]  # noqa: UP007
             self._adapter = TypeAdapter(body)
-        self._skipped: set[object] = set()
 
     def decode(self, frame: WsFrame, label: str) -> Any:
         """The message, or ``None`` for one of a type the protocol does not read."""
@@ -124,19 +152,37 @@ class _Decoder:
         if self._adapter is None and not self._by_tag:
             raise _protocol_error(label, f"an unexpected {type(frame).__name__} frame")
         try:
-            if self._adapter is not None:
-                return self._adapter.validate_json(frame)
             value = pydantic_core.from_json(frame)
+            if self._adapter is not None:
+                if not isinstance(value, dict):
+                    # every untagged type is an object: another frame is no message it reads
+                    log_skipped(label, f"a JSON {type(value).__name__}")
+                    return None
+                return self._adapter.validate_python(value, strict=True)
             tag = value.get(self._discriminator) if isinstance(value, dict) else None
-            adapter = self._by_tag.get(tag)
+            # a list or an object is no tag (nor hashable): skipped like an unknown one; an absent
+            # or null tag is the key of a member whose tag is ``Literal[None]``
+            scalar = tag is None or isinstance(tag, str | int | float)
+            adapter = self._by_tag.get(tag) if scalar else None
             if adapter is None:
-                if tag not in self._skipped:
-                    self._skipped.add(tag)
-                    logger.debug("%s: skipping a message type it does not read: %r", label, tag)
+                shown = repr(tag) if scalar else type(tag).__name__
+                log_skipped(label, f"{self._discriminator}={shown}")
                 return None
-            return adapter.validate_python(value)
+            return adapter.validate_python(value, strict=True)
         except (ValidationError, ValueError) as e:
             raise _protocol_error(label, f"{e}; frame: {_shown(frame)}") from e
+
+
+_logged_skips: set[tuple[str, str]] = set()
+
+
+def log_skipped(label: str, kind: str) -> None:
+    """A received message the protocol does not read (a type the provider added since), skipped:
+    logged once per provider ``label`` and ``kind``. For a plugin's own ``decode()``."""
+    if (label, kind) in _logged_skips:
+        return
+    _logged_skips.add((label, kind))
+    logger.debug("%s: skipping a message it does not read: %s", label, kind)
 
 
 def _common_tag(members: list[Any]) -> str | None:
@@ -342,6 +388,13 @@ class WebSocketKind(ABC, Generic[ItemT]):
         item went, or an item that ends the session)."""
         return False
 
+    def goodbye(self) -> list[WsFrame]:
+        """The frames that end the provider session when a replacement is due and when the input
+        ends, read at each connection: the connection is replaced, or ends with the stream, once
+        the provider finished its session or closed, bounded by the read limit. Empty: left at
+        once."""
+        return []
+
     def connecting(self, first: bool) -> None:
         """A connection opens; ``first``: the first of the session's run."""
 
@@ -361,6 +414,14 @@ class WebSocketKind(ABC, Generic[ItemT]):
 
     def input_idle(self) -> list[WsFrame]:
         """The frames sent once the input stayed silent, which are not input."""
+        return []
+
+    def response_idle_after(self) -> float | None:
+        """Seconds of silence after response data and the latest input; no first-response timer."""
+        return None
+
+    def response_idle(self) -> list[WsFrame]:
+        """The response went silent for ``response_idle_after`` seconds."""
         return []
 
 
@@ -390,19 +451,29 @@ class WebSocketHost:
         self._controls: collections.deque[_Queued] = collections.deque()
         self._control_sent = asyncio.Event()
         self._control_taken = asyncio.Event()
+        # the provider finished its session and no connection opened since: no connection takes
+        # what is sent, the next one's ``connect`` rebuilding the state
+        self._between_sessions = False
+        self._reconnecting = False
+        # the take of the open connection's control messages; one connection each
+        self._taking_control: asyncio.Task[list[WsFrame]] | None = None
         # connections opened by the stream, and by the current run
         self._connections = 0
         self._run_connections = 0
         # what the message being handled signals
         self._signal: Signal | None = None
         self._named_request: str | None = None
+        self.response_received = False
 
     @property
     def label(self) -> str:
         return self._kind.label
 
     def send_now(self, message: object, *, first: bool) -> None:
-        queued = _Queued(message, max(self._connections, 1))
+        if self._between_sessions:
+            return
+        connection = self._connections + int(self._reconnecting)
+        queued = _Queued(message, max(connection, 1))
         if first:
             self._controls.appendleft(queued)
         else:
@@ -419,6 +490,8 @@ class WebSocketHost:
 
     def reconnect(self, reason: str) -> None:
         if (session := self._session) is not None:
+            # Commands issued after the replacement was requested belong to its new session.
+            self._reconnecting = True
             session.reconnect(reason)
 
     def end_session(self) -> None:
@@ -463,25 +536,26 @@ class WebSocketHost:
     # the session's host interface
 
     async def _core_connect(self, conn_options: APIConnectOptions) -> WebSocketConnection:
+        self._between_sessions = False
+        self._reconnecting = False
+        # the last connection's take, dropped with it, must not take what this one is sent; a
+        # take that already ran took the last connection's message, which went with it
+        if (taking := self._taking_control) is not None:
+            taking.cancel()
+            self._taking_control = None
         self._kind.connecting(first=self._run_connections == 0)
         self._connections += 1
         self._run_connections += 1
         protocol = self._protocol
         target = await protocol.connect(conn_options)
-        keepalive = protocol.keepalive
         return WebSocketConnection(
             target=target,
-            keepalive=(
-                WebSocketKeepaliveFrame(interval=keepalive.every, frame=_frame(keepalive.frame))
-                if keepalive is not None
-                else None
-            ),
+            keepalive=_keepalive_frame(protocol.keepalive),
             max_session_duration=protocol.max_session_duration,
             ping_interval=protocol.ping_interval,
             setup=frames_of(protocol.setup()),
             awaits_ready=protocol.awaits_ready,
-            input_idle=self._kind.input_idle_after(),
-            context_keepalive=None,
+            goodbye=self._kind.goodbye(),
         )
 
     async def _core_next_input(self) -> WebSocketInput | None:
@@ -496,8 +570,15 @@ class WebSocketHost:
         return None
 
     async def _core_next_control(self) -> list[WsFrame]:
+        self._taking_control = asyncio.current_task()
         while True:
             while self._controls:
+                if self._controls[0].connection > max(self._connections, 1):
+                    # The new connection cancels this take and starts its own; do not hand a
+                    # new session's command to the connection being replaced.
+                    self._control_sent.clear()
+                    await self._control_sent.wait()
+                    continue
                 queued = self._controls.popleft()
                 self._control_taken.set()
                 # one sent for an earlier connection: ``connect`` rebuilt the session since
@@ -508,11 +589,21 @@ class WebSocketHost:
             self._control_sent.clear()
             await self._control_sent.wait()
 
+    def _core_input_idle_after(self) -> float | None:
+        return self._kind.input_idle_after()
+
     async def _core_input_idle(self) -> list[WsFrame]:
         return self._kind.input_idle()
 
+    def _core_response_idle_after(self) -> float | None:
+        return self._kind.response_idle_after()
+
+    async def _core_response_idle(self) -> list[WsFrame]:
+        return self._kind.response_idle()
+
     async def _core_on_message(self, frame: WsFrame, message: object) -> WebSocketRead:
         self._signal = self._named_request = None
+        self.response_received = False
         self.reading = True
         try:
             if message is None:
@@ -527,26 +618,30 @@ class WebSocketHost:
             self.reading = False
         if self._named_request is not None:
             self.request_id = self._named_request
-        return WebSocketRead(signal=self._signal, request_id=self._named_request)
+        return WebSocketRead(
+            signal=self._signal, request_id=self._named_request, response=self.response_received
+        )
 
     def _core_opened(self, request_id: str | None) -> None:
         self.request_id = request_id
         self._kind.opened(request_id)
 
     def _core_session_finished(self) -> None:
+        # what is queued was for the finished session: the input it held back goes on the next
+        self._between_sessions = True
+        self._controls.clear()
+        self._control_taken.set()
         self._kind.session_finished()
 
-    async def _core_close_context(self) -> list[WsFrame]:
-        mux = self._protocol.multiplexer
-        if mux is None:
-            return []
-        return [frame for c in self.contexts() for frame in frames_of(mux.close_context(c))]
-
-    async def _core_keep_context(self) -> list[WsFrame]:
-        mux = self._protocol.multiplexer
-        if mux is None:
-            return []
-        return [frame for c in self.contexts() for frame in frames_of(mux.keep_context(c))]
+    async def _core_close_context(self) -> WebSocketContextsCancel:
+        cancel = WebSocketContextsCancel(contexts=[], frames=[])
+        if (mux := self._protocol.multiplexer) is None:
+            return cancel
+        for context in self.contexts():
+            if frames := frames_of(mux.close_context(context)):
+                cancel.contexts.append(context)
+                cancel.frames.extend(frames)
+        return cancel
 
     def _core_retrying(self, error: Exception) -> None:
         self._kind.retrying(error)
@@ -584,10 +679,11 @@ class WebSocketMultiplexer(ABC, Generic[InboundT, OutboundT]):
     idle_timeout: float | None = None
     """Seconds a socket no stream holds stays open."""
     keep_warm: bool = False
-    """An idle socket the provider closed is opened again, so the next stream finds one open."""
-    context_keepalive: float | None = None
-    """Seconds without a send on a stream after which a ``keep_context`` frame goes for each of
-    its open contexts."""
+    """A socket with room is kept open as a standby: one opens when a stream takes the last, and
+    an idle one the provider closed is opened again, so the next stream finds one open."""
+    reuses_sockets: ClassVar[bool] = True
+    """A socket is reused by the next stream once its stream left it. ``False``: each stream takes
+    a fresh socket, which closes after it; with ``keep_warm`` the next one is already open."""
     routed: ClassVar[bool] = True
     """Each received message goes to the context ``route`` names. A pool (``False``) carries
     one stream a socket and hands it every frame once the socket is ready; ``route`` then sees
@@ -622,8 +718,16 @@ class WebSocketMultiplexer(ABC, Generic[InboundT, OutboundT]):
         """The frame that ends a context its stream left before the provider finished it."""
         return None
 
-    def keep_context(self, context_id: str) -> bytes | OutboundT | None:
-        """The frame that keeps an open context alive (see ``context_keepalive``)."""
+    def context_ended(self, message: InboundT) -> str | None:
+        """The context ``message`` ends, if it is the provider's last word on one. A pool
+        (``routed = False``) that reads it cancels a stream left mid-answer with
+        ``close_context`` and reuses the socket once the provider ended the cancelled contexts;
+        one that does not closes that socket."""
+        return None
+
+    def goodbye(self) -> bytes | OutboundT | None:
+        """The frame sent on a socket the multiplexer closes (idle, replaced, spent, or at its
+        close) before the close: the provider session's own end."""
         return None
 
     def decode(self, frame: bytes | str) -> InboundT | None:
@@ -654,10 +758,15 @@ class WebSocketMultiplexer(ABC, Generic[InboundT, OutboundT]):
                 idle_timeout=self.idle_timeout,
                 keep_warm=self.keep_warm,
                 routed=self.routed,
+                reuses_sockets=self.reuses_sockets,
+                reads_cancel_end=self._reads_cancel_end(),
             )
             native = self._mux = _core.WebSocketMux(self, options)
             self._streams: dict[str, WebSocketHost] = {}
         return native
+
+    def _reads_cancel_end(self) -> bool:
+        return type(self).context_ended is not WebSocketMultiplexer.context_ended
 
     def _stream(self, context: str) -> WebSocketHost | None:
         """The stream holding a context."""
@@ -667,34 +776,34 @@ class WebSocketMultiplexer(ABC, Generic[InboundT, OutboundT]):
 
     async def _core_connect(self, conn_options: APIConnectOptions) -> WebSocketConnection:
         target = await self.connect(conn_options)
-        keepalive = self.keepalive
         return WebSocketConnection(
             target=target,
-            keepalive=(
-                WebSocketKeepaliveFrame(interval=keepalive.every, frame=_frame(keepalive.frame))
-                if keepalive is not None
-                else None
-            ),
+            keepalive=_keepalive_frame(self.keepalive),
             max_session_duration=self.max_session_duration,
             ping_interval=self.ping_interval,
             setup=frames_of(self.setup()),
             awaits_ready=self.awaits_ready,
-            input_idle=None,
-            context_keepalive=self.context_keepalive,
+            # a shared socket says goodbye through ``goodbye()`` whenever it closes one
+            goodbye=[],
         )
 
     async def _core_route(self, frame: WsFrame) -> WebSocketMuxRoute:
+        nowhere = WebSocketMuxRoute(context=None, message=None, ready=False, ended_context=None)
         message = self.decode(frame)
         if message is None:
-            return WebSocketMuxRoute(context=None, message=None, ready=False)
+            return nowhere
         if self.awaits_ready and self.ready(message):
-            return WebSocketMuxRoute(context=None, message=None, ready=True)
+            return replace(nowhere, ready=True)
         context = self.route(message)
-        # a frame no stream reads (a late one of a closed context) goes nowhere
+        # a frame no stream reads (a late one of a closed context) goes nowhere, but may end a
+        # context a stream cancelled
         if context is None or (stream := self._stream(context)) is None:
-            return WebSocketMuxRoute(context=None, message=None, ready=False)
+            return replace(nowhere, ended_context=self.context_ended(message))
         # the stream reads the message as decoded here: no second decode
-        return WebSocketMuxRoute(context=stream.context_id, message=message, ready=False)
+        return replace(nowhere, context=stream.context_id, message=message)
 
     async def _core_open_context(self, context_id: str) -> list[WsFrame]:
         return frames_of(self.open_context(context_id))
+
+    async def _core_goodbye(self) -> list[WsFrame]:
+        return frames_of(self.goodbye())

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Literal, NotRequired, TypedDict
 
+from google.auth.credentials import Credentials
 from google.genai import Client, types
-from google.genai.errors import APIError, ClientError, ServerError
+from google.genai.errors import APIError
 from livekit.agents import APIConnectionError, APIStatusError, tokenize, tts, utils
 from livekit.agents.tts import split_expr_markup
 from livekit.agents.types import (
@@ -16,13 +17,10 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from ..log import logger
-from ..utils import auth, genai_http_options
+from .log import logger
+from .utils import gemini_backend, genai_http_options
 
 GEMINI_TTS_MODELS = Literal[
-    "gemini-2.5-flash-preview-tts",
-    "gemini-2.5-pro-preview-tts",
-    "gemini-3.1-flash-tts-preview",
     "gemini-3.8-flash-tts",
     "gemini-3.8-flash-lite-tts",
 ]
@@ -84,7 +82,7 @@ GEMINI_VOICES = Literal[
     "Sulafat",
 ]
 
-DEFAULT_MODEL = "gemini-3.1-flash-tts-preview"
+DEFAULT_MODEL = "gemini-3.8-flash-tts"
 DEFAULT_VOICE = "Kore"
 DEFAULT_SAMPLE_RATE = 24000  # not configurable
 NUM_CHANNELS = 1
@@ -92,19 +90,28 @@ NUM_CHANNELS = 1
 DEFAULT_INSTRUCTIONS = "Say the text with a proper tone, don't omit or add any words"
 
 
+class _SpeechMetadata(TypedDict, total=False):
+    style: str
+    speaker: str
+
+
+class _Part(TypedDict):
+    text: str
+    speech_metadata: NotRequired[_SpeechMetadata]
+
+
 @dataclass
 class _TTSOptions:
     model: GEMINI_TTS_MODELS | str
     voice_name: GEMINI_VOICES | str
-    vertexai: bool
-    project: str | None
-    location: str | None
     instructions: str | None
     speakers: dict[str, str] | None
     speaker: str | None
 
 
-class TTS(tts.TTS):
+class GeminiTTS(tts.TTS):
+    """Text-to-speech through the Gemini API's speech generation."""
+
     def __init__(
         self,
         *,
@@ -112,64 +119,53 @@ class TTS(tts.TTS):
         voice_name: GEMINI_VOICES | str = DEFAULT_VOICE,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         vertexai: NotGivenOr[bool] = NOT_GIVEN,
+        credentials: NotGivenOr[Credentials] = NOT_GIVEN,
+        credentials_info: NotGivenOr[Mapping[str, object]] = NOT_GIVEN,
+        credentials_file: NotGivenOr[str] = NOT_GIVEN,
         project: NotGivenOr[str] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
         instructions: NotGivenOr[str | None] = NOT_GIVEN,
         speakers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         speaker: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        """
-        Create a new instance of Gemini TTS.
-
-        Environment Requirements:
-        - For VertexAI: Set the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to the path of the service account key file.
-        - For Google Gemini API: Set the `api_key` argument or the `GOOGLE_API_KEY` environment variable.
+        """Create a new instance of Gemini TTS.
 
         Args:
-            model (str, optional): The Gemini TTS model to use. Defaults to "gemini-3.1-flash-tts-preview".
-            voice_name (str, optional): The voice to use for synthesis. Defaults to "Kore".
-            api_key (str, optional): The API key for Google Gemini. If not provided, it attempts to read from the `GOOGLE_API_KEY` environment variable.
-            vertexai (bool, optional): Whether to use VertexAI. Defaults to False.
-            project (str, optional): The Google Cloud project to use (only for VertexAI).
-            location (str, optional): The location to use for VertexAI API requests. Defaults to "us-central1".
-            instructions (str, optional): Control the style, tone, accent, and pace using prompts. See https://ai.google.dev/gemini-api/docs/speech-generation#controllable
-            speakers (dict[str, str], optional): Speaker name -> voice, for a multi-speaker voice config. Replaces `voice_name`.
-            speaker (str, optional): Which of `speakers` this instance voices. Required with `speakers`, and switchable via `update_options`.
-        """  # noqa: E501
+            model: The Gemini TTS model to use. Defaults to "gemini-3.8-flash-tts".
+            voice_name: The voice to use for synthesis. Defaults to "Kore".
+            api_key: Gemini API key. Defaults to the `GOOGLE_API_KEY` environment variable.
+            vertexai: Whether to use Vertex AI. Defaults to `GOOGLE_GENAI_USE_VERTEXAI`, else
+                to Vertex AI when credentials, a project or a location are given.
+            credentials: Credentials for Vertex AI.
+            credentials_info: Service account info for Vertex AI.
+            credentials_file: Path to a service account JSON file for Vertex AI.
+            project: Google Cloud project for Vertex AI. Defaults to `GOOGLE_CLOUD_PROJECT`,
+                then the credentials' project.
+            location: Google Cloud region for Vertex AI. Defaults to `GOOGLE_CLOUD_LOCATION`,
+                then "us-central1".
+            instructions: Control the style, tone, accent, and pace using prompts. See
+                https://ai.google.dev/gemini-api/docs/speech-generation#controllable
+            speakers: Speaker name -> voice, for a multi-speaker voice config. Replaces
+                `voice_name`.
+            speaker: Which of `speakers` this instance voices. Required with `speakers`, and
+                switchable via `update_options`.
+        """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=DEFAULT_SAMPLE_RATE,
             num_channels=NUM_CHANNELS,
         )
 
-        gcp_project: str | None = (
-            project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
+        backend = gemini_backend(
+            api_key=api_key,
+            vertexai=vertexai,
+            project=project,
+            location=location,
+            credentials=credentials,
+            credentials_info=credentials_info,
+            credentials_file=credentials_file,
+            default_location="us-central1",
         )
-        gcp_location: str | None = (
-            location
-            if is_given(location)
-            else os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-central1"
-        )
-        use_vertexai = (
-            vertexai
-            if is_given(vertexai)
-            else os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "0").lower() in ["true", "1"]
-        )
-        gemini_api_key = api_key if is_given(api_key) else os.environ.get("GOOGLE_API_KEY")
-
-        if use_vertexai:
-            if not gcp_project:
-                _, gcp_project = auth.default(
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
-                )
-            gemini_api_key = None  # VertexAI does not require an API key
-        else:
-            gcp_project = None
-            gcp_location = None
-            if not gemini_api_key:
-                raise ValueError(
-                    "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
-                )
 
         speaker_map = dict(speakers) if is_given(speakers) else None
         current_speaker = speaker if is_given(speaker) else None
@@ -198,9 +194,6 @@ class TTS(tts.TTS):
             speaker=current_speaker,
             model=model,
             voice_name=voice_name,
-            vertexai=use_vertexai,
-            project=gcp_project,
-            location=gcp_location,
             # this family speaks anything left in a part's text, so the preamble would
             # be read aloud (measured: it roughly triples a short line). _styled_part
             # puts instructions in speech_metadata.style instead.
@@ -210,17 +203,18 @@ class TTS(tts.TTS):
         )
 
         self._client = Client(
-            api_key=gemini_api_key,
-            vertexai=use_vertexai,
-            project=gcp_project,
-            location=gcp_location,
+            api_key=backend.api_key,
+            vertexai=backend.vertexai,
+            credentials=backend.credentials,
+            project=backend.project,
+            location=backend.location,
         )
 
     class Markup(tts.TTS.Markup):
         # only a model that can carry a style out of band declares the dialect; on the
         # others a marker would have nowhere to go and would be read aloud
         def _provider_key(self) -> str:
-            assert isinstance(self._tts, TTS)
+            assert isinstance(self._tts, GeminiTTS)
             return "gemini" if _styles_per_part(self._tts.model) else ""
 
     @property
@@ -264,17 +258,18 @@ class TTS(tts.TTS):
             pacing (tts.SentenceStreamPacer | None, optional): A ``SentenceStreamPacer``, or
                 ``None`` to send each chunk as soon as it is split.
         """
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            if is_given(speaker):
+                if not self._opts.speakers:
+                    raise ValueError("`speaker` needs a TTS constructed with `speakers`")
+                if speaker not in self._opts.speakers:
+                    raise ValueError(
+                        f"speaker {speaker!r} is not one of the configured speakers: "
+                        f"{', '.join(sorted(self._opts.speakers))}"
+                    )
         if is_given(voice_name):
             self._opts.voice_name = voice_name
         if is_given(speaker):
-            if not self._opts.speakers:
-                raise ValueError("`speaker` needs a TTS constructed with `speakers`")
-            if speaker not in self._opts.speakers:
-                raise ValueError(
-                    f"speaker {speaker!r} is not one of the configured speakers: "
-                    f"{', '.join(sorted(self._opts.speakers))}"
-                )
             self._opts.speaker = speaker
 
     async def aclose(self) -> None:
@@ -312,7 +307,7 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(
         self,
         *,
-        tts: TTS,
+        tts: GeminiTTS,
         input_text: str,
         conn_options: APIConnectOptions,
         options: _TTSOptions,
@@ -322,7 +317,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._options = options
         self._client = client
 
-    def _styled_parts(self) -> list[dict[str, Any]] | None:
+    def _styled_parts(self) -> list[_Part] | None:
         """Build one request part per delivery style, or ``None`` if none is carried.
 
         Discrete events are already inline Gemini tags here and belong in the words; the ``expression`` marker is the other channel and comes out,
@@ -347,7 +342,7 @@ class ChunkedStream(tts.ChunkedStream):
         bounds = [0, *(m.start() for m in _EXPRESSION_MARKER_RE.finditer(text)), len(text)]
         spans = [text[a:b] for a, b in zip(bounds, bounds[1:], strict=False)]
 
-        parts: list[dict[str, Any]] = []
+        parts: list[_Part] = []
         stripped_a_marker = False
         for span in spans:
             split = split_expr_markup(span)
@@ -356,8 +351,8 @@ class ChunkedStream(tts.ChunkedStream):
             if not (words := words.strip()):
                 continue
             marker = next((t["value"] for t in markers if t["type"] == "expression"), "")
-            part: dict[str, Any] = {"text": f'"{words}"'}
-            metadata: dict[str, str] = {}
+            part: _Part = {"text": f'"{words}"'}
+            metadata: _SpeechMetadata = {}
             if style := ", ".join(p for p in (opts.instructions, marker) if p):
                 metadata["style"] = style
             if opts.speaker:
@@ -392,7 +387,7 @@ class ChunkedStream(tts.ChunkedStream):
             # (types.Part and SpeechConfig both forbid extras), so both ride extra_body:
             # it merges into the request body, replacing `contents` wholesale since lists
             # overwrite, and merging into `generationConfig` since dicts recurse.
-            extra_body: dict[str, Any] = {}
+            extra_body: dict[str, object] = {}
             if _styles_per_part(opts.model):
                 extra_body["generationConfig"] = {"response_format": _RESPONSE_FORMAT}
             if (styled_parts := self._styled_parts()) is not None:
@@ -429,23 +424,9 @@ class ChunkedStream(tts.ChunkedStream):
                             # mime_type: audio/L16;codec=pcm;rate=24000
                             output_emitter.push(inline_data.data)
 
-        except ClientError as e:
-            raise APIStatusError(
-                "gemini tts: client error",
-                status_code=e.code,
-                body=f"{e.message} {e.status}",
-            ) from e
-        except ServerError as e:
-            raise APIStatusError(
-                "gemini tts: server error",
-                status_code=e.code,
-                body=f"{e.message} {e.status}",
-            ) from e
         except APIError as e:
             raise APIStatusError(
-                "gemini tts: api error",
-                status_code=e.code,
-                body=f"{e.message} {e.status}",
+                "gemini tts: api error", status_code=e.code, body=f"{e.message} {e.status}"
             ) from e
         except Exception as e:
             raise APIConnectionError(f"gemini tts: error generating speech {str(e)}") from e

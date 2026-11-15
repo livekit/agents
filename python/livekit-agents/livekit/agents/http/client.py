@@ -414,7 +414,7 @@ class _Deadline:
     ) -> None:
         self._options = options
         self._timeout = timeout
-        self.after_connect = after_connect
+        self.after_connect: Timeout | None = after_connect
         self.limit: Timeout | None = None
 
     def set_limit(self, limit: Timeout | None) -> None:
@@ -444,9 +444,10 @@ _current = contextvars.ContextVar[_Deadline | None]("http_deadline", default=Non
 async def _under_limits(
     options: APIConnectOptions, after_connect: Timeout | None, request_id_header: str | None
 ) -> AsyncIterator[_Deadline]:
+    timeout = asyncio.timeout(None)
+    deadline = _Deadline(options, timeout, after_connect)
     try:
-        async with asyncio.timeout(None) as timeout:
-            deadline = _Deadline(options, timeout, after_connect)
+        async with timeout:
             token = _current.set(deadline)
             try:
                 yield deadline

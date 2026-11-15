@@ -293,3 +293,54 @@ impl VoiceRuntime {
         }
     }
 }
+
+/// A conversation checkpoint always returns one result, including if its task dies. It belongs
+/// to the session rather than any speech, so releasing an interrupted speech cannot drop it.
+struct ConversationReceipt {
+    tx: Tx,
+    sequence: u64,
+    read: Option<Vec<ChatItem>>,
+}
+
+impl ConversationReceipt {
+    fn settle(mut self, result: Result<Vec<ChatItem>, StorageError>) {
+        let read = self.read.take().expect("the receipt is owed once");
+        let _ =
+            self.tx.send(VoiceEvent::ConversationSaved { sequence: self.sequence, read, result });
+    }
+}
+
+impl Drop for ConversationReceipt {
+    fn drop(&mut self) {
+        if let Some(read) = self.read.take() {
+            let result =
+                Err(StorageError::Unavailable("the conversation checkpoint task ended".into()));
+            let _ = self.tx.send(VoiceEvent::ConversationSaved {
+                sequence: self.sequence,
+                read,
+                result,
+            });
+        }
+    }
+}
+
+impl VoiceRuntime {
+    pub(in crate::voice) fn save_conversation(
+        &self,
+        progress: lk_agents_abi::storage::voice::VoiceConversationProgress,
+    ) {
+        let receipt = ConversationReceipt {
+            tx: self.reports.clone(),
+            sequence: progress.sequence,
+            read: Some(progress.history.clone()),
+        };
+        let storage = self.storage.clone();
+        self.spawn("voice conversation progress", async move {
+            let result = match storage {
+                Some(storage) => storage.conversation(progress).await,
+                None => Ok(progress.history),
+            };
+            receipt.settle(result);
+        });
+    }
+}

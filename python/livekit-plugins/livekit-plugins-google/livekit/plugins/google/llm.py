@@ -509,7 +509,7 @@ class LLMStream(llm.LLMStream):
             response_generated = False
             finish_reason: types.FinishReason | None = None
             async for response in stream:
-                if response.prompt_feedback:
+                if response.prompt_feedback and response.prompt_feedback.block_reason:
                     raise APIError(
                         "gemini llm: prompt blocked",
                         kind="invalid_request",
@@ -564,6 +564,10 @@ class LLMStream(llm.LLMStream):
                         # be treated as successful and skip the retry below.
                         response_generated = True
                         self.send(chat_chunk)
+                    elif not part.thought and part.text is None:
+                        # a part kind the stream does not read (one Gemini added since):
+                        # the model answered, so no retry
+                        response_generated = True
 
             if not response_generated:
                 raise APIError(

@@ -14,15 +14,14 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import contextlib
-import json
 import os
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from typing import Literal, NotRequired, TypedDict, assert_never
 
-from pydantic import BaseModel, Field, JsonValue, ValidationError
+from pydantic import JsonValue
 
 from livekit.agents import (
     APIConnectionError,
@@ -48,24 +47,9 @@ SMALLEST_WS_URL = "wss://api.smallest.ai/waves/v1/tts/live"
 # G.711 output_format values and the mime types the audio emitter decodes them as
 _OUTPUT_FORMAT_MIME = {"ulaw": "audio/pcmu", "alaw": "audio/pcma"}
 
-# Continuations gives no terminal marker for the last `complete` frame, so completion
-# is inferred: this many idle seconds after the closing fragment, with no further
-# frames, means done. The connection is never reused after an inferred completion
-# (see _run), so a too-short value costs a truncated tail, not a corrupted response.
+# Continuations gives no terminal marker for a segment's last fragment, so completion is
+# inferred after both the closing fragment and this much silence in received audio.
 _CONTINUATIONS_IDLE_TIMEOUT = 0.6
-
-
-class _TtsData(BaseModel):
-    audio: str | None = None
-    word: str | None = None
-    start: float | None = None
-    end: float | None = None
-
-
-class _TtsEvent(BaseModel):
-    status: str | None = None
-    data: _TtsData = Field(default_factory=_TtsData)
-    message: JsonValue = "unknown error"
 
 
 @dataclass
@@ -185,12 +169,7 @@ class TTS(tts.TTS):
             ws_url=ws_url,
         )
         self._session = http_session
-        self._pool = utils.ConnectionPool[http.WebSocket](
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-            max_session_duration=3600,
-            mark_refreshed_on_get=False,
-        )
+        self._pool = _Pool(self._opts)
 
     @property
     def model(self) -> str:
@@ -204,20 +183,6 @@ class TTS(tts.TTS):
         if not self._session:
             self._session = http.http_session()
         return self._session
-
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
-        return await self._ensure_session().ws_connect(
-            self._opts.ws_url,
-            headers={
-                "Authorization": f"Bearer {self._opts.api_key}",
-                "X-Source": "livekit",
-                "X-LiveKit-Version": __version__,
-            },
-            conn_options=conn_options,
-        )
-
-    async def _close_ws(self, ws: http.WebSocket) -> None:
-        await ws.close()
 
     def update_options(
         self,
@@ -236,13 +201,15 @@ class TTS(tts.TTS):
         pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
         """Update TTS options."""
-        # capabilities are fixed at construction: word timestamps decide `aligned_transcript`
-        if is_given(word_timestamps) and word_timestamps != self.capabilities.aligned_transcript:
-            raise ValueError(
-                "word_timestamps is fixed at construction: it sets the aligned_transcript "
-                "capability; create a new TTS to change it"
-            )
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            # capabilities are fixed at construction: word timestamps decide `aligned_transcript`
+            if is_given(word_timestamps) and (
+                word_timestamps != self.capabilities.aligned_transcript
+            ):
+                raise ValueError(
+                    "word_timestamps is fixed at construction: it sets the aligned_transcript "
+                    "capability; create a new TTS to change it"
+                )
         if is_given(model):
             self._opts.model = model
         if is_given(voice_id):
@@ -277,7 +244,7 @@ class TTS(tts.TTS):
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         return SynthesizeStream(
-            tts=self, opts=replace(self._opts), pool=self._pool, conn_options=conn_options
+            tts=self, pool=self._pool, opts=replace(self._opts), conn_options=conn_options
         )
 
     def prewarm(self) -> None:
@@ -305,7 +272,7 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            data = _to_smallest_options(self._opts)
+            data: dict[str, JsonValue] = {**_to_smallest_options(self._opts)}
             data["text"] = self._input_text
 
             headers = {
@@ -344,242 +311,182 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    """WebSocket-based streaming synthesis — primary path used by the agent pipeline.
+# Smallest's streaming socket: each segment is a context (continuations) or a run of text closed
+# by a flush (legacy). Each message declares only the fields read.
 
-    Defaults to the continuations protocol: text fragments are sent under a shared
+
+class _Audio(TypedDict):
+    audio: NotRequired[str | None]
+
+
+class _Chunk(TypedDict):
+    status: Literal["chunk"]
+    data: NotRequired[_Audio]
+
+
+class _Word(TypedDict, total=False):
+    word: str | None
+    start: float | None
+    end: float | None
+
+
+class _WordTimestamp(TypedDict):
+    status: Literal["word_timestamp"]
+    data: _Word
+
+
+class _Complete(TypedDict):
+    status: Literal["complete"]
+
+
+class _Error(TypedDict):
+    status: Literal["error"]
+    message: NotRequired[JsonValue]
+
+
+_Message = _Chunk | _WordTimestamp | _Complete | _Error
+
+
+class _Speak(TypedDict):
+    model: str
+    voice_id: str
+    sample_rate: int
+    speed: float
+    language: str
+    text: str
+    word_timestamps: NotRequired[bool]
+    context_id: NotRequired[str]
+    max_buffer_delay_ms: NotRequired[int]
+    max_buffer_flush_ms: NotRequired[int]
+    flush: NotRequired[bool]
+
+
+_Continue = TypedDict("_Continue", {"continue": bool})  # a keyword: the functional form
+
+
+class _Packet(_Speak, _Continue):
+    pass
+
+
+class _Pool(tts.WebSocketMultiplexer[_Message, _Packet]):
+    """Smallest's sockets, one stream each and never reused: a continuation sends no end of a
+    segment's audio, so a used socket may still carry the last one's. The next stream's socket is
+    kept open ahead, so it pays no connect."""
+
+    routed = False
+    reuses_sockets = False
+    keep_warm = True
+    max_session_duration = 3600
+
+    def __init__(self, opts: _TTSOptions) -> None:
+        self._opts = opts
+
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        return tts.WebSocketTarget(
+            self._opts.ws_url,
+            headers={
+                "Authorization": f"Bearer {self._opts.api_key}",
+                "X-Source": "livekit",
+                "X-LiveKit-Version": __version__,
+            },
+        )
+
+
+class SynthesizeStream(tts.WebSocketStream[_Message, _Packet]):
+    """Streaming synthesis over a socket of Smallest's pool, the stream's alone.
+
+    Defaults to the continuations protocol: each segment's text goes under its own
     ``context_id`` and the server releases audio at natural sentence boundaries (or
-    ``max_buffer_delay_ms``, whichever comes first) instead of waiting for the whole
-    segment, priming each release with the previous one's audio so prosody stays
-    continuous. Falls back to the legacy ``continue``/``flush`` protocol when
-    ``use_continuations`` is False.
+    ``max_buffer_delay_ms``), priming each release with the previous one's audio so prosody
+    stays continuous. It sends no end of a segment's audio: a segment whose closing fragment
+    went and whose audio came is done once received audio stays idle. The legacy
+    ``continue``/``flush`` protocol (``use_continuations=False``) ends each with ``complete``.
     """
 
+    audio_idle = _CONTINUATIONS_IDLE_TIMEOUT
+    # Responses carry no context id: each segment drains on its own socket.
+    connection_per_segment = True
+
     def __init__(
-        self,
-        *,
-        tts: TTS,
-        opts: _TTSOptions,
-        pool: utils.ConnectionPool[http.WebSocket],
-        conn_options: APIConnectOptions,
+        self, *, tts: TTS, pool: _Pool, opts: _TTSOptions, conn_options: APIConnectOptions
     ) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
+        self.multiplexer = pool
         self._opts = opts
-        self._pool = pool
+        # segments in the order they went, those whose closing fragment went, and whether audio
+        # came since the last closing fragment
+        self._open = deque[str]()
+        self._closed: set[str] = set()
+        self._answered = False
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=NUM_CHANNELS,
-            mime_type="audio/pcm",
-            stream=True,
-        )
-        # One stream instance = one segment (the agent creates a new stream per segment).
-        output_emitter.start_segment(segment_id=request_id)
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Packet | None:
+        match item:
+            case tts.SegmentStart():
+                self._open.append(item.segment_id)
+                self._answered = False
+                return None
+            case tts.SegmentText():
+                return self._packet(item.segment_id, item.chunk.text + " ", more=True)
+            case tts.SegmentEnd():
+                self._closed.add(item.segment_id)
+                return self._packet(item.segment_id, "", more=False)
+            case tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-        # Reused as the continuations `context_id`; shortuuid()'s output satisfies the
-        # server's alphanumeric/length constraints.
-        context_id = request_id
-        # opened: a fragment was sent under context_id. finalized: the closing
-        # (`continue: false`) fragment was sent. Used to detect an interrupted context
-        # (e.g. barge-in cancels this stream mid-way) so we can tell the server to drop it.
-        ctx_state = {"opened": False, "finalized": False}
+    def on_audio_idle(self) -> None:
+        if self._opts.use_continuations and self._answered:
+            while self._open and self._open[0] in self._closed:
+                segment = self._open.popleft()
+                self._closed.discard(segment)
+                self.report(tts.SegmentDone(segment))
 
-        try:
-            async with self._pool.connection(conn_options=self._conn_options) as ws:
-                tasks = utils.aio.TaskSet()
-                send_task = tasks.spawn(self._send_task(ws, context_id, ctx_state))
-                recv_task = tasks.spawn(self._recv_task(ws, output_emitter, ctx_state))
-                # Whether recv_task ended on a protocol-confirmed signal (legacy's
-                # explicit `complete`) vs. the continuations idle-drain heuristic, which
-                # is never fully certain - see _recv_task and the pool.remove() below.
-                drained_confidently = True
-                try:
-                    # send_task reports whether any text was actually sent; if the
-                    # segment was empty (no non-whitespace tokens) no context was opened
-                    # and the server produces no `complete`, so don't wait on recv_task.
-                    sent_any = await send_task
-                    if sent_any:
-                        drained_confidently = await recv_task
-                    else:
-                        await utils.aio.cancel_and_wait(recv_task)
-                finally:
-                    await tasks.aclose()
-                    if self._opts.use_continuations and ctx_state["opened"]:
-                        removed = False
-                        if not ctx_state["finalized"]:
-                            # Interrupted (e.g. barge-in) before the context was closed.
-                            await self._try_cancel_context(ws, context_id)
-                            self._pool.remove(ws)
-                            removed = True
-                        elif not drained_confidently:
-                            # Completion was inferred, not confirmed by the server (no
-                            # terminal marker exists in this protocol - see _recv_task).
-                            # Don't let a possibly-still-active context leak trailing
-                            # frames into the next request that reuses this connection.
-                            self._pool.remove(ws)
-                            removed = True
-                        if removed:
-                            # A removed connection always needs replacing. Continuations
-                            # never reuses a used socket (see above), so without this,
-                            # every turn after the first would pay a full reconnect
-                            # handshake on the next turn's critical path. Kick the
-                            # reconnect off now, in the background, so it's already warm
-                            # by the time the next segment needs a connection.
-                            self._pool.prewarm()
-        except TimeoutError:
-            raise APITimeoutError() from None
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
-
-        output_emitter.end_segment()
-
-    async def _try_cancel_context(self, ws: http.WebSocket, context_id: str) -> None:
-        # Best-effort: interrupted before the context was closed cleanly (e.g. the
-        # agent's speech was cut off by user barge-in). Tell the server to drop
-        # whatever's still buffered instead of leaving the context open.
-        with contextlib.suppress(Exception):
-            pkt = {**self._base_payload(context_id), "cancel_request": True}
-            await asyncio.wait_for(ws.send_str(json.dumps(pkt)), timeout=1.0)
-
-    def _base_payload(self, context_id: str) -> dict[str, JsonValue]:
-        payload: dict[str, JsonValue] = {
-            "model": self._opts.model,
-            "voice_id": self._opts.voice_id,
-            "sample_rate": self._opts.sample_rate,
-            "speed": self._opts.speed,
-            "language": self._opts.language.language,
-        }
-        if self._opts.word_timestamps:
-            payload["word_timestamps"] = True
-        if self._opts.use_continuations:
-            payload["context_id"] = context_id
-            payload["max_buffer_delay_ms"] = self._opts.max_buffer_delay_ms
-        else:
-            payload["max_buffer_flush_ms"] = self._opts.max_buffer_flush_ms
-        return payload
-
-    async def _send_task(
-        self, ws: http.WebSocket, context_id: str, ctx_state: dict[str, bool]
-    ) -> bool:
-        # Forward each chunk as it arrives so the server can begin synthesis before the
-        # segment is complete; the server concatenates them, so each ends with a space.
-        # The flush sentinel (or end of input) closes the segment. Returns whether any
-        # text was sent.
-        sent_any = False
-        async for chunk in self.input:
-            if isinstance(chunk, self.Flush):
-                break
-            token_pkt = {
-                **self._base_payload(context_id),
-                "text": chunk.text + " ",
-                "continue": True,
-            }
-            if not self._opts.use_continuations:
-                token_pkt["flush"] = False
-            self.mark_started()
-            await ws.send_str(json.dumps(token_pkt))
-            sent_any = True
-            ctx_state["opened"] = True
-
-        # Only close when text was sent; an empty segment produces no `complete`, so
-        # closing it would leave _recv_task waiting until the connection timeout.
-        if sent_any:
-            final_pkt = {**self._base_payload(context_id), "text": "", "continue": False}
-            if not self._opts.use_continuations:
-                final_pkt["flush"] = True
-            await ws.send_str(json.dumps(final_pkt))
-            ctx_state["finalized"] = True
-            # the read deadline runs only from here: before, a pause in the text owes nothing
-            self._core_attempts.expect_response(final=True)
-        return sent_any
-
-    async def _recv_task(
-        self,
-        ws: http.WebSocket,
-        output_emitter: tts.AudioEmitter,
-        ctx_state: dict[str, bool],
-    ) -> bool:
-        """Returns whether completion was protocol-confirmed (safe to reuse the pooled
-        connection) — always True for legacy, never True for continuations, which has
-        no way to confirm it (see the loop below and _run's handling of the result).
-        """
-        if not self._opts.use_continuations:
-            while True:
-                msg = await self._recv_one(ws, timeout=None)
-                status = self._parse_status_event(msg, output_emitter)
-                if status == "complete":
-                    return True
-
-        # Continuations gives no marker for which `complete` is the truly last one (a
-        # context can release audio in more than one frame at natural sentence
-        # boundaries), so instead of reacting to a specific `complete` event, poll with
-        # a short idle timeout and re-check `ctx_state["finalized"]` fresh on every
-        # tick. This also sidesteps any race between the closing fragment's send (which
-        # flips `finalized`) and an early `complete` reply for it: we never depend on
-        # which of the two concurrent tasks the event loop happens to run first, only
-        # on the current value of `finalized` at each poll. Because there's still no
-        # way to be certain we've drained everything, the caller must never reuse the
-        # underlying connection when this heuristic (rather than an explicit signal) is
-        # what ended the loop - see _run.
-        #
-        # Inactivity is bounded by the read deadline, which runs only once the closing
-        # fragment is sent; a finalized segment with no audio yet is the server warming up.
-        received_chunk = False
-        while True:
-            try:
-                msg = await self._recv_one(ws, timeout=_CONTINUATIONS_IDLE_TIMEOUT)
-            except APITimeoutError:
-                if ctx_state["finalized"] and received_chunk:
-                    return False
-                continue
-            if self._parse_status_event(msg, output_emitter) == "chunk":
-                received_chunk = True
-
-    async def _recv_one(
-        self, ws: http.WebSocket, *, timeout: float | None
-    ) -> http.WebSocketMessage:
-        msg = await ws.receive(timeout=timeout)
-        if msg.type is http.WebSocketMessageType.CLOSE:
-            raise ws.close_error("SmallestAI WebSocket closed unexpectedly")
-        return msg
-
-    def _parse_status_event(
-        self, msg: http.WebSocketMessage, output_emitter: tts.AudioEmitter
-    ) -> str | None:
-        if msg.type is not http.WebSocketMessageType.TEXT:
-            return None
-
-        try:
-            parsed = _TtsEvent.model_validate_json(msg.data)
-        except ValidationError as e:
-            raise APIError(
-                "SmallestAI TTS sent a malformed message", kind="protocol", detail=str(msg.data)
-            ) from e
-        status = parsed.status
-
-        if status == "chunk":
-            audio_b64 = parsed.data.audio
-            if audio_b64:
-                self._core_attempts.audio_received()
-                output_emitter.push(base64.b64decode(audio_b64))
-        elif status == "word_timestamp":
-            word = parsed.data.word
-            start = parsed.data.start
-            end = parsed.data.end
+    def on_message(self, message: _Message) -> None:
+        segment = self._open[0] if self._open else ""
+        if message["status"] == "chunk":
+            if audio := message.get("data", _Audio()).get("audio"):
+                self._answered = True
+                self.report(tts.SegmentAudio(segment, base64.b64decode(audio)))
+        elif message["status"] == "word_timestamp":
+            data = message["data"]
+            word, start, end = data.get("word"), data.get("start"), data.get("end")
             if word is not None and start is not None and end is not None:
-                output_emitter.push_timed_transcript(
-                    TranscriptChunk(text=word, start_time=start, end_time=end)
-                )
-        elif status == "error":
+                chunk = TranscriptChunk(text=word, start_time=start, end_time=end)
+                self.report(tts.SegmentWords(segment, [chunk]))
+        elif message["status"] == "complete":
+            # the legacy protocol's end of a segment; a continuation's release ends no segment
+            if not self._opts.use_continuations and self._open:
+                segment = self._open.popleft()
+                self._closed.discard(segment)
+                self.report(tts.SegmentDone(segment))
+        elif message["status"] == "error":
             raise APIError(
-                "SmallestAI TTS error", kind="invalid_request", detail=str(parsed.message)
+                "SmallestAI TTS error", kind="invalid_request", detail=str(message.get("message"))
             )
-        return status
+        else:
+            assert_never(message)
+
+    def _packet(self, segment_id: str, text: str, *, more: bool) -> _Packet:
+        opts = self._opts
+        packet: _Packet = {
+            "model": opts.model,
+            "voice_id": opts.voice_id,
+            "sample_rate": opts.sample_rate,
+            "speed": opts.speed,
+            "language": opts.language.language,
+            "text": text,
+            "continue": more,
+        }
+        if opts.word_timestamps:
+            packet["word_timestamps"] = True
+        if opts.use_continuations:
+            packet["context_id"] = segment_id
+            packet["max_buffer_delay_ms"] = opts.max_buffer_delay_ms
+        else:
+            packet["max_buffer_flush_ms"] = opts.max_buffer_flush_ms
+            packet["flush"] = not more
+        return packet
 
 
 def _to_smallest_options(opts: _TTSOptions) -> dict[str, JsonValue]:

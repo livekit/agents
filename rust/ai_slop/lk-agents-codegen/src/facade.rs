@@ -175,10 +175,17 @@ impl Module<'_> {
             self.runtime.add(&source, &format!("{name} as Base{name}"));
             *b = format!("Base{name}");
         }
-        // An adapter observing availability emits its event besides its base's.
+        // An adapter observing availability emits its event besides its base's, and a subclass's
+        // own events (the members' it relays), named by the base module's `TEvent`.
+        let mut event_param = false;
         if let (Some(b), Some(availability)) = (&mut base, &facade.availability) {
             self.runtime.add("typing", "Literal");
-            *b = format!("{b}[Literal[{:?}]]", availability.event);
+            if let Some(dotted) = &facade.base {
+                let (source, _) = self.placed_source(dotted);
+                self.runtime.add(&source, "TEvent");
+            }
+            *b = format!("{b}[Literal[{:?}] | TEvent]", availability.event);
+            event_param = true;
         }
         let mut text = String::new();
         // A provider facade is its native object: the native class first, so its getters
@@ -197,6 +204,9 @@ impl Module<'_> {
             self.runtime.add("typing", "TypeVar");
             text.push_str(&format!("\n\n{t} = TypeVar(\"{t}\")\n"));
             bases.push(format!("Generic[{t}]"));
+        } else if event_param {
+            self.runtime.add("typing", "Generic");
+            bases.push("Generic[TEvent]".to_owned());
         }
         let bases =
             if bases.is_empty() { String::new() } else { format!("({})", bases.join(", ")) };
@@ -775,8 +785,14 @@ impl Module<'_> {
         } else if awaited && adapt.discard {
             ret = "None".into();
             format!("await {}", invocation(14))
-        } else if m.ret.ok != Ty::Unit && adapt.annotations.iter().any(|(a, _)| a == "ret") {
-            // `annotation(ret = ..)` narrows what the native's stub declares (a JSON `object`).
+        } else if m.ret.ok != Ty::Unit
+            && let Some((_, text)) = adapt.annotations.iter().find(|(a, _)| a == "ret")
+            && !called.as_ref().is_some_and(|c| {
+                matches!(&c.ret.ok, Ty::Instance { class, .. } if text.rsplit('.').next() == Some(class))
+            })
+        {
+            // `annotation(ret = ..)` narrows what the native's stub declares (a JSON `object`);
+            // a forwarded call whose stub already returns that class needs no cast.
             self.casts = true;
             let prefix = if awaited { "await " } else { "" };
             format!("return cast({ret:?}, {prefix}{})", invocation(22 + ret.len() + prefix.len()))

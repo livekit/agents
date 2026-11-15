@@ -19,10 +19,9 @@ import contextlib
 import dataclasses
 import time
 import weakref
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Protocol, TypeVar, cast, get_args
 
 from grpc.aio import StreamStreamCall
 
@@ -31,10 +30,8 @@ import google.auth.credentials
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.auth.exceptions import DefaultCredentialsError
-from google.cloud.speech_v1 import SpeechAsyncClient as SpeechAsyncClientV1
-from google.cloud.speech_v1.types import cloud_speech as cloud_speech_v1, resource as resource_v1
-from google.cloud.speech_v2 import SpeechAsyncClient as SpeechAsyncClientV2
-from google.cloud.speech_v2.types import cloud_speech as cloud_speech_v2
+from google.cloud.speech_v2 import SpeechAsyncClient
+from google.cloud.speech_v2.types import cloud_speech
 from google.protobuf.duration_pb2 import Duration
 from livekit import rtc
 from livekit.agents import (
@@ -55,37 +52,12 @@ from livekit.agents.utils.aio import ChanClosed
 from livekit.agents.voice.io import TranscriptChunk
 
 from .log import logger
-from .models import EndpointingSensitivity, SpeechLanguages, SpeechModels, SpeechModelsV2
-from .utils import ServiceAccountClient, api_status_error, auth
+from .models import EndpointingSensitivity, SpeechLanguages, SpeechModels
+from .utils import api_status_error, auth
 
 gauth_default = auth.default
 
-RequestT = TypeVar("RequestT", contravariant=True)
-ResponseT = TypeVar("ResponseT", covariant=True)
-StreamRequestT = TypeVar("StreamRequestT", contravariant=True)
-StreamResponseT = TypeVar("StreamResponseT", covariant=True)
-
-
-class SpeechClient(Protocol[RequestT, ResponseT, StreamRequestT, StreamResponseT]):
-    async def recognize(self, request: RequestT, *, timeout: None, retry: None) -> ResponseT: ...
-
-    async def streaming_recognize(
-        self, requests: AsyncIterator[StreamRequestT], *, timeout: None, retry: None
-    ) -> AsyncIterable[StreamResponseT]: ...
-
-
-SpeechClientV1 = SpeechClient[
-    cloud_speech_v1.RecognizeRequest,
-    cloud_speech_v1.RecognizeResponse,
-    cloud_speech_v1.StreamingRecognizeRequest,
-    cloud_speech_v1.StreamingRecognizeResponse,
-]
-SpeechClientV2 = SpeechClient[
-    cloud_speech_v2.RecognizeRequest,
-    cloud_speech_v2.RecognizeResponse,
-    cloud_speech_v2.StreamingRecognizeRequest,
-    cloud_speech_v2.StreamingRecognizeResponse,
-]
+_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
 
 LgType = SpeechLanguages | str
 LanguagesInput = LgType | list[LgType]
@@ -118,47 +90,27 @@ class STTOptions:
     sample_rate: int
     min_confidence_threshold: float
     profanity_filter: bool
-    denoiser_config: NotGivenOr[cloud_speech_v2.DenoiserConfig] = NOT_GIVEN
-    adaptation: NotGivenOr[cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation] = (
-        NOT_GIVEN
-    )
+    denoiser_config: NotGivenOr[cloud_speech.DenoiserConfig] = NOT_GIVEN
+    adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN
     keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN
     speech_start_timeout: NotGivenOr[float] = NOT_GIVEN
     speech_end_timeout: NotGivenOr[float] = NOT_GIVEN
     endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN
-    custom_prompt_config: NotGivenOr[cloud_speech_v2.CustomPromptConfig] = NOT_GIVEN
+    custom_prompt_config: NotGivenOr[cloud_speech.CustomPromptConfig] = NOT_GIVEN
 
-    @property
-    def version(self) -> int:
-        return 2 if self.model in get_args(SpeechModelsV2) else 1
-
-    def build_adaptation(
-        self,
-    ) -> cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation | None:
+    def build_adaptation(self) -> cloud_speech.SpeechAdaptation | None:
         if is_given(self.adaptation):
             return self.adaptation
         if is_given(self.keywords):
-            if self.version == 2:
-                return cloud_speech_v2.SpeechAdaptation(
-                    phrase_sets=[
-                        cloud_speech_v2.SpeechAdaptation.AdaptationPhraseSet(
-                            inline_phrase_set=cloud_speech_v2.PhraseSet(
-                                phrases=[
-                                    cloud_speech_v2.PhraseSet.Phrase(value=keyword, boost=boost)
-                                    for keyword, boost in self.keywords
-                                ]
-                            )
-                        )
-                    ]
-                )
-            return resource_v1.SpeechAdaptation(
+            return cloud_speech.SpeechAdaptation(
                 phrase_sets=[
-                    resource_v1.PhraseSet(
-                        name="keywords",
-                        phrases=[
-                            resource_v1.PhraseSet.Phrase(value=keyword, boost=boost)
-                            for keyword, boost in self.keywords
-                        ],
+                    cloud_speech.SpeechAdaptation.AdaptationPhraseSet(
+                        inline_phrase_set=cloud_speech.PhraseSet(
+                            phrases=[
+                                cloud_speech.PhraseSet.Phrase(value=keyword, boost=boost)
+                                for keyword, boost in self.keywords
+                            ]
+                        )
                     )
                 ]
             )
@@ -177,16 +129,14 @@ class STT(stt.STT):
         enable_word_time_offsets: NotGivenOr[bool] = NOT_GIVEN,
         enable_word_confidence: bool = False,
         enable_voice_activity_events: bool = False,
-        model: SpeechModels | str = "latest_long",
+        model: SpeechModels | str = "long",
         location: str = "global",
         project: NotGivenOr[str] = NOT_GIVEN,
         profanity_filter: bool = False,
         sample_rate: int = 16000,
         min_confidence_threshold: float = _default_min_confidence,
-        denoiser_config: NotGivenOr[cloud_speech_v2.DenoiserConfig] = NOT_GIVEN,
-        adaptation: NotGivenOr[
-            cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation
-        ] = NOT_GIVEN,
+        denoiser_config: NotGivenOr[cloud_speech.DenoiserConfig] = NOT_GIVEN,
+        adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN,
         credentials_info: NotGivenOr[dict[str, object]] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
         credentials: NotGivenOr[google.auth.credentials.Credentials] = NOT_GIVEN,
@@ -194,7 +144,7 @@ class STT(stt.STT):
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
-        custom_prompt_config: NotGivenOr[cloud_speech_v2.CustomPromptConfig] = NOT_GIVEN,
+        custom_prompt_config: NotGivenOr[cloud_speech.CustomPromptConfig] = NOT_GIVEN,
         use_streaming: NotGivenOr[bool] = NOT_GIVEN,
     ):
         """
@@ -214,7 +164,8 @@ class STT(stt.STT):
             enable_word_time_offsets(bool): whether to enable word time offsets (default: None)
             enable_word_confidence(bool): whether to enable word confidence (default: False)
             enable_voice_activity_events(bool): whether to enable voice activity events (default: False)
-            model(SpeechModels): the model to use for recognition default: "latest_long"
+            model(SpeechModels): the Speech-to-Text V2 model to use for recognition
+                (default: "long")
             location(str): the location to use for recognition default: "global"
             project(str): the Google Cloud project to use for recognition
             profanity_filter(bool): whether to filter out profanities default: False
@@ -250,7 +201,6 @@ class STT(stt.STT):
                 logger.warning(
                     "Both 'adaptation' and 'keywords' are set; 'keywords' will be ignored."
                 )
-            self._validate_adaptation(adaptation, 2 if model in get_args(SpeechModelsV2) else 1)
 
         if not is_given(use_streaming):
             use_streaming = True
@@ -334,7 +284,7 @@ class STT(stt.STT):
         self._user_keywords: list[tuple[str, float]] = list(keywords) if is_given(keywords) else []
         self._session_keyterms: list[str] = []  # framework-managed; merged with user keywords
         self._streams = weakref.WeakSet[SpeechStream]()
-        self._pool = utils.ConnectionPool[SpeechAsyncClientV2 | SpeechAsyncClientV1](
+        self._pool = utils.ConnectionPool[SpeechAsyncClient](
             max_session_duration=_max_session_duration,
             connect_cb=self._create_client,
         )
@@ -347,68 +297,49 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Google Cloud Platform"
 
-    async def _create_client(
-        self, conn_options: APIConnectOptions
-    ) -> SpeechAsyncClientV2 | SpeechAsyncClientV1:
-        # Add support for passing a specific location that matches recognizer
-        # see: https://cloud.google.com/speech-to-text/v2/docs/speech-to-text-supported-languages
-        # TODO(long): how to set timeout?
+    async def _create_client(self, conn_options: APIConnectOptions) -> SpeechAsyncClient:
+        # a regional recognizer is only reachable through its regional endpoint
         client_options = None
-        client: SpeechAsyncClientV2 | SpeechAsyncClientV1 | None = None
-        client_cls = SpeechAsyncClientV2 if self._config.version == 2 else SpeechAsyncClientV1
         if self._location != "global":
             client_options = ClientOptions(api_endpoint=f"{self._location}-speech.googleapis.com")
+        credentials: google.auth.credentials.Credentials | None = None
+        project_id: str | None = None
         if is_given(self._credentials):
-            if self._project_id is None:
-                # in-memory credentials (e.g. Workload Identity Federation) may
-                # carry the project directly; resolve it here so _get_recognizer
-                # doesn't fall back to Application Default Credentials, which
-                # such setups typically don't have
-                self._project_id = getattr(self._credentials, "project_id", None) or getattr(
-                    self._credentials, "quota_project_id", None
-                )
-            client = client_cls(credentials=self._credentials, client_options=client_options)
+            credentials = self._credentials
+            # in-memory credentials (e.g. Workload Identity Federation) may carry the project
+            # directly, where Application Default Credentials typically are not available
+            for field in ("project_id", "quota_project_id"):
+                if isinstance(value := getattr(credentials, field, None), str) and value:
+                    project_id = value
+                    break
         elif is_given(self._credentials_info):
-            factory = cast(
-                ServiceAccountClient[SpeechAsyncClientV2 | SpeechAsyncClientV1], client_cls
-            )
-            client = factory.from_service_account_info(
-                self._credentials_info, client_options=client_options
+            credentials, project_id = auth.load_credentials_from_dict(
+                self._credentials_info, scopes=_SCOPES
             )
         elif is_given(self._credentials_file):
             credentials, project_id = auth.load_credentials_from_file(
-                self._credentials_file,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                self._credentials_file, scopes=_SCOPES
             )
-            if self._project_id is None:
-                self._project_id = project_id
-            client = client_cls(credentials=credentials, client_options=client_options)
-        else:
-            client = client_cls(client_options=client_options)
-        assert client is not None
-        return client
+        if self._project_id is None:
+            self._project_id = project_id
+        return SpeechAsyncClient(credentials=credentials, client_options=client_options)
 
-    def _get_recognizer(self, client: SpeechAsyncClientV2) -> str:
-        # TODO(theomonnom): should we use recognizers?
-        # recognizers may improve latency https://cloud.google.com/speech-to-text/v2/docs/recognizers#understand_recognizers
-
-        if self._project_id is not None:
-            return f"projects/{self._project_id}/locations/{self._location}/recognizers/_"
-
-        # TODO(theomonnom): find a better way to access the project_id
-        try:
-            project_id = client.transport._credentials.project_id  # type: ignore
-        except AttributeError:
+    def _get_recognizer(self) -> str:
+        project_id = self._project_id
+        if project_id is None:
             try:
                 _, project_id = auth.default()
             except DefaultCredentialsError as e:
                 raise APIConnectionError(
                     "google stt: could not determine the GCP project id: the supplied "
                     "credentials expose no project_id/quota_project_id and Application "
-                    "Default Credentials are unavailable. Pass credentials that carry a "
-                    "project (e.g. with a quota_project_id) or use credentials_info / "
-                    "credentials_file."
+                    "Default Credentials are unavailable. Pass `project`, or credentials "
+                    "that carry one."
                 ) from e
+        if not project_id:
+            raise APIConnectionError(
+                "google stt: could not determine the GCP project id; pass `project`"
+            )
         return f"projects/{project_id}/locations/{self._location}/recognizers/_"
 
     def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> STTOptions:
@@ -429,63 +360,28 @@ class STT(stt.STT):
         sample_rate: int,
         num_channels: int,
         language: NotGivenOr[SpeechLanguages | str] = NOT_GIVEN,
-    ) -> cloud_speech_v2.RecognitionConfig | cloud_speech_v1.RecognitionConfig:
+    ) -> cloud_speech.RecognitionConfig:
         config = self._sanitize_options(language=language)
-        if self._config.version == 2:
-            return cloud_speech_v2.RecognitionConfig(
-                explicit_decoding_config=cloud_speech_v2.ExplicitDecodingConfig(
-                    encoding=cloud_speech_v2.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
-                    sample_rate_hertz=sample_rate,
-                    audio_channel_count=num_channels,
-                ),
-                adaptation=config.build_adaptation(),
-                features=cloud_speech_v2.RecognitionFeatures(
-                    enable_automatic_punctuation=config.punctuate,
-                    enable_spoken_punctuation=config.spoken_punctuation,
-                    enable_word_time_offsets=config.enable_word_time_offsets,
-                    enable_word_confidence=config.enable_word_confidence,
-                    profanity_filter=config.profanity_filter,
-                    custom_prompt_config=config.custom_prompt_config
-                    if is_given(config.custom_prompt_config)
-                    else None,
-                ),
-                denoiser_config=config.denoiser_config
-                if is_given(config.denoiser_config)
-                else None,
-                model=config.model,
-                language_codes=config.languages,
-            )
-        return cloud_speech_v1.RecognitionConfig(
-            encoding=cloud_speech_v1.RecognitionConfig.AudioEncoding.LINEAR16,
-            sample_rate_hertz=sample_rate,
-            audio_channel_count=num_channels,
+        return cloud_speech.RecognitionConfig(
+            explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
+                encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
+                sample_rate_hertz=sample_rate,
+                audio_channel_count=num_channels,
+            ),
             adaptation=config.build_adaptation(),
-            language_code=config.languages[0],
-            alternative_language_codes=config.languages[1:],
-            enable_word_time_offsets=config.enable_word_time_offsets,
-            enable_word_confidence=config.enable_word_confidence,
-            enable_automatic_punctuation=config.punctuate,
-            enable_spoken_punctuation=config.spoken_punctuation,
-            profanity_filter=config.profanity_filter,
+            features=cloud_speech.RecognitionFeatures(
+                enable_automatic_punctuation=config.punctuate,
+                enable_spoken_punctuation=config.spoken_punctuation,
+                enable_word_time_offsets=config.enable_word_time_offsets,
+                enable_word_confidence=config.enable_word_confidence,
+                profanity_filter=config.profanity_filter,
+                custom_prompt_config=config.custom_prompt_config
+                if is_given(config.custom_prompt_config)
+                else None,
+            ),
+            denoiser_config=config.denoiser_config if is_given(config.denoiser_config) else None,
             model=config.model,
-        )
-
-    def _build_recognition_request(
-        self,
-        client: SpeechAsyncClientV2 | SpeechAsyncClientV1,
-        config: cloud_speech_v2.RecognitionConfig | cloud_speech_v1.RecognitionConfig,
-        content: bytes,
-    ) -> cloud_speech_v2.RecognizeRequest | cloud_speech_v1.RecognizeRequest:
-        if self._config.version == 2:
-            return cloud_speech_v2.RecognizeRequest(
-                recognizer=self._get_recognizer(cast(SpeechAsyncClientV2, client)),
-                config=config,
-                content=content,
-            )
-
-        return cloud_speech_v1.RecognizeRequest(
-            config=config,
-            audio=cloud_speech_v1.RecognitionAudio(content=content),
+            language_codes=config.languages,
         )
 
     async def _recognize_impl(
@@ -505,15 +401,12 @@ class STT(stt.STT):
 
         try:
             async with self._pool.connection(conn_options=conn_options) as client:
-                request = self._build_recognition_request(client, config, frame.data.tobytes())
-                if isinstance(request, cloud_speech_v2.RecognizeRequest):
-                    raw = await cast(SpeechClientV2, client).recognize(
-                        request, timeout=None, retry=None
-                    )
-                else:
-                    raw = await cast(SpeechClientV1, client).recognize(
-                        request, timeout=None, retry=None
-                    )
+                request = cloud_speech.RecognizeRequest(
+                    recognizer=self._get_recognizer(),
+                    config=config,
+                    content=frame.data.tobytes(),
+                )
+                raw = await client.recognize(request, timeout=None, retry=None)
                 return _recognize_response_to_speech_event(raw)
         except DeadlineExceeded:
             raise APITimeoutError() from None
@@ -548,17 +441,15 @@ class STT(stt.STT):
         punctuate: NotGivenOr[bool] = NOT_GIVEN,
         spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
-        model: NotGivenOr[SpeechModels] = NOT_GIVEN,
+        model: NotGivenOr[SpeechModels | str] = NOT_GIVEN,
         location: NotGivenOr[str] = NOT_GIVEN,
-        denoiser_config: NotGivenOr[cloud_speech_v2.DenoiserConfig] = NOT_GIVEN,
-        adaptation: NotGivenOr[
-            cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation
-        ] = NOT_GIVEN,
+        denoiser_config: NotGivenOr[cloud_speech.DenoiserConfig] = NOT_GIVEN,
+        adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
-        custom_prompt_config: NotGivenOr[cloud_speech_v2.CustomPromptConfig] = NOT_GIVEN,
+        custom_prompt_config: NotGivenOr[cloud_speech.CustomPromptConfig] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
@@ -575,21 +466,8 @@ class STT(stt.STT):
             self._config.spoken_punctuation = spoken_punctuation
         if is_given(profanity_filter):
             self._config.profanity_filter = profanity_filter
-        new_version = (
-            (2 if model in get_args(SpeechModelsV2) else 1)
-            if is_given(model)
-            else self._config.version
-        )
-        effective_adaptation = adaptation if is_given(adaptation) else self._config.adaptation
-        if is_given(effective_adaptation) and (is_given(adaptation) or is_given(model)):
-            self._validate_adaptation(effective_adaptation, new_version)
-
         if is_given(model):
-            old_version = self._config.version
             self._config.model = model
-            if self._config.version != old_version:
-                self._pool.invalidate()
-
         if is_given(location):
             self._location = location
             # if location is changed, fetch a new client and recognizer as per the new location
@@ -693,22 +571,6 @@ class STT(stt.STT):
         await self._pool.aclose()
         await super().aclose()
 
-    def _validate_adaptation(
-        self,
-        adaptation: cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation,
-        api_version: int,
-    ) -> None:
-        if api_version == 2 and not isinstance(adaptation, cloud_speech_v2.SpeechAdaptation):
-            raise ValueError(
-                "adaptation must be cloud_speech_v2.SpeechAdaptation for v2 models, "
-                f"got {type(adaptation).__name__}"
-            )
-        if api_version == 1 and not isinstance(adaptation, resource_v1.SpeechAdaptation):
-            raise ValueError(
-                "adaptation must be resource_v1.SpeechAdaptation for v1 models, "
-                f"got {type(adaptation).__name__}"
-            )
-
 
 class SpeechStream(stt.RecognizeStream):
     def __init__(
@@ -716,8 +578,8 @@ class SpeechStream(stt.RecognizeStream):
         *,
         stt: STT,
         conn_options: APIConnectOptions,
-        pool: utils.ConnectionPool[SpeechAsyncClientV2 | SpeechAsyncClientV1],
-        recognizer_cb: Callable[[SpeechAsyncClientV2], str],
+        pool: utils.ConnectionPool[SpeechAsyncClient],
+        recognizer_cb: Callable[[], str],
         config: STTOptions,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=config.sample_rate)
@@ -746,17 +608,15 @@ class SpeechStream(stt.RecognizeStream):
         punctuate: NotGivenOr[bool] = NOT_GIVEN,
         spoken_punctuation: NotGivenOr[bool] = NOT_GIVEN,
         profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
-        model: NotGivenOr[SpeechModels] = NOT_GIVEN,
+        model: NotGivenOr[SpeechModels | str] = NOT_GIVEN,
         min_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
-        denoiser_config: NotGivenOr[cloud_speech_v2.DenoiserConfig] = NOT_GIVEN,
-        adaptation: NotGivenOr[
-            cloud_speech_v2.SpeechAdaptation | resource_v1.SpeechAdaptation
-        ] = NOT_GIVEN,
+        denoiser_config: NotGivenOr[cloud_speech.DenoiserConfig] = NOT_GIVEN,
+        adaptation: NotGivenOr[cloud_speech.SpeechAdaptation] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
-        custom_prompt_config: NotGivenOr[cloud_speech_v2.CustomPromptConfig] = NOT_GIVEN,
+        custom_prompt_config: NotGivenOr[cloud_speech.CustomPromptConfig] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
@@ -774,10 +634,7 @@ class SpeechStream(stt.RecognizeStream):
         if is_given(profanity_filter):
             self._config.profanity_filter = profanity_filter
         if is_given(model):
-            old_version = self._config.version
             self._config.model = model
-            if self._config.version != old_version:
-                self._pool.invalidate()
         if is_given(min_confidence_threshold):
             self._config.min_confidence_threshold = min_confidence_threshold
         if is_given(denoiser_config):
@@ -811,108 +668,61 @@ class SpeechStream(stt.RecognizeStream):
             self.update_options(keywords=self._pending_keywords)
             self._pending_keywords = None
 
-    def _build_streaming_config(
-        self,
-    ) -> cloud_speech_v2.StreamingRecognitionConfig | cloud_speech_v1.StreamingRecognitionConfig:
-        if self._config.version == 2:
-            # Build voice activity timeout if either timeout is specified
-            voice_activity_timeout = None
-            if is_given(self._config.speech_start_timeout) or is_given(
-                self._config.speech_end_timeout
-            ):
-                voice_activity_timeout = (
-                    cloud_speech_v2.StreamingRecognitionFeatures.VoiceActivityTimeout()
+    def _build_streaming_config(self) -> cloud_speech.StreamingRecognitionConfig:
+        # Build voice activity timeout if either timeout is specified
+        voice_activity_timeout = None
+        if is_given(self._config.speech_start_timeout) or is_given(self._config.speech_end_timeout):
+            voice_activity_timeout = (
+                cloud_speech.StreamingRecognitionFeatures.VoiceActivityTimeout()
+            )
+            if is_given(self._config.speech_start_timeout):
+                voice_activity_timeout.speech_start_timeout = Duration(
+                    seconds=int(self._config.speech_start_timeout),
+                    nanos=int((self._config.speech_start_timeout % 1) * 1e9),
                 )
-                if is_given(self._config.speech_start_timeout):
-                    voice_activity_timeout.speech_start_timeout = Duration(
-                        seconds=int(self._config.speech_start_timeout),
-                        nanos=int((self._config.speech_start_timeout % 1) * 1e9),
-                    )
-                if is_given(self._config.speech_end_timeout):
-                    voice_activity_timeout.speech_end_timeout = Duration(
-                        seconds=int(self._config.speech_end_timeout),
-                        nanos=int((self._config.speech_end_timeout % 1) * 1e9),
-                    )
+            if is_given(self._config.speech_end_timeout):
+                voice_activity_timeout.speech_end_timeout = Duration(
+                    seconds=int(self._config.speech_end_timeout),
+                    nanos=int((self._config.speech_end_timeout % 1) * 1e9),
+                )
 
-            return cloud_speech_v2.StreamingRecognitionConfig(
-                config=cloud_speech_v2.RecognitionConfig(
-                    explicit_decoding_config=cloud_speech_v2.ExplicitDecodingConfig(
-                        encoding=cloud_speech_v2.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
-                        sample_rate_hertz=self._config.sample_rate,
-                        audio_channel_count=1,
-                    ),
-                    adaptation=self._config.build_adaptation(),
-                    language_codes=self._config.languages,
-                    model=self._config.model,
-                    features=cloud_speech_v2.RecognitionFeatures(
-                        enable_automatic_punctuation=self._config.punctuate,
-                        enable_word_time_offsets=self._config.enable_word_time_offsets,
-                        enable_spoken_punctuation=self._config.spoken_punctuation,
-                        enable_word_confidence=self._config.enable_word_confidence,
-                        profanity_filter=self._config.profanity_filter,
-                        custom_prompt_config=self._config.custom_prompt_config
-                        if is_given(self._config.custom_prompt_config)
-                        else None,
-                    ),
-                    denoiser_config=self._config.denoiser_config
-                    if is_given(self._config.denoiser_config)
-                    else None,
+        return cloud_speech.StreamingRecognitionConfig(
+            config=cloud_speech.RecognitionConfig(
+                explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
+                    encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
+                    sample_rate_hertz=self._config.sample_rate,
+                    audio_channel_count=1,
                 ),
-                streaming_features=cloud_speech_v2.StreamingRecognitionFeatures(
-                    interim_results=self._config.interim_results,
-                    # Auto-enable voice activity events when voice_activity_timeout is specified,
-                    # as per Google API documentation requirements
-                    enable_voice_activity_events=self._config.enable_voice_activity_events
-                    or (voice_activity_timeout is not None),
-                    voice_activity_timeout=voice_activity_timeout,
-                    endpointing_sensitivity=getattr(
-                        cloud_speech_v2.StreamingRecognitionFeatures.EndpointingSensitivity,
-                        self._config.endpointing_sensitivity,
-                    )
-                    if is_given(self._config.endpointing_sensitivity)
-                    else None,
-                ),
-            )
-
-        return cloud_speech_v1.StreamingRecognitionConfig(
-            config=cloud_speech_v1.RecognitionConfig(
-                encoding=cloud_speech_v1.RecognitionConfig.AudioEncoding.LINEAR16,
-                sample_rate_hertz=self._config.sample_rate,
-                audio_channel_count=1,
                 adaptation=self._config.build_adaptation(),
-                language_code=self._config.languages[0],
-                alternative_language_codes=self._config.languages[1:],
-                enable_word_time_offsets=self._config.enable_word_time_offsets,
-                enable_word_confidence=self._config.enable_word_confidence,
-                enable_automatic_punctuation=self._config.punctuate,
-                enable_spoken_punctuation=self._config.spoken_punctuation,
-                profanity_filter=self._config.profanity_filter,
+                language_codes=self._config.languages,
                 model=self._config.model,
+                features=cloud_speech.RecognitionFeatures(
+                    enable_automatic_punctuation=self._config.punctuate,
+                    enable_word_time_offsets=self._config.enable_word_time_offsets,
+                    enable_spoken_punctuation=self._config.spoken_punctuation,
+                    enable_word_confidence=self._config.enable_word_confidence,
+                    profanity_filter=self._config.profanity_filter,
+                    custom_prompt_config=self._config.custom_prompt_config
+                    if is_given(self._config.custom_prompt_config)
+                    else None,
+                ),
+                denoiser_config=self._config.denoiser_config
+                if is_given(self._config.denoiser_config)
+                else None,
             ),
-            interim_results=self._config.interim_results,
-            enable_voice_activity_events=self._config.enable_voice_activity_events,
+            streaming_features=cloud_speech.StreamingRecognitionFeatures(
+                interim_results=self._config.interim_results,
+                # Auto-enable voice activity events when voice_activity_timeout is specified,
+                # as per Google API documentation requirements
+                enable_voice_activity_events=self._config.enable_voice_activity_events
+                or (voice_activity_timeout is not None),
+                voice_activity_timeout=voice_activity_timeout,
+                # proto-plus reads an enum field from its name
+                endpointing_sensitivity=self._config.endpointing_sensitivity
+                if is_given(self._config.endpointing_sensitivity)
+                else None,
+            ),
         )
-
-    def _build_init_request(
-        self,
-        client: SpeechAsyncClientV2 | SpeechAsyncClientV1,
-    ) -> cloud_speech_v2.StreamingRecognizeRequest | cloud_speech_v1.StreamingRecognizeRequest:
-        if self._config.version == 2:
-            return cloud_speech_v2.StreamingRecognizeRequest(
-                recognizer=self._recognizer_cb(cast(SpeechAsyncClientV2, client)),
-                streaming_config=self._streaming_config,
-            )
-        return cloud_speech_v1.StreamingRecognizeRequest(
-            streaming_config=self._streaming_config,
-        )
-
-    def _build_audio_request(
-        self,
-        frame: rtc.AudioFrame,
-    ) -> cloud_speech_v2.StreamingRecognizeRequest | cloud_speech_v1.StreamingRecognizeRequest:
-        if self._config.version == 2:
-            return cloud_speech_v2.StreamingRecognizeRequest(audio=frame.data.tobytes())
-        return cloud_speech_v1.StreamingRecognizeRequest(audio_content=frame.data.tobytes())
 
     async def _run(self) -> None:
         audio_pushed = False
@@ -920,16 +730,16 @@ class SpeechStream(stt.RecognizeStream):
         # google requires a async generator when calling streaming_recognize
         # this function basically convert the queue into a async generator
         async def input_generator(
-            client: SpeechAsyncClientV2 | SpeechAsyncClientV1, should_stop: asyncio.Event
-        ) -> AsyncGenerator[
-            cloud_speech_v2.StreamingRecognizeRequest | cloud_speech_v1.StreamingRecognizeRequest,
-            None,
-        ]:
+            should_stop: asyncio.Event,
+        ) -> AsyncGenerator[cloud_speech.StreamingRecognizeRequest, None]:
             nonlocal audio_pushed
             async with utils.aio.TaskSet() as tasks:
                 stop_task = tasks.spawn(should_stop.wait())
                 try:
-                    yield self._build_init_request(client)
+                    yield cloud_speech.StreamingRecognizeRequest(
+                        recognizer=self._recognizer_cb(),
+                        streaming_config=self._streaming_config,
+                    )
 
                     while True:
                         # Race the next-frame await against should_stop so this generator
@@ -948,7 +758,7 @@ class SpeechStream(stt.RecognizeStream):
 
                         frame = frame_task.result()
                         if isinstance(frame, rtc.AudioFrame):
-                            yield self._build_audio_request(frame)
+                            yield cloud_speech.StreamingRecognizeRequest(audio=frame.data.tobytes())
                             if not audio_pushed:
                                 audio_pushed = True
 
@@ -956,32 +766,18 @@ class SpeechStream(stt.RecognizeStream):
                     logger.exception("an error occurred while streaming input to google STT")
 
         async def process_stream(
-            client: SpeechAsyncClientV2 | SpeechAsyncClientV1,
-            stream: AsyncIterable[
-                cloud_speech_v2.StreamingRecognizeResponse
-                | cloud_speech_v1.StreamingRecognizeResponse
-            ],
+            client: SpeechAsyncClient,
+            stream: AsyncIterable[cloud_speech.StreamingRecognizeResponse],
         ) -> None:
+            events = cloud_speech.StreamingRecognizeResponse.SpeechEventType
             self._speaking = False
             last_usage_event_time: float = 0.0
             async for resp in stream:
-                if resp.speech_event_type == (
-                    cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
-                    if self._config.version == 2
-                    else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
-                ):
+                if resp.speech_event_type == events.SPEECH_ACTIVITY_BEGIN:
                     self.send(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
                     self._speaking = True
 
-                if (
-                    resp.speech_event_type
-                    == (
-                        cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_TYPE_UNSPECIFIED
-                        if self._config.version == 2
-                        else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_EVENT_UNSPECIFIED
-                    )
-                    and resp.results
-                ):
+                if resp.speech_event_type == events.SPEECH_EVENT_TYPE_UNSPECIFIED and resp.results:
                     result = resp.results[0]
                     speech_data = _streaming_recognize_response_to_speech_data(
                         resp,
@@ -1017,11 +813,7 @@ class SpeechStream(stt.RecognizeStream):
                             self._reconnect_event.set()
                             return
 
-                if resp.speech_event_type == (
-                    cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
-                    if self._config.version == 2
-                    else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
-                ):
+                if resp.speech_event_type == events.SPEECH_ACTIVITY_END:
                     self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
                     self._speaking = False
                     self._on_end_of_speech()
@@ -1030,7 +822,7 @@ class SpeechStream(stt.RecognizeStream):
                     self.send(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.RECOGNITION_USAGE,
-                            request_id=_get_request_id(resp),
+                            request_id=resp.metadata.request_id,
                             recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
                         )
                     )
@@ -1043,29 +835,15 @@ class SpeechStream(stt.RecognizeStream):
                     self._streaming_config = self._build_streaming_config()
 
                     should_stop = asyncio.Event()
-                    requests = input_generator(client, should_stop)
-                    if self._config.version == 2:
-                        stream = await cast(SpeechClientV2, client).streaming_recognize(
-                            requests=cast(
-                                AsyncIterator[cloud_speech_v2.StreamingRecognizeRequest], requests
-                            ),
-                            timeout=None,
-                            retry=None,
-                        )
-                    else:
-                        stream = await cast(SpeechClientV1, client).streaming_recognize(
-                            requests=cast(
-                                AsyncIterator[cloud_speech_v1.StreamingRecognizeRequest], requests
-                            ),
-                            timeout=None,
-                            retry=None,
-                        )
+                    stream = await client.streaming_recognize(
+                        requests=input_generator(should_stop), timeout=None, retry=None
+                    )
                     self._session_connected_at = time.time()
 
                     async with utils.aio.TaskSet() as tasks:
                         process_stream_task = tasks.spawn(process_stream(client, stream))
                         reconnect = tasks.spawn(self._reconnect_event.wait())
-                        first: asyncio.Future[object] | None = None
+                        first: asyncio.Future[None] | asyncio.Future[bool] | None = None
                         try:
                             first = await tasks.first_completed(
                                 asyncio.shield(process_stream_task), reconnect
@@ -1079,8 +857,8 @@ class SpeechStream(stt.RecognizeStream):
                             # its read/write tasks and request iterator. Without this the
                             # call (and the input_generator that yielded into it) stays
                             # pinned across reconnects and leaks ~0.4 MB per cycle.
-                            with contextlib.suppress(Exception):
-                                cast(StreamStreamCall[object, object], stream).cancel()
+                            if isinstance(stream, StreamStreamCall):
+                                stream.cancel()
                             if first is None and not process_stream_task.done():
                                 # try to gracefully stop the process_stream_task
                                 with contextlib.suppress(TimeoutError):
@@ -1105,20 +883,8 @@ def _duration_to_seconds(duration: Duration | timedelta) -> float:
     return duration.seconds + duration.nanos / 1e9
 
 
-def _get_start_time(word: cloud_speech_v2.WordInfo | cloud_speech_v1.WordInfo) -> float:
-    if isinstance(word, cloud_speech_v2.WordInfo):
-        return _duration_to_seconds(word.start_offset)
-    return _duration_to_seconds(word.start_time)
-
-
-def _get_end_time(word: cloud_speech_v2.WordInfo | cloud_speech_v1.WordInfo) -> float:
-    if isinstance(word, cloud_speech_v2.WordInfo):
-        return _duration_to_seconds(word.end_offset)
-    return _duration_to_seconds(word.end_time)
-
-
 def _recognize_response_to_speech_event(
-    resp: cloud_speech_v2.RecognizeResponse | cloud_speech_v1.RecognizeResponse,
+    resp: cloud_speech.RecognizeResponse,
 ) -> stt.SpeechEvent:
     text = ""
     confidence = 0.0
@@ -1131,8 +897,8 @@ def _recognize_response_to_speech_event(
     # Google STT may return empty results when spoken_lang != stt_lang
     if resp.results:
         try:
-            start_time = _get_start_time(resp.results[0].alternatives[0].words[0])
-            end_time = _get_end_time(resp.results[-1].alternatives[0].words[-1])
+            start_time = _duration_to_seconds(resp.results[0].alternatives[0].words[0].start_offset)
+            end_time = _duration_to_seconds(resp.results[-1].alternatives[0].words[-1].end_offset)
         except IndexError:
             # When enable_word_time_offsets=False, there are no "words" to access
             start_time = end_time = 0
@@ -1150,8 +916,8 @@ def _recognize_response_to_speech_event(
                 words=[
                     TranscriptChunk(
                         text=word.word,
-                        start_time=_get_start_time(word),
-                        end_time=_get_end_time(word),
+                        start_time=_duration_to_seconds(word.start_offset),
+                        end_time=_duration_to_seconds(word.end_offset),
                     )
                     for word in resp.results[0].alternatives[0].words
                 ]
@@ -1164,7 +930,7 @@ def _recognize_response_to_speech_event(
 
 
 def _streaming_recognize_response_to_speech_data(
-    resp: cloud_speech_v2.StreamingRecognizeResponse | cloud_speech_v1.StreamingRecognizeResponse,
+    resp: cloud_speech.StreamingRecognizeResponse,
     *,
     min_confidence_threshold: float,
     start_time_offset: float,
@@ -1172,7 +938,7 @@ def _streaming_recognize_response_to_speech_data(
     text = ""
     confidence = 0.0
     final_result = None
-    words: list[cloud_speech_v2.WordInfo | cloud_speech_v1.WordInfo] = []
+    words: list[cloud_speech.WordInfo] = []
     for result in resp.results:
         if len(result.alternatives) == 0:
             continue
@@ -1215,15 +981,15 @@ def _streaming_recognize_response_to_speech_data(
 
     data = stt.SpeechData(
         language=lg,
-        start_time=_get_start_time(words[0]) + start_time_offset,
-        end_time=_get_end_time(words[-1]) + start_time_offset,
+        start_time=_duration_to_seconds(words[0].start_offset) + start_time_offset,
+        end_time=_duration_to_seconds(words[-1].end_offset) + start_time_offset,
         confidence=confidence,
         text=text,
         words=[
             TranscriptChunk(
                 text=word.word,
-                start_time=_get_start_time(word) + start_time_offset,
-                end_time=_get_end_time(word) + start_time_offset,
+                start_time=_duration_to_seconds(word.start_offset) + start_time_offset,
+                end_time=_duration_to_seconds(word.end_offset) + start_time_offset,
                 start_time_offset=start_time_offset,
                 confidence=word.confidence,
             )
@@ -1235,29 +1001,16 @@ def _streaming_recognize_response_to_speech_data(
 
 
 def _get_audio_duration(
-    resp: cloud_speech_v2.StreamingRecognizeResponse | cloud_speech_v1.StreamingRecognizeResponse,
+    resp: cloud_speech.StreamingRecognizeResponse,
     last_usage_event_time: float,
 ) -> float:
     """Calculate the audio duration from the response.
 
     References:
-        - https://docs.cloud.google.com/python/docs/reference/speech/latest/google.cloud.speech_v1.types.StreamingRecognizeResponse
         - https://docs.cloud.google.com/speech-to-text/docs/reference/rest/v2/StreamingRecognitionResult
     """
-    # total_billed_time is only set "if this is the last response in the stream"
-    # use speech event time/offset before the last response is received
-    if isinstance(resp, cloud_speech_v2.StreamingRecognizeResponse):
-        if resp.metadata.total_billed_duration:
-            return _duration_to_seconds(resp.metadata.total_billed_duration) - last_usage_event_time
-        return _duration_to_seconds(resp.speech_event_offset) - last_usage_event_time
-    if resp.total_billed_time:
-        return _duration_to_seconds(resp.total_billed_time) - last_usage_event_time
-    return _duration_to_seconds(resp.speech_event_time) - last_usage_event_time
-
-
-def _get_request_id(
-    resp: cloud_speech_v2.StreamingRecognizeResponse | cloud_speech_v1.StreamingRecognizeResponse,
-) -> str:
-    if isinstance(resp, cloud_speech_v2.StreamingRecognizeResponse):
-        return resp.metadata.request_id
-    return str(resp.request_id)
+    # total_billed_duration is only set on the last response in the stream;
+    # use the speech event offset before it is received
+    if resp.metadata.total_billed_duration:
+        return _duration_to_seconds(resp.metadata.total_billed_duration) - last_usage_event_time
+    return _duration_to_seconds(resp.speech_event_offset) - last_usage_event_time

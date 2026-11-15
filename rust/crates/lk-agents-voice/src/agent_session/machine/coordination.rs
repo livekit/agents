@@ -51,6 +51,7 @@ fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
         | VoiceEffect::Host(_)
         | VoiceEffect::ChatContext(_)
         | VoiceEffect::StorageCommit { .. }
+        | VoiceEffect::SaveConversation(_)
         | VoiceEffect::StorageAbort(_)
         | VoiceEffect::Outputs(_)
         | VoiceEffect::Tap(_)
@@ -195,6 +196,7 @@ impl VoiceDriver {
     /// Settles transitions and their callbacks; scheduling and close progression run here, so no
     /// handler has to request them.
     pub(crate) fn settle_internal(&mut self) {
+        self.conversation_changed();
         self.advance_transition();
         loop {
             self.resolve_input_operations();
@@ -209,6 +211,14 @@ impl VoiceDriver {
                 continue;
             }
             if !self.publish_current_speech() {
+                // Checkpoint only the settled transition, after all internal callbacks. A turn
+                // must move from draft to accepted without an intermediate empty save.
+                let before = self.session.close_phase();
+                self.checkpoint_conversation();
+                self.advance_transition();
+                if !self.callbacks.is_empty() || before != self.session.close_phase() {
+                    continue;
+                }
                 break;
             }
         }

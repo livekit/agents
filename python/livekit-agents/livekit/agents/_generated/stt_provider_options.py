@@ -97,6 +97,7 @@ class SpeechmaticsOptions(TypedDict, total=False):
     end_of_utterance_silence_trigger: float
     audio_filtering_config: dict[str, Any]
     transcript_filtering_config: dict[str, Any]
+    language_hints: list[str]
 
 
 class XaiOptions(TypedDict, total=False):

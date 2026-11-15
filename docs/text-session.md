@@ -193,6 +193,19 @@ turn = await TextSession(agent=front_desk).run(message, state=before, context=de
 after = turn.state
 ```
 
+To persist manually through an application's marked `SessionState` field, assign the settled
+snapshot and explicitly save the context:
+
+```python
+app = await ctx.store.load_context(App(services=services))
+turn = await TextSession(agent=front_desk).run(ctx.message, context=app)
+app.session = turn.state
+await ctx.store.save_context(app)
+```
+
+The snapshot and marked application fields join the handler's commit together. Without the
+assignment and save, plain context execution leaves the stored conversation unchanged.
+
 `dependencies` in this example has no session-state field. Explicit state cannot be combined
 with a bound context or a second session field. Detached snapshots do not follow live updates.
 Reading a snapshot never starts a binding or advances a stored conversation.

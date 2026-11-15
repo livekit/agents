@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use lk_agents_abi::{
-    AudioFrame, LanguageCode, SpeechEvent, Stt, SttCapabilities, SttSink, SttSource, Ts,
+    AudioFrame, LanguageCode, SpeechEvent, SpeechEventType, Stt, SttCapabilities, SttSink,
+    SttSource, Ts,
     errors::ProviderError,
     utils::stream::{Closed, StreamOutput},
 };
+use lk_agents_runtime::inference::stt::normalizer::SpeechNormalizer;
 use tokio::sync::{Notify, mpsc};
 
 use super::{
@@ -13,12 +15,12 @@ use super::{
 };
 use crate::{
     input::{Input, Speaker, UserText},
-    record::{Detail, Kind},
+    record::{Detail, Kind, Recognised, SttReport},
 };
 
 // A reopened stream stays addressable, so a late delivery to it is a recorded, rejected attempt
 // rather than a silent channel swap. Audio is recorded, never interpreted. As a real provider's,
-// a stream whose input ended still delivers the utterance it is in, and closes after its end.
+// a stream whose input ended still delivers the speech it is in, and ends once that speech has.
 
 pub struct FakeStt {
     registry: Arc<Registry>,
@@ -28,21 +30,34 @@ pub struct FakeStt {
     detail: Detail,
     /// `STTCapabilities.keyterms`.
     keyterms: bool,
+    reports: SttSpeech,
 }
 
 impl FakeStt {
-    pub fn new(registry: Arc<Registry>, connect: std::time::Duration) -> Arc<Self> {
-        Arc::new(FakeStt { registry, connect, detail: Detail::None, keyterms: false })
+    pub fn new(
+        registry: Arc<Registry>,
+        connect: std::time::Duration,
+        reports: SttSpeech,
+    ) -> Arc<Self> {
+        Arc::new(FakeStt { registry, connect, detail: Detail::None, keyterms: false, reports })
     }
 
     /// A recogniser that takes keyterms, as most streaming providers do.
-    pub fn taking_keyterms(registry: Arc<Registry>, connect: std::time::Duration) -> Arc<Self> {
-        Arc::new(FakeStt { registry, connect, detail: Detail::None, keyterms: true })
+    pub fn taking_keyterms(
+        registry: Arc<Registry>,
+        connect: std::time::Duration,
+        reports: SttSpeech,
+    ) -> Arc<Self> {
+        Arc::new(FakeStt { registry, connect, detail: Detail::None, keyterms: true, reports })
     }
 
     /// `AMD(stt=..)`: a recogniser the detector feeds through its own listening gate.
-    pub fn for_amd(registry: Arc<Registry>, connect: std::time::Duration) -> Arc<Self> {
-        Arc::new(FakeStt { registry, connect, detail: Detail::AmdStt, keyterms: false })
+    pub fn for_amd(
+        registry: Arc<Registry>,
+        connect: std::time::Duration,
+        reports: SttSpeech,
+    ) -> Arc<Self> {
+        Arc::new(FakeStt { registry, connect, detail: Detail::AmdStt, keyterms: false, reports })
     }
 }
 
@@ -55,6 +70,8 @@ struct Recognition {
     input_ended: bool,
     /// Between a start of speech and its end.
     speaking: bool,
+    /// The stream ended, and said so.
+    finished: bool,
 }
 
 impl Stt for FakeStt {
@@ -73,6 +90,7 @@ impl Stt for FakeStt {
             keyterms: self.keyterms,
             // the corpus models send their own `recognition_usage` (`Input::SttUsage`)
             reports_usage: true,
+            transcribes_after_speech_ends: self.reports.transcribes_after_speech_ends,
             ..Default::default()
         }
     }
@@ -104,11 +122,20 @@ impl Stt for FakeStt {
             }
             let (sender, events) = mpsc::unbounded_channel();
             let ended = Arc::new(Notify::new());
-            let opened = self.registry.now();
+            let provider = Provider {
+                sender,
+                opened: self.registry.now(),
+                started: None,
+                reports: self.reports,
+                speech: SpeechNormalizer::new(
+                    self.reports.provider_vad,
+                    self.reports.transcribes_after_speech_ends,
+                ),
+            };
             let slot = self.registry.register(
                 Kind::Stt,
                 self.detail.clone(),
-                Control::Stt(sender, opened, None),
+                Control::Stt(Box::new(provider)),
             );
             Ok(Some(lk_agents_abi::DuplexStream::new(
                 Box::new(Forward {
@@ -124,6 +151,7 @@ impl Stt for FakeStt {
                     hazard: self.registry.stream_hazard(Site::SttNext, Site::SttClose),
                     input_ended: false,
                     speaking: false,
+                    finished: false,
                 }) as SttSource,
             )))
         })
@@ -137,10 +165,15 @@ impl StreamOutput<SpeechEvent> for Recognition {
             if let Some(fault) = fault {
                 return strike(fault, Site::SttNext).await;
             }
-            // A real stream ends once its input has and its utterance ended; otherwise a replaced
-            // stream stays open.
+            // A real stream ends once its input has and its speech ended, all it said read;
+            // otherwise a replaced stream stays open. The provider is gone from then on.
             loop {
-                if self.input_ended && !self.speaking {
+                if self.input_ended && !self.speaking && self.events.is_empty() {
+                    if !std::mem::replace(&mut self.finished, true) {
+                        self.events.close();
+                        let finished = SttReport::Finished;
+                        self.registry.record_recognition(self.slot, finished, Vec::new());
+                    }
                     return Ok(None);
                 }
                 let event = tokio::select! {
@@ -153,8 +186,8 @@ impl StreamOutput<SpeechEvent> for Recognition {
                 };
                 if let Some(Ok(ev)) = &event {
                     match ev.kind {
-                        lk_agents_abi::SpeechEventType::StartOfSpeech => self.speaking = true,
-                        lk_agents_abi::SpeechEventType::EndOfSpeech => self.speaking = false,
+                        SpeechEventType::StartOfSpeech => self.speaking = true,
+                        SpeechEventType::EndOfSpeech => self.speaking = false,
                         _ => {}
                     }
                 }
@@ -181,70 +214,143 @@ impl StreamOutput<SpeechEvent> for Recognition {
 
 impl lk_agents_abi::utils::stream::ProviderStream<SpeechEvent> for Recognition {}
 
-/// A real recogniser stamps words with the seconds of stream heard when they began and ended.
-pub(super) struct Clock {
-    pub opened: Ts,
-    pub started: Option<Ts>,
-    pub now: Ts,
+/// How the provider reports speech, as a plugin declares it: whether it detects speech itself
+/// (`provider_vad`, its own start and end of speech) and whether it transcribes a speech only
+/// after it ended (`STTCapabilities.transcribes_after_speech_ends`, as openai and mistral do).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SttSpeech {
+    pub provider_vad: bool,
+    pub transcribes_after_speech_ends: bool,
 }
 
-impl Clock {
-    fn seconds(&self, at: Ts) -> f64 {
-        at.saturating_duration_since(self.opened).as_secs_f64()
+impl Default for SttSpeech {
+    fn default() -> Self {
+        SttSpeech { provider_vad: true, transcribes_after_speech_ends: false }
     }
 }
 
-/// One recognition event onto a registered stream. True when the product still reads it.
-pub(super) fn deliver(
-    sender: &mpsc::UnboundedSender<Result<SpeechEvent, ProviderError>>,
-    what: &Input,
-    clock: Clock,
-) -> bool {
-    use lk_agents_abi::SpeechEventType as T;
-    if let Input::SttFail { .. } = what {
-        let error = ProviderError::Local(lk_agents_abi::errors::ApiError::new(
-            lk_agents_abi::errors::ErrorKind::Server,
-            "recogniser failed mid-stream",
-        ));
-        return sender.send(Err(error)).is_ok();
+/// The provider's side of one recognition stream. What the case reports goes through the
+/// production speech rules (`SpeechNormalizer`) on its way to the reader, exactly as a plugin's reports
+/// do: the stream's starts and ends of speech, its utterance numbers and the words a connection
+/// boundary promotes are the machine's, never the fake's.
+pub struct Provider {
+    sender: mpsc::UnboundedSender<Result<SpeechEvent, ProviderError>>,
+    /// When the stream opened, and when its utterance began: the instants a transcript's
+    /// `start_time`/`end_time` are measured from.
+    opened: Ts,
+    started: Option<Ts>,
+    reports: SttSpeech,
+    speech: SpeechNormalizer,
+}
+
+impl Provider {
+    /// Whether the stream's speech is over and owes no words: nothing the case still has to
+    /// release.
+    pub(crate) fn settled(&self) -> bool {
+        self.speech.settled()
     }
-    let (kind, text, speaker) = match what {
-        Input::SttStart { .. } => (T::StartOfSpeech, None, None),
-        Input::SttInterim { text: UserText(t), speaker, .. } => {
-            (T::InterimTranscript, Some(t), *speaker)
+
+    /// One report from the provider. Whether the reader still takes the stream, and what the
+    /// provider reported with what the stream made of it, if it reported anything.
+    pub(super) fn deliver(
+        &mut self,
+        what: &Input,
+        now: Ts,
+    ) -> (bool, Option<(SttReport, Vec<Recognised>)>) {
+        let seconds = |at: Ts| at.saturating_duration_since(self.opened).as_secs_f64();
+        let words = |text: &UserText, speaker: &Option<Speaker>| {
+            let mut transcript = lk_agents_abi::stt::events::Transcript::new("en", text.0.clone());
+            transcript.speaker_id = speaker.map(|Speaker(n)| format!("speaker-{n}"));
+            transcript.start_time = seconds(self.started.unwrap_or(now));
+            transcript.end_time = seconds(now);
+            transcript
+        };
+        if self.sender.is_closed() {
+            return (false, None);
         }
-        Input::SttPreflight { text: UserText(t), speaker, .. } => {
-            (T::PreflightTranscript, Some(t), *speaker)
+        let mut out = Vec::new();
+        let report = match what {
+            Input::SttUsage { .. } => {
+                // A usage report passes the speech rules by, as a plugin `send`s it.
+                let mut ev = SpeechEvent::new(SpeechEventType::RecognitionUsage);
+                // The audio the stream has heard so far, as the providers bill it.
+                ev.recognition_usage = Some(Box::new(lk_agents_abi::RecognitionUsage {
+                    audio_duration: Some(seconds(now)),
+                    ..Default::default()
+                }));
+                return (self.sender.send(Ok(ev)).is_ok(), None);
+            }
+            Input::SttStart { .. } => {
+                self.started = Some(now);
+                if !self.reports.provider_vad {
+                    return (true, None);
+                }
+                // as most plugins report it: no onset of its own, the start's arrival is
+                self.speech.started(None, &mut out);
+                SttReport::Started
+            }
+            Input::SttEnd { .. } => {
+                if !self.reports.provider_vad {
+                    return (true, None);
+                }
+                self.speech.ended(&mut out);
+                SttReport::Ended
+            }
+            Input::SttInterim { text, speaker, .. } => {
+                self.speech.transcript(words(text, speaker), &mut out);
+                SttReport::Interim(text.0.clone())
+            }
+            Input::SttPreflight { text, speaker, .. } => {
+                let transcript = lk_agents_abi::stt::events::Transcript {
+                    preflight: true,
+                    ..words(text, speaker)
+                };
+                self.speech.transcript(transcript, &mut out);
+                SttReport::Preflight(text.0.clone())
+            }
+            Input::SttFinal { text, speaker, .. } => {
+                let transcript = lk_agents_abi::stt::events::Transcript {
+                    r#final: true,
+                    ..words(text, speaker)
+                };
+                self.speech.transcript(transcript, &mut out);
+                SttReport::Final(text.0.clone())
+            }
+            // The attempt ends: its open speech ends there, whether it reconnects or gives up.
+            Input::SttDrop { .. } => {
+                self.speech.boundary(&mut out);
+                SttReport::Dropped
+            }
+            Input::SttFail { .. } => {
+                self.speech.boundary(&mut out);
+                SttReport::Failed
+            }
+            _ => return (false, None),
+        };
+        let emitted = out.iter().filter_map(recognised).collect();
+        let mut accepted = true;
+        for ev in out {
+            accepted &= self.sender.send(Ok(ev)).is_ok();
         }
-        Input::SttFinal { text: UserText(t), speaker, .. } => {
-            (T::FinalTranscript, Some(t), *speaker)
+        if let Input::SttFail { .. } = what {
+            let error = ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+                lk_agents_abi::errors::ErrorKind::Server,
+                "recogniser failed mid-stream",
+            ));
+            accepted &= self.sender.send(Err(error)).is_ok();
         }
-        Input::SttEnd { .. } => (T::EndOfSpeech, None, None),
-        Input::SttUsage { .. } => (T::RecognitionUsage, None, None),
-        _ => return false,
-    };
-    let mut ev = SpeechEvent::new(kind);
-    // The recogniser numbers its utterances: a late final is known as its utterance's.
-    if let Input::SttInterim { utterance, .. }
-    | Input::SttPreflight { utterance, .. }
-    | Input::SttFinal { utterance, .. }
-    | Input::SttEnd { utterance } = what
-    {
-        ev.utterance = Some(u64::from(utterance.nth));
+        (accepted, Some((report, emitted)))
     }
-    if kind == T::RecognitionUsage {
-        // The audio the stream has heard so far, as the providers bill it.
-        ev.recognition_usage = Some(Box::new(lk_agents_abi::RecognitionUsage {
-            audio_duration: Some(clock.seconds(clock.now)),
-            ..Default::default()
-        }));
-    }
-    if let Some(text) = text {
-        let mut data = lk_agents_abi::SpeechData::new("en", text.clone());
-        data.speaker_id = speaker.map(|Speaker(n)| format!("speaker-{n}"));
-        data.start_time = clock.seconds(clock.started.unwrap_or(clock.now));
-        data.end_time = clock.seconds(clock.now);
-        ev.alternatives.push(data);
-    }
-    sender.send(Ok(ev)).is_ok()
+}
+
+fn recognised(ev: &SpeechEvent) -> Option<Recognised> {
+    let text = || ev.alternatives.first().map(|a| a.text.clone()).unwrap_or_default();
+    Some(match ev.kind {
+        SpeechEventType::StartOfSpeech => Recognised::Start,
+        SpeechEventType::InterimTranscript => Recognised::Interim(text()),
+        SpeechEventType::PreflightTranscript => Recognised::Preflight(text()),
+        SpeechEventType::FinalTranscript => Recognised::Final(text()),
+        SpeechEventType::EndOfSpeech => Recognised::End,
+        _ => return None,
+    })
 }

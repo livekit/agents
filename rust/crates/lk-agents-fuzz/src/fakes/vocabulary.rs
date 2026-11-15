@@ -30,6 +30,7 @@ table! { Stt:
     stt::FinalTranscript => Covered("SttFinal");
     stt::RecognitionUsage => Covered("SttUsage");
     stt::EndOfSpeech => Covered("SttEnd");
+    stt::EndOfSpeechPending => Covered("SttEnd after an interim or before owed final words");
 }
 
 /// The detector's event kinds.

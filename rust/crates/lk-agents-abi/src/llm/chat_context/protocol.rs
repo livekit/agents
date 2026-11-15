@@ -136,7 +136,11 @@ fn time(at: Option<pbjson_types::Timestamp>) -> Result<SystemTime, Invalid> {
 fn native_extra(
     values: impl IntoIterator<Item = (String, String)>,
 ) -> serde_json::Map<String, Value> {
+    // Protocol maps have no iteration order. Establish one before entering decision state,
+    // including when serde_json preserves insertion order for host-facing objects.
     values
+        .into_iter()
+        .collect::<std::collections::BTreeMap<_, _>>()
         .into_iter()
         .map(|(key, value)| {
             let decoded = serde_json::from_str(&value).unwrap_or(Value::String(value));
@@ -237,6 +241,13 @@ pub fn decode_chat_item(item: proto::chat_context::ChatItem) -> Result<ChatItem,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_metadata_has_one_order_regardless_of_protocol_map_iteration() {
+        let first = native_extra([("z".into(), "1".into()), ("a".into(), "2".into())]);
+        let second = native_extra([("a".into(), "2".into()), ("z".into(), "1".into())]);
+        assert_eq!(first.keys().collect::<Vec<_>>(), second.keys().collect::<Vec<_>>());
+    }
 
     /// Decision 117 (Q29): `extra` crosses the proto losslessly; a raw string an earlier row
     /// stored still reads as it did.

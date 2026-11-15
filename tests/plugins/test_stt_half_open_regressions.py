@@ -12,7 +12,6 @@ from aiohttp.test_utils import TestServer
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, http, stt
 from livekit.plugins import deepgram, elevenlabs, inworld, openai, telnyx
-from livekit.plugins.openai import stt as openai_stt
 
 HEARTBEAT = 0.05  # the heartbeat a plugin asks for, scaled down from its ~45 s
 
@@ -54,11 +53,6 @@ async def test_a_silent_socket_fails_the_stream_with_a_connection_error(
         return await connect(self, url, **kwargs)
 
     monkeypatch.setattr(http.HttpSession, "ws_connect", scaled)
-    # a socket protocol's pings are the framework's
-    for socket_stream in (deepgram.SpeechStream, elevenlabs.SpeechStream, inworld.SpeechStream):
-        monkeypatch.setattr(socket_stream, "ping_interval", HEARTBEAT)
-    monkeypatch.setattr(telnyx.stt.SpeechStream, "ping_interval", HEARTBEAT)
-    monkeypatch.setattr(openai_stt.SpeechStream, "ping_interval", HEARTBEAT)
 
     app = web.Application()
     app.router.add_route("GET", "/{tail:.*}", blackhole)
@@ -80,8 +74,12 @@ async def test_a_silent_socket_fails_the_stream_with_a_connection_error(
         frame = rtc.AudioFrame(
             data=bytes(320), sample_rate=16000, num_channels=1, samples_per_channel=160
         )
+        stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+        # a socket protocol's pings are the framework's, set on the stream's class before it
+        # connects
+        monkeypatch.setattr(type(stream), "ping_interval", HEARTBEAT)
         try:
-            async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+            async with stream:
                 stream.push_frame(frame)
                 await asyncio.wait_for(accepted.wait(), 2)
                 with pytest.raises(APIConnectionError):

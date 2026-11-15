@@ -19,27 +19,22 @@ This module provides a TTS implementation that uses the Sarvam.ai API.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import binascii
-import contextlib
-import enum
-import json
 import os
 import platform
 import re
 import weakref
-from collections.abc import AsyncIterable, Awaitable, Callable
+from collections import deque
 from dataclasses import dataclass, replace
+from typing import Literal, NotRequired, TypedDict, assert_never
 
-from pydantic import ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from livekit.agents import (
-    APIConnectionError,
     APIConnectOptions,
     APIError,
     APIStatusError,
-    APITimeoutError,
     LanguageCode,
     __version__ as livekit_version,
     http,
@@ -52,17 +47,10 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from .log import logger
 from .models import (
     MODEL_SPEAKER_COMPATIBILITY,
-    TTS_MESSAGE,
-    AudioMessage,
-    ErrorData,
-    ErrorMessage,
-    EventMessage,
     SarvamTTSLanguages,
     SarvamTTSModels,
     SarvamTTSOutputAudioBitrate,
     SarvamTTSSpeakers,
-    TTSBatchResponse,
-    message_request_id,
 )
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
@@ -70,20 +58,8 @@ USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 SARVAM_TTS_BASE_URL = "https://api.sarvam.ai/text-to-speech"
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 
-# Sarvam TTS WebSocket connections idle out after 60 seconds. We defend against
-# this on two layers:
-#
-# 1. Protocol-level: the websocket ``heartbeat`` sends WebSocket PING frames every
-#    ``_WS_HEARTBEAT_INTERVAL`` seconds and auto-handles PONGs even while no
-#    application-level ``receive()`` is in flight. This is what actually keeps
-#    the TCP connection alive while it sits idle in the pool.
-# 2. Application-level: ``_keepalive_loop`` sends a Sarvam-defined
-#    ``{"type": "ping"}`` JSON message every ``_KEEPALIVE_INTERVAL`` seconds.
-#    This guards against a server-side application idle timer that may not be
-#    reset by protocol-level pings, and serves as a fast detector for stale
-#    pooled connections.
-_WS_HEARTBEAT_INTERVAL: float = 20.0
-_KEEPALIVE_INTERVAL: float = 30.0
+# Sarvam closes a socket idle for 60 seconds: an idle pooled socket is pinged every 30
+_KEEPALIVE_INTERVAL = 30.0
 
 # bulbul:v4-flash rides the same pipeline as v3/v3-beta: temperature and the websocket
 # buffering knobs apply to all three.
@@ -121,15 +97,6 @@ def _codec_to_mime_type(codec: str) -> str:
     return mime
 
 
-class ConnectionState(enum.Enum):
-    """WebSocket connection states for TTS."""
-
-    DISCONNECTED = "disconnected"
-    CONNECTING = "connecting"
-    CONNECTED = "connected"
-    FAILED = "failed"
-
-
 def validate_model_speaker_compatibility(model: str, speaker: str) -> bool:
     """Validate that the speaker is compatible with the model version."""
     if model not in MODEL_SPEAKER_COMPATIBILITY:
@@ -146,13 +113,15 @@ def validate_model_speaker_compatibility(model: str, speaker: str) -> bool:
     return True
 
 
-# Accepted [min, max] per synthesis parameter. bulbul:v4-flash is stricter than v2/v3.
+# Accepted [min, max] per synthesis parameter. bulbul:v3 narrows the pace; bulbul:v4-flash is
+# stricter still.
 _PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "pitch": (-0.75, 0.75),
     "pace": (0.3, 3.0),
     "loudness": (0.5, 2.0),
     "temperature": (0.01, 2.0),
 }
+_V3_PARAM_BOUNDS: dict[str, tuple[float, float]] = {**_PARAM_BOUNDS, "pace": (0.5, 2.0)}
 _V4_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "pitch": (-0.5, 0.5),
     "pace": (0.5, 2.0),
@@ -163,7 +132,11 @@ _V4_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
 
 def _param_bounds(model: str, param: str) -> tuple[float, float]:
     """Accepted range for a synthesis parameter on the given model."""
-    return (_V4_PARAM_BOUNDS if model == "bulbul:v4-flash" else _PARAM_BOUNDS)[param]
+    if model == "bulbul:v4-flash":
+        return _V4_PARAM_BOUNDS[param]
+    if model in ("bulbul:v3", "bulbul:v3-beta"):
+        return _V3_PARAM_BOUNDS[param]
+    return _PARAM_BOUNDS[param]
 
 
 def _validate_param(model: str, param: str, value: float) -> None:
@@ -244,21 +217,51 @@ _V4_STREAM_SAMPLE_RATES = (8000, 16000, 22050, 24000)
 _V4_STREAM_OPUS_SAMPLE_RATES = (8000, 16000, 24000)
 
 
-def _model_extra_fields(opts: SarvamTTSOptions) -> dict[str, object]:
-    """Model-specific fields shared by the REST body and the websocket config."""
-    extra: dict[str, object] = {}
+class _Config(TypedDict):
+    """The synthesis options, shared by the REST body and the websocket's config message."""
+
+    target_language_code: str
+    speaker: str | None
+    pace: float
+    model: str
+    speech_sample_rate: int
+    output_audio_codec: str
+    pitch: NotRequired[float]
+    loudness: NotRequired[float]
+    enable_preprocessing: NotRequired[bool]
+    enable_cached_responses: NotRequired[bool]
+    temperature: NotRequired[float]
+    dict_id: NotRequired[str]
+    output_audio_bitrate: NotRequired[str]
+    min_buffer_size: NotRequired[int]
+    max_chunk_length: NotRequired[int]
+
+
+def _config(opts: SarvamTTSOptions) -> _Config:
+    config = _Config(
+        target_language_code=opts.target_language_code,
+        speaker=opts.speaker,
+        pace=opts.pace,
+        model=opts.model,
+        speech_sample_rate=opts.speech_sample_rate,
+        output_audio_codec=opts.output_audio_codec,
+    )
     if opts.model in ("bulbul:v2", "bulbul:v4-flash"):
-        extra["pitch"] = opts.pitch
-        extra["loudness"] = opts.loudness
-        extra["enable_preprocessing"] = opts.enable_preprocessing
+        config["pitch"] = opts.pitch
+        config["loudness"] = opts.loudness
+        config["enable_preprocessing"] = opts.enable_preprocessing
     # v3 and v4 silently ignore caching, so it is only ever sent for v2
     if opts.model == "bulbul:v2" and opts.enable_cached_responses is not None:
-        extra["enable_cached_responses"] = opts.enable_cached_responses
+        config["enable_cached_responses"] = opts.enable_cached_responses
     if opts.model in _V3_PIPELINE_MODELS:
-        extra["temperature"] = opts.temperature
+        config["temperature"] = opts.temperature
     if opts.model in ("bulbul:v3", "bulbul:v4-flash") and opts.dict_id is not None:
-        extra["dict_id"] = opts.dict_id
-    return extra
+        config["dict_id"] = opts.dict_id
+    return config
+
+
+class _Request(_Config):
+    text: str
 
 
 def _websocket_url(opts: SarvamTTSOptions) -> str:
@@ -272,9 +275,11 @@ def _websocket_url(opts: SarvamTTSOptions) -> str:
             else _V4_STREAM_SAMPLE_RATES
         )
         if opts.speech_sample_rate not in allowed:
-            raise ValueError(
-                f"speech_sample_rate must be one of {', '.join(str(r) for r in allowed)} "
-                f"when streaming bulbul:v4-flash with codec '{opts.output_audio_codec}'"
+            raise APIError(
+                "Sarvam refuses this stream's sample rate",
+                kind="invalid_request",
+                detail=f"speech_sample_rate must be one of {', '.join(str(r) for r in allowed)} "
+                f"when streaming bulbul:v4-flash with codec '{opts.output_audio_codec}'",
             )
         if not url.rstrip("/").endswith("/v2"):
             url = f"{url.rstrip('/')}/v2"
@@ -285,14 +290,14 @@ _MESSAGE_STATUS_RE = re.compile(r"\s*(\d{3})\s*:")
 _CODE_STATUS_RE = re.compile(r"\s*\d{3}\s*")
 
 
-def _error_status_code(error_data: ErrorData) -> int | None:
+def _error_status_code(error_data: _ErrorData) -> int | None:
     """Extract the HTTP-equivalent status code from a Sarvam websocket error frame.
 
     Schema rejections carry ``code`` (e.g. 422, or the string ``"422"``). Others omit
     it and prefix the message instead, as in ``"400: Speaker '...' is not compatible
     with model bulbul:v4-flash"``. Returns None when neither form is present.
     """
-    code = error_data.code
+    code = error_data.get("code")
     if isinstance(code, bool):  # bool is an int subclass; never a status code
         return None
     if isinstance(code, int):
@@ -300,7 +305,7 @@ def _error_status_code(error_data: ErrorData) -> int | None:
     if isinstance(code, str) and _CODE_STATUS_RE.fullmatch(code):
         return int(code)
 
-    match = _MESSAGE_STATUS_RE.match(str(error_data.message))
+    match = _MESSAGE_STATUS_RE.match(str(error_data.get("message")))
     return int(match.group(1)) if match else None
 
 
@@ -442,150 +447,7 @@ class TTS(tts.TTS):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        # Maps id(ws) -> background keepalive task that pings the server while
-        # the connection sits idle in the pool. Sarvam closes idle connections
-        # after 60 s; pinging every 30 s keeps them alive for reuse.
-        self._ws_keepalive_tasks: dict[int, asyncio.Task[None]] = {}
-        self._tasks = utils.aio.TaskSet()
-        # ids of the sockets this TTS has opened and not yet closed
-        self._open_ws_ids: set[int] = set()
-        # ids of sockets that were open when update_options last changed a handshake
-        # option. The pool will not hand them out again but only closes them on its
-        # next acquisition, so a stream returning one closes it instead.
-        self._retired_ws: set[int] = set()
-
-        self._pool = utils.ConnectionPool[http.WebSocket](
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-            max_session_duration=3600,  # 1 hour
-            mark_refreshed_on_get=False,
-        )
-
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
-        session = self._ensure_session()
-        headers = {
-            "api-subscription-key": self._opts.api_key,
-            "User-Agent": USER_AGENT,
-            "Accept": "*/*",
-            "Accept-Encoding": "gzip, deflate, br",
-        }
-        # Add model parameter to URL like the client does
-        ws_url = _websocket_url(self._opts)
-
-        logger.info("Connecting to Sarvam TTS WebSocket")
-
-        ws = await session.ws_connect(
-            ws_url,
-            headers=headers,
-            # Send protocol-level WebSocket PING frames every
-            # ``_WS_HEARTBEAT_INTERVAL`` seconds. The transport handles the
-            # PONG accounting on its own and will close the connection
-            # locally if the server stops responding -- this is what
-            # actually keeps the TCP connection alive while it sits
-            # idle in the pool (no ``receive()`` call to auto-pong).
-            heartbeat=_WS_HEARTBEAT_INTERVAL,
-            conn_options=conn_options,
-        )
-
-        self._start_keepalive(ws)
-        self._open_ws_ids.add(id(ws))
-        return ws
-
-    async def _close_ws(self, ws: http.WebSocket) -> None:
-        await self._stop_keepalive(ws)
-        self._open_ws_ids.discard(id(ws))
-        self._retired_ws.discard(id(ws))
-        await ws.close()
-
-    def _start_keepalive(self, ws: http.WebSocket) -> None:
-        """Spawn a background task that keeps ``ws`` alive with periodic pings.
-
-        Idempotent: if a live keepalive task is already registered for ``ws``
-        the call is a no-op. Callers that need a fresh task must invoke
-        ``_stop_keepalive`` first.
-        """
-        if _KEEPALIVE_INTERVAL <= 0 or self._tasks.closed:
-            return
-        existing = self._ws_keepalive_tasks.get(id(ws))
-        if existing is not None and not existing.done():
-            return
-        task = self._tasks.spawn(self._keepalive_loop(ws), name="sarvam-tts-ws-keepalive")
-        self._ws_keepalive_tasks[id(ws)] = task
-
-    async def _stop_keepalive(self, ws: http.WebSocket) -> None:
-        """Cancel the keepalive task associated with ``ws`` (if any)."""
-        task = self._ws_keepalive_tasks.pop(id(ws), None)
-        if task is None or task.done():
-            return
-        task.cancel()
-        with contextlib.suppress(BaseException):
-            await task
-
-    async def _keepalive_loop(self, ws: http.WebSocket) -> None:
-        """Keep a pooled WebSocket alive while it sits idle.
-
-        This loop does two things in lockstep:
-
-        1. Actively calls ``ws.receive()`` so that the transport can process
-           server-initiated PONG frames (and any other messages). The transport
-           only resets its internal "PONG not received" timer when a PONG
-           is read via ``receive()`` -- without an active reader, the
-           protocol-level heartbeat will tear the connection down even
-           though the server is happily replying.
-
-        2. Sends a Sarvam-defined ``{"type": "ping"}`` JSON message
-           whenever ``receive()`` times out (i.e. nothing has come in for
-           ``_KEEPALIVE_INTERVAL`` seconds). This resets Sarvam's
-           server-side application idle timer (documented as 60 s).
-
-        A CLOSE message or receive error from the server, or any
-        write failure, evicts the connection from the pool so the next
-        checkout creates a fresh one instead of handing the dead one out.
-        """
-        try:
-            while not ws.closed:
-                try:
-                    msg = await ws.receive(timeout=_KEEPALIVE_INTERVAL)
-                except APITimeoutError:
-                    # No incoming message within the interval -- send our
-                    # app-level ping to reset Sarvam's idle timer.
-                    if ws.closed:
-                        return
-                    try:
-                        await ws.send_str(json.dumps({"type": "ping"}))
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as e:
-                        logger.debug(
-                            "Sarvam TTS keepalive ping failed; evicting connection from pool",
-                            extra={"error": str(e)},
-                        )
-                        with contextlib.suppress(Exception):
-                            self._pool.remove(ws)
-                        return
-                    continue
-                except APIConnectionError:
-                    msg = None
-
-                # A CLOSE or a receive error means the server tore the
-                # connection down -- evict and exit.
-                if msg is None or msg.type == http.WebSocketMessageType.CLOSE:
-                    logger.debug(
-                        "Sarvam TTS WebSocket closed while idle in pool; evicting connection",
-                        extra={
-                            "msg_type": "error" if msg is None else str(msg.type),
-                            "close_code": ws.close_code,
-                        },
-                    )
-                    with contextlib.suppress(Exception):
-                        self._pool.remove(ws)
-                    return
-                # Otherwise -- TEXT or BINARY -- discard. We are idle in the
-                # pool so any unsolicited TTS traffic from a previous request
-                # is no longer relevant. The act of receiving has already
-                # reset the heartbeat.
-        except asyncio.CancelledError:
-            pass
+        self._mux = _Pool(self)
 
     @property
     def model(self) -> str:
@@ -623,198 +485,155 @@ class TTS(tts.TTS):
     ) -> None:
         """Update TTS options with validation.
 
-        Changes land on a copy that is committed only after every model-dependent
-        limit validates against the resulting model. A rejected update therefore
-        leaves the live options untouched, and switching models cannot carry over
-        a speaker or a pitch/pace/loudness/temperature the new model refuses.
+        Changes land on a copy that is committed, with the text options, only after every
+        model-dependent limit validates against the resulting model. A rejected update
+        therefore changes nothing, and switching models cannot carry over a speaker or a
+        pitch/pace/loudness/temperature the new model refuses.
         """
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
-        opts = replace(self._opts)
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            opts = replace(self._opts)
 
-        if target_language_code is not None:
-            if not target_language_code.strip():
-                raise ValueError("Target language code cannot be empty")
-            opts.target_language_code = LanguageCode(target_language_code)
+            if target_language_code is not None:
+                if not target_language_code.strip():
+                    raise ValueError("Target language code cannot be empty")
+                opts.target_language_code = LanguageCode(target_language_code)
 
-        if model is not None:
-            if not model.strip():
-                raise ValueError("Model cannot be empty")
-            opts.model = model
+            if model is not None:
+                if not model.strip():
+                    raise ValueError("Model cannot be empty")
+                opts.model = model
 
-        if speaker is not None:
-            if not speaker.strip():
-                raise ValueError("Speaker cannot be empty")
-            opts.speaker = speaker
+            if speaker is not None:
+                if not speaker.strip():
+                    raise ValueError("Speaker cannot be empty")
+                opts.speaker = speaker
 
-        if pitch is not None:
-            opts.pitch = pitch
+            if pitch is not None:
+                opts.pitch = pitch
 
-        if pace is not None:
-            opts.pace = pace
+            if pace is not None:
+                opts.pace = pace
 
-        if loudness is not None:
-            opts.loudness = loudness
+            if loudness is not None:
+                opts.loudness = loudness
 
-        if temperature is not None:
-            opts.temperature = temperature
+            if temperature is not None:
+                opts.temperature = temperature
 
-        if output_audio_bitrate is not None:
-            if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
+            if output_audio_bitrate is not None:
+                if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
+                    raise ValueError(
+                        "output_audio_bitrate must be one of "
+                        f"{', '.join(sorted(ALLOWED_OUTPUT_AUDIO_BITRATES))}"
+                    )
+                opts.output_audio_bitrate = output_audio_bitrate
+
+            if min_buffer_size is not None:
+                if not 30 <= min_buffer_size <= 200:
+                    raise ValueError("min_buffer_size must be between 30 and 200")
+                opts.min_buffer_size = min_buffer_size
+
+            if max_chunk_length is not None:
+                if not 50 <= max_chunk_length <= 500:
+                    raise ValueError("max_chunk_length must be between 50 and 500")
+                opts.max_chunk_length = max_chunk_length
+
+            if enable_preprocessing is not None:
+                opts.enable_preprocessing = enable_preprocessing
+
+            if dict_id is not None:
+                opts.dict_id = dict_id
+
+            if enable_cached_responses is not None:
+                opts.enable_cached_responses = enable_cached_responses
+
+            if send_completion_event is not None:
+                opts.send_completion_event = send_completion_event
+
+            if output_audio_codec is not None:
+                if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
+                    raise ValueError(
+                        "output_audio_codec must be one of "
+                        f"{','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
+                    )
+                opts.output_audio_codec = output_audio_codec
+
+            # Re-check every model-dependent limit against the resulting model, not just
+            # the arguments this call passed: the v4-flash speaker catalogue and bounds
+            # are disjoint from v3's, so a bare model switch can invalidate stored values.
+            if opts.speaker is not None and not validate_model_speaker_compatibility(
+                opts.model, opts.speaker
+            ):
+                compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(opts.model, {}).get("all", [])
                 raise ValueError(
-                    "output_audio_bitrate must be one of "
-                    f"{', '.join(sorted(ALLOWED_OUTPUT_AUDIO_BITRATES))}"
+                    f"Speaker '{opts.speaker}' incompatible with {opts.model}. "
+                    f"Compatible speakers: {', '.join(compatible_speakers)}"
                 )
-            opts.output_audio_bitrate = output_audio_bitrate
+            _validate_param(opts.model, "pace", opts.pace)
+            _validate_param(opts.model, "loudness", opts.loudness)
+            _validate_param(opts.model, "temperature", opts.temperature)
+            opts.pitch = _clamp_pitch(opts.model, opts.pitch)
 
-        if min_buffer_size is not None:
-            if not 30 <= min_buffer_size <= 200:
-                raise ValueError("min_buffer_size must be between 30 and 200")
-            opts.min_buffer_size = min_buffer_size
-
-        if max_chunk_length is not None:
-            if not 50 <= max_chunk_length <= 500:
-                raise ValueError("max_chunk_length must be between 50 and 500")
-            opts.max_chunk_length = max_chunk_length
-
-        if enable_preprocessing is not None:
-            opts.enable_preprocessing = enable_preprocessing
-
-        if dict_id is not None:
-            opts.dict_id = dict_id
-
-        if enable_cached_responses is not None:
-            opts.enable_cached_responses = enable_cached_responses
-
-        if send_completion_event is not None:
-            opts.send_completion_event = send_completion_event
-
-        if output_audio_codec is not None:
-            if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
-                raise ValueError(
-                    "output_audio_codec must be one of "
-                    f"{','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
-                )
-            opts.output_audio_codec = output_audio_codec
-
-        # Re-check every model-dependent limit against the resulting model, not just
-        # the arguments this call passed: the v4-flash speaker catalogue and bounds
-        # are disjoint from v3's, so a bare model switch can invalidate stored values.
-        if opts.speaker is not None and not validate_model_speaker_compatibility(
-            opts.model, opts.speaker
-        ):
-            compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(opts.model, {}).get("all", [])
-            raise ValueError(
-                f"Speaker '{opts.speaker}' incompatible with {opts.model}. "
-                f"Compatible speakers: {', '.join(compatible_speakers)}"
-            )
-        _validate_param(opts.model, "pace", opts.pace)
-        _validate_param(opts.model, "loudness", opts.loudness)
-        _validate_param(opts.model, "temperature", opts.temperature)
-        opts.pitch = _clamp_pitch(opts.model, opts.pitch)
-
-        # model and send_completion_event are pinned in the handshake URL (and v4-flash
-        # is served on a different path), so a pooled socket would keep synthesising
-        # with the previous ones. Retire them; checked-out streams finish untouched.
-        reconnect = (opts.model, opts.send_completion_event) != (
-            self._opts.model,
-            self._opts.send_completion_event,
-        )
+        # a socket is configured once, when it opens: a change reaches the sockets opened next
+        changed = opts != self._opts
         self._opts = opts
-        if reconnect:
-            self._retired_ws.update(self._open_ws_ids)
-            self._pool.invalidate()
+        if changed:
+            self._mux.invalidate()
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions
     ) -> ChunkedStream:
         return ChunkedStream(
-            tts=self,
-            input_text=chunk.text,
-            conn_options=conn_options,
-            opts=replace(self._opts),
-            get_session=self._ensure_session,
+            tts=self, input_text=chunk.text, conn_options=conn_options, opts=replace(self._opts)
         )
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            tts=self,
-            conn_options=conn_options,
-            opts=replace(self._opts),
-            pool=self._pool,
-            options_for_connection=self._options_for_connection,
-            stop_keepalive=self._stop_keepalive,
-            return_ws=self._return_ws,
-        )
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
-    def _options_for_connection(self, stream_options: SarvamTTSOptions) -> SarvamTTSOptions:
-        return replace(
-            self._opts,
-            speech_sample_rate=stream_options.speech_sample_rate,
-            output_audio_codec=stream_options.output_audio_codec,
-        )
-
-    async def _return_ws(self, ws: http.WebSocket) -> None:
-        if id(ws) in self._retired_ws:
-            await self._close_ws(ws)
-        else:
-            self._start_keepalive(ws)
-
     def prewarm(self) -> None:
-        """Prewarm WebSocket connections."""
-        self._pool.prewarm()
+        self._mux.prewarm()
 
     async def aclose(self) -> None:
-        """Close all active streams and connections."""
         for stream in list(self._streams):
             await stream.aclose()
-
         self._streams.clear()
-        await self._pool.aclose()
-        await self._tasks.aclose()
+        await self._mux.aclose()
+
+
+class _Batch(TypedDict):
+    request_id: NotRequired[str | None]
+    audios: list[str]
+
+
+_BATCH = TypeAdapter(_Batch)
 
 
 class ChunkedStream(tts.ChunkedStream):
     def __init__(
-        self,
-        *,
-        tts: TTS,
-        input_text: str,
-        conn_options: APIConnectOptions,
-        opts: SarvamTTSOptions,
-        get_session: Callable[[], http.HttpSession],
+        self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions, opts: SarvamTTSOptions
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = opts
-        self._get_session = get_session
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        """Run the Sarvam.ai TTS request and emit audio via the output emitter."""
-        payload: dict[str, object] = {
-            "target_language_code": self._opts.target_language_code,
+        request: _Request = {
+            **_config(self._opts),
             "text": self._input_text,
-            "speaker": self._opts.speaker,
-            "pace": self._opts.pace,
-            "speech_sample_rate": self._opts.speech_sample_rate,
-            "model": self._opts.model,
             "output_audio_bitrate": self._opts.output_audio_bitrate,
             "min_buffer_size": self._opts.min_buffer_size,
             "max_chunk_length": self._opts.max_chunk_length,
-            "output_audio_codec": self._opts.output_audio_codec,
         }
-        payload.update(_model_extra_fields(self._opts))
-        headers = {
-            "api-subscription-key": self._opts.api_key,
-            "Content-Type": "application/json",
-            "User-Agent": USER_AGENT,
-        }
-        mime_type = _codec_to_mime_type(self._opts.output_audio_codec)
-        async with self._get_session().post(
+        async with self._tts._ensure_session().post(
             self._opts.base_url,
-            json=payload,
-            headers=headers,
+            json=request,
+            headers={
+                "api-subscription-key": self._opts.api_key,
+                "Content-Type": "application/json",
+                "User-Agent": USER_AGENT,
+            },
             conn_options=self._conn_options,
         ) as res:
             if res.status != 200:
@@ -825,366 +644,181 @@ class ChunkedStream(tts.ChunkedStream):
                     body=error_text,
                     detail=error_text,
                 )
-
-            response_json = TTSBatchResponse.model_validate(await res.json())
-            request_id = response_json.request_id
-            audios = response_json.audios
-            if not audios:
-                raise APIConnectionError("Sarvam TTS API response invalid: no audio data")
+            try:
+                batch = _BATCH.validate_python(await res.json())
+            except ValidationError as e:
+                raise APIError("Sarvam TTS sent an invalid response", kind="protocol") from e
+            if not batch["audios"]:
+                raise APIError("Sarvam TTS sent no audio", kind="protocol")
 
             output_emitter.initialize(
-                request_id=request_id or "unknown",
+                request_id=batch.get("request_id") or utils.shortuuid(),
                 sample_rate=self._tts.sample_rate,
                 num_channels=self._tts.num_channels,
-                mime_type=mime_type,
+                mime_type=_codec_to_mime_type(self._opts.output_audio_codec),
             )
-            # handle multiple audio chunks
-            for b64 in audios:
-                output_emitter.push(base64.b64decode(b64))
+            for audio in batch["audios"]:
+                output_emitter.push(base64.b64decode(audio))
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    """WebSocket-based streaming TTS for Sarvam.ai."""
+# Sarvam's text-to-speech socket: configured once, then each segment is its text and a flush,
+# answered in order with audio and a `final` event. Each message declares only the fields read.
 
-    def __init__(
-        self,
-        *,
-        tts: TTS,
-        conn_options: APIConnectOptions,
-        opts: SarvamTTSOptions,
-        pool: utils.ConnectionPool[http.WebSocket],
-        options_for_connection: Callable[[SarvamTTSOptions], SarvamTTSOptions],
-        stop_keepalive: Callable[[http.WebSocket], Awaitable[None]],
-        return_ws: Callable[[http.WebSocket], Awaitable[None]],
-    ) -> None:
+
+class _Data(TypedDict, total=False):
+    request_id: str | None
+
+
+class _AudioData(_Data, total=False):
+    audio: str
+
+
+class _EventData(_Data, total=False):
+    event_type: str | None
+
+
+class _ErrorData(_Data, total=False):
+    code: str | int | None
+    message: JsonValue
+
+
+class _Audio(TypedDict):
+    type: Literal["audio"]
+    data: NotRequired[_AudioData | None]
+    request_id: NotRequired[str | None]
+
+
+class _Event(TypedDict):
+    type: Literal["event"]
+    data: NotRequired[_EventData | None]
+    request_id: NotRequired[str | None]
+
+
+class _Events(TypedDict):
+    type: Literal["events"]
+    data: NotRequired[_EventData | None]
+    request_id: NotRequired[str | None]
+
+
+class _Error(TypedDict):
+    type: Literal["error"]
+    data: NotRequired[_ErrorData | None]
+    request_id: NotRequired[str | None]
+
+
+class _Errors(TypedDict):
+    type: Literal["errors"]
+    data: NotRequired[_ErrorData | None]
+    request_id: NotRequired[str | None]
+
+
+_Message = _Audio | _Event | _Events | _Error | _Errors
+
+
+class _ConfigMessage(TypedDict):
+    type: Literal["config"]
+    data: _Config
+
+
+class _TextData(TypedDict):
+    text: str
+
+
+class _Text(TypedDict):
+    type: Literal["text"]
+    data: _TextData
+
+
+class _Control(TypedDict):
+    type: Literal["flush", "ping"]
+
+
+_Command = _ConfigMessage | _Text | _Control
+
+
+class _Pool(tts.WebSocketMultiplexer[_Message, _Command]):
+    """Sarvam sockets, one stream at a time each, configured with the TTS's options when they
+    open and reused by the next stream."""
+
+    routed = False
+    keepalive = tts.Keepalive(every=_KEEPALIVE_INTERVAL, frame=_Control(type="ping"))
+    max_session_duration = 3600
+
+    def __init__(self, tts: TTS) -> None:
+        self._tts = tts
+
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        opts = self._tts._opts
+        return tts.WebSocketTarget(
+            _websocket_url(opts),
+            headers={"api-subscription-key": opts.api_key, "User-Agent": USER_AGENT},
+        )
+
+    def setup(self) -> _ConfigMessage:
+        opts = self._tts._opts
+        config = _config(opts)
+        if opts.model in _V3_PIPELINE_MODELS:
+            config["output_audio_bitrate"] = opts.output_audio_bitrate
+            config["min_buffer_size"] = opts.min_buffer_size
+            config["max_chunk_length"] = opts.max_chunk_length
+        return _ConfigMessage(type="config", data=config)
+
+
+class SynthesizeStream(tts.WebSocketStream[_Message, _Command]):
+    """A stream on a pooled Sarvam socket; its segments are answered in the order they went."""
+
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
-        self._opts = opts
-        self._pool = pool
-        self._options_for_connection = options_for_connection
-        self._stop_keepalive = stop_keepalive
-        self._return_ws = return_ws
+        self.multiplexer = tts._mux
+        self.mime_type = _codec_to_mime_type(tts._opts.output_audio_codec)
+        # the segments awaiting their audio, in the order they went
+        self._open = deque[str]()
 
-        # Connection state management
-        self._connection_state = ConnectionState.DISCONNECTED
-        self._session_id = id(self)
-        self._client_request_id: str | None = None
-        self._server_request_id: str | None = None
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> _Command | None:
+        match item:
+            case tts.SegmentStart():
+                self._open.append(item.segment_id)
+                return None
+            case tts.SegmentText():
+                return _Text(type="text", data=_TextData(text=item.chunk.text + " "))
+            case tts.SegmentEnd():
+                return _Control(type="flush")
+            case tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
 
-        # Task management for cleanup
-        self._send_task: asyncio.Task[None] | None = None
-        self._recv_task: asyncio.Task[None] | None = None
-        self._ws_conn: http.WebSocket | None = None
-
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
-        request_id = utils.shortuuid()
-        self._client_request_id = request_id
-        self._server_request_id = None
-        mime_type = _codec_to_mime_type(self._opts.output_audio_codec)
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._opts.speech_sample_rate,
-            num_channels=1,
-            mime_type=mime_type,
-            stream=True,
-            frame_size_ms=50,
-        )
-
-        async def _split_segments() -> None:
-            segment: utils.aio.Chan[str] | None = None
-            async for item in self.input:
-                if isinstance(item, tts.SpeechChunk):
-                    if segment is None:
-                        segment = utils.aio.Chan[str]()
-                        segments_ch.send_nowait(segment)
-                    segment.send_nowait(item.text + " ")
-                elif segment is not None:
-                    segment.close()
-                    segment = None
-
-            if segment is not None:
-                segment.close()
-
-            segments_ch.close()
-
-        async def _process_segments() -> None:
-            async for segment in segments_ch:
-                await self._run_ws(segment, output_emitter)
-
-        try:
-            async with utils.aio.TaskSet() as tasks:
-                await asyncio.gather(
-                    tasks.spawn(_split_segments()), tasks.spawn(_process_segments())
-                )
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError(f"TTS stream failed: {e}") from e
-        finally:
-            output_emitter.end_input()
-
-    async def _run_ws(self, segment: AsyncIterable[str], output_emitter: tts.AudioEmitter) -> None:
-        segment_id = utils.shortuuid()
-        output_emitter.start_segment(segment_id=segment_id)
-
-        logger.info(
-            "Starting TTS WebSocket session",
-            extra={**self._build_log_context(), "user-agent": USER_AGENT},
-        )
-
-        input_sent_event = asyncio.Event()
-
-        async def send_task(ws: http.WebSocket) -> None:
-            try:
-                data: dict[str, object] = {
-                    "target_language_code": self._opts.target_language_code,
-                    "speaker": self._opts.speaker,
-                    "pace": self._opts.pace,
-                    "model": self._opts.model,
-                    "speech_sample_rate": self._opts.speech_sample_rate,
-                    "output_audio_codec": self._opts.output_audio_codec,
-                }
-                data.update(_model_extra_fields(self._opts))
-                if self._opts.model in _V3_PIPELINE_MODELS:
-                    data["output_audio_bitrate"] = self._opts.output_audio_bitrate
-                    data["min_buffer_size"] = self._opts.min_buffer_size
-                    data["max_chunk_length"] = self._opts.max_chunk_length
-                config_msg = {"type": "config", "data": data}
-                logger.debug(
-                    "Sending TTS config",
-                    # carries speaker and dict_id, so it is tagged for redaction
-                    extra={**self._build_log_context(), "lk.pii.config": config_msg},
-                )
-                await ws.send_str(json.dumps(config_msg))
-                input_sent_event.set()
-
-                started = False
-                text_chunks_sent = 0
-                async for text in segment:
-                    if not started:
-                        self.mark_started()
-                        started = True
-                    text_msg = {"type": "text", "data": {"text": text}}
-                    await ws.send_str(json.dumps(text_msg))
-                    text_chunks_sent += 1
-
-                flush_msg = {"type": "flush"}
-                await ws.send_str(json.dumps(flush_msg))
-
-            except (APIConnectionError, APITimeoutError):
-                # The transport is dead -- almost always a stale pooled
-                # connection that the server already closed (60s idle
-                # timeout). Raise so the pool evicts it via the
-                # ``async with`` __aexit__; the framework will retry
-                # against a fresh connection. Real user interruptions
-                # propagate as ``CancelledError``, not this branch.
-                logger.debug(
-                    "Sarvam TTS WebSocket transport failed before send "
-                    "completed; pool will replace this connection",
-                    extra=self._build_log_context(),
-                )
-                raise
-            except Exception as e:
-                raise APIConnectionError(f"Send task failed: {e}") from e
-            finally:
-                input_sent_event.set()
-
-        async def recv_task(ws: http.WebSocket) -> None:
-            await input_sent_event.wait()
-            while True:
-                msg = await ws.receive(timeout=self._conn_options.read_timeout)
-
-                if msg.type == http.WebSocketMessageType.CLOSE:
-                    close_code = ws.close_code
-                    close_reason = msg.data
-                    is_expected_close = close_code in (1000, 1001, None)
-                    if not is_expected_close:
-                        raise ws.close_error("Sarvam TTS WebSocket closed with non-graceful status")
-                    logger.info(
-                        "WebSocket connection closed by server",
-                        extra={
-                            **self._build_log_context(),
-                            "close_code": close_code,
-                            "close_reason": close_reason,
-                        },
-                    )
-                    break
-
-                if msg.type == http.WebSocketMessageType.TEXT:
-                    success = await self._handle_websocket_message(msg.data, output_emitter)
-                    if not success:
-                        break
-
-        try:
-            async with self._pool.connection(conn_options=self._conn_options) as ws:
-                # Nothing suspends between the pool's get() and here, and every change to a
-                # handshake option invalidates the pool, so this socket was opened with the
-                # TTS's current model and completion setting. Adopt every model-coupled
-                # option at once: update_options validates them as one set, so taking only
-                # some could pair a model with a speaker or language it rejects. Sample
-                # rate and codec stay this stream's own, as the output emitter is already
-                # initialized from them.
-                self._opts = self._options_for_connection(self._opts)
-                # Pause the keepalive while this stream holds the socket so its pings don't
-                # interleave with config, text and flush frames. It was started by
-                # _connect_ws for a fresh socket, or by the stream that last returned it.
-                await self._stop_keepalive(ws)
-
-                self._ws_conn = ws
-                self._connection_state = ConnectionState.CONNECTED
-
-                logger.info("WebSocket connected successfully", extra=self._build_log_context())
-
+    def on_message(self, message: _Message) -> None:
+        data = message.get("data") or {}
+        request_id = message.get("request_id") or data.get("request_id")
+        if request_id and request_id != self.request_id:
+            self.report(tts.ProviderRequestId(request_id))
+        segment = self._open[0] if self._open else ""
+        if message["type"] == "audio":
+            if audio := (message.get("data") or {}).get("audio"):
                 try:
-                    async with utils.aio.TaskSet() as tasks:
-                        self._send_task = tasks.spawn(send_task(ws))
-                        self._recv_task = tasks.spawn(recv_task(ws))
-                        await asyncio.gather(self._send_task, self._recv_task)
-                    logger.info(
-                        "WebSocket session completed successfully",
-                        extra=self._build_log_context(),
-                    )
-                finally:
-                    input_sent_event.set()
-                    self._send_task = None
-                    self._recv_task = None
-
-                # Only reached when the session completed cleanly; on an exception the
-                # pool removes the socket and closes it with its next drain. A socket that
-                # update_options retired meanwhile would otherwise stay open until the
-                # pool's next acquisition, which may not come, so close it now.
-                await self._return_ws(ws)
-
-        except APIError:
-            self._connection_state = ConnectionState.FAILED
-            raise
-        except Exception as e:
-            self._connection_state = ConnectionState.FAILED
-            raise APIConnectionError(f"TTS WebSocket session failed: {e}") from e
-        finally:
-            self._connection_state = ConnectionState.DISCONNECTED
-            self._ws_conn = None
-
-    async def _handle_websocket_message(
-        self, msg_data: str | bytes, output_emitter: tts.AudioEmitter
-    ) -> bool:
-        """Handle WebSocket message with proper error handling.
-
-        Returns:
-            True if processing should continue, False if stream should end
-        """
-        try:
-            resp = TTS_MESSAGE.validate_json(msg_data)
-            msg_type = resp.type
-            self._maybe_set_server_request_id(message_request_id(resp))
-            if self._server_request_id:
-                # Expose the server-assigned request id on the tts_request_run span so
-                # users can correlate traces with Sarvam's logs for debugging. Deduped
-                # internally, so calling on every message is fine.
-                output_emitter.provider_request_id(self._server_request_id)
-
-            if not msg_type:
-                logger.warning(
-                    "Received message without type field",
-                    extra={**self._build_log_context(), "lk.pii.data": resp},
-                )
-                return True
-
-            # logger.debug(f"Processing message type: {msg_type}", extra=self._build_log_context())
-
-            if isinstance(resp, AudioMessage):
-                return await self._handle_audio_message(resp, output_emitter)
-            elif isinstance(resp, ErrorMessage):
-                await self._handle_error_message(resp)
-                return False  # Stop processing on error
-            elif isinstance(resp, EventMessage):
-                return await self._handle_event_message(resp, output_emitter)
-            else:
-                logger.debug(f"Unknown message type: {msg_type}", extra=self._build_log_context())
-                return True
-
-        except ValidationError as e:
-            if any(error["type"] != "json_invalid" for error in e.errors()):
-                raise APIError(
-                    "Sarvam TTS sent an invalid event", kind="protocol", detail=str(msg_data)
-                ) from e
-            logger.warning(
-                f"Invalid JSON in WebSocket message: {e}",
-                extra={**self._build_log_context(), "lk.pii.raw_data": msg_data[:200]},
-            )
-            return True  # Continue processing
-        except APIError:
-            # Preserve provider-originated status/body/kind metadata.
-            raise
-        except Exception as e:
-            raise APIError(
-                "Sarvam TTS message processing error",
-                kind="protocol",
-                body={"raw_message": msg_data},
-                detail=str(msg_data),
-            ) from e
-
-    async def _handle_audio_message(
-        self, resp: AudioMessage, output_emitter: tts.AudioEmitter
-    ) -> bool:
-        audio_data = resp.data.audio if resp.data is not None else ""
-        if not audio_data:
-            return True
-        try:
-            audio_bytes = base64.b64decode(audio_data, validate=True)
-        except binascii.Error as e:
-            raise APIError("Sarvam TTS sent malformed audio", kind="protocol") from e
-        output_emitter.push(audio_bytes)
-        return True
-
-    async def _handle_error_message(self, resp: ErrorMessage) -> None:
-        """Handle error messages from the API."""
-        error_data = resp.data or ErrorData()
-        error_msg = None if error_data.message is None else str(error_data.message)
-        error_code = _error_status_code(error_data)
-
-        if error_code is None:
-            # an error frame without a status refused the request
-            raise APIError("TTS API error from Sarvam", kind="invalid_request", detail=error_msg)
-        raise APIStatusError(
-            f"TTS API error from Sarvam (status {error_code})",
-            status_code=error_code,
-            detail=error_msg,
-            request_id=error_data.request_id,
-        )
-
-    async def _handle_event_message(
-        self, resp: EventMessage, output_emitter: tts.AudioEmitter
-    ) -> bool:
-        """Handle event messages from the API."""
-        event_data = resp.data
-        if event_data is None:
-            logger.debug("Received event without data", extra=self._build_log_context())
-            return True
-        event_type = event_data.event_type
-        self._maybe_set_server_request_id(event_data.request_id)
-
-        if event_type == "final":
-            logger.debug("Generation complete event received", extra=self._build_log_context())
-            output_emitter.end_input()
-            return False  # Stop processing
+                    decoded = base64.b64decode(audio, validate=True)
+                except binascii.Error as e:
+                    raise APIError("Sarvam TTS sent malformed audio", kind="protocol") from e
+                self.report(tts.SegmentAudio(segment, decoded))
+        elif message["type"] == "event" or message["type"] == "events":
+            if (message.get("data") or {}).get("event_type") == "final" and self._open:
+                self.report(tts.SegmentDone(self._open.popleft()))
+        elif message["type"] == "error" or message["type"] == "errors":
+            raise _error(message.get("data") or {})
         else:
-            logger.debug(f"Unknown event type: {event_type}", extra=self._build_log_context())
-            return True
+            assert_never(message)
 
-    def _build_log_context(self) -> dict[str, object]:
-        """Build consistent logging context."""
-        return {
-            "session_id": self._session_id,
-            "connection_state": self._connection_state.value,
-            "model": self._opts.model,
-            "speaker": self._opts.speaker,
-            "client_request_id": self._client_request_id,
-            "server_request_id": self._server_request_id,
-        }
 
-    def _maybe_set_server_request_id(self, request_id: object) -> None:
-        """Capture server-assigned request_id once it is available."""
-        if self._server_request_id is None and request_id:
-            self._server_request_id = str(request_id)
+def _error(error_data: _ErrorData) -> APIError:
+    message = error_data.get("message")
+    detail = None if message is None else str(message)
+    if (status := _error_status_code(error_data)) is None:
+        # an error frame without a status refused the request
+        return APIError("TTS API error from Sarvam", kind="invalid_request", detail=detail)
+    return APIStatusError(
+        f"TTS API error from Sarvam (status {status})",
+        status_code=status,
+        detail=detail,
+        request_id=error_data.get("request_id"),
+    )

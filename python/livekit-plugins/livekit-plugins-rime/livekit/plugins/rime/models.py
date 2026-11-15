@@ -9,6 +9,12 @@ MODEL_MIST_V3 = "mistv3"
 DefaultMistVoice = "cove"
 DefaultCodaVoice = "lyra"
 
+# the WebSocket v1 endpoint of each model that streams; mistv2 synthesizes over HTTP only
+WEBSOCKET_URLS: dict[str, str] = {
+    MODEL_CODA: "wss://coda.api.rime.ai/ws",
+    MODEL_MIST_V3: "wss://mist.api.rime.ai/ws",
+}
+
 
 def is_mist_model(model: str) -> bool:
     return model.startswith("mist")
@@ -16,7 +22,3 @@ def is_mist_model(model: str) -> bool:
 
 def supports_time_scale_factor(model: str) -> bool:
     return model != MODEL_MIST_V2
-
-
-def supports_reduce_latency(model: str) -> bool:
-    return model == MODEL_MIST_V2

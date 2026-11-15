@@ -33,6 +33,8 @@ class Transcript(TypedDict):
 
 class Finished(TypedDict):
     type: Literal["finished"]
+    # open: the provider adds reasons; the plugin reads the ones it knows
+    reason: NotRequired[str]
 
 
 SttMessage = Annotated[Transcript | Finished, Field(discriminator="type")]
@@ -72,6 +74,8 @@ class LoopbackSttStream(stt.WebSocketStream[SttMessage, SttCommand]):
 
     def on_message(self, message: Transcript | Finished) -> None:
         if message["type"] == "finished":
+            if message.get("reason") == "error":
+                raise APIError("the provider failed the session", kind="server")
             self.report(stt.SessionFinished())
         elif message["type"] == "transcript":
             self.report(

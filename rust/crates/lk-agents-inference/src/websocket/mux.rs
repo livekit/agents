@@ -3,21 +3,21 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use lk_agents_abi::errors::{ApiError, ProviderError, Timeout};
+use lk_agents_abi::errors::{ApiError, ErrorKind, ProviderError, Timeout};
 use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::utils::websocket::{
-    WebSocketHost, WebSocketMuxHost, WebSocketMuxOptions, WsFrame,
+    CANCELLED_ANSWER_WAIT, WebSocketHost, WebSocketMuxHost, WebSocketMuxOptions, WsFrame,
 };
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, Ts};
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::owned::Background;
+use lk_agents_net::owned::{Background, Owned};
 use lk_agents_net::signal;
 use lk_agents_net::task::TaskSet;
 use lk_agents_net::transport::{TransportError, WsReceiver, WsSender};
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
-use super::executor::{options, ready_by, seconds};
+use super::executor::{options, ready_by};
 use super::liveness::{Beat, Liveness};
 use super::{Inbound, Transports, close_by, lost, open_direct, recv_heard};
 
@@ -48,10 +48,20 @@ struct Socket {
     state: signal::Cell<State>,
     /// The provider's id for the socket, from its handshake.
     request_id: Option<String>,
-    /// How often a stream on it keeps its open contexts alive.
-    context_keepalive: Option<Duration>,
-    /// Bumped when a stream takes or leaves it, so its reader rechecks its idle close.
+    /// Bumped when a stream takes or leaves it, or its cancel changes, so its reader rechecks its
+    /// timers.
     used: signal::Shared<u64>,
+    /// The contexts a stream that left mid-answer cancelled, and when the provider must have
+    /// ended them for the socket to be reused.
+    cancelling: Mutex<Option<Cancelling>>,
+}
+
+/// A stream left an unrouted socket mid-answer: it is reused once the provider ended each
+/// cancelled context, by `until`, else closed.
+#[derive(Debug, Clone)]
+struct Cancelling {
+    contexts: std::collections::BTreeSet<String>,
+    until: Ts,
 }
 
 impl Socket {
@@ -100,6 +110,20 @@ struct Sockets {
 /// `_core.WebSocketMux`: the shared sockets of a multiplexing provider, connected on demand.
 pub struct Mux(Arc<Shared>);
 
+/// The pool slot is owned while readiness is awaited, before a context can own it.
+struct Acquisition {
+    mux: Arc<Shared>,
+    socket: Option<Arc<Socket>>,
+}
+
+impl Drop for Acquisition {
+    fn drop(&mut self) {
+        if let Some(socket) = self.socket.take() {
+            self.mux.released(&socket, false);
+        }
+    }
+}
+
 impl Mux {
     pub fn new(
         host: Arc<dyn WebSocketMuxHost>,
@@ -145,6 +169,8 @@ pub(super) struct Shared {
     idle_timeout: Option<Duration>,
     keep_warm: bool,
     routed: bool,
+    reuses_sockets: bool,
+    reads_cancel_end: bool,
     env: ProcessEnv,
     transports: Transports,
     /// Changed when a socket opens, frees room or closes: a stream at the cap waits on it.
@@ -174,6 +200,8 @@ impl Shared {
                 .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok()),
             keep_warm: options.keep_warm,
             routed: options.routed,
+            reuses_sockets: options.reuses_sockets,
+            reads_cancel_end: options.reads_cancel_end,
             env,
             transports,
             sockets: signal::Shared::new(Sockets::default()),
@@ -184,6 +212,16 @@ impl Shared {
 
     fn clock(&self) -> &dyn Clock {
         self.env.clock.as_ref()
+    }
+
+    fn admit(&self) -> Result<(), ApiError> {
+        if self.sockets.with(|sockets| sockets.closed) {
+            return Err(ApiError::new(
+                ErrorKind::InvalidRequest,
+                "the shared socket pool is closed",
+            ));
+        }
+        Ok(())
     }
 
     fn background(&self) -> Result<Background, ApiError> {
@@ -203,20 +241,31 @@ impl Shared {
     ) -> Result<Context, ProviderError> {
         let background = self.background()?;
         let pool_deadline = conn_options.pool_deadline(self.clock().now());
+        // a socket whose cancel is being answered is free in a round trip: a stream waits for it
+        // rather than opening another
+        let may_connect = |sockets: &Sockets| {
+            sockets.open.len() < self.max_sockets as usize
+                && !sockets.open.values().any(|(socket, _)| socket.cancelling.lock().is_some())
+        };
         let socket = loop {
+            self.admit()?;
             {
-                let _connecting = self.connecting.lock().await;
+                let _connecting =
+                    lk_agents_abi::before(self.clock(), pool_deadline, self.connecting.lock())
+                        .await
+                        .map_err(|_| ApiError::timed_out(Timeout::Pool))?;
+                self.admit()?;
                 if let Some(socket) = self.take_room(&background) {
                     break socket;
                 }
-                if self.sockets.with(|s| s.open.len() < self.max_sockets as usize) {
+                if self.sockets.with(|sockets| may_connect(sockets)) {
                     break self.connect(cx, conn_options, &background, 1).await?;
                 }
             }
-            // at the cap: a socket frees room, or one closes
+            // at the cap, or a cancel being answered: a socket frees room, or one closes
             let room = self.sockets.wait_until(|sockets| {
                 let now = self.clock().now();
-                let free = sockets.open.len() < self.max_sockets as usize
+                let free = may_connect(sockets)
                     || sockets
                         .open
                         .values()
@@ -227,6 +276,8 @@ impl Shared {
                 return Err(ApiError::timed_out(Timeout::Pool).into());
             }
         };
+        let mut acquisition = Acquisition { mux: Arc::clone(self), socket: Some(socket) };
+        let socket = acquisition.socket.as_ref().expect("held until readiness settles");
         let ready_by = Some(ready_by(self.clock(), conn_options));
         let ready = socket.state.wait_map(|state| match state {
             State::Opening => None,
@@ -241,12 +292,25 @@ impl Shared {
             }
             Err(_) => Err(ApiError::timed_out(Timeout::Connect).into()),
         };
-        if let Err(error) = ready {
-            self.released(&socket, false);
-            return Err(error);
+        ready?;
+        if self.keep_warm {
+            // the standby: a socket with room for the next stream
+            Shared::prewarm(self);
         }
         let (tx, rx) = mpsc::unbounded_channel();
-        socket.routes.lock().insert(context_id.clone(), tx);
+        {
+            let mut routes = socket.routes.lock();
+            // The reader publishes its end before draining routes. Register under the same
+            // route lock, so a close between readiness and registration cannot lose its end.
+            if let Some(error) = socket.state.with(|state| match state {
+                State::Ended(error) => Some(error.clone()),
+                State::Opening | State::Ready => None,
+            }) {
+                return Err(error);
+            }
+            routes.insert(context_id.clone(), tx);
+        }
+        let socket = acquisition.socket.take().expect("the context takes the acquired slot");
         Ok(Context { mux: Arc::clone(self), socket, context_id, rx, stream })
     }
 
@@ -296,13 +360,25 @@ impl Shared {
         contexts: u32,
     ) -> Result<Arc<Socket>, ProviderError> {
         loop {
+            self.admit()?;
             let generation = self.sockets.with(|s| s.generation);
             let connection = self.host.connect(cx, *conn_options).await?;
+            let options = options(&connection, Duration::ZERO, None)?;
             let ready_by = ready_by(self.clock(), conn_options);
             let (sender, receiver) =
                 open_direct(&self.transports, &self.env, conn_options, &connection).await?;
-            let options = options(&connection, Duration::ZERO)?;
-            let context_keepalive = seconds(connection.context_keepalive, "context_keepalive")?;
+            let clock = Arc::clone(&self.env.clock);
+            let sender = Owned::new(
+                background,
+                sender,
+                Box::new(move |sender, deadline| {
+                    Box::pin(
+                        async move { close_by(clock.as_ref(), deadline, sender.as_ref()).await },
+                    )
+                }),
+            );
+            let keepalive_only_while_unused =
+                connection.keepalive.as_ref().is_some_and(|keepalive| keepalive.only_while_unused);
             let request_id = connection
                 .target
                 .request_id_header
@@ -324,8 +400,8 @@ impl Shared {
                         last_sent: Mutex::new(now),
                         state: ready,
                         request_id,
-                        context_keepalive,
                         used: signal::Shared::new(0),
+                        cancelling: Mutex::new(None),
                     });
                     let retire_at =
                         options.max_session_duration.map(|limit| now.saturating_add(limit));
@@ -337,9 +413,11 @@ impl Shared {
             });
             let Some(socket) = opened else {
                 // the options changed while it connected: it has the old ones
-                close_by(self.clock(), background.deadline(), sender.as_ref()).await;
+                sender.close().await;
                 continue;
             };
+            // The registered socket and its reader now own the close.
+            drop(sender.into_inner());
             let reader = Reader {
                 mux: Arc::downgrade(self),
                 host: Arc::clone(&self.host),
@@ -347,6 +425,7 @@ impl Shared {
                 state,
                 ready_by: connection.awaits_ready.then_some(ready_by),
                 keepalive: options.keepalive,
+                keepalive_only_while_unused,
                 ping: options.ping,
                 clock: Arc::clone(&self.env.clock),
                 opened_at: now,
@@ -383,9 +462,11 @@ impl Shared {
         })
     }
 
-    /// A context left `socket`; `reusable`: the next stream can start where it left the socket.
-    /// Once idle, a stale or spent socket closes.
-    fn released(&self, socket: &Arc<Socket>, reusable: bool) {
+    /// A context left `socket`; `reusable`: the next stream can start where it left the socket
+    /// (never, for a pool that does not reuse its sockets). Once idle, a stale or spent socket
+    /// closes, and a warm pool opens another.
+    fn released(self: &Arc<Self>, socket: &Arc<Socket>, reusable: bool) {
+        let reusable = reusable && self.reuses_sockets;
         let now = self.clock().now();
         let closing = self.sockets.modify(|sockets| {
             let generation = sockets.generation;
@@ -406,6 +487,36 @@ impl Shared {
             && let Ok(background) = self.background()
         {
             self.close_later(&background, socket);
+            if self.keep_warm {
+                Shared::prewarm(self);
+            }
+        }
+    }
+
+    /// Whether a stream holds `socket`.
+    fn in_use(&self, socket: u64) -> bool {
+        self.sockets
+            .with(|sockets| sockets.open.get(&socket).is_some_and(|(_, usage)| usage.contexts > 0))
+    }
+
+    /// The provider ended `context` on `socket`: once it ended every context a stream cancelled
+    /// there, the socket is free for the next stream.
+    fn context_ended(self: &Arc<Self>, socket: &Arc<Socket>, context: &str) {
+        let settled = {
+            let mut cancelling = socket.cancelling.lock();
+            let Some(pending) = cancelling.as_mut() else { return };
+            pending.contexts.remove(context);
+            pending.contexts.is_empty() && cancelling.take().is_some()
+        };
+        if settled {
+            self.released(socket, true);
+        }
+    }
+
+    /// The provider did not end the cancelled contexts in time: the socket is not reused.
+    fn cancel_unanswered(self: &Arc<Self>, socket: &Arc<Socket>) {
+        if socket.cancelling.lock().take().is_some() {
+            self.released(socket, false);
         }
     }
 
@@ -461,19 +572,49 @@ impl Shared {
         self.tasks.close();
         let deadline = self.clock().now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         for (socket, _) in open.into_values() {
-            close_by(self.clock(), deadline, socket.sender.as_ref()).await;
+            close_with_goodbye(self.host.as_ref(), self.clock(), deadline, &socket).await;
         }
         self.tasks.cancel_and_wait(self.clock()).await;
     }
 
-    /// Closes `socket` on the mux's tasks; its reader then ends.
+    /// Closes `socket` on the mux's tasks, its goodbye first; its reader then ends.
     fn close_later(&self, background: &Background, socket: Arc<Socket>) {
         let clock = Arc::clone(&self.env.clock);
+        let host = Arc::clone(&self.host);
         let deadline = background.deadline();
         background.cleanup("socket mux close", async move {
-            close_by(clock.as_ref(), deadline, socket.sender.as_ref()).await
+            close_with_goodbye(host.as_ref(), clock.as_ref(), deadline, &socket).await
         });
     }
+}
+
+/// Closes a socket the multiplexer is done with by `deadline`, its goodbye frames first while
+/// the socket is still open: the provider session ends on its own terms. A goodbye that fails
+/// or runs late leaves the close to end the session.
+async fn close_with_goodbye(
+    host: &dyn WebSocketMuxHost,
+    clock: &dyn Clock,
+    deadline: Ts,
+    socket: &Socket,
+) -> Closed {
+    if !socket.sender.is_closed() {
+        let goodbye = async {
+            for frame in host.goodbye(&Cx::NONE).await? {
+                socket.send(frame, clock).await.map_err(lost)?;
+            }
+            Ok::<(), ProviderError>(())
+        };
+        match lk_agents_abi::before(clock, Some(deadline), goodbye).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                log::debug!(target: lk_agents_abi::LOG_TARGET, "a shared socket's goodbye failed: {error}");
+            }
+            Err(_) => {
+                log::debug!(target: lk_agents_abi::LOG_TARGET, "a shared socket's goodbye ran out of time");
+            }
+        }
+    }
+    close_by(clock, deadline, socket.sender.as_ref()).await
 }
 
 /// A shared socket's reader: each frame to its context (routed by the multiplexer, or straight
@@ -486,7 +627,9 @@ struct Reader {
     state: signal::Producer<State>,
     /// When the provider must have said it is ready.
     ready_by: Option<Ts>,
-    keepalive: Option<(Duration, super::connection::Keepalive)>,
+    keepalive: Option<(Duration, WsFrame)>,
+    /// The keepalive goes only while no stream holds the socket.
+    keepalive_only_while_unused: bool,
     ping: Option<Duration>,
     clock: Arc<dyn Clock>,
     opened_at: Ts,
@@ -494,7 +637,18 @@ struct Reader {
 
 impl Reader {
     async fn run(self, mut receiver: Box<dyn WsReceiver>) {
-        let Reader { mux, host, socket, state, ready_by, keepalive, ping, clock, opened_at } = self;
+        let Reader {
+            mux,
+            host,
+            socket,
+            state,
+            ready_by,
+            keepalive,
+            keepalive_only_while_unused,
+            ping,
+            clock,
+            opened_at,
+        } = self;
         let clock = clock.as_ref();
         let routed = mux.upgrade().is_none_or(|mux| mux.routed);
         let liveness = ping.map(|interval| Mutex::new(Liveness::new(interval, clock.now())));
@@ -503,18 +657,20 @@ impl Reader {
                 liveness.lock().heard();
             }
         };
-        let keepalive = keepalive.and_then(|(interval, keepalive)| match keepalive {
-            super::connection::Keepalive::Frame(frame) => Some((interval, frame)),
-            super::connection::Keepalive::Contexts => None,
-        });
+        // the pool closed it (idle): its goodbye goes before the close
+        let mut closed_by_pool = false;
         let end: Routed = loop {
             let ready = state.with(|state| matches!(state, State::Ready));
+            let used = socket.used.with(|n| *n);
+            let in_use = keepalive_only_while_unused
+                && mux.upgrade().is_some_and(|mux| mux.in_use(socket.id));
             let keepalive_at = keepalive
                 .as_ref()
+                .filter(|_| !in_use)
                 .map(|(interval, _)| socket.last_sent.lock().saturating_add(*interval));
             let ping_at = liveness.as_ref().map(|liveness| liveness.lock().wake_at());
             let idle_at = mux.upgrade().and_then(|mux| mux.idle_close_at(socket.id));
-            let used = socket.used.with(|n| *n);
+            let cancel_until = socket.cancelling.lock().as_ref().map(|pending| pending.until);
             tokio::select! {
                 biased;
                 inbound = recv_heard(receiver.as_mut(), &heard) => match inbound {
@@ -530,6 +686,11 @@ impl Reader {
                             Ok(route) => {
                                 if route.ready && !ready {
                                     state.set(State::Ready);
+                                }
+                                if let Some(ended) = &route.ended_context
+                                    && let Some(mux) = mux.upgrade()
+                                {
+                                    mux.context_ended(&socket, ended);
                                 }
                                 let target = route.context.and_then(|context| {
                                     socket.routes.lock().get(&context).cloned()
@@ -575,7 +736,13 @@ impl Reader {
                 () = crate::wait_for_deadline(clock, idle_at) => {
                     let mux = mux.upgrade();
                     if mux.is_some_and(|mux| mux.close_if_idle(socket.id, clock.now())) {
+                        closed_by_pool = true;
                         break Ok(Inbound::Closed { code: None, reason: None });
+                    }
+                }
+                () = crate::wait_for_deadline(clock, cancel_until) => {
+                    if let Some(mux) = mux.upgrade() {
+                        mux.cancel_unanswered(&socket);
                     }
                 }
                 () = socket.used.wait_until(|n| (*n != used).then_some(())) => {}
@@ -599,7 +766,11 @@ impl Reader {
             let _ = route.send(end.clone());
         }
         let deadline = clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        close_by(clock, deadline, socket.sender.as_ref()).await;
+        if closed_by_pool {
+            close_with_goodbye(host.as_ref(), clock, deadline, &socket).await;
+        } else {
+            close_by(clock, deadline, socket.sender.as_ref()).await;
+        }
     }
 }
 
@@ -627,11 +798,6 @@ impl Context {
         self.socket.request_id.clone()
     }
 
-    /// How often the stream keeps its open contexts alive.
-    pub(super) fn context_keepalive(&self) -> Option<Duration> {
-        self.socket.context_keepalive
-    }
-
     /// The context's view of the socket: its sends keep the keepalive quiet, and its close
     /// leaves the socket open for the other streams.
     pub(super) fn sender(&self) -> Arc<dyn WsSender> {
@@ -643,31 +809,71 @@ impl Context {
         self.rx.recv().await.unwrap_or(Ok(Inbound::Closed { code: None, reason: None }))
     }
 
-    /// Leaves the socket by `deadline`. A routed context the provider did not finish is ended
-    /// with the stream's frames first; an unrouted socket a stream left unfinished is not
-    /// reused, since its late frames would reach the next stream.
+    /// Leaves the socket by `deadline`. A context the provider did not finish is ended with the
+    /// stream's frames first: a routed socket is free at once; an unrouted one, whose late frames
+    /// would reach the next stream, is reused only once the provider ended every context
+    /// cancelled (with `reads_cancel_end`), else closed.
     pub(super) async fn release(self, finished: bool, deadline: Ts) -> Closed {
         self.socket.routes.lock().remove(&self.context_id);
-        let mut closed = Closed::Clean;
-        if self.mux.routed && !finished && !self.socket.sender.is_closed() {
-            let clock = self.mux.clock();
-            let close = async {
-                for frame in self.stream.close_context(&Cx::NONE).await? {
-                    self.socket.send(frame, clock).await.map_err(lost)?;
-                }
-                Ok::<(), ProviderError>(())
-            };
-            closed = match lk_agents_abi::before(clock, Some(deadline), close).await {
-                Ok(Ok(())) => Closed::Clean,
-                Ok(Err(error)) => {
-                    log::debug!(target: lk_agents_abi::LOG_TARGET,
-                        "closing a multiplexed context failed: {error}");
-                    Closed::Failed
-                }
-                Err(_) => Closed::TimedOut,
-            };
+        let mux = &self.mux;
+        let cancels = mux.routed || mux.reads_cancel_end;
+        if finished || !cancels || self.socket.sender.is_closed() {
+            mux.released(&self.socket, mux.routed || finished);
+            return Closed::Clean;
         }
-        self.mux.released(&self.socket, self.mux.routed || finished);
+        let clock = mux.clock();
+        let socket = &self.socket;
+        let failed = |error: ProviderError| {
+            log::debug!(target: lk_agents_abi::LOG_TARGET,
+                "closing a multiplexed context failed: {error}");
+            Closed::Failed
+        };
+        let cancel = match lk_agents_abi::before(
+            clock,
+            Some(deadline),
+            self.stream.close_context(&Cx::NONE),
+        )
+        .await
+        {
+            Ok(Ok(cancel)) => cancel,
+            Ok(Err(error)) => {
+                let closed = failed(error);
+                mux.released(socket, mux.routed);
+                return closed;
+            }
+            Err(_) => {
+                mux.released(socket, mux.routed);
+                return Closed::TimedOut;
+            }
+        };
+        let awaits_end = !mux.routed && !cancel.frames.is_empty();
+        if awaits_end {
+            // armed before the frames go, so an end answered at once is read
+            let until = clock.now().saturating_add(CANCELLED_ANSWER_WAIT);
+            let contexts = cancel.contexts.into_iter().collect();
+            *socket.cancelling.lock() = Some(Cancelling { contexts, until });
+            socket.used.modify(|n| *n += 1);
+        }
+        let send = async {
+            for frame in cancel.frames {
+                socket.send(frame, clock).await.map_err(lost)?;
+            }
+            Ok::<(), ProviderError>(())
+        };
+        let closed = match lk_agents_abi::before(clock, Some(deadline), send).await {
+            Ok(Ok(())) => Closed::Clean,
+            Ok(Err(error)) => failed(error),
+            Err(_) => Closed::TimedOut,
+        };
+        if awaits_end {
+            // held until the provider ends the cancelled contexts or its wait runs out; a cancel
+            // that did not go out is never answered
+            if closed != Closed::Clean {
+                mux.cancel_unanswered(socket);
+            }
+            return closed;
+        }
+        mux.released(socket, mux.routed);
         closed
     }
 }

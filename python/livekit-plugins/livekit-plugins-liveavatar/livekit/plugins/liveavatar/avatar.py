@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import asyncio
 import base64
-import contextlib
 import os
 import uuid
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, Literal, Required, TypeVar
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue
 from typing_extensions import TypedDict
 
 import livekit.rtc as rtc
@@ -18,14 +17,19 @@ from livekit.agents import (
     NOT_GIVEN,
     APIConnectOptions,
     APIError,
-    APITimeoutError,
     NotGivenOr,
     http,
-    utils,
 )
 from livekit.agents.utils import is_given
 from livekit.agents.utils.media import AudioConverter
-from livekit.agents.voice.avatar import AudioSegmentEnd, AvatarStart, ForwardingAvatarSession
+from livekit.agents.voice.avatar import (
+    AudioSegmentEnd,
+    AvatarStart,
+    AvatarWebSocket,
+    ForwardingAvatarSession,
+    Keepalive,
+    WebSocketTarget,
+)
 from livekit.agents.voice.events import AgentStateChangedEvent
 
 from .log import logger
@@ -71,7 +75,7 @@ _AnswerT = TypeVar("_AnswerT", bound=BaseModel)
 
 
 class _ServerEvent(TypedDict, total=False):
-    type: Required[str]
+    type: str
     event_id: str
     source_event_id: str | None
     state: str
@@ -81,7 +85,36 @@ class _ServerEvent(TypedDict, total=False):
     warning: JsonValue
 
 
-_SERVER_EVENT = TypeAdapter(_ServerEvent)
+def _keep_alive() -> dict[str, JsonValue]:
+    return {"type": "session.keep_alive", "event_id": str(uuid.uuid4())}
+
+
+class _Events(AvatarWebSocket[_ServerEvent, dict[str, JsonValue]]):
+    """LiveAvatar's LITE-mode event socket: nothing goes before the session says it is
+    connected, then a keep-alive at once and after each quiet ``KEEP_ALIVE_INTERVAL``."""
+
+    awaits_ready = True
+
+    def __init__(self, ws_url: str, handle: Callable[[_ServerEvent], None]) -> None:
+        super().__init__("LiveAvatar")
+        self._ws_url = ws_url
+        self._handle = handle
+        self._connected = False
+        self.keepalive = Keepalive(every=KEEP_ALIVE_INTERVAL, frame=_keep_alive())
+
+    async def connect(self, conn_options: APIConnectOptions) -> WebSocketTarget:
+        return WebSocketTarget(self._ws_url)
+
+    def on_message(self, message: _ServerEvent) -> None:
+        if (
+            not self._connected
+            and message.get("type") == "session.state_updated"
+            and message.get("state") == "connected"
+        ):
+            self._connected = True
+            self.ready()
+            self.send(_keep_alive())
+        self._handle(message)
 
 
 @dataclass
@@ -134,9 +167,7 @@ class AvatarSession(ForwardingAvatarSession):
         self._video_quality = video_quality
 
         self._token: _Token | None = None
-        self._ws_url = ""
-        self._msg_ch = utils.aio.Chan[dict[str, JsonValue]]()
-        self._session_connected = asyncio.Event()
+        self._event_socket: _Events | None = None
         self._agent_session_listened: VoiceSession | None = None
         self._audio_playing = False
         self._utterances: deque[_Utterance] = deque()
@@ -169,9 +200,8 @@ class AvatarSession(ForwardingAvatarSession):
             {"Authorization": f"Bearer {token.session_token}"},
             _Answer[_Started],
         )
-        self._token, self._ws_url = token, started.data.ws_url
-        self._msg_ch = utils.aio.Chan[dict[str, JsonValue]]()
-        self._session_connected.clear()
+        self._token = token
+        self._event_socket = _Events(started.data.ws_url, self._handle_server_event)
         ctx.agent_session.on("agent_state_changed", self._on_agent_state_changed)
         self._agent_session_listened = ctx.agent_session
         logger.info(f"LiveAvatar session started: {token.session_id}")
@@ -202,63 +232,38 @@ class AvatarSession(ForwardingAvatarSession):
             return answer.model_validate_json(await response.text())
 
     def send_event(self, msg: dict[str, JsonValue]) -> None:
-        with contextlib.suppress(utils.aio.ChanClosed):
-            self._msg_ch.send_nowait(msg)
+        """Send a LITE-mode command once the session is connected; dropped before ``start()``
+        created the session and after ``aclose()``."""
+        if self._event_socket is not None:
+            self._event_socket.send(msg)
 
     def _on_agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
         if ev.new_state == "idle":
             self.send_event({"type": "agent.stop_listening", "event_id": str(uuid.uuid4())})
 
     async def aclose(self) -> None:
-        self._msg_ch.close()
         if (listened := self._agent_session_listened) is not None:
             self._agent_session_listened = None
             listened.off("agent_state_changed", self._on_agent_state_changed)
-        await super().aclose()
+        try:
+            if self._event_socket is not None:
+                await self._event_socket.aclose()
+        finally:
+            await super().aclose()
 
     async def receive(self) -> None:
-        ws = await http.http_session().ws_connect(self._ws_url, conn_options=self._conn_options)
-        ping_interval = utils.aio.interval(KEEP_ALIVE_INTERVAL)
-
-        async def keep_alive() -> None:
-            await self._session_connected.wait()
-            while True:
-                await ping_interval.tick()
-                self.send_event({"type": "session.keep_alive", "event_id": str(uuid.uuid4())})
-
-        async def send() -> None:
-            async for msg in self._msg_ch:
-                await ws.send_json(msg)
-                ping_interval.reset()
-
-        async def read() -> None:
-            while (msg := await ws.receive()).type is not http.WebSocketMessageType.CLOSE:
-                try:
-                    event = _SERVER_EVENT.validate_json(msg.data, strict=True)
-                except ValidationError as e:
-                    raise APIError(
-                        "LiveAvatar sent a malformed event", kind="protocol", detail=str(msg.data)
-                    ) from e
-                self._handle_server_event(event)
-            if self._is_sandbox:
+        assert self._event_socket is not None
+        try:
+            await self._event_socket.run(self._conn_options)
+        except APIError as e:
+            # the sandbox ends its sessions by closing the socket after a minute
+            if self._is_sandbox and e.kind == "connection":
                 raise APIError(
                     "The LiveAvatar Sandbox connection surpassed the 1 minute limit", kind="quota"
-                )
-            raise ws.close_error("LiveAvatar connection closed unexpectedly")
-
-        try:
-            async with utils.aio.TaskSet() as tasks:
-                await tasks.first_completed(read(), send(), keep_alive())
-        finally:
-            await ws.close()
+                ) from e
+            raise
 
     async def forward(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
-        if not self._session_connected.is_set():
-            try:
-                async with asyncio.timeout(self._conn_options.connect_timeout):
-                    await self._session_connected.wait()
-            except TimeoutError:
-                raise APITimeoutError("LiveAvatar session did not connect") from None
         if isinstance(frame, rtc.AudioFrame):
             if self._current_utterance is None:
                 self._current_utterance = _Utterance()
@@ -328,10 +333,7 @@ class AvatarSession(ForwardingAvatarSession):
     def _handle_server_event(self, event: _ServerEvent) -> None:
         event_type = event.get("type")
         if event_type == "session.state_updated":
-            state = event.get("state")
-            logger.debug(f"LiveAvatar session state: {state}")
-            if state == "connected":
-                self._session_connected.set()
+            logger.debug(f"LiveAvatar session state: {event.get('state')}")
         elif event_type == "agent.speak_interrupted":
             self._handle_agent_speak_interrupted(event)
         elif event_type == "agent.speak_ended":
@@ -382,7 +384,7 @@ class AvatarSession(ForwardingAvatarSession):
         )
 
     def _handle_agent_speak_interrupted(self, event: _ServerEvent) -> None:
-        if event["type"] == "agent.audio_buffer_cleared":
+        if event.get("type") == "agent.audio_buffer_cleared":
             source = event.get("source_event_id")
             if source is None:
                 return

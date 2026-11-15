@@ -184,8 +184,8 @@ class _AgentHooks:
 
     async def _core_function_tools_executed(
         self,
-        function_calls: list[llm.ChatItem],
-        function_call_outputs: list[llm.ChatItem],
+        function_calls: list[llm.FunctionCall],
+        function_call_outputs: list[llm.FunctionCallOutput],
     ) -> list[bool]:
         ev = FunctionToolsExecutedEvent(
             function_calls=list(function_calls),
@@ -384,7 +384,7 @@ def _on_item_added(self: VoiceSession[Any], wire: ItemAddedWire) -> None:
     # the same object as in `session.history`
     if (item := wire.host_item) is None:
         return
-    if item.type in ("message", "agent_handoff"):
+    if isinstance(item, llm.ChatMessage | llm.AgentHandoff):
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=item))
 
 

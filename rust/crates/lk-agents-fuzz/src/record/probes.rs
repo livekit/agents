@@ -28,6 +28,8 @@ pub enum Site {
     Node,
     /// A hook the host never answers (a hook has no future of the fake's to panic in).
     Hook,
+    /// A host audio output's `capture_frame` that never returns (`CaptureFault { hangs: true }`).
+    Capture,
 }
 
 impl Site {

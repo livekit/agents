@@ -1,3 +1,17 @@
+//! Coordinates persistence receipts for the session's conversation.
+//!
+//! Receives speech starts, delivered prefixes, step/turn outcomes and typed storage answers.
+//! Produces acquire/checkpoint/commit/abort effects; performs no database I/O. The storage
+//! layer acquires and reconciles the partition before the next model read is released.
+//! A save carries concrete conversation items, not an instruction to infer a user turn.
+//! Stable item IDs identify revisions; speech IDs correlate requests, while the store owns
+//! database runs and may bind overlapping speeches to one run.
+//!
+//! Checkpoints precede the continuation they protect. A commit waits for outstanding
+//! checkpoints; only its receipt marks the included edits saved. Floor release may precede
+//! tools and persistence: those outcomes still belong to their original speech. Close and
+//! task death must resolve outstanding operations rather than leave an orphaned waiter.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
@@ -12,6 +26,8 @@ use super::machine::StorageRequest;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::events::SessionEvent;
 use crate::generation::TurnOutcome;
+
+mod progress;
 
 // Storage receipts precede model reads and reply settlement.
 
@@ -95,6 +111,7 @@ pub(crate) struct StorageTurns {
     /// Each turn's message heard so far.
     progress: BTreeMap<u64, lk_agents_abi::ChatMessage>,
     progress_dirty: BTreeSet<SpeechId>,
+    conversation: progress::ConversationSaves,
 }
 
 impl StorageTurns {
@@ -104,6 +121,13 @@ impl StorageTurns {
 
     fn turn_of(&self, speech: SpeechId) -> Option<u64> {
         self.turns.iter().find(|(_, turn)| turn.speech == speech).map(|(n, _)| *n)
+    }
+
+    /// Progress and terminal snapshots share one session-wide submission order.
+    fn next_sequence(&mut self) -> u64 {
+        let sequence = self.next_checkpoint;
+        self.next_checkpoint = sequence.checked_add(1).expect("save sequences fit u64");
+        sequence
     }
 
     /// The speech has not reported how its turn ends.
@@ -176,12 +200,12 @@ impl VoiceDriver {
             return;
         }
         storage.progress_dirty.remove(&speech);
-        let checkpoint = storage.next_checkpoint;
-        let Some(checkpoints) = storage.running(speech) else {
+        if storage.running(speech).is_none() {
             return self.hand_on(speech, effect.into_iter().collect());
-        };
+        }
+        let checkpoint = storage.next_sequence();
+        let checkpoints = storage.running(speech).expect("the save is running");
         checkpoints.insert(checkpoint, effect);
-        storage.next_checkpoint = checkpoint.checked_add(1).expect("checkpoint ids fit u64");
         let history = self.checkpoint_history();
         self.record_effect(VoiceEffect::StorageCheckpoint {
             checkpoint,
@@ -210,29 +234,10 @@ impl VoiceDriver {
                 .filter(|item| !matches!(item, ChatItem::FunctionCallOutput(_)))
                 .map(|item| (item.clone(), Some(*speech)))
         });
-        let held = self.session.chat_ctx.projected(progress.chain(calls));
-        // An output lands as its commit stamps it: a cut turn's right after its call's group, any
-        // other once its step's results are handled, after everything stamped before.
-        let outputs = replies.into_iter().flat_map(|(speech, items)| {
-            let cut = self.activity.outliving_tools.contains(&speech);
-            let held = &held;
-            items.into_iter().filter_map(move |item| {
-                let ChatItem::FunctionCallOutput(mut output) = item else { return None };
-                if !held.iter().any(|h| h.id() == output.id) {
-                    output.created_at = if cut {
-                        crate::agent::call_group_end(held, &output.call_id)
-                            .unwrap_or(output.created_at)
-                    } else {
-                        output.created_at.max(self.step.wall())
-                    };
-                }
-                Some(ChatItem::FunctionCallOutput(output))
-            })
-        });
-        let outputs: Vec<ChatItem> = outputs.collect();
-        let mut history = held;
-        for output in outputs {
-            crate::agent::commit_by_instant(&mut history, output);
+        let mut history = self.session.chat_ctx.projected(progress.chain(calls));
+        let outputs = replies.into_iter().flat_map(|(_, items)| items);
+        for output in outputs.filter(|item| matches!(item, ChatItem::FunctionCallOutput(_))) {
+            lk_agents_abi::llm::chat_context::ordering::commit_by_instant(&mut history, output);
         }
         history
     }
@@ -353,8 +358,9 @@ impl VoiceDriver {
             turns.insert(n, Turn { speech, save });
             match asked {
                 Some(TurnSave::Commit) => {
+                    let sequence = self.session.storage.next_sequence();
                     let history = self.session.chat_ctx.items().cloned().collect();
-                    self.record_effect(VoiceEffect::StorageCommit { speech, history });
+                    self.record_effect(VoiceEffect::StorageCommit { speech, sequence, history });
                 }
                 Some(TurnSave::Abort) => self.record_effect(VoiceEffect::StorageAbort(speech)),
                 None => {}

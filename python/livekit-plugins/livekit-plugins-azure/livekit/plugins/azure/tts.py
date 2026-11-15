@@ -226,16 +226,20 @@ class TTS(tts.TTS):
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            if is_given(prosody):
+                prosody.validate()
+            if is_given(style):
+                style.validate()
+            if is_given(language):
+                language = LanguageCode(language)
         if is_given(voice):
             self._opts.voice = voice
         if is_given(language):
-            self._opts.language = LanguageCode(language)
+            self._opts.language = language
         if is_given(prosody):
-            prosody.validate()
             self._opts.prosody = prosody
         if is_given(style):
-            style.validate()
             self._opts.style = style
         if is_given(lexicon_uri):
             self._opts.lexicon_uri = lexicon_uri

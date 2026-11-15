@@ -1,6 +1,7 @@
 use crate::telemetry;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::{ApiError, HostError};
+use lk_agents_abi::llm::provider_format::tools::RawFunctionDescription;
 use lk_agents_abi::voice::rtc::{DisconnectReason, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
 use lk_agents_abi::voice::workflows::InstructionsArg;
 use lk_agents_abi::voice::workflows::warm_transfer::HoldMusic;
@@ -184,7 +185,7 @@ impl TransferRun {
     /// The briefing agent's three tools, as raw function schemas, each answered by
     /// [`call_tool`](Self::call_tool). All three are hidden while the briefing is entered:
     /// connecting then would cut the summary off.
-    pub fn tools(&self) -> Vec<BTreeMap<String, Value>> {
+    pub fn tools(&self) -> Vec<RawFunctionDescription> {
         transfer_tools()
     }
 
@@ -713,7 +714,7 @@ impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransf
     fn instructions(&self) -> String {
         self.0.instructions()
     }
-    fn tools(&self) -> Vec<BTreeMap<String, serde_json::Value>> {
+    fn tools(&self) -> Vec<RawFunctionDescription> {
         self.0.tools()
     }
 

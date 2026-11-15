@@ -42,6 +42,10 @@ class OpenAIProtocolModel(_core.OpenAIRealtimeModel, RealtimeModel):
     _provider_label: str | None = None
     _gateway: InferenceGateway | None = None
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _bindings.refuse_overrides(cls, ("session",), "session.llm_node")
+
     def __init__(
         self,
         *,

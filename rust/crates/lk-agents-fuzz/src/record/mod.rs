@@ -21,6 +21,8 @@ use crate::input::Input;
 
 mod probes;
 pub use probes::{Fault, Probe, Site, Wait};
+mod recognition;
+pub use recognition::{Recognised, Recognition, SttReport};
 mod resources;
 mod storage;
 pub use storage::{
@@ -668,6 +670,8 @@ pub struct Recording {
     breaches: Vec<(Observed, u32, Breach)>,
     /// Each failed attempt the framework reported to a fake provider, and its `recoverable`.
     provider_failed: Vec<(Observed, Kind, bool)>,
+    /// Each recogniser report and what its stream made of it.
+    recognition: Vec<Recognition>,
     /// Realtime audio the person heard, by generation (`Tag::generated`'s id) and milliseconds:
     /// what the speaker reported played of it, as each segment finished or was cut.
     heard_generations: Vec<(Observed, u32, u64, bool)>,

@@ -28,6 +28,8 @@ pub(crate) enum SegmentEffect {
     ExpectResponse,
     Progress,
     CompleteResponse,
+    /// The provider ended this segment while it waited for more text.
+    Expired(String),
 }
 
 /// Audio, words or usage a segment received before it played.
@@ -47,14 +49,9 @@ struct Segment {
     held: Vec<Held>,
 }
 
-/// Why a segment report breaks the protocol.
+/// A segment report that breaks the protocol: it names no segment open on this stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Refused {
-    /// It names no segment open on this stream.
-    Unknown,
-    /// A done before the segment's text ended.
-    Early,
-}
+pub(crate) struct Unknown;
 
 /// One attempt's segments, in order. The first is the one playing.
 #[derive(Debug, Default)]
@@ -115,22 +112,24 @@ impl SegmentMachine {
         Some(item)
     }
 
-    /// What the provider answered for a segment.
+    /// What the provider answered for a segment; `id` names the segment that takes the rest of
+    /// a segment's text when the provider ended it early.
     pub(crate) fn deliver(
         &mut self,
         output: SegmentOutput,
+        id: impl FnOnce() -> String,
         effects: &mut Vec<SegmentEffect>,
-    ) -> Result<(), Refused> {
+    ) -> Result<(), Unknown> {
         let (segment_id, held) = match output {
             SegmentOutput::Audio(audio) => (audio.segment_id, Held::Audio(audio.data)),
             SegmentOutput::Words(words) => (words.segment_id, Held::Words(words.words)),
             SegmentOutput::Usage(usage) => {
                 (usage.segment_id, Held::Usage(usage.usage, usage.characters_count))
             }
-            SegmentOutput::Done(done) => return self.done(&done.segment_id, effects),
+            SegmentOutput::Done(done) => return self.done(&done.segment_id, id, effects),
         };
         let head = self.playing.front().is_some_and(|s| s.id == segment_id);
-        let segment = self.segment(&segment_id).ok_or(Refused::Unknown)?;
+        let segment = self.segment(&segment_id).ok_or(Unknown)?;
         effects.push(SegmentEffect::Progress);
         match head {
             true => effects.push(played(held)),
@@ -144,7 +143,7 @@ impl SegmentMachine {
         let ended: Vec<String> =
             self.playing.iter().filter(|s| s.ended && !s.done).map(|s| s.id.clone()).collect();
         for segment_id in ended {
-            let _ = self.done(&segment_id, effects);
+            let _ = self.done(&segment_id, String::new, effects);
         }
     }
 
@@ -165,12 +164,22 @@ impl SegmentMachine {
         self.playing.iter_mut().find(|s| s.id == segment_id && !s.done)
     }
 
-    fn done(&mut self, segment_id: &str, effects: &mut Vec<SegmentEffect>) -> Result<(), Refused> {
-        let segment = self.segment(segment_id).ok_or(Refused::Unknown)?;
-        if !segment.ended {
-            return Err(Refused::Early);
-        }
+    /// The provider finished `segment_id`. One whose text had not ended was ended by the provider
+    /// while it waited for more (its context expired while the LLM was slow): it is done with what
+    /// it said, and the rest of its text opens a new segment, a new context.
+    fn done(
+        &mut self,
+        segment_id: &str,
+        id: impl FnOnce() -> String,
+        effects: &mut Vec<SegmentEffect>,
+    ) -> Result<(), Unknown> {
+        let segment = self.segment(segment_id).ok_or(Unknown)?;
+        let expired = !segment.ended;
         segment.done = true;
+        if expired {
+            effects.push(SegmentEffect::Expired(segment_id.to_owned()));
+            self.reopen(segment_id, id);
+        }
         while self.playing.front().is_some_and(|s| s.done) {
             self.playing.pop_front();
             effects.push(SegmentEffect::EndSegment);
@@ -183,6 +192,45 @@ impl SegmentMachine {
             effects.push(SegmentEffect::CompleteResponse);
         }
         Ok(())
+    }
+
+    /// Moves the text `expired` has yet to send to a new segment right after it: its queued
+    /// text, its end, and the text still to come if it is the open one. An end with no text
+    /// left to carry is dropped.
+    fn reopen(&mut self, expired: &str, id: impl FnOnce() -> String) {
+        let carried = |item: &SegmentInput| match item {
+            SegmentInput::Text(text) => text.segment_id == expired,
+            SegmentInput::Start(_) | SegmentInput::End(_) => false,
+        };
+        let Some(first) = self.queued.iter().position(carried) else {
+            self.queued.retain(
+                |item| !matches!(item, SegmentInput::End(end) if end.segment_id == expired),
+            );
+            if self.open.as_deref() == Some(expired) {
+                self.open = None;
+            }
+            return;
+        };
+        let segment_id = id();
+        for item in self.queued.iter_mut() {
+            match item {
+                SegmentInput::Text(SegmentText { segment_id: owner, .. })
+                | SegmentInput::End(SegmentEnd { segment_id: owner })
+                    if owner == expired =>
+                {
+                    owner.clone_from(&segment_id);
+                }
+                SegmentInput::Start(_) | SegmentInput::Text(_) | SegmentInput::End(_) => {}
+            }
+        }
+        self.queued
+            .insert(first, SegmentInput::Start(SegmentStart { segment_id: segment_id.clone() }));
+        if self.open.as_deref() == Some(expired) {
+            self.open = Some(segment_id.clone());
+        }
+        let at = self.playing.iter().position(|s| s.id == expired).map_or(0, |i| i + 1);
+        let segment = Segment { id: segment_id, ended: false, done: false, held: Vec::new() };
+        self.playing.insert(at, segment);
     }
 }
 
@@ -228,6 +276,10 @@ impl TtsSegments {
                 SegmentEffect::ExpectResponse => self.deadline.expect_response(),
                 SegmentEffect::Progress => self.deadline.progress(),
                 SegmentEffect::CompleteResponse => self.deadline.complete_response(),
+                SegmentEffect::Expired(id) => log::warn!(target: lk_agents_abi::LOG_TARGET,
+                    "{}: the provider ended segment {id} while the LLM was slow to send its next \
+                     text (its context expired); the rest of its text goes on a new context",
+                    self.label),
             }
         }
         Ok(out)
@@ -259,15 +311,11 @@ impl abi::TtsSegments for TtsSegments {
 
     fn deliver(&self, output: SegmentOutput) -> Result<(), SegmentError> {
         let shown = format!("{output:?}");
-        match self.run(|m, effects| m.deliver(output, effects))? {
+        match self.run(|m, effects| m.deliver(output, || crate::shortuuid(""), effects))? {
             Ok(()) => Ok(()),
-            Err(refused) => {
-                let why = match refused {
-                    Refused::Unknown => "names no open segment",
-                    Refused::Early => "ends a segment before its text ended",
-                };
+            Err(Unknown) => {
                 let message = format!("{} sent a message that breaks its protocol", self.label);
-                let error = ApiError::protocol(message, format!("{shown} {why}"));
+                let error = ApiError::protocol(message, format!("{shown} names no open segment"));
                 Err(SegmentError::Protocol(error.into()))
             }
         }

@@ -408,6 +408,12 @@ mod stt_end_resumes_pause {
                 text: UserText("uh".into()),
                 speaker: None,
             },
+            // the provider retracts the noise, then ends the speech
+            Input::SttFinal {
+                utterance: Ref::new(0),
+                text: UserText(String::new()),
+                speaker: None,
+            },
             Input::SttEnd { utterance: Ref::new(0) },
             Input::Advance { ms: Millis(5_000) },
         ]);

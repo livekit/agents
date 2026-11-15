@@ -913,6 +913,7 @@ impl Resolver<'_> {
             declared,
             boxed,
             self_events,
+            natives: self.native_classes(module, item, false, at)?,
         })
     }
 

@@ -42,7 +42,8 @@ mod tests {
                 outcome.case.inputs.iter().any(
                     |i| matches!(i, Input::SttFinal { text, .. } if !text.0.trim().is_empty()),
                 );
-            if names("VadEnd") == 0 || !worded {
+            // A turn the host started by hand is the host's to end, not the observers'.
+            if names("VadEnd") == 0 || !worded || names("StartUserTurn") > 0 {
                 continue;
             }
             closed += 1;

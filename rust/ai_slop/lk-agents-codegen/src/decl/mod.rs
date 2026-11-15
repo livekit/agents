@@ -895,6 +895,8 @@ pub enum Ty {
         /// `proxy(.., self_events)`: the events an `init` constructor's object emits, through a weak
         /// reference to it, filled by the binding and never crossing.
         self_events: bool,
+        /// The dotted native classes the host passes as themselves (`class(native = Trait)`).
+        natives: Vec<String>,
     },
     /// `Arc<dyn Trait>` of a `#[host(native)]` trait: an instance of one of the registered host
     /// `classes` (dotted) implementing it, as itself; any other host object is refused with

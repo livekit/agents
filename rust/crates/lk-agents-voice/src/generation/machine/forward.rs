@@ -112,6 +112,7 @@ impl TurnAccumulator {
                 }
                 if !heard.complete {
                     self.cut_short();
+                    self.after_cut = true;
                 }
                 TurnAccumulatorEffect::Read
             }

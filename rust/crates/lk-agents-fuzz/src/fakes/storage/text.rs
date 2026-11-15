@@ -155,10 +155,14 @@ impl Faults {
         plan
     }
 
-    async fn wait(&self, latency: Duration) {
-        if !latency.is_zero() {
-            self.clock.wait_until(self.clock.now().saturating_add(latency)).await;
+    /// Waits `latency` as the transport does: whether the answer came in time.
+    async fn wait(&self, latency: Duration) -> bool {
+        if latency.is_zero() {
+            return true;
         }
+        let (until, in_time) = super::answer_at(&*self.clock, latency);
+        self.clock.wait_until(until).await;
+        in_time
     }
 }
 
@@ -171,18 +175,24 @@ struct FaultyConnection {
 impl ThreadDbConnection for FaultyConnection {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         let plan = self.faults.plan(false);
-        self.faults.wait(plan.before).await;
+        if !self.faults.wait(plan.before).await {
+            return Err(StorageError::Unavailable("the operation's deadline passed".into()));
+        }
         if let Some(error) = plan.refused {
             return Err(error);
         }
         let rows = self.inner.query(statement).await;
-        self.faults.wait(plan.after).await;
+        if !self.faults.wait(plan.after).await {
+            return Err(StorageError::Uncertain(Unacknowledged::sent("the deadline passed")));
+        }
         rows
     }
 
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         let plan = self.faults.plan(true);
-        self.faults.wait(plan.before).await;
+        if !self.faults.wait(plan.before).await {
+            return Err(StorageError::Unavailable("the operation's deadline passed".into()));
+        }
         if let Some(error) = plan.refused {
             return Err(error);
         }
@@ -190,8 +200,7 @@ impl ThreadDbConnection for FaultyConnection {
             self.faults.dying.die_next_poll();
         }
         let result = self.inner.batch(statements).await;
-        self.faults.wait(plan.after).await;
-        if plan.answer_lost && result.is_ok() {
+        if !self.faults.wait(plan.after).await || plan.answer_lost && result.is_ok() {
             return Err(StorageError::Uncertain(Unacknowledged::sent("the answer was lost")));
         }
         result

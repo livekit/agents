@@ -30,3 +30,17 @@ def callback_signatures(session: VoiceSession[None]) -> None:
 
 def extended_events(session: llm.RealtimeSession[Literal["provider_event"]]) -> llm.RealtimeSession:
     return session
+
+
+class RelayingChain(stt.FallbackAdapter[Literal["member_event"]]):
+    """A chain that relays its members' own event: fails while ``stt.FallbackAdapter`` emits
+    only its availability event."""
+
+    def relay(self, payload: object) -> None:
+        self.emit("member_event", payload)
+        self.emit("stt_availability_changed", payload)
+        self.emit("unknown_event", payload)  # type: ignore[arg-type]
+
+
+def chain_events(chain: stt.FallbackAdapter) -> None:
+    assert_type(chain, stt.FallbackAdapter[Never])

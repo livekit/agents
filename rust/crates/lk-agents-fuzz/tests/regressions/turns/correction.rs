@@ -45,7 +45,7 @@ fn corrections(run: &Run) -> usize {
 
 /// A thread database that meets no fault: what the call saved is what the rule reads.
 fn saved() -> Option<StorageSetup> {
-    Some(StorageSetup { faults: false, outage: None, take_answer_ms: None })
+    Some(StorageSetup::default())
 }
 
 /// The text the thread saved each user message with.
@@ -55,8 +55,16 @@ fn saved_users(run: &Run) -> Vec<String> {
         .iter()
         .rev()
         .find_map(|(_, step)| match step {
-            StorageStep::Saved { user_texts, .. } => Some(
-                user_texts.iter().map(|(_, text)| text.clone()).filter(|t| !t.is_empty()).collect(),
+            StorageStep::Saved { items } => Some(
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        item.as_message()
+                            .filter(|m| m.role == Role::User)
+                            .and_then(|m| m.raw_text_content())
+                    })
+                    .filter(|text| !text.is_empty())
+                    .collect(),
             ),
             _ => None,
         })
@@ -216,6 +224,8 @@ fn a_final_only_utterance_after_the_turn_took_an_interim_is_a_new_turn() {
         Input::LlmText { chat: Ref::new(0), text: AgentText("For how many?".into()) },
         Input::LlmEnd { chat: Ref::new(0) },
         Input::Advance { ms: Millis(500) },
+        // the provider gave up on the interim's speech, then heard a new one
+        Input::SttEnd { utterance: Ref::new(0) },
         Input::SttStart { stt: Ref::new(0) },
         final_(1, "yes"),
         Input::SttEnd { utterance: Ref::new(1) },

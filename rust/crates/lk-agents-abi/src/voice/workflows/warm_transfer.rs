@@ -138,7 +138,7 @@ pub trait WarmTransfer: Sized + Send + Sync + 'static {
     #[host(getter)]
     fn instructions(&self) -> String;
     #[host(call)]
-    fn tools(&self) -> Vec<BTreeMap<String, serde_json::Value>>;
+    fn tools(&self) -> Vec<crate::llm::provider_format::tools::RawFunctionDescription>;
     #[host(await)]
     async fn run(
         &self,

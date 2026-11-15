@@ -483,13 +483,20 @@ class _InputText(TypedDict):
     text: str
 
 
-class _Speaking(TypedDict):
-    type: Literal[
-        "user_started_speaking",
-        "user_finished_speaking",
-        "assistant_started_speaking",
-        "assistant_finished_speaking",
-    ]
+class _UserStartedSpeaking(TypedDict):
+    type: Literal["user_started_speaking"]
+
+
+class _UserFinishedSpeaking(TypedDict):
+    type: Literal["user_finished_speaking"]
+
+
+class _AssistantStartedSpeaking(TypedDict):
+    type: Literal["assistant_started_speaking"]
+
+
+class _AssistantFinishedSpeaking(TypedDict):
+    type: Literal["assistant_finished_speaking"]
 
 
 class _ToolCall(TypedDict):
@@ -529,7 +536,10 @@ ServerMessage = Annotated[
     | _ConversationCreated
     | _AudioChunk
     | _InputText
-    | _Speaking
+    | _UserStartedSpeaking
+    | _UserFinishedSpeaking
+    | _AssistantStartedSpeaking
+    | _AssistantFinishedSpeaking
     | _ToolCall
     | _ToolCallInterrupted
     | _Error

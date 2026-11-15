@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Literal, NotRequired, TypedDict, assert_never
 
 import msgpack
+from pydantic import TypeAdapter, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
@@ -69,6 +69,65 @@ class _TTSOptions:
 
     def get_ws_url(self, path: str) -> str:
         return f"{self.base_url.replace('http', 'ws', 1)}{path}"
+
+
+# Fish Audio's live websocket speaks msgpack: a session per segment (start, text and flush, stop),
+# answered by audio events and a finish. Each message declares only the fields read.
+
+
+class _Audio(TypedDict):
+    event: Literal["audio"]
+    audio: bytes
+
+
+class _Finish(TypedDict):
+    event: Literal["finish"]
+    reason: str
+
+
+_Message = _Audio | _Finish
+_MESSAGE: TypeAdapter[_Message] = TypeAdapter(_Message)
+
+
+class _Prosody(TypedDict, total=False):
+    speed: float
+    volume: float
+    normalize_loudness: bool
+
+
+class _Request(TypedDict):
+    text: str
+    chunk_length: int
+    format: str
+    sample_rate: int
+    mp3_bitrate: int
+    opus_bitrate: int
+    references: list[str]
+    reference_id: str | None
+    normalize: bool
+    latency: str
+    prosody: _Prosody | None
+    top_p: float
+    temperature: float
+    features: list[str]
+    max_new_tokens: NotRequired[int]
+    min_chunk_length: NotRequired[int]
+    condition_on_previous_chunks: NotRequired[bool]
+    early_stop_threshold: NotRequired[float]
+
+
+class _Start(TypedDict):
+    event: Literal["start"]
+    request: _Request
+
+
+class _Text(TypedDict):
+    event: Literal["text"]
+    text: str
+
+
+class _Control(TypedDict):
+    event: Literal["flush", "stop"]
 
 
 class TTS(tts.TTS):
@@ -210,13 +269,8 @@ class TTS(tts.TTS):
             early_stop_threshold=early_stop_threshold,
         )
 
+        self._mux = _Mux(self._opts)
         self._session = http_session
-        self._pool = utils.ConnectionPool[http.WebSocket](
-            connect_cb=self._connect_ws,
-            close_cb=self._close_ws,
-            max_session_duration=300,
-            mark_refreshed_on_get=True,
-        )
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
     @property
@@ -244,23 +298,8 @@ class TTS(tts.TTS):
             self._session = http.http_session()
         return self._session
 
-    async def _connect_ws(self, conn_options: APIConnectOptions) -> http.WebSocket:
-        return await self._ensure_session().ws_connect(
-            self._opts.get_ws_url("/v1/tts/live"),
-            headers={
-                "Authorization": f"Bearer {self._opts.api_key}",
-                "User-Agent": USER_AGENT,
-                "model": self._opts.model,
-            },
-            heartbeat=30.0,
-            conn_options=conn_options,
-        )
-
-    async def _close_ws(self, ws: http.WebSocket) -> None:
-        await ws.close()
-
     def prewarm(self) -> None:
-        self._pool.prewarm()
+        self._mux.prewarm()
 
     def update_options(
         self,
@@ -284,14 +323,26 @@ class TTS(tts.TTS):
         sentence_tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         pacing: NotGivenOr[tts.SentenceStreamPacer | None] = NOT_GIVEN,
     ) -> None:
-        super().update_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing)
+        """Change the options of the next synthesis; an invalid option is refused and changes
+        nothing."""
+        with self._updating_options(sentence_tokenizer=sentence_tokenizer, pacing=pacing):
+            if is_given(chunk_length) and not 100 <= chunk_length <= 300:
+                raise ValueError("chunk_length must be between 100 and 300")
+            if is_given(temperature) and not 0 <= temperature <= 1:
+                raise ValueError("temperature must be between 0 and 1")
+            if is_given(top_p) and not 0 <= top_p <= 1:
+                raise ValueError("top_p must be between 0 and 1")
+            if is_given(max_new_tokens) and max_new_tokens < 0:
+                raise ValueError("max_new_tokens must be non-negative")
+            if is_given(min_chunk_length) and not 0 <= min_chunk_length <= 100:
+                raise ValueError("min_chunk_length must be between 0 and 100")
+            if is_given(early_stop_threshold) and not 0 <= early_stop_threshold <= 1:
+                raise ValueError("early_stop_threshold must be between 0 and 1")
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
-            # The model is sent as a connection header at ws-handshake time, not in the
-            # per-request body, so a pooled socket keeps the old model. Drop pooled
-            # connections so the next stream reconnects with the new model. Other
-            # options ride in the per-request body and need no reconnect.
-            self._pool.invalidate()
+            # the model is a handshake header, not in the per-request body: a pooled
+            # socket keeps the old one; other options ride in each request
+            self._mux.invalidate()
             if model == "s1" and is_given(self._opts.normalize_loudness):
                 logger.warning("normalize_loudness is not supported by the s1 model, dropping")
                 self._opts.normalize_loudness = NOT_GIVEN
@@ -300,20 +351,14 @@ class TTS(tts.TTS):
         if is_given(latency_mode):
             self._opts.latency_mode = latency_mode
         if is_given(chunk_length):
-            if not 100 <= chunk_length <= 300:
-                raise ValueError("chunk_length must be between 100 and 300")
             self._opts.chunk_length = chunk_length
         if is_given(speed):
             self._opts.speed = speed
         if is_given(volume):
             self._opts.volume = volume
         if is_given(temperature):
-            if not 0 <= temperature <= 1:
-                raise ValueError("temperature must be between 0 and 1")
             self._opts.temperature = temperature
         if is_given(top_p):
-            if not 0 <= top_p <= 1:
-                raise ValueError("top_p must be between 0 and 1")
             self._opts.top_p = top_p
         if is_given(mp3_bitrate):
             self._opts.mp3_bitrate = mp3_bitrate
@@ -327,18 +372,12 @@ class TTS(tts.TTS):
             else:
                 self._opts.normalize_loudness = normalize_loudness
         if is_given(max_new_tokens):
-            if max_new_tokens < 0:
-                raise ValueError("max_new_tokens must be non-negative")
             self._opts.max_new_tokens = max_new_tokens
         if is_given(min_chunk_length):
-            if not 0 <= min_chunk_length <= 100:
-                raise ValueError("min_chunk_length must be between 0 and 100")
             self._opts.min_chunk_length = min_chunk_length
         if is_given(condition_on_previous_chunks):
             self._opts.condition_on_previous_chunks = condition_on_previous_chunks
         if is_given(early_stop_threshold):
-            if not 0 <= early_stop_threshold <= 1:
-                raise ValueError("early_stop_threshold must be between 0 and 1")
             self._opts.early_stop_threshold = early_stop_threshold
 
     def _synthesize(
@@ -353,12 +392,7 @@ class TTS(tts.TTS):
         )
 
     def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
-        stream = SynthesizeStream(
-            pool=self._pool,
-            opts=replace(self._opts),
-            tts=self,
-            conn_options=conn_options,
-        )
+        stream = SynthesizeStream(opts=replace(self._opts), tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
@@ -366,45 +400,74 @@ class TTS(tts.TTS):
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
-        await self._pool.aclose()
+        await self._mux.aclose()
 
 
-def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> dict[str, Any]:
+def _pack(message: _Request | _Start | _Text | _Control) -> bytes:
+    # msgpack is untyped; packb returns the packed bytes unless autoreset is off
+    packed = msgpack.packb(message, use_bin_type=True)
+    if not isinstance(packed, bytes):
+        raise TypeError(f"msgpack.packb returned {type(packed).__name__}")
+    return packed
+
+
+def _decode(frame: bytes | str) -> _Message | None:
+    """A received frame, or None for an event the stream does not read (a log)."""
+    if isinstance(frame, str):
+        return None
+    try:
+        value = msgpack.unpackb(frame, raw=False)
+    except ValueError as e:
+        raise APIError("Fish Audio sent a malformed frame", kind="protocol", detail=str(e)) from e
+    event = value.get("event") if isinstance(value, dict) else None
+    if event not in ("audio", "finish"):
+        # an event the stream does not read (a log, or one Fish added since): named once
+        tts.log_skipped("Fish Audio", str(event))
+        return None
+    try:
+        return _MESSAGE.validate_python(value)
+    except ValidationError as e:
+        raise APIError(
+            "Fish Audio sent a message that breaks its protocol", kind="protocol", detail=str(e)
+        ) from e
+
+
+def _build_tts_request(opts: _TTSOptions, *, text: str = "") -> _Request:
     # Send the same field set the upstream Fish Audio Python SDK sends so the
     # server doesn't fall back to its own (larger) defaults — in particular the
     # docs default of `chunk_length=300` produces large bursts that leave audible
     # gaps between Fish's chunk boundaries.
     # `prosody` stays None unless the caller set speed/volume/normalize_loudness,
     # so the default request is byte-for-byte unchanged.
-    prosody: dict[str, Any] | None = None
+    prosody: _Prosody | None = None
     if is_given(opts.speed) or is_given(opts.volume) or is_given(opts.normalize_loudness):
-        prosody = {}
+        prosody = _Prosody()
         if is_given(opts.speed):
             prosody["speed"] = opts.speed
         if is_given(opts.volume):
             prosody["volume"] = opts.volume
         if is_given(opts.normalize_loudness):
             prosody["normalize_loudness"] = opts.normalize_loudness
-    request: dict[str, Any] = {
-        "text": text,
-        "chunk_length": opts.chunk_length,
-        "format": opts.output_format,
-        "sample_rate": opts.sample_rate,
-        "mp3_bitrate": opts.mp3_bitrate,
-        "opus_bitrate": opts.opus_bitrate,
-        "references": [],
+    request = _Request(
+        text=text,
+        chunk_length=opts.chunk_length,
+        format=opts.output_format,
+        sample_rate=opts.sample_rate,
+        mp3_bitrate=opts.mp3_bitrate,
+        opus_bitrate=opts.opus_bitrate,
+        references=[],
         # Fish Audio's wire field is `reference_id`; we expose it as `voice_id` on
         # the plugin for consistency with other TTS plugins.
-        "reference_id": opts.voice_id if is_given(opts.voice_id) else None,
-        "normalize": opts.normalize,
-        "latency": opts.latency_mode,
-        "prosody": prosody,
-        "top_p": opts.top_p,
-        "temperature": opts.temperature,
+        reference_id=opts.voice_id if is_given(opts.voice_id) else None,
+        normalize=opts.normalize,
+        latency=opts.latency_mode,
+        prosody=prosody,
+        top_p=opts.top_p,
+        temperature=opts.temperature,
         # Server-side reliability feature, deliberately not exposed as an option:
         # every synthesis request runs with the quality guard enabled.
-        "features": ["quality-guard"],
-    }
+        features=["quality-guard"],
+    )
     # Generation-tuning fields have no plugin default: they are omitted unless
     # set so Fish's server-side defaults stay in effect.
     if is_given(opts.max_new_tokens):
@@ -446,7 +509,7 @@ class ChunkedStream(tts.ChunkedStream):
                     "Content-Type": "application/msgpack",
                     "model": self._opts.model,
                 },
-                data=msgpack.packb(payload, use_bin_type=True),
+                data=_pack(payload),
                 conn_options=self._conn_options,
             ) as resp:
                 await resp.raise_for_status()
@@ -469,98 +532,70 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
 
 
-class SynthesizeStream(tts.SynthesizeStream):
-    """Streaming TTS via the Fish Audio /v1/tts/live WebSocket endpoint."""
+class _Mux(tts.WebSocketMultiplexer[_Message, bytes]):
+    """A pool of live sockets, each carrying one stream at a time; the model is a handshake
+    header."""
 
-    def __init__(
-        self,
-        *,
-        pool: utils.ConnectionPool[http.WebSocket],
-        opts: _TTSOptions,
-        tts: TTS,
-        conn_options: APIConnectOptions,
-    ) -> None:
-        super().__init__(tts=tts, conn_options=conn_options)
-        self._tts: TTS = tts
+    routed = False
+    max_session_duration = 300
+
+    def __init__(self, opts: _TTSOptions) -> None:
         self._opts = opts
-        self._pool = pool
 
-    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=NUM_CHANNELS,
-            mime_type=f"audio/{self._opts.output_format}",
-            stream=True,
+    async def connect(self, conn_options: APIConnectOptions) -> tts.WebSocketTarget:
+        return tts.WebSocketTarget(
+            self._opts.get_ws_url("/v1/tts/live"),
+            headers={
+                "Authorization": f"Bearer {self._opts.api_key}",
+                "User-Agent": USER_AGENT,
+                "model": self._opts.model,
+            },
         )
-        output_emitter.start_segment(segment_id=request_id)
 
-        try:
-            async with self._pool.connection(conn_options=self._conn_options) as ws:
-                await self._run_ws(ws, output_emitter)
+    def decode(self, frame: bytes | str) -> _Message | None:
+        return _decode(frame)
 
-        except APIError:
-            raise
-        except Exception as e:
-            raise APIConnectionError() from e
-        finally:
-            output_emitter.end_segment()
 
-    async def _run_ws(
-        self,
-        ws: http.WebSocket,
-        output_emitter: tts.AudioEmitter,
-    ) -> None:
-        read_deadline = self._core_attempts
+class SynthesizeStream(tts.WebSocketStream[_Message, bytes]):
+    """Each segment is one Fish session, its text flushed chunk by chunk so Fish synthesizes at
+    chunk boundaries instead of waiting for ``chunk_length`` characters."""
 
-        async def send_task() -> None:
-            start_msg = {"event": "start", "request": _build_tts_request(self._opts)}
-            await ws.send_bytes(msgpack.packb(start_msg, use_bin_type=True))
+    connection_per_segment = True
 
-            # flush after each chunk so Fish synthesizes at chunk boundaries instead of
-            # waiting for `chunk_length` characters to accumulate
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    continue
-                self.mark_started()
-                await ws.send_bytes(
-                    msgpack.packb({"event": "text", "text": data.text + " "}, use_bin_type=True)
+    def __init__(self, *, opts: _TTSOptions, tts: TTS, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self.multiplexer = tts._mux
+        self.mime_type = f"audio/{opts.output_format}"
+        self._opts = opts
+        self._segment_id = ""
+
+    def decode(self, frame: bytes | str) -> _Message | None:
+        return _decode(frame)
+
+    def encode(self, item: tts.SegmentInput | tts.EndOfText) -> bytes | None:
+        match item:
+            case tts.SegmentStart():
+                self._segment_id = item.segment_id
+                return _pack(_Start(event="start", request=_build_tts_request(self._opts)))
+            case tts.SegmentText():
+                self.send_now(_pack(_Text(event="text", text=f"{item.chunk.text} ")))
+                return _pack(_Control(event="flush"))
+            case tts.SegmentEnd():
+                return _pack(_Control(event="stop"))
+            case tts.EndOfText():
+                return None
+            case _:
+                assert_never(item)
+
+    def on_message(self, message: _Message) -> None:
+        if message["event"] == "audio":
+            if message["audio"]:
+                self.report(tts.SegmentAudio(self._segment_id, message["audio"]))
+        elif message["event"] == "finish":
+            if message["reason"] == "error":
+                raise APIError(
+                    "Fish Audio TTS reported an error", kind="invalid_request", body=message
                 )
-                await ws.send_bytes(msgpack.packb({"event": "flush"}, use_bin_type=True))
-                read_deadline.expect_response()
-
-            await ws.send_bytes(msgpack.packb({"event": "stop"}, use_bin_type=True))
-            read_deadline.expect_response(final=True)
-
-        async def recv_task() -> None:
-            while True:
-                msg = await ws.receive()
-                if msg.type == http.WebSocketMessageType.CLOSE:
-                    raise ws.close_error("Fish Audio websocket connection closed unexpectedly")
-
-                if msg.type != http.WebSocketMessageType.BINARY:
-                    logger.debug("unexpected Fish Audio message type %s", msg.type)
-                    continue
-
-                data = msgpack.unpackb(msg.binary, raw=False)
-                event = data.get("event")
-                if event == "audio":
-                    audio = data.get("audio")
-                    if audio:
-                        read_deadline.audio_received()
-                        output_emitter.push(audio)
-                elif event == "finish":
-                    reason = data.get("reason")
-                    if reason == "error":
-                        raise APIError(
-                            "Fish Audio TTS reported an error",
-                            kind="invalid_request",
-                            body=str(data),
-                        )
-                    break
-                else:
-                    logger.debug("unknown Fish Audio event", extra={"lk.pii.data": data})
-
-        async with utils.aio.TaskSet() as tasks:
-            await asyncio.gather(tasks.spawn(send_task()), tasks.spawn(recv_task()))
+            self.report(tts.SegmentDone(self._segment_id))
+        else:
+            assert_never(message)

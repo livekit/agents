@@ -90,3 +90,29 @@ async def test_malformed_socket_message_fails_pending_synthesis_without_waiting_
 
     assert failure.value.kind == "protocol"
     assert isinstance(failure.value.__cause__, ValidationError)
+
+
+# Catches: an event Uplift added since (another name, more arguments) or a message type it
+# added since failing the synthesis as a protocol error instead of being skipped.
+async def test_events_and_message_types_uplift_added_since_are_skipped(ws_peer: WsPeer) -> None:
+    provider = uplift(ws_peer, [{"type": "audio", "audio": "AAAA"}, {"type": "audio_end"}])
+    answer = ws_peer.reply
+
+    def reply(connection: Connection, message: str | bytes) -> list[Frame]:
+        frames = answer(connection, message)
+        if frames and isinstance(message, str) and message.startswith(f"42{WEBSOCKET_NAMESPACE},"):
+            added = [["usage", {"characters": 5}, 1], ["message", {"type": "alignment"}]]
+            frames[:0] = [f"42{WEBSOCKET_NAMESPACE},{json.dumps(e)}" for e in added]
+        return frames
+
+    ws_peer.reply = reply
+    try:
+        async with provider.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+            stream.push_text("hello")
+            stream.end_input()
+            async with asyncio.timeout(2):
+                audio = [event async for event in stream]
+    finally:
+        await provider.aclose()
+
+    assert audio

@@ -15,42 +15,29 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import math
 import os
 import weakref
-from collections import OrderedDict, deque
-from dataclasses import dataclass
-from typing import Never
+from typing import Literal, Never, NotRequired, TypedDict, assert_never, final
 from urllib.parse import urlparse
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
-    APIConnectionError,
     APIConnectOptions,
     APIError,
-    APITimeoutError,
     LanguageCode,
-    http,
     stt,
-    utils,
 )
+from livekit.agents.stt import WebSocketPacing
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
 DEFAULT_URL = "wss://api.meta.ai/v1/asr/realtime"
 DEFAULT_MODEL = "muse-voice-transcribe-1.0"
 _SAMPLE_RATE = 24_000
-_CHANNELS = 1
-_SAMPLE_WIDTH_BYTES = 2
-_CHUNK_DURATION = 0.08
-_CHUNK_BYTES = int(_SAMPLE_RATE * _CHANNELS * _SAMPLE_WIDTH_BYTES * _CHUNK_DURATION)
-_MAX_MESSAGE_BYTES = 1024 * 1024
-_WS_HEARTBEAT = 30.0
-_MAX_COMPLETED_TURNS = 128
+_LOOPBACK = ("localhost", "127.0.0.1", "::1")
 _SUPPORTED_LANGUAGES = (
     "Arabic",
     "Bengali",
@@ -108,7 +95,6 @@ _LANGUAGE_CODES = {
     "vi": "Vietnamese",
     "zh": "Mandarin Chinese",
 }
-_MESSAGE = TypeAdapter(dict[str, object])
 
 
 def _normalize_hints(values: list[str] | None, *, name: str) -> list[str]:
@@ -160,63 +146,6 @@ def _normalize_language_hint(language: str) -> str:
     return mapped_name
 
 
-def _protocol_error(what: str, payload: object = None) -> APIError:
-    return APIError(
-        f"Meta Muse realtime ASR protocol error: {what}",
-        kind="protocol",
-        detail=None if payload is None else str(payload),
-    )
-
-
-def _server_error(*, phase: str) -> APIError:
-    return APIError(f"Meta Muse realtime ASR {phase} error", kind="invalid_request")
-
-
-def _parse_ws_message(
-    raw: http.WebSocketMessage, ws: http.WebSocket, *, phase: str
-) -> dict[str, object]:
-    if raw.type is not http.WebSocketMessageType.TEXT or not isinstance(raw.data, str):
-        if raw.type is http.WebSocketMessageType.CLOSE:
-            raise ws.close_error(f"Meta Muse realtime ASR closed during {phase}")
-        raise _protocol_error(f"unexpected message type during {phase}")
-    try:
-        message = json.loads(raw.data)
-    except (json.JSONDecodeError, TypeError):
-        raise _protocol_error(f"invalid JSON during {phase}", raw.data) from None
-    if not isinstance(message, dict):
-        raise _protocol_error(f"non-object message during {phase}", raw.data)
-    return _MESSAGE.validate_python(message)
-
-
-async def _close_quietly(ws: http.WebSocket) -> None:
-    try:
-        await ws.close()
-    except Exception:
-        pass
-
-
-def _normalize_turn_id(value: object, *, event: str) -> str:
-    if isinstance(value, bool) or not isinstance(value, (str, int)):
-        raise _protocol_error(f"{event} event has an invalid turnId")
-    turn_id = str(value).strip()
-    if not turn_id:
-        raise _protocol_error(f"{event} event has an invalid turnId")
-    return turn_id
-
-
-@dataclass(slots=True)
-class _TurnState:
-    provider_started: bool = False
-    emitted_start: bool = False
-    latest_interim: str | None = None
-    emitted_interim: str | None = None
-    final_text: str | None = None
-    final_emitted: bool = False
-    ended: bool = False
-    usage_seconds: float = 0.0
-    usage_captured: bool = False
-
-
 class STT(stt.STT[Never]):
     """Streaming speech recognition with Meta Muse Voice Transcribe."""
 
@@ -228,7 +157,6 @@ class STT(stt.STT[Never]):
         url: str = DEFAULT_URL,
         keywords: list[str] | None = None,
         language_bias: list[str] | None = None,
-        http_session: http.HttpSession | None = None,
     ) -> None:
         """Create a Meta Muse streaming STT provider.
 
@@ -236,11 +164,9 @@ class STT(stt.STT[Never]):
             api_key: Meta Model API key. Falls back to ``MODEL_API_KEY``, then
                 ``META_API_KEY``.
             model: Muse Voice Transcribe model identifier.
-            url: Realtime Muse ASR WebSocket endpoint. Must use ``wss://``.
+            url: Realtime Muse ASR WebSocket endpoint: ``wss://``, or ``ws://`` on this machine.
             keywords: Static recognition keywords sent when each stream starts.
             language_bias: Static supported language names sent when each stream starts.
-            http_session: Optional HttpSession. By default, the job's shared session
-                is used.
         """
         if api_key is not None:
             resolved_key = api_key.strip()
@@ -255,15 +181,22 @@ class STT(stt.STT[Never]):
         if not model.strip():
             raise ValueError("model must be non-empty")
 
+        # the access token goes in the handshake message: never in clear off this machine
         parsed_url = urlparse(url)
         if (
-            parsed_url.scheme != "wss"
+            not (
+                parsed_url.scheme == "wss"
+                or (parsed_url.scheme == "ws" and parsed_url.hostname in _LOOPBACK)
+            )
             or not parsed_url.hostname
             or parsed_url.username is not None
             or parsed_url.password is not None
             or parsed_url.fragment
         ):
-            raise ValueError("url must be an absolute wss:// URL without credentials or a fragment")
+            raise ValueError(
+                "url must be an absolute wss:// URL (ws:// on this machine) without credentials "
+                "or a fragment"
+            )
 
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -275,6 +208,9 @@ class STT(stt.STT[Never]):
                 keyterms=False,
                 # usage events carry the audio the server reports as processed
                 reports_usage=True,
+                # each turn's speechComplete is its final, empty for noise, and may follow
+                # its speechEnd
+                transcribes_after_speech_ends=True,
             )
         )
         self._api_key = _normalize_access_token(resolved_key)
@@ -282,7 +218,6 @@ class STT(stt.STT[Never]):
         self._url = url
         self._keywords = _normalize_hints(keywords, name="keywords")
         self._language_bias = _normalize_language_bias(language_bias)
-        self._http_session = http_session
         self._streams: weakref.WeakSet[SpeechStream] = weakref.WeakSet()
         self._closed = False
 
@@ -293,11 +228,6 @@ class STT(stt.STT[Never]):
     @property
     def provider(self) -> str:
         return "Meta"
-
-    def _ensure_session(self) -> http.HttpSession:
-        if self._http_session is None:
-            self._http_session = http.http_session()
-        return self._http_session
 
     async def _recognize_impl(
         self,
@@ -334,7 +264,6 @@ class STT(stt.STT[Never]):
             url=self._url,
             keywords=list(self._keywords),
             language_bias=language_bias,
-            http_session=self._ensure_session(),
         )
         self._streams.add(stream)
         return stream
@@ -346,7 +275,91 @@ class STT(stt.STT[Never]):
             await asyncio.gather(*(stream.aclose() for stream in streams), return_exceptions=True)
 
 
-class SpeechStream(stt.RecognizeStream):
+@final
+class _SessionStarted(TypedDict):
+    """The handshake's acknowledgement, the one message Muse does not tag."""
+
+    type: NotRequired[Literal[None]]
+    sessionId: str
+
+
+@final
+class _Error(TypedDict):
+    type: Literal["error"]
+
+
+@final
+class _SpeechStart(TypedDict):
+    type: Literal["speechStart"]
+    turnId: str | int
+
+
+@final
+class _Transcript(TypedDict):
+    type: Literal["transcript"]
+    transcript: str
+    turnId: NotRequired[str | int]
+
+
+@final
+class _SpeechEnd(TypedDict):
+    type: Literal["speechEnd"]
+    turnId: str | int
+
+
+@final
+class _SpeechComplete(TypedDict):
+    type: Literal["speechComplete"]
+    transcript: str
+    turnId: str | int
+
+
+@final
+class _AudioProgress(TypedDict):
+    type: Literal["audioProgress"]
+    audioProcessedMs: float
+
+
+_Message = (
+    _SessionStarted
+    | _Error
+    | _SpeechStart
+    | _Transcript
+    | _SpeechEnd
+    | _SpeechComplete
+    | _AudioProgress
+)
+
+
+_OBJECT: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
+
+
+class _Authorization(TypedDict):
+    accessToken: str
+
+
+class _Handshake(TypedDict):
+    mode: Literal["ENDPOINTING"]
+    authorization: _Authorization
+    audioEncoding: Literal["PCM_24KHZ"]
+    model: str
+    partialMode: Literal["CUMULATIVE"]
+    emitAudioProgress: bool
+    keywords: NotRequired[list[str]]
+    languageBias: NotRequired[list[str]]
+
+
+class _EndStream(TypedDict):
+    type: Literal["endStream"]
+
+
+class SpeechStream(stt.WebSocketStream[_Message, _Handshake | _EndStream]):
+    # Muse reads audio no faster than it plays, in 80 ms packets
+    frame_ms = 80
+    awaits_ready = True
+    # speechStart and speechEnd are Muse's own turn boundaries
+    provider_vad = True
+
     def __init__(
         self,
         *,
@@ -357,341 +370,106 @@ class SpeechStream(stt.RecognizeStream):
         url: str,
         keywords: list[str],
         language_bias: list[str],
-        http_session: http.HttpSession,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=_SAMPLE_RATE)
+        # real-time pacing per stream: one shared would pace every stream together
+        self.pacing = WebSocketPacing(real_time=True)
         self._api_key = api_key
         self._model = model
         self._url = url
         self._keywords = keywords
         self._language_bias = language_bias
-        self._session = http_session
         self._session_id = ""
-        self._turns: OrderedDict[str, _TurnState] = OrderedDict()
-        self._provider_active_turn_id: str | None = None
-        self._completed_turn_ids: set[str] = set()
-        self._completed_turn_order: deque[str] = deque()
-        self._end_stream_sent = False
-        self._last_audio_processed_ms = 0.0
-        self._pending_usage_seconds = 0.0
+        self._processed_ms = 0.0
 
-    async def _run(self) -> None:
-        self._end_stream_sent = False
-        self._last_audio_processed_ms = 0.0
-        ws: http.WebSocket | None = None
-        tasks = utils.aio.TaskSet()
-        try:
-            ws = await self._connect_ws()
-            sender = tasks.spawn(self._send_audio(ws), name="meta-stt-send")
-            receiver = tasks.spawn(self._receive_events(ws), name="meta-stt-receive")
-            await self._drive_tasks(tasks, sender, receiver)
-        except asyncio.CancelledError:
-            raise
-        except APIError:
-            raise
-        except Exception as exc:
-            raise APIConnectionError(
-                f"Meta Muse realtime ASR failed ({type(exc).__name__})"
-            ) from None
-        finally:
-            await tasks.aclose()
-            self._flush_usage()
-            if ws is not None:
-                await _close_quietly(ws)
+    async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
+        self._processed_ms = 0.0
+        return stt.WebSocketTarget(self._url)
 
-    async def _connect_ws(self) -> http.WebSocket:
-        ws = await self._session.ws_connect(
-            self._url,
-            heartbeat=_WS_HEARTBEAT,
-            max_msg_size=_MAX_MESSAGE_BYTES,
-            conn_options=self._conn_options,
+    def setup(self) -> _Handshake:
+        handshake = _Handshake(
+            mode="ENDPOINTING",
+            authorization=_Authorization(accessToken=self._api_key),
+            audioEncoding="PCM_24KHZ",
+            model=self._model,
+            partialMode="CUMULATIVE",
+            emitAudioProgress=True,
         )
-
-        try:
-            await ws.send_str(json.dumps(self._handshake(), separators=(",", ":")))
-            raw = await asyncio.wait_for(ws.receive(), timeout=self._conn_options.read_timeout)
-            message = _parse_ws_message(raw, ws, phase="handshake")
-            self._accept_handshake(message)
-        except asyncio.CancelledError:
-            await _close_quietly(ws)
-            raise
-        except TimeoutError:
-            await _close_quietly(ws)
-            raise APITimeoutError("Meta Muse realtime ASR handshake timed out") from None
-        except APIError:
-            await _close_quietly(ws)
-            raise
-        except Exception as exc:
-            await _close_quietly(ws)
-            raise APIConnectionError(
-                f"Meta Muse realtime ASR handshake failed ({type(exc).__name__})"
-            ) from None
-
-        return ws
-
-    def _handshake(self) -> dict[str, object]:
-        handshake: dict[str, object] = {
-            "mode": "ENDPOINTING",
-            "authorization": {"accessToken": self._api_key},
-            "audioEncoding": "PCM_24KHZ",
-            "model": self._model,
-            "partialMode": "CUMULATIVE",
-            "emitAudioProgress": True,
-        }
         if self._keywords:
             handshake["keywords"] = self._keywords
         if self._language_bias:
             handshake["languageBias"] = self._language_bias
         return handshake
 
-    def _accept_handshake(self, message: dict[str, object]) -> None:
-        if message.get("type") == "error":
-            raise _server_error(phase="handshake")
-        session_id = message.get("sessionId")
-        if not isinstance(session_id, str) or not session_id:
-            raise _protocol_error("invalid handshake response", message)
-        self._session_id = session_id
+    def encode(
+        self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio
+    ) -> bytes | _EndStream | None:
+        match item:
+            case rtc.AudioFrame():
+                if item.num_channels != 1:
+                    raise APIError(
+                        "Meta Muse realtime ASR requires mono audio", kind="invalid_request"
+                    )
+                return bytes(item.data)
+            case stt.Flush():
+                return None
+            case stt.EndOfAudio():
+                return _EndStream(type="endStream")
+            case _:
+                assert_never(item)
 
-    async def _drive_tasks(
-        self,
-        tasks: utils.aio.TaskSet,
-        sender: asyncio.Task[None],
-        receiver: asyncio.Task[None],
-    ) -> None:
-        # shielded: the other one keeps running, to be drained below
-        await tasks.first_completed(asyncio.shield(sender), asyncio.shield(receiver))
-        if receiver.done():
-            receiver.result()
-            if not self._end_stream_sent:
-                raise APIConnectionError("Meta Muse realtime ASR closed before input ended")
-            if not sender.done():
-                await sender
-        else:
-            try:
-                await asyncio.wait_for(receiver, timeout=self._conn_options.read_timeout)
-            except TimeoutError:
-                raise APITimeoutError(
-                    "Meta Muse realtime ASR timed out while draining final events"
-                ) from None
-        self._validate_clean_close()
+    def decode(self, frame: bytes | str) -> _Message | None:
+        try:
+            # an untagged message is the handshake's acknowledgement only when it names the
+            # session: another (one Muse added since) is skipped
+            if isinstance(frame, str):
+                fields = _OBJECT.validate_json(frame)
+                if "type" not in fields and "sessionId" not in fields:
+                    stt.log_skipped("Meta Muse", f"untagged: {','.join(sorted(fields))}")
+                    return None
+            return super().decode(frame)
+        except (APIError, ValidationError):
+            # the frame may hold the customer's words: never attached
+            raise APIError("Meta Muse realtime ASR protocol error", kind="protocol") from None
 
-    async def _send_audio(self, ws: http.WebSocket) -> None:
-        pending = bytearray()
-        loop = asyncio.get_running_loop()
-        pacing_origin: float | None = None
-        sent_duration = 0.0
-
-        async def send_packet(packet: bytes) -> None:
-            nonlocal pacing_origin, sent_duration
-            if not packet:
-                return
-            if pacing_origin is None:
-                pacing_origin = loop.time()
-            deadline = pacing_origin + sent_duration
-            delay = deadline - loop.time()
-            if delay > 0:
-                await asyncio.sleep(delay)
-            await ws.send_bytes(packet)
-            duration = len(packet) / (_SAMPLE_RATE * _CHANNELS * _SAMPLE_WIDTH_BYTES)
-            sent_duration += duration
-
-        async for item in self.input:
-            if isinstance(item, self.Flush):
-                if pending:
-                    await send_packet(bytes(pending))
-                    pending.clear()
-                continue
-
-            if item.num_channels != _CHANNELS:
-                raise APIError("Meta Muse realtime ASR requires mono audio", kind="invalid_request")
-            pending.extend(item.data.tobytes())
-            while len(pending) >= _CHUNK_BYTES:
-                await send_packet(bytes(pending[:_CHUNK_BYTES]))
-                del pending[:_CHUNK_BYTES]
-
-        if pending:
-            await send_packet(bytes(pending))
-        if not self._end_stream_sent:
-            await ws.send_str('{"type":"endStream"}')
-            self._end_stream_sent = True
-
-    async def _receive_events(self, ws: http.WebSocket) -> None:
-        while True:
-            raw = await ws.receive()
-            if raw.type is http.WebSocketMessageType.CLOSE:
-                if self._end_stream_sent and ws.close_code == 1000:
-                    return
-                raise ws.close_error("Meta Muse realtime ASR closed during stream")
-            if raw.type is not http.WebSocketMessageType.TEXT:
-                continue
-            message = _parse_ws_message(raw, ws, phase="stream")
-            event_type = message.get("type")
-            if event_type == "error":
-                raise _server_error(phase="stream")
-            if event_type == "speechStart":
-                self._speech_start(message)
-            elif event_type == "transcript":
-                self._transcript(message)
-            elif event_type == "speechEnd":
-                self._speech_end(message)
-            elif event_type == "speechComplete":
-                self._speech_complete(message)
-            elif event_type == "audioProgress":
-                self._audio_progress(message)
-
-    def _audio_progress(self, message: dict[str, object]) -> None:
-        processed_ms = message.get("audioProcessedMs")
-        if (
-            isinstance(processed_ms, bool)
-            or not isinstance(processed_ms, (int, float))
-            or not math.isfinite(processed_ms)
-            or processed_ms < 0
-        ):
-            raise _protocol_error("audioProgress event has invalid audioProcessedMs", message)
-        if processed_ms <= self._last_audio_processed_ms:
-            return
-        delta_seconds = (processed_ms - self._last_audio_processed_ms) / 1000
-        self._last_audio_processed_ms = float(processed_ms)
-        self._pending_usage_seconds += delta_seconds
-
-    def _speech_start(self, message: dict[str, object]) -> None:
-        turn_id = self._required_turn_id(message, event="speechStart")
-        if turn_id in self._completed_turn_ids:
-            return
-        turn = self._turns.setdefault(turn_id, _TurnState())
-        turn.provider_started = True
-        self._provider_active_turn_id = turn_id
-        self._drain_turns()
-
-    def _transcript(self, message: dict[str, object]) -> None:
-        text = message.get("transcript")
-        if not isinstance(text, str):
-            raise _protocol_error("transcript event has invalid text", message)
-        if not text and message.get("turnId") is None and self._provider_active_turn_id is None:
-            return
-        turn_id = self._transcript_turn_id(message)
-        if turn_id in self._completed_turn_ids:
-            return
-        turn = self._turns.setdefault(turn_id, _TurnState())
-        if turn.final_text is not None or turn.latest_interim == text:
-            return
-        turn.latest_interim = text
-        self._drain_turns()
-
-    def _speech_end(self, message: dict[str, object]) -> None:
-        turn_id = self._required_turn_id(message, event="speechEnd")
-        if turn_id in self._completed_turn_ids:
-            return
-        turn = self._turns.setdefault(turn_id, _TurnState())
-        turn.ended = True
-        if self._provider_active_turn_id == turn_id:
-            self._provider_active_turn_id = None
-        self._capture_turn_usage(turn)
-        self._drain_turns()
-
-    def _speech_complete(self, message: dict[str, object]) -> None:
-        turn_id = self._required_turn_id(message, event="speechComplete")
-        if turn_id in self._completed_turn_ids:
-            return
-        text = message.get("transcript")
-        if not isinstance(text, str):
-            raise _protocol_error("speechComplete event has invalid transcript", message)
-        turn = self._turns.setdefault(turn_id, _TurnState())
-        if turn.final_text is None:
-            turn.final_text = text
-        self._capture_turn_usage(turn)
-        self._drain_turns()
-
-    def _capture_turn_usage(self, turn: _TurnState) -> None:
-        if turn.usage_captured or not turn.ended:
-            return
-        turn.usage_seconds = self._pending_usage_seconds
-        turn.usage_captured = True
-        self._pending_usage_seconds = 0.0
-
-    def _drain_turns(self) -> None:
-        while self._turns:
-            turn_id = next(iter(self._turns))
-            turn = self._turns[turn_id]
-            has_content = turn.latest_interim is not None or turn.final_text is not None
-            if not turn.emitted_start and (turn.provider_started or has_content):
-                turn.emitted_start = True
-                self._emit(stt.SpeechEventType.START_OF_SPEECH, turn_id)
-
-            if (
-                turn.emitted_start
-                and not turn.final_emitted
-                and turn.latest_interim is not None
-                and turn.latest_interim != turn.emitted_interim
-            ):
-                turn.emitted_interim = turn.latest_interim
-                self._emit(
-                    stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    turn_id,
-                    turn.latest_interim,
+    def on_message(self, message: _Message) -> None:
+        if "sessionId" in message:
+            self._session_id = message["sessionId"]
+            self.report(stt.Ready())
+        elif message["type"] == "error":
+            # its message can hold the customer's words: never attached
+            raise APIError("Meta Muse realtime ASR error", kind="invalid_request")
+        elif message["type"] == "speechStart":
+            self.report(stt.SpeechStarted())
+        elif message["type"] == "transcript":
+            if message["transcript"]:
+                self.report(self._transcript(message["transcript"], message.get("turnId")))
+        elif message["type"] == "speechComplete":
+            self.report(self._transcript(message["transcript"], message["turnId"], final=True))
+        elif message["type"] == "speechEnd":
+            self.report(stt.SpeechEnded())
+        elif message["type"] == "audioProgress":
+            processed = message["audioProcessedMs"]
+            if processed > self._processed_ms:
+                self.send(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.RECOGNITION_USAGE,
+                        request_id=self._session_id,
+                        recognition_usage=stt.RecognitionUsage(
+                            audio_duration=(processed - self._processed_ms) / 1000
+                        ),
+                    )
                 )
+                self._processed_ms = processed
+        else:
+            assert_never(message)
 
-            if turn.emitted_start and not turn.final_emitted and turn.final_text is not None:
-                turn.final_emitted = True
-                self._emit(stt.SpeechEventType.FINAL_TRANSCRIPT, turn_id, turn.final_text)
-
-            if not (turn.final_emitted and turn.ended):
-                return
-
-            self._emit(stt.SpeechEventType.END_OF_SPEECH, turn_id)
-            self._emit_usage(turn.usage_seconds)
-            del self._turns[turn_id]
-            self._remember_completed_turn(turn_id)
-
-    def _remember_completed_turn(self, turn_id: str) -> None:
-        if turn_id in self._completed_turn_ids:
-            return
-        if len(self._completed_turn_order) >= _MAX_COMPLETED_TURNS:
-            oldest = self._completed_turn_order.popleft()
-            self._completed_turn_ids.discard(oldest)
-        self._completed_turn_order.append(turn_id)
-        self._completed_turn_ids.add(turn_id)
-
-    def _emit(self, event_type: stt.SpeechEventType, turn_id: str, text: str | None = None) -> None:
-        alternatives: list[stt.SpeechData] = []
-        if text is not None:
-            alternatives.append(stt.SpeechData(language=LanguageCode(""), text=text))
-        self.send(stt.SpeechEvent(type=event_type, request_id=turn_id, alternatives=alternatives))
-
-    def _emit_usage(self, duration: float) -> None:
-        if duration <= 0:
-            return
-        self.send(
-            stt.SpeechEvent(
-                type=stt.SpeechEventType.RECOGNITION_USAGE,
-                request_id=self._session_id,
-                recognition_usage=stt.RecognitionUsage(audio_duration=duration),
-            )
+    def _transcript(
+        self, text: str, turn_id: str | int | None, *, final: bool = False
+    ) -> stt.Transcript:
+        return stt.Transcript(
+            text,
+            LanguageCode(""),
+            final=final,
+            request_id=str(turn_id) if turn_id is not None else "",
         )
-
-    def _flush_usage(self) -> None:
-        duration = self._pending_usage_seconds
-        self._pending_usage_seconds = 0.0
-        for turn in self._turns.values():
-            duration += turn.usage_seconds
-            turn.usage_seconds = 0.0
-        self._emit_usage(duration)
-
-    def _transcript_turn_id(self, message: dict[str, object]) -> str:
-        value = message.get("turnId")
-        if value is not None:
-            return _normalize_turn_id(value, event="transcript")
-
-        if self._provider_active_turn_id is not None:
-            return self._provider_active_turn_id
-        raise _protocol_error("transcript event is missing turnId outside an active turn")
-
-    def _required_turn_id(self, message: dict[str, object], *, event: str) -> str:
-        value = message.get("turnId")
-        if value is None:
-            raise _protocol_error(f"{event} event is missing turnId")
-        return _normalize_turn_id(value, event=event)
-
-    def _validate_clean_close(self) -> None:
-        if self._turns:
-            raise _protocol_error("closed with incomplete speech turns")

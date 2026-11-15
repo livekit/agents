@@ -1,4 +1,4 @@
-"""Deepgram STT (v1 and Flux) against a local peer speaking Deepgram's live and batch wire."""
+"""Deepgram STT (Nova and Flux) against a local peer speaking Deepgram's live and batch wire."""
 
 from __future__ import annotations
 
@@ -114,8 +114,11 @@ async def test_flux_live_fields_reconfigure_in_band_without_reconnecting() -> No
     """
     peer = _Peer()
     async with _server(peer.handle) as server, http.open():
-        model = deepgram.STTv2(
-            api_key="test", eot_threshold=0.7, base_url=str(server.make_url("/listen"))
+        model = deepgram.STT(
+            api_key="test",
+            model="flux-general-en",
+            eot_threshold=0.7,
+            base_url=str(server.make_url("/listen")),
         )
         async with model.stream(conn_options=NO_RETRY) as stream:
             stream.push_frame(_audio(50))
@@ -428,8 +431,8 @@ def test_flux_eager_threshold_above_the_end_of_turn_threshold_fails_locally() ->
     https://github.com/livekit/agents/issues/5199
     """
     with pytest.raises(ValueError, match="eot_threshold"):
-        deepgram.STTv2(api_key="test", eager_eot_threshold=0.85)
-    model = deepgram.STTv2(api_key="test", eager_eot_threshold=0.5)
+        deepgram.STT(api_key="test", model="flux-general-en", eager_eot_threshold=0.85)
+    model = deepgram.STT(api_key="test", model="flux-general-en", eager_eot_threshold=0.5)
     with pytest.raises(ValueError, match="eot_threshold"):
         model.update_options(eager_eot_threshold=0.85)
 
@@ -456,3 +459,38 @@ async def test_session_keyterms_set_mid_speech_reconnect_only_once_the_speech_en
     assert kinds == [stt.SpeechEventType.FINAL_TRANSCRIPT, stt.SpeechEventType.END_OF_SPEECH]
     assert (await peer.queries.get()).getall("keyterm", []) == []
     assert (await peer.queries.get()).getall("keyterm") == ["LiveKit"]
+
+
+def test_an_option_of_the_other_model_family_is_refused() -> None:
+    """Flux and Nova take different options: one given to the other family fails locally
+    instead of being ignored, and the model cannot move to the other family's endpoint."""
+    with pytest.raises(ValueError, match="eot_threshold"):
+        deepgram.STT(api_key="test", model="nova-3", eot_threshold=0.8)
+    with pytest.raises(ValueError, match="interim_results"):
+        deepgram.STT(api_key="test", model="flux-general-en", interim_results=False)
+    nova = deepgram.STT(api_key="test", model="nova-3")
+    with pytest.raises(ValueError, match="language_hint"):
+        nova.update_options(language_hint=["en"])
+    with pytest.raises(ValueError, match="flux-general-en"):
+        nova.update_options(model="flux-general-en")
+    flux = deepgram.STT(api_key="test", model="flux-general-en")
+    with pytest.raises(ValueError, match="nova-3"):
+        flux.update_options(model="nova-3")
+    assert (nova.model, flux.model) == ("nova-3", "flux-general-en")
+
+
+async def test_a_new_sample_rate_leaves_an_open_stream_at_the_rate_of_its_audio() -> None:
+    """An open stream resamples its audio to the rate it was created with: its reconnection
+    still declares that rate, not the one later set for new streams."""
+    peer = _Peer()
+    async with _server(peer.handle) as server, http.open():
+        model = deepgram.STT(api_key="test", base_url=str(server.make_url("/listen")))
+        async with model.stream(conn_options=NO_RETRY):
+            await peer.sockets.get()
+            model.update_options(sample_rate=8000, language="fr")
+            await peer.sockets.get()
+        await model.aclose()
+
+    first, second = await peer.queries.get(), await peer.queries.get()
+    assert (first["sample_rate"], second["sample_rate"]) == ("16000", "16000")
+    assert second["language"] == "fr"

@@ -1,25 +1,18 @@
 from typing import Literal
 
-# Speech to Text (v1 and v2)
-
+# Speech-to-Text V2 models
+# https://docs.cloud.google.com/speech-to-text/docs/speech-to-text-supported-languages
 SpeechModels = Literal[
     "long",
     "short",
     "telephony",
+    "telephony_short",
     "medical_dictation",
     "medical_conversation",
     "chirp",
     "chirp_2",
     "chirp_3",
-    "latest_long",
-    "latest_short",
-]
-# https://docs.cloud.google.com/speech-to-text/docs/transcription-model
-
-SpeechModelsV2 = Literal[
-    "telephony",
-    "chirp_2",
-    "chirp_3",
+    "chirp_telephony",
 ]
 
 SpeechLanguages = Literal[

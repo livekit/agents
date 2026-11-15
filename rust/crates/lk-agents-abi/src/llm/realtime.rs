@@ -907,6 +907,8 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
     name = "OpenAIProtocolModel",
     base = "llm.realtime.RealtimeModel",
     native = OpenAIRealtimeModel,
+    refuse(session),
+    node = "session.llm_node",
     base_args(capabilities),
     host_args(dialect = "self._dialect", label = "self._provider_label", gateway = "self._gateway")
 ))]

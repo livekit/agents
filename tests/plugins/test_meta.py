@@ -8,14 +8,13 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, http
+from livekit.agents import APIConnectOptions, APIError, http, stt
 from livekit.plugins import meta
 
 ONE_TRY = APIConnectOptions(max_retry=0, retry_interval=0.0, connect_timeout=1.0, read_timeout=1.0)
@@ -38,8 +37,8 @@ class Muse:
 
 
 @pytest.fixture
-async def muse(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Muse]:
-    """A local Muse ASR endpoint behind a TLS terminator.
+async def muse() -> AsyncIterator[Muse]:
+    """A local Muse ASR endpoint.
 
     It acknowledges the handshake with a session id, then plays ``script``: a dict or str is
     sent as text, ``("close", code, reason)`` closes, ``"drop"`` drops the connection after the
@@ -73,15 +72,8 @@ async def muse(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Muse]:
 
     app = web.Application()
     app.router.add_get("/v1/asr/realtime", realtime)
-    async with TestServer(app) as server, http.open() as session:
-        connect = session.ws_connect
-
-        # Any: ws_connect's keyword options, forwarded untouched
-        async def local_tls_terminator(url: str, **kwargs: Any) -> http.WebSocket:
-            return await connect(url.replace("wss://", "ws://", 1), **kwargs)
-
-        monkeypatch.setattr(session, "ws_connect", local_tls_terminator)
-        peer.url = str(server.make_url("/v1/asr/realtime").with_scheme("wss"))
+    async with TestServer(app) as server, http.open():
+        peer.url = str(server.make_url("/v1/asr/realtime").with_scheme("ws"))
         yield peer
 
 
@@ -171,3 +163,22 @@ async def test_failures_redact_transport_and_provider_details(
     assert secret not in rendered
     assert "api-key-secret" not in rendered
     assert caught.value.body is None
+
+
+# Catches: an untagged message Muse added since read as the handshake's acknowledgement,
+# failing the stream as a protocol error instead of being skipped.
+async def test_an_untagged_message_that_names_no_session_is_skipped(muse: Muse) -> None:
+    muse.script = [
+        {"serverTime": 12},
+        {"type": "speechComplete", "transcript": "hello", "turnId": 1},
+    ]
+    provider = meta.STT(api_key="key", url=muse.url)
+
+    async with provider.stream(conn_options=ONE_TRY) as stream:
+        stream.push_frame(AUDIO)
+        stream.end_input()
+        events = [event async for event in stream]
+    await provider.aclose()
+
+    finals = [e for e in events if e.type is stt.SpeechEventType.FINAL_TRANSCRIPT]
+    assert [e.alternatives[0].text for e in finals] == ["hello"]

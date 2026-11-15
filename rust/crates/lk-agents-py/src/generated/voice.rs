@@ -5694,16 +5694,9 @@ impl WarmTransfer {
                 py,
                 out.into_iter()
                     .map(|x| {
-                        ::pyo3::PyResult::Ok({
-                            let d = ::pyo3::types::PyDict::new(py);
-                            for (k, x) in x {
-                                d.set_item(
-                                    ::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?,
-                                    crate::py_values::value_to_py(py, &x)?,
-                                )?;
-                            }
-                            d.into_any()
-                        })
+                        crate::generated::records::tool_context::raw_function_description_to_py(
+                            py, x,
+                        )
                     })
                     .collect::<PyResult<Vec<_>>>()?,
             )?
@@ -12437,8 +12430,8 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
     fn function_tools_executed(
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
-        function_calls: ::std::vec::Vec<::lk_agents_abi::ChatItem>,
-        function_call_outputs: ::std::vec::Vec<::lk_agents_abi::ChatItem>,
+        function_calls: ::std::vec::Vec<::lk_agents_abi::FunctionCall>,
+        function_call_outputs: ::std::vec::Vec<::lk_agents_abi::FunctionCallOutput>,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<::std::vec::Vec<bool>, ::lk_agents_abi::errors::HostError>,
@@ -12458,7 +12451,9 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                         py,
                         function_calls_arg
                             .into_iter()
-                            .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
+                            .map(|x| {
+                                crate::generated::records::chat_items::function_call_to_py(py, x)
+                            })
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
                     .into_any(),
@@ -12466,7 +12461,11 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                         py,
                         function_call_outputs_arg
                             .into_iter()
-                            .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
+                            .map(|x| {
+                                crate::generated::records::chat_items::function_call_output_to_py(
+                                    py, x,
+                                )
+                            })
                             .collect::<PyResult<Vec<_>>>()?,
                     )?
                     .into_any(),

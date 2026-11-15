@@ -6,7 +6,7 @@ import functools
 import hashlib
 import weakref
 from collections.abc import Awaitable, Callable
-from typing import Any, Self, cast
+from typing import TYPE_CHECKING, Generic, Self, TypeAlias
 
 from pydantic import JsonValue
 
@@ -14,8 +14,11 @@ from .. import _core
 from .._generated import facades_llm_mcp as _facades, public_llm_mcp as _public
 from .._generated.mcp import MCP_IDLE_CLOSE_SECONDS, ResolvedToolOptions
 from .._generated.public_llm_mcp import *  # noqa: F403
-from ..voice.events import RunContext
+from ..voice.events import Context_T, RunContext
 from .tool_context import AsyncToolset, RawFunctionTool, Toolset, function_tool
+
+if TYPE_CHECKING:
+    from ..voice.agent_session import VoiceSession
 
 __all__ = [
     "MCPServer",
@@ -25,15 +28,15 @@ __all__ = [
 __all__ += _public.__all__
 
 
-HeadersFor = Callable[[RunContext[Any]], dict[str, str]]
+HeadersFor: TypeAlias = Callable[[RunContext[Context_T]], dict[str, str]]
 """A run's HTTP headers, from its ``RunContext``."""
-TokenFor = Callable[[RunContext[Any]], "str | None"]
+TokenFor: TypeAlias = Callable[[RunContext[Context_T]], "str | None"]
 """A run's bearer token, from its ``RunContext``."""
 _Credentials = tuple[tuple[tuple[str, str], ...], "str | None"]
 """Headers (sorted name/value pairs) and a bearer token, comparable and hashable."""
 
 
-class MCPServerHTTP(_facades.MCPServerHTTP):
+class MCPServerHTTP(_facades.MCPServerHTTP, Generic[Context_T]):
     """An MCP server over Streamable HTTP.
 
     Args:
@@ -56,8 +59,8 @@ class MCPServerHTTP(_facades.MCPServerHTTP):
         self,
         url: str,
         *,
-        headers: dict[str, str] | HeadersFor | None = None,
-        auth: str | TokenFor | None = None,
+        headers: dict[str, str] | HeadersFor[Context_T] | None = None,
+        auth: str | TokenFor[Context_T] | None = None,
         init_timeout: float = 5,
         read_timeout: float | None = 300,
         request_timeout: float | None = 30,
@@ -83,7 +86,7 @@ class MCPServerHTTP(_facades.MCPServerHTTP):
     def _per_run(self) -> bool:
         return callable(self._headers) or callable(self._auth)
 
-    def _credentials(self, ctx: RunContext[Any] | None) -> _Credentials:
+    def _credentials(self, ctx: RunContext[Context_T] | None) -> _Credentials:
         headers, auth = self._headers, self._auth
         if callable(headers):
             assert ctx is not None
@@ -93,9 +96,9 @@ class MCPServerHTTP(_facades.MCPServerHTTP):
             auth = auth(ctx)
         return tuple(sorted((name, str(value)) for name, value in (headers or {}).items())), auth
 
-    def _for_run(self, ctx: RunContext[Any]) -> MCPServerHTTP:
+    def _for_run(self, ctx: RunContext[Context_T]) -> MCPServerHTTP[Context_T]:
         init_timeout, read_timeout, request_timeout = self._timeouts
-        copy = MCPServerHTTP(
+        copy = MCPServerHTTP[Context_T](
             self._url,
             init_timeout=init_timeout,
             read_timeout=read_timeout,
@@ -131,11 +134,11 @@ class MCPServerHTTP(_facades.MCPServerHTTP):
         return f"MCPServerHTTP(url={self._url})"
 
 
-MCPServer = MCPServerHTTP | _facades.MCPServerStdio
+MCPServer: TypeAlias = MCPServerHTTP[Context_T] | _facades.MCPServerStdio
 """An MCP server an ``MCPToolset`` takes its tools from."""
 
 
-class MCPToolset(AsyncToolset):
+class MCPToolset(AsyncToolset, Generic[Context_T]):
     """An ``MCPServer``'s tools for an ``Agent``; ``setup()`` connects and fetches them.
 
     A server that cannot be reached leaves the toolset without tools instead of failing the run
@@ -170,7 +173,7 @@ class MCPToolset(AsyncToolset):
         self,
         *,
         id: str,
-        mcp_server: MCPServer,
+        mcp_server: MCPServer[Context_T],
         tool_options: dict[str, MCPToolOptions] | None = None,
         idle_timeout: float = MCP_IDLE_CLOSE_SECONDS,
     ) -> None:
@@ -183,28 +186,30 @@ class MCPToolset(AsyncToolset):
             _describe(mcp_server), mcp_server._native, idle_timeout
         )
         # per-run credentials: one toolset per credential set, kept by a call for its length
-        self._by_credentials: dict[str, MCPToolset] = {}
-        self._by_call: weakref.WeakKeyDictionary[object, MCPToolset] = weakref.WeakKeyDictionary()
-        self._release: Callable[[], object] | None = None
+        self._by_credentials: dict[str, MCPToolset[Context_T]] = {}
+        self._by_call: weakref.WeakKeyDictionary[VoiceSession[Context_T], MCPToolset[Context_T]] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._release: Callable[[], MCPToolset[Context_T] | None] | None = None
 
     @property
     def _per_run(self) -> bool:
         server = self._mcp_server
         return isinstance(server, MCPServerHTTP) and server._per_run
 
-    def for_run(self, ctx: RunContext[Any]) -> Toolset:
+    def for_run(self, ctx: RunContext[Context_T]) -> Toolset:
         """This toolset, or with per-run credentials the one for ``ctx``'s: shared by the runs
         whose credentials are the same, and kept by a call for its whole length."""
-        if not self._per_run:
+        server = self._mcp_server
+        if not isinstance(server, MCPServerHTTP) or not server._per_run:
             return self
         call = ctx.live_session
         if call is not None and (kept := self._by_call.get(call)) is not None:
             return kept
-        server = cast(MCPServerHTTP, self._mcp_server)
         # keyed by a digest, so the dict never holds the credentials themselves
         key = hashlib.sha256(repr(server._credentials(ctx)).encode()).hexdigest()
         if (toolset := self._by_credentials.get(key)) is None:
-            toolset = MCPToolset(
+            toolset = MCPToolset[Context_T](
                 id=self.id,
                 mcp_server=server._for_run(ctx),
                 tool_options=self._tool_options,
@@ -239,14 +244,11 @@ class MCPToolset(AsyncToolset):
         if not server.initialized:
             await server.initialize()
         await _refresh(server)
-        listed = cast(list[dict[str, Any]], await server.list_tools())
         self._tools = [
             _function_tool(
-                server,
-                tool,
-                _core.resolve_mcp_tool_options(self._tool_options.get(tool["name"])),
+                server, tool, _core.resolve_mcp_tool_options(self._tool_options.get(tool.name))
             )
-            for tool in listed
+            for tool in await server.list_tools()
         ]
 
     async def _core_close_idle(self) -> None:
@@ -257,11 +259,11 @@ class MCPToolset(AsyncToolset):
 
 
 def _function_tool(
-    server: MCPServer, tool: dict[str, Any], options: ResolvedToolOptions
+    server: MCPServer[Context_T], tool: MCPTool, options: ResolvedToolOptions
 ) -> RawFunctionTool:
-    name = tool["name"]
+    name = tool.name
 
-    async def call(arguments: dict[str, Any], progress: RunContext | None) -> Any:
+    async def call(arguments: dict[str, JsonValue], progress: RunContext[Context_T] | None) -> str:
         await _refresh(server)
         result = await server._native.call_tool(
             name,
@@ -272,23 +274,16 @@ def _function_tool(
         )
         return _core.mcp_render_result(name, result)
 
-    impl: Callable[..., Awaitable[Any]]
-    if options["report_progress"]:
+    async def reporting(ctx: RunContext[Context_T], raw_arguments: dict[str, JsonValue]) -> str:
+        return await call(raw_arguments, ctx)
 
-        async def impl(ctx: RunContext, raw_arguments: dict[str, Any]) -> Any:
-            return await call(raw_arguments, ctx)
+    async def silent(raw_arguments: dict[str, JsonValue]) -> str:
+        return await call(raw_arguments, None)
 
-    else:
-
-        async def impl(raw_arguments: dict[str, Any]) -> Any:
-            return await call(raw_arguments, None)
-
-    schema = _core.mcp_raw_schema(
-        name, tool.get("description"), tool.get("inputSchema") or {}, tool.get("_meta")
-    )
+    impl: Callable[..., Awaitable[str]] = reporting if options["report_progress"] else silent
     return function_tool(
         impl,
-        raw_schema=cast(dict[str, JsonValue], schema),
+        raw_schema=_core.mcp_raw_schema(tool),
         flags=options["flags"],
         on_duplicate=options["on_duplicate"],
         duplicate_scope=options["duplicate_scope"],
@@ -296,12 +291,12 @@ def _function_tool(
     )
 
 
-async def _refresh(server: MCPServer) -> None:
+async def _refresh(server: MCPServer[Context_T]) -> None:
     if isinstance(server, MCPServerHTTP):
         await server._refresh()
 
 
-def _describe(server: MCPServer) -> str:
+def _describe(server: MCPServer[Context_T]) -> str:
     if isinstance(server, MCPServerHTTP):
         return repr(server)
     return f"MCPServerStdio(command={server._command}, args={list(server._args)})"

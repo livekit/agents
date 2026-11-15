@@ -6,6 +6,7 @@ import secrets
 import struct
 
 import opuslib_next as opuslib
+from opuslib_next.api import ctl, encoder as opus_encoder
 
 SAMPLE_RATES = {8000, 12000, 16000, 24000, 48000}
 FRAME_DURATIONS_MS = {10, 20, 40, 60}
@@ -54,7 +55,6 @@ class OggOpusEncoder:
         self._encoder = opuslib.Encoder(sample_rate, 1, application)
         if bitrate > 0:
             self._encoder.bitrate = bitrate
-        ctl = opuslib.api.ctl
         for request, value in (
             (ctl.set_vbr, 1),
             (ctl.set_complexity, 10),
@@ -63,7 +63,7 @@ class OggOpusEncoder:
             (ctl.set_dtx, 0),
             (ctl.set_inband_fec, 0),
         ):
-            opuslib.api.encoder.encoder_ctl(self._encoder.encoder_state, request, value)
+            opus_encoder.encoder_ctl(self._encoder.encoder_state, request, value)
 
     def encode(self, pcm: bytes, *, end: bool) -> bytes:
         out = bytearray()

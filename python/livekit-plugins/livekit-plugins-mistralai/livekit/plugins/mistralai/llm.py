@@ -349,12 +349,10 @@ class LLMStream(llm.LLMStream):
 
         try:
             messages, _ = await self._chat_ctx.to_provider_format(format="openai")
-            for message in messages:
-                if message["role"] == "developer":
-                    message["role"] = "system"
-                message.pop("extra_content", None)
-                for call in message.get("tool_calls", []):
-                    call.pop("extra_content", None)
+            # Mistral has no developer role; validation drops the keys it does not model
+            chat_messages = _CHAT_MESSAGES.validate_python(
+                [{**m, "role": "system"} if m["role"] == "developer" else m for m in messages]
+            )
             tools_list = self._tool_ctx.parse_function_tools("openai", strict=True)
 
             extra_kwargs = dict(self._extra_kwargs)
@@ -387,7 +385,7 @@ class LLMStream(llm.LLMStream):
 
             async_response = await self._client.chat.stream_async(
                 model=self._model,
-                messages=_CHAT_MESSAGES.validate_python(messages),
+                messages=chat_messages,
                 timeout_ms=request_timeout_ms(self._conn_options),
                 retries=None,
                 **call_kwargs,

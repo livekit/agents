@@ -55,7 +55,7 @@ def test_provider_updates_bind_only_the_changed_legs_and_their_nodes() -> None:
 def _native_facades() -> list[tuple[type, tuple[str, ...], str]]:
     """Every native provider facade, the hooks it runs itself and where their behaviour belongs."""
     from livekit.agents import inference, llm, stt, tts
-    from livekit.agents.llm import _realtime, duplex, realtime
+    from livekit.agents.llm import duplex, openai_protocol, realtime
 
     tts_hooks, stt_hooks = ("_synthesize", "_stream"), ("stream", "recognize", "_recognize_impl")
     return [
@@ -68,7 +68,7 @@ def _native_facades() -> list[tuple[type, tuple[str, ...], str]]:
         (inference.LLM, ("chat",), "session.llm_node"),
         (llm.FallbackAdapter, ("chat",), "session.llm_node"),
         (inference.VAD, ("stream",), "session.stt_node"),
-        (_realtime.RealtimeModel, ("session",), "session.llm_node"),
+        (openai_protocol.OpenAIProtocolModel, ("session",), "session.llm_node"),
         (realtime.RealtimeModelFallbackAdapter, ("session",), "session.llm_node"),
         (duplex.DuplexRealtimeAdapter, ("session",), "session.llm_node"),
     ]

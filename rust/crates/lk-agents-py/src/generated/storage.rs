@@ -526,8 +526,9 @@ impl CoreContextActivation {
         })
     }
 
-    /// Stage the validated fields; a stale activation cannot overwrite a newer revision.
-    #[pyo3(signature = (scope_id, identity, revision, fields))]
+    /// Stage validated fields and an explicitly assigned detached session snapshot together;
+    /// a stale activation cannot overwrite either part of a newer revision.
+    #[pyo3(signature = (scope_id, identity, revision, fields, session = None))]
     fn save<'py>(
         &self,
         py: Python<'py>,
@@ -536,6 +537,7 @@ impl CoreContextActivation {
         #[pyo3(from_py_with = _extract_context_activation_save_revision)]
         revision: ContextActivationSaveRevisionInput,
         fields: Bound<'_, PyAny>,
+        session: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let fields = fields.try_iter().and_then(|items| {
@@ -546,9 +548,11 @@ impl CoreContextActivation {
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
+        let session =
+            session.map(|v| crate::py_values::value_from_py(v.as_any(), "session")).transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::save(&this, scope_id, identity, revision, fields)
+            let out = <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::save(&this, scope_id, identity, revision, fields, session)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(

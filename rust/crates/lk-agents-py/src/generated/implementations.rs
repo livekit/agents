@@ -82,7 +82,7 @@ impl super::Implementations for Selected {
     type PersistedSessionState = ::lk_agents_runtime::storage::session_state::SessionState;
     type SessionBinding = ::lk_agents_runtime::storage::session_binding::SessionBinding;
     type VoiceStore = ::lk_agents_runtime::storage::voice::VoiceStore;
-    type SpeechState = ::lk_agents_runtime::inference::stt::speech::Speech;
+    type SpeechNormalizer = ::lk_agents_runtime::inference::stt::normalizer::SpeechNormalizer;
     type FallbackStt = ::lk_agents_runtime::inference::fallback::FallbackStt;
     type InferenceStt = ::lk_agents_runtime::inference::stt::GatewayStt;
     type SttStreamAdapter = ::lk_agents_runtime::inference::stt::stream_adapter::StreamAdapter;

@@ -10,7 +10,6 @@ import asyncio
 import io
 import wave
 from collections.abc import AsyncIterator, Awaitable, Callable
-from types import ModuleType
 from typing import TypeAlias
 
 import google.auth
@@ -19,7 +18,6 @@ from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import Aborted, BadRequest, DeadlineExceeded
 from google.auth.credentials import AnonymousCredentials, Credentials as GoogleCredentials
 from google.cloud import texttospeech
-from google.cloud.speech_v1.types import cloud_speech as v1
 from google.cloud.speech_v2.types import cloud_speech as v2
 from google.oauth2.credentials import Credentials
 from google.protobuf.duration_pb2 import Duration
@@ -41,10 +39,10 @@ OPTIONS = APIConnectOptions(max_retry=0)
 FRAME = rtc.AudioFrame(bytes(3200), 16000, 1, 1600)
 
 
-RecognizeRequest: TypeAlias = "v1.RecognizeRequest | v2.RecognizeRequest"
-StreamingRequest: TypeAlias = "v1.StreamingRecognizeRequest | v2.StreamingRecognizeRequest"
-RecognizeResponse: TypeAlias = "v1.RecognizeResponse | v2.RecognizeResponse"
-StreamingResponse: TypeAlias = "v1.StreamingRecognizeResponse | v2.StreamingRecognizeResponse"
+RecognizeRequest: TypeAlias = v2.RecognizeRequest
+StreamingRequest: TypeAlias = v2.StreamingRecognizeRequest
+RecognizeResponse: TypeAlias = v2.RecognizeResponse
+StreamingResponse: TypeAlias = v2.StreamingRecognizeResponse
 StreamingRecognize: TypeAlias = (
     "Callable[[AsyncIterator[StreamingRequest]], Awaitable[AsyncIterator[StreamingResponse]]]"
 )
@@ -122,7 +120,7 @@ def speech(monkeypatch: pytest.MonkeyPatch) -> SpeechAPI:
 
     api = SpeechAPI()
 
-    class Client:  # the plugin builds its client from the SDK class and unions the classes
+    class Client:  # the plugin builds its client from the SDK class
         def __new__(  # type: ignore[misc]  # stands in for the SDK client
             cls,
             *,
@@ -131,49 +129,38 @@ def speech(monkeypatch: pytest.MonkeyPatch) -> SpeechAPI:
         ) -> SpeechAPI:
             return api(credentials=credentials, client_options=client_options)
 
-    monkeypatch.setattr(google_stt, "SpeechAsyncClientV1", Client)
-    monkeypatch.setattr(google_stt, "SpeechAsyncClientV2", Client)
+    monkeypatch.setattr(google_stt, "SpeechAsyncClient", Client)
     return api
 
 
 def result(
-    speech_api: ModuleType = v2,
     text: str = "Hello",
     *,
     final: bool = True,
     confidence: float | None = None,
 ) -> StreamingResponse:
     """A streaming response carrying one result."""
-    scored = {} if confidence is None else {"confidence": confidence}
-    response: StreamingResponse = speech_api.StreamingRecognizeResponse(
+    alternative = v2.SpeechRecognitionAlternative(transcript=text)
+    if confidence is not None:
+        alternative.confidence = confidence
+    return v2.StreamingRecognizeResponse(
         results=[
-            speech_api.StreamingRecognitionResult(
-                alternatives=[speech_api.SpeechRecognitionAlternative(transcript=text, **scored)],
+            v2.StreamingRecognitionResult(
+                alternatives=[alternative],
                 is_final=final,
                 language_code="en-US",
             )
         ]
     )
-    return response
 
 
-def one_word(
-    speech_api: ModuleType, start: Duration, end: Duration
-) -> v1.SpeechRecognitionAlternative | v2.SpeechRecognitionAlternative:
-    """An alternative with the single word "test", in the v1 or v2 offset field names."""
-    fields = ("start_offset", "end_offset") if speech_api is v2 else ("start_time", "end_time")
-    alternative: v1.SpeechRecognitionAlternative | v2.SpeechRecognitionAlternative = (
-        speech_api.SpeechRecognitionAlternative(
-            transcript="test",
-            confidence=1.0,
-            words=[
-                speech_api.WordInfo(
-                    word="test", confidence=1.0, **dict(zip(fields, (start, end), strict=True))
-                )
-            ],
-        )
+def one_word(start: Duration, end: Duration) -> v2.SpeechRecognitionAlternative:
+    """An alternative with the single word "test"."""
+    return v2.SpeechRecognitionAlternative(
+        transcript="test",
+        confidence=1.0,
+        words=[v2.WordInfo(word="test", confidence=1.0, start_offset=start, end_offset=end)],
     )
-    return alternative
 
 
 async def transcribe(provider: STT) -> list[stt.SpeechEvent]:
@@ -252,10 +239,9 @@ async def test_activity_boundaries_deliver_exactly_one_final_transcript(
     assert list(config.config.language_codes) == [language]
 
 
-@pytest.mark.parametrize("speech_api, model", [(v1, "latest_long"), (v2, "chirp_2")])
 @pytest.mark.parametrize("confidence", [None, 0.1, 0.9])
 async def test_final_transcripts_bypass_the_confidence_filter_but_interims_do_not(
-    speech: SpeechAPI, speech_api: ModuleType, model: str, confidence: float | None
+    speech: SpeechAPI, confidence: float | None
 ) -> None:
     """A final transcript is kept whatever its confidence; a low-confidence interim is dropped.
 
@@ -263,12 +249,12 @@ async def test_final_transcripts_bypass_the_confidence_filter_but_interims_do_no
     """
     speech.streams = [
         [
-            result(speech_api, "Interim", final=False, confidence=confidence),
-            result(speech_api, "Final", confidence=confidence),
+            result("Interim", final=False, confidence=confidence),
+            result("Final", confidence=confidence),
         ]
     ]
 
-    received = await transcribe(cloud_stt(model, min_confidence_threshold=0.5))
+    received = await transcribe(cloud_stt(min_confidence_threshold=0.5))
 
     assert finals(received) == ["Final"]
     interims = [e.alternatives[0].text for e in received if e.type.name == "INTERIM_TRANSCRIPT"]
@@ -297,26 +283,23 @@ async def test_a_response_with_several_results_reports_its_final_one(speech: Spe
     assert (final.alternatives[0].text, final.alternatives[0].language) == ("best", "te-ST")
 
 
-@pytest.mark.parametrize("speech_api, model", [(v1, "latest_long"), (v2, "chirp_2")])
 async def test_word_timings_land_on_the_stream_timeline(
-    speech: SpeechAPI, speech_api: ModuleType, model: str
+    speech: SpeechAPI,
 ) -> None:
     """Word offsets reach the transcript, shifted to where the stream sits on the input.
 
     https://github.com/livekit/agents/pull/4338
     """
-    alternative = one_word(speech_api, Duration(seconds=0), Duration(seconds=1))
+    alternative = one_word(Duration(seconds=0), Duration(seconds=1))
     speech.streams = [
         [
-            speech_api.StreamingRecognizeResponse(
-                results=[
-                    speech_api.StreamingRecognitionResult(alternatives=[alternative], is_final=True)
-                ]
+            v2.StreamingRecognizeResponse(
+                results=[v2.StreamingRecognitionResult(alternatives=[alternative], is_final=True)]
             )
         ]
     ]
 
-    [final] = [e for e in await transcribe(cloud_stt(model)) if e.type.name == "FINAL_TRANSCRIPT"]
+    [final] = [e for e in await transcribe(cloud_stt()) if e.type.name == "FINAL_TRANSCRIPT"]
 
     [word] = final.alternatives[0].words or []
     assert (word.text, word.confidence) == ("test", 1.0)
@@ -447,7 +430,6 @@ async def test_an_rpc_closed_before_audio_releases_its_request_reader(speech: Sp
 # ---- one-shot recognition
 
 
-@pytest.mark.parametrize("speech_api, model", [(v1, "latest_long"), (v2, "chirp_2")])
 @pytest.mark.parametrize(
     "empty_alternatives",
     [
@@ -462,26 +444,24 @@ async def test_an_rpc_closed_before_audio_releases_its_request_reader(speech: Sp
     ],
 )
 async def test_an_empty_recognition_does_not_prevent_later_speech(
-    speech: SpeechAPI, speech_api: ModuleType, model: str, empty_alternatives: bool
+    speech: SpeechAPI, empty_alternatives: bool
 ) -> None:
     """An empty result is reported as no alternatives, and the next recognition still works.
 
     https://github.com/livekit/agents/pull/680 https://github.com/livekit/agents/issues/683
     """
     speech.replies = [
-        speech_api.RecognizeResponse(
-            results=[speech_api.SpeechRecognitionResult()] if empty_alternatives else []
-        ),
-        speech_api.RecognizeResponse(
+        v2.RecognizeResponse(results=[v2.SpeechRecognitionResult()] if empty_alternatives else []),
+        v2.RecognizeResponse(
             results=[
-                speech_api.SpeechRecognitionResult(
-                    alternatives=[speech_api.SpeechRecognitionAlternative(transcript="Recovered")],
+                v2.SpeechRecognitionResult(
+                    alternatives=[v2.SpeechRecognitionAlternative(transcript="Recovered")],
                     language_code="en-US",
                 )
             ]
         ),
     ]
-    provider = cloud_stt(model)
+    provider = cloud_stt()
 
     try:
         first = await provider.recognize(FRAME, conn_options=OPTIONS)
@@ -493,22 +473,17 @@ async def test_an_empty_recognition_does_not_prevent_later_speech(
     assert [alternative.text for alternative in second.alternatives] == ["Recovered"]
 
 
-@pytest.mark.parametrize("speech_api, model", [(v1, "latest_long"), (v2, "chirp_2")])
 async def test_fractional_word_durations_parse(
-    speech: SpeechAPI, speech_api: ModuleType, model: str
+    speech: SpeechAPI,
 ) -> None:
     """Sub-second word offsets keep their fraction. https://github.com/livekit/agents/pull/3252"""
-    alternative = one_word(
-        speech_api, Duration(nanos=125000000), Duration(seconds=1, nanos=750000000)
-    )
+    alternative = one_word(Duration(nanos=125000000), Duration(seconds=1, nanos=750000000))
     speech.replies = [
-        speech_api.RecognizeResponse(
-            results=[
-                speech_api.SpeechRecognitionResult(alternatives=[alternative], language_code="en")
-            ]
+        v2.RecognizeResponse(
+            results=[v2.SpeechRecognitionResult(alternatives=[alternative], language_code="en")]
         )
     ]
-    provider = cloud_stt(model)
+    provider = cloud_stt()
 
     try:
         [data] = (await provider.recognize(FRAME, conn_options=OPTIONS)).alternatives
@@ -524,25 +499,20 @@ async def test_fractional_word_durations_parse(
     strict=True,
     reason="https://github.com/livekit/agents/pull/4338: recognize() words carry no confidence or offset",
 )
-@pytest.mark.parametrize("speech_api, model", [(v1, "latest_long"), (v2, "chirp_2")])
 async def test_recognized_words_carry_their_timing_and_confidence(
-    speech: SpeechAPI, speech_api: ModuleType, model: str
+    speech: SpeechAPI,
 ) -> None:
     """One-shot recognition reports its words like streaming does.
 
     https://github.com/livekit/agents/pull/4338
     """
-    alternative = one_word(speech_api, Duration(seconds=0), Duration(seconds=1))
+    alternative = one_word(Duration(seconds=0), Duration(seconds=1))
     speech.replies = [
-        speech_api.RecognizeResponse(
-            results=[
-                speech_api.SpeechRecognitionResult(
-                    alternatives=[alternative], language_code="te-ST"
-                )
-            ]
+        v2.RecognizeResponse(
+            results=[v2.SpeechRecognitionResult(alternatives=[alternative], language_code="te-ST")]
         )
     ]
-    provider = cloud_stt(model)
+    provider = cloud_stt()
 
     try:
         event = await provider.recognize(FRAME, conn_options=OPTIONS)
@@ -612,13 +582,25 @@ async def test_a_region_change_routes_to_a_fresh_regional_client(
     ]
 
 
-@pytest.mark.parametrize("speech_api, model", [(v1, "latest_long"), (v2, "chirp_2")])
+@pytest.mark.parametrize("model", [None, "long", "short", "chirp", "medical_dictation"])
+async def test_every_model_is_recognized_on_speech_v2(speech: SpeechAPI, model: str | None) -> None:
+    """`long`, `short` and `chirp` are V2 model names the V1 API rejects, so a stream with them
+    (or the default) must reach V2 with its recognizer."""
+    speech.streams = [[result()]]
+    provider = STT(credentials=anonymous(), project="test") if model is None else cloud_stt(model)
+
+    assert finals(await transcribe(provider)) == ["Hello"]
+
+    request = speech.streamed[0]
+    assert isinstance(request, v2.StreamingRecognizeRequest)
+    assert request.recognizer == "projects/test/locations/global/recognizers/_"
+    assert request.streaming_config.config.model == (model or "long")
+
+
 @pytest.mark.parametrize("explicit", [False, True])
 async def test_workload_credentials_need_no_service_account_file(
     speech: SpeechAPI,
     monkeypatch: pytest.MonkeyPatch,
-    speech_api: ModuleType,
-    model: str,
     explicit: bool,
 ) -> None:
     """Ambient or explicit workload credentials authenticate, and their project names the recognizer.
@@ -634,17 +616,15 @@ async def test_workload_credentials_need_no_service_account_file(
     monkeypatch.setattr(google.auth, "default", lambda *a, **kw: (ambient, "workload-project"))
     credentials = token_credentials("explicit-token", "workload-project")
     speech.replies = [
-        speech_api.RecognizeResponse(
+        v2.RecognizeResponse(
             results=[
-                speech_api.SpeechRecognitionResult(
-                    alternatives=[
-                        speech_api.SpeechRecognitionAlternative(transcript="Authenticated")
-                    ]
+                v2.SpeechRecognitionResult(
+                    alternatives=[v2.SpeechRecognitionAlternative(transcript="Authenticated")]
                 )
             ]
         )
     ]
-    provider = STT(model=model, credentials=credentials) if explicit else STT(model=model)
+    provider = STT(credentials=credentials) if explicit else STT()
 
     try:
         event = await provider.recognize(FRAME, conn_options=OPTIONS)
@@ -653,10 +633,8 @@ async def test_workload_credentials_need_no_service_account_file(
 
     assert event.alternatives[0].text == "Authenticated"
     assert speech.credentials == [credentials if explicit else None]
-    if speech_api is v2:
-        [request] = speech.recognized
-        assert isinstance(request, v2.RecognizeRequest)
-        assert request.recognizer == "projects/workload-project/locations/global/recognizers/_"
+    [request] = speech.recognized
+    assert request.recognizer == "projects/workload-project/locations/global/recognizers/_"
 
 
 async def test_an_explicit_project_names_the_recognizer(speech: SpeechAPI) -> None:

@@ -10,28 +10,30 @@
 use pyo3::prelude::*;
 
 // Declared in rust/crates/lk-agents-abi/src/stt/events.rs.
-type SpeechStateImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::SpeechState;
+type SpeechNormalizerImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::SpeechNormalizer;
 
-fn _extract_speech_state_started_speech_start_time(
+fn _extract_speech_normalizer_started_speech_start_time(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<SpeechStateStartedSpeechStartTimeInput> {
+) -> PyResult<SpeechNormalizerStartedSpeechStartTimeInput> {
     if obj.is_none() {
         Ok(None)
     } else {
         (crate::py_values::number_from_py::<f64>(obj.as_any(), "speech_start_time")).map(Some)
     }
 }
-type SpeechStateStartedSpeechStartTimeInput = ::std::option::Option<f64>;
+type SpeechNormalizerStartedSpeechStartTimeInput = ::std::option::Option<f64>;
 
-/// One recognition's speech state: START_OF_SPEECH and END_OF_SPEECH are derived here from what
-/// the stream reports, the provider's own boundaries deduplicated, and open speech ends at each
-/// connection boundary.
-#[pyclass(name = "SpeechState", module = "livekit.agents._core")]
-pub struct SpeechState(pub(crate) SpeechStateImpl);
+/// Normalizes one recognition stream's provider observations into speech events.
+/// Owns both START_OF_SPEECH and END_OF_SPEECH: missing boundaries are synthesized, provider
+/// boundaries are deduplicated, and a connection boundary settles pending words and open speech.
+/// Utterances identify provider speech across transcript revisions, not conversational turns.
+/// Turn completion, interruption policy and provider I/O belong to their enclosing owners.
+#[pyclass(name = "SpeechNormalizer", module = "livekit.agents._core")]
+pub struct SpeechNormalizer(pub(crate) SpeechNormalizerImpl);
 
 #[pymethods]
-impl SpeechState {
+impl SpeechNormalizer {
     /// `provider_vad`: the provider detects speech itself, so its reported end closes the
     /// speech and a final transcript does not. `transcribes_after_speech_ends`: the
     /// `STTCapabilities` of that name.
@@ -41,27 +43,32 @@ impl SpeechState {
         py: Python<'_>,
         provider_vad: bool,
         transcribes_after_speech_ends: bool,
-    ) -> PyResult<SpeechState> {
+    ) -> PyResult<SpeechNormalizer> {
         let out = py.detach(|| {
-            <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::new(
+            <SpeechNormalizerImpl as ::lk_agents_abi::stt::events::SpeechNormalizer>::new(
                 provider_vad,
                 transcribes_after_speech_ends,
             )
         });
-        ::pyo3::PyResult::Ok(SpeechState(out))
+        ::pyo3::PyResult::Ok(SpeechNormalizer(out))
     }
 
     /// Whether a speech is open.
     #[getter]
     fn speaking(&self) -> PyResult<bool> {
-        let out = <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::speaking(&self.0);
+        let out =
+            <SpeechNormalizerImpl as ::lk_agents_abi::stt::events::SpeechNormalizer>::speaking(
+                &self.0,
+            );
         ::pyo3::PyResult::Ok(out)
     }
 
     /// No speech is open and no interim awaits its final: nothing heard is left to transcribe.
     #[getter]
     fn settled(&self) -> PyResult<bool> {
-        let out = <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::settled(&self.0);
+        let out = <SpeechNormalizerImpl as ::lk_agents_abi::stt::events::SpeechNormalizer>::settled(
+            &self.0,
+        );
         ::pyo3::PyResult::Ok(out)
     }
 
@@ -73,10 +80,11 @@ impl SpeechState {
         transcript: Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let transcript = crate::generated::records::stt::transcript_from_py(transcript.as_any())?;
-        let out = <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::transcript(
-            &mut self.0,
-            transcript,
-        );
+        let out =
+            <SpeechNormalizerImpl as ::lk_agents_abi::stt::events::SpeechNormalizer>::transcript(
+                &mut self.0,
+                transcript,
+            );
         ::pyo3::PyResult::Ok(
             ::pyo3::types::PyList::new(
                 py,
@@ -93,10 +101,10 @@ impl SpeechState {
     fn started<'py>(
         &mut self,
         py: Python<'py>,
-        #[pyo3(from_py_with = _extract_speech_state_started_speech_start_time)]
-        speech_start_time: SpeechStateStartedSpeechStartTimeInput,
+        #[pyo3(from_py_with = _extract_speech_normalizer_started_speech_start_time)]
+        speech_start_time: SpeechNormalizerStartedSpeechStartTimeInput,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let out = <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::started(
+        let out = <SpeechNormalizerImpl as ::lk_agents_abi::stt::events::SpeechNormalizer>::started(
             &mut self.0,
             speech_start_time,
         );
@@ -115,8 +123,9 @@ impl SpeechState {
     /// words of a provider that transcribes after the speech ends), the speech stays open until
     /// a final, a new speech or the connection's end.
     fn ended<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let out =
-            <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::ended(&mut self.0);
+        let out = <SpeechNormalizerImpl as ::lk_agents_abi::stt::events::SpeechNormalizer>::ended(
+            &mut self.0,
+        );
         ::pyo3::PyResult::Ok(
             ::pyo3::types::PyList::new(
                 py,
@@ -132,7 +141,9 @@ impl SpeechState {
     /// the next connection's events.
     fn boundary<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let out =
-            <SpeechStateImpl as ::lk_agents_abi::stt::events::SpeechState>::boundary(&mut self.0);
+            <SpeechNormalizerImpl as ::lk_agents_abi::stt::events::SpeechNormalizer>::boundary(
+                &mut self.0,
+            );
         ::pyo3::PyResult::Ok(
             ::pyo3::types::PyList::new(
                 py,

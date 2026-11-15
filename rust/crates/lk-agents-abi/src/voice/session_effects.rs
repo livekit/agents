@@ -143,8 +143,8 @@ pub trait SessionHooks: Send + Sync {
     fn function_tools_executed(
         &self,
         cx: &crate::telemetry::Cx,
-        function_calls: Vec<crate::ChatItem>,
-        function_call_outputs: Vec<crate::ChatItem>,
+        function_calls: Vec<crate::FunctionCall>,
+        function_call_outputs: Vec<crate::FunctionCallOutput>,
     ) -> crate::BoxFuture<'_, Result<Vec<bool>, crate::errors::HostError>>;
     /// A filler's callable `source` called for `step`, awaited when it returns an awaitable.
     #[host(await, name = "_core_filler_source")]

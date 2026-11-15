@@ -12,18 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Annotated, Generic, Literal, TypeVar, cast
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
     BeforeValidator,
     ConfigDict,
-    Discriminator,
     Field,
-    JsonValue,
-    Tag,
-    TypeAdapter,
-    field_validator,
 )
 
 # Sarvam TTS specific models and speakers
@@ -470,45 +465,9 @@ MODEL_SPEAKER_COMPATIBILITY = {
 }
 
 
-class RequestMetadata(BaseModel):
-    model_config = ConfigDict(strict=True, extra="allow")
-
-    request_id: str | None = None
-
-
-DataT = TypeVar("DataT", bound=RequestMetadata, covariant=True)
-
-
-class ProviderMessage(BaseModel, Generic[DataT]):
-    model_config = ConfigDict(strict=True, extra="allow")
-
-    request_id: str | None = None
-    session_id: str | None = None
-    data: DataT | None = None
-    metadata: RequestMetadata | None = None
-    error: JsonValue = None
-    code: str | int | None = None
-
-
-def message_request_id(message: ProviderMessage[RequestMetadata]) -> str | None:
-    if message.request_id is not None:
-        return message.request_id
-    if message.data is not None and message.data.request_id is not None:
-        return message.data.request_id
-    return message.metadata.request_id if message.metadata is not None else None
-
-
 class TranscriptionTimestamps(BaseModel):
-    model_config = ConfigDict(strict=True)
-
     start_time_seconds: list[float] = Field(default_factory=list[float])
     end_time_seconds: list[float] = Field(default_factory=list[float])
-
-
-class TranscriptionMetrics(BaseModel):
-    model_config = ConfigDict(strict=True)
-
-    audio_duration: float = 0.0
 
 
 def _optional_number(value: object) -> float | None:
@@ -520,132 +479,13 @@ def _optional_number(value: object) -> float | None:
 _OptionalNumber = Annotated[float | None, BeforeValidator(_optional_number)]
 
 
-class TranscriptionData(RequestMetadata):
+class TranscriptionData(BaseModel):
+    """A batch recognition's response."""
+
+    model_config = ConfigDict(extra="allow")
+
     transcript: str = ""
     language_code: str | None = None
     request_id: str | None = None
     language_probability: _OptionalNumber = None
-    speech_start: _OptionalNumber = None
-    speech_end: _OptionalNumber = None
     timestamps: TranscriptionTimestamps | None = None
-    metrics: TranscriptionMetrics = Field(default_factory=TranscriptionMetrics)
-
-
-class EventData(RequestMetadata):
-    request_id: str | None = None
-    signal_type: str | None = None
-    event_type: str | None = None
-    event: str | None = None
-    error: JsonValue = None
-    code: str | int | None = None
-    message: JsonValue = "Unknown error"
-
-
-class AudioData(RequestMetadata):
-    audio: str = ""
-
-
-class ErrorData(RequestMetadata):
-    code: str | int | None = None
-    message: JsonValue = "Unknown error"
-    error: JsonValue = None
-
-
-class UnknownData(ErrorData):
-    event_type: str | None = None
-    event: str | None = None
-
-
-class TranscriptMessage(ProviderMessage[TranscriptionData]):
-    type: Literal["data"]
-
-
-class EventMessage(ProviderMessage[EventData]):
-    type: Literal["event", "events"]
-
-
-class AudioMessage(ProviderMessage[AudioData]):
-    type: Literal["audio"]
-
-
-class ErrorMessage(ProviderMessage[ErrorData]):
-    type: Literal["error", "errors"]
-
-
-class UnknownMessage(ProviderMessage[UnknownData]):
-    type: str | None = None
-
-
-def _message_kind(value: object) -> str:
-    match value:
-        case {"type": str(kind)} if kind in {"data", "event", "events", "audio", "error", "errors"}:
-            return kind
-        case _:
-            return "unknown"
-
-
-STTMessage = TranscriptMessage | EventMessage | ErrorMessage | UnknownMessage
-STT_MESSAGE: TypeAdapter[STTMessage] = TypeAdapter(
-    Annotated[
-        Annotated[TranscriptMessage, Tag("data")]
-        | Annotated[EventMessage, Tag("event")]
-        | Annotated[EventMessage, Tag("events")]
-        | Annotated[ErrorMessage, Tag("error")]
-        | Annotated[ErrorMessage, Tag("errors")]
-        | Annotated[UnknownMessage, Tag("unknown")],
-        Discriminator(_message_kind),
-    ]
-)
-TTSMessage = AudioMessage | EventMessage | ErrorMessage | UnknownMessage
-TTS_MESSAGE: TypeAdapter[TTSMessage] = TypeAdapter(
-    Annotated[
-        Annotated[AudioMessage, Tag("audio")]
-        | Annotated[EventMessage, Tag("event")]
-        | Annotated[EventMessage, Tag("events")]
-        | Annotated[ErrorMessage, Tag("error")]
-        | Annotated[ErrorMessage, Tag("errors")]
-        | Annotated[UnknownMessage, Tag("unknown")],
-        Discriminator(_message_kind),
-    ]
-)
-
-
-class RealtimeMessage(ProviderMessage[RequestMetadata]):
-    """Validated realtime STT events, with provider extensions retained as extras."""
-
-    event: str | None = None
-    config: dict[str, JsonValue] | None = None
-    applied: list[str] | None = None
-    utterance_idx: int | None = None
-    text: str | None = None
-    language: str | None = None
-    language_confidence: _OptionalNumber = None
-    confidence: _OptionalNumber = None
-    audio_duration_s: _OptionalNumber = None
-    start_s: _OptionalNumber = None
-    end_s: _OptionalNumber = None
-    is_fatal: bool | None = False
-    message: str | None = None
-    status_code: int | None = None
-
-    @field_validator("utterance_idx", "status_code", mode="before")
-    @classmethod
-    def optional_integer(cls, value: object) -> int | None:
-        return value if isinstance(value, int) and not isinstance(value, bool) else None
-
-    @field_validator("applied", mode="before")
-    @classmethod
-    def optional_applied(cls, value: object) -> list[str] | None:
-        if not isinstance(value, list):
-            return None
-        entries = cast(list[object], value)
-        if any(not isinstance(entry, str) for entry in entries):
-            return None
-        return cast(list[str], entries)
-
-
-class TTSBatchResponse(BaseModel):
-    model_config = ConfigDict(strict=True)
-
-    request_id: str | None = None
-    audios: list[str] = Field(default_factory=list[str])

@@ -252,6 +252,11 @@ ignore_missing_imports = true
 module = "opuslib_next.*"
 ignore_missing_imports = true
 
+# no stubs; fishaudio's _pack is its typed boundary
+[[tool.mypy.overrides]]
+module = "msgpack"
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = "smithy_aws_core.*"
 ignore_missing_imports = true

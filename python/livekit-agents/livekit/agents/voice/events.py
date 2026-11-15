@@ -106,7 +106,7 @@ class RunContext(_facades.RunContext[Context_T]):
         binding = _BindingContextVar.get(None)
         if binding is None:
             raise RuntimeError("no agent runs in this context")
-        return binding.agent  # type: ignore[no-any-return]
+        return binding.agent
 
     @property
     def store(self) -> ContextStore:
