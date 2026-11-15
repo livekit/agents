@@ -8,7 +8,6 @@ import json
 import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from types import SimpleNamespace
 from typing import Protocol, cast
 
 import aiohttp
@@ -47,6 +46,8 @@ from livekit.plugins.reson8.stt import (
     TranscriptOptions,
     TurnOptions,
 )
+
+from .fake_stt import attach_provider_audio_channels
 
 pytestmark = pytest.mark.unit
 
@@ -116,9 +117,8 @@ def offline_stream() -> SpeechStream:
     stream._candidate = None
     stream._turn_settled = asyncio.Event()
     stream._turn_ended = asyncio.Event()
-    stream._input_ch = SimpleNamespace(start_time_offset=0.0)  # type: ignore[assignment]
     stream._speech_duration = 0.0
-    stream._event_ch = FakeChan()  # type: ignore[assignment]
+    attach_provider_audio_channels(stream)
     return stream
 
 
@@ -588,14 +588,14 @@ def test_build_speech_data_timings_and_confidence() -> None:
             {"text": "there", "confidence": 0.97},
         ],
     }
-    data = build_speech_data(msg, language="en", start_time_offset=2.0)
+    data = build_speech_data(msg, language="en")
 
-    assert (data.start_time, data.end_time) == (pytest.approx(3.0), pytest.approx(3.5))
+    assert (data.start_time, data.end_time) == (pytest.approx(1.0), pytest.approx(1.5))
     assert data.confidence == pytest.approx(0.98)
     assert data.words is not None
     hi, there = data.words
     assert hi == "hi"
-    assert (hi.start_time, hi.end_time) == (pytest.approx(3.0), pytest.approx(3.2))
+    assert (hi.start_time, hi.end_time) == (pytest.approx(1.0), pytest.approx(1.2))
     assert hi.confidence == pytest.approx(0.99)
     assert there.start_time is NOT_GIVEN
 

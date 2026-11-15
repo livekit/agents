@@ -271,7 +271,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 self._last_speech_end_time = 0
 
                 send = asyncio.create_task(send_task(ws))
@@ -370,15 +370,12 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             timed_words: list[TimedString] = [
                 TimedString(
                     text=word.get("word", ""),
-                    start_time=word.get("start", 0) + self.start_time_offset,
-                    end_time=word.get("end", 0) + self.start_time_offset,
-                    start_time_offset=self.start_time_offset,
+                    start_time=word.get("start", 0),
+                    end_time=word.get("end", 0),
                 )
                 for word in words
             ]
             # word timestamps are often within the audio window, so we track time separately
-            if self._last_speech_end_time == 0.0:
-                self._last_speech_end_time = self.start_time_offset
             start_time = self._last_speech_end_time
             end_time = start_time + data.get("duration", 0)
             self._last_speech_end_time = end_time
@@ -431,8 +428,8 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                         end_alternatives = [
                             replace(
                                 speech_data,
-                                start_time=self.start_time_offset + words[0].get("start", 0),
-                                end_time=self.start_time_offset + last_word_end,
+                                start_time=words[0].get("start", 0),
+                                end_time=last_word_end,
                             )
                         ]
                     end_event = stt.SpeechEvent(

@@ -10,6 +10,7 @@ from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
 from livekit.agents.llm import ChatMessage
 from livekit.agents.stt import SpeechEvent, SpeechEventType
+from livekit.agents.stt.clock import _SessionStart
 from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.agents.voice.events import ConversationItemAddedEvent
 from livekit.plugins.fishaudio import STT
@@ -33,7 +34,8 @@ def _make_stream(stt: STT | None = None) -> SpeechStream:
 
     with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
         stream = stt.stream()
-    stream._input_ch.input_started_at = _INPUT_STARTED_AT
+    # place the wall-clock start without declaring an offset
+    stream._input_clock._session_start = _SessionStart.from_wall_timestamp(_INPUT_STARTED_AT)
     return stream
 
 
@@ -137,7 +139,7 @@ async def test_auto_mode_turn_events():
 
 async def test_timestamps_follow_the_stream_offset():
     stream = _make_stream()
-    stream._input_ch._start_time_offset = 2.0
+    stream._input_clock._start_time_offset = 2.0
     _user_turn(stream)
     stream._process_message(_committed())
 

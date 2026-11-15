@@ -1462,17 +1462,16 @@ class SpeechStream(stt.SpeechStream):
         metadata = extra if isinstance(extra, dict) and extra else None
         return stt.SpeechData(
             language=language,
-            start_time=self.start_time_offset + data.get("start", 0),
-            end_time=self.start_time_offset + data.get("start", 0) + data.get("duration", 0),
+            start_time=data.get("start", 0),
+            end_time=data.get("start", 0) + data.get("duration", 0),
             confidence=data.get("confidence", 1.0),
             text=data.get("transcript", ""),
             speaker_id=data.get("speaker_id"),
             words=[
                 TimedString(
                     text=word.get("word", ""),
-                    start_time=word.get("start", 0) + self.start_time_offset,
-                    end_time=word.get("end", 0) + self.start_time_offset,
-                    start_time_offset=self.start_time_offset,
+                    start_time=word.get("start", 0),
+                    end_time=word.get("end", 0),
                     confidence=word.get("confidence", 0.0),
                     speaker_id=word.get("speaker_id"),
                 )
@@ -1548,9 +1547,7 @@ class SpeechStream(stt.SpeechStream):
                 # speech_data.end_time uses start + duration. Some providers report
                 # billed audio duration (e.g. Ink-2), so use word timing for EOS.
                 if (words := data.get("words")) and (last_word_end := words[-1].get("end", 0)) > 0:
-                    end_alternatives = [
-                        replace(speech_data, end_time=self.start_time_offset + last_word_end)
-                    ]
+                    end_alternatives = [replace(speech_data, end_time=last_word_end)]
                 end_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.END_OF_SPEECH,
                     alternatives=end_alternatives,

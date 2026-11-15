@@ -543,10 +543,8 @@ class Agent:
                         if activity._audio_recognition is not None
                         else None
                     )
-                    _audio_input_started_at: float = (
-                        pipeline.input_started_at
-                        if pipeline is not None and pipeline.input_started_at is not None
-                        else (
+                    if pipeline is None or pipeline.input_started_at is None:
+                        _audio_input_started_at: float = (
                             activity.session._recorder_io.recording_started_at
                             if activity.session._recorder_io
                             and activity.session._recorder_io.recording_started_at
@@ -554,10 +552,15 @@ class Agent:
                             if activity.session._started_at
                             else time.time()
                         )
-                    )
-                    stream.start_time_offset = time.time() - _audio_input_started_at
+                        if pipeline is None:
+                            stream.start_time_offset = time.time() - _audio_input_started_at
+                        else:
+                            pipeline.input_started_at = _audio_input_started_at
                     if pipeline is not None:
-                        pipeline.input_started_at = _audio_input_started_at
+                        # the pipeline keeps the session start's monotonic timestamp, so
+                        # a wall-clock step before a recreated stream does not move it
+                        assert pipeline.session_start is not None
+                        stream._input_clock.session_start = pipeline.session_start
 
                     pipeline = _STTPipelineContextVar.get(None)
                     if pipeline:

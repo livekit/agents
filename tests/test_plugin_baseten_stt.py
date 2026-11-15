@@ -481,6 +481,14 @@ async def test_client_flush_sends_no_vad_and_asks_livekit_to_flush(
     assert not STT(model="streaming-v2", api_key="k", model_id="m").capabilities.manual_flush
 
 
+def test_only_streaming_v2_remaps_its_own_timestamps() -> None:
+    # streaming-v2 replays audio and emits session timestamps; the other backends
+    # emit connection timestamps for the stream to remap
+    assert not STT(model="streaming-v2", api_key="k", model_id="m").requires_timestamp_translation
+    assert STT(api_key="k", model_endpoint="wss://test.invalid/stt").requires_timestamp_translation
+    assert STT(model="qwen3-asr", api_key="k", model_id="m").requires_timestamp_translation
+
+
 async def test_end_input_flushes_once_then_closes_and_delivers_the_final() -> None:
     server = _FakeStreamingV2Server()
     # 1.5 chunks of 100 ms: the trailing 800 samples only go out when the input ends
@@ -713,6 +721,34 @@ async def test_transcript_times_are_placed_in_the_session() -> None:
         pytest.approx(41.5, abs=0.01),
         pytest.approx(44.5, abs=0.01),
         pytest.approx(45.5, abs=0.01),
+    ]
+
+
+async def test_transcript_times_follow_the_audio_across_an_input_pause() -> None:
+    # Pause input for 5 s after turn 1, then replay turn 2 on the second socket.
+    # The server counts received audio; turns 2 and 3 must retain their capture
+    # times after the pause.
+    server = _FakeStreamingV2Server("drop_second_turn")
+    stream = _v2_stream(server, max_retry=1, segmentation_mode="client_flush")
+    stream.start_time_offset = 40.0
+    await asyncio.sleep(1.0)
+    await _push_live(stream, 48000)
+    stream.flush()
+    await asyncio.sleep(5.0)
+    await _push_live(stream, 16000)
+    stream.flush()
+    await _push_live(stream, 16000)
+    stream.end_input()
+    events = await _collect(stream)
+
+    finals = [
+        ev.alternatives[0] for ev in events if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert server.connections == 2
+    assert [f.start_time for f in finals] == [
+        pytest.approx(41.5, abs=0.01),
+        pytest.approx(49.5, abs=0.01),
+        pytest.approx(50.5, abs=0.01),
     ]
 
 

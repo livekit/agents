@@ -1,15 +1,10 @@
-"""MultiSpeakerAdapter delegation contract and primary speaker detection.
-
-The adapter wraps another STT and inherits its ``capabilities`` wholesale, so the framework
-treats it as if it were the wrapped recognizer: it pushes keyterms and conversation items to
-it, prewarms it, and reads ``model``/``provider`` off it for metrics. Every one of those has
-to reach the wrapped STT, otherwise the capability the adapter advertises is a no-op.
-"""
+"""Verify adapter delegation and primary-speaker detection."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import Any
 
 import pytest
@@ -248,6 +243,12 @@ async def test_mixed_speaker_turn_ends_after_suppressed_final(timed_endpoint: bo
         await adapter.aclose()
 
 
+def test_adapter_forwards_remapped_timestamps_without_a_second_remap() -> None:
+    adapter, wrapped = _adapter()
+    assert wrapped.requires_timestamp_translation is True
+    assert adapter.requires_timestamp_translation is False
+
+
 def test_keyterms_reach_the_wrapped_stt() -> None:
     adapter, wrapped = _adapter()
     # the adapter advertises keyterms=True (inherited), so the base warn-and-skip never runs:
@@ -458,3 +459,140 @@ def test_detect_primary_disabled_keeps_primary_unset() -> None:
     detector = _detector(detect_primary_speaker=False)
     _push_speech(detector, "A", amplitude=3000, start_time=0.0)
     assert detector._primary_speaker is None
+
+
+class _DiarizedStream(RecognizeStream):
+    """Reads its input; the test sends the provider's events."""
+
+    async def _run(self) -> None:
+        async for _ in self._input_ch:
+            pass
+
+
+class _DiarizedSTT(_RecordingSTT):
+    def __init__(self) -> None:
+        super().__init__()
+        self.streams: list[_DiarizedStream] = []
+
+    def stream(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = _CONN,
+    ) -> RecognizeStream:
+        self.streams.append(_DiarizedStream(stt=self, conn_options=conn_options))
+        return self.streams[-1]
+
+
+@pytest.mark.parametrize("gap", [0.0, 5.0])
+@pytest.mark.parametrize("start_time_offset", [None, 5.0])
+async def test_primary_speaker_follows_the_audio_across_input_gaps(
+    gap: float, start_time_offset: float | None
+) -> None:
+    """Detect speakers across input gaps while preserving forwarded timestamps."""
+    provider = _DiarizedSTT()
+    adapter = MultiSpeakerAdapter(stt=provider, suppress_background_speaker=True)
+    stream = adapter.stream(conn_options=_CONN)
+    if start_time_offset is not None:
+        stream.start_time_offset = start_time_offset
+    # the timeline begins `start_time_offset` ago, or with the first audio
+    timeline_started_at = time.time() - (start_time_offset or 0.0)
+    captured_at: list[float] = []  # timeline time of the start of each second of audio
+
+    async def push_second(amplitude: int) -> None:
+        captured_at.append(time.time() - timeline_started_at)
+        for _ in range(10):
+            await asyncio.sleep(0.1)  # a frame is pushed when its capture ends
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=amplitude.to_bytes(2, "little", signed=True) * 1600,
+                    sample_rate=16000,
+                    num_channels=1,
+                    samples_per_channel=1600,
+                )
+            )
+        await asyncio.sleep(gap)
+
+    async def recognize(speaker_id: str, second: int) -> SpeechData:
+        """The provider's final for speech in ``second`` of the audio it received."""
+        provider.streams[0]._event_ch.send_nowait(
+            SpeechEvent(
+                type=SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[_speech_data(speaker_id, second + 0.1, second + 0.8)],
+                speech_end_time=second + 0.8,
+            )
+        )
+        event = await asyncio.wait_for(stream.__anext__(), timeout=1.0)
+        assert event.type == SpeechEventType.FINAL_TRANSCRIPT
+        if event.alternatives[0].text:
+            # the provider's stream placed the end of speech on the wall clock, once
+            assert event.speech_end_time == pytest.approx(
+                timeline_started_at + captured_at[second] + 0.8, rel=0, abs=1e-3
+            )
+        else:
+            assert event.speech_end_time is None  # the final of a suppressed speaker
+        return event.alternatives[0]
+
+    try:
+        # the provider receives 4s of audio: speaker A twice, a louder B, a quiet C
+        for amplitude in (1000, 1000, 3000, 100):
+            await push_second(amplitude)
+
+        for second in (0, 1):
+            first = await recognize("A", second)
+            assert first.is_primary_speaker
+            assert first.start_time == pytest.approx(captured_at[second] + 0.1, abs=1e-3)
+            assert first.end_time == pytest.approx(captured_at[second] + 0.8, abs=1e-3)
+
+        louder = await recognize("B", 2)
+        assert louder.is_primary_speaker
+        assert louder.text == "hello"
+        assert louder.start_time == pytest.approx(captured_at[2] + 0.1, abs=1e-3)
+        assert louder.end_time == pytest.approx(captured_at[2] + 0.8, abs=1e-3)
+        assert captured_at[2] == pytest.approx((start_time_offset or 0.0) + 2 * (1 + gap), abs=1e-3)
+
+        # a speaker that is not louder stays in the background, and is suppressed
+        quiet = await recognize("C", 3)
+        assert quiet.text == ""
+        assert (await recognize("A", 1)).text == ""
+    finally:
+        await stream.aclose()
+        await adapter.aclose()
+
+
+@pytest.mark.parametrize("step", [3600.0, -3600.0])
+async def test_wrapped_stream_keeps_the_session_start_across_a_wall_clock_step(
+    step: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wrapped stream continues the adapter stream's timeline from the same session start."""
+    provider = _DiarizedSTT()
+    adapter = MultiSpeakerAdapter(stt=provider)
+    stream = adapter.stream(conn_options=_CONN)
+    stream.start_time_offset = 30.0
+    session_start = stream._input_clock.session_start
+    assert session_start is not None
+
+    wall_clock = time.time
+    monkeypatch.setattr(time, "time", lambda: wall_clock() + step)
+    try:
+        frame = rtc.AudioFrame(
+            data=b"\x00\x00" * 1600, sample_rate=16000, num_channels=1, samples_per_channel=1600
+        )
+        for _ in range(10):
+            await asyncio.sleep(frame.duration)  # a frame is pushed when its capture ends
+            stream.push_frame(frame)
+        wrapped = provider.streams[0]
+        while wrapped.input_position < 1.0 - 1e-6:
+            await asyncio.sleep(0)
+
+        assert wrapped._input_clock.session_start is session_start
+        wrapped._event_ch.send_nowait(
+            SpeechEvent(
+                type=SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[_speech_data("A", 0.2, 0.8)],
+            )
+        )
+        placed = (await asyncio.wait_for(stream.__anext__(), timeout=1.0)).alternatives[0]
+        assert (placed.start_time, placed.end_time) == pytest.approx((30.2, 30.8))
+    finally:
+        await stream.aclose()

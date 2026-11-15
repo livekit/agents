@@ -25,7 +25,6 @@ import json
 import logging
 import os
 import platform
-import time
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Literal
@@ -913,7 +912,6 @@ class SpeechStream(stt.SpeechStream):
 
         self._ws: aiohttp.ClientWebSocketResponse | None = None
 
-        self._utterance_speech_start_wall: float | None = None
         self._pending_final_data: dict[str, Any] | None = None
         self._pending_eos = False
         self._eos_fallback_task: asyncio.Task[None] | None = None
@@ -979,14 +977,12 @@ class SpeechStream(stt.SpeechStream):
             return None
         if value <= 0:
             return None
-        # Map connection-relative timestamps onto the caller's audio timeline.
-        return float(value) + self.start_time_offset
+        return float(value)
 
     def _reset_utterance_state(self) -> None:
         self._cancel_eos_fallback()
         self._pending_final_data = None
         self._pending_eos = False
-        self._utterance_speech_start_wall = time.time()
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
 
@@ -1664,7 +1660,6 @@ class SpeechStream(stt.SpeechStream):
                     start_event = stt.SpeechEvent(
                         type=stt.SpeechEventType.START_OF_SPEECH,
                         request_id=self._server_request_id or "",
-                        speech_start_time=self._utterance_speech_start_wall,
                     )
                     self._event_ch.send_nowait(start_event)
                     self._logger.debug("Speech started", extra=self._build_log_context())

@@ -10,7 +10,7 @@ from google.cloud.speech_v2.types import cloud_speech as cloud_speech_v2
 from google.protobuf.duration_pb2 import Duration
 
 from livekit.agents import APIConnectionError, APIConnectOptions, LanguageCode
-from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
+from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTCapabilities
 from livekit.agents.types import TimedString
 from livekit.agents.utils.aio import ChanClosed
 from livekit.plugins.google.stt import (
@@ -34,6 +34,8 @@ class _FakeSTT:
     _label = "google.STT"
     model = "default"
     provider = "Google Cloud Platform"
+    capabilities = STTCapabilities(streaming=True, interim_results=True)
+    requires_timestamp_translation = True
 
     def emit(self, *_args, **_kwargs):
         pass
@@ -296,22 +298,12 @@ async def test_streaming_recognize_response_to_speech_data_01():
     srr = cloud_speech_v2.StreamingRecognizeResponse(
         results=[cloud_speech_v2.StreamingRecognitionResult()]
     )
-    assert (
-        _streaming_recognize_response_to_speech_data(
-            srr, min_confidence_threshold=1.0, start_time_offset=0.0
-        )
-        is None
-    )
+    assert _streaming_recognize_response_to_speech_data(srr, min_confidence_threshold=1.0) is None
 
     srr = cloud_speech_v1.StreamingRecognizeResponse(
         results=[cloud_speech_v1.StreamingRecognitionResult()]
     )
-    assert (
-        _streaming_recognize_response_to_speech_data(
-            srr, min_confidence_threshold=1.0, start_time_offset=0.0
-        )
-        is None
-    )
+    assert _streaming_recognize_response_to_speech_data(srr, min_confidence_threshold=1.0) is None
 
 
 async def test_streaming_recognize_response_to_speech_data_02():
@@ -327,9 +319,7 @@ async def test_streaming_recognize_response_to_speech_data_02():
             )
         ]
     )
-    result = _streaming_recognize_response_to_speech_data(
-        srr, min_confidence_threshold=0.5, start_time_offset=0.0
-    )
+    result = _streaming_recognize_response_to_speech_data(srr, min_confidence_threshold=0.5)
     assert type(result) is SpeechData
     assert result.text == "test"
     assert result.language == "te-ST"
@@ -346,9 +336,7 @@ async def test_streaming_recognize_response_to_speech_data_02():
             )
         ]
     )
-    result = _streaming_recognize_response_to_speech_data(
-        srr, min_confidence_threshold=0.5, start_time_offset=0.0
-    )
+    result = _streaming_recognize_response_to_speech_data(srr, min_confidence_threshold=0.5)
     assert type(result) is SpeechData
     assert result.text == "test"
     assert result.language == "te-ST"
@@ -366,9 +354,7 @@ async def test_streaming_recognize_response_to_speech_data_03():
             )
         ]
     )
-    result = _streaming_recognize_response_to_speech_data(
-        srr, min_confidence_threshold=0.5, start_time_offset=0.0
-    )
+    result = _streaming_recognize_response_to_speech_data(srr, min_confidence_threshold=0.5)
     assert result is None
 
     srr = cloud_speech_v1.StreamingRecognizeResponse(
@@ -381,9 +367,7 @@ async def test_streaming_recognize_response_to_speech_data_03():
             )
         ]
     )
-    result = _streaming_recognize_response_to_speech_data(
-        srr, min_confidence_threshold=0.5, start_time_offset=0.0
-    )
+    result = _streaming_recognize_response_to_speech_data(srr, min_confidence_threshold=0.5)
     assert result is None
 
 
@@ -410,9 +394,7 @@ async def test_streaming_recognize_response_to_speech_data_04():
             ),
         ]
     )
-    result = _streaming_recognize_response_to_speech_data(
-        srr, min_confidence_threshold=0.5, start_time_offset=0.0
-    )
+    result = _streaming_recognize_response_to_speech_data(srr, min_confidence_threshold=0.5)
     assert type(result) is SpeechData
     assert result.text == "test01test02"
     assert result.language == "te-ST"
@@ -449,9 +431,7 @@ async def test_streaming_recognize_response_to_speech_data_05():
             ),
         ]
     )
-    result = _streaming_recognize_response_to_speech_data(
-        srr, min_confidence_threshold=0.5, start_time_offset=0.0
-    )
+    result = _streaming_recognize_response_to_speech_data(srr, min_confidence_threshold=0.5)
     assert type(result) is SpeechData
     assert result.text == "best"
     assert result.language == "te-ST"
@@ -480,17 +460,11 @@ async def test_streaming_recognize_response_to_speech_data_words():
             )
         ]
     )
-    result = _streaming_recognize_response_to_speech_data(
-        srr, min_confidence_threshold=0.5, start_time_offset=0.0
-    )
+    result = _streaming_recognize_response_to_speech_data(srr, min_confidence_threshold=0.5)
     assert type(result) is SpeechData
     assert result.text == "test"
     assert result.confidence == 1.0
-    assert result.words == [
-        TimedString(
-            text="test", start_time=0.0, end_time=1.0, start_time_offset=0.0, confidence=1.0
-        )
-    ]
+    assert result.words == [TimedString(text="test", start_time=0.0, end_time=1.0, confidence=1.0)]
 
     srr = cloud_speech_v1.StreamingRecognizeResponse(
         results=[
@@ -513,17 +487,13 @@ async def test_streaming_recognize_response_to_speech_data_words():
             )
         ]
     )
-    result = _streaming_recognize_response_to_speech_data(
-        srr, min_confidence_threshold=0.5, start_time_offset=0.1
-    )
+    result = _streaming_recognize_response_to_speech_data(srr, min_confidence_threshold=0.5)
     assert type(result) is SpeechData
     assert result.text == "test"
     assert result.confidence == 1.0
-    assert result.words == [
-        TimedString(
-            text="test", start_time=0.1, end_time=1.1, start_time_offset=0.1, confidence=1.0
-        )
-    ]
+    assert (result.start_time, result.end_time) == (0.0, 1.0)
+    assert result.words is not None
+    assert (result.words[0].start_time, result.words[0].end_time) == (0.0, 1.0)
 
 
 async def test_recognize_response_to_speech_event_words():
@@ -558,11 +528,7 @@ async def test_recognize_response_to_speech_event_words():
             end_time=1.0,
             text="test",
             confidence=1.0,
-            words=[
-                TimedString(
-                    text="test", start_time=0.0, end_time=1.0, start_time_offset=0.0, confidence=1.0
-                )
-            ],
+            words=[TimedString(text="test", start_time=0.0, end_time=1.0, confidence=1.0)],
         )
     ]
 
@@ -597,11 +563,7 @@ async def test_recognize_response_to_speech_event_words():
             end_time=1.0,
             text="test",
             confidence=1.0,
-            words=[
-                TimedString(
-                    text="test", start_time=0.0, end_time=1.0, start_time_offset=0.0, confidence=1.0
-                )
-            ],
+            words=[TimedString(text="test", start_time=0.0, end_time=1.0, confidence=1.0)],
         )
     ]
 

@@ -848,7 +848,7 @@ class SpeechStream(stt.RecognizeStream):
 
             try:
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -893,11 +893,7 @@ class SpeechStream(stt.RecognizeStream):
             self._start_speaking()
 
             try:
-                current = build_speech_data(
-                    msg,
-                    language=self._opts.language,
-                    start_time_offset=self.start_time_offset,
-                )
+                current = build_speech_data(msg, language=self._opts.language)
             except (AttributeError, OverflowError, TypeError, ValueError) as e:
                 logger.warning(
                     "Ignoring malformed Reson8 turn payload",

@@ -406,7 +406,7 @@ class SpeechStream(stt.RecognizeStream):
             try:
                 closing_ws = False
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 self._final_alternatives = []
                 self._server_ready.clear()
                 tasks = [
@@ -518,7 +518,6 @@ class SpeechStream(stt.RecognizeStream):
                     text,
                     language=language,
                     enable_diarization=self._opts.enable_diarization,
-                    start_time_offset=self.start_time_offset,
                 )
                 if not speech_final or not self._emitted_chunk_final:
                     self._final_alternatives = (
@@ -560,7 +559,6 @@ class SpeechStream(stt.RecognizeStream):
                     text,
                     language=language,
                     enable_diarization=self._opts.enable_diarization,
-                    start_time_offset=self.start_time_offset,
                 )
                 if words and words[-1].get("end", 0) > 0:
                     self._final_alternatives = [speech_data]
@@ -598,7 +596,6 @@ def _words_to_speech_data(
     *,
     language: str,
     enable_diarization: bool,
-    start_time_offset: float = 0.0,
 ) -> stt.SpeechData:
     speaker_id = (
         f"S{words[0]['speaker']}"
@@ -608,17 +605,14 @@ def _words_to_speech_data(
     return stt.SpeechData(
         language=LanguageCode(language),
         text=text,
-        start_time=words[0].get("start", 0.0) + start_time_offset if words else 0.0,
-        end_time=words[-1]["end"] + start_time_offset
-        if words and words[-1].get("end", 0.0) > 0
-        else 0.0,
+        start_time=words[0].get("start", 0.0) if words else 0.0,
+        end_time=words[-1]["end"] if words and words[-1].get("end", 0.0) > 0 else 0.0,
         speaker_id=speaker_id,
         words=[
             TimedString(
                 w.get("text", ""),
-                start_time=w.get("start", 0.0) + start_time_offset,
-                end_time=w.get("end", 0.0) + start_time_offset,
-                start_time_offset=start_time_offset,
+                start_time=w.get("start", 0.0),
+                end_time=w.get("end", 0.0),
             )
             for w in words
         ]

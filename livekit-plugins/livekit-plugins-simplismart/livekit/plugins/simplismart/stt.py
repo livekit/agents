@@ -411,7 +411,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 await self._send_initial_config(ws)
                 tasks = [
                     asyncio.create_task(send_task(ws)),

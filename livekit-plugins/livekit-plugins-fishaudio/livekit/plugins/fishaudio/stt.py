@@ -315,7 +315,7 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         while True:
             ws = await self._connect_ws()
-            self._input_ch.restart_provider_clock()
+            self._restart_connection_clock()
             # the config carries every change made so far; later ones are queued
             while not self._control_queue.empty():
                 self._control_queue.get_nowait()
@@ -662,7 +662,7 @@ class SpeechStream(stt.SpeechStream):
         start_event = stt.SpeechEvent(
             type=stt.SpeechEventType.START_OF_SPEECH,
             request_id=self._request_id,
-            speech_start_time=self._wall_time(audio_ms),
+            speech_start_time=audio_ms / 1000,
         )
         self._event_ch.send_nowait(start_event)
 
@@ -776,27 +776,25 @@ class SpeechStream(stt.SpeechStream):
         if language_code:
             self._language = LanguageCode(language_code)
 
-        offset = self.start_time_offset
         raw_words = msg.get("words") or []
         words: list[TimedString] = []
         for raw_word in raw_words:
             word = TimedString(
                 text=raw_word.get("text", ""),
-                start_time=raw_word.get("start_ms", 0) / 1000 + offset,
-                end_time=raw_word.get("end_ms", 0) / 1000 + offset,
-                start_time_offset=offset,
+                start_time=raw_word.get("start_ms", 0) / 1000,
+                end_time=raw_word.get("end_ms", 0) / 1000,
             )
             words.append(word)
 
         start_time = 0.0
         end_time = 0.0
         if raw_words:
-            start_time = raw_words[0].get("start_ms", 0) / 1000 + offset
-            end_time = raw_words[-1].get("end_ms", 0) / 1000 + offset
+            start_time = raw_words[0].get("start_ms", 0) / 1000
+            end_time = raw_words[-1].get("end_ms", 0) / 1000
         elif "audio_end_ms" in msg:
             # degraded commit: no word timings
-            start_time = msg.get("audio_start_ms", 0) / 1000 + offset
-            end_time = msg["audio_end_ms"] / 1000 + offset
+            start_time = msg.get("audio_start_ms", 0) / 1000
+            end_time = msg["audio_end_ms"] / 1000
 
         return stt.SpeechData(
             language=self._language,
@@ -805,13 +803,6 @@ class SpeechStream(stt.SpeechStream):
             end_time=end_time,
             words=words or None,
         )
-
-    def _wall_time(self, audio_ms: int) -> float | None:
-        """Wall-clock time of a position in this connection's audio."""
-        input_started_at = self._input_ch.input_started_at
-        if input_started_at is None:
-            return None
-        return input_started_at + self.start_time_offset + audio_ms / 1000
 
 
 def _validate_silence_timeout(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import time
 from collections.abc import AsyncIterable
@@ -10,6 +11,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import Agent
+from livekit.agents.stt.clock import _ConnectionClock, _InputClock
 from livekit.agents.utils import aio
 from livekit.agents.vad import VADEvent, VADEventType
 from livekit.agents.voice.agent import ModelSettings
@@ -324,6 +326,33 @@ async def test_turn_detector_stream_reused_only_for_same_detector(
     reused = new_detector == "same"
     assert (resources.turn_detector_stream is not None) is reused
     assert old._audio_recognition._detach_turn_detector.called is reused
+
+
+@pytest.mark.parametrize("step", [3600.0, -3600.0])
+def test_pipeline_session_start_survives_a_wall_clock_step(
+    step: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wall_offset = 950.0
+    monkeypatch.setattr(time, "time", lambda: 50.0 + wall_offset)
+    monkeypatch.setattr(time, "perf_counter", lambda: 50.0)
+    pipeline = object.__new__(_STTPipeline)
+    pipeline.input_started_at = 990.0
+    session_start = pipeline.session_start
+    assert session_start is not None
+    assert (session_start.monotonic_timestamp, session_start.wall_timestamp) == (40.0, 990.0)
+
+    wall_offset += step
+    # assigning the wall-clock start it already has must not re-pair it with the stepped clock
+    pipeline.input_started_at = 990.0
+    assert pipeline.session_start is session_start
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        session_start.wall_timestamp += step  # type: ignore[misc]
+
+    # a stream that continues the session reads the same start on both clocks
+    input_clock = _InputClock()
+    input_clock.session_start = session_start
+    assert input_clock.session_start is session_start
+    assert _ConnectionClock(input_clock, 0.0).start_time_offset == 10.0
 
 
 async def test_reused_stt_pipeline_keeps_input_anchor_and_rebinds_node() -> None:

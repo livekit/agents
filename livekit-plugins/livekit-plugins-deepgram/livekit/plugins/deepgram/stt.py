@@ -736,7 +736,7 @@ class SpeechStream(stt.SpeechStream):
             conn_start_time = 0.0
             try:
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 self._final_alternatives = []
                 conn_start_time = time.perf_counter()
                 tasks = [
@@ -903,7 +903,6 @@ class SpeechStream(stt.SpeechStream):
                 self._opts.language,
                 data,
                 is_final=is_final_transcript,
-                start_time_offset=self.start_time_offset,
                 use_punctuated_word=self._opts.punctuate or self._opts.smart_format,
             )
             # If, for some reason, we didn't get a SpeechStarted event but we got
@@ -961,7 +960,7 @@ class SpeechStream(stt.SpeechStream):
                             stt.SpeechData(
                                 language=LanguageCode(self._opts.language),
                                 text="",
-                                end_time=self.start_time_offset + last_word_end,
+                                end_time=last_word_end,
                             )
                         ]
                         if last_word_end > 0
@@ -999,7 +998,6 @@ def live_transcription_to_speech_data(
     data: dict,
     *,
     is_final: bool,
-    start_time_offset: float,
     use_punctuated_word: bool = True,
 ) -> list[stt.SpeechData]:
     dg_alts = data["channel"]["alternatives"]
@@ -1015,18 +1013,17 @@ def live_transcription_to_speech_data(
 
         sd = stt.SpeechData(
             language=LanguageCode(language),
-            start_time=next((word.get("start", 0) for word in alt["words"]), 0) + start_time_offset,
-            end_time=(alt["words"][-1].get("end", 0) if alt["words"] else 0) + start_time_offset,
+            start_time=next((word.get("start", 0) for word in alt["words"]), 0),
+            end_time=(alt["words"][-1].get("end", 0) if alt["words"] else 0),
             confidence=alt["confidence"],
             text=alt["transcript"],
             speaker_id=f"S{speaker}" if speaker is not None else None,
             words=[
                 TimedString(
                     text=_word_text(word, use_punctuated_word=use_punctuated_word),
-                    start_time=word.get("start", 0) + start_time_offset,
-                    end_time=word.get("end", 0) + start_time_offset,
+                    start_time=word.get("start", 0),
+                    end_time=word.get("end", 0),
                     confidence=word.get("confidence", NOT_GIVEN),
-                    start_time_offset=start_time_offset,
                 )
                 for word in alt["words"]
             ]

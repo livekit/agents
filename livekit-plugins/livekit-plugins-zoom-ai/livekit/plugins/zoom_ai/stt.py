@@ -58,6 +58,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents.stt.clock import _ConnectionClock
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import AudioBuffer, is_given
 
@@ -432,7 +433,9 @@ class STT(stt.STT):
                 offline_recognize=True,
                 # With Scribe's VAD off, LiveKit flushes the stream to end each turn.
                 manual_flush=mode == "live" and turn_detection == "none",
-            )
+            ),
+            # The stream emits stream positions and translates its own events.
+            requires_timestamp_translation=False,
         )
         api_key = api_key if is_given(api_key) else os.environ.get("ZOOM_AI_API_KEY", "")
         if not api_key:
@@ -684,6 +687,45 @@ class STT(stt.STT):
             stream.update_options(language=language, silence_duration_ms=silence_duration_ms)
 
 
+class _SessionAudio:
+    """Map Scribe session audio offsets to stream positions.
+
+    Session offsets include keepalive silence and restart with each connection.
+    Held frames retain stream positions from the previous connection.
+    """
+
+    def __init__(self) -> None:
+        self.sent_duration = 0.0  # Audio sent to Scribe, including inserted silence, in seconds
+        # input sent without silence in between: [session time, stream position, duration]
+        self._spans: list[list[float]] = []
+        self._after_silence = True
+
+    def add_input(self, input_position: float, duration: float) -> None:
+        if self._after_silence:
+            self._spans.append([self.sent_duration, input_position, 0.0])
+            self._after_silence = False
+        self._spans[-1][2] += duration
+        self.sent_duration += duration
+
+    def add_silence(self, duration: float) -> None:
+        self.sent_duration += duration
+        self._after_silence = True
+
+    def input_position(self, session_time: float) -> float | None:
+        """Stream position at ``session_time``, or None before any input.
+
+        Added silence maps to the adjacent stream position.
+        """
+        if not self._spans:
+            return None
+        span = self._spans[0]
+        for candidate in reversed(self._spans):
+            if candidate[0] <= session_time:
+                span = candidate
+                break
+        return span[1] + min(max(session_time - span[0], 0.0), span[2])
+
+
 class SpeechStream(stt.SpeechStream):
     """One Scribe Live session; reconnects on option changes and server-side session ends."""
 
@@ -693,6 +735,8 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
         self._zoom = stt
         self._opts = opts
+        # Scribe results are converted to stream positions (see ``_input_position``).
+        self._position_clock = _ConnectionClock(self._input_clock, 0.0)
         # turn_detection can't change after the stream starts (see update_options).
         self._manual_commit = opts.turn_detection == "none"
         # What the current session was configured with (options plus extra_kwargs).
@@ -713,18 +757,18 @@ class SpeechStream(stt.SpeechStream):
         self._uncommitted = False
         # - an options reconnect is waiting: input is held back instead of being sent;
         self._draining = False
-        # - input held back while draining, sent first on the next session, in order; a
-        #   frame leaves it only once sent, so a failed send keeps it for the retry.
-        self._held: collections.deque[rtc.AudioFrame | SpeechStream._FlushSentinel] = (
-            collections.deque()
-        )
+        # - input held while draining, sent first in the next session, in order;
+        #   retain each frame and its stream position until the send succeeds.
+        self._held: collections.deque[
+            tuple[rtc.AudioFrame | SpeechStream._FlushSentinel, float]
+        ] = collections.deque()
         # Serializes sends with the drain commit, so no audio follows it on the old session.
         self._send_lock = asyncio.Lock()
         self._tracking_id: str | None = None  # the current session's x-zm-trackingid
         self._session_updated = False  # Scribe accepted the current session's settings
-        # Time between the start of this _run attempt and the current Scribe session.
-        # The base class adds whole attempts to start_time_offset when it retries.
-        self._session_offset = 0.0
+        # Scribe's audio_*_ms restart at 0 each session, including sessions that
+        # start with held frames read earlier.
+        self._session_audio = _SessionAudio()
 
     def update_options(
         self,
@@ -831,13 +875,20 @@ class SpeechStream(stt.SpeechStream):
             return any(kind != "silent" for kind in self._flushes)
         return self._speech_started
 
-    def _send_final(self, data: stt.SpeechData, request_id: str = "") -> None:
-        """Emit a final transcript event with the supplied speech data."""
-        self._event_ch.send_nowait(
+    def _send_positioned(self, event: stt.SpeechEvent) -> None:
+        """Remap an event from stream positions and enqueue it."""
+        self._event_ch.send_nowait(self._position_clock.translate_event_timestamps(event))
+
+    def _send_final(
+        self, data: stt.SpeechData, request_id: str = "", speech_end_time: float | None = None
+    ) -> None:
+        """Emit a final transcript whose timestamps are stream positions."""
+        self._send_positioned(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                 request_id=request_id,
                 alternatives=[data],
+                speech_end_time=speech_end_time,
             )
         )
 
@@ -909,20 +960,19 @@ class SpeechStream(stt.SpeechStream):
             self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
     async def _run(self) -> None:
-        self._session_offset = 0.0
         closing = False
         closed = asyncio.Event()  # Scribe confirmed our session.close
         last_audio_at = time.monotonic()  # last audio sent, input or silence
         last_input_at = time.monotonic()  # last input audio sent
         gap_filled = False  # silence already sent for the current input gap
-        session_audio_s = 0.0  # audio sent on the current Scribe session, keepalive included
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing, last_audio_at, last_input_at, gap_filled, session_audio_s
-            anchored = False
+            nonlocal closing, last_audio_at, last_input_at, gap_filled
 
-            async def send(frame: rtc.AudioFrame | SpeechStream._FlushSentinel) -> None:
-                nonlocal last_audio_at, last_input_at, gap_filled, session_audio_s, anchored
+            async def send(
+                frame: rtc.AudioFrame | SpeechStream._FlushSentinel, input_position: float
+            ) -> None:
+                nonlocal last_audio_at, last_input_at, gap_filled
                 if isinstance(frame, self._FlushSentinel):
                     # LiveKit ended the user's speech. With Scribe's VAD off, commit the
                     # audio so far for its final; otherwise Scribe's VAD ends the turn.
@@ -950,31 +1000,29 @@ class SpeechStream(stt.SpeechStream):
                     self._uncommitted = True
                 last_audio_at = last_input_at = time.monotonic()
                 gap_filled = False
-                # Scribe's audio_*_ms count from the session's first audio. Audio queued
-                # while connecting goes out in a burst, so anchor that 0 ms at the
-                # earliest "now minus audio sent", which is when that audio was captured.
-                session_audio_s += frame.duration
-                captured_at = time.time() - session_audio_s
-                if not anchored or captured_at < self.start_time:
-                    self.start_time = captured_at
-                    anchored = True
+                # Record audio under the send lock to preserve wire order.
+                self._session_audio.add_input(input_position, frame.duration)
 
             async def send_held() -> None:
                 # Each held frame leaves the queue only once sent, so if this session
                 # fails, the retry resumes from the first unsent one.
                 while self._held:
-                    await send(self._held[0])
+                    await send(*self._held[0])
                     self._held.popleft()
 
             try:
                 async with self._send_lock:
                     await send_held()  # held back while the previous session drained
                 async for frame in self._input_ch:
+                    input_position = self.input_position
+                    if isinstance(frame, rtc.AudioFrame):
+                        input_position -= frame.duration  # where the frame starts
+                    # Kept until sent, for a retry. Held before the wait for the lock: a
+                    # reconnect can cancel this task while a keepalive write holds it.
+                    self._held.append((frame, input_position))
                     async with self._send_lock:
                         if self._draining:
-                            self._held.append(frame)  # for the next session
-                            continue
-                        self._held.append(frame)  # kept until sent, for a retry
+                            continue  # for the next session
                         await send_held()
                 # Input ended while a reconnect was waiting: there is no next session, so
                 # send what was held to this one.
@@ -999,32 +1047,38 @@ class SpeechStream(stt.SpeechStream):
             # has no keepalive message, so send a little silence when the input has gone quiet.
             # If input stops while a turn is open, send enough silence for Scribe's VAD to end
             # the turn now rather than at the next keepalive.
-            nonlocal last_audio_at, session_audio_s, gap_filled
+            nonlocal last_audio_at, gap_filled
             keepalive = bytes(SAMPLE_RATE * 2 // 10)  # 100 ms
             try:
                 while not closing:
                     await asyncio.sleep(INPUT_GAP_S / 2)
-                    if closing:
-                        break
-                    now = time.monotonic()
-                    silence = b""
-                    if (
-                        # Only Scribe's VAD needs silence to end a turn; else the commit does.
-                        not self._manual_commit
-                        and self._speech_started
-                        and not gap_filled
-                        and now - last_input_at >= INPUT_GAP_S
-                    ):
-                        window_ms = self._view.silence_duration_ms or 1000
-                        silence = bytes(SAMPLE_RATE * 2 * (window_ms + 100) // 1000)
-                        gap_filled = True
-                    elif now - last_audio_at >= KEEPALIVE_INTERVAL_S:
-                        silence = keepalive
-                    if silence:
-                        await ws.send_bytes(silence)
-                        self._audio_duration += len(silence) / (2 * SAMPLE_RATE)
-                        session_audio_s += len(silence) / (2 * SAMPLE_RATE)
-                        last_audio_at = now
+                    # A write waits while the socket is full. The lock keeps the silence
+                    # and the input in one order on the wire and in `_session_audio`.
+                    async with self._send_lock:
+                        # read after the wait for the lock: input sent meanwhile ends the gap
+                        if closing:
+                            break
+                        if self._draining:
+                            continue  # no audio follows the drain commit on this session
+                        now = time.monotonic()
+                        silence = b""
+                        if (
+                            # Only Scribe's VAD needs silence to end a turn; else the commit does.
+                            not self._manual_commit
+                            and self._speech_started
+                            and not gap_filled
+                            and now - last_input_at >= INPUT_GAP_S
+                        ):
+                            window_ms = self._view.silence_duration_ms or 1000
+                            silence = bytes(SAMPLE_RATE * 2 * (window_ms + 100) // 1000)
+                            gap_filled = True
+                        elif now - last_audio_at >= KEEPALIVE_INTERVAL_S:
+                            silence = keepalive
+                        if silence:
+                            await ws.send_bytes(silence)
+                            self._audio_duration += len(silence) / (2 * SAMPLE_RATE)
+                            self._session_audio.add_silence(len(silence) / (2 * SAMPLE_RATE))
+                            last_audio_at = now
             except (aiohttp.ClientError, ConnectionError) as e:
                 if closing or self._zoom._http.closed:
                     return
@@ -1075,8 +1129,7 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             self._end_open_utterance()
-            connected_at = time.time()
-            session_audio_s = 0.0
+            self._session_audio = _SessionAudio()
             self._reconnect_event.clear()  # this connect reads the current options
             ws = await self._connect_ws()
             tasks = [
@@ -1135,12 +1188,19 @@ class SpeechStream(stt.SpeechStream):
                 # Scribe closed without a final for the last turn
                 self._end_open_utterance(closing=True)
                 return
-            # Scribe's audio_*_ms restart at 0 on the new session; keep stream-relative
-            # timestamps moving forward, as the base class does when it retries.
-            self._session_offset += time.time() - connected_at
+
+    def _input_position(self, session_ms: float) -> float:
+        """Convert session milliseconds to stream positions in seconds.
+
+        Remove keepalive silence and account for session clock resets.
+        """
+        input_position = self._session_audio.input_position(session_ms / 1000)
+        if input_position is None:
+            return self.input_position  # only silence was sent
+        return input_position
 
     def _speech_end_time(self, end_ms: int) -> float | None:
-        """Wall-clock end of speech for a final ending at ``end_ms``.
+        """Stream position of the end of speech for a final ending at ``end_ms``.
 
         Scribe ends a segment after ``silence_duration_ms`` of silence, so ``audio_end_ms``
         is that much later than the end of speech. With ``silence_duration_ms=None`` the
@@ -1153,7 +1213,7 @@ class SpeechStream(stt.SpeechStream):
         if not end_ms or self._manual_commit:
             return None
         silence_ms = self._view.silence_duration_ms or 0
-        return self.start_time + max(0, end_ms - silence_ms) / 1000
+        return self._input_position(max(0, end_ms - silence_ms))
 
     def _process_event(self, ev: dict[str, Any]) -> bool:
         kind = ev.get("type")
@@ -1163,12 +1223,12 @@ class SpeechStream(stt.SpeechStream):
             if not self._speech_started and not self._manual_commit:
                 self._speech_started = True
                 start_ms = ev.get("audio_start_ms")
-                self._event_ch.send_nowait(
+                self._send_positioned(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.START_OF_SPEECH,
-                        speech_start_time=self.start_time + start_ms / 1000
-                        if start_ms is not None
-                        else None,
+                        speech_start_time=None
+                        if start_ms is None
+                        else self._input_position(start_ms),
                     )
                 )
         elif kind == "transcription.completed":
@@ -1197,10 +1257,10 @@ class SpeechStream(stt.SpeechStream):
                 # No speech_started for this transcript (e.g. it was lost in a reconnect):
                 # open the turn so turn_detection="stt" still commits it.
                 self._speech_started = True
-                self._event_ch.send_nowait(
+                self._send_positioned(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.START_OF_SPEECH,
-                        speech_start_time=self.start_time + start_ms / 1000
+                        speech_start_time=self._input_position(start_ms)
                         if "audio_start_ms" in ev
                         else None,
                     )
@@ -1210,8 +1270,8 @@ class SpeechStream(stt.SpeechStream):
                     ev.get("language"), self._view.language_detection, self._opts.language
                 ),
                 text=text,
-                start_time=start_ms / 1000 + self.start_time_offset + self._session_offset,
-                end_time=end_ms / 1000 + self.start_time_offset + self._session_offset,
+                start_time=(start_time := self._input_position(start_ms)),
+                end_time=self._input_position(end_ms) if end_ms > start_ms else start_time,
                 speaker_id=speaker_id,
                 metadata=metadata,
             )
@@ -1228,21 +1288,14 @@ class SpeechStream(stt.SpeechStream):
                     self._flushes.popleft()
                     self._answer_flush()
             elif text:
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(
-                        type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                        request_id=ev.get("item_id", ""),
-                        alternatives=[data],
-                        speech_end_time=self._speech_end_time(end_ms),
-                    )
-                )
+                self._send_final(data, ev.get("item_id", ""), self._speech_end_time(end_ms))
             # Scribe's final closes the utterance: end of speech comes after the transcript,
             # so turn_detection="stt" commits the turn with the text already in hand.
             if self._speech_started:
                 self._speech_started = False
                 # speech_end_time lets turn_detection="stt" count its endpointing delay from
                 # when the user stopped speaking, not from when the final arrived.
-                self._event_ch.send_nowait(
+                self._send_positioned(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.END_OF_SPEECH,
                         speech_end_time=self._speech_end_time(end_ms),

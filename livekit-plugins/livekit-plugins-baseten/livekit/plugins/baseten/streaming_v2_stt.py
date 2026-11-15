@@ -56,6 +56,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.language import LanguageCode
+from livekit.agents.stt.clock import _ConnectionClock
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
@@ -323,13 +324,6 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
         # Whether a turn is open on the event channel, which a reconnect does
         # not close: the replay continues that turn.
         self._speaking = False
-        # Whether any audio has been read from the input channel yet.
-        self._audio_read = False
-        # Where the stream's first audio sits in the session, kept from the first
-        # connection that read audio. The framework re-anchors `start_time_offset`
-        # on the first frame each connection reads, but a reconnected socket's
-        # clock starts at the replayed audio, which came before that frame.
-        self._session_offset_s: float | None = None
 
     def _buffer(self, item: bytes | None) -> None:
         self._pending.append(item)
@@ -400,13 +394,14 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
         except Exception as e:
             raise APIConnectionError() from e
 
-        if self._audio_read and self._session_offset_s is None:
-            self._session_offset_s = self.start_time_offset
-
         input_ended = asyncio.Event()
-        # This socket's clock starts at the replayed audio, so its times are
-        # placed on the stream's timeline from here.
+        # Replayed audio precedes the first frame this socket reads. Remap this
+        # socket's transcripts from the stream position of its first sample.
         base = self._pending_start
+        clock = _ConnectionClock(self._input_clock, base / SAMPLE_RATE)
+
+        def send_transcript(event: stt_module.SpeechEvent) -> None:
+            self._event_ch.send_nowait(clock.translate_event_timestamps(event))
 
         async def _send() -> None:
             # LiveKit resamples to SAMPLE_RATE for us; the chunker only re-chunks.
@@ -451,7 +446,6 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
                         await flush()
                         flushed = True
                     else:
-                        self._audio_read = True
                         await append(chunker.write(data.data.tobytes()))
                         flushed = False
                 if not flushed:
@@ -537,10 +531,10 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
                         event.get("turn_id"),
                         event.get("message"),
                     )
-                    self._event_ch.send_nowait(
+                    send_transcript(
                         stt_module.SpeechEvent(
                             type=stt_module.SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[self._speech_data({}, [], "", base)],
+                            alternatives=[self._speech_data({}, [], "")],
                         )
                     )
                     if self._speaking:
@@ -591,12 +585,12 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
                 # A final is sent even when empty: under client_flush it is how
                 # the framework learns its flush was answered.
                 if text or is_final:
-                    self._event_ch.send_nowait(
+                    send_transcript(
                         stt_module.SpeechEvent(
                             type=stt_module.SpeechEventType.FINAL_TRANSCRIPT
                             if is_final
                             else stt_module.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[self._speech_data(transcript, segments, text, base)],
+                            alternatives=[self._speech_data(transcript, segments, text)],
                         )
                     )
 
@@ -628,19 +622,13 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
         transcript: dict[str, Any],
         segments: list[dict[str, Any]],
         text: str,
-        base: int,
     ) -> stt_module.SpeechData:
-        # Server times count the audio this socket was sent, from sample `base`
-        # of the stream; the stream's first audio sits at the offset in the session.
-        offset = (
-            self.start_time_offset if self._session_offset_s is None else self._session_offset_s
-        )
-        base_s = offset + base / SAMPLE_RATE
+        # Server times count the audio this socket was sent.
         return stt_module.SpeechData(
             # The language this turn was decoded in; absent when the server
             # cannot say (detection that does not report what it found).
             language=LanguageCode(transcript.get("language") or ""),
             text=text,
-            start_time=(float(segments[0].get("start", 0.0)) if segments else 0.0) + base_s,
-            end_time=(float(segments[-1].get("end", 0.0)) if segments else 0.0) + base_s,
+            start_time=float(segments[0].get("start", 0.0)) if segments else 0.0,
+            end_time=float(segments[-1].get("end", 0.0)) if segments else 0.0,
         )

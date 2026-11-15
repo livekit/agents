@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import copy
 import time
+from collections.abc import Iterator
 from typing import Literal
 
 from pydantic import BaseModel
@@ -18,6 +19,7 @@ from livekit.agents.stt import (
     SpeechEventType,
     STTCapabilities,
 )
+from livekit.agents.stt.clock import _SessionStart
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils.audio import AudioBuffer
 
@@ -236,3 +238,67 @@ class FakeRecognizeStream(RecognizeStream):
 
         with contextlib.suppress(asyncio.InvalidStateError):
             self._stt._done_fut.set_result(None)
+
+
+class _RecordingEventChan(RecognizeStream._EventChan):
+    def __init__(self, stream: RecognizeStream) -> None:
+        super().__init__(translate_event_timestamps=stream._translate_event_timestamps)
+        self.events: list[SpeechEvent] = []
+
+    def send_nowait(self, value: SpeechEvent) -> None:
+        super().send_nowait(value)
+        self.events.append(self._queue[-1])
+
+
+class _DetachedStream(RecognizeStream):
+    async def _run(self) -> None:
+        raise NotImplementedError
+
+
+@contextlib.contextmanager
+def current_event_loop() -> Iterator[None]:
+    """Provide a temporary loop when a synchronous test has no current loop.
+
+    The test only constructs channels; it does not await them on this loop.
+    """
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            yield
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+    else:
+        yield
+
+
+def attach_provider_audio_channels(
+    stream: object, *, start_time_offset: float = 0.0, input_started_at: float | None = None
+) -> list[SpeechEvent]:
+    """Attach production channels and clocks to a stream built without ``__init__``.
+
+    A stand-in object that is not a ``RecognizeStream`` gets the channels and the
+    input clock of a detached stream. Return the translated events in enqueue order.
+    """
+    owner = stream if isinstance(stream, RecognizeStream) else object.__new__(_DetachedStream)
+    with current_event_loop():
+        owner._init_channels(translate_timestamps=True)
+        event_ch = _RecordingEventChan(owner)
+    owner._event_ch = event_ch
+    owner._input_clock.set_session_timeline(start_time_offset)
+    if input_started_at is not None:
+        # move the wall-clock start only; the declared offset stays
+        owner._input_clock._session_start = _SessionStart.from_wall_timestamp(input_started_at)
+    if owner is not stream:
+        stream._input_ch = owner._input_ch  # type: ignore[attr-defined]
+        stream._event_ch = event_ch  # type: ignore[attr-defined]
+        stream._input_clock = owner._input_clock  # type: ignore[attr-defined]
+    return event_ch.events
+
+
+def queued_events(stream: RecognizeStream) -> list[SpeechEvent]:
+    """Return queued events that no consumer has read."""
+    return list(stream._event_ch._queue)

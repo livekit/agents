@@ -564,7 +564,7 @@ class SpeechStreamv2(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 # expose the connection for in-band Configure updates
                 self._ws = ws
                 tasks = [
@@ -711,7 +711,8 @@ class SpeechStreamv2(stt.SpeechStream):
     def _send_transcript_event(
         self, event_type: stt.SpeechEventType, data: dict
     ) -> list[stt.SpeechData]:
-        alts = _parse_transcription(self._opts.language, data, self.start_time_offset)
+        """Send a transcript event and return its alternatives."""
+        alts = _parse_transcription(self._opts.language, data)
         if alts:
             event = stt.SpeechEvent(
                 type=event_type,
@@ -772,10 +773,7 @@ class SpeechStreamv2(stt.SpeechStream):
 
                 end_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.END_OF_SPEECH,
-                    alternatives=[
-                        replace(alt, end_time=self.start_time_offset + last_word_end)
-                        for alt in alts
-                    ]
+                    alternatives=[replace(alt, end_time=last_word_end) for alt in alts]
                     if last_word_end > 0
                     else [],
                 )
@@ -794,9 +792,7 @@ class SpeechStreamv2(stt.SpeechStream):
             raise APIStatusError(message=desc, status_code=code)
 
 
-def _parse_transcription(
-    language: str, data: dict[str, Any], start_time_offset: float
-) -> list[stt.SpeechData]:
+def _parse_transcription(language: str, data: dict[str, Any]) -> list[stt.SpeechData]:
     transcript = data.get("transcript")
     words = data.get("words")
     if not words:
@@ -810,18 +806,17 @@ def _parse_transcription(
 
     sd = stt.SpeechData(
         language=primary_language,
-        start_time=data.get("audio_window_start", 0) + start_time_offset,
-        end_time=data.get("audio_window_end", 0) + start_time_offset,
+        start_time=data.get("audio_window_start", 0),
+        end_time=data.get("audio_window_end", 0),
         confidence=confidence,
         text=transcript or "",
         source_languages=[LanguageCode(lang) for lang in detected_languages] or None,
         words=[
             TimedString(
                 text=word.get("word", ""),
-                start_time=word.get("start", 0) + start_time_offset,
-                end_time=word.get("end", 0) + start_time_offset,
+                start_time=word.get("start", 0),
+                end_time=word.get("end", 0),
                 confidence=word["confidence"],
-                start_time_offset=start_time_offset,
             )
             for word in words
         ],

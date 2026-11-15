@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator
 from unittest.mock import MagicMock
@@ -12,6 +13,7 @@ import pytest
 from livekit import rtc
 from livekit.agents import ModelSettings
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
+from livekit.agents.stt.clock import _ConnectionClock, _InputClock
 from livekit.agents.voice.audio_recognition import AudioRecognition, _STTPipeline
 
 pytestmark = pytest.mark.unit
@@ -294,6 +296,59 @@ async def test_custom_stt_node_normalizes_aligned_speech_end_time(
         await pipeline.aclose()
 
     assert recognition._transcript_buffer[0].speech_end_time == expected_speech_end_time
+
+
+@pytest.mark.parametrize("input_gap", [0.0, 5.59])
+async def test_backchannel_is_discarded_when_the_input_paused_before_it(
+    input_gap: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Discard a backchannel after an earlier input gap."""
+    now = 990.0
+    monkeypatch.setattr(time, "time", lambda: now)
+    # the input clock measures elapsed time on the monotonic clock
+    monkeypatch.setattr(time, "perf_counter", lambda: now)
+    input_clock = _InputClock()
+    input_clock.set_session_timeline(0.0)  # the session input starts now
+    connection_clock: _ConnectionClock | None = None
+    frame = rtc.AudioFrame.create(16000, 1, 1600)
+
+    def push_audio(captured_from: float, duration: float) -> None:
+        nonlocal now, connection_clock
+        for i in range(round(duration / frame.duration)):
+            now = captured_from + (i + 1) * frame.duration
+            if connection_clock is None:
+                connection_clock = _ConnectionClock(input_clock, 0.0)
+            input_clock.on_audio_enqueued(frame.duration, now, connection_clock)
+            input_clock.on_audio_dequeued(frame.duration)
+
+    push_audio(990.0, 4.0)
+    resumed_at = 994.0 + input_gap
+    push_audio(resumed_at, 12.0 - input_gap)
+
+    # the agent speaks from 1000.0 to 1013.14, the user says "mm-hmm" until 1005.45
+    now = 1005.76
+    backchannel_end = 4.0 + (1005.45 - resumed_at)  # on the provider's clock
+    # the stream sends the provider's time, and the connection clock places it
+    assert connection_clock is not None
+    event = connection_clock.translate_event_timestamps(
+        _event("mm-hmm", created_at=now, end_time=backchannel_end)
+    )
+    recognition = _make_recognition(vad_sos=None, agent_sos=1000.0, end_boundary=1.0)
+    session_start = input_clock.session_start
+    assert session_start is not None
+    recognition._stt_pipeline = MagicMock(input_started_at=session_start.wall_timestamp)
+    recognition._stt_aligned_transcript = True
+    recognition._agent_speaking = True
+    recognition._turn_detection_mode = "vad"
+    recognition._user_turn_committed = False
+    recognition._stt_request_ids = []
+    recognition._mark_turn_transcribed = MagicMock()  # type: ignore[method-assign]
+
+    await recognition._on_stt_event(event)
+    assert recognition._transcript_buffer[0].speech_end_time == pytest.approx(1005.45)
+    recognition._flush_held_transcripts(resolved_at=1013.14, vad_speech_started_at=None)
+
+    recognition._process_stt_event.assert_not_called()  # type: ignore[attr-defined]
 
 
 def test_disabling_vad_flushes_held_transcripts() -> None:
