@@ -30,6 +30,7 @@ from livekit.plugins.zoom_ai.realtime import RealtimeSession
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 API_KEY = "test-key"
+LONG_CALL_ID = "call_7552bb1e87185342b467aa230c2ae072"
 FAST_RETRY = APIConnectOptions(max_retry=2, retry_interval=0.01, timeout=5)
 NO_RETRY = APIConnectOptions(max_retry=0, retry_interval=0.01, timeout=5)
 
@@ -46,12 +47,23 @@ class Conn:
     protocol: str | None
     events: list[dict[str, Any]] = field(default_factory=list)
     audio: bytearray = field(default_factory=bytearray)
+    # the last conversation item, which the next one is placed after
+    last_item: str | None = None
+    _outputs: int = 0
 
     def of_type(self, event_type: str) -> list[dict[str, Any]]:
         return [e for e in self.events if e["type"] == event_type]
 
     async def emit(self, event_type: str, **payload: Any) -> None:
         await self.ws.send_json({"type": event_type, "payload": {"type": event_type, **payload}})
+
+    async def add_item(
+        self, item: dict[str, Any], event_type: str = "conversation.item.added"
+    ) -> None:
+        """Announce a conversation item; like Zoom, a connection's first has no previous id."""
+        placement = {"previous_item_id": self.last_item} if self.last_item else {}
+        await self.emit(event_type, item=item, **placement)
+        self.last_item = item["id"]
 
 
 Hook = Callable[[Conn, dict[str, Any]], Awaitable[None]]
@@ -86,6 +98,16 @@ class FakeVoiceAgent:
             conn.events.append(event)
             if event["type"] == "input_audio_buffer.append":
                 conn.audio.extend(base64.b64decode(event["audio"]))
+            elif (
+                event["type"] == "conversation.item.create"
+                and event["item"]["type"] == "function_call_output"
+            ):
+                # Zoom acknowledges a function result as conversation.item.created
+                conn._outputs += 1
+                await conn.add_item(
+                    {"id": f"item_out_{conn._outputs}", "status": "completed", **event["item"]},
+                    event_type="conversation.item.created",
+                )
             elif event["type"] == "session.update":
                 if self.reject_update:
                     await ws.send_json(
@@ -192,13 +214,85 @@ async def collect(gen: llm.GenerationCreatedEvent) -> tuple[str, int, list[llm.F
     return text, samples, calls
 
 
-async def reply(conn: Conn, *, response_id: str = "resp_1", item_id: str = "item_1") -> None:
-    """Script one spoken agent response."""
+async def user_turn(conn: Conn, *, item_id: str = "user_1", transcript: str = "Hi") -> None:
+    """Script one spoken user turn, in the order the live API sends it."""
+    await conn.emit("input_audio_buffer.speech_started", item_id=item_id, audio_start_ms=0)
+    await conn.emit("input_audio_buffer.speech_stopped", item_id=item_id, audio_end_ms=900)
+    await conn.emit("input_audio_buffer.committed", item_id=item_id)
+    await conn.add_item(
+        {
+            "id": item_id,
+            "type": "message",
+            "role": "user",
+            "status": "completed",
+            "content": [{"type": "input_audio", "transcript": transcript}],
+        }
+    )
+    await conn.emit(
+        "conversation.item.input_audio_transcription.completed",
+        item_id=item_id,
+        content_index=0,
+        transcript=transcript,
+        usage={"type": "duration", "seconds": 0.9},
+    )
+
+
+async def function_call(
+    conn: Conn,
+    *,
+    response_id: str = "resp_fc",
+    item_id: str = "item_fc",
+    call_id: str = "call_7552bb1e87185342b467aa230c2ae072",  # Zoom's are 37 characters
+    name: str = "get_order_status",
+    arguments: str = '{"order_id":"123"}',
+) -> None:
+    """Script one response that calls a function, in the order the live API sends it."""
     await conn.emit("response.created", response={"id": response_id, "status": "in_progress"})
+    item = {"id": item_id, "type": "function_call", "call_id": call_id, "name": name}
     await conn.emit(
         "response.output_item.added",
         response_id=response_id,
-        item={"id": item_id, "type": "message"},
+        output_index=0,
+        item={**item, "arguments": "", "status": "in_progress"},
+    )
+    await conn.add_item({**item, "arguments": "", "status": "in_progress"})
+    await conn.emit(
+        "response.function_call_arguments.done",
+        response_id=response_id,
+        item_id=item_id,
+        output_index=0,
+        call_id=call_id,
+        name=name,
+        arguments=arguments,
+    )
+    await conn.emit(
+        "response.output_item.done",
+        response_id=response_id,
+        output_index=0,
+        item={**item, "arguments": arguments, "status": "completed"},
+    )
+    await conn.emit("response.done", response={"id": response_id, "status": "completed"})
+
+
+async def reply(conn: Conn, *, response_id: str = "resp_1", item_id: str = "item_1") -> None:
+    """Script one spoken agent response, in the order the live API sends it."""
+    await conn.emit("response.created", response={"id": response_id, "status": "in_progress"})
+    message = {"id": item_id, "type": "message", "role": "assistant"}
+    content = [{"type": "output_audio"}]
+    await conn.emit(
+        "response.output_item.added",
+        response_id=response_id,
+        output_index=0,
+        item={**message, "status": "in_progress", "content": content},
+    )
+    await conn.add_item({**message, "status": "in_progress", "content": content})
+    await conn.emit(
+        "response.content_part.added",
+        response_id=response_id,
+        item_id=item_id,
+        output_index=0,
+        content_index=0,
+        part={"type": "audio", "transcript": ""},
     )
     await conn.emit(
         "response.output_audio_transcript.delta",
@@ -214,6 +308,12 @@ async def reply(conn: Conn, *, response_id: str = "resp_1", item_id: str = "item
         delta=base64.b64encode(pcm).decode(),
     )
     await conn.emit("response.output_audio.done", response_id=response_id, item_id=item_id)
+    await conn.emit(
+        "response.output_item.done",
+        response_id=response_id,
+        output_index=0,
+        item={**message, "status": "completed", "content": [{"type": "output_audio"}]},
+    )
     await conn.emit(
         "response.done",
         response={
@@ -525,6 +625,47 @@ async def test_generate_reply_streams_audio_and_transcript(
     await session.aclose()
 
 
+async def test_reply_request_carries_no_response_object(
+    server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
+) -> None:
+    fake, url = server
+
+    async def on_event(conn: Conn, event: dict[str, Any]) -> None:
+        if event["type"] == "response.create":
+            await reply(conn)
+
+    fake.on_event = on_event
+    session = await start(make_model(url, http))
+    await asyncio.wait_for(session.generate_reply(instructions="Say hi."), 2)
+    conn = await fake.conn()
+    # Zoom refuses a response object ("use session.update") and doesn't echo metadata
+    (create,) = conn.of_type("response.create")
+    assert set(create) <= {"type", "event_id"}
+    await session.aclose()
+
+
+async def test_new_turns_follow_the_carried_over_history(
+    server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
+) -> None:
+    fake, url = server
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="My order is 123.")
+    chat_ctx.add_message(role="assistant", content="Transferring you now.")
+    session = await start(make_model(url, http), chat_ctx=chat_ctx)
+    conn = await fake.conn()
+    # the connection's first item comes without a previous_item_id
+    await user_turn(conn, item_id="user_1", transcript="Hello?")
+    await reply(conn)
+    await wait_for(lambda: len(session.chat_ctx.items) == 4)
+    assert [(i.role, i.text_content) for i in session.chat_ctx.items if i.type == "message"] == [
+        ("user", "My order is 123."),
+        ("assistant", "Transferring you now."),
+        ("user", "Hello?"),  # once, though Zoom sends the transcript twice
+        ("assistant", "Hello there."),
+    ]
+    await session.aclose()
+
+
 async def test_server_started_response_is_not_user_initiated(
     server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
 ) -> None:
@@ -538,13 +679,7 @@ async def test_server_started_response_is_not_user_initiated(
     session.on("input_audio_transcription_completed", transcripts.append)
 
     conn = await fake.conn()
-    await conn.emit("input_audio_buffer.speech_started", item_id="user_1")
-    await conn.emit("input_audio_buffer.speech_stopped", item_id="user_1")
-    await conn.emit(
-        "conversation.item.input_audio_transcription.completed",
-        item_id="user_1",
-        transcript="Where is my order?",
-    )
+    await user_turn(conn, item_id="user_1", transcript="Where is my order?")
     await reply(conn)
     await wait_for(lambda: gens and transcripts)
     assert started
@@ -565,7 +700,7 @@ async def test_reply_waits_for_the_active_response(
     session = await start(make_model(url, http))
     conn = await fake.conn()
     await conn.emit("response.created", response={"id": "resp_auto"})
-    await wait_for(lambda: session._active_response_id == "resp_auto")
+    await wait_for(lambda: session._zoom_active_response == "resp_auto")
 
     fut = session.generate_reply()
     await asyncio.sleep(0.05)
@@ -642,7 +777,7 @@ async def test_interrupt_cancels_and_truncate_aligns_history(
     session = await start(make_model(url, http))
     conn = await fake.conn()
     await conn.emit("response.created", response={"id": "resp_9"})
-    await wait_for(lambda: session._active_response_id == "resp_9")
+    await wait_for(lambda: session._zoom_active_response == "resp_9")
     session.interrupt()
     session.interrupt()  # already being cancelled: no second response.cancel
     session.truncate(message_id="item_9", modalities=["audio", "text"], audio_end_ms=1500)
@@ -688,10 +823,10 @@ async def test_interrupt_after_zoom_barge_in_sends_no_cancel(
     await conn.emit("response.created", response={"id": "resp_9"})
     # the caller talks over the agent: Zoom cancels the response itself
     await conn.emit("input_audio_buffer.speech_started", item_id="user_2")
-    await wait_for(lambda: session._active_response_cancelled)
+    await wait_for(lambda: session._zoom_active_cancelled)
     session.interrupt()  # what AgentActivity does on the barge-in
     await conn.emit("response.done", response={"id": "resp_9", "status": "cancelled"})
-    await wait_for(lambda: session._active_response_id is None)
+    await wait_for(lambda: session._zoom_active_response is None)
     assert not conn.of_type("response.cancel")
     await session.aclose()
 
@@ -739,7 +874,7 @@ async def test_cancelled_reply_refused_leaves_the_next_turn_alone(
     fut.cancel()
     # refused: a response the server started itself is running
     await conn.ws.send_json(ACTIVE_RESPONSE_ERROR)
-    await wait_for(lambda: not session._reply_inflight)
+    await wait_for(lambda: not session._zoom_inflight)
     await conn.emit("response.done", response={"id": "resp_auto", "status": "completed"})
 
     # Zoom's reply to the caller's next turn plays
@@ -765,28 +900,13 @@ async def test_function_call_and_result_round_trip(
     gens: list[llm.GenerationCreatedEvent] = []
     session.on("generation_created", gens.append)
     conn = await fake.conn()
-    await conn.emit(
-        "conversation.item.input_audio_transcription.completed",
-        item_id="user_1",
-        transcript="Status of order 123?",
-    )
-    await conn.emit("response.created", response={"id": "resp_fc"})
-    await conn.emit(
-        "response.function_call_arguments.done",
-        event_id="event_abc123",
-        response_id="resp_fc",
-        item_id="item_fc",
-        output_index=0,
-        call_id="call_abc123",
-        name="get_order_status",
-        arguments='{"order_id":"123"}',
-    )
-    await conn.emit("response.done", response={"id": "resp_fc", "status": "completed"})
+    await user_turn(conn, item_id="user_1", transcript="Status of order 123?")
+    await function_call(conn)
     await wait_for(lambda: gens)
     _, _, calls = await asyncio.wait_for(collect(gens[0]), 2)
     (call,) = calls
     assert (call.call_id, call.name, call.arguments) == (
-        "call_abc123",
+        LONG_CALL_ID,
         "get_order_status",
         '{"order_id":"123"}',
     )
@@ -795,10 +915,11 @@ async def test_function_call_and_result_round_trip(
     chat_ctx = session.chat_ctx.copy()
     chat_ctx.items.append(
         llm.FunctionCallOutput(
-            call_id="call_abc123", name="get_order_status", output="shipped", is_error=False
+            call_id=LONG_CALL_ID, name="get_order_status", output="shipped", is_error=False
         )
     )
     await session.update_chat_ctx(chat_ctx)
+    await session.update_chat_ctx(chat_ctx)  # sent once, though Zoom gives it its own id
     session.interrupt()  # no active response: nothing to cancel
     fut = session.generate_reply(tool_choice="none")
 
@@ -806,7 +927,8 @@ async def test_function_call_and_result_round_trip(
     assert conn.of_type("conversation.item.create") == [
         {
             "type": "conversation.item.create",
-            "item": {"type": "function_call_output", "call_id": "call_abc123", "output": "shipped"},
+            # the call id goes back as Zoom sent it, not shortened to OpenAI's 32 characters
+            "item": {"type": "function_call_output", "call_id": LONG_CALL_ID, "output": "shipped"},
         }
     ]
     assert not conn.of_type("response.cancel")
@@ -814,6 +936,13 @@ async def test_function_call_and_result_round_trip(
     assert item_create < conn.events.index(conn.of_type("response.create")[0])
     await reply(conn, response_id="resp_after")
     assert (await asyncio.wait_for(fut, 2)).response_id == "resp_after"
+    await wait_for(lambda: len(session.chat_ctx.items) == 4)
+    assert [i.type for i in session.chat_ctx.items] == [
+        "message",
+        "function_call",
+        "function_call_output",
+        "message",
+    ]
     await session.aclose()
 
 
@@ -823,9 +952,7 @@ async def test_messages_cannot_be_added_mid_conversation(
     fake, url = server
     session = await start(make_model(url, http))
     conn = await fake.conn()
-    await conn.emit(
-        "conversation.item.input_audio_transcription.completed", item_id="u1", transcript="Hi"
-    )
+    await user_turn(conn, item_id="u1", transcript="Hi")
     await wait_for(lambda: session.chat_ctx.items)
     chat_ctx = session.chat_ctx.copy()
     chat_ctx.add_message(role="user", content="typed text")
@@ -850,11 +977,7 @@ async def test_reconnects_with_the_conversation_after_the_server_closes(
     reconnected: list[llm.RealtimeSessionReconnectedEvent] = []
     session.on("session_reconnected", reconnected.append)
     conn = await fake.conn()
-    await conn.emit(
-        "conversation.item.input_audio_transcription.completed",
-        item_id="u1",
-        transcript="My name is Sam.",
-    )
+    await user_turn(conn, item_id="u1", transcript="My name is Sam.")
     await reply(conn)
     await wait_for(lambda: len(session.chat_ctx.items) == 2)
 
@@ -867,6 +990,14 @@ async def test_reconnects_with_the_conversation_after_the_server_closes(
     assert instructions.startswith("Be kind.\n\n")
     assert "user: My name is Sam." in instructions
     assert "assistant: Hello there." in instructions
+    # the session keeps the conversation, and new turns follow it
+    await user_turn(conn2, item_id="u2", transcript="Still there?")
+    await wait_for(lambda: len(session.chat_ctx.items) == 3)
+    assert [i.text_content for i in session.chat_ctx.items] == [
+        "My name is Sam.",
+        "Hello there.",
+        "Still there?",
+    ]
     await session.aclose()
 
 
@@ -883,7 +1014,7 @@ async def test_reconnect_drops_events_queued_for_the_old_connection(
     session.on("error", errors.append)
     conn = await fake.conn()
     await conn.emit("response.created", response={"id": "resp_1"})
-    await wait_for(lambda: session._active_response_id == "resp_1")
+    await wait_for(lambda: session._zoom_active_response == "resp_1")
 
     fake.status = 503  # the first retry fails, so the session waits out a backoff
     await conn.ws.close()
@@ -931,7 +1062,7 @@ async def test_unexpected_failure_ends_the_session_with_an_error(
     async def _broken_connect() -> aiohttp.ClientWebSocketResponse:
         raise RuntimeError("boom")
 
-    session._connect = _broken_connect  # type: ignore[method-assign]
+    session._create_ws_conn = _broken_connect  # type: ignore[method-assign]
     await session._update_session(instructions="Hi.", chat_ctx=llm.ChatContext.empty(), tools=[])
     await wait_for(lambda: session._main_atask.done())
     assert len(errors) == 1 and not errors[0].recoverable
@@ -970,16 +1101,7 @@ async def test_agent_session_runs_a_tool_turn_end_to_end(
             return
         creates += 1
         if creates == 1:
-            await conn.emit("response.created", response={"id": "resp_fc"})
-            await conn.emit(
-                "response.function_call_arguments.done",
-                response_id="resp_fc",
-                item_id="item_fc",
-                call_id="call_1",
-                name="get_order_status",
-                arguments='{"order_id":"123"}',
-            )
-            await conn.emit("response.done", response={"id": "resp_fc", "status": "completed"})
+            await function_call(conn, call_id="call_1")
         else:
             await reply(conn, response_id="resp_answer", item_id="item_answer")
 
