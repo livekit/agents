@@ -1,0 +1,23 @@
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  s_10ca674c3da44d::t_e72bfae0e4e69d 341
+livekit-plugins/livekit-plugins-sarvam/tests/test_language_probability.py
+  s_10ca674c3da44d::t_e72bfae0e4e69d 122
+uv.lock
+  s_10ca674c3da44d::t_a0fd2d941c2a82 2533
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8124e4527ed67a402cc6cff01eaaad2f276e244c",
+  "prompts": {},
+  "sessions": {
+    "s_10ca674c3da44d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1df66-1bb2-7130-a03f-66a37350a4ad",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
