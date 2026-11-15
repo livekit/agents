@@ -87,6 +87,11 @@ pub trait RoomIo: Send + Sync {
     /// Starts the room's IO; its startup spans (the participant, its track, the agent's
     /// publication) open under `startup`, the session's `session_start`.
     fn start(self: Arc<Self>, startup: crate::telemetry::Cx);
+    /// The consumer and its transports finished startup successfully. A cancelled
+    /// or failed startup must not activate its binding or a legacy projection.
+    fn session_started(&self) -> Result<()> {
+        Ok(())
+    }
     fn on_agent_state_changed(self: Arc<Self>, state: crate::voice::events::AgentState);
     fn wait_for_ready<'a>(&'a self) -> crate::BoxFuture<'a, Result<()>>;
     fn set_participant<'a>(
@@ -103,6 +108,9 @@ pub trait RoomIo: Send + Sync {
     ) -> crate::BoxFuture<'a, Result<()>>;
     /// The user's transcript `segment`, already final, now reads `text`.
     fn on_user_input_corrected(&self, segment: &str, text: &str);
+    /// Admit cleanup with its owner's original deadline. A later poll or waiter
+    /// must not reset the time allowed for retiring the same resources.
+    fn aclose_by(self: Arc<Self>, deadline: crate::Ts) -> crate::BoxFuture<'static, Closed>;
     fn aclose(self: Arc<Self>) -> crate::BoxFuture<'static, Closed>;
 }
 
@@ -114,13 +122,97 @@ pub trait SessionRoom: Any + Send + Sync {
     fn virtual_clock(&self) -> Option<Arc<VirtualClock>> {
         None
     }
-    fn room_io(&self, spawner: Arc<dyn Spawner>, config: RoomIoConfig) -> Arc<dyn RoomIo>;
+    fn room_io(
+        &self,
+        spawner: Arc<dyn Spawner>,
+        config: RoomIoConfig,
+    ) -> std::result::Result<Arc<dyn RoomIo>, crate::voice::room_binding::BindingRefused>;
+    /// Construct the consumer's ports after its binding has admitted activation.
+    fn create_io(&self, spawner: Arc<dyn Spawner>, config: RoomIoConfig) -> Arc<dyn RoomIo>;
 }
 
 /// `_core_RoomSession`: what a session's room I/O is built from, handed to the host and taken
 /// back as itself.
 #[crate::host(class(name = "_core_RoomSession", native = SessionRoom))]
 pub trait RoomSession: Send + Sync + Sized + 'static {}
+
+/// Native attachment ownership, cached independently of SDK room references.
+#[crate::host(native(refused = "expected native room attachments"))]
+pub trait RoomAttachmentsPort: Send + Sync {
+    /// The factory runs after admission and its resource is owned before the next await.
+    fn attach(
+        &self,
+        clock: Arc<dyn Clock>,
+        spawner: Arc<dyn Spawner>,
+        create: Box<dyn FnOnce() -> Arc<dyn RoomIo> + Send>,
+    ) -> std::result::Result<Arc<dyn RoomIo>, crate::voice::room_binding::BindingRefused>;
+}
+
+/// Room-local ownership without a strong reference back to the SDK room.
+#[crate::host(class(name = "_core_RoomAttachments", native = RoomAttachmentsPort))]
+pub trait RoomAttachments: Send + Sync + Sized + 'static {
+    #[host(env)]
+    type Env;
+    #[host(class(name = "_core_RoomBinding"))]
+    type Binding;
+
+    #[host(new)]
+    fn new() -> Self;
+
+    #[host(call)]
+    fn bind(
+        &self,
+        env: &Self::Env,
+        key: String,
+        #[host(kw)] room: Arc<dyn SessionRoom>,
+        #[host(kw)] sdk_room: crate::HostRef,
+    ) -> std::result::Result<Self::Binding, crate::voice::room_io::RoomOptionsError>;
+
+    #[host(await)]
+    async fn aclose(&self) -> std::result::Result<(), crate::voice::room_io::RoomOptionsError>;
+}
+
+/// A declared room binding. Its only activation authority is transferred to a consumer.
+#[crate::host(class(name = "_core_RoomBinding", native = SessionRoom))]
+pub trait RoomBinding: Send + Sync + Sized + 'static {
+    #[host(getter)]
+    fn key(&self) -> String;
+    #[host(getter)]
+    fn room(&self) -> crate::HostRef;
+    #[host(call)]
+    fn prepare(
+        &self,
+        options: RoomIoConfig,
+        host_audio_input: bool,
+        host_video_input: bool,
+        host_audio_output: bool,
+    ) -> std::result::Result<(), crate::voice::room_io::RoomOptionsError>;
+    #[host(await)]
+    async fn aclose(&self) -> std::result::Result<(), crate::voice::room_io::RoomOptionsError>;
+}
+
+/// Shared room I/O. Ordinary session startup obtains the same service automatically.
+#[crate::host(facade(path = "livekit.agents.voice.room_io", name = "RoomIO", native = RoomAttachments, extended))]
+pub trait RoomIOFacade {
+    /// Declare a binding without subscribing to tracks or publishing outputs.
+    #[host(
+        bind(room = "_room_native", sdk_room = "_room"),
+        returns = "..voice.room_io.RoomBinding"
+    )]
+    fn bind(&self, key: String);
+    /// Close this room's bindings without disconnecting the SDK room.
+    async fn aclose(&self);
+}
+
+/// One consumer's room input/output ports and lifetime. Obtain it with `RoomIO.bind(key)`.
+#[crate::host(facade(path = "livekit.agents.voice.room_io", name = "RoomBinding", native = RoomBinding, from_native))]
+pub trait RoomBindingFacade {
+    #[host(getter)]
+    fn key(&self) -> String;
+    #[host(getter, annotation(ret = "livekit.rtc.Room"))]
+    fn room(&self) -> crate::HostRef;
+    async fn aclose(&self);
+}
 
 #[crate::host(functions)]
 pub trait RoomRuntime {

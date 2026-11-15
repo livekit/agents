@@ -45,7 +45,7 @@ from ..types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from ..utils import aio
+from ..utils import aio, is_given
 from . import Agent, Output_T, io
 from ._session_bindings import (
     LLMNode as LLMNode,
@@ -77,6 +77,7 @@ from .events import (
 )
 from .room_io import (
     AudioInputOptions,
+    RoomBinding,
     RoomOptions,
     TextInputCallback,
 )
@@ -321,6 +322,7 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         agent: Agent,
         *,
         room: NotGivenOr[rtc.Room | None] = NOT_GIVEN,
+        io: RoomBinding | None = None,
         room_options: NotGivenOr[RoomOptions] = NOT_GIVEN,
         chat_ctx: ChatContext | None = None,
     ) -> None:
@@ -338,9 +340,12 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         from ..telemetry import _context
         from ._session_bindings import SessionHost
 
+        if io is not None and is_given(room):
+            raise ValueError("pass either room= or io=, not both")
+
         # a start joining one already under way runs on that start's host
         if self._host is None:
-            self._host = SessionHost(self, agent, room, room_options, chat_ctx)
+            self._host = SessionHost(self, agent, room, room_options, chat_ctx, io)
         host = self._host
         ctx = get_job_context(required=False)
         job = (

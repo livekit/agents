@@ -44,9 +44,9 @@ mod background_audio {
         let (rtc, clock) = FakeRtc::with_virtual_clock(RoomEventBus::port);
         let room = rtc.room(name);
         std::mem::forget(rtc);
-        let fixed =
-            FixedRoom { rtc: Some(room.clone()), time: Timebase::from_virtual(clock), pool: None };
-        let player = player(&fixed.time);
+        let time = Timebase::from_virtual(clock);
+        let fixed = FixedRoom::new(Some(room.clone()), time.clone(), None);
+        let player = player(&time);
         player.start(Arc::new(fixed), 0.5, Some(Sounds::Choice(ambient)), None).await.unwrap();
         (player, room)
     }

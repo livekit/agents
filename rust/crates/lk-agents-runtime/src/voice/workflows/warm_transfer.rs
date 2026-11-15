@@ -752,6 +752,9 @@ mod tests {
     /// A caller room these tests never reach: each stops before the transfer touches it.
     struct Untouched;
     impl RtcRoom for Untouched {
+        fn attachments(&self) -> &Arc<dyn lk_agents_abi::voice::room_owner::RoomAttachmentsPort> {
+            panic!("room must remain untouched")
+        }
         fn rpc_router(&self) -> &Arc<dyn lk_agents_abi::voice::rtc::ports::RpcRoutes> {
             panic!("room must remain untouched")
         }

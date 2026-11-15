@@ -90,6 +90,8 @@ from .voice import (
     FunctionToolsExecutedEvent,
     ModelSettings,
     PlayHandle,
+    RoomBinding,
+    RoomIO,
     RunContext,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
@@ -145,6 +147,8 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
+    "RoomIO",
+    "RoomBinding",
     "TextSession",
     "TextSessionState",
     "TextSessionTurn",

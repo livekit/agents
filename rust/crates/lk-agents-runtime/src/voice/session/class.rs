@@ -59,7 +59,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         };
         let clock = time.clock();
         let anchor = lk_agents_abi::WallAnchor::of(&*clock);
-        let mut config = args.room_io_config;
+        let config = args.room_io_config;
         let host_audio_input = args
             .host_audio_input
             .or_else(|| args.console.as_ref().map(|c| c.clone().as_audio_input()));
@@ -69,12 +69,13 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let rtc_room = room.rtc();
         // An audio leg the host set replaces the room's, which is then neither published nor
         // subscribed. The room's transcription output stays: it paces a host transcription leg.
-        if host_audio_input.is_some() {
-            config.audio_input = None;
-        }
-        if host_audio_output.is_some() || rtc_room.is_none() {
-            config.audio_output = None;
-        }
+        let config = lk_agents_voice::room_io::resolve_room_io(
+            config,
+            host_audio_input.is_some(),
+            args.host_video_input.is_some(),
+            host_audio_output.is_some(),
+            rtc_room.is_some(),
+        );
         // A host sink's playback reports are stamped on the session's clock.
         if let Some(out) = &host_audio_output {
             out.tracker().anchor_to(anchor);
@@ -110,7 +111,9 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             delete_room_on_close: config.delete_room_on_close,
             room: rtc_room.as_ref().map(|room| room.name()).transpose()?.unwrap_or_default(),
         };
-        let room_io = room.room_io(spawner.clone(), config);
+        let room_io = room
+            .room_io(spawner.clone(), config)
+            .map_err(|error| lk_agents_abi::voice::rtc::RtcError::host(error.to_string()))?;
 
         let outputs = crate::voice::io::SessionOutputs::new(
             room_io.as_ref(),

@@ -70,4 +70,10 @@ impl room_owner::RoomIo for DetachedRoomIo {
     fn aclose(self: Arc<Self>) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
         Box::pin(async move { lk_agents_abi::Closed::Clean })
     }
+    fn aclose_by(
+        self: Arc<Self>,
+        _deadline: lk_agents_abi::Ts,
+    ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
+        self.aclose()
+    }
 }

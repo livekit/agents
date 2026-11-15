@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from .audio_errors import AudioProcessingError as AudioProcessingError
+from .facades_voice_room_io import RoomBinding as RoomBinding
 from .room_api import (
     AudioInputOptions as AudioInputOptions,
     AudioOutputOptions as AudioOutputOptions,
@@ -27,4 +28,5 @@ __all__: list[str] = [
     "AudioOutputOptions",
     "TranscriptionOutputOptions",
     "RoomOptions",
+    "RoomBinding",
 ]

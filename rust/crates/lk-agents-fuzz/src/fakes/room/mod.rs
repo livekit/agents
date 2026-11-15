@@ -98,6 +98,7 @@ pub struct FakeRoom {
     name: String,
     bus: Arc<dyn RoomEventSink>,
     routes: Arc<dyn lk_agents_abi::voice::rtc::ports::RpcRoutes>,
+    attachments: Arc<dyn lk_agents_abi::voice::room_owner::RoomAttachmentsPort>,
     local: Arc<FakeLocalParticipant>,
     local_dyn: Arc<dyn LocalParticipant>,
     /// The host loop its SDK objects bind to.
@@ -135,6 +136,7 @@ impl FakeRoom {
         let host = Arc::new(HostLoop::default());
         let local = Arc::new(FakeLocalParticipant::new(clock, bus.clone(), host.clone()));
         Arc::new(FakeRoom {
+            attachments: Arc::new(lk_agents_runtime::room_io::AttachmentRegistry::default()),
             name: name.to_owned(),
             local_dyn: local.clone(),
             local,
@@ -358,6 +360,9 @@ impl RtcRoom for FakeRoom {
     }
     fn rpc_router(&self) -> &Arc<dyn lk_agents_abi::voice::rtc::ports::RpcRoutes> {
         &self.routes
+    }
+    fn attachments(&self) -> &Arc<dyn lk_agents_abi::voice::room_owner::RoomAttachmentsPort> {
+        &self.attachments
     }
 
     fn register_byte_stream_handler(

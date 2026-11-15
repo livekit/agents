@@ -5946,6 +5946,146 @@ inventory::submit! {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/room_owner.rs.
+type CoreRoomAttachmentsImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::RoomAttachments;
+
+/// Room-local ownership without a strong reference back to the SDK room.
+#[pyclass(frozen, name = "_core_RoomAttachments", module = "livekit.agents._core")]
+pub struct CoreRoomAttachments(pub(crate) ::std::sync::Arc<CoreRoomAttachmentsImpl>);
+
+#[pymethods]
+impl CoreRoomAttachments {
+    #[new]
+    fn new(py: Python<'_>) -> PyResult<CoreRoomAttachments> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(
+            <CoreRoomAttachmentsImpl as ::lk_agents_abi::voice::room_owner::RoomAttachments>::new,
+        );
+        ::pyo3::PyResult::Ok(CoreRoomAttachments(::std::sync::Arc::new(out)))
+    }
+
+    #[pyo3(signature = (key, *, room, sdk_room))]
+    fn bind(
+        &self,
+        py: Python<'_>,
+        key: ::std::string::String,
+        room: Bound<'_, PyAny>,
+        sdk_room: Bound<'_, PyAny>,
+    ) -> PyResult<super::voice::CoreRoomBinding> {
+        crate::py_calls::check_pid()?;
+        let env = crate::process::env();
+        let room =
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(
+                room.as_any(),
+            )
+            .and_then(|native| {
+                native.ok_or_else(|| {
+                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                        "room",
+                        ": expected a native room session"
+                    ))
+                })
+            })?;
+        let sdk_room = crate::py_objects::object_ref_from_py(sdk_room.as_any())?;
+        let out = py.detach(|| <CoreRoomAttachmentsImpl as ::lk_agents_abi::voice::room_owner::RoomAttachments>::bind(&self.0, &env, key, room, sdk_room)).map_err(|e: ::lk_agents_abi::voice::room_io::RoomOptionsError| <::lk_agents_abi::voice::room_io::RoomOptionsError as crate::py_errors::HostException>::to_py_err(&e))?;
+        ::pyo3::PyResult::Ok(super::voice::CoreRoomBinding(::std::sync::Arc::new(out)))
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreRoomAttachmentsImpl as ::lk_agents_abi::voice::room_owner::RoomAttachments>::aclose(&this, )
+                .await.map_err(|e: ::lk_agents_abi::voice::room_io::RoomOptionsError| <::lk_agents_abi::voice::room_io::RoomOptionsError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::room_owner::RoomAttachmentsPort`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::room_owner::RoomAttachmentsPort>(),
+        read: |obj| match obj.cast::<CoreRoomAttachments>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::room_owner::RoomAttachmentsPort> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/room_owner.rs.
+type CoreRoomBindingImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::RoomBinding;
+
+/// A declared room binding. Its only activation authority is transferred to a consumer.
+#[pyclass(frozen, name = "_core_RoomBinding", module = "livekit.agents._core")]
+pub struct CoreRoomBinding(pub(crate) ::std::sync::Arc<CoreRoomBindingImpl>);
+
+#[pymethods]
+impl CoreRoomBinding {
+    #[getter]
+    fn key(&self, py: Python<'_>) -> PyResult<::std::string::String> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <CoreRoomBindingImpl as ::lk_agents_abi::voice::room_owner::RoomBinding>::key(&self.0)
+        });
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[getter]
+    fn room<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <CoreRoomBindingImpl as ::lk_agents_abi::voice::room_owner::RoomBinding>::room(&self.0)
+        });
+        crate::py_objects::object_ref_to_py(py, out)
+    }
+
+    #[pyo3(signature = (options, host_audio_input, host_video_input, host_audio_output))]
+    fn prepare(
+        &self,
+        py: Python<'_>,
+        options: Bound<'_, PyAny>,
+        host_audio_input: bool,
+        host_video_input: bool,
+        host_audio_output: bool,
+    ) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        let options =
+            crate::generated::records::room_options::room_io_config_from_py(options.as_any())?;
+        py.detach(|| <CoreRoomBindingImpl as ::lk_agents_abi::voice::room_owner::RoomBinding>::prepare(&self.0, options, host_audio_input, host_video_input, host_audio_output)).map_err(|e: ::lk_agents_abi::voice::room_io::RoomOptionsError| <::lk_agents_abi::voice::room_io::RoomOptionsError as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
+    }
+
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreRoomBindingImpl as ::lk_agents_abi::voice::room_owner::RoomBinding>::aclose(&this, )
+                .await.map_err(|e: ::lk_agents_abi::voice::room_io::RoomOptionsError| <::lk_agents_abi::voice::room_io::RoomOptionsError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::room_owner::SessionRoom`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::room_owner::SessionRoom>(),
+        read: |obj| match obj.cast::<CoreRoomBinding>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::room_owner::SessionRoom> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/room_owner.rs.
 type RoomRuntimeImpl =
     <crate::generated::implementations::Selected as super::Implementations>::RoomRuntime;
 
@@ -8545,6 +8685,7 @@ pub struct RtcRoomProxy {
     local: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::LocalParticipant>,
     event_bus: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>,
     rpc_router: ::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::ports::RpcRoutes>,
+    attachments: ::std::sync::Arc<dyn ::lk_agents_abi::voice::room_owner::RoomAttachmentsPort>,
 }
 
 impl RtcRoomProxy {
@@ -8634,7 +8775,11 @@ impl RtcRoomProxy {
                 })
             })?
         };
-        Ok(RtcRoomProxy { host, context, local, event_bus, rpc_router })
+        let attachments = {
+            let v = obj.getattr("attachments")?;
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::room_owner::RoomAttachmentsPort>(v.as_any()).and_then(|native| native.ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("RtcRoom.attachments", ": expected native room attachments"))))?
+        };
+        Ok(RtcRoomProxy { host, context, local, event_bus, rpc_router, attachments })
     }
 }
 
@@ -8922,6 +9067,12 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
 
     fn rpc_router(&self) -> &::std::sync::Arc<dyn ::lk_agents_abi::voice::rtc::ports::RpcRoutes> {
         &self.rpc_router
+    }
+
+    fn attachments(
+        &self,
+    ) -> &::std::sync::Arc<dyn ::lk_agents_abi::voice::room_owner::RoomAttachmentsPort> {
+        &self.attachments
     }
 
     fn register_byte_stream_handler(

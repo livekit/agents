@@ -30,7 +30,7 @@ from livekit.agents.stt import (
     SpeechEventType,
     STTCapabilities,
 )
-from livekit.agents.tts import TTS, ChunkedStream, SynthesizeStream, TTSCapabilities
+from livekit.agents.tts import TTS, ChunkedStream, SpeechChunk, SynthesizeStream, TTSCapabilities
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils import shortuuid
 from livekit.agents.voice.avatar import (
@@ -132,21 +132,21 @@ class _ToneRecognition(RecognizeStream):
 
 
 class ToneTTS(TTS):
-    """Speaks a 1 kHz tone, 60 ms per character."""
+    """Speaks a 1 kHz tone, 60 ms per character, accepting Cartesia's markup."""
+
+    class Markup(TTS.Markup):
+        def _provider_key(self) -> str:
+            return "cartesia"
 
     def __init__(self) -> None:
         super().__init__(
             capabilities=TTSCapabilities(streaming=True), sample_rate=24000, num_channels=1
         )
 
-    def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> ChunkedStream:
-        return _ToneChunks(tts=self, input_text=text, conn_options=conn_options)
+    def _synthesize(self, chunk: SpeechChunk, *, conn_options: APIConnectOptions) -> ChunkedStream:
+        return _ToneChunks(tts=self, input_text=chunk.said, conn_options=conn_options)
 
-    def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> SynthesizeStream:
+    def _stream(self, *, conn_options: APIConnectOptions) -> SynthesizeStream:
         return _ToneStream(tts=self, conn_options=conn_options)
 
 
@@ -172,8 +172,8 @@ class _ToneStream(SynthesizeStream):
         )
         text = ""
         async for data in self.input:
-            if isinstance(data, str):
-                text += data
+            if isinstance(data, SpeechChunk):
+                text += data.said
             elif text.strip():
                 output_emitter.start_segment(segment_id=f"tone-{id(text)}")
                 _speak(output_emitter, text)

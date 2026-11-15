@@ -174,6 +174,8 @@ impl super::Implementations for Selected {
     type RoomAudioInput = ::lk_agents_runtime::room_io::RoomAudioInput;
     type RoomVideoInput = ::lk_agents_runtime::room_io::RoomVideoInput;
     type RoomSession = ::lk_agents_runtime::room_io::FixedRoom;
+    type RoomAttachments = ::lk_agents_runtime::room_io::AttachmentRegistry;
+    type RoomBinding = ::lk_agents_runtime::room_io::RoomBinding;
     type RoomRuntime = ::lk_agents_runtime::room_io::RoomFactory;
     type JoinTokens = ::lk_agents_runtime::net::token::JoinTokens;
     type HttpExchange = ::lk_agents_runtime::worker::http::Exchange;

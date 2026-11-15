@@ -451,6 +451,7 @@ impl VoiceSession {
         };
         let opening =
             self.open(executor, remote.clone(), move |runner| Box::pin(drain.run(runner)))?;
+        let room_io = self.room_io.clone();
         Ok(Box::pin(async move {
             let connect = async {
                 match &job {
@@ -464,6 +465,7 @@ impl VoiceSession {
             if let Some(remote) = remote {
                 remote.start().await.map_err(StartFailed::Host)?;
             }
+            room_io.session_started().map_err(|error| StartFailed::Driver(error.to_string()))?;
             Ok(())
         }))
     }

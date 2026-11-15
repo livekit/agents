@@ -1,8 +1,12 @@
+mod attachments;
+pub mod bindings;
+mod bound;
 mod detached;
 pub mod input;
 pub mod output;
 mod owner;
 pub mod pre_connect_audio;
+mod session_binding;
 
 use self::output::transcription::SegmentIds;
 use crate::rtc::wait;
@@ -17,15 +21,28 @@ use lk_agents_abi::{Clock, Spawner};
 use lk_agents_net::env::ProcessEnv;
 use std::sync::Arc;
 
+pub use attachments::AttachmentRegistry;
 pub use owner::RoomIo;
+pub use session_binding::RoomBinding;
 
-/// The session's room, or none for a session without RTC.
+/// A native room view for production and simulated executors. Its RTC connection
+/// and clock are immutable; attachment ownership belongs to the SDK room boundary.
 pub struct FixedRoom {
-    pub rtc: Option<Arc<dyn RtcRoom>>,
-    pub time: crate::voice::session::Timebase,
+    rtc: Option<Arc<dyn RtcRoom>>,
+    time: crate::voice::session::Timebase,
     /// Where the room's CPU work (a pre-connect head's decode) runs; `None` runs it on the
     /// executor's own task.
-    pub pool: Option<lk_agents_media::pool::MediaPool>,
+    pool: Option<lk_agents_media::pool::MediaPool>,
+}
+
+impl FixedRoom {
+    pub fn new(
+        rtc: Option<Arc<dyn RtcRoom>>,
+        time: crate::voice::session::Timebase,
+        pool: Option<lk_agents_media::pool::MediaPool>,
+    ) -> Self {
+        Self { rtc, time, pool }
+    }
 }
 
 impl room_owner::SessionRoom for FixedRoom {
@@ -42,17 +59,35 @@ impl room_owner::SessionRoom for FixedRoom {
         &self,
         spawner: Arc<dyn Spawner>,
         config: RoomIoConfig,
-    ) -> Arc<dyn room_owner::RoomIo> {
+    ) -> Result<Arc<dyn room_owner::RoomIo>, lk_agents_abi::voice::room_binding::BindingRefused>
+    {
         let Some(rtc) = self.rtc.clone() else {
             // A session without RTC has no SDK resources to publish, subscribe or retire.
-            return detached::room_io();
+            return Ok(detached::room_io());
         };
+        let clock = self.time.clock();
+        let factory = FixedRoom::new(Some(rtc.clone()), self.time.clone(), self.pool.clone());
+        let performer_spawner = spawner.clone();
+        let attachments = rtc.attachments().clone();
+        attachments.attach(
+            clock,
+            spawner,
+            Box::new(move || factory.create_io(performer_spawner, config)),
+        )
+    }
+
+    fn create_io(
+        &self,
+        spawner: Arc<dyn Spawner>,
+        config: RoomIoConfig,
+    ) -> Arc<dyn room_owner::RoomIo> {
+        let Some(rtc) = self.rtc.clone() else { return detached::room_io() };
         RoomIo::new(
             rtc,
             self.time.clock(),
             spawner,
             Arc::new(SegmentIds::default()),
-            config.clone(),
+            config,
             None,
             self.pool.clone(),
         )
@@ -104,7 +139,7 @@ impl room_owner::RoomRuntime for RoomFactory {
     fn create_room_session(env: &ProcessEnv, room: Option<Arc<dyn RtcRoom>>) -> FixedRoom {
         let time = crate::voice::session::Timebase::of_clock(env.clock.clone());
         let pool = room.as_ref().map(|_| lk_agents_media::pool::media_pool());
-        FixedRoom { rtc: room, time, pool }
+        FixedRoom::new(room, time, pool)
     }
 }
 

@@ -709,6 +709,10 @@ impl RoomIo {
     }
 
     fn request_close(self: &Arc<Self>) {
+        self.request_close_by(self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT));
+    }
+
+    fn request_close_by(self: &Arc<Self>, deadline: Ts) {
         let closing = self.execution.modify(|_| {
             if self.stopped.is_cancelled() {
                 return false;
@@ -718,7 +722,6 @@ impl RoomIo {
         });
         if closing {
             let owner = self.clone();
-            let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
             let close = self.spawner.spawn(async move {
                 let outcome = owner.close(deadline).await;
                 owner.transition(|state| state.finish_close(outcome));
@@ -917,8 +920,13 @@ impl room_owner::RoomIo for RoomIo {
     }
 
     fn aclose(self: Arc<Self>) -> BoxFuture<'static, Closed> {
+        let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+        self.aclose_by(deadline)
+    }
+
+    fn aclose_by(self: Arc<Self>, deadline: Ts) -> BoxFuture<'static, Closed> {
+        self.request_close_by(deadline);
         Box::pin(async move {
-            self.request_close();
             let view = self.view.cell();
             view.wait_map(|view| view.closed).await.unwrap_or(Closed::Failed)
         })

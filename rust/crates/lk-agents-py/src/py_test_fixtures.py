@@ -541,18 +541,12 @@ def notifications_reach_the_host_in_call_order_in_their_context(state):
 
 
 def a_notification_behind_a_stalled_loop_is_delivered_and_a_lossy_one_dropped(state):
-    import time
-
     seen = []
-
-    def stall(i):
-        time.sleep(0.3)
 
     def note(i):
         seen.append(i)
 
     state.seen = seen
-    state.stall = stall
     state.note = note
 
 

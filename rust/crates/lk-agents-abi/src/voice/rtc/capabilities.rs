@@ -112,6 +112,11 @@ pub trait RtcRoom: Send + Sync {
     #[host(read_once, getter = "rpc_router")]
     fn rpc_router(&self) -> &Arc<dyn super::ports::RpcRoutes>;
 
+    /// The attachment registry is fixed to this SDK room identity; every view of
+    /// the connection shares it without retaining a native room reference cycle.
+    #[host(read_once, getter = "attachments")]
+    fn attachments(&self) -> &Arc<dyn crate::voice::room_owner::RoomAttachmentsPort>;
+
     /// Route every stream opened on `topic` into `streams`. Errors if the topic already has a
     /// handler -- the SDK's `ValueError`, which both callers treat as a warn-and-continue.
     /// `rtc::events::byte_streams` is the reader's form.

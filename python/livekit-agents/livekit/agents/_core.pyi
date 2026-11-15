@@ -310,6 +310,8 @@ from ._generated._core_voice import (
     _core_room_track_subscribed as _core_room_track_subscribed,
     _core_room_track_unpublished as _core_room_track_unpublished,
     _core_room_track_unsubscribed as _core_room_track_unsubscribed,
+    _core_RoomAttachments as _core_RoomAttachments,
+    _core_RoomBinding as _core_RoomBinding,
     _core_RoomRpcRouter as _core_RoomRpcRouter,
     _core_RoomSession as _core_RoomSession,
     _core_RpcTracing as _core_RpcTracing,

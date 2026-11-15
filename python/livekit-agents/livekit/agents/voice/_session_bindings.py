@@ -57,7 +57,7 @@ from .events import (
     RunContext,
     UserTurnExceededEvent,
 )
-from .room_io import RoomOptions
+from .room_io import RoomBinding, RoomOptions
 
 if TYPE_CHECKING:
     from .._core import VoiceAgent as _NativeAgent
@@ -367,12 +367,15 @@ class SessionHost:
         room: NotGivenOr[rtc.Room | None],
         room_options: NotGivenOr[RoomOptions],
         chat_ctx: ChatContext | None,
+        io: RoomBinding | None = None,
     ) -> None:
         self.session = session
         self.agent = agent
         self.room = room
         self.room_options = room_options
         self.chat_ctx = chat_ctx
+        self.io = io
+        self._owns_io = False
         thread = session._thread if session._bound_context is not None else None
         self.storage = _core._core_SessionStorage(
             thread._storage.threads if thread is not None else None,
@@ -392,7 +395,11 @@ class SessionHost:
         console = ConsoleCall.claim()
         job_ctx = get_job_context(required=False)
         if console is not None:
+            if self.io is not None:
+                raise ValueError("RoomBinding requires RTC startup; console uses its own I/O")
             room = None
+        elif self.io is not None:
+            room = self.io.room
         elif not is_given(room):
             room = job_ctx.room if job_ctx is not None else None
         options = room_options if is_given(room_options) else RoomOptions()
@@ -429,6 +436,14 @@ class SessionHost:
         realtime = model if isinstance(model, llm.RealtimeModel) else None
         keyterm_llm = _detection_llm(session._stt_context)
         session._room = room
+        if self.io is not None:
+            self.io._native.prepare(
+                options,
+                session._input.audio is not None,
+                session._input.video is not None,
+                session._output.audio is not None,
+            )
+            self._owns_io = True
         args = VoiceSessionArgs(
             instructions=frame.instructions,
             dynamic_instructions=frame.dynamic_instructions,
@@ -472,7 +487,7 @@ class SessionHost:
             job_run=job._run if job is not None else None,
         )
         return _core._core_SessionBindings(
-            room=_core._core_create_room_session(room),
+            room=self.io._native if self.io is not None else _core._core_create_room_session(room),
             args=args,
             record_audio=console is not None and ConsoleCall.record,
         )
@@ -499,6 +514,9 @@ class SessionHost:
     async def closed(self) -> None:
         session = self.session
         await session._tasks.aclose()
+        if self._owns_io:
+            assert self.io is not None
+            await self.io.aclose()
         if session._session_binding is not None:
             session._session_binding.close()
         if session._store is not None:

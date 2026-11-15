@@ -131,6 +131,8 @@
     "_core_PersistedSessionState",
     "_core_QueueAudio",
     "_core_RemoteInteraction",
+    "_core_RoomAttachments",
+    "_core_RoomBinding",
     "_core_RoomRpcRouter",
     "_core_RoomSession",
     "_core_RpcTracing",

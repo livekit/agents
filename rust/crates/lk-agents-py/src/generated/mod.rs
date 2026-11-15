@@ -242,6 +242,8 @@ pub trait Implementations: 'static {
     type RoomAudioInput: ::lk_agents_abi::voice::room_owner::RoomAudioInput;
     type RoomVideoInput: ::lk_agents_abi::voice::room_owner::RoomVideoInput;
     type RoomSession: ::lk_agents_abi::voice::room_owner::RoomSession;
+    type RoomAttachments: ::lk_agents_abi::voice::room_owner::RoomAttachments<Binding = Self::RoomBinding>;
+    type RoomBinding: ::lk_agents_abi::voice::room_owner::RoomBinding;
     type RoomRuntime: ::lk_agents_abi::voice::room_owner::RoomRuntime<Room = Self::RoomSession>;
     type JoinTokens: ::lk_agents_abi::worker::JoinTokens;
     type HttpExchange: ::lk_agents_abi::worker::http::HttpExchange;
@@ -536,6 +538,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::RoomAudioInput>()?;
     m.add_class::<voice::RoomVideoInput>()?;
     m.add_class::<voice::CoreRoomSession>()?;
+    m.add_class::<voice::CoreRoomAttachments>()?;
+    m.add_class::<voice::CoreRoomBinding>()?;
     m.add_function(wrap_pyfunction!(voice::_core_create_room_session, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_for_participant, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_for_agent, m)?)?;

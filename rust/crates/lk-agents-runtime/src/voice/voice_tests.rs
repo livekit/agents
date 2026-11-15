@@ -1022,7 +1022,7 @@ async fn startup_runs_under_the_spans_start_reserved() {
         ..lk_agents_net::env::ProcessEnv::current_runtime()
     };
     let time = Timebase::from_virtual(clock);
-    let room = crate::room_io::FixedRoom { rtc: None, time, pool: None };
+    let room = crate::room_io::FixedRoom::new(None, time, None);
     let job = Arc::new(Job::default());
     let args = lk_agents_abi::voice::session::VoiceSessionArgs {
         agent: "agent".into(),

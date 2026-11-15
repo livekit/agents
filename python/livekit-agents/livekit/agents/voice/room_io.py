@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING, TypeAlias, cast
 from livekit import rtc
 
 from .. import _core
-from .._generated import public_voice_room_io as _public, rtc_events, rtc_wire
+from .._generated import (
+    facades_voice_room_io as _facades,
+    public_voice_room_io as _public,
+    rtc_events,
+    rtc_wire,
+)
 from .._generated.public_voice_room_io import *  # noqa: F403
 from ..types import ATTRIBUTE_PUBLISH_ON_BEHALF
 
@@ -17,6 +22,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ATTRIBUTE_PUBLISH_ON_BEHALF",
+    "RoomIO",
 ]
 __all__ += _public.__all__
 
@@ -29,12 +35,22 @@ NoiseCancellationSelector: TypeAlias = Callable[
 ]
 
 
+class RoomIO(_facades.RoomIO):
+    """Room resources shared by bindings on the same SDK room connection."""
+
+    def __init__(self, room: rtc.Room) -> None:
+        self._room = room
+        self._room_native = _core._core_create_room_session(room)
+        self._native = Room(room).attachments
+
+
 class Room:
     # one adapter per rtc.Room, so its SDK event handlers are registered once
     sdk: rtc.Room
     bus: _core.RoomEventBus
     rpc_router: _core._core_RoomRpcRouter
     local: LocalParticipant
+    attachments: _core._core_RoomAttachments
 
     def __new__(cls, room: rtc.Room) -> Room:
         adapter: Room | None = getattr(room, "_lk_core_room", None)
@@ -44,6 +60,7 @@ class Room:
             adapter.bus = _core.RoomEventBus()
             adapter.rpc_router = _core._core_RoomRpcRouter()
             adapter.local = LocalParticipant(adapter)
+            adapter.attachments = _core._core_RoomAttachments()
             rtc_events.subscribe(adapter)
             room._lk_core_room = adapter  # type: ignore[attr-defined]
         return adapter

@@ -187,6 +187,9 @@ impl RtcRoom for StreamingRoom {
     fn rpc_router(&self) -> &Arc<dyn lk_agents_abi::voice::rtc::ports::RpcRoutes> {
         self.room.rpc_router()
     }
+    fn attachments(&self) -> &Arc<dyn lk_agents_abi::voice::room_owner::RoomAttachmentsPort> {
+        self.room.attachments()
+    }
     fn register_byte_stream_handler(
         &self,
         topic: &str,
@@ -1037,6 +1040,7 @@ async fn source_capture_failure_releases_playout_and_refuses_further_audio() {
     );
 }
 
+mod bindings;
 mod participant;
 mod playback;
 mod reconnect;
@@ -1149,6 +1153,9 @@ impl RtcRoom for EndingRoom {
     }
     fn rpc_router(&self) -> &Arc<dyn lk_agents_abi::voice::rtc::ports::RpcRoutes> {
         self.room.rpc_router()
+    }
+    fn attachments(&self) -> &Arc<dyn lk_agents_abi::voice::room_owner::RoomAttachmentsPort> {
+        self.room.attachments()
     }
     fn register_byte_stream_handler(
         &self,

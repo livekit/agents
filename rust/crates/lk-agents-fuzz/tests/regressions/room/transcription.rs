@@ -131,6 +131,9 @@ impl RtcRoom for StalledRoom {
     fn rpc_router(&self) -> &Arc<dyn lk_agents_abi::voice::rtc::ports::RpcRoutes> {
         self.inner.rpc_router()
     }
+    fn attachments(&self) -> &Arc<dyn lk_agents_abi::voice::room_owner::RoomAttachmentsPort> {
+        self.inner.attachments()
+    }
     fn register_byte_stream_handler(
         &self,
         topic: &str,

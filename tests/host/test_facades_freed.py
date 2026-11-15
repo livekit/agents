@@ -33,6 +33,7 @@ from livekit.agents._generated import (
     facades_voice_background_audio,
     facades_voice_events,
     facades_voice_io,
+    facades_voice_room_io,
     facades_voice_run_result,
 )
 from tests.fakes import until
@@ -75,6 +76,8 @@ FACADES: dict[str, type] = {
     "livekit.agents.voice.background_audio.PlayHandle": facades_voice_background_audio.PlayHandle,
     "livekit.agents.voice.events.RunContext": facades_voice_events.RunContext,
     "livekit.agents.voice.io.SpeechHandle": facades_voice_io.SpeechHandle,
+    "livekit.agents.voice.room_io.RoomBinding": facades_voice_room_io.RoomBinding,
+    "livekit.agents.voice.room_io.RoomIO": facades_voice_room_io.RoomIO,
     "livekit.agents.voice.run_result.RunStream": facades_voice_run_result.RunStream,
 }
 

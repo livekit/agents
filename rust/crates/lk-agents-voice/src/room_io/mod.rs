@@ -1,7 +1,10 @@
 use lk_agents_abi::voice::rtc::RtcError;
 
+pub mod bindings;
 pub mod effects;
+pub mod legacy;
 pub mod machine;
+pub mod shared;
 pub use machine::attachment::*;
 
 /// Streams of one topic admitted and not yet closed.

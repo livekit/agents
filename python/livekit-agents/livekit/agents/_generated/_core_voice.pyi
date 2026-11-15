@@ -46,6 +46,7 @@ from .io_events import AvatarPlaybackSegment, PlaybackSegment
 from .llm import ChatChunk
 from .metrics import AvatarMetrics
 from .playback_events import PlaybackFinishedEvent
+from .room_options import RoomIoConfig
 from .room_runtime import TrackPublished
 from .rtc_frames import AudioFrame
 from .rtc_rpc import RpcCallInfo
@@ -175,7 +176,7 @@ class AvatarRunner:
     """The avatar worker's native queue owner. Its decisions remain in RunnerCore."""
     def __new__(
         cls,
-        room: _core_RoomSession,
+        room: _core_RoomBinding | _core_RoomSession,
         *,
         receiver: DataStreamAudioReceiver | HostAudioReceiver,
         generator: VideoGenerator,
@@ -267,7 +268,7 @@ class BackgroundAudioPlayer:
     ) -> Self: ...
     async def start(
         self,
-        room: _core_RoomSession,
+        room: _core_RoomBinding | _core_RoomSession,
         draw: float,
         *,
         ambient: Sounds | None,
@@ -582,7 +583,7 @@ class VoiceSession:
     """
     def __new__(
         cls,
-        room: _core_RoomSession,
+        room: _core_RoomBinding | _core_RoomSession,
         args: VoiceSessionArgs,
         options: SessionOptions | None = None,
     ) -> Self:
@@ -930,7 +931,7 @@ def resolve_interruption_detector(
 class _core_SessionBindings:
     def __new__(
         cls,
-        room: _core_RoomSession,
+        room: _core_RoomBinding | _core_RoomSession,
         args: VoiceSessionArgs,
         *,
         record_audio: bool = False,
@@ -1218,10 +1219,13 @@ def dtmf_event_to_code(symbol: str) -> int:
 def format_dtmf(symbols: Sequence[str]) -> str:
     """The space-joined digits that fill the DTMF read-back's `{digits}` hole."""
 
-async def send_dtmf_events(room: _core_RoomSession, events: Sequence[DtmfEvent]) -> str: ...
+async def send_dtmf_events(
+    room: _core_RoomBinding | _core_RoomSession,
+    events: Sequence[DtmfEvent],
+) -> str: ...
 
 async def receive_dtmf(
-    room: _core_RoomSession,
+    room: _core_RoomBinding | _core_RoomSession,
     num_digits: int,
     timeout: float,
     stop_event: DtmfEvent,
@@ -1251,7 +1255,11 @@ class WarmTransfer:
     @property
     def instructions(self) -> str: ...
     def tools(self) -> list[RawFunctionDescription]: ...
-    async def run(self, host: _TransferHost, caller: _core_RoomSession) -> str: ...
+    async def run(
+        self,
+        host: _TransferHost,
+        caller: _core_RoomBinding | _core_RoomSession,
+    ) -> str: ...
     async def call_tool(self, name: str, arguments: object) -> None: ...
 
 class ConsoleIo:
@@ -1281,19 +1289,46 @@ class _core_RoomSession:
     back as itself.
     """
 
+class _core_RoomAttachments:
+    """Room-local ownership without a strong reference back to the SDK room."""
+    def __new__(cls) -> Self: ...
+    def bind(
+        self,
+        key: str,
+        *,
+        room: _core_RoomBinding | _core_RoomSession,
+        sdk_room: object,
+    ) -> _core_RoomBinding: ...
+    async def aclose(self) -> None: ...
+
+class _core_RoomBinding:
+    """A declared room binding. Its only activation authority is transferred to a consumer."""
+    @property
+    def key(self) -> str: ...
+    @property
+    def room(self) -> object: ...
+    def prepare(
+        self,
+        options: RoomIoConfig,
+        host_audio_input: bool,
+        host_video_input: bool,
+        host_audio_output: bool,
+    ) -> None: ...
+    async def aclose(self) -> None: ...
+
 def _core_create_room_session(room: Room | None) -> _core_RoomSession: ...
 
 async def wait_for_participant(
-    room: _core_RoomSession,
+    room: _core_RoomBinding | _core_RoomSession,
     identity: str | None,
     kinds: Sequence[int] | None,
     include_local: bool,
 ) -> str | None: ...
 
-async def wait_for_agent(room: _core_RoomSession, name: str | None) -> str: ...
+async def wait_for_agent(room: _core_RoomBinding | _core_RoomSession, name: str | None) -> str: ...
 
 async def wait_for_track_publication(
-    room: _core_RoomSession,
+    room: _core_RoomBinding | _core_RoomSession,
     identity: str | None,
     kinds: Sequence[int] | None,
     include_local: bool,

@@ -31,6 +31,27 @@ pub fn wants_transcript_sync(config: &RoomIoConfig, has_audio_output: bool) -> b
 
 pub use lk_agents_abi::voice::room_owner::RoomIoEvent;
 
+/// Explicit host endpoints replace the corresponding room legs before any
+/// subscription or publication is acquired.
+pub fn resolve_room_io(
+    mut config: RoomIoConfig,
+    host_audio_input: bool,
+    host_video_input: bool,
+    host_audio_output: bool,
+    has_room: bool,
+) -> RoomIoConfig {
+    if host_audio_input {
+        config.audio_input = None;
+    }
+    if host_video_input {
+        config.video_input = false;
+    }
+    if host_audio_output || !has_room {
+        config.audio_output = None;
+    }
+    config
+}
+
 /// Whether to link a connecting participant. Not when someone is already linked, when an explicit
 /// target is configured and this is not it, or, without an explicit target, when the candidate is
 /// an avatar publishing for the agent.

@@ -45,7 +45,7 @@ pub(super) fn agent_update(agent: &str, instructions: Instructions) -> AgentUpda
 /// A session's room without RTC, on a virtual clock.
 pub(super) fn no_room() -> FixedRoom {
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-    FixedRoom { rtc: None, time: Timebase::from_virtual(clock), pool: None }
+    FixedRoom::new(None, Timebase::from_virtual(clock), None)
 }
 
 /// An output that never reports playback; it latches the segment its first capture was keyed to.

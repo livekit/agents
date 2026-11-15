@@ -48,6 +48,7 @@ const READ_ONCE: &[ReadOnce] = &[
     any("_run", "the job's execution port, built with the job"),
     any("bus", "the room adapter's event sink, built in its constructor"),
     any("rpc_router", "the room adapter's RPC routes, built in its constructor"),
+    any("attachments", "the room adapter's native attachment registry, fixed in its constructor"),
     any("local", "the room's local participant, fixed for the connection"),
     // Audio outputs: an output's chain and rate are constructor arguments.
     any("label", "an I/O object's name, given at construction"),

@@ -181,21 +181,23 @@ mod invocation {
             let g = Python::attach(|py| globals.clone_ref(py));
             notifier.notify(context.clone(), "note", lossy, Box::new(call(g, name, i)))
         };
-        send("stall", 0, false);
         let total = NOTIFY_QUEUE as i64 * 2;
-        for i in 0..total {
-            send("note", i, false);
-        }
-        for i in 0..total {
-            send("note", total + i, true);
-        }
+        // Holding the GIL prevents the host loop from draining this batch. A
+        // timed stall can expire before the producer queues it all under load.
+        Python::attach(|_| {
+            for i in 0..total {
+                send("note", i, false);
+            }
+            for i in 0..total {
+                send("note", total + i, true);
+            }
+        });
         // The lossy ones arrived while every control one still waited: all dropped.
         let seen = || -> Vec<i64> {
             Python::attach(|py| globals.bind(py).getattr("seen").unwrap().extract().unwrap())
         };
         for _ in 0..300 {
             if seen().len() >= total as usize {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 assert_eq!(
                     seen(),
                     (0..total).collect::<Vec<_>>(),

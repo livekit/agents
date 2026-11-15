@@ -65,6 +65,7 @@ from .events import (
     UserStateChangedEvent,
 )
 from .io import SpeechHandle
+from .room_io import RoomBinding, RoomIO
 
 if TYPE_CHECKING:
     from .._generated.agent_run import RunFinished
@@ -677,6 +678,8 @@ from .background_audio import (  # noqa: E402
 )
 
 __all__ = [
+    "RoomIO",
+    "RoomBinding",
     "VoiceSession",
     "VoiceTask",
     "VoiceTaskFailed",

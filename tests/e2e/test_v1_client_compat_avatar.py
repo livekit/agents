@@ -63,7 +63,9 @@ async def test_the_person_hears_and_sees_the_avatar_speak_the_reply(sfu: str) ->
             microphone, _ = await publish_microphone(room)
             async with hearing(avatar) as heard, watching(avatar) as seen:
                 await speak(microphone, "hello there agent")
-                await until(lambda: heard.seconds > 1.0, "the avatar speaks the reply")
+                # Await real SFU startup and a second of playout, beyond the
+                # hermetic helper's two-second budget.
+                await until(lambda: heard.seconds > 1.0, "the avatar speaks the reply", timeout=10)
                 await wait_for_agent_state(room, "listening")
 
         assert seen.lit > 10 and seen.dark > 0
@@ -160,7 +162,9 @@ async def test_a_v1_avatar_worker_plays_the_agents_reply(sfu: str) -> None:
             microphone, _ = await publish_microphone(room)
             async with hearing(avatar) as heard:
                 await speak(microphone, "hello there agent")
-                await until(lambda: worker.reports, "the worker reports the reply played")
+                await until(
+                    lambda: worker.reports, "the worker reports the reply played", timeout=10
+                )
                 await wait_for_agent_state(room, "listening")
 
         assert heard.seconds > 1.0
@@ -238,7 +242,7 @@ async def test_a_v1_agent_interrupts_a_2_0_avatar_worker(sfu: str) -> None:
             async with joined(sfu, v1_agent_token(name)) as agent_room, hearing(avatar) as heard:
                 agent = V1AvatarAgent(agent_room)
                 await agent.say(4.0)
-                await until(lambda: heard.seconds > 0.5, "the avatar speaks")
+                await until(lambda: heard.seconds > 0.5, "the avatar speaks", timeout=10)
 
                 await agent.interrupt()
                 report = await agent.finished.get()

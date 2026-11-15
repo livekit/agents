@@ -11,10 +11,12 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     Agent,
     APIConnectOptions,
+    RoomIO,
     RunContext,
     VoiceSession,
     _core,
@@ -367,6 +369,22 @@ async def play_handle() -> object:
     return handle
 
 
+async def room_io() -> object:
+    io = RoomIO(rtc.Room())
+    binding = io.bind("voice")
+    await binding.aclose()
+    await io.aclose()
+    return io
+
+
+async def room_binding() -> object:
+    io = RoomIO(rtc.Room())
+    binding = io.bind("voice")
+    await binding.aclose()
+    await io.aclose()
+    return binding
+
+
 async def run_context() -> object:
     seen: list[RunContext[list[Any]]] = []
     agent = Agent[list[Any]](
@@ -434,5 +452,7 @@ SCENARIOS: dict[str, Scenario] = {
     "livekit.agents.voice.background_audio.PlayHandle": play_handle,
     "livekit.agents.voice.events.RunContext": run_context,
     "livekit.agents.voice.io.SpeechHandle": speech_handle,
+    "livekit.agents.voice.room_io.RoomIO": room_io,
+    "livekit.agents.voice.room_io.RoomBinding": room_binding,
     "livekit.agents.voice.run_result.RunStream": run_stream,
 }

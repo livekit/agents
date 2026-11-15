@@ -50,8 +50,7 @@ mod agent_state_written_on_connect {
         let (rtc, clock) =
             FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
         let room = rtc.room("agent-state");
-        let fixed =
-            FixedRoom { rtc: Some(room.clone()), time: Timebase::from_virtual(clock), pool: None };
+        let fixed = FixedRoom::new(Some(room.clone()), Timebase::from_virtual(clock), None);
         let args = VoiceSessionArgs {
             agent: "agent".into(),
             room_io_config: Default::default(),
