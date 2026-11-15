@@ -112,6 +112,8 @@ class ReconnectClock:
         self.ready = ready
         self.closed = False
         monkeypatch.setattr(time, "time", lambda: self.now)
+        # the input clock measures elapsed time on the monotonic clock
+        monkeypatch.setattr(time, "perf_counter", lambda: self.now)
 
     def ws_connect(self, *args: Any, **kwargs: Any) -> FakeWebSocket:
         ws = FakeWebSocket()

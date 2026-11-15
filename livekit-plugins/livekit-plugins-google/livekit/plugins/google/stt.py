@@ -958,7 +958,6 @@ class SpeechStream(stt.SpeechStream):
                     speech_data = _streaming_recognize_response_to_speech_data(
                         resp,
                         min_confidence_threshold=self._config.min_confidence_threshold,
-                        start_time_offset=self.start_time_offset,
                     )
                     if speech_data is None:
                         continue
@@ -987,7 +986,7 @@ class SpeechStream(stt.SpeechStream):
                                     stt.SpeechEvent(
                                         type=stt.SpeechEventType.END_OF_SPEECH,
                                         alternatives=[speech_data]
-                                        if speech_data.end_time > self.start_time_offset
+                                        if speech_data.end_time > 0
                                         else [],
                                     )
                                 )
@@ -1013,7 +1012,7 @@ class SpeechStream(stt.SpeechStream):
                                 stt.SpeechData(
                                     language=LanguageCode(""),
                                     text="",
-                                    end_time=end_time + self.start_time_offset,
+                                    end_time=end_time,
                                 )
                             ]
                             if end_time > 0
@@ -1044,7 +1043,7 @@ class SpeechStream(stt.SpeechStream):
                     self._streaming_config = self._build_streaming_config()
 
                     should_stop = asyncio.Event()
-                    self._input_ch.restart_provider_clock()
+                    self._restart_connection_clock()
                     stream = await client.streaming_recognize(
                         requests=input_generator(client, should_stop),
                     )
@@ -1166,7 +1165,6 @@ def _streaming_recognize_response_to_speech_data(
     resp: cloud_speech_v2.StreamingRecognizeResponse | cloud_speech_v1.StreamingRecognizeResponse,
     *,
     min_confidence_threshold: float,
-    start_time_offset: float,
 ) -> stt.SpeechData | None:
     text = ""
     confidence = 0.0
@@ -1214,16 +1212,15 @@ def _streaming_recognize_response_to_speech_data(
 
     data = stt.SpeechData(
         language=lg,
-        start_time=_get_start_time(words[0]) + start_time_offset,
-        end_time=_get_end_time(words[-1]) + start_time_offset,
+        start_time=_get_start_time(words[0]),
+        end_time=_get_end_time(words[-1]),
         confidence=confidence,
         text=text,
         words=[
             TimedString(
                 text=word.word,
-                start_time=_get_start_time(word) + start_time_offset,
-                end_time=_get_end_time(word) + start_time_offset,
-                start_time_offset=start_time_offset,
+                start_time=_get_start_time(word),
+                end_time=_get_end_time(word),
                 confidence=word.confidence,
             )
             for word in words

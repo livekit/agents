@@ -5,6 +5,7 @@ import asyncio
 import inspect
 import queue
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, create_autospec
@@ -14,6 +15,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, LanguageCode
+from livekit.agents.stt.clock import _ConnectionClock
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions
 from livekit.plugins.nvidia import stt as nvidia_stt, tts as nvidia_tts
 from livekit.plugins.nvidia.utils import to_api_error
@@ -173,7 +175,7 @@ async def test_stt_rpc_timestamps_and_replay(monkeypatch, retry, final):
 
     def start(config, loop, **kwargs):
         attempt = original_start(config, loop, **kwargs)
-        offsets.append(attempt.start_time_offset)
+        offsets.append(attempt.input_origin)
         return attempt
 
     monkeypatch.setattr(stream, "_start_recognition_attempt", start)
@@ -196,9 +198,12 @@ async def test_stt_rpc_timestamps_and_replay(monkeypatch, retry, final):
             assert offsets[0] == offsets[1]
         else:
             assert offsets[1] - offsets[0] == pytest.approx(0.01, abs=0.001)
+        # Each RPC starts at its first frame's stream position. This test pushes frames
+        # in a burst, at most a few milliseconds apart.
+        assert offsets[0] == 0.0
         for speech, offset in zip(transcripts, offsets[-len(transcripts) :], strict=True):
-            assert speech.words[0].start_time == pytest.approx(offset + 0.1)
-            assert speech.words[0].end_time == pytest.approx(offset + 0.5)
+            assert speech.words[0].start_time == pytest.approx(7.25 + offset + 0.1, abs=0.05)
+            assert speech.words[0].end_time == pytest.approx(7.25 + offset + 0.5, abs=0.05)
     finally:
         await stream.aclose()
 
@@ -277,7 +282,7 @@ async def test_stt_replays_recent_audio_after_buffer_overflow(monkeypatch, termi
 
     def start(self, config, loop, **kwargs):
         attempt = original_start(self, config, loop, **kwargs)
-        offsets.append(attempt.start_time_offset)
+        offsets.append(attempt.input_origin)
         return attempt
 
     def responses(audio, config):
@@ -317,9 +322,49 @@ async def test_stt_replays_recent_audio_after_buffer_overflow(monkeypatch, termi
         transcripts = [e async for e in stream if e.alternatives]
         assert calls[1] == [_audio_frame(2).data.tobytes(), _audio_frame(3).data.tobytes()]
         assert offsets[1] == pytest.approx(offsets[0] + 0.01)
-        assert transcripts[0].alternatives[0].start_time == pytest.approx(offsets[1])
+        assert transcripts[0].alternatives[0].start_time == pytest.approx(offsets[1], abs=0.05)
     finally:
         release.set()
+        await stream.aclose()
+
+
+async def test_stt_places_words_on_the_event_loop_across_an_input_gap(monkeypatch):
+    """Map worker-thread responses on the event loop after an input gap."""
+    now = 1000.0
+    monkeypatch.setattr(time, "time", lambda: now)
+    # the input clock measures elapsed time on the monotonic clock
+    monkeypatch.setattr(time, "perf_counter", lambda: now)
+
+    def responses(audio, config):
+        next(audio), next(audio)
+        # the word starts with the second frame, 10 ms into the RPC's audio
+        yield _response(words=[SimpleNamespace(word="hello", start_time=10, end_time=20)])
+        list(audio)
+
+    stream = _mock_stt(monkeypatch, responses).stream()
+    placed_on = set()
+    connection_to_session_timestamps = _ConnectionClock.connection_to_session_timestamps
+
+    def spy(clock, speech_data):
+        placed_on.add(threading.get_ident())
+        return connection_to_session_timestamps(clock, speech_data)
+
+    # the times of an event are placed when it is sent
+    monkeypatch.setattr(_ConnectionClock, "connection_to_session_timestamps", spy)
+    try:
+        stream.start_time_offset = 7.0
+        now = 1000.01
+        stream.push_frame(_audio_frame(1))
+        now = 1005.02  # the input paused for 5s
+        stream.push_frame(_audio_frame(2))
+        stream.end_input()
+        await asyncio.wait_for(stream._task, 2)
+        speech = [e.alternatives[0] async for e in stream if e.alternatives][0]
+        assert speech.words[0].start_time == pytest.approx(7.0 + 5.01)
+        assert speech.words[0].end_time == pytest.approx(7.0 + 5.02)
+        assert (speech.start_time, speech.end_time) == pytest.approx((7.0 + 5.01, 7.0 + 5.02))
+        assert placed_on == {threading.get_ident()}
+    finally:
         await stream.aclose()
 
 
@@ -327,7 +372,7 @@ async def test_stt_replay_buffer_rolls_and_resets_after_final():
     attempt = nvidia_stt._RecognitionAttempt(
         audio_queue=queue.Queue(),
         done_fut=asyncio.get_running_loop().create_future(),
-        start_time_offset=2,
+        input_origin=2,
         bytes_per_second=2,
     )
     attempt.buffer_for_replay(b"1234", max_bytes=6)

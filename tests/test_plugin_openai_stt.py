@@ -560,6 +560,8 @@ async def test_server_endpoint_reanchors_after_internal_reconnect(
 ) -> None:
     clock = 1000.0
     monkeypatch.setattr(stt.time, "time", lambda: clock)
+    # the input clock measures elapsed time on the monotonic clock
+    monkeypatch.setattr(stt.time, "perf_counter", lambda: clock)
     monkeypatch.setattr(stt, "_max_session_duration", 5)
     instance = _offline_stt(
         model="gpt-4o-mini-transcribe",
@@ -631,6 +633,8 @@ async def test_local_vad_endpoint_uses_captured_audio_time(monkeypatch, blocked)
 
     now = 1000.0
     monkeypatch.setattr(stt.time, "time", lambda: now)
+    # the input clock measures elapsed time on the monotonic clock
+    monkeypatch.setattr(stt.time, "perf_counter", lambda: now)
     instance = _offline_stt(model="gpt-live-transcribe", vad=TimedVAD())
     setup_gate = asyncio.Event()
     if blocked == "setup":

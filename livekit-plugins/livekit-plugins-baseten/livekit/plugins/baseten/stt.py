@@ -228,7 +228,9 @@ class STT(stt.STT):
                     # Under client_flush only a flush ends a turn, so LiveKit's
                     # turn handling has to send one when it commits the user's turn.
                     manual_flush=mode == "client_flush",
-                )
+                ),
+                # The stream replays audio on reconnect and translates its own events.
+                requires_timestamp_translation=False,
             )
             self._session = http_session
             self._streams = weakref.WeakSet[stt.SpeechStream]()
@@ -658,33 +660,21 @@ class SpeechStream(stt.SpeechStream):
                                 timed_words.append(
                                     TimedString(
                                         text=w.get("word", ""),
-                                        start_time=(
-                                            w.get("start_time", 0.0) + self.start_time_offset
-                                        ),
-                                        end_time=(w.get("end_time", 0.0) + self.start_time_offset),
-                                        start_time_offset=self.start_time_offset,
+                                        start_time=w.get("start_time", 0.0),
+                                        end_time=w.get("end_time", 0.0),
                                     )
                                 )
                         else:
                             timed_words.append(
                                 TimedString(
                                     text=segment.get("text", ""),
-                                    start_time=(
-                                        segment.get("start_time", 0.0) + self.start_time_offset
-                                    ),
-                                    end_time=(
-                                        segment.get("end_time", 0.0) + self.start_time_offset
-                                    ),
-                                    start_time_offset=self.start_time_offset,
+                                    start_time=segment.get("start_time", 0.0),
+                                    end_time=segment.get("end_time", 0.0),
                                 )
                             )
 
-                    start_time = (
-                        segments[0].get("start_time", 0.0) if segments else 0.0
-                    ) + self.start_time_offset
-                    end_time = (
-                        segments[-1].get("end_time", 0.0) if segments else 0.0
-                    ) + self.start_time_offset
+                    start_time = segments[0].get("start_time", 0.0) if segments else 0.0
+                    end_time = segments[-1].get("end_time", 0.0) if segments else 0.0
 
                     if not is_final:
                         if text:
@@ -734,7 +724,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),

@@ -683,10 +683,10 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         """Run a single websocket connection to AssemblyAI."""
         closing_ws = False
+        self._last_preflight_start_time = 0.0
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
-            anchored = False
 
             samples_per_buffer = self._opts.sample_rate // round(1 / self._opts.buffer_size_seconds)
             audio_bstream = utils.audio.AudioByteStream(
@@ -706,13 +706,6 @@ class SpeechStream(stt.SpeechStream):
                         frames = audio_bstream.write(data.data.tobytes())
 
                     for frame in frames:
-                        if not anchored:
-                            # Anchor the stream's wall-clock to the moment just
-                            # before the first frame is sent — aligned with the
-                            # server's stream-relative zero used by
-                            # SpeechStarted.timestamp.
-                            self.start_time = time.time()
-                            anchored = True
                         self._speech_duration += frame.duration
                         await ws.send_bytes(frame.data.tobytes())
                         self._last_frame_sent_at = time.time()
@@ -938,19 +931,13 @@ class SpeechStream(stt.SpeechStream):
             return
 
         if message_type == "SpeechStarted":
-            # SpeechStarted can arrive well after actual speech onset. The
-            # `timestamp` field carries the server VAD's onset time in stream-
-            # relative ms. Convert to wall-clock by adding self.start_time
-            # (the stream's wall-clock anchor) so the framework records an
-            # accurate _speech_start_time instead of message arrival.
+            # SpeechStarted can arrive late. Its timestamp gives the server VAD's
+            # onset time in stream-relative milliseconds.
             timestamp_ms = data.get("timestamp")
-            speech_start_time: float | None = None
-            if timestamp_ms is not None:
-                speech_start_time = self.start_time + timestamp_ms / 1000
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.START_OF_SPEECH,
-                    speech_start_time=speech_start_time,
+                    speech_start_time=None if timestamp_ms is None else timestamp_ms / 1000,
                 )
             )
             return
@@ -1016,14 +1003,12 @@ class SpeechStream(stt.SpeechStream):
         start_time: float = 0
         end_time: float = 0
         confidence: float = 0
-        # word timestamps are in milliseconds
         # https://www.assemblyai.com/docs/api-reference/streaming-api/streaming-api#receive.receiveTurn.words
         timed_words: list[TimedString] = [
             TimedString(
                 text=word.get("text", ""),
-                start_time=word.get("start", 0) / 1000 + self.start_time_offset,
-                end_time=word.get("end", 0) / 1000 + self.start_time_offset,
-                start_time_offset=self.start_time_offset,
+                start_time=word.get("start", 0) / 1000,
+                end_time=word.get("end", 0) / 1000,
                 confidence=word.get("confidence", 0),
             )
             for word in words

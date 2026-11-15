@@ -1,26 +1,30 @@
 import asyncio
 import copy
 import json
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import stt
+from livekit.agents.stt.clock import _ConnectionClock
 from livekit.plugins.azure import stt as azure_stt
+
+from .fake_stt import attach_provider_audio_channels
 
 pytestmark = pytest.mark.plugin("azure")
 
 
 @pytest.mark.parametrize("offset", [4_000_000, 0, -1])
 def test_azure_endpoint_uses_event_offset_before_final(offset: int) -> None:
-    events = []
     stream = object.__new__(azure_stt.SpeechStream)
     stream._speaking = True
     stream._final_alternatives = []
     stream._on_provider_progress = None
-    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
-    stream._event_ch = SimpleNamespace(send_nowait=events.append)
+    events = attach_provider_audio_channels(stream, start_time_offset=7.0)
 
     stream._on_speech_end(SimpleNamespace(offset=offset))
     stream._on_speech_end(SimpleNamespace(offset=offset))
@@ -34,7 +38,6 @@ def test_azure_endpoint_uses_event_offset_before_final(offset: int) -> None:
 
 
 def test_azure_recognized_emits_final_transcript(monkeypatch):
-    events = []
     monkeypatch.setattr(
         azure_stt.speechsdk,
         "AutoDetectSourceLanguageResult",
@@ -45,8 +48,7 @@ def test_azure_recognized_emits_final_transcript(monkeypatch):
     stream._opts = SimpleNamespace(language=["en-US"], pronunciation_assessment=None)
     stream._on_provider_progress = None
     stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
-    stream._event_ch = SimpleNamespace(send_nowait=events.append)
-    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
+    events = attach_provider_audio_channels(stream)
 
     stream._on_recognized(
         SimpleNamespace(
@@ -70,14 +72,12 @@ def timed_stream(monkeypatch):
         lambda result: SimpleNamespace(language="en-US"),
     )
     stream = object.__new__(azure_stt.SpeechStream)
-    events = []
     stream._opts = SimpleNamespace(language=["en-US"], pronunciation_assessment=None)
     stream._speaking = True
     stream._final_alternatives = []
     stream._on_provider_progress = None
-    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
-    stream._event_ch = SimpleNamespace(send_nowait=events.append)
+    events = attach_provider_audio_channels(stream, start_time_offset=7.0)
     return stream, events
 
 
@@ -203,7 +203,7 @@ async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
         await provider.aclose()
 
 
-def _recognized_stream(monkeypatch, *, assessment: bool, events: list) -> azure_stt.SpeechStream:
+def _recognized_stream(monkeypatch, *, assessment: bool) -> azure_stt.SpeechStream:
     monkeypatch.setattr(
         azure_stt.speechsdk,
         "AutoDetectSourceLanguageResult",
@@ -215,8 +215,7 @@ def _recognized_stream(monkeypatch, *, assessment: bool, events: list) -> azure_
     )
     stream._on_provider_progress = None
     stream._loop = SimpleNamespace(call_soon_threadsafe=lambda callback, *args: callback(*args))
-    stream._event_ch = SimpleNamespace(send_nowait=events.append)
-    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
+    attach_provider_audio_channels(stream)
     return stream
 
 
@@ -234,8 +233,8 @@ ASSESSED = {
 
 
 def test_azure_final_transcript_carries_pronunciation_assessment(monkeypatch):
-    events: list = []
-    stream = _recognized_stream(monkeypatch, assessment=True, events=events)
+    stream = _recognized_stream(monkeypatch, assessment=True)
+    events = stream._event_ch.events
 
     stream._on_recognized(_recognized_event(json.dumps({"NBest": [ASSESSED]})))
 
@@ -244,8 +243,8 @@ def test_azure_final_transcript_carries_pronunciation_assessment(monkeypatch):
 
 
 def test_azure_final_transcript_has_no_metadata_without_assessment(monkeypatch):
-    events: list = []
-    stream = _recognized_stream(monkeypatch, assessment=False, events=events)
+    stream = _recognized_stream(monkeypatch, assessment=False)
+    events = stream._event_ch.events
 
     stream._on_recognized(_recognized_event(json.dumps({"NBest": [ASSESSED]})))
 
@@ -257,8 +256,8 @@ def test_azure_final_transcript_has_no_metadata_without_assessment(monkeypatch):
     [None, "", "not json", "{}", '{"NBest": []}', '{"NBest": [{"Display": "x"}]}'],
 )
 def test_azure_unreadable_assessment_still_emits_transcript(monkeypatch, caplog, json_result):
-    events: list = []
-    stream = _recognized_stream(monkeypatch, assessment=True, events=events)
+    stream = _recognized_stream(monkeypatch, assessment=True)
+    events = stream._event_ch.events
 
     stream._on_recognized(_recognized_event(json_result))
 
@@ -301,5 +300,72 @@ def test_provider_progress_resets_retries_without_transcript(monkeypatch, callba
     stream._on_provider_progress = None
     stream._num_retries = 2
     stream._speaking = False
-    getattr(stream, callback)(SimpleNamespace(result=SimpleNamespace(text="")))
+    getattr(stream, callback)(
+        SimpleNamespace(result=SimpleNamespace(text="", offset=0, duration=0), offset=0)
+    )
     assert stream._num_retries == 0
+
+
+async def test_azure_places_sdk_results_on_the_event_loop_across_an_input_gap(monkeypatch):
+    """Enqueue SDK-thread events on the loop and preserve post-gap timing."""
+    now = 1000.0
+    monkeypatch.setattr(time, "time", lambda: now)
+    # the input clock measures elapsed time on the monotonic clock
+    monkeypatch.setattr(time, "perf_counter", lambda: now)
+    monkeypatch.setattr(
+        azure_stt.speechsdk,
+        "AutoDetectSourceLanguageResult",
+        lambda result: SimpleNamespace(language="en-US"),
+    )
+    stream = azure_stt.SpeechStream.__new__(azure_stt.SpeechStream)
+    stream._opts = SimpleNamespace(language=["en-US"], pronunciation_assessment=None)
+    stream._speaking = False
+    stream._final_alternatives = []
+    stream._on_provider_progress = None
+    stream._num_retries = 0
+    stream._loop = asyncio.get_running_loop()
+    stream._init_channels(translate_timestamps=True)
+    stream.start_time_offset = 7.0
+
+    frame = rtc.AudioFrame.create(16000, 1, 1600)
+    for captured_from in (1000.0, 1006.0):  # the input paused for 5s
+        for i in range(10):
+            now = captured_from + (i + 1) * frame.duration
+            stream._input_ch.send_nowait(frame)
+            stream._input_ch.recv_nowait()
+
+    # the event channel places the times of an event when it is sent
+    placed_on: set[int] = set()
+    connection_to_session_timestamps = _ConnectionClock.connection_to_session_timestamps
+
+    def spy(clock: _ConnectionClock, speech_data: stt.SpeechData) -> stt.SpeechData:
+        placed_on.add(threading.get_ident())
+        return connection_to_session_timestamps(clock, speech_data)
+
+    monkeypatch.setattr(_ConnectionClock, "connection_to_session_timestamps", spy)
+
+    def result(text: str, duration: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            result=SimpleNamespace(text=text, offset=10_000_000, duration=duration)
+        )
+
+    def sdk_thread() -> None:
+        stream._on_speech_start(SimpleNamespace(offset=10_000_000))
+        stream._on_recognizing(result("hel", 2_000_000))
+        stream._on_recognized(result("hello", 3_000_000))
+        stream._on_speech_end(SimpleNamespace(offset=20_000_000))
+
+    await asyncio.to_thread(sdk_thread)
+    events = [await asyncio.wait_for(stream._event_ch.recv(), 1) for _ in range(4)]
+
+    assert [event.type for event in events] == [
+        stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.INTERIM_TRANSCRIPT,
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
+        stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    interim, final, end = (event.alternatives[0] for event in events[1:])
+    assert (interim.start_time, interim.end_time) == pytest.approx((7.0 + 6.0, 7.0 + 6.2))
+    assert (final.start_time, final.end_time) == pytest.approx((7.0 + 6.0, 7.0 + 6.3))
+    assert end.end_time == pytest.approx(7.0 + 6.3)
+    assert placed_on == {threading.get_ident()}

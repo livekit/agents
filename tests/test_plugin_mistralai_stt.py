@@ -12,6 +12,8 @@ from livekit import rtc
 from livekit.agents import stt, vad
 from livekit.plugins.mistralai import STT, stt as mistral_stt
 
+from .fake_stt import attach_provider_audio_channels
+
 pytestmark = pytest.mark.plugin("mistralai")
 
 
@@ -19,12 +21,12 @@ pytestmark = pytest.mark.plugin("mistralai")
 async def test_endpoint_preserves_vad_time_before_flush(monkeypatch):
     now = 1010.0
     monkeypatch.setattr(time, "time", lambda: now)
+    # the input clock measures elapsed time on the monotonic clock
+    monkeypatch.setattr(time, "perf_counter", lambda: now)
     stream = object.__new__(mistral_stt.SpeechStream)
     stream._speaking = True
     stream._audio_pending = True
-    stream._input_ch = SimpleNamespace(input_started_at=993.0, start_time_offset=7.0)
-    events = []
-    stream._event_ch = SimpleNamespace(send_nowait=events.append)
+    events = attach_provider_audio_channels(stream, start_time_offset=7.0, input_started_at=993.0)
 
     async def vad_events():
         yield vad.VADEvent(

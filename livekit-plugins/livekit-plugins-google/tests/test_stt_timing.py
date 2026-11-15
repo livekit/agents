@@ -41,12 +41,10 @@ def _response(results: list[Any]) -> Any:
 
 
 def test_final_without_word_offsets_reports_unknown_timing() -> None:
-    """chirp_3 finals have no words: timing stays 0 rather than the stream offset."""
+    """Keep unknown timing for chirp_3 finals without words."""
     resp = _response([_result(text="hello world", words=[])])
 
-    data = _streaming_recognize_response_to_speech_data(
-        resp, min_confidence_threshold=0.0, start_time_offset=12.5
-    )
+    data = _streaming_recognize_response_to_speech_data(resp, min_confidence_threshold=0.0)
 
     assert data is not None
     assert data.text == "hello world"
@@ -58,9 +56,7 @@ def test_final_without_word_offsets_reports_unknown_timing() -> None:
 def test_interim_without_word_offsets_reports_unknown_timing() -> None:
     resp = _response([_result(text="hello", words=[], is_final=False, confidence=0.5)])
 
-    data = _streaming_recognize_response_to_speech_data(
-        resp, min_confidence_threshold=0.0, start_time_offset=12.5
-    )
+    data = _streaming_recognize_response_to_speech_data(resp, min_confidence_threshold=0.0)
 
     assert data is not None
     assert data.text == "hello"
@@ -68,29 +64,25 @@ def test_interim_without_word_offsets_reports_unknown_timing() -> None:
     assert data.end_time == 0.0
 
 
-def test_final_with_words_keeps_the_stream_timeline() -> None:
-    """Word-based results keep the stream offset applied and expose word timing."""
+def test_final_with_words_reports_googles_times() -> None:
+    """Preserve word timestamps in parsed results."""
     words = [_word("hello", 1.0, 1.4), _word("world", 1.4, 1.9)]
     resp = _response([_result(text="hello world", words=words)])
 
-    data = _streaming_recognize_response_to_speech_data(
-        resp, min_confidence_threshold=0.0, start_time_offset=10.0
-    )
+    data = _streaming_recognize_response_to_speech_data(resp, min_confidence_threshold=0.0)
 
     assert data is not None
-    assert data.start_time == pytest.approx(11.0)
-    assert data.end_time == pytest.approx(11.9)
+    assert data.start_time == pytest.approx(1.0)
+    assert data.end_time == pytest.approx(1.9)
     assert data.words is not None
     assert [str(word) for word in data.words] == ["hello", "world"]
-    assert data.words[0].start_time == pytest.approx(11.0)
-    assert data.words[0].end_time == pytest.approx(11.4)
+    assert data.words[0].start_time == pytest.approx(1.0)
+    assert data.words[0].end_time == pytest.approx(1.4)
 
 
 def test_low_confidence_interim_is_dropped() -> None:
     resp = _response([_result(text="hmm", words=[], is_final=False, confidence=0.1)])
 
-    data = _streaming_recognize_response_to_speech_data(
-        resp, min_confidence_threshold=0.5, start_time_offset=3.0
-    )
+    data = _streaming_recognize_response_to_speech_data(resp, min_confidence_threshold=0.5)
 
     assert data is None

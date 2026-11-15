@@ -343,7 +343,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 self._ws = ws
                 # Create task for audio processing, voice turn detection and message handling.
                 tasks: list[asyncio.Task[None]] = [
@@ -497,7 +497,6 @@ class SpeechStream(stt.SpeechStream):
                         type=SpeechEventType.FINAL_TRANSCRIPT,
                         alternatives=[
                             final.to_speech_data(
-                                self.start_time_offset,
                                 source_languages=source_languages,
                                 source_texts=source_texts,
                                 target_languages=target_languages,
@@ -511,7 +510,7 @@ class SpeechStream(stt.SpeechStream):
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=SpeechEventType.END_OF_SPEECH,
-                        alternatives=[endpoint_tokens.to_speech_data(self.start_time_offset)]
+                        alternatives=[endpoint_tokens.to_speech_data()]
                         if endpoint_tokens.end_time > 0
                         else [],
                     )
@@ -643,7 +642,6 @@ class SpeechStream(stt.SpeechStream):
                                 alternatives=[
                                     final.merged_speech_data(
                                         non_final,
-                                        self.start_time_offset,
                                         source_languages=interim_src_langs,
                                         source_texts=interim_src_texts,
                                         target_languages=interim_tgt_langs,
@@ -812,7 +810,6 @@ class _TokenAccumulator:
 
     def to_speech_data(
         self,
-        start_time_offset: float = 0.0,
         source_languages: list[LanguageCode] | None = None,
         source_texts: list[str] | None = None,
         target_languages: list[LanguageCode] | None = None,
@@ -826,15 +823,14 @@ class _TokenAccumulator:
             target_languages=target_languages,
             target_texts=target_texts,
             speaker_id=self.speaker_id,
-            start_time=self.start_time / 1000 + start_time_offset,
-            end_time=self.end_time / 1000 + start_time_offset,
+            start_time=self.start_time / 1000,
+            end_time=self.end_time / 1000,
             confidence=self.confidence,
         )
 
     def merged_speech_data(
         self,
         other: _TokenAccumulator,
-        start_time_offset: float = 0.0,
         source_languages: list[LanguageCode] | None = None,
         source_texts: list[str] | None = None,
         target_languages: list[LanguageCode] | None = None,
@@ -854,7 +850,7 @@ class _TokenAccumulator:
             target_languages=target_languages,
             target_texts=target_texts,
             speaker_id=self.speaker_id if self.speaker_id is not None else other.speaker_id,
-            start_time=start / 1000 + start_time_offset,
-            end_time=end / 1000 + start_time_offset,
+            start_time=start / 1000,
+            end_time=end / 1000,
             confidence=total_sum / total_count if total_count > 0 else 0.0,
         )

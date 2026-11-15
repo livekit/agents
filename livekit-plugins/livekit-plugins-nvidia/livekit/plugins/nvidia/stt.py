@@ -42,6 +42,7 @@ from livekit.agents import (
     LanguageCode,
     stt,
 )
+from livekit.agents.stt.clock import _ConnectionClock
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
@@ -184,6 +185,8 @@ class STT(stt.STT):
                 aligned_transcript="word" if enable_word_time_offsets else False,
                 offline_recognize=supports_offline,
             ),
+            # The stream replays audio on retry and translates its own events.
+            requires_timestamp_translation=False,
         )
 
         if is_given(api_key):
@@ -384,7 +387,8 @@ class STT(stt.STT):
 class _RecognitionAttempt:
     audio_queue: queue.Queue[bytes | None]
     done_fut: asyncio.Future[None]
-    start_time_offset: float
+    # Stream position where this RPC starts, in seconds.
+    input_origin: float
     bytes_per_second: int
     audio_bytes: int = 0
     thread: threading.Thread | None = None
@@ -418,11 +422,11 @@ class _RecognitionAttempt:
     def replay_snapshot(self) -> tuple[list[bytes], float, bool]:
         with self.replay_lock:
             # A replayed RPC's clock starts at the first retained PCM sample.
-            offset = (
-                self.start_time_offset
+            input_origin = (
+                self.input_origin
                 + (self.audio_bytes - self.replay_audio_bytes) / self.bytes_per_second
             )
-            return list(self.replay_audio), offset, self.final_transcript_emitted
+            return list(self.replay_audio), input_origin, self.final_transcript_emitted
 
     def received_final_transcript(self) -> bool:
         with self.replay_lock:
@@ -485,7 +489,11 @@ class SpeechStream(stt.SpeechStream):
                         audio_bytes = data.data.tobytes()
                         if audio_bytes:
                             if active_attempt is None:
-                                active_attempt = self._start_recognition_attempt(config, event_loop)
+                                active_attempt = self._start_recognition_attempt(
+                                    config,
+                                    event_loop,
+                                    input_origin=self.input_position - data.duration,
+                                )
                             active_attempt.buffer_for_replay(
                                 audio_bytes,
                                 max_bytes=self._max_replay_bytes,
@@ -499,7 +507,7 @@ class SpeechStream(stt.SpeechStream):
                         )
                         active_attempt = None
                         streaming_retry_count = 0
-                        self._input_ch.restart_provider_clock()
+                        self._restart_connection_clock()
 
                     input_task = asyncio.create_task(anext(input_aiter))
 
@@ -525,16 +533,14 @@ class SpeechStream(stt.SpeechStream):
         config: riva.client.StreamingRecognitionConfig,
         event_loop: asyncio.AbstractEventLoop,
         *,
-        start_time_offset: float | None = None,
+        input_origin: float,
     ) -> _RecognitionAttempt:
         audio_queue: queue.Queue[bytes | None] = queue.Queue()
         done_fut: asyncio.Future[None] = event_loop.create_future()
         attempt = _RecognitionAttempt(
             audio_queue=audio_queue,
             done_fut=done_fut,
-            start_time_offset=(
-                self.start_time_offset if start_time_offset is None else start_time_offset
-            ),
+            input_origin=input_origin,
             bytes_per_second=self._stt._opts.sample_rate * _PCM_BYTES_PER_SAMPLE,
         )
         recognition_thread = threading.Thread(
@@ -570,7 +576,7 @@ class SpeechStream(stt.SpeechStream):
         if api_error is not None and not api_error.retryable:
             raise api_error
 
-        replay_audio, replay_offset, _ = attempt.replay_snapshot()
+        replay_audio, replay_origin, _ = attempt.replay_snapshot()
 
         clean_completion_after_progress = api_error is None and made_progress
         if not clean_completion_after_progress and retry_count == self._conn_options.max_retry:
@@ -584,7 +590,7 @@ class SpeechStream(stt.SpeechStream):
             await asyncio.sleep(self._conn_options._interval_for_retry(retry_count))
 
         next_attempt = self._start_recognition_attempt(
-            config, event_loop, start_time_offset=replay_offset
+            config, event_loop, input_origin=replay_origin
         )
         for audio_chunk in replay_audio:
             next_attempt.buffer_for_replay(audio_chunk, max_bytes=self._max_replay_bytes)
@@ -663,7 +669,7 @@ class SpeechStream(stt.SpeechStream):
 
             for response in response_generator:
                 if self._handle_response(
-                    response, event_loop=event_loop, start_time_offset=attempt.start_time_offset
+                    response, event_loop=event_loop, input_origin=attempt.input_origin
                 ):
                     attempt.mark_final_transcript()
 
@@ -704,8 +710,9 @@ class SpeechStream(stt.SpeechStream):
         response: Any,
         *,
         event_loop: asyncio.AbstractEventLoop,
-        start_time_offset: float,
+        input_origin: float,
     ) -> bool:
+        """Schedule worker-thread responses on the stream's event loop in arrival order."""
         final_transcript_emitted = False
         if not hasattr(response, "results") or not response.results:
             return False
@@ -731,26 +738,8 @@ class SpeechStream(stt.SpeechStream):
                     stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
                 )
 
-            speech_data = _convert_to_speech_data(
-                alternative,
-                language=LanguageCode(self._language),
-                start_time_offset=start_time_offset,
-                enable_diarization=self._stt._opts.enable_diarization,
-                is_final=is_final,
-            )
-
-            event_type = (
-                stt.SpeechEventType.FINAL_TRANSCRIPT
-                if is_final
-                else stt.SpeechEventType.INTERIM_TRANSCRIPT
-            )
             event_loop.call_soon_threadsafe(
-                self._event_ch.send_nowait,
-                stt.SpeechEvent(
-                    type=event_type,
-                    request_id=self._request_id,
-                    alternatives=[speech_data],
-                ),
+                self._send_transcript, alternative, is_final, self._request_id, input_origin
             )
 
             if is_final and self._speaking:
@@ -762,6 +751,29 @@ class SpeechStream(stt.SpeechStream):
                 )
 
         return final_transcript_emitted
+
+    def _send_transcript(
+        self, alternative: Any, is_final: bool, request_id: str, input_origin: float
+    ) -> None:
+        speech_data = _convert_to_speech_data(
+            alternative,
+            language=LanguageCode(self._language),
+            enable_diarization=self._stt._opts.enable_diarization,
+            is_final=is_final,
+        )
+        # Each response retains its RPC attempt's input origin, even after a retry.
+        clock = _ConnectionClock(self._input_clock, input_origin)
+        self._event_ch.send_nowait(
+            clock.translate_event_timestamps(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT
+                    if is_final
+                    else stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                    request_id=request_id,
+                    alternatives=[speech_data],
+                )
+            )
+        )
 
 
 def _endpointing_values(
@@ -818,7 +830,6 @@ def _response_to_speech_event(
                 if len(result.alternatives) > alternative_index
             ],
             language=language,
-            start_time_offset=0.0,
             enable_diarization=enable_diarization,
             is_final=is_final,
         )
@@ -841,7 +852,6 @@ def _combine_result_alternatives(
     alternatives: list[Any],
     *,
     language: LanguageCode,
-    start_time_offset: float,
     enable_diarization: bool,
     is_final: bool,
 ) -> stt.SpeechData:
@@ -865,13 +875,13 @@ def _combine_result_alternatives(
     timed_words: list[TimedString] | None = None
 
     if words:
-        start_time = _time_offset_seconds(getattr(words[0], "start_time", 0)) + start_time_offset
-        end_time = _time_offset_seconds(getattr(words[-1], "end_time", 0)) + start_time_offset
+        start_time = _time_offset_seconds(getattr(words[0], "start_time", 0))
+        end_time = _time_offset_seconds(getattr(words[-1], "end_time", 0))
         timed_words = [
             TimedString(
                 text=getattr(word, "word", ""),
-                start_time=_time_offset_seconds(getattr(word, "start_time", 0)) + start_time_offset,
-                end_time=_time_offset_seconds(getattr(word, "end_time", 0)) + start_time_offset,
+                start_time=_time_offset_seconds(getattr(word, "start_time", 0)),
+                end_time=_time_offset_seconds(getattr(word, "end_time", 0)),
             )
             for word in words
         ]
@@ -897,14 +907,12 @@ def _convert_to_speech_data(
     alternative: Any,
     *,
     language: LanguageCode,
-    start_time_offset: float,
     enable_diarization: bool,
     is_final: bool,
 ) -> stt.SpeechData:
     return _combine_result_alternatives(
         [alternative],
         language=language,
-        start_time_offset=start_time_offset,
         enable_diarization=enable_diarization,
         is_final=is_final,
     )

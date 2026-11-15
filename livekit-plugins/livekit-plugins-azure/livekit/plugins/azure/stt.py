@@ -18,6 +18,7 @@ import json
 import os
 import time
 import weakref
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -297,7 +298,7 @@ class SpeechStream(stt.SpeechStream):
                     self._session_started_event.wait(), self._conn_options.timeout
                 )
 
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
 
                 async def process_input() -> None:
                     async for input in self._input_ch:
@@ -356,42 +357,51 @@ class SpeechStream(stt.SpeechStream):
 
                 await asyncio.to_thread(_cleanup)
 
-    def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+    def _call_on_loop(self, handler: Callable[..., None], *args: Any) -> None:
         with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(self._mark_provider_progress)
+            self._loop.call_soon_threadsafe(handler, *args)
+
+    def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
         res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
-        detected_lg = LanguageCode(res.language or "")
-        text = evt.result.text.strip()
-        if not text:
-            return
-
-        if not detected_lg and self._opts.language:
-            detected_lg = LanguageCode(self._opts.language[0])
-
         metadata = None
-        if self._opts.pronunciation_assessment:
+        if evt.result.text.strip() and self._opts.pronunciation_assessment:
             assessment = _pronunciation_assessment(evt.result)
             if assessment is not None:
                 metadata = {"pronunciation_assessment": assessment}
+        self._call_on_loop(
+            self._handle_recognized,
+            evt.result.text,
+            res.language or "",
+            evt.result.offset,
+            evt.result.duration,
+            metadata,
+        )
+
+    def _handle_recognized(
+        self, text: str, language: str, offset: int, duration: int, metadata: dict[str, Any] | None
+    ) -> None:
+        self._mark_provider_progress()
+        if not text.strip():
+            return
 
         # TODO: @chenghao-mou get confidence from NBest with `detailed` output format
         final_data = stt.SpeechData(
-            language=detected_lg,
+            language=self._detected_language(language),
             confidence=1.0,
-            text=evt.result.text,
-            start_time=evt.result.offset / 10**7 + self.start_time_offset,
-            end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
+            text=text,
+            start_time=offset / 10**7,
+            end_time=(offset + duration) / 10**7,
             metadata=metadata,
         )
-        self._final_alternatives = [final_data] if evt.result.duration > 0 else []
+        self._final_alternatives = [final_data] if duration > 0 else []
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[final_data])
+        )
 
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(
-                self._event_ch.send_nowait,
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[final_data]
-                ),
-            )
+    def _detected_language(self, language: str) -> LanguageCode:
+        if not language and self._opts.language:
+            language = self._opts.language[0]
+        return LanguageCode(language)
 
     def _maybe_emit_recognition_usage(self) -> None:
         if time.monotonic() - self._last_audio_duration_report_time >= 5.0:
@@ -413,53 +423,52 @@ class SpeechStream(stt.SpeechStream):
             )
 
     def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(self._mark_provider_progress)
         res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
-        detected_lg = LanguageCode(res.language or "")
-        text = evt.result.text.strip()
-        if not text:
+        self._call_on_loop(
+            self._handle_recognizing,
+            evt.result.text,
+            res.language or "",
+            evt.result.offset,
+            evt.result.duration,
+        )
+
+    def _handle_recognizing(self, text: str, language: str, offset: int, duration: int) -> None:
+        self._mark_provider_progress()
+        if not text.strip():
             return
 
-        if not detected_lg and self._opts.language:
-            detected_lg = LanguageCode(self._opts.language[0])
-
         interim_data = stt.SpeechData(
-            language=detected_lg,
+            language=self._detected_language(language),
             confidence=0.0,
-            text=evt.result.text,
-            start_time=evt.result.offset / 10**7 + self.start_time_offset,
-            end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
+            text=text,
+            start_time=offset / 10**7,
+            end_time=(offset + duration) / 10**7,
         )
         self._final_alternatives = []
-
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(
-                self._event_ch.send_nowait,
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    alternatives=[interim_data],
-                ),
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                alternatives=[interim_data],
             )
+        )
 
     def _on_speech_start(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+        self._call_on_loop(self._handle_speech_start)
+
+    def _handle_speech_start(self) -> None:
         self._final_alternatives = []
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(self._mark_provider_progress)
+        self._mark_provider_progress()
         if self._speaking:
             return
 
         self._speaking = True
-
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(
-                self._event_ch.send_nowait,
-                stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
-            )
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
 
     def _on_speech_end(self, evt: speechsdk.RecognitionEventArgs) -> None:
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(self._mark_provider_progress)
+        self._call_on_loop(self._handle_speech_end, evt.offset)
+
+    def _handle_speech_end(self, offset: int) -> None:
+        self._mark_provider_progress()
         if not self._speaking:
             return
 
@@ -467,24 +476,21 @@ class SpeechStream(stt.SpeechStream):
         # At stream close, the SDK's event offset can include trailing silence.
         # A completed transcript reports the duration of recognized speech.
         alternatives = self._final_alternatives
-        if not alternatives and evt.offset > 0:
+        if not alternatives and offset > 0:
             alternatives = [
                 stt.SpeechData(
                     language=LanguageCode(""),
                     text="",
-                    end_time=evt.offset / 10**7 + self.start_time_offset,
+                    end_time=offset / 10**7,
                 )
             ]
         self._final_alternatives = []
-
-        with contextlib.suppress(RuntimeError):
-            self._loop.call_soon_threadsafe(
-                self._event_ch.send_nowait,
-                stt.SpeechEvent(
-                    type=stt.SpeechEventType.END_OF_SPEECH,
-                    alternatives=alternatives,
-                ),
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.END_OF_SPEECH,
+                alternatives=alternatives,
             )
+        )
 
     def _on_session_started(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
         self._session_started_event.set()

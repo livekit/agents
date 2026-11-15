@@ -13,6 +13,8 @@ from livekit.agents import APIStatusError
 from livekit.plugins import sarvam
 from livekit.plugins.sarvam import stt_streaming, tts
 
+from .fake_stt import attach_provider_audio_channels
+
 pytestmark = pytest.mark.plugin("sarvam")
 
 
@@ -29,7 +31,6 @@ def _make_stream(
     endpointing: str = "vad",
 ) -> stt_streaming.RealtimeSpeechStream:
     stream = object.__new__(stt_streaming.RealtimeSpeechStream)
-    stream._event_ch = _FakeEventChannel()
     stream._num_retries = 0
     stream._on_provider_progress = None
     stream._request_id = ""
@@ -58,7 +59,7 @@ def _make_stream(
     stream._utterance_start_audio_pos = 0.0
     stream._utterance_speech_end_audio_pos = None
     stream._utterance_speech_end_wall = None
-    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
+    attach_provider_audio_channels(stream)
     stream._final_received_for_utterance = False
     stream._eos_emitted_for_utterance = False
     stream._manual_speech_started = False
@@ -1691,7 +1692,10 @@ async def test_manual_endpointing_emits_boundary_events_and_resets_each_turn() -
 @pytest.mark.parametrize("switch_to_vad", [False, True], ids=["manual", "manual_to_vad"])
 async def test_manual_eos_precedes_final_received_during_send(switch_to_vad: bool) -> None:
     stream = _make_stream(endpointing="manual")
-    stream._input_ch = stt_streaming.stt.RecognizeStream._InputChan()
+    # a separate input channel: this audio does not move the stream's clocks
+    stream._input_ch = stt_streaming.stt.RecognizeStream._InputChan(
+        on_audio_enqueued=lambda _: None, on_audio_dequeued=lambda _: None
+    )
     stream._input_ch.send_nowait(stt_streaming.rtc.AudioFrame.create(16000, 1, 8000))
     stream._input_ch.send_nowait(stream._FlushSentinel())
     stream._input_ch.close()

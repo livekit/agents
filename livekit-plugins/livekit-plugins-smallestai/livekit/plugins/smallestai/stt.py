@@ -635,7 +635,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -786,7 +786,6 @@ class SpeechStream(stt.SpeechStream):
                 language=self._opts.language,
                 data=data,
                 transcript=transcript,
-                start_time_offset=self.start_time_offset,
                 diarize=self._opts.diarize,
             )
             self._event_ch.send_nowait(
@@ -829,7 +828,6 @@ def _transcript_to_speech_data(
     data: dict[str, Any],
     *,
     transcript: str,
-    start_time_offset: float,
     diarize: bool,
 ) -> list[stt.SpeechData]:
     raw_words: list[dict[str, Any]] = data.get("words") or []
@@ -838,9 +836,8 @@ def _transcript_to_speech_data(
         [
             TimedString(
                 text=w.get("word", ""),
-                start_time=w.get("start", 0.0) + start_time_offset,
-                end_time=w.get("end", 0.0) + start_time_offset,
-                start_time_offset=start_time_offset,
+                start_time=w.get("start", 0.0),
+                end_time=w.get("end", 0.0),
             )
             for w in raw_words
         ]
@@ -848,8 +845,8 @@ def _transcript_to_speech_data(
         else None
     )
 
-    start_time = raw_words[0].get("start", 0.0) + start_time_offset if raw_words else 0.0
-    end_time = raw_words[-1].get("end", 0.0) + start_time_offset if raw_words else 0.0
+    start_time = raw_words[0].get("start", 0.0) if raw_words else 0.0
+    end_time = raw_words[-1].get("end", 0.0) if raw_words else 0.0
 
     # Streaming diarization: per-word speaker ids are integers; the utterance takes the majority.
     speaker_id: str | None = None
@@ -864,14 +861,9 @@ def _transcript_to_speech_data(
     metadata: dict[str, Any] = {}
     raw_utterances: list[dict[str, Any]] = data.get("utterances") or []
     if raw_utterances:
-        metadata["utterances"] = [
-            {
-                **u,
-                "start": u.get("start", 0.0) + start_time_offset,
-                "end": u.get("end", 0.0) + start_time_offset,
-            }
-            for u in raw_utterances
-        ]
+        # keep provider metadata unchanged. Remapping only works on standard
+        # transcript timestamps.
+        metadata["utterances"] = raw_utterances
     redacted_entities: list[str] = data.get("redacted_entities") or []
     if redacted_entities:
         metadata["redacted_entities"] = redacted_entities

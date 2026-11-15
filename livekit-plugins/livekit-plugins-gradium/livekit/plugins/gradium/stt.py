@@ -218,7 +218,7 @@ class _PaddedTimeline:
         self._pending_padding: deque[tuple[float, float]] = deque()
 
     def reset(self) -> None:
-        """Restart at provider time zero, for a new connection."""
+        """Reset the connection clock for a new connection."""
         self._sent_samples = 0
         self._settled_padding = 0.0
         self._pending_padding.clear()
@@ -236,27 +236,27 @@ class _PaddedTimeline:
         self._pending_padding.append((start, samples / self._sample_rate))
         self._sent_samples += samples
 
-    def remove_padding(self, provider_time: float) -> float:
-        """Return the caller audio sent before ``provider_time``, in seconds."""
+    def remove_padding(self, connection_time: float) -> float:
+        """Return the caller audio sent before ``connection_time``, in seconds."""
         while self._pending_padding:
             start, duration = self._pending_padding[0]
-            if start + duration > provider_time:
+            if start + duration > connection_time:
                 break
             self._settled_padding += duration
             self._pending_padding.popleft()
 
         # a late boundary can precede padding that has already been sent
         pending = sum(
-            min(max(provider_time - start, 0.0), duration)
+            min(max(connection_time - start, 0.0), duration)
             for start, duration in self._pending_padding
         )
-        return provider_time - self._settled_padding - pending
+        return connection_time - self._settled_padding - pending
 
 
 class SpeechStream(stt.SpeechStream):
     @dataclass
     class _VADFlush(stt.SpeechStream._FlushSentinel):
-        """Request synthetic silence without advancing the caller's audio clock."""
+        """Request synthetic silence without advancing the stream clock."""
 
         samples_per_channel: int
 
@@ -403,8 +403,7 @@ class SpeechStream(stt.SpeechStream):
                                 stt.SpeechData(
                                     text=data["text"],
                                     language=self._opts.language,
-                                    start_time=timeline.remove_padding(data["start_s"])
-                                    + self.start_time_offset,
+                                    start_time=timeline.remove_padding(data["start_s"]),
                                 )
                             ],
                         )
@@ -452,7 +451,6 @@ class SpeechStream(stt.SpeechStream):
                                                     text=" ".join(buffered_text),
                                                     language=self._opts.language,
                                                     end_time=timeline.remove_padding(speech_end)
-                                                    + self.start_time_offset
                                                     if speech_end > 0
                                                     else 0.0,
                                                 )
@@ -492,7 +490,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 timeline.reset()
                 tasks = [
                     asyncio.create_task(send_task(ws)),

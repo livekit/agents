@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from livekit.agents import stt
 from livekit.plugins.gladia import stt as gladia_stt
+
+from .fake_stt import attach_provider_audio_channels
 
 pytestmark = pytest.mark.plugin("gladia")
 
@@ -26,10 +26,8 @@ def test_endpoint_preserves_source_timing(translate, end_time):
     stream._opts = gladia_stt.STT(api_key="test-key")._opts
     stream._opts.translation_config.enabled = translate
     stream._speaking = False
-    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     stream._request_id = "test"
-    events = []
-    stream._event_ch = SimpleNamespace(send_nowait=events.append)
+    events = attach_provider_audio_channels(stream, start_time_offset=7.0)
     utterance = {"text": "hello", "language": "en", "start": 0.1, "end": end_time}
     stream._process_gladia_message(
         {"type": "transcript", "data": {"is_final": True, "utterance": utterance}}

@@ -13,10 +13,12 @@ from livekit.agents.stt import (
     AvailabilityChangedEvent,
     FallbackAdapter,
     RecognizeStream,
+    SpeechData,
     SpeechEvent,
+    SpeechEventType,
     STTCapabilities,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, TimedString
 from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.agents.utils.audio import AudioBuffer
 
@@ -260,6 +262,106 @@ async def test_stt_stream_fallback_propagates_start_time_offset(set_late: bool) 
     assert leg2.start_time_offset == pytest.approx(30.0 + switched_at - set_at, abs=0.05)
 
     await fallback_adapter.aclose()
+
+
+@pytest.mark.parametrize("step", [3600.0, -3600.0])
+async def test_stt_stream_fallback_keeps_the_session_start_across_a_wall_clock_step(
+    step: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each leg continues the stream's timeline from the same session start."""
+    fake1 = FakeSTT(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = FakeSTT(fake_transcript="hello world")
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+
+    stream = fallback_adapter.stream()
+    set_at = time.perf_counter()
+    stream.start_time_offset = 30.0
+    session_start = stream._input_clock.session_start
+    assert session_start is not None
+    frame = utils.audio.silence_frame(0.02, 16000)
+
+    wall_clock = time.time
+    monkeypatch.setattr(time, "time", lambda: wall_clock() + step)
+    async with stream:
+        await asyncio.sleep(5.0)
+        pushed_at = time.perf_counter()
+        stream.push_frame(frame)
+        stream.end_input()
+        async for _ in stream:
+            pass
+        switched_at = time.perf_counter()
+
+    leg1 = fake1.stream_ch.recv_nowait()
+    leg2 = fake2.stream_ch.recv_nowait()
+    for leg in (leg1, leg2):
+        assert leg._input_clock.session_start is session_start
+    assert leg1.start_time_offset == pytest.approx(30.0 + pushed_at - frame.duration - set_at)
+    assert leg2.start_time_offset == pytest.approx(30.0 + switched_at - set_at, abs=0.05)
+
+    await fallback_adapter.aclose()
+
+
+@pytest.mark.parametrize("nested", [False, True])
+async def test_stt_stream_fallback_forwards_provider_times_placed_once(nested: bool) -> None:
+    """Remap once through nested fallback adapters after an input gap."""
+    provider = FakeSTT()
+    adapter = FallbackAdapter([provider])
+    if nested:
+        adapter = FallbackAdapter([adapter])
+
+    stream = adapter.stream()
+    stream.start_time_offset = 30.0
+    frame = utils.audio.silence_frame(0.02, 16000)
+
+    async def push_live_audio(duration: float) -> None:
+        for _ in range(round(duration / frame.duration)):
+            await asyncio.sleep(frame.duration)
+            stream.push_frame(frame)
+
+    first_audio_at = time.time()
+    await push_live_audio(1.0)
+    await asyncio.sleep(5.0)
+    await push_live_audio(1.0)
+
+    provider_stream = await asyncio.wait_for(provider.stream_ch.recv(), 1.0)
+    while provider_stream.input_position < 2.0 - 1e-6:  # the provider read all the audio
+        await asyncio.sleep(0)
+    for start, end in ((0.5, 0.8), (1.5, 1.8)):  # on the provider's clock
+        provider_stream._event_ch.send_nowait(
+            SpeechEvent(
+                type=SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[
+                    SpeechData(
+                        language="en",
+                        text="hello",
+                        start_time=start,
+                        end_time=end,
+                        words=[TimedString("hello", start_time=start, end_time=end)],
+                    )
+                ],
+                speech_start_time=start,
+                speech_end_time=end,
+            )
+        )
+
+    events = [await asyncio.wait_for(anext(stream), 1.0) for _ in range(2)]
+    # the speech bounds are on the wall clock, where the audio was captured
+    assert [
+        (ev.speech_start_time - first_audio_at, ev.speech_end_time - first_audio_at)
+        for ev in events
+    ] == [pytest.approx((0.5, 0.8), abs=1e-3), pytest.approx((6.5, 6.8), abs=1e-3)]
+    received = [ev.alternatives[0] for ev in events]
+    assert [(alt.start_time, alt.end_time) for alt in received] == [
+        pytest.approx((30.5, 30.8)),
+        pytest.approx((30.0 + 6.5, 30.0 + 6.8)),
+    ]
+    assert [(alt.words[0].start_time, alt.words[0].end_time) for alt in received] == [
+        pytest.approx((30.5, 30.8)),
+        pytest.approx((30.0 + 6.5, 30.0 + 6.8)),
+    ]
+
+    await stream.aclose()
+    await adapter.aclose()
 
 
 async def test_stt_stream_fallback() -> None:

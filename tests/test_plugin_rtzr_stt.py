@@ -14,6 +14,7 @@ from livekit.agents import APIConnectOptions, LanguageCode, stt
 from livekit.plugins.rtzr import stt as rtzr_stt
 from livekit.plugins.rtzr.rtzrapi import RTZROpenAPIClient
 
+from .fake_stt import attach_provider_audio_channels
 from .stt_reconnect import ReconnectClock, wait_until
 
 pytestmark = pytest.mark.unit
@@ -22,7 +23,7 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def bare_stream() -> rtzr_stt.SpeechStream:
     stream = object.__new__(rtzr_stt.SpeechStream)
-    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
+    attach_provider_audio_channels(stream, start_time_offset=7.0)
     stream._rtzr_stt = SimpleNamespace(_params=SimpleNamespace(language=LanguageCode("ko")))
     return stream
 
@@ -67,7 +68,9 @@ def test_endpoint_uses_nested_word_timing_relative_to_the_utterance(bare_stream)
         ],
     }
     events, _, _ = stream._process_transcript_event(message, False, None)
-    transcript, endpoint = events[-2:]
+    for event in events:
+        stream._event_ch.send_nowait(event)
+    transcript, endpoint = stream._event_ch.events[-2:]
     assert transcript.alternatives[0].words[0].start_time == pytest.approx(7.0 + 44.185)
     assert transcript.alternatives[0].words[0].end_time == pytest.approx(7.0 + 44.465)
     assert endpoint.alternatives[0].end_time == pytest.approx(7.0 + 44.465)

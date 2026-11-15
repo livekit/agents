@@ -11,7 +11,9 @@ import time
 import wave
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 import aiohttp
 import pytest
@@ -678,22 +680,150 @@ def test_urls_derive_from_base_url() -> None:
 
 @pytest.mark.parametrize(("silence_duration_ms", "expected"), [(350, 0.55), (None, 0.9)])
 async def test_live_speech_end_excludes_scribes_silence_window(
-    http, silence_duration_ms: int | None, expected: float
+    http, monkeypatch: pytest.MonkeyPatch, silence_duration_ms: int | None, expected: float
 ) -> None:
     # Scribe ends a segment after the silence window we set, so audio_end_ms (900 ms here)
     # is that much later than the end of speech. With None the window is Scribe's own, so
     # audio_end_ms is used as is.
-    stt = make_stt(
-        http,
-        ("ws://127.0.0.1:9/unused", "http://127.0.0.1:9/unused"),
-        silence_duration_ms=silence_duration_ms,
-    )
-    stream = stt.stream()
-    try:
-        assert stream._speech_end_time(900) == pytest.approx(stream.start_time + expected)
-        assert stream._speech_end_time(0) is None
-    finally:
-        await stream.aclose()
+    stream = idle_stream(http, silence_duration_ms=silence_duration_ms)
+    clock = WallClock(monkeypatch)
+    clock.send_live(stream, 1.0, captured_from=1000.0)
+
+    stream._process_event(completed(100, 900))
+    _, final, ended = (stream._event_ch.recv_nowait() for _ in range(3))
+    assert final.speech_end_time == pytest.approx(1000.0 + expected, rel=0, abs=1e-6)
+    assert ended.speech_end_time == pytest.approx(1000.0 + expected, rel=0, abs=1e-6)
+
+    # a final without an end position reports no end of speech
+    stream._process_event(completed(0, 0))
+    _, final, ended = (stream._event_ch.recv_nowait() for _ in range(3))
+    assert final.speech_end_time is None and ended.speech_end_time is None
+
+
+def idle_stream(http: aiohttp.ClientSession, **kwargs: Any) -> zoom_stt.SpeechStream:
+    """A stream that doesn't connect: its tasks are not started, events are handled by hand."""
+
+    def discard(coro: Any, *args: Any, **kwargs: Any) -> MagicMock:
+        coro.close()
+        return MagicMock()
+
+    stt = make_stt(http, ("ws://127.0.0.1:9/unused", "http://127.0.0.1:9/unused"), **kwargs)
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=discard):
+        return stt.stream()
+
+
+class WallClock:
+    """The wall clock while audio is read by hand from the input of an idle stream."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.now = 1000.0
+        monkeypatch.setattr(time, "time", lambda: self.now)
+        # the input clock measures elapsed time on the monotonic clock
+        monkeypatch.setattr(time, "perf_counter", lambda: self.now)
+
+    def read(
+        self, stream: zoom_stt.SpeechStream, seconds: float, *, captured_from: float
+    ) -> list[tuple[float, float]]:
+        """Read live audio (each 100 ms frame is pushed when its capture ends).
+
+        Returns the stream position and duration of each frame."""
+        frame = rtc.AudioFrame.create(16000, 1, 1600)
+        read = []
+        for i in range(round(seconds / frame.duration)):
+            self.now = captured_from + (i + 1) * frame.duration
+            stream._input_ch.send_nowait(frame)
+            stream._input_ch.recv_nowait()
+            read.append((stream.input_position - frame.duration, frame.duration))
+        return read
+
+    def send_live(
+        self, stream: zoom_stt.SpeechStream, seconds: float, *, captured_from: float
+    ) -> None:
+        """Read live audio and send it to the current session, as the send task does."""
+        for position, duration in self.read(stream, seconds, captured_from=captured_from):
+            stream._session_audio.add_input(position, duration)
+
+
+def completed(start_ms: int, end_ms: int) -> dict[str, Any]:
+    return {
+        "type": "transcription.completed",
+        "item_id": "item_1",
+        "transcript": "Hello.",
+        "audio_start_ms": start_ms,
+        "audio_end_ms": end_ms,
+    }
+
+
+async def test_live_times_follow_the_audio_across_an_input_gap(
+    http, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # After 1 s of input and a 5 s pause, audio resumes at wall time 1006.
+    # The inserted 100 ms keepalive puts that same audio at Scribe time 1.1 s.
+    stream = idle_stream(http, silence_duration_ms=300)
+    clock = WallClock(monkeypatch)
+    stream.start_time_offset = 7.0
+    clock.send_live(stream, 1.0, captured_from=1000.0)
+    stream._session_audio.add_silence(0.1)
+    clock.send_live(stream, 1.0, captured_from=1006.0)
+
+    stream._process_event({"type": "input_audio_buffer.speech_started", "audio_start_ms": 1100})
+    stream._process_event(completed(1100, 1900))
+    started, final, ended = (stream._event_ch.recv_nowait() for _ in range(3))
+
+    assert started.speech_start_time == pytest.approx(1006.0, rel=0, abs=1e-6)
+    data = final.alternatives[0]
+    assert (data.start_time, data.end_time) == pytest.approx((7.0 + 6.0, 7.0 + 6.8))
+    # the end of speech is the end of the segment less Scribe's silence window
+    assert final.speech_end_time == pytest.approx(1006.5, rel=0, abs=1e-6)
+    assert ended.speech_end_time == pytest.approx(1006.5, rel=0, abs=1e-6)
+
+
+async def test_live_times_of_a_turn_that_ends_in_added_silence(
+    http, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The plugin inserts silence to end the turn when input stops. An end in that
+    # silence maps to the last input before the gap.
+    stream = idle_stream(http, silence_duration_ms=None)
+    clock = WallClock(monkeypatch)
+    stream.start_time_offset = 7.0
+    clock.send_live(stream, 1.0, captured_from=1000.0)
+    stream._session_audio.add_silence(1.1)
+    clock.send_live(stream, 1.0, captured_from=1006.0)
+
+    stream._process_event(completed(400, 1600))
+    started, final, _ = (stream._event_ch.recv_nowait() for _ in range(3))
+
+    assert started.speech_start_time == pytest.approx(1000.4, rel=0, abs=1e-6)
+
+    data = final.alternatives[0]
+    assert (data.start_time, data.end_time) == pytest.approx((7.4, 8.0))
+    assert final.speech_end_time == pytest.approx(1001.0, rel=0, abs=1e-6)
+
+
+async def test_live_times_of_held_audio_sent_to_a_later_session(
+    http, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The new session sends held audio captured at 1006, after an input gap.
+    # Its clock starts at that audio; output timestamps must match capture time
+    # even though the session opens later.
+    stream = idle_stream(http, silence_duration_ms=None)
+    clock = WallClock(monkeypatch)
+    stream.start_time_offset = 7.0
+    clock.send_live(stream, 1.0, captured_from=1000.0)
+    held = clock.read(stream, 1.0, captured_from=1006.0)
+
+    clock.now = 1010.0  # the new session opens and is sent the held audio at once
+    stream._session_audio = zoom_stt._SessionAudio()
+    for position, duration in held:
+        stream._session_audio.add_input(position, duration)
+
+    stream._process_event({"type": "input_audio_buffer.speech_started", "audio_start_ms": 0})
+    stream._process_event(completed(0, 800))
+    started, final, _ = (stream._event_ch.recv_nowait() for _ in range(3))
+
+    assert started.speech_start_time == pytest.approx(1006.0, rel=0, abs=1e-6)
+    data = final.alternatives[0]
+    assert (data.start_time, data.end_time) == pytest.approx((7.0 + 6.0, 7.0 + 6.8))
 
 
 def test_rejects_an_unknown_mode_or_url() -> None:
@@ -885,10 +1015,11 @@ async def test_live_timestamps_survive_a_reconnect_then_a_retry(scribe, http) ->
     await asyncio.wait_for(collector, 5)
     await stream.aclose()
 
-    # the final's audio starts at 0 on the third session, so its stream-relative start
-    # is the time before that session opened: never more than the time that has passed.
+    # The final starts at 0 on the third session, or stream position 0.2 s.
+    # Frames arrive faster than real time. Place them by push time, at or after
+    # the end of the preceding audio.
     start = finals[0].alternatives[0].start_time
-    assert 0.09 < start <= elapsed
+    assert 0.2 - 1e-3 <= start <= max(elapsed, 0.2) + 1e-3
 
 
 @pytest.mark.parametrize(
@@ -1565,6 +1696,146 @@ async def test_live_keepalive_sends_silence_when_input_is_idle(
     audio = fake.sessions[0].audio
     assert len(audio) >= 3 * 3200 and len(audio) % 3200 == 0
     assert not any(audio)
+
+
+class BackpressuredSocket:
+    """A Scribe socket that takes a write and then makes the sender wait (flow control)."""
+
+    def __init__(self, *, waits_on: str = "input", fails_input: bool = False) -> None:
+        self.wire: list[str] = []  # what went out, in order
+        self.inputs: list[bytes] = []  # the input frames that went out
+        self.drained = asyncio.Event()  # the socket takes writes again
+        self.close_code: int | None = None
+        self._waits_on = waits_on
+        self._fails_input = fails_input
+        self._closed = asyncio.Event()
+
+    async def send_bytes(self, data: bytes) -> None:
+        kind = "input" if any(data) else "silence"
+        if kind == "input" and self._fails_input:
+            raise ConnectionResetError("socket closed")
+        self.wire.append(kind)
+        if kind == "input":
+            self.inputs.append(data)
+        if kind == self._waits_on:
+            await self.drained.wait()
+
+    async def send_str(self, data: str) -> None:
+        pass
+
+    async def receive(self) -> Any:
+        await self._closed.wait()
+        return SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=None, extra=None)
+
+    async def close(self) -> None:
+        self._closed.set()
+
+
+@pytest.mark.virtual_time
+async def test_live_keepalive_silence_keeps_its_place_behind_input_that_waits_on_the_socket(
+    http, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A full socket blocks an input-frame send until keepalive is due. The wire
+    # order and session clock must both place the silence after that frame.
+    # Counting silence first would shift the frame's timestamps forward by 100 ms.
+    socket = BackpressuredSocket()
+    counted: list[str] = []
+
+    class CountedSessionAudio(zoom_stt._SessionAudio):
+        def add_input(self, input_position: float, duration: float) -> None:
+            counted.append("input")
+            super().add_input(input_position, duration)
+
+        def add_silence(self, duration: float) -> None:
+            counted.append("silence")
+            super().add_silence(duration)
+
+    async def connect(self: zoom_stt.SpeechStream) -> BackpressuredSocket:
+        self._view = zoom_stt._RequestView.of(self._session_update())
+        return socket
+
+    loop = asyncio.get_running_loop()
+    # the plugin reads idle time from the monotonic clock, which follows the loop here
+    monkeypatch.setattr(
+        zoom_stt,
+        "time",
+        SimpleNamespace(monotonic=loop.time, time=time.time, perf_counter=time.perf_counter),
+    )
+    monkeypatch.setattr(zoom_stt, "_SessionAudio", CountedSessionAudio)
+    monkeypatch.setattr(zoom_stt.SpeechStream, "_connect_ws", connect)
+    stream = make_stt(http, ("ws://127.0.0.1:9/unused", "http://127.0.0.1:9/unused")).stream()
+    try:
+        stream.push_frame(speech(0.02)[0])
+        await asyncio.sleep(zoom_stt.KEEPALIVE_INTERVAL_S + zoom_stt.INPUT_GAP_S)
+        # the keepalive is due, and the frame's send still waits on the socket
+        assert socket.wire == ["input"]
+        assert counted == []
+
+        socket.drained.set()
+        await asyncio.sleep(zoom_stt.INPUT_GAP_S)
+        # the frame was sent meanwhile: the input is not idle, so no silence follows yet
+        assert (socket.wire, counted) == (["input"], ["input"])
+
+        await asyncio.sleep(zoom_stt.KEEPALIVE_INTERVAL_S + zoom_stt.INPUT_GAP_S)
+        assert socket.wire == ["input", "silence"]
+        assert counted == socket.wire
+        # the frame is the session's first audio
+        assert stream._session_audio.input_position(0.0) == pytest.approx(0.0)
+        assert stream._session_audio.input_position(0.02) == pytest.approx(0.02)
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_live_frame_waiting_behind_a_keepalive_survives_a_reconnect_and_a_retry(
+    http, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A keepalive write waits on a full socket and holds the send lock. A frame read
+    # meanwhile waits for the lock; an options reconnect cancels that wait. The frame
+    # must go to the next session, and after that session fails, to the retry: once.
+    sockets = [
+        BackpressuredSocket(waits_on="silence"),
+        BackpressuredSocket(fails_input=True),
+        BackpressuredSocket(waits_on="nothing"),
+    ]
+    remaining = iter(sockets)
+
+    async def connect(self: zoom_stt.SpeechStream) -> BackpressuredSocket:
+        self._view = zoom_stt._RequestView.of(self._session_update())
+        return next(remaining)
+
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(
+        zoom_stt,
+        "time",
+        SimpleNamespace(monotonic=loop.time, time=time.time, perf_counter=time.perf_counter),
+    )
+    monkeypatch.setattr(zoom_stt.SpeechStream, "_connect_ws", connect)
+    zoom = make_stt(http, ("ws://127.0.0.1:9/unused", "http://127.0.0.1:9/unused"))
+    stream = zoom.stream()
+    first, second = speech(0.04)
+    second = rtc.AudioFrame(
+        bytes(b ^ 0x55 for b in second.data.tobytes()), 16000, 1, second.samples_per_channel
+    )
+    try:
+        await asyncio.sleep(zoom_stt.KEEPALIVE_INTERVAL_S + zoom_stt.INPUT_GAP_S)
+        assert sockets[0].wire == ["silence"]  # the keepalive write holds the lock
+
+        stream.push_frame(first)
+        await wait_until(lambda: stream._input_ch.empty(), "the frame is read")
+        zoom.update_options(language="fr")  # no turn is open: reconnect now
+        await wait_until(lambda: len(sockets[2].inputs) == 1, "the frame reaches the retry")
+        stream.push_frame(second)
+        await wait_until(lambda: len(sockets[2].inputs) == 2, "the next frame is sent")
+
+        assert sockets[0].inputs == [] and sockets[1].inputs == []
+        assert sockets[2].inputs == [first.data.tobytes(), second.data.tobytes()]
+        assert not stream._held
+        # the frames keep their stream positions on the session that sent them
+        assert stream._session_audio.input_position(0.0) == pytest.approx(0.0)
+        assert stream._session_audio.input_position(0.03) == pytest.approx(0.03)
+    finally:
+        await stream.aclose()
 
 
 async def test_live_reconnect_mid_speech_closes_the_utterance(scribe, http) -> None:

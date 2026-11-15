@@ -257,6 +257,8 @@ async def test_aws_transcript_after_idle_restart_uses_new_audio_offset(
 ):
     now = 100.0
     monkeypatch.setattr(time, "time", lambda: now)
+    # the input clock measures elapsed time on the monotonic clock
+    monkeypatch.setattr(time, "perf_counter", lambda: now)
     provider, stream, transcribe_stream = _make_stream(
         monkeypatch,
         output_error=aws_stt.BadRequestException(

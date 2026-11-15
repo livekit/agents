@@ -96,7 +96,8 @@ class FallbackAdapter(
                 keyterms=any(t.capabilities.keyterms for t in stt),
                 chat_context=any(t.capabilities.chat_context for t in stt),
                 manual_flush=all(t.capabilities.manual_flush for t in stt),
-            )
+            ),
+            requires_timestamp_translation=False,
         )
 
         self._stt_instances = stt
@@ -375,8 +376,9 @@ class FallbackRecognizeStream(RecognizeStream):
 
         def _seed(stream: RecognizeStream) -> None:
             nonlocal seeded_stream
-            if (origin := self._input_ch.input_started_at) is not None:
-                stream.start_time_offset = time.time() - origin
+            input_clock = self._input_clock
+            if (session_start := input_clock.session_start) is not None:
+                stream._input_clock.session_start = session_start
                 seeded_stream = stream
 
         async def _forward_input_task() -> None:

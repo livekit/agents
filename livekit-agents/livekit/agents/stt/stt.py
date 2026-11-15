@@ -3,12 +3,19 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Generic, Literal, Protocol, TypeVar, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Generic,
+    Literal,
+    Protocol,
+    TypeVar,
+    runtime_checkable,
+)
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -28,6 +35,7 @@ from ..types import (
 )
 from ..utils import AudioBuffer, aio, is_given
 from ..utils.audio import calculate_audio_duration
+from .clock import _ConnectionClock, _InputClock
 
 if TYPE_CHECKING:
     from ..llm.chat_context import MetricsMetadata
@@ -121,12 +129,16 @@ class SpeechEvent:
     alternatives: list[SpeechData] = field(default_factory=list)
     recognition_usage: RecognitionUsage | None = None
     speech_start_time: float | None = None
-    """server-reported wall-clock time of speech onset, when the provider sends
-    a separate speech-start signal carrying onset timing."""
+    """Speech onset wall-clock time for event consumers.
+
+    When ``requires_timestamp_translation`` is true, supply connection-relative
+    seconds. The event channel translates them to wall-clock time.
+    """
     created_at: float = field(default_factory=lambda: time.time())
     """Wall-clock time when this event was created."""
     speech_end_time: float | None = None
-    """Wall-clock time when the recognized speech ended, when known."""
+    """Time when the recognized speech ended, when known. Same clocks as
+    ``speech_start_time``."""
 
 
 @dataclass
@@ -170,9 +182,20 @@ class STT(
     rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
-    def __init__(self, *, capabilities: STTCapabilities) -> None:
+    def __init__(
+        self, *, capabilities: STTCapabilities, requires_timestamp_translation: bool = True
+    ) -> None:
+        """
+        Args:
+            capabilities: The features that this STT supports.
+            requires_timestamp_translation: Whether the streams of this STT emit event
+                timestamps relative to their connection. If true, the output channel
+                translates those timestamps to the session timeline. Set it to false
+                when the streams emit session timestamps themselves.
+        """
         super().__init__()
         self._capabilities = capabilities
+        self._requires_timestamp_translation = requires_timestamp_translation
         self._label = f"{type(self).__module__}.{type(self).__name__}"
         self._recognize_metrics_needed = True
         self._keyterms_unsupported_warned = False
@@ -214,6 +237,11 @@ class STT(
     @property
     def capabilities(self) -> STTCapabilities:
         return self._capabilities
+
+    @property
+    def requires_timestamp_translation(self) -> bool:
+        """Whether the event channel must translate timestamps to the session timeline."""
+        return self._requires_timestamp_translation
 
     @abstractmethod
     async def _recognize_impl(
@@ -374,67 +402,46 @@ class RecognizeStream(ABC):
         pass
 
     class _InputChan(aio.Chan[rtc.AudioFrame | _FlushSentinel]):
-        """Input queue that places the provider's timestamps on the caller's timeline.
+        """Report the duration of each audio frame when it is pushed and when it is read."""
 
-        The provider counts audio from the first frame each connection reads, so the offset
-        is anchored on the capture time of that frame when it is read.
-        """
-
-        def __init__(self) -> None:
+        def __init__(
+            self,
+            *,
+            on_audio_enqueued: Callable[[float], None],
+            on_audio_dequeued: Callable[[float], None],
+        ) -> None:
             super().__init__()
-            # session start wall clock time; the first audio when unset
-            self.input_started_at: float | None = None
-            # session start -> capture of the current connection's first frame, or the value
-            # set before that frame is read (last write wins)
-            # word end time (connection relative) + offset = word end time (session relative)
-            self._start_time_offset = 0.0
-            # capture time of the first frame read since the provider's clock restarted
-            self._first_frame_at: float | None = None
-            # push time of each queued frame, in queue order
-            self._pushed_at: deque[float] = deque()
-            self._queued_duration = 0.0
-            self._last_pushed_at = 0.0
-
-        @property
-        def start_time_offset(self) -> float:
-            return self._start_time_offset
-
-        @start_time_offset.setter
-        def start_time_offset(self, value: float) -> None:
-            self.input_started_at = time.time() - value
-            self._start_time_offset = (
-                value
-                if self._first_frame_at is None
-                else self._first_frame_at - self.input_started_at
-            )
-
-        def restart_provider_clock(self) -> None:
-            """Anchor the offset again on the next frame read, for a new connection."""
-            self._first_frame_at = None
+            self._on_audio_enqueued = on_audio_enqueued
+            self._on_audio_dequeued = on_audio_dequeued
 
         def send_nowait(self, value: rtc.AudioFrame | RecognizeStream._FlushSentinel) -> None:
             super().send_nowait(value)
-            if isinstance(value, rtc.AudioFrame):
-                self._last_pushed_at = time.time()
-                self._pushed_at.append(self._last_pushed_at)
-                self._queued_duration += value.duration
+            if isinstance(value, rtc.AudioFrame) and value.duration > 0:
+                self._on_audio_enqueued(value.duration)
 
         def recv_nowait(self) -> rtc.AudioFrame | RecognizeStream._FlushSentinel:
             value = super().recv_nowait()
-            if isinstance(value, rtc.AudioFrame):
-                pushed_at = self._pushed_at.popleft()
-                if self._first_frame_at is None:
-                    # a frame is pushed after it is captured, so its capture start is at most
-                    # its own push minus its duration (exact across pauses in the input) and
-                    # at most the last push minus all queued audio (exact for a burst)
-                    self._first_frame_at = min(
-                        pushed_at - value.duration, self._last_pushed_at - self._queued_duration
-                    )
-                    if self.input_started_at is None:
-                        self.input_started_at = self._first_frame_at
-                    self._start_time_offset = self._first_frame_at - self.input_started_at
-                self._queued_duration -= value.duration
+            if isinstance(value, rtc.AudioFrame) and value.duration > 0:
+                self._on_audio_dequeued(value.duration)
             return value
+
+    class _EventChan(aio.Chan[SpeechEvent]):
+        """Translate timestamps before enqueueing events.
+
+        ``translate_event_timestamps`` returns a copy of an event on the session timeline.
+        """
+
+        def __init__(
+            self, *, translate_event_timestamps: Callable[[SpeechEvent], SpeechEvent] | None
+        ) -> None:
+            super().__init__()
+            self._translate_event_timestamps = translate_event_timestamps
+
+        def send_nowait(self, value: SpeechEvent) -> None:
+            """Queue ``value``, translating its timestamps when a callback is set."""
+            if self._translate_event_timestamps is not None:
+                value = self._translate_event_timestamps(value)
+            super().send_nowait(value)
 
     def __init__(
         self,
@@ -453,8 +460,7 @@ class RecognizeStream(ABC):
         """
         self._stt = stt
         self._conn_options = conn_options
-        self._input_ch = RecognizeStream._InputChan()
-        self._event_ch = aio.Chan[SpeechEvent]()
+        self._init_channels(translate_timestamps=stt.requires_timestamp_translation)
 
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee
@@ -474,6 +480,40 @@ class RecognizeStream(ABC):
         self._start_time: float = time.time()
         self._context: BaseModel | None = None
 
+    def _init_channels(self, *, translate_timestamps: bool) -> None:
+        """Create the input and event channels and the clocks they report to."""
+        self._input_clock = _InputClock()
+        self._connection_clock = _ConnectionClock(self._input_clock, 0.0)
+        self._connection_clock_restart_pending = True
+
+        self._input_ch = RecognizeStream._InputChan(
+            on_audio_enqueued=self._on_audio_enqueued, on_audio_dequeued=self._on_audio_dequeued
+        )
+        self._event_ch = RecognizeStream._EventChan(
+            translate_event_timestamps=self._translate_event_timestamps
+            if translate_timestamps
+            else None
+        )
+
+    def _on_audio_enqueued(self, duration: float) -> None:
+        self._input_clock.on_audio_enqueued(duration, time.perf_counter(), self._connection_clock)
+
+    def _on_audio_dequeued(self, duration: float) -> None:
+        if self._connection_clock_restart_pending:
+            self._connection_clock_restart_pending = False
+            self._connection_clock = self._input_clock.start_connection()
+        self._input_clock.on_audio_dequeued(duration)
+
+    def _translate_event_timestamps(self, event: SpeechEvent) -> SpeechEvent:
+        return self._connection_clock.translate_event_timestamps(event)
+
+    def _restart_connection_clock(self) -> None:
+        """Start the next connection's clock when its first frame is read.
+
+        Keep the previous connection's mapping until then.
+        """
+        self._connection_clock_restart_pending = True
+
     @property
     def context(self) -> BaseModel | None:
         """Persistent speaker metadata updated by the STT plugin during recognition.
@@ -490,30 +530,40 @@ class RecognizeStream(ABC):
 
     @property
     def start_time_offset(self) -> float:
-        """Offset plugins add to the provider's timestamps.
+        """Session position of the current connection's first audio frame, in seconds.
 
-        Setting it says the caller's timeline began ``value`` seconds ago. With no value
-        set, the timeline begins with the stream's first audio. The provider counts from
-        the first frame it reads, and each new connection restarts that count, so the
-        offset is re-anchored on the first frame each attempt reads.
+        Setting this value declares that the session timeline began that many
+        seconds ago. When unset, it begins with the stream's first audio. Each new
+        connection re-anchors the offset when it reads its first frame.
         """
-        return self._input_ch.start_time_offset
+        return self._connection_clock.start_time_offset
 
     @start_time_offset.setter
     def start_time_offset(self, value: float) -> None:
         if value < 0:
             raise ValueError("start_time_offset must be non-negative")
-        self._input_ch.start_time_offset = value
+        self._input_clock.set_session_timeline(value)
+
+    @property
+    def input_position(self) -> float:
+        """Stream position of the next frame, in seconds from the stream's first frame.
+
+        The position excludes input gaps and continues across provider reconnects.
+
+        Providers that replay earlier audio record its stream position to place
+        the results of that audio.
+
+        TODO: @chenghao-mou this is needed only for plugins who track buffered/segmented
+        audio. We should simplify those implementation.
+        """
+        return self._input_clock.dequeued_duration
 
     @property
     def start_time(self) -> float:
-        """Wall-clock anchor for the stream. Seeded to `time.time()` when the
-        stream is initialized (and re-seeded on each retry). Plugins may
-        override this via the setter to anchor it at a more accurate moment
-        (e.g., when the first audio frame is sent to the provider) so that
-        server-provided stream-relative timestamps (like
-        `SpeechEvent.speech_start_time`) can be converted to wall-clock
-        accurately.
+        """Wall-clock time of stream creation, reset when each ``_run`` attempt starts.
+
+        Timestamp mapping does not use this value; it follows ``start_time_offset``
+        and the input audio. Plugins can set it for their own bookkeeping.
         """
         return self._start_time
 
@@ -552,7 +602,7 @@ class RecognizeStream(ABC):
                 return await self._run()
             except APIError as e:
                 # _run has stopped reading, so the next frame read is the next connection's
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 if not e.retryable or max_retries == 0:
                     self._emit_error(e, recoverable=False)
                     raise

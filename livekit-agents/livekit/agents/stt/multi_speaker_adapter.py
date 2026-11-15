@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -52,7 +52,7 @@ class MultiSpeakerAdapter(STT):
         if not stt.capabilities.diarization:
             raise ValueError("MultiSpeakerAdapter needs STT with diarization capability")
 
-        super().__init__(capabilities=stt.capabilities)
+        super().__init__(capabilities=stt.capabilities, requires_timestamp_translation=False)
         self._stt = stt
 
         self._detect_primary = detect_primary_speaker
@@ -133,6 +133,7 @@ class MultiSpeakerAdapterWrapper(RecognizeStream):
             primary_detection_options=stt._opt,
             primary_format=stt._primary_format,
             background_format=stt._background_format,
+            session_to_stream_timestamps=self._input_clock.session_to_stream_timestamps,
         )
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SpeechEvent]) -> None:
@@ -146,8 +147,13 @@ class MultiSpeakerAdapterWrapper(RecognizeStream):
 
     async def _run(self) -> None:
         async def _forward_input(stream: RecognizeStream) -> None:
+            seeded = False
             async for frame in self._input_ch:
                 if isinstance(frame, rtc.AudioFrame):
+                    input_clock = self._input_clock
+                    if not seeded and (session_start := input_clock.session_start) is not None:
+                        stream._input_clock.session_start = session_start
+                        seeded = True
                     stream.push_frame(frame)
                     self._detector.push_audio(frame)
                 elif isinstance(frame, self._FlushSentinel):
@@ -225,9 +231,15 @@ class _PrimarySpeakerDetector:
         primary_detection_options: NotGivenOr[PrimarySpeakerDetectionOptions] = NOT_GIVEN,
         primary_format: str = "{text}",
         background_format: str = "{text}",
+        session_to_stream_timestamps: Callable[[SpeechData], SpeechData | None] | None = None,
     ):
         """Primary speaker detector. It detects the primary speaker based on RMS,
         formats the primary and background speakers separately, or suppresses the background speaker.
+
+        ``session_to_stream_timestamps`` returns a copy of a transcript with stream
+        positions, or None when no position is known. The detector uses the copy
+        only for RMS lookup and activity timing. Without it, event times are stream
+        positions.
 
         Args:
             detect_primary_speaker (bool, optional): Whether to detect primary speaker. Defaults to True.
@@ -243,6 +255,7 @@ class _PrimarySpeakerDetector:
         self._detect_primary = detect_primary_speaker
         self._suppress_background = suppress_background_speaker
         self._opt = primary_detection_options or PrimarySpeakerDetectionOptions()
+        self._session_to_stream_timestamps = session_to_stream_timestamps
 
         if self._suppress_background and not self._detect_primary:
             logger.warning(
@@ -347,21 +360,29 @@ class _PrimarySpeakerDetector:
             # so leave the current primary in place rather than clearing it
             return
 
-        rms = self._get_rms_for_timerange(sd.start_time, sd.end_time)
+        # RMS lookup and speaker decay use stream positions.
+        timing: SpeechData | None = sd
+        if self._session_to_stream_timestamps is not None:
+            timing = self._session_to_stream_timestamps(sd)
+        if timing is None:
+            return
+        end_time = timing.end_time
+
+        rms = self._get_rms_for_timerange(timing.start_time, end_time)
         if rms is None:
             return
 
         # update speaker data
         speaker_id = sd.speaker_id
         if data := self._speaker_data.get(speaker_id):
-            data.last_activity_time = sd.end_time
+            data.last_activity_time = end_time
             data.rms = data.rms * self._opt.rms_smoothing_factor + rms * (
                 1 - self._opt.rms_smoothing_factor
             )
         else:
             self._speaker_data[speaker_id] = _PrimarySpeakerDetector.SpeakerData(
                 speaker_id=speaker_id,
-                last_activity_time=sd.end_time,
+                last_activity_time=end_time,
                 rms=rms,
             )
 

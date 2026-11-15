@@ -233,7 +233,7 @@ class SpeechStream(stt.SpeechStream):
             samples_per_channel=self._rtzr_stt._params.sample_rate // (1000 // _DEFAULT_CHUNK_MS),
         )
 
-        self._input_ch.restart_provider_clock()
+        self._restart_connection_clock()
         while True:
             try:
                 data = await asyncio.wait_for(
@@ -258,7 +258,7 @@ class SpeechStream(stt.SpeechStream):
 
             if isinstance(data, self._FlushSentinel):
                 await self._end_segment()
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
 
         frames = audio_bstream.flush()
         if frames:
@@ -269,14 +269,12 @@ class SpeechStream(stt.SpeechStream):
         await self._end_segment()
 
     def _parse_words(self, words: list[dict], *, start_time: float) -> list[TimedString]:
-        """Parse word timing data from RTZR response."""
+        """Parse word timing data from RTZR response, on the stream's audio clock."""
         return [
             TimedString(
                 text=w.get("text", ""),
-                start_time=start_time + w.get("start_at", 0) / 1000.0 + self.start_time_offset,
-                end_time=(w.get("start_at", 0) + w.get("duration", 0)) / 1000.0
-                + start_time
-                + self.start_time_offset,
+                start_time=start_time + w.get("start_at", 0) / 1000.0,
+                end_time=start_time + (w.get("start_at", 0) + w.get("duration", 0)) / 1000.0,
             )
             for w in words
         ]
@@ -334,20 +332,14 @@ class SpeechStream(stt.SpeechStream):
             else stt.SpeechEventType.INTERIM_TRANSCRIPT
         )
 
-        events.append(
-            stt.SpeechEvent(
-                type=event_type,
-                alternatives=[
-                    stt.SpeechData(
-                        text=text,
-                        language=self._rtzr_stt._params.language,
-                        start_time=start_time + self.start_time_offset,
-                        end_time=start_time + duration + self.start_time_offset,
-                        words=self._parse_words(words, start_time=start_time) if words else None,
-                    )
-                ],
-            )
+        speech_data = stt.SpeechData(
+            text=text,
+            language=self._rtzr_stt._params.language,
+            start_time=start_time,
+            end_time=start_time + duration,
+            words=self._parse_words(words, start_time=start_time) if words else None,
         )
+        events.append(stt.SpeechEvent(type=event_type, alternatives=[speech_data]))
 
         if is_final:
             speech_duration = (
@@ -359,11 +351,9 @@ class SpeechStream(stt.SpeechStream):
             # relative to the utterance's start_at, not the beginning of the stream.
             if words and words[-1].get("duration", 0) > 0:
                 end_time = (
-                    start_time
-                    + (words[-1].get("start_at", 0) + words[-1]["duration"]) / 1000.0
-                    + self.start_time_offset
+                    start_time + (words[-1].get("start_at", 0) + words[-1]["duration"]) / 1000.0
                 )
-                end_alternatives = [replace(events[-1].alternatives[0], end_time=end_time)]
+                end_alternatives = [replace(speech_data, end_time=end_time)]
             events.append(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.END_OF_SPEECH,

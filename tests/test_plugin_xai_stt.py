@@ -17,6 +17,8 @@ import pytest
 
 from livekit.agents import APIConnectOptions
 
+from .fake_stt import attach_provider_audio_channels
+
 pytestmark = pytest.mark.plugin("xai")
 
 # Retry immediately so a reconnect shows up within the test timeout.
@@ -156,10 +158,8 @@ def test_endpoint_preserves_word_timing(endpoint_type, end_time, prior_timed_chu
     stream._speaking = False
     stream._emitted_chunk_final = False
     stream._final_alternatives = []
-    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
     stream._request_id = "test"
-    events = []
-    stream._event_ch = SimpleNamespace(send_nowait=events.append)
+    events = attach_provider_audio_channels(stream, start_time_offset=7.0)
     final = {
         "type": "transcript.partial",
         "text": "hello",

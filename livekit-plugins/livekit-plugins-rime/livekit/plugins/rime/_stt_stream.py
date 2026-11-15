@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -23,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APIError, APIStatusError, stt, utils, vad
 from livekit.agents.language import LanguageCode
+from livekit.agents.stt.clock import _ConnectionClock
 from livekit.agents.types import NotGivenOr
 
 if TYPE_CHECKING:
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
 @dataclass(eq=False)
 class _Utterance:
+    # speech bounds are stream positions (see RecognizeStream.input_position)
     speech_start_time: float
     audio: asyncio.Queue[bytes | None] = field(default_factory=asyncio.Queue)
     done: asyncio.Event = field(default_factory=asyncio.Event)
@@ -70,9 +71,15 @@ class SpeechStream(stt.RecognizeStream):
                 pending_bytes -= len(chunk)
                 yield chunk
 
+        # Utterance bounds use stream positions across flushes and delayed finals.
+        clock = _ConnectionClock(self._input_clock, 0.0)
+
+        def send(event: stt.SpeechEvent) -> None:
+            self._event_ch.send_nowait(clock.translate_event_timestamps(event))
+
         def publish(utterance: _Utterance, event: stt.SpeechEvent) -> None:
             if utterance.publishing:
-                self._event_ch.send_nowait(event)
+                send(event)
             elif event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
                 # LiveKit snapshots replace earlier text. While an older request is
                 # pending, retain only the newest snapshot, never every fragment.
@@ -144,7 +151,7 @@ class SpeechStream(stt.RecognizeStream):
             while (utterance := await ordered.get()) is not None:
                 # Boundaries and transcripts must describe the same utterance. Later
                 # requests can upload now, but cannot advance LiveKit's turn state.
-                self._event_ch.send_nowait(
+                send(
                     stt.SpeechEvent(
                         stt.SpeechEventType.START_OF_SPEECH,
                         speech_start_time=utterance.speech_start_time,
@@ -153,12 +160,12 @@ class SpeechStream(stt.RecognizeStream):
                 utterance.publishing = True
                 for event in (utterance.interim, utterance.final, utterance.usage):
                     if event is not None:
-                        self._event_ch.send_nowait(event)
+                        send(event)
                 utterance.interim = utterance.final = utterance.usage = None
                 await utterance.done.wait()
                 # Closing the audio source is not a transcript completion signal.
                 # Publish the end only after the final, including buffered results.
-                self._event_ch.send_nowait(
+                send(
                     stt.SpeechEvent(
                         stt.SpeechEventType.END_OF_SPEECH,
                         speech_end_time=utterance.speech_end_time,
@@ -185,11 +192,14 @@ class SpeechStream(stt.RecognizeStream):
 
         def finish(utterance: _Utterance) -> None:
             if utterance.speech_end_time is None:
-                utterance.speech_end_time = time.time()
+                # the detector ended mid-speech, at the last audio it read
+                utterance.speech_end_time = self.input_position
             utterance.audio.put_nowait(None)
 
         async def segment() -> bool:
             detector = self._vad.stream()
+            # each detector counts audio from this segment's first frame
+            origin = self.input_position
             eof = False
 
             async def forward() -> None:
@@ -229,9 +239,7 @@ class SpeechStream(stt.RecognizeStream):
                         if contract_type is not None:
                             options["output_contract"] = contract_type(owner._output_contract)
                         active = _Utterance(
-                            speech_start_time=(
-                                time.time() - event.speech_duration - event.inference_duration
-                            )
+                            speech_start_time=origin + event.timestamp - event.speech_duration
                         )
                         upload(active, event.frames)
                         pending.add(active)
@@ -243,9 +251,7 @@ class SpeechStream(stt.RecognizeStream):
                         upload(active, event.frames)
                     elif event.type == vad.VADEventType.END_OF_SPEECH and active is not None:
                         # END contains the whole utterance; don't upload it again.
-                        active.speech_end_time = (
-                            time.time() - event.silence_duration - event.inference_duration
-                        )
+                        active.speech_end_time = origin + event.timestamp - event.silence_duration
                         finish(active)
                         active = None
                 if active is not None:

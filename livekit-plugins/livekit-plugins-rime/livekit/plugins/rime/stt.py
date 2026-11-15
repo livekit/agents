@@ -93,8 +93,12 @@ class STT(stt.STT):
         self._streams: set[stt.RecognizeStream] = set()
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=vad is not None, interim_results=vad is not None, keyterms=True
-            )
+                streaming=vad is not None,
+                interim_results=vad is not None,
+                keyterms=True,
+            ),
+            # The stream emits stream positions and translates its own events.
+            requires_timestamp_translation=False,
         )
         self._sdk = rimelabs_sdk
         self._language = language

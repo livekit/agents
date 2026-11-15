@@ -28,7 +28,8 @@ class StreamAdapter(STT):
                 diarization=False,  # diarization requires streaming STT
                 keyterms=stt.capabilities.keyterms,
                 chat_context=stt.capabilities.chat_context,
-            )
+            ),
+            requires_timestamp_translation=False,
         )
         self._vad = vad
         self._stt = stt

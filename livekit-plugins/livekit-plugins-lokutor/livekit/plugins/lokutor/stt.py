@@ -279,8 +279,7 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = ""
         self._input_done = False
         self._done = False
-        # start_time_offset restarts at this connection's first frame (restart_provider_clock), so
-        # transcript times count from here too. The last connection's usage was reported when it ended.
+        # Reset usage and utterance counters for the new connection.
         self._audio_sent = 0.0
         self._audio_reported = 0.0
         self._utterance_floor = 0.0
@@ -418,8 +417,8 @@ class SpeechStream(stt.SpeechStream):
                     stt.SpeechData(
                         language=self._language,
                         text=text,
-                        start_time=self.start_time_offset + self._utterance_floor,
-                        end_time=self.start_time_offset + self._audio_sent,
+                        start_time=self._utterance_floor,
+                        end_time=self._audio_sent,
                     )
                 ],
             )

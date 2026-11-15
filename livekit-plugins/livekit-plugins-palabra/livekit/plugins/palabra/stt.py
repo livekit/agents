@@ -258,12 +258,11 @@ class SpeechStream(stt.RecognizeStream):
             await session.close()
 
         def _speech_data(ev: SttTranscript) -> stt.SpeechData:
-            offset = self.start_time_offset
             data = stt.SpeechData(
                 language=LanguageCode(ev.language),
                 text=ev.text,
-                start_time=(ev.start_time or 0.0) + offset,
-                end_time=(ev.end_time or 0.0) + offset,
+                start_time=ev.start_time or 0.0,
+                end_time=ev.end_time or 0.0,
             )
             if ev.is_translation:
                 source = utterances[ev.transcription_id].source
