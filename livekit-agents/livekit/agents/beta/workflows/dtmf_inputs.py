@@ -49,7 +49,6 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         Args:
             num_digits: The number of digits to collect.
             ask_for_confirmation: Whether to ask for confirmation when agent has collected full digits.
-            repeat_instructions: The number of times to repeat the initial instructions.
             dtmf_input_timeout: The per-digit timeout.
             dtmf_stop_event: The DTMF event to stop collecting inputs.
             chat_ctx: The chat context to use.
@@ -108,7 +107,10 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
                 return
 
             self._curr_dtmf_inputs.append(DtmfEvent(ev.digit))
-            logger.info(f"DTMF inputs: {format_dtmf(self._curr_dtmf_inputs)}")
+            logger.info(
+                "DTMF inputs received",
+                extra={"lk.pii.dtmf_inputs": format_dtmf(self._curr_dtmf_inputs)},
+            )
             self._generate_dtmf_reply.schedule()
 
         @debounced(delay=dtmf_input_timeout)
@@ -119,7 +121,7 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
                 self.session.interrupt()
 
                 dmtf_str = format_dtmf(self._curr_dtmf_inputs)
-                logger.debug(f"Generating DTMF reply, current inputs: {dmtf_str}")
+                logger.debug("Generating DTMF reply", extra={"lk.pii.dtmf_inputs": dmtf_str})
 
                 # if input not fully received (i.e. timeout), return None
                 if len(self._curr_dtmf_inputs) != num_digits:

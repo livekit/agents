@@ -27,6 +27,7 @@ from typing import cast, get_args
 from grpc.aio import StreamStreamCall
 
 import google.auth
+import google.auth.credentials
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.auth import default as gauth_default
@@ -97,6 +98,7 @@ class STTOptions:
     speech_start_timeout: NotGivenOr[float] = NOT_GIVEN
     speech_end_timeout: NotGivenOr[float] = NOT_GIVEN
     endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN
+    custom_prompt_config: NotGivenOr[cloud_speech_v2.CustomPromptConfig] = NOT_GIVEN
 
     @property
     def version(self) -> int:
@@ -149,6 +151,7 @@ class STT(stt.STT):
         enable_voice_activity_events: bool = False,
         model: SpeechModels | str = "latest_long",
         location: str = "global",
+        project: NotGivenOr[str] = NOT_GIVEN,
         profanity_filter: bool = False,
         sample_rate: int = 16000,
         min_confidence_threshold: float = _default_min_confidence,
@@ -158,17 +161,20 @@ class STT(stt.STT):
         ] = NOT_GIVEN,
         credentials_info: NotGivenOr[dict] = NOT_GIVEN,
         credentials_file: NotGivenOr[str] = NOT_GIVEN,
+        credentials: NotGivenOr[google.auth.credentials.Credentials] = NOT_GIVEN,
         keywords: NotGivenOr[list[tuple[str, float]]] = NOT_GIVEN,
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
+        custom_prompt_config: NotGivenOr[cloud_speech_v2.CustomPromptConfig] = NOT_GIVEN,
         use_streaming: NotGivenOr[bool] = NOT_GIVEN,
     ):
         """
         Create a new instance of Google STT.
 
-        Credentials must be provided, either by using the ``credentials_info`` dict, or reading
-        from the file specified in ``credentials_file`` or via Application Default Credentials as
+        Credentials must be provided, either as a ``google.auth.credentials.Credentials`` object
+        via ``credentials``, by using the ``credentials_info`` dict, by reading from the file
+        specified in ``credentials_file``, or via Application Default Credentials as
         described in https://cloud.google.com/docs/authentication/application-default-credentials
 
         args:
@@ -182,6 +188,7 @@ class STT(stt.STT):
             enable_voice_activity_events(bool): whether to enable voice activity events (default: False)
             model(SpeechModels): the model to use for recognition default: "latest_long"
             location(str): the location to use for recognition default: "global"
+            project(str): the Google Cloud project to use for recognition
             profanity_filter(bool): whether to filter out profanities default: False
             sample_rate(int): the sample rate of the audio default: 16000
             min_confidence_threshold(float): minimum confidence threshold for recognition
@@ -190,6 +197,10 @@ class STT(stt.STT):
             adaptation (SpeechAdaptation): speech adaptation for biasing specific words and phrases (default: None)
             credentials_info(dict): the credentials info to use for recognition (default: None)
             credentials_file(str): the credentials file to use for recognition (default: None)
+            credentials(google.auth.credentials.Credentials): a credentials object to use
+                directly, e.g. from Workload Identity Federation, where credentials are
+                obtained in memory and never exist on disk. Takes precedence over
+                ``credentials_info`` and ``credentials_file`` (default: NOT_GIVEN)
             keywords(List[tuple[str, float]]): list of keywords to recognize (default: None)
             speech_start_timeout(float): maximum seconds to wait for speech to begin before timeout (default: None)
             speech_end_timeout(float): seconds of silence before marking utterance as complete (default: None)
@@ -197,6 +208,7 @@ class STT(stt.STT):
                 and accuracy when detecting end-of-speech. Only supported with chirp_3.
                 Options: ENDPOINTING_SENSITIVITY_STANDARD (default),
                 ENDPOINTING_SENSITIVITY_SHORT, ENDPOINTING_SENSITIVITY_SUPERSHORT (default: None)
+            custom_prompt_config (CustomPromptConfig): custom prompt configuration for recognition (default: None)
             use_streaming(bool): whether to use streaming for recognition (default: True)
         """
         if is_given(endpointing_sensitivity) and model != "chirp_3":
@@ -226,6 +238,12 @@ class STT(stt.STT):
         else:
             enable_word_time_offsets = True
 
+        if is_given(custom_prompt_config) and model != "chirp_3":
+            logger.warning(
+                "custom_prompt_config is only supported with the chirp_3 model; ignoring."
+            )
+            custom_prompt_config = NOT_GIVEN
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=use_streaming,
@@ -239,9 +257,14 @@ class STT(stt.STT):
         self._location = location
         self._credentials_info = credentials_info
         self._credentials_file = credentials_file
-        self._project_id: str | None = None
+        self._credentials = credentials
+        self._project_id: str | None = project if is_given(project) else None
 
-        if not is_given(credentials_file) and not is_given(credentials_info):
+        if (
+            not is_given(credentials)
+            and not is_given(credentials_file)
+            and not is_given(credentials_info)
+        ):
             try:
                 gauth_default()
             except DefaultCredentialsError:
@@ -275,6 +298,7 @@ class STT(stt.STT):
             speech_start_timeout=speech_start_timeout,
             speech_end_timeout=speech_end_timeout,
             endpointing_sensitivity=endpointing_sensitivity,
+            custom_prompt_config=custom_prompt_config,
         )
         # user-tuned (phrase, boost) pairs, kept separate so keyterm updates can't clobber them
         self._user_keywords: list[tuple[str, float]] = list(keywords) if is_given(keywords) else []
@@ -302,7 +326,17 @@ class STT(stt.STT):
         client_cls = SpeechAsyncClientV2 if self._config.version == 2 else SpeechAsyncClientV1
         if self._location != "global":
             client_options = ClientOptions(api_endpoint=f"{self._location}-speech.googleapis.com")
-        if is_given(self._credentials_info):
+        if is_given(self._credentials):
+            if self._project_id is None:
+                # in-memory credentials (e.g. Workload Identity Federation) may
+                # carry the project directly; resolve it here so _get_recognizer
+                # doesn't fall back to Application Default Credentials, which
+                # such setups typically don't have
+                self._project_id = getattr(self._credentials, "project_id", None) or getattr(
+                    self._credentials, "quota_project_id", None
+                )
+            client = client_cls(credentials=self._credentials, client_options=client_options)
+        elif is_given(self._credentials_info):
             client = client_cls.from_service_account_info(
                 self._credentials_info, client_options=client_options
             )
@@ -311,7 +345,8 @@ class STT(stt.STT):
                 self._credentials_file,
                 scopes=["https://www.googleapis.com/auth/cloud-platform"],
             )
-            self._project_id = project_id
+            if self._project_id is None:
+                self._project_id = project_id
             client = client_cls(credentials=credentials, client_options=client_options)
         else:
             client = client_cls(client_options=client_options)
@@ -331,7 +366,16 @@ class STT(stt.STT):
         except AttributeError:
             from google.auth import default as ga_default
 
-            _, project_id = ga_default()
+            try:
+                _, project_id = ga_default()
+            except DefaultCredentialsError as e:
+                raise APIConnectionError(
+                    "google stt: could not determine the GCP project id: the supplied "
+                    "credentials expose no project_id/quota_project_id and Application "
+                    "Default Credentials are unavailable. Pass credentials that carry a "
+                    "project (e.g. with a quota_project_id) or use credentials_info / "
+                    "credentials_file."
+                ) from e
         return f"projects/{project_id}/locations/{self._location}/recognizers/_"
 
     def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> STTOptions:
@@ -370,6 +414,9 @@ class STT(stt.STT):
                     enable_word_time_offsets=config.enable_word_time_offsets,
                     enable_word_confidence=config.enable_word_confidence,
                     profanity_filter=config.profanity_filter,
+                    custom_prompt_config=config.custom_prompt_config
+                    if is_given(config.custom_prompt_config)
+                    else None,
                 ),
                 denoiser_config=config.denoiser_config
                 if is_given(config.denoiser_config)
@@ -475,6 +522,7 @@ class STT(stt.STT):
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
+        custom_prompt_config: NotGivenOr[cloud_speech_v2.CustomPromptConfig] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
@@ -540,6 +588,26 @@ class STT(stt.STT):
                 endpointing_sensitivity = NOT_GIVEN
             else:
                 self._config.endpointing_sensitivity = endpointing_sensitivity
+        if is_given(custom_prompt_config):
+            if self._config.model != "chirp_3":
+                logger.warning(
+                    "custom_prompt_config is only supported with the chirp_3 model; ignoring."
+                )
+                custom_prompt_config = NOT_GIVEN
+            else:
+                self._config.custom_prompt_config = custom_prompt_config
+        elif (
+            is_given(model)
+            and self._config.model != "chirp_3"
+            and is_given(self._config.custom_prompt_config)
+        ):
+            # model was switched away from chirp_3; a previously configured prompt is no
+            # longer valid for the new model and must not be sent with it.
+            logger.warning(
+                "model changed away from chirp_3; clearing previously configured "
+                "custom_prompt_config."
+            )
+            self._config.custom_prompt_config = NOT_GIVEN
 
         for stream in self._streams:
             stream.update_options(
@@ -556,6 +624,7 @@ class STT(stt.STT):
                 speech_start_timeout=speech_start_timeout,
                 speech_end_timeout=speech_end_timeout,
                 endpointing_sensitivity=endpointing_sensitivity,
+                custom_prompt_config=custom_prompt_config,
             )
 
     def _get_merged_keywords(self) -> list[tuple[str, float]]:
@@ -649,6 +718,7 @@ class SpeechStream(stt.SpeechStream):
         speech_start_timeout: NotGivenOr[float] = NOT_GIVEN,
         speech_end_timeout: NotGivenOr[float] = NOT_GIVEN,
         endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
+        custom_prompt_config: NotGivenOr[cloud_speech_v2.CustomPromptConfig] = NOT_GIVEN,
     ) -> None:
         if is_given(languages):
             if isinstance(languages, str):
@@ -685,6 +755,16 @@ class SpeechStream(stt.SpeechStream):
             self._config.speech_end_timeout = speech_end_timeout
         if is_given(endpointing_sensitivity):
             self._config.endpointing_sensitivity = endpointing_sensitivity
+        if is_given(custom_prompt_config):
+            self._config.custom_prompt_config = custom_prompt_config
+        elif (
+            is_given(model)
+            and self._config.model != "chirp_3"
+            and is_given(self._config.custom_prompt_config)
+        ):
+            # model was switched away from chirp_3; a previously configured prompt is no
+            # longer valid for the new model and must not be sent with it.
+            self._config.custom_prompt_config = NOT_GIVEN
 
         self._reconnect_event.set()
 
@@ -732,6 +812,9 @@ class SpeechStream(stt.SpeechStream):
                         enable_spoken_punctuation=self._config.spoken_punctuation,
                         enable_word_confidence=self._config.enable_word_confidence,
                         profanity_filter=self._config.profanity_filter,
+                        custom_prompt_config=self._config.custom_prompt_config
+                        if is_given(self._config.custom_prompt_config)
+                        else None,
                     ),
                     denoiser_config=self._config.denoiser_config
                     if is_given(self._config.denoiser_config)
@@ -850,6 +933,8 @@ class SpeechStream(stt.SpeechStream):
             self._speaking = False
             last_usage_event_time: float = 0.0
             async for resp in stream:
+                if resp.results or resp.speech_event_type:
+                    self._mark_provider_progress()
                 if resp.speech_event_type == (
                     cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN
                     if self._config.version == 2
@@ -899,7 +984,12 @@ class SpeechStream(stt.SpeechStream):
                             self._pool.remove(client)
                             if self._speaking:
                                 self._event_ch.send_nowait(
-                                    stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                                    stt.SpeechEvent(
+                                        type=stt.SpeechEventType.END_OF_SPEECH,
+                                        alternatives=[speech_data]
+                                        if speech_data.end_time > self.start_time_offset
+                                        else [],
+                                    )
                                 )
                                 self._speaking = False
                                 self._on_end_of_speech()
@@ -911,13 +1001,30 @@ class SpeechStream(stt.SpeechStream):
                     if self._config.version == 2
                     else cloud_speech_v1.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
                 ):
+                    end_time = _duration_to_seconds(
+                        resp.speech_event_offset
+                        if isinstance(resp, cloud_speech_v2.StreamingRecognizeResponse)
+                        else resp.speech_event_time
+                    )
                     self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.END_OF_SPEECH,
+                            alternatives=[
+                                stt.SpeechData(
+                                    language=LanguageCode(""),
+                                    text="",
+                                    end_time=end_time + self.start_time_offset,
+                                )
+                            ]
+                            if end_time > 0
+                            else [],
+                        )
                     )
                     self._speaking = False
                     self._on_end_of_speech()
 
                 if (audio_duration := _get_audio_duration(resp, last_usage_event_time)) > 0:
+                    self._mark_provider_progress()
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.RECOGNITION_USAGE,
@@ -937,6 +1044,7 @@ class SpeechStream(stt.SpeechStream):
                     self._streaming_config = self._build_streaming_config()
 
                     should_stop = asyncio.Event()
+                    self._input_ch.restart_provider_clock()
                     stream = await client.streaming_recognize(
                         requests=input_generator(client, should_stop),
                     )
@@ -978,6 +1086,7 @@ class SpeechStream(stt.SpeechStream):
                 if e.code == 409:
                     if audio_pushed:
                         logger.debug("stream timed out, restarting.")
+                    raise APIConnectionError("Google STT stream timed out") from e
                 else:
                     raise APIStatusError(
                         f"{e.message} {e.details}", status_code=e.code or -1
@@ -1088,10 +1197,15 @@ def _streaming_recognize_response_to_speech_data(
 
     if text == "" or not words:
         if text and not words:
+            # No words to time the text with (e.g. chirp_3 forces
+            # enable_word_time_offsets=False): report the timing as unknown,
+            # like the REST path, instead of the stream offset. The SDK reads
+            # any end_time > 0 as the provider's end of speech, which would
+            # otherwise freeze the end-of-turn anchor in turn_detection="stt".
             data = stt.SpeechData(
                 language=lg,
-                start_time=start_time_offset,
-                end_time=start_time_offset,
+                start_time=0.0,
+                end_time=0.0,
                 confidence=confidence,
                 text=text,
             )

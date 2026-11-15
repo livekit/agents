@@ -24,6 +24,8 @@ class TavusException(Exception):
 DEFAULT_API_URL = "https://tavusapi.com/v2"
 # Stock Tavus PAL. Use create_pal() to create a PAL with the appearance you'd like.
 DEFAULT_PAL_ID = "pb87e71797da"
+# Stock Tavus face ("Lucy - Home", phoenix-4.5) used with DEFAULT_PAL_ID when no face is given.
+DEFAULT_FACE_ID = "r4067604db72"
 
 
 def _coalesce_with_deprecated(
@@ -96,17 +98,20 @@ class TavusAPI:
             or NOT_GIVEN
         )
 
-        if not pal_id:
-            # no pal supplied — use the default stock pal (carries its own face)
+        # extra_payload overrides the payload wholesale, so a pal named there counts
+        # as user-supplied when deciding whether to fill in the stock face.
+        extra = dict(extra_payload) if utils.is_given(extra_payload) else {}
+        if not pal_id and not extra.get("pal_id"):
+            # no pal supplied — use the default stock pal and, unless overridden, its stock face
             pal_id = DEFAULT_PAL_ID
+            face_id = face_id or DEFAULT_FACE_ID
 
         properties = properties or {}
         payload: dict[str, Any] = {"pal_id": pal_id, "properties": properties}
-        # send face_id only when given; otherwise the pal's default_face_id is used
+        # a user-supplied pal carries its own default face, so only send face_id when we have one
         if face_id:
             payload["face_id"] = face_id
-        if utils.is_given(extra_payload):
-            payload.update(extra_payload)
+        payload.update(extra)
 
         if "conversation_name" not in payload:
             payload["conversation_name"] = utils.shortuuid("lk_conversation_")
@@ -174,9 +179,11 @@ class TavusAPI:
             Response data as a dictionary
 
         Raises:
+            APIStatusError: If Tavus returns a non-retryable error, or a retryable one
+                persists after all retries
             APIConnectionError: If the request fails after all retries
         """
-        for i in range(self._conn_options.max_retry):
+        for attempt in range(self._conn_options.max_retry + 1):
             try:
                 async with self._session.post(
                     f"{self._api_url}/{endpoint}",
@@ -192,14 +199,30 @@ class TavusAPI:
                         raise APIStatusError(
                             "Server returned an error", status_code=response.status, body=text
                         )
-                    return await response.json()  # type: ignore
-            except Exception as e:
-                if isinstance(e, APIConnectionError):
-                    logger.warning("failed to call tavus api", extra={"error": str(e)})
-                else:
-                    logger.exception("failed to call tavus api")
-
-                if i < self._conn_options.max_retry - 1:
-                    await asyncio.sleep(self._conn_options.retry_interval)
+                    try:
+                        return await response.json()  # type: ignore
+                    except ValueError as e:
+                        # Tavus already accepted the POST; retrying could create a duplicate.
+                        raise APIConnectionError(
+                            "Tavus returned an invalid response", retryable=False
+                        ) from e
+            except APIStatusError as e:
+                # A 4xx such as a bad API key will fail the same way every time.
+                if not e.retryable:
+                    raise
+                logger.warning(
+                    "failed to call tavus api",
+                    extra={"attempt": attempt + 1, "status_code": e.status_code},
+                )
+                if attempt >= self._conn_options.max_retry:
+                    raise
+                await asyncio.sleep(self._conn_options.retry_interval)
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logger.warning(
+                    "failed to call tavus api", extra={"attempt": attempt + 1, "error": str(e)}
+                )
+                if attempt >= self._conn_options.max_retry:
+                    raise APIConnectionError("Failed to call Tavus API after all retries") from e
+                await asyncio.sleep(self._conn_options.retry_interval)
 
         raise APIConnectionError("Failed to call Tavus API after all retries")

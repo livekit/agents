@@ -49,6 +49,10 @@ load_dotenv()
 
 logger = logging.getLogger("transcriber")
 
+# background tasks are held here so the event loop, which only keeps a weak
+# reference to a task, cannot collect one before it finishes
+_background_tasks: set[asyncio.Task[None]] = set()
+
 
 @dataclass
 class Language:
@@ -267,7 +271,10 @@ class InputTrack:
     def _remove_translator(self, target_language: str):
         translator = self._translators.pop(target_language, None)
         if translator:
-            asyncio.create_task(translator.aclose())
+            # hold the task: the loop only weakly references it
+            task = asyncio.create_task(translator.aclose())
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
 
     async def _forward_to_translators(self):
         """Forward transcribed sentences to each language specific translators."""
@@ -412,7 +419,10 @@ class RoomTranslator:
     def _remove_track(self, track: rtc.RemoteAudioTrack):
         input_track = next((t for t in self.input_tracks if t.track.sid == track.sid), None)
         if input_track:
-            asyncio.create_task(input_track.aclose())
+            # hold the task: the loop only weakly references it
+            task = asyncio.create_task(input_track.aclose())
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
             self.input_tracks.remove(input_track)
 
     def _reconcile_translators(self):

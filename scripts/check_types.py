@@ -98,6 +98,15 @@ def main() -> None:
         *uv_run_args,
         "mypy",
         "--untyped-calls-exclude=smithy_aws_core",
+        # Analyze for linux regardless of the host OS, matching the CI gate.
+        # Host-platform analysis breaks on Windows: the unix branch of
+        # cli/readchar.py resolves against the empty win32 termios stub
+        # (20 attr-defined errors) and the win32 branches demand stubs the
+        # typing group intentionally doesn't carry (types-colorama,
+        # types-pywin32, ...). User-supplied args come later, so an explicit
+        # --platform still overrides this default.
+        "--platform",
+        "linux",
         *pkg_args,
         *mypy_args,
     ]

@@ -12,15 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from ._tts_node import emotion_instructions, emotion_tts_node
 from .avatar import AvatarSession
 from .errors import KeyframeException
-from .types import Emotion
+from .types import EMOTIONS, USERDATA_EMOTION_CUES, Emotion, EmotionCue
 from .version import __version__
 
 __all__ = [
     "AvatarSession",
+    "EMOTIONS",
     "Emotion",
+    "EmotionCue",
     "KeyframeException",
+    "USERDATA_EMOTION_CUES",
+    "emotion_instructions",
+    "emotion_tts_node",
     "__version__",
 ]
 

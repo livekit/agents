@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
+from opentelemetry import context as otel_context, trace
 from typing_extensions import TypedDict
 
 from livekit import rtc
@@ -13,7 +13,8 @@ from ..llm import LLM, ChatContext, FunctionToolCall, function_tool
 from ..llm.utils import parse_function_arguments
 from ..log import logger
 from ..stt.stt import STT
-from ..utils import aio
+from ..telemetry import trace_types, tracer
+from ..utils import aio, resolve_env_int
 
 if TYPE_CHECKING:
     from ..metrics import LLMMetrics
@@ -24,14 +25,9 @@ if TYPE_CHECKING:
 class KeytermsOptions(TypedDict, total=False):
     """Keyterm biasing for STTs that accept a term list.
 
-    Can be passed as a plain dict::
-
-        AgentSession(
-            keyterms_options={
-                "keyterms": ["LiveKit", "Acme Corp"],
-                "keyterm_detection": {"enabled": True, "turn_interval": 1},
-            },
-        )
+    .. deprecated:: v2.0
+        Use :class:`STTContextOptions` (``AgentSession(stt_context_options=...)``) instead;
+        its ``keyterms`` and ``keyterm_detection`` keys are identical.
     """
 
     keyterms: list[str]
@@ -64,6 +60,29 @@ class KeytermDetectionOptions(TypedDict, total=False):
     Defaults to ``10.0``. Raise it if a slow detection ``llm`` needs longer."""
 
 
+class STTContextOptions(TypedDict, total=False):
+    """Conversation-aware context for the STT.
+
+    Can be passed as a plain dict::
+
+        AgentSession(
+            stt_context_options={
+                "keyterms": ["LiveKit", "Acme Corp"],
+                "keyterm_detection": {"enabled": True, "turn_interval": 1},
+                "forward_chat_context": True,
+            },
+        )
+    """
+
+    keyterms: list[str]
+    """Static keyterms applied wherever the STT accepts a term list; never touched by detection."""
+    keyterm_detection: KeytermDetectionOptions
+    """LLM-based keyterm extraction, for STTs that accept a term list."""
+    forward_chat_context: bool
+    """Forward conversation turns to STTs that consume context directly (e.g. AssemblyAI u3-pro).
+    Defaults to ``True``; only STTs that advertise the ``chat_context`` capability act on it."""
+
+
 # bound a single pass so a stuck LLM call can't hold the single-flight guard forever and
 # stall detection for the rest of the call; a timed-out pass simply makes no change
 _DETECTION_TIMEOUT = 10.0
@@ -84,7 +103,7 @@ _MAX_TRANSCRIPT_MESSAGES = 12
 _DEFAULT_DETECTION_MODEL = "google/gemma-4-31b-it"
 
 # set LK_KEYTERMS_DEBUG=1 to log the input/output of every detection pass
-lk_keyterms_debug = int(os.getenv("LK_KEYTERMS_DEBUG", 0))
+lk_keyterms_debug = resolve_env_int("LK_KEYTERMS_DEBUG")
 
 
 def _resolve_detection(config: KeytermDetectionOptions | None) -> KeytermDetectionOptions:
@@ -92,13 +111,25 @@ def _resolve_detection(config: KeytermDetectionOptions | None) -> KeytermDetecti
     return KeytermDetectionOptions(**{**_KEYTERM_DETECTION_DEFAULTS, **(config or {})})
 
 
-def _resolve_keyterms_options(config: KeytermsOptions | None) -> KeytermsOptions:
-    """Return a fully-defaulted keyterms config."""
+def _resolve_stt_context_options(config: STTContextOptions | None) -> STTContextOptions:
+    """Return a fully-defaulted STT-context config."""
     config = config or {}
-    return KeytermsOptions(
+    return STTContextOptions(
         keyterms=list(config.get("keyterms", [])),
         keyterm_detection=_resolve_detection(config.get("keyterm_detection")),
+        forward_chat_context=config.get("forward_chat_context", True),
     )
+
+
+def _stt_context_from_keyterms_options(config: KeytermsOptions | None) -> STTContextOptions:
+    """Map the deprecated ``keyterms_options`` onto the new :class:`STTContextOptions` shape."""
+    config = config or {}
+    out: STTContextOptions = {}
+    if "keyterms" in config:
+        out["keyterms"] = config["keyterms"]
+    if "keyterm_detection" in config:
+        out["keyterm_detection"] = config["keyterm_detection"]
+    return out
 
 
 def _resolve_detection_llm(configured: LLM | str | None) -> LLM | None:
@@ -250,6 +281,14 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         self._turn_count = 0
         session.on("conversation_item_added", self._on_conversation_item_added)
 
+    def swap_stt(self, stt: STT | None) -> None:
+        """Rebind the recognizer in place, keeping any running detection."""
+        if stt is self._stt:
+            return
+        self._stt = stt
+        if stt is not None and self.keyterms:
+            stt._update_session_keyterms(self.keyterms)
+
     async def aclose(self) -> None:
         """Stop detection for the current activity; keyterm state is kept."""
         if self._llm is not None:
@@ -285,8 +324,15 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         if self._detect_task is not None and not self._detect_task.done():
             return
 
+        # under the agent_turn that answers this message when fired from its reply, else
+        # (a skipped reply, user code editing the history) under the session root
+        parent = (
+            otel_context.get_current()
+            if trace.get_current_span().is_recording()
+            else getattr(session, "_root_span_context", None)
+        )
         # snapshot the transcript now so the pass isn't affected by later turns
-        self._detect_task = asyncio.create_task(self._run_once(self._snapshot(session)))
+        self._detect_task = asyncio.create_task(self._run_once(self._snapshot(session), parent))
 
     @staticmethod
     def _snapshot(session: AgentSession) -> ChatContext:
@@ -298,25 +344,56 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         )
 
     @utils.log_exceptions(logger=logger)
-    async def _run_once(self, chat_ctx: ChatContext) -> None:
+    async def _run_once(
+        self, chat_ctx: ChatContext, parent: otel_context.Context | None = None
+    ) -> None:
         if not isinstance(self._llm, LLM):
             return
 
-        # show static terms as applied too, or the LLM keeps re-proposing them
-        current = (
-            [(t, True) for t in self._static_terms]
-            + [(t, True) for t in self._detected_terms]
-            + [(t, False) for t in self._pending_terms]
-        )
-        pending, confirm, remove = await _detect_keyterms(
-            llm=self._llm,
-            chat_ctx=chat_ctx,
-            current_keyterms=current,
-            instructions=self._instructions,
-            timeout=self._detection_timeout,
-        )
+        # its own span: otherwise the LLM call reads as a second inference step of the reply
+        attributes: dict[str, Any] = {trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model}
+        if (provider := trace_types.gen_ai_provider_name(self._llm.provider)) is not None:
+            attributes[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = provider
+        with tracer.start_as_current_span(
+            "keyterm_detection", context=parent, attributes=attributes
+        ) as span:
+            # show static terms as applied too, or the LLM keeps re-proposing them
+            current = (
+                [(t, True) for t in self._static_terms]
+                + [(t, True) for t in self._detected_terms]
+                + [(t, False) for t in self._pending_terms]
+            )
+            pending, confirm, remove = await _detect_keyterms(
+                llm=self._llm,
+                chat_ctx=chat_ctx,
+                current_keyterms=current,
+                instructions=self._instructions,
+                timeout=self._detection_timeout,
+            )
+            before = self.keyterms
+            self._apply_pass(pending, confirm, remove)
+            after = self.keyterms
+            span.set_attributes(
+                {
+                    trace_types.ATTR_KEYTERMS_COUNT: len(after),
+                    trace_types.ATTR_KEYTERMS_ADDED: len(set(after) - set(before)),
+                    trace_types.ATTR_KEYTERMS_REMOVED: len(set(before) - set(after)),
+                }
+            )
 
-        before = self.keyterms
+        # update the STT if the keyterms changed
+        if after != before and self._stt is not None:
+            self._stt._update_session_keyterms(after)
+            before_set, new_set = set(before), set(after)
+            logger.debug(
+                "keyterms changed",
+                extra={
+                    "added": [t for t in after if t not in before_set],
+                    "removed": [t for t in before if t not in new_set],
+                },
+            )
+
+    def _apply_pass(self, pending: list[str], confirm: list[str], remove: list[str]) -> None:
         self._tick += 1
 
         # update the keyterm state
@@ -345,18 +422,6 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         if self._max_keyterms is not None:
             while len(self._detected_terms) > self._max_keyterms:
                 self._detected_terms.pop(0)
-
-        # update the STT if the keyterms changed
-        if (new_keyterms := self.keyterms) != before and self._stt is not None:
-            self._stt._update_session_keyterms(new_keyterms)
-            before_set, new_set = set(before), set(new_keyterms)
-            logger.debug(
-                "keyterms changed",
-                extra={
-                    "added": [t for t in new_keyterms if t not in before_set],
-                    "removed": [t for t in before if t not in new_set],
-                },
-            )
 
 
 async def _detect_keyterms(
@@ -440,7 +505,12 @@ def _parse_tool_call(
         return [], [], []
 
     def _terms(key: str) -> list[str]:
-        return [t for t in data.get(key, []) if isinstance(t, str) and t.strip()]
+        value = data.get(key)
+        if not isinstance(value, list):
+            # null or a bare string (also what a repaired truncated call decodes to):
+            # iterating either would raise, or yield one keyterm per character
+            return []
+        return [t for t in value if isinstance(t, str) and t.strip()]
 
     return _terms("pending"), _terms("confirm"), _terms("remove")
 

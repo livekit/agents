@@ -12,7 +12,8 @@
 
 from .llm import LLM
 from .log import logger
-from .models import LLMModels
+from .models import LLMModels, STTModels, TTSModels
+from .qwen3_tts import list_voices, register_voice
 from .stt import STT, SpeechStream
 from .tts import TTS, SynthesizeStream
 from .version import __version__
@@ -24,7 +25,11 @@ __all__ = [
     "logger",
     "TTS",
     "SynthesizeStream",
+    "register_voice",
+    "list_voices",
     "LLMModels",
+    "STTModels",
+    "TTSModels",
     "__version__",
 ]
 
@@ -33,7 +38,7 @@ from livekit.agents import Plugin
 
 class BasetenPlugin(Plugin):
     def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__)
+        super().__init__(__name__, __version__, __package__, logger)
 
 
 Plugin.register_plugin(BasetenPlugin())

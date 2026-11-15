@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 
@@ -49,6 +50,15 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
     )
 
+    async def hangup():
+        await ctx.api.room.delete_room(
+            api.DeleteRoomRequest(
+                room=ctx.room.name,
+            )
+        )
+
+    ctx.add_shutdown_callback(hangup)
+
     phone_number = os.getenv("SIP_PHONE_NUMBER")
     participant_identity = os.getenv("SIP_PARTICIPANT_IDENTITY")
     outbound_trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID")
@@ -69,16 +79,28 @@ async def entrypoint(ctx: JobContext):
         # start running amd before the SIP participant joins to avoid audio loss
         if phone_number and outbound_trunk_id and participant_identity:
             logger.info(f"creating SIP participant for {participant_identity}")
-            await ctx.api.sip.create_sip_participant(
-                api.CreateSIPParticipantRequest(
-                    room_name=ctx.room.name,
-                    sip_trunk_id=outbound_trunk_id,
-                    sip_call_to=phone_number,
-                    participant_identity=participant_identity,
-                    wait_until_answered=True,
+            # The API timeout must outlast the ring window; AMD's timeout starts after answer.
+            try:
+                await ctx.api.sip.create_sip_participant(
+                    api.CreateSIPParticipantRequest(
+                        room_name=ctx.room.name,
+                        sip_trunk_id=outbound_trunk_id,
+                        sip_call_to=phone_number,
+                        participant_identity=participant_identity,
+                        wait_until_answered=True,
+                    ),
+                    timeout=45,
                 )
-            )
-            participant = await ctx.wait_for_participant(identity=participant_identity)
+            except (api.SipCallError, asyncio.TimeoutError) as e:
+                logger.info(f"call was not answered: {e}")
+                ctx.shutdown("call not answered")
+                return
+            # The call may end just before wait_until_answered returns.
+            participant = ctx.room.remote_participants.get(participant_identity)
+            if participant is None:
+                logger.info("SIP participant missing, ending")
+                ctx.shutdown("participant missing")
+                return
             logger.info(
                 "participant joined",
                 extra={
@@ -126,15 +148,6 @@ async def entrypoint(ctx: JobContext):
             logger.info("mailbox unavailable, ending call", extra={"transcript": result.transcript})
 
             ctx.shutdown("mailbox unavailable")
-
-    async def hangup():
-        await ctx.api.room.delete_room(
-            api.DeleteRoomRequest(
-                room=ctx.room.name,
-            )
-        )
-
-    ctx.add_shutdown_callback(hangup)
 
 
 if __name__ == "__main__":

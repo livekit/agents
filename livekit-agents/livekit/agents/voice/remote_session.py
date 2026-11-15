@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import struct
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 from google.protobuf.duration_pb2 import Duration
@@ -14,6 +15,7 @@ from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .. import llm, utils
+from .._proto import encode_chat_item, encode_session_usage
 from ..llm import (
     AgentConfigUpdate,
     AgentHandoff,
@@ -26,19 +28,14 @@ from ..llm import (
 )
 from ..llm.chat_context import Instructions
 from ..log import logger
-from ..metrics import (
-    AgentSessionUsage,
-    EOTModelUsage,
-    InterruptionModelUsage,
-    LLMModelUsage,
-    STTModelUsage,
-    TTSModelUsage,
-)
 from ..version import __version__
 from ..voice.amd import AMDCategory, AMDPredictionEvent
 from .events import (
+    AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
+    CloseEvent,
+    CloseReason,
     ConversationItemAddedEvent,
     EotPredictionEvent,
     ErrorEvent,
@@ -63,6 +60,23 @@ if TYPE_CHECKING:
 
 TOPIC_SESSION_MESSAGES = "lk.agent.session"
 
+# How long SessionHost.aclose waits for in-flight request handlers to finish
+# before cancelling them. Stays well under the worker's shutdown_process_timeout
+# (10s by default), which has to cover this plus the rest of session cleanup.
+_SHUTDOWN_DRAIN_TIMEOUT = 3.0
+
+
+async def _drain(tasks: set[asyncio.Task[Any]], deadline: float) -> set[asyncio.Task[Any]]:
+    """Wait for ``tasks`` until ``deadline``, then cancel and return the stragglers."""
+    if not tasks:
+        return set()
+
+    remaining = max(0.0, deadline - asyncio.get_event_loop().time())
+    _, pending = await asyncio.wait(tasks, timeout=remaining)
+    if pending:
+        await utils.aio.cancel_and_wait(*pending)
+    return pending
+
 
 class SessionTransport(ABC):
     @abstractmethod
@@ -83,7 +97,12 @@ class RoomSessionTransport(SessionTransport):
         self._remote_identity = remote_identity
         self._recv_ch: utils.aio.Chan[agent_pb.AgentSessionMessage] = utils.aio.Chan()
         self._handler_registered = False
-        self._tasks: set[asyncio.Task[None]] = set()
+        self._send_lock = asyncio.Lock()
+        # inbound streams queue here for a single reader. A task per stream costs
+        # one per message, and lets two streams finish out of order and deliver
+        # their messages swapped.
+        self._incoming_ch: utils.aio.Chan[rtc.ByteStreamReader] = utils.aio.Chan()
+        self._read_task: asyncio.Task[None] | None = None
 
     @property
     def remote_identity(self) -> str | None:
@@ -96,15 +115,23 @@ class RoomSessionTransport(SessionTransport):
     async def start(self) -> None:
         if self._handler_registered:
             return
+        self._read_task = asyncio.create_task(
+            self._read_loop(), name="RoomSessionTransport._read_loop"
+        )
         self._room.register_byte_stream_handler(TOPIC_SESSION_MESSAGES, self._on_byte_stream)
         self._handler_registered = True
 
     def _on_byte_stream(self, reader: rtc.ByteStreamReader, participant_identity: str) -> None:
         if self._remote_identity and participant_identity != self._remote_identity:
             return
-        task = asyncio.create_task(self._read_stream(reader))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        with contextlib.suppress(utils.aio.ChanClosed):
+            self._incoming_ch.send_nowait(reader)
+
+    @utils.log_exceptions(logger=logger)
+    async def _read_loop(self) -> None:
+        # sequential, so messages reach _recv_ch in the order they were sent
+        async for reader in self._incoming_ch:
+            await self._read_stream(reader)
 
     async def _read_stream(self, reader: rtc.ByteStreamReader) -> None:
         try:
@@ -121,27 +148,34 @@ class RoomSessionTransport(SessionTransport):
             logger.warning("failed to read binary stream message", exc_info=e)
 
     async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+        # a dropped message is a request the caller waits out in full, so failures
+        # are raised rather than logged: only the caller knows whether anyone is
+        # waiting on this one
         if self._recv_ch.closed or not self._room.isconnected():
-            return
-        try:
-            data = msg.SerializeToString()
-            dest = [self._remote_identity] if self._remote_identity else None
-            writer = await self._room.local_participant.stream_bytes(
-                name=utils.shortuuid("AS_"),
-                topic=TOPIC_SESSION_MESSAGES,
-                destination_identities=dest,
-            )
-            await writer.write(data)
-            await writer.aclose()
-        except Exception as e:
-            logger.warning("failed to send binary stream message: %s", e)
+            raise RuntimeError("room session transport is closed")
+
+        data = msg.SerializeToString()
+        dest = [self._remote_identity] if self._remote_identity else None
+        # one send at a time, so messages reach the receiver in the order they were sent
+        async with self._send_lock:
+            try:
+                await self._room.local_participant.send_bytes(
+                    data,
+                    name=utils.shortuuid("AS_"),
+                    topic=TOPIC_SESSION_MESSAGES,
+                    destination_identities=dest,
+                )
+            except Exception as e:
+                raise RuntimeError(f"failed to send binary stream message: {e}") from e
 
     async def close(self) -> None:
         if self._recv_ch.closed:
             return
         self._recv_ch.close()
-        await utils.aio.cancel_and_wait(*self._tasks)
-        self._tasks.clear()
+        self._incoming_ch.close()
+        if self._read_task is not None:
+            await utils.aio.cancel_and_wait(self._read_task)
+            self._read_task = None
         if self._handler_registered:
             try:
                 self._room.unregister_byte_stream_handler(TOPIC_SESSION_MESSAGES)
@@ -168,6 +202,7 @@ class TcpSessionTransport(SessionTransport):
         self._writer: asyncio.StreamWriter | None = None
         self._closed = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._send_lock = asyncio.Lock()
 
     async def start(self) -> None:
         reader, writer = await asyncio.open_connection(self._host, self._port)
@@ -182,12 +217,18 @@ class TcpSessionTransport(SessionTransport):
 
     async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
         if self._closed or self._writer is None:
-            return
+            raise RuntimeError("tcp session transport is closed")
+
         data = msg.SerializeToString()
         header = struct.pack(">I", len(data))
-        self._writer.write(header + data)
-        if self._writer.transport.get_write_buffer_size() > 64 * 1024:
-            await self._writer.drain()
+        # the drain below yields, so without the lock a second sender can splice
+        # its frame between this header and its payload
+        async with self._send_lock:
+            if self._closed or self._writer is None:
+                raise RuntimeError("tcp session transport is closed")
+            self._writer.write(header + data)
+            if self._writer.transport.get_write_buffer_size() > 64 * 1024:
+                await self._writer.drain()
 
     def send_message_threadsafe(self, msg: agent_pb.AgentSessionMessage) -> None:
         if self._closed or self._writer is None or self._loop is None:
@@ -248,15 +289,6 @@ _USER_STATE_MAP: dict[UserState, agent_pb.UserState] = {
     "away": agent_pb.US_AWAY,
 }
 
-_METRICS_FIELDS = (
-    "transcription_delay",
-    "end_of_turn_delay",
-    "on_user_turn_completed_delay",
-    "llm_node_ttft",
-    "tts_node_ttfb",
-    "e2e_latency",
-)
-
 _TOOL_CALL_STATUS_MAP: dict[str, agent_pb.ToolCallStatus] = {
     "done": agent_pb.TC_DONE,
     "error": agent_pb.TC_ERROR,
@@ -278,6 +310,14 @@ _AMD_CATEGORY_MAP: dict[AMDCategory, agent_pb.AmdCategory] = {
     AMDCategory.UNCERTAIN: agent_pb.AmdCategory.AMD_UNCERTAIN,
 }
 
+_CLOSE_REASON_MAP: dict[CloseReason, agent_pb.CloseReason] = {
+    CloseReason.ERROR: agent_pb.CloseReason.CR_ERROR,
+    CloseReason.JOB_SHUTDOWN: agent_pb.CloseReason.CR_JOB_SHUTDOWN,
+    CloseReason.PARTICIPANT_DISCONNECTED: agent_pb.CloseReason.CR_PARTICIPANT_DISCONNECTED,
+    CloseReason.USER_INITIATED: agent_pb.CloseReason.CR_USER_INITIATED,
+    CloseReason.TASK_COMPLETED: agent_pb.CloseReason.CR_COMPLETED,
+}
+
 
 def _tool_names(tools: Sequence[llm.Tool | Toolset]) -> list[str]:
     result: list[str] = []
@@ -289,76 +329,13 @@ def _tool_names(tools: Sequence[llm.Tool | Toolset]) -> list[str]:
     return result
 
 
-def _metrics_to_proto(metrics: Mapping[str, Any] | None) -> agent_pb.MetricsReport:
-    if not metrics:
-        return agent_pb.MetricsReport()
-    kwargs = {k: metrics[k] for k in _METRICS_FIELDS if k in metrics}
-    return agent_pb.MetricsReport(**kwargs)
-
-
-def _chat_item_to_proto(item: llm.ChatItem) -> agent_pb.ChatContext.ChatItem:
-    if isinstance(item, ChatMessage):
-        role_map = {
-            "developer": agent_pb.DEVELOPER,
-            "system": agent_pb.SYSTEM,
-            "user": agent_pb.USER,
-            "assistant": agent_pb.ASSISTANT,
-        }
-        pb_role = role_map.get(item.role, agent_pb.ASSISTANT)
-        content = []
-        if item.raw_text_content:
-            content.append(agent_pb.ChatMessage.ChatContent(text=item.raw_text_content))
-        pb_msg = agent_pb.ChatMessage(
-            id=item.id,
-            role=pb_role,
-            content=content,
-            interrupted=item.interrupted,
-            metrics=_metrics_to_proto(item.metrics),
-        )
-        return agent_pb.ChatContext.ChatItem(message=pb_msg)
-    elif isinstance(item, FunctionCall):
-        return agent_pb.ChatContext.ChatItem(
-            function_call=agent_pb.FunctionCall(
-                id=item.id,
-                call_id=item.call_id,
-                name=item.name,
-                arguments=item.arguments,
-            )
-        )
-    elif isinstance(item, FunctionCallOutput):
-        return agent_pb.ChatContext.ChatItem(
-            function_call_output=agent_pb.FunctionCallOutput(
-                call_id=item.call_id,
-                output=item.output,
-                is_error=item.is_error,
-            )
-        )
-    elif isinstance(item, AgentHandoff):
-        return agent_pb.ChatContext.ChatItem(
-            agent_handoff=agent_pb.AgentHandoff(
-                id=item.id,
-                old_agent_id=item.old_agent_id,
-                new_agent_id=item.new_agent_id,
-            )
-        )
-    elif isinstance(item, AgentConfigUpdate):
-        return agent_pb.ChatContext.ChatItem(
-            agent_config_update=agent_pb.AgentConfigUpdate(
-                id=item.id,
-                instructions=str(item.instructions) if item.instructions is not None else None,
-                tools_added=item.tools_added or [],
-                tools_removed=item.tools_removed or [],
-            )
-        )
-    return agent_pb.ChatContext.ChatItem()
-
-
 def _serialize_options(opts: AgentSessionOptions) -> dict[str, str]:
     return {
         "endpointing": str(dict(opts.endpointing)),
         "interruption": str(dict(opts.interruption)),
         "max_tool_steps": str(opts.max_tool_steps),
         "user_away_timeout": str(opts.user_away_timeout),
+        "transcription_timeout": str(opts.transcription_timeout),
         "preemptive_generation": str(dict(opts.preemptive_generation)),
         "min_consecutive_speech_delay": str(opts.min_consecutive_speech_delay),
         "use_tts_aligned_transcript": str(opts.use_tts_aligned_transcript),
@@ -366,7 +343,19 @@ def _serialize_options(opts: AgentSessionOptions) -> dict[str, str]:
     }
 
 
+NO_ACTIVE_SESSION_ERROR = "no active session"
+
+
 class SessionHost:
+    """Serves a ``RemoteSession`` client for the whole job.
+
+    The host outlives any one ``AgentSession``: at most one session is attached at a
+    time, and none once it has closed. A session's close is sent as a ``session_closed``
+    event, after which none of its events follow. Session requests go to the attached
+    session and fail with ``NO_ACTIVE_SESSION_ERROR`` while none is;
+    ``finalize_simulation`` needs only the job, so it is answered either way.
+    """
+
     def __init__(
         self,
         transport: SessionTransport,
@@ -379,38 +368,41 @@ class SessionHost:
         self._started = False
         self._recv_task: asyncio.Task[None] | None = None
         self._tasks = utils.aio.TaskSet()
+        # the attached session is exactly the one whose events are subscribed
         self._session: AgentSession | None = None
-        self._events_registered = False
+        # events are emitted from sync callbacks and nobody awaits them, so they
+        # queue here and one long-lived writer drains them in emission order.
+        # Built here rather than in start() so events emitted between
+        # register_session() and start() queue up instead of being dropped.
+        self._event_ch = utils.aio.Chan[agent_pb.AgentSessionMessage]()
+        self._write_task: asyncio.Task[None] | None = None
+        self._simulation_finalized = asyncio.Event()
+
+    @property
+    def session(self) -> AgentSession | None:
+        """The session this host currently serves, if any."""
+        return self._session
 
     def register_session(self, session: AgentSession) -> None:
+        """Serve ``session``: forward its events and route session requests to it."""
+        self.unregister_session()
         self._session = session
-        if not self._events_registered:
-            self._events_registered = True
-            session.on("agent_state_changed", self._on_agent_state_changed)
-            session.on("user_state_changed", self._on_user_state_changed)
-            session.on("conversation_item_added", self._on_conversation_item_added)
-            session.on("user_input_transcribed", self._on_user_input_transcribed)
-            session.on("function_tools_executed", self._on_function_tools_executed)
-            session.on("tool_execution_updated", self._on_tool_execution_updated)
-            session.on("session_usage_updated", self._on_session_usage_updated)
-            session.on("overlapping_speech", self._on_overlapping_speech)
-            session.on("error", self._on_error)
-            session.on("debug_message", self._on_debug_message)
+        session.on("agent_state_changed", self._on_agent_state_changed)
+        session.on("user_state_changed", self._on_user_state_changed)
+        session.on("conversation_item_added", self._on_conversation_item_added)
+        session.on("user_input_transcribed", self._on_user_input_transcribed)
+        session.on("function_tools_executed", self._on_function_tools_executed)
+        session.on("tool_execution_updated", self._on_tool_execution_updated)
+        session.on("session_usage_updated", self._on_session_usage_updated)
+        session.on("overlapping_speech", self._on_overlapping_speech)
+        session.on("agent_false_interruption", self._on_agent_false_interruption)
+        session.on("error", self._on_error)
+        session.on("debug_message", self._on_debug_message)
+        session.on("close", self._on_close)
 
-    async def start(self) -> None:
-        if self._started:
-            return
-        self._started = True
-        await self._transport.start()
-        self._recv_task = asyncio.create_task(self._recv_loop())
-
-    async def aclose(self) -> None:
-        if not self._started:
-            return
-        self._started = False
-
-        if self._session and self._events_registered:
-            self._events_registered = False
+    def unregister_session(self) -> None:
+        """Stop serving the attached session; the host itself stays up."""
+        if self._session:
             self._session.off("agent_state_changed", self._on_agent_state_changed)
             self._session.off("user_state_changed", self._on_user_state_changed)
             self._session.off("conversation_item_added", self._on_conversation_item_added)
@@ -419,21 +411,69 @@ class SessionHost:
             self._session.off("tool_execution_updated", self._on_tool_execution_updated)
             self._session.off("session_usage_updated", self._on_session_usage_updated)
             self._session.off("overlapping_speech", self._on_overlapping_speech)
+            self._session.off("agent_false_interruption", self._on_agent_false_interruption)
             self._session.off("error", self._on_error)
             self._session.off("debug_message", self._on_debug_message)
+            self._session.off("close", self._on_close)
+        self._session = None
+
+    async def start(self) -> None:
+        if self._started:
+            return
+        self._started = True
+        await self._transport.start()
+        self._write_task = asyncio.create_task(
+            self._write_loop(self._event_ch), name="SessionHost._write_loop"
+        )
+        self._recv_task = asyncio.create_task(self._recv_loop())
+
+    async def aclose(self) -> None:
+        if not self._started:
+            return
+        self._started = False
+
+        self.unregister_session()
 
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)
+            self._recv_task = None
 
-        await utils.aio.cancel_and_wait(*self._tasks.tasks)
+        # one budget for the whole drain, so aclose cannot stack two full grace
+        # periods and eat the worker's shutdown allowance
+        deadline = asyncio.get_event_loop().time() + _SHUTDOWN_DRAIN_TIMEOUT
+
+        # let in-flight handlers finish. Cancelling here drops the response of a
+        # request that already did its work — the caller then waits out its full
+        # timeout for an answer the session had ready.
+        if cancelled := await _drain(self._tasks.tasks, deadline):
+            # the type is what can be acted on: it says what was in flight when the
+            # session went away. Reporting the request ids too would not help — a
+            # client shutting down alongside the host cancels its pending requests
+            # rather than waiting out the timeout that would log them to match.
+            logger.warning(
+                "cancelled in-flight session requests while closing",
+                extra={"request_types": sorted({t.get_name() for t in cancelled})},
+            )
+
+        # closing the channel lets the writer flush what the handlers queued on
+        # their way out, then exit
+        self._event_ch.close()
+        if self._write_task is not None:
+            await _drain({self._write_task}, deadline)
+            self._write_task = None
+
         await self._transport.close()
 
     async def _recv_loop(self) -> None:
         try:
             async for msg in self._transport:
                 if msg.HasField("request"):
-                    if self._session is not None:
-                        self._tasks.create_task(self._handle_request_safe(msg.request))
+                    # the task name is the request type verbatim, which is what
+                    # aclose reports when it gives up on one
+                    self._tasks.create_task(
+                        self._handle_request_safe(msg.request),
+                        name=msg.request.WhichOneof("request") or "unknown",
+                    )
                 else:
                     msg_type = msg.WhichOneof("message")
                     if msg_type:
@@ -456,7 +496,19 @@ class SessionHost:
         ts.FromNanoseconds(int((created_at if created_at is not None else time.time()) * 1e9))
         event.created_at.CopyFrom(ts)
         msg = agent_pb.AgentSessionMessage(event=event)
-        self._tasks.create_task(self._transport.send_message(msg))
+        with contextlib.suppress(utils.aio.ChanClosed):
+            self._event_ch.send_nowait(msg)
+
+    @utils.log_exceptions(logger=logger)
+    async def _write_loop(self, event_ch: utils.aio.Chan[agent_pb.AgentSessionMessage]) -> None:
+        # nobody awaits an event, so a failed one is logged rather than raised.
+        # Draining them from a single task keeps their emission order and avoids
+        # spawning a task per event.
+        async for msg in event_ch:
+            try:
+                await self._transport.send_message(msg)
+            except Exception:
+                logger.warning("failed to send session event", exc_info=True)
 
     def _on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
         old_pb = _AGENT_STATE_MAP.get(event.old_state, agent_pb.AS_IDLE)
@@ -500,7 +552,7 @@ class SessionHost:
             ChatMessage | FunctionCall | FunctionCallOutput | AgentHandoff | AgentConfigUpdate,
         ):
             return
-        chat_item = _chat_item_to_proto(event.item)
+        chat_item = encode_chat_item(event.item)
         self._send_event(
             agent_pb.AgentSessionEvent(
                 conversation_item_added=agent_pb.AgentSessionEvent.ConversationItemAdded(
@@ -521,11 +573,11 @@ class SessionHost:
         pb_outputs = [
             agent_pb.FunctionCallOutput(
                 call_id=fco.call_id,
+                name=fco.name,
                 output=fco.output,
                 is_error=fco.is_error,
             )
             for fco in event.function_call_outputs
-            if fco is not None
         ]
         self._send_event(
             agent_pb.AgentSessionEvent(
@@ -593,6 +645,7 @@ class SessionHost:
             overlap_started_at = Timestamp()
             overlap_started_at.FromNanoseconds(int(event.overlap_started_at * 1e9))
 
+        # TODO(AGT-3180): Forward agent_ended when the remote-session protocol supports it.
         pb = agent_pb.AgentSessionEvent.OverlappingSpeech(
             is_interruption=event.is_interruption,
             detection_delay=event.detection_delay,
@@ -602,6 +655,16 @@ class SessionHost:
             pb.overlap_started_at.CopyFrom(overlap_started_at)
 
         self._send_event(agent_pb.AgentSessionEvent(overlapping_speech=pb))
+
+    def _on_agent_false_interruption(self, event: AgentFalseInterruptionEvent) -> None:
+        self._send_event(
+            agent_pb.AgentSessionEvent(
+                agent_false_interruption=agent_pb.AgentSessionEvent.AgentFalseInterruption(
+                    resumed=event.resumed,
+                )
+            ),
+            created_at=event.created_at,
+        )
 
     def _on_amd_prediction(self, event: AMDPredictionEvent) -> None:
         speech_duration = Duration()
@@ -644,7 +707,7 @@ class SessionHost:
         self._send_event(
             agent_pb.AgentSessionEvent(
                 session_usage_updated=agent_pb.AgentSessionEvent.SessionUsageUpdated(
-                    usage=_session_usage_to_proto(event.usage),
+                    usage=encode_session_usage(event.usage),
                 )
             )
         )
@@ -660,6 +723,14 @@ class SessionHost:
 
     def _on_debug_message(self, event: agent_pb.DebugMessage) -> None:
         self._send_event(agent_pb.AgentSessionEvent(debug_message=event))
+
+    def _on_close(self, event: CloseEvent) -> None:
+        closed = agent_pb.AgentSessionEvent.SessionClosed(reason=_CLOSE_REASON_MAP[event.reason])
+        if event.error is not None:
+            closed.error = str(event.error)
+        self._send_event(
+            agent_pb.AgentSessionEvent(session_closed=closed), created_at=event.created_at
+        )
 
     async def _handle_request_safe(self, req: agent_pb.SessionRequest) -> None:
         try:
@@ -682,7 +753,21 @@ class SessionHost:
                 pass
 
     async def _handle_request(self, req: agent_pb.SessionRequest) -> None:
-        assert self._session is not None
+        if req.HasField("finalize_simulation"):
+            await self._finalize_simulation(req)
+            return
+
+        # an unregister_session() while this request is in flight must not swap its session out
+        session = self._session
+        if session is None:
+            await self._transport.send_message(
+                agent_pb.AgentSessionMessage(
+                    response=agent_pb.SessionResponse(
+                        request_id=req.request_id, error=NO_ACTIVE_SESSION_ERROR
+                    )
+                )
+            )
+            return
 
         if req.HasField("ping"):
             resp = agent_pb.AgentSessionMessage(
@@ -694,7 +779,7 @@ class SessionHost:
             await self._transport.send_message(resp)
 
         elif req.HasField("get_chat_history"):
-            items = [_chat_item_to_proto(item) for item in self._session.history.items]
+            items = [encode_chat_item(item) for item in session.history.items]
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
@@ -706,8 +791,8 @@ class SessionHost:
             await self._transport.send_message(resp)
 
         elif req.HasField("get_agent_info"):
-            agent = self._session.current_agent
-            items = [_chat_item_to_proto(item) for item in agent.chat_ctx.items]
+            agent = session.current_agent
+            items = [encode_chat_item(item) for item in agent.chat_ctx.items]
             # collapse modality variants for the report; audio-first matches the
             # update_instructions default for voice sessions
             agent_instructions = (
@@ -736,19 +821,20 @@ class SessionHost:
                 error = "empty run_input text"
             else:
                 try:
-                    await self._session.interrupt(force=True)
+                    await session.interrupt(force=True)
                 except RuntimeError:
                     pass
 
                 try:
-                    result: RunResult[None] = self._session.run(user_input=text)
+                    result: RunResult[None] = session.run(user_input=text)
                     await result
-                    items_list = [_chat_item_to_proto(ev.item) for ev in result.events]
+                    # an empty list is a turn the agent chose to stay silent on, not a
+                    # failure: a tool may have told it to say nothing (a close-the-call
+                    # tool that already delivered its goodbye is the common case). Report
+                    # the silence and let the caller decide what it means.
+                    items_list = [encode_chat_item(ev.item) for ev in result.events]
                 except Exception as e:
                     error = str(e)
-
-                if not items_list and not error:
-                    error = "agent produced no response items"
 
             resp = agent_pb.AgentSessionMessage(
                 response=agent_pb.SessionResponse(
@@ -759,12 +845,15 @@ class SessionHost:
                     ),
                 )
             )
-            await self._transport.send_message(resp)
+            # queued behind the session's events, so a client hears session_closed before
+            # the run that the close cut short fails
+            with contextlib.suppress(utils.aio.ChanClosed):
+                self._event_ch.send_nowait(resp)
 
         elif req.HasField("get_session_state"):
-            agent = self._session.current_agent
+            agent = session.current_agent
             created_at = Timestamp()
-            started_at = self._session._started_at or time.time()
+            started_at = session._started_at or time.time()
             created_at.FromNanoseconds(int(started_at * 1e9))
 
             resp = agent_pb.AgentSessionMessage(
@@ -772,15 +861,15 @@ class SessionHost:
                     request_id=req.request_id,
                     get_session_state=agent_pb.SessionResponse.GetSessionStateResponse(
                         agent_state=_AGENT_STATE_MAP.get(
-                            self._session.agent_state,
+                            session.agent_state,
                             agent_pb.AS_IDLE,
                         ),
                         user_state=_USER_STATE_MAP.get(
-                            self._session.user_state,
+                            session.user_state,
                             agent_pb.US_LISTENING,
                         ),
                         agent_id=agent.id,
-                        options=_serialize_options(self._session.options),
+                        options=_serialize_options(session.options),
                         created_at=created_at,
                     ),
                 )
@@ -791,8 +880,8 @@ class SessionHost:
             from google.protobuf.struct_pb2 import Struct
 
             rtc_stats = (
-                await self._session._room_io.room.get_rtc_stats()
-                if self._session._room_io is not None
+                await session._room_io.room.get_rtc_stats()
+                if session._room_io is not None
                 else None
             )
             publisher_stats: list[Struct] = []
@@ -830,7 +919,7 @@ class SessionHost:
                 response=agent_pb.SessionResponse(
                     request_id=req.request_id,
                     get_session_usage=agent_pb.SessionResponse.GetSessionUsageResponse(
-                        usage=_session_usage_to_proto(self._session.usage),
+                        usage=encode_session_usage(session.usage),
                         created_at=created_at,
                     ),
                 )
@@ -855,8 +944,8 @@ class SessionHost:
             # are applied (presence-tracked booleans), so the client can
             # send a partial update without clobbering the other channels.
             io = req.update_io
-            input_io = self._session.input
-            output_io = self._session.output
+            input_io = session.input
+            output_io = session.output
             if io.HasField("input"):
                 if io.input.HasField("audio_enabled"):
                     input_io.set_audio_enabled(io.input.audio_enabled)
@@ -877,128 +966,63 @@ class SessionHost:
             )
             await self._transport.send_message(resp)
 
-        elif req.HasField("finalize_simulation"):
-            # The simulator's verdict is passed in so on_simulation_end can read it
-            # (ctx.simulator_verdict); the agent records its OWN verdict via
-            # ctx.success()/fail(). Both are reported; this is not an override.
-            user_verdict: (
-                agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict | None
-            ) = None  # noqa: E501
-            sim_error: str | None = None
-            try:
-                from livekit.protocol import agent_simulation as sim_pb
+    async def wait_for_simulation_finalized(self) -> None:
+        await self._simulation_finalized.wait()
 
-                from ..job import get_job_context
-                from ..simulation import SimulationVerdict
+    async def _finalize_simulation(self, req: agent_pb.SessionRequest) -> None:
+        # The simulator's verdict is passed in so on_simulation_end can read it
+        # (ctx.simulator_verdict); the agent records its OWN verdict via
+        # ctx.success()/fail(). Both are reported; this is not an override.
+        user_verdict: (
+            agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict | None
+        ) = None  # noqa: E501
+        sim_error: str | None = None
+        try:
+            from livekit.protocol import agent_simulation as sim_pb
 
-                jc = get_job_context(required=False)
-                sim_ctx = jc.simulation_context() if jc is not None else None
-                if sim_ctx is not None:
-                    sim_ctx._begin_finalize(
-                        simulator_verdict=SimulationVerdict(
-                            success=req.finalize_simulation.provisional_success,
-                            reason=req.finalize_simulation.provisional_reason,
-                        ),
-                        run=sim_pb.SimulationRun(id=sim_ctx._dispatch.simulation_run_id),
-                        job=None,
-                    )
-                    fnc = jc._simulation_end_fnc if jc is not None else None
-                    if fnc is not None:
-                        cb_res = fnc(sim_ctx)
-                        if asyncio.iscoroutine(cb_res):
-                            await cb_res
-                    if (uv := sim_ctx.user_verdict) is not None:
-                        user_verdict = (
-                            agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict(
-                                success=uv.success, reason=uv.reason
-                            )
-                        )
-            except Exception as e:
-                sim_error = str(e)
-                logger.exception("error while executing the on_simulation_end callback")
+            from ..job import get_job_context
+            from ..simulation import SimulationVerdict
 
-            resp = agent_pb.AgentSessionMessage(
-                response=agent_pb.SessionResponse(
-                    request_id=req.request_id,
-                    error=sim_error,
-                    finalize_simulation=agent_pb.SessionResponse.FinalizeSimulationResponse(
-                        user_verdict=user_verdict,
+            jc = get_job_context(required=False)
+            sim_ctx = jc.simulation_context() if jc is not None else None
+            if sim_ctx is not None:
+                sim_ctx._begin_finalize(
+                    simulator_verdict=SimulationVerdict(
+                        success=req.finalize_simulation.provisional_success,
+                        reason=req.finalize_simulation.provisional_reason,
                     ),
+                    run=sim_pb.SimulationRun(id=sim_ctx._dispatch.simulation_run_id),
                 )
+                fnc = jc._simulation_end_fnc if jc is not None else None
+                if fnc is not None:
+                    cb_res = fnc(sim_ctx)
+                    if asyncio.iscoroutine(cb_res):
+                        await cb_res
+                if (uv := sim_ctx.user_verdict) is not None:
+                    user_verdict = (
+                        agent_pb.SessionResponse.FinalizeSimulationResponse.SimulationVerdict(
+                            success=uv.success, reason=uv.reason
+                        )
+                    )
+        except Exception as e:
+            sim_error = str(e)
+            logger.exception("error while executing the on_simulation_end callback")
+
+        resp = agent_pb.AgentSessionMessage(
+            response=agent_pb.SessionResponse(
+                request_id=req.request_id,
+                error=sim_error,
+                finalize_simulation=agent_pb.SessionResponse.FinalizeSimulationResponse(
+                    user_verdict=user_verdict,
+                ),
             )
+        )
+        try:
             await self._transport.send_message(resp)
-
-
-def _session_usage_to_proto(usage: AgentSessionUsage) -> agent_pb.AgentSessionUsage:
-    model_usages: list[agent_pb.ModelUsage] = []
-    for mu in usage.model_usage:
-        if isinstance(mu, LLMModelUsage):
-            model_usages.append(
-                agent_pb.ModelUsage(
-                    llm=agent_pb.LLMModelUsage(
-                        provider=mu.provider,
-                        model=mu.model,
-                        input_tokens=mu.input_tokens,
-                        input_cached_tokens=mu.input_cached_tokens,
-                        input_audio_tokens=mu.input_audio_tokens,
-                        input_cached_audio_tokens=mu.input_cached_audio_tokens,
-                        input_text_tokens=mu.input_text_tokens,
-                        input_cached_text_tokens=mu.input_cached_text_tokens,
-                        input_image_tokens=mu.input_image_tokens,
-                        input_cached_image_tokens=mu.input_cached_image_tokens,
-                        output_tokens=mu.output_tokens,
-                        output_audio_tokens=mu.output_audio_tokens,
-                        output_text_tokens=mu.output_text_tokens,
-                        session_duration=mu.session_duration,
-                    )
-                )
-            )
-        elif isinstance(mu, TTSModelUsage):
-            model_usages.append(
-                agent_pb.ModelUsage(
-                    tts=agent_pb.TTSModelUsage(
-                        provider=mu.provider,
-                        model=mu.model,
-                        input_tokens=mu.input_tokens,
-                        output_tokens=mu.output_tokens,
-                        characters_count=mu.characters_count,
-                        audio_duration=mu.audio_duration,
-                    )
-                )
-            )
-        elif isinstance(mu, STTModelUsage):
-            model_usages.append(
-                agent_pb.ModelUsage(
-                    stt=agent_pb.STTModelUsage(
-                        provider=mu.provider,
-                        model=mu.model,
-                        input_tokens=mu.input_tokens,
-                        output_tokens=mu.output_tokens,
-                        audio_duration=mu.audio_duration,
-                    )
-                )
-            )
-        elif isinstance(mu, InterruptionModelUsage):
-            model_usages.append(
-                agent_pb.ModelUsage(
-                    interruption=agent_pb.InterruptionModelUsage(
-                        provider=mu.provider,
-                        model=mu.model,
-                        total_requests=mu.total_requests,
-                    )
-                )
-            )
-        elif isinstance(mu, EOTModelUsage):
-            model_usages.append(
-                agent_pb.ModelUsage(
-                    eot=agent_pb.EotModelUsage(
-                        provider=mu.provider,
-                        model=mu.model,
-                        total_requests=mu.total_requests,
-                    )
-                )
-            )
-    return agent_pb.AgentSessionUsage(model_usage=model_usages)
+        finally:
+            # the simulator has had its one answer, delivered or not; the job's shutdown
+            # must not keep waiting for one
+            self._simulation_finalized.set()
 
 
 RemoteSessionEventTypes = Literal[
@@ -1009,7 +1033,9 @@ RemoteSessionEventTypes = Literal[
     "function_tools_executed",
     "tool_execution_updated",
     "session_usage_updated",
+    "agent_false_interruption",
     "error",
+    "session_closed",
 ]
 
 
@@ -1060,6 +1086,11 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             pass
         except Exception:
             logger.warning("error processing session message", exc_info=True)
+        finally:
+            for future in self._pending_requests.values():
+                if not future.done():
+                    future.set_exception(RuntimeError("remote session transport closed"))
+            self._pending_requests.clear()
 
     def _dispatch_response(self, response: agent_pb.SessionResponse) -> None:
         future = self._pending_requests.pop(response.request_id, None)
@@ -1071,6 +1102,11 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         request: agent_pb.SessionRequest,
         timeout: float = 60.0,
     ) -> agent_pb.SessionResponse:
+        if self._recv_task is None:
+            raise RuntimeError("remote session not started")
+        if self._recv_task.done():
+            raise RuntimeError("remote session transport closed")
+
         req_type = request.WhichOneof("request")
         future: asyncio.Future[agent_pb.SessionResponse] = asyncio.Future()
         self._pending_requests[request.request_id] = future
@@ -1080,15 +1116,15 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             await self._transport.send_message(msg)
             resp = await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
-            self._pending_requests.pop(request.request_id, None)
             logger.warning(
                 "remote session request timed out",
                 extra={"request_id": request.request_id, "type": req_type, "timeout": timeout},
             )
             raise
-        except Exception:
+        finally:
             self._pending_requests.pop(request.request_id, None)
-            raise
+            if future.done() and not future.cancelled():
+                future.exception()
 
         if resp.error:
             raise RuntimeError(f"session request {req_type} failed: {resp.error}")
@@ -1097,9 +1133,14 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
 
     async def wait_for_ready(self, timeout: float = 5.0, retry_interval: float = 0.5) -> None:
         deadline = asyncio.get_event_loop().time() + timeout
+        # a transport that never came up is the useful answer; a bare timeout
+        # would say only that no pong arrived
+        send_error: Exception | None = None
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
+                if send_error is not None:
+                    raise send_error
                 raise TimeoutError("wait_for_ready timed out")
             req = agent_pb.SessionRequest(
                 request_id=utils.shortuuid("req_"),
@@ -1111,6 +1152,19 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             except (TimeoutError, asyncio.TimeoutError):
                 if asyncio.get_event_loop().time() >= deadline:
                     raise TimeoutError("wait_for_ready timed out") from None
+            except Exception as e:
+                if self._recv_task is None or self._recv_task.done():
+                    raise
+                # the transport reports that it is not up yet instead of dropping
+                # the ping, and that state is exactly what this call polls
+                # through. The request timeout paced the retries before; pace
+                # them here, since the failure is now immediate.
+                send_error = e
+                if asyncio.get_event_loop().time() >= deadline:
+                    raise
+                await asyncio.sleep(
+                    min(retry_interval, max(0.0, deadline - asyncio.get_event_loop().time()))
+                )
 
     async def get_chat_history(self) -> agent_pb.SessionResponse.GetChatHistoryResponse:
         req = agent_pb.SessionRequest(
@@ -1127,6 +1181,14 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         )
         resp = await self._send_request(req)
         return resp.get_agent_info
+
+    async def get_framework_info(self) -> agent_pb.SessionResponse.GetFrameworkInfoResponse:
+        req = agent_pb.SessionRequest(
+            request_id=utils.shortuuid("req_"),
+            get_framework_info=agent_pb.SessionRequest.GetFrameworkInfo(),
+        )
+        resp = await self._send_request(req)
+        return resp.get_framework_info
 
     async def get_session_state(self) -> agent_pb.SessionResponse.GetSessionStateResponse:
         req = agent_pb.SessionRequest(

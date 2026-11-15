@@ -1,12 +1,12 @@
 # Healthcare Example
 
-A full healhcare assistant providing secure appointment management and billing handling.
+A full healthcare assistant providing secure appointment management and billing handling.
 
 For setup instructions and more details, see the [main examples README](https://github.com/livekit/agents/blob/main/examples/README.md).
 
 ## Overview
 
-The healthcare agent utilizes a variety of `AgentTasks` to achieve structured workflows to collect information. This example is modality-agnostic, where users can interact via text or voice and switch seamlessly. If the conversation heads out of the scope of the agent, the user will be transfered to a human.
+The healthcare agent utilizes a variety of `AgentTasks` to achieve structured workflows to collect information. This example is modality-agnostic, where users can interact via text or voice and switch seamlessly. If the conversation heads out of the scope of the agent, the user will be transferred to a human.
 
 ### Profile Authentication
 

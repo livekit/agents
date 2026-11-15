@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import multiprocessing as mp
+import os
 import socket
+import sys
+from unittest.mock import patch
 
+import psutil
 import pytest
 
 from livekit.agents.ipc.supervised_proc import (
@@ -74,7 +78,7 @@ async def test_memory_logging_extra_reports_baseline_and_growth() -> None:
     proc = _make_proc()
 
     # before a baseline is captured, only the basic fields are present
-    extra = proc._memory_logging_extra(520.0)
+    extra = proc._memory_logging_extra(520.0, "pss")
     assert extra["memory_usage_mb"] == 520.0
     assert extra["memory_warn_mb"] == 500
     assert extra["has_running_job"] is False
@@ -83,7 +87,7 @@ async def test_memory_logging_extra_reports_baseline_and_growth() -> None:
 
     # once a baseline is set, growth-since-startup is reported
     proc._memory_baseline_mb = 300.0
-    extra = proc._memory_logging_extra(520.0)
+    extra = proc._memory_logging_extra(520.0, "pss")
     assert extra["baseline_memory_mb"] == 300.0
     assert extra["growth_memory_mb"] == 220.0
 
@@ -93,14 +97,15 @@ async def test_uptime_is_zero_before_start() -> None:
     assert proc.uptime == 0.0
 
 
-async def test_supervise_resolves_shutdown_futures_when_read_task_cancelled_first() -> None:
-    """Regression for #5929.
+async def test_supervise_teardown_resolves_futures_and_marks_prometheus_process_dead() -> None:
+    """Regressions for #5929 and #7006.
 
     When the child is killed externally, the join thread resolves _join_fut and
     _supervise_task cancels _read_ipc_task. If that cancellation wins the race
     against the read task observing the closed channel, the shutdown futures must
     still be resolved (by the read task's done callback) — otherwise aclose()
-    blocks waiting for an ack that can never arrive.
+    blocks waiting for an ack that can never arrive. Once the child is joined, its
+    Prometheus multiprocess metrics must also be marked dead before teardown ends.
     """
     from livekit.agents.ipc.supervised_proc import channel  # noqa: F401
     from livekit.agents.utils.aio import duplex_unix
@@ -125,18 +130,24 @@ async def test_supervise_resolves_shutdown_futures_when_read_task_cancelled_firs
         def close(self) -> None: ...
 
     proc._proc = _FakeMpProc()  # type: ignore[assignment]
+    proc._pid = 1234
     proc._join_fut = asyncio.Future()
     proc._initialize_fut.set_result(None)
 
-    supervise = asyncio.create_task(proc._supervise_task())
-    await asyncio.sleep(0)  # let _supervise_task reach `await self._join_fut`
+    with (
+        patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": "metrics"}),
+        patch("prometheus_client.multiprocess.mark_process_dead") as mark_process_dead,
+    ):
+        supervise = asyncio.create_task(proc._supervise_task())
+        await asyncio.sleep(0)  # let _supervise_task reach `await self._join_fut`
 
-    assert not proc._shutdown_ack_fut.done()
-    proc._join_fut.set_result(None)  # join thread signals the child has exited
-    await asyncio.wait_for(supervise, timeout=5)
+        assert not proc._shutdown_ack_fut.done()
+        proc._join_fut.set_result(None)  # join thread signals the child has exited
+        await asyncio.wait_for(supervise, timeout=5)
 
-    assert proc._shutdown_ack_fut.done()
-    assert proc._shutting_down_fut.done()
+        assert proc._shutdown_ack_fut.done()
+        assert proc._shutting_down_fut.done()
+        mark_process_dead.assert_called_once_with(proc._pid)
 
     b.close()
 
@@ -169,3 +180,63 @@ def test_subclassing_without_process_kind_is_rejected() -> None:
             mp_ctx=mp.get_context("spawn"),
             loop=asyncio.get_event_loop(),
         )
+
+
+def test_sample_memory_picks_metric_psutil_actually_exposes() -> None:
+    proc = _make_proc()
+    proc._pid = os.getpid()
+
+    value_mb, metric = proc._sample_memory_mb()
+
+    assert metric in ("pss", "uss", "rss")
+    assert value_mb > 0
+
+    # must select the highest-priority field psutil reports nonzero on this host
+    info = psutil.Process(os.getpid()).memory_full_info()
+    expected_metric = next(m for m in ("pss", "uss", "rss") if getattr(info, m, 0))
+    assert metric == expected_metric
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="PSS is only exposed on Linux")
+def test_sample_memory_reports_pss_on_linux() -> None:
+    proc = _make_proc()
+    proc._pid = os.getpid()
+
+    value_mb, metric = proc._sample_memory_mb()
+
+    assert metric == "pss"
+    assert value_mb > 0
+
+
+@pytest.mark.skipif(
+    sys.platform not in ("darwin", "win32"),
+    reason="USS-without-PSS path applies to macOS and Windows",
+)
+def test_sample_memory_reports_uss_on_macos_and_windows() -> None:
+    proc = _make_proc()
+    proc._pid = os.getpid()
+
+    value_mb, metric = proc._sample_memory_mb()
+
+    assert metric == "uss"
+    assert value_mb > 0
+
+
+def test_sample_memory_falls_back_to_rss_when_full_info_unavailable() -> None:
+    # AccessDenied/NotImplementedError can't be provoked on one's own process, so
+    # only the trigger is faked: memory_full_info is shadowed on a real Process
+    # instance (instance attribute, so no global/class state leaks across the
+    # concurrent suite) while memory_info().rss stays a genuine psutil read.
+    proc = _make_proc()
+    real = psutil.Process(os.getpid())
+
+    def _unavailable():
+        raise NotImplementedError
+
+    real.memory_full_info = _unavailable  # type: ignore[method-assign]
+    proc._psutil_process = real
+
+    value_mb, metric = proc._sample_memory_mb()
+
+    assert metric == "rss"
+    assert value_mb > 0

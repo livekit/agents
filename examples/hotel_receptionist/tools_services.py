@@ -24,6 +24,33 @@ from livekit.agents import RunContext, ToolError, function_tool
 logger = logging.getLogger("hotel-receptionist")
 
 
+@function_tool
+async def record_followup(
+    ctx: RunContext[Userdata],
+    kind: FollowupKind,
+    caller_name: str,
+    caller_phone: str,
+    summary: str,
+) -> str:
+    """Capture something for a human to follow up on - sales/group leads, identity-field change requests (email/phone/name), callback requests, verification-failed callers, in-house early-checkout requests, and any other request you can't handle on this line. ALWAYS use this instead of saying "someone will follow up" with no record; otherwise the request vanishes.
+
+    Args:
+        kind: One of housekeeping, sales_lead, identity_change, callback, verification_help, early_checkout, abandoned_booking, lost_and_found, other.
+        caller_name: Caller's name (ask if you don't already have it).
+        caller_phone: Caller's callback number - for an in-house guest, the room number works.
+        summary: One sentence describing what they want, with enough detail for a human to act on it.
+    """
+    code = await ctx.userdata.db.record_followup(
+        kind=kind, caller_name=caller_name, caller_phone=caller_phone, summary=summary
+    )
+    return (
+        f"recorded; reference {_speak_code(code)} | read it back so the caller knows it's "
+        f"actually on the list: who it's for ({caller_name}, {caller_phone}) and what's noted "
+        f'("{summary}"). Don\'t just say "logged", and don\'t promise anyone will follow up or '
+        "call back unless that's what was actually recorded."
+    )
+
+
 class ServicesToolsMixin:
     @function_tool
     async def flag_late_arrival(self, ctx: RunContext[Userdata], note: str) -> str:
@@ -35,33 +62,6 @@ class ServicesToolsMixin:
         booking = await self._verified_booking(ctx)
         await ctx.userdata.db.flag_late_arrival(booking_code=booking.code, note=note)
         return f"Noted on the booking - we'll hold the room. See you at {note}."
-
-    @function_tool
-    async def record_followup(
-        self,
-        ctx: RunContext[Userdata],
-        kind: FollowupKind,
-        caller_name: str,
-        caller_phone: str,
-        summary: str,
-    ) -> str:
-        """Capture something for a human to follow up on - sales/group leads, identity-field change requests (email/phone/name), callback requests, verification-failed callers, in-house early-checkout requests, and any other request you can't handle on this line. ALWAYS use this instead of saying "someone will follow up" with no record; otherwise the request vanishes.
-
-        Args:
-            kind: One of housekeeping, sales_lead, identity_change, callback, verification_help, early_checkout, abandoned_booking, lost_and_found, other.
-            caller_name: Caller's name (ask if you don't already have it).
-            caller_phone: Caller's callback number - for an in-house guest, the room number works.
-            summary: One sentence describing what they want, with enough detail for a human to act on it.
-        """
-        code = await ctx.userdata.db.record_followup(
-            kind=kind, caller_name=caller_name, caller_phone=caller_phone, summary=summary
-        )
-        return (
-            f"recorded; reference {_speak_code(code)} | read it back so the caller knows it's "
-            f"actually on the list: who it's for ({caller_name}, {caller_phone}) and what's noted "
-            f'("{summary}"). Don\'t just say "logged", and don\'t promise anyone will follow up or '
-            "call back unless that's what was actually recorded."
-        )
 
     @function_tool
     async def record_group_inquiry(

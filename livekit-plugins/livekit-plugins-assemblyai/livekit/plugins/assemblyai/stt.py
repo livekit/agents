@@ -22,13 +22,14 @@ import os
 import time
 import weakref
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     LanguageCode,
@@ -58,9 +59,11 @@ class STTOptions:
         "u3-rt-pro-beta-1",
         "u3-pro",
         "universal-3-5-pro",
-    ] = "universal-3-5-pro"
+        "universal-3-6-pro",
+        "assemblyai-stt-3-7-realtime-agent",
+    ] = "universal-3-6-pro"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
-    language_code: NotGivenOr[str] = NOT_GIVEN
+    language_codes: NotGivenOr[list[str]] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
     min_turn_silence: NotGivenOr[int] = NOT_GIVEN
     max_turn_silence: NotGivenOr[int] = NOT_GIVEN
@@ -84,7 +87,61 @@ class STTOptions:
 # (prompt, agent_context, previous_context_n_turns, continuous_partials,
 # interruption_delay, voice_focus, voice_focus_threshold) and connect-time
 # defaults. Mirrors the server-side `SpeechModel.is_u3_pro`.
-_U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro")
+_U3_PRO_MODELS = (
+    "u3-rt-pro",
+    "u3-rt-pro-beta-1",
+    "universal-3-5-pro",
+    "universal-3-6-pro",
+    "assemblyai-stt-3-7-realtime-agent",
+)
+
+# Server-side cap on the number of steering codes, mirrored client-side so bad
+# input fails at construction/update time instead of as a websocket error.
+# Universal-3.6 Pro has no documented cap.
+_MAX_LANGUAGE_CODES = 10
+_UNCAPPED_LANGUAGE_CODES_MODELS = ("universal-3-6-pro",)
+
+
+def _normalize_language_codes(language_codes: str | list[str], model: str) -> list[str]:
+    """Normalize code(s) to bare ISO 639-1 and dedup preserving order.
+
+    Accepts a single code or a list, mirroring the server, which takes either.
+    Mirrors the AssemblyAI streaming API's validation rules: at most 10 codes
+    (except on Universal-3.6 Pro), and 'multi' (the unsteered multilingual
+    default) must be sent alone.
+    """
+    if isinstance(language_codes, str):
+        # A bare code is shorthand for a one-element list; wrapping here (the
+        # single choke point for every input path) keeps a stray string from
+        # being iterated per-character. "" means "no codes", like [].
+        language_codes = [language_codes] if language_codes else []
+    normalized = list(dict.fromkeys(LanguageCode(code).language for code in language_codes))
+    if model not in _UNCAPPED_LANGUAGE_CODES_MODELS and len(normalized) > _MAX_LANGUAGE_CODES:
+        raise ValueError(
+            f"language_codes accepts at most {_MAX_LANGUAGE_CODES} codes "
+            f"(got {len(normalized)} after normalization)"
+        )
+    if "multi" in normalized and len(normalized) > 1:
+        raise ValueError(
+            "'multi' routes to the unsteered multilingual model "
+            "and cannot be combined with other language codes"
+        )
+    return normalized
+
+
+# Server-side cap on `agent_context` length (mirrors the AssemblyAI streaming
+# API's MAX_PROMPT_CHARS). Oversize values sent mid-stream make the server
+# cancel the whole session, so the cap is enforced client-side.
+_MAX_AGENT_CONTEXT_CHARS = 1750
+
+
+def _validate_agent_context(agent_context: str) -> None:
+    """Reject explicit agent_context longer than the server cap."""
+    if len(agent_context) > _MAX_AGENT_CONTEXT_CHARS:
+        raise ValueError(
+            f"agent_context exceeds maximum length of {_MAX_AGENT_CONTEXT_CHARS} "
+            f"characters (got {len(agent_context)})"
+        )
 
 
 class STT(stt.STT):
@@ -101,9 +158,12 @@ class STT(stt.STT):
             "u3-rt-pro-beta-1",
             "u3-pro",
             "universal-3-5-pro",
-        ] = "universal-3-5-pro",
+            "universal-3-6-pro",
+            "assemblyai-stt-3-7-realtime-agent",
+        ] = "universal-3-6-pro",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         language_code: NotGivenOr[str] = NOT_GIVEN,
+        language_codes: NotGivenOr[str | list[str]] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
         max_turn_silence: NotGivenOr[int] = NOT_GIVEN,
@@ -114,7 +174,6 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_context: NotGivenOr[str] = NOT_GIVEN,
         previous_context_n_turns: NotGivenOr[int] = NOT_GIVEN,
-        agent_context_carryover: bool = False,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
@@ -127,6 +186,7 @@ class STT(stt.STT):
         base_url: str = "wss://streaming.assemblyai.com",
         # Deprecated — use min_turn_silence instead
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
+        agent_context_carryover: NotGivenOr[bool] = NOT_GIVEN,
     ):
         """
         Args:
@@ -138,13 +198,22 @@ class STT(stt.STT):
                 0 and 1 that determines how sensitive the VAD is. Lower values make the VAD
                 more sensitive (detects quieter speech). Higher values make it less sensitive.
                 Defaults to 0.4.
-            language_code: Steer transcription toward a specific language (e.g. 'en', 'es',
-                'fr'). Accepts any common format ('en', 'en-US', 'english'); it is normalized
-                to a bare ISO 639-1 code before being sent. When set, the model is biased
-                toward this language instead of automatically detecting/code-switching across
-                the supported languages. Leave unset to use the model's default multilingual
-                behavior. Only supported with the Universal-3 Pro family models. Set at
-                construction (connect) time only.
+            language_code: Deprecated — use ``language_codes`` instead (it accepts a
+                single code directly). Mutually exclusive with ``language_codes``.
+            language_codes: Steer transcription toward one or more expected languages.
+                Accepts a single code ('es') or a list (['en', 'es']). Each entry
+                accepts any common format ('en', 'en-US', 'english') and is normalized
+                to a bare ISO 639-1 code before being sent; duplicates after
+                normalization are dropped, preserving order. One code biases the model
+                toward that language — several codes, toward that set — instead of
+                automatically detecting/code-switching across all supported languages.
+                At most 10 codes, except on universal-3-6-pro; 'multi' (the unsteered
+                multilingual default) cannot be combined with other codes. Leave unset to
+                use the model's default multilingual behavior. Only supported with the
+                Universal-3 Pro family models. Can be updated mid-session via
+                ``update_options``; pass an empty list (or empty string) there to clear
+                steering back to the model default. At construction an empty value is
+                equivalent to leaving it unset.
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
             min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
             continuous_partials: Whether to emit additional partial transcripts during long
@@ -162,18 +231,22 @@ class STT(stt.STT):
             agent_context: Free-text context describing what the agent said, used to bias
                 transcription of the user's reply. Set at construction or updated per-turn
                 via `update_options(agent_context=...)`. Only supported with the
-                Universal-3 Pro family models (max 1500 characters).
+                Universal-3 Pro family models (max 1750 characters; longer values raise
+                ValueError). When chat-context carryover is on (the default on the Universal-3
+                Pro family) each assistant reply replaces this value automatically; disable it
+                to manage this manually.
             previous_context_n_turns: Maximum number of prior conversation entries (user
                 transcripts and any `agent_context` values) carried forward as context for
                 each transcription. Set to 0 to disable automatic context carryover
                 entirely; leave unset to use the server default (recommended). Range 0–100.
                 Only supported with the Universal-3 Pro family models. Set at construction
                 (connect) time only; it cannot be changed via `update_options`.
-            agent_context_carryover: When the model supports it, let an ``AgentSession`` push each
-                assistant reply into ``agent_context`` so it is carried into the model's
-                conversation context. Defaults to False; set True to enable. Prior user turns are
-                carried automatically by the model regardless of this flag. Ignored on models
-                without context support.
+            agent_context_carryover: Deprecated, use
+                ``AgentSession(stt_context_options={"forward_chat_context": ...})`` instead.
+                On the Universal-3 Pro family, assistant replies are carried into ``agent_context``
+                by default; pass ``False`` to opt out. On other models it is off. Replies longer
+                than the 1750-character server cap are truncated (keeping the tail) before
+                being sent.
             voice_focus: Voice Focus isolates the primary voice and suppresses background
                 noise (chatter, keyboard clicks, fan hum, room echo) before the audio reaches
                 the model. Use 'near-field' for headsets, handsets, and close-talking
@@ -195,14 +268,39 @@ class STT(stt.STT):
                 Leave unset to use the server default. Only supported with the Universal-3 Pro
                 family models. Set at construction (connect) time only.
         """
-        # agent_context carryover is only available on the u3-rt-pro family
-        # ("u3-pro" is normalized to "u3-rt-pro" below) and is opt-in via the user
-        supports_carryover = model in _U3_PRO_MODELS or model == "u3-pro"
-        if agent_context_carryover and not supports_carryover:
-            logger.warning(
-                "agent_context_carryover is enabled but model %r does not support it; ignoring",
-                model,
+        if is_given(language_code) and is_given(language_codes):
+            raise ValueError(
+                "language_code and language_codes are mutually exclusive; "
+                "use language_codes (it accepts a single code directly)"
             )
+        if is_given(language_code):
+            logger.warning("'language_code' is deprecated, use 'language_codes' instead.")
+        # An explicit empty value ([] or "") is equivalent to unset at
+        # construction — the param is omitted from the connect query either
+        # way — so it is not subject to the U3-Pro-family gate below.
+        if is_given(language_codes) and not language_codes:
+            language_codes = NOT_GIVEN
+        if is_given(agent_context):
+            _validate_agent_context(agent_context)
+
+        # agent_context carryover is only available on the u3-rt-pro family ("u3-pro" is
+        # normalized to "u3-rt-pro" below), where it is on by default; the session's
+        # stt_context_options.forward_chat_context toggle is the supported way to control it.
+        supports_carryover = model in _U3_PRO_MODELS or model == "u3-pro"
+        if is_given(agent_context_carryover):
+            logger.warning(
+                "'agent_context_carryover' is deprecated, use "
+                "AgentSession(stt_context_options={'forward_chat_context': ...}) instead."
+            )
+            if agent_context_carryover and not supports_carryover:
+                logger.warning(
+                    "agent_context_carryover is enabled but model %r does not support it; ignoring",
+                    model,
+                )
+        # on by default for supported models; an explicit agent_context_carryover=False opts out
+        carryover_enabled = supports_carryover and (
+            agent_context_carryover if is_given(agent_context_carryover) else True
+        )
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -211,12 +309,12 @@ class STT(stt.STT):
                 offline_recognize=False,
                 diarization=is_given(speaker_labels) and speaker_labels is True,
                 keyterms=True,
-                chat_context=agent_context_carryover and supports_carryover,
+                chat_context=carryover_enabled,
             ),
         )
         if model == "u3-pro":
-            logger.warning("'u3-pro' is deprecated, use 'universal-3-5-pro' instead.")
-            model = "universal-3-5-pro"
+            logger.warning("'u3-pro' is deprecated, use 'universal-3-6-pro' instead.")
+            model = "universal-3-6-pro"
 
         # These parameters are only supported by the Universal-3 Pro family of models.
         if model not in _U3_PRO_MODELS:
@@ -230,6 +328,7 @@ class STT(stt.STT):
                 "voice_focus_threshold": voice_focus_threshold,
                 "mode": mode,
                 "language_code": language_code,
+                "language_codes": language_codes,
             }
             for _param_name, _param_value in _u3_pro_only_params.items():
                 if is_given(_param_value):
@@ -264,11 +363,14 @@ class STT(stt.STT):
         if not is_given(min_turn_silence) and not is_given(mode):
             min_turn_silence = 100
 
-        # Normalize to a bare ISO 639-1 code (e.g. "es-ES" / "Spanish" -> "es"),
-        # the form AssemblyAI's language steering expects.
-        normalized_language_code: NotGivenOr[str] = NOT_GIVEN
+        # Normalize to bare ISO 639-1 codes (e.g. "es-ES" / "Spanish" -> "es"),
+        # the form AssemblyAI's language steering expects. The singular
+        # language_code is shorthand for a one-element list.
+        normalized_language_codes: NotGivenOr[list[str]] = NOT_GIVEN
         if is_given(language_code):
-            normalized_language_code = LanguageCode(language_code).language
+            normalized_language_codes = _normalize_language_codes(language_code, model)
+        elif is_given(language_codes):
+            normalized_language_codes = _normalize_language_codes(language_codes, model)
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
@@ -276,7 +378,7 @@ class STT(stt.STT):
             encoding=encoding,
             speech_model=model,
             language_detection=language_detection,
-            language_code=normalized_language_code,
+            language_codes=normalized_language_codes,
             end_of_turn_confidence_threshold=end_of_turn_confidence_threshold,
             min_turn_silence=min_turn_silence,
             max_turn_silence=max_turn_silence,
@@ -352,6 +454,7 @@ class STT(stt.STT):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_context: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_codes: NotGivenOr[str | list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
@@ -365,6 +468,18 @@ class STT(stt.STT):
             )
             if not is_given(min_turn_silence):
                 min_turn_silence = min_end_of_turn_silence_when_confident
+
+        # Validate/normalize before mutating any option so a ValueError from a
+        # bad value cannot leave _opts partially updated.
+        if is_given(language_codes):
+            if self._opts.speech_model not in _U3_PRO_MODELS:
+                raise ValueError(
+                    "The 'language_codes' parameter is only supported with the "
+                    f"{', '.join(_U3_PRO_MODELS)} models."
+                )
+            language_codes = _normalize_language_codes(language_codes, self._opts.speech_model)
+        if is_given(agent_context):
+            _validate_agent_context(agent_context)
 
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
@@ -383,6 +498,8 @@ class STT(stt.STT):
             # re-merge with the active session keyterms so a user update doesn't drop them
             keyterms_prompt = list(dict.fromkeys([*self._user_keyterms, *self._session_keyterms]))
             self._opts.keyterms_prompt = keyterms_prompt
+        if is_given(language_codes):
+            self._opts.language_codes = language_codes
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
         if is_given(continuous_partials):
@@ -399,6 +516,7 @@ class STT(stt.STT):
                 prompt=prompt,
                 agent_context=agent_context,
                 keyterms_prompt=keyterms_prompt,
+                language_codes=language_codes,
                 vad_threshold=vad_threshold,
                 continuous_partials=continuous_partials,
                 interruption_delay=interruption_delay,
@@ -418,9 +536,18 @@ class STT(stt.STT):
         if (
             (chat_item := ev.item).type == "message"
             and chat_item.role == "assistant"
-            and chat_item.text_content
+            and (text := chat_item.text_content)
         ):
-            self.update_options(agent_context=chat_item.text_content)
+            if len(text) > _MAX_AGENT_CONTEXT_CHARS:
+                # Keep the tail: the end of the reply (the question posed to
+                # the user) has the most biasing value for their next utterance.
+                logger.debug(
+                    "truncating agent_context carryover from %d to %d chars",
+                    len(text),
+                    _MAX_AGENT_CONTEXT_CHARS,
+                )
+                text = text[-_MAX_AGENT_CONTEXT_CHARS:]
+            self.update_options(agent_context=text)
 
 
 class SpeechStream(stt.SpeechStream):
@@ -473,6 +600,7 @@ class SpeechStream(stt.SpeechStream):
         prompt: NotGivenOr[str] = NOT_GIVEN,
         agent_context: NotGivenOr[str] = NOT_GIVEN,
         keyterms_prompt: NotGivenOr[list[str]] = NOT_GIVEN,
+        language_codes: NotGivenOr[str | list[str]] = NOT_GIVEN,
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
@@ -486,6 +614,18 @@ class SpeechStream(stt.SpeechStream):
             )
             if not is_given(min_turn_silence):
                 min_turn_silence = min_end_of_turn_silence_when_confident
+
+        # Validate/normalize before mutating any option so a ValueError from a
+        # bad value cannot leave _opts partially updated.
+        if is_given(language_codes):
+            if self._opts.speech_model not in _U3_PRO_MODELS:
+                raise ValueError(
+                    "The 'language_codes' parameter is only supported with the "
+                    f"{', '.join(_U3_PRO_MODELS)} models."
+                )
+            language_codes = _normalize_language_codes(language_codes, self._opts.speech_model)
+        if is_given(agent_context):
+            _validate_agent_context(agent_context)
 
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
@@ -501,6 +641,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.agent_context = agent_context
         if is_given(keyterms_prompt):
             self._opts.keyterms_prompt = keyterms_prompt
+        if is_given(language_codes):
+            self._opts.language_codes = language_codes
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
         if is_given(continuous_partials):
@@ -516,6 +658,8 @@ class SpeechStream(stt.SpeechStream):
             config_msg["agent_context"] = agent_context
         if is_given(keyterms_prompt):
             config_msg["keyterms_prompt"] = keyterms_prompt
+        if is_given(language_codes):
+            config_msg["language_codes"] = language_codes
         if is_given(max_turn_silence):
             config_msg["max_turn_silence"] = max_turn_silence
         if is_given(min_turn_silence):
@@ -554,34 +698,42 @@ class SpeechStream(stt.SpeechStream):
             # forward inputs to AssemblyAI
             # if we receive a close message, signal it to AssemblyAI and break.
             # the recv task will then make sure to process the remaining audio and stop
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
-                else:
-                    frames = audio_bstream.write(data.data.tobytes())
+            try:
+                async for data in self._input_ch:
+                    if isinstance(data, self._FlushSentinel):
+                        frames = audio_bstream.flush()
+                    else:
+                        frames = audio_bstream.write(data.data.tobytes())
 
-                for frame in frames:
-                    if not anchored:
-                        # Anchor the stream's wall-clock to the moment just
-                        # before the first frame is sent — aligned with the
-                        # server's stream-relative zero used by
-                        # SpeechStarted.timestamp.
-                        self.start_time = time.time()
-                        anchored = True
-                    self._speech_duration += frame.duration
-                    await ws.send_bytes(frame.data.tobytes())
-                    self._last_frame_sent_at = time.time()
+                    for frame in frames:
+                        if not anchored:
+                            # Anchor the stream's wall-clock to the moment just
+                            # before the first frame is sent — aligned with the
+                            # server's stream-relative zero used by
+                            # SpeechStarted.timestamp.
+                            self.start_time = time.time()
+                            anchored = True
+                        self._speech_duration += frame.duration
+                        await ws.send_bytes(frame.data.tobytes())
+                        self._last_frame_sent_at = time.time()
 
-            closing_ws = True
-            logger.debug("AssemblyAI sending close message session=%s", self._session_id)
-            await ws.send_str(SpeechStream._CLOSE_MSG)
+                closing_ws = True
+                logger.debug("AssemblyAI sending close message session=%s", self._session_id)
+                await ws.send_str(SpeechStream._CLOSE_MSG)
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("AssemblyAI connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             consecutive_timeouts = 0
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
                 try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    msg = await asyncio.wait_for(monitor.receive(), timeout=5)
                     consecutive_timeouts = 0
                 except asyncio.TimeoutError:
                     if closing_ws:
@@ -639,7 +791,10 @@ class SpeechStream(stt.SpeechStream):
                     continue
 
                 try:
-                    self._process_stream_event(json.loads(msg.data))
+                    data = json.loads(msg.data)
+                    self._process_stream_event(data)
+                    if data.get("type") in ("SpeechStarted", "Turn"):
+                        self._mark_provider_progress()
                 except Exception:
                     logger.exception(
                         "failed to process AssemblyAI message session=%s",
@@ -720,8 +875,8 @@ class SpeechStream(stt.SpeechStream):
             if "multilingual" in self._opts.speech_model
             or self._opts.speech_model in _U3_PRO_MODELS
             else False,
-            "language_code": self._opts.language_code
-            if is_given(self._opts.language_code)
+            "language_codes": json.dumps(self._opts.language_codes)
+            if is_given(self._opts.language_codes) and self._opts.language_codes
             else None,
             "prompt": self._opts.prompt if is_given(self._opts.prompt) else None,
             "agent_context": self._opts.agent_context
@@ -762,7 +917,7 @@ class SpeechStream(stt.SpeechStream):
             self._opts.speech_model,
             self._base_url,
         )
-        ws = await self._session.ws_connect(url, headers=headers)
+        ws = await self._session.ws_connect(url, headers=headers, autoping=False)
         logger.debug(
             "AssemblyAI WebSocket connected status=%s",
             ws._response.status if ws._response is not None else None,
@@ -825,10 +980,36 @@ class SpeechStream(stt.SpeechStream):
         utterance = data.get("utterance", "")
         transcript = data.get("transcript", "")
         language = LanguageCode(data.get("language_code", "en"))
+        language_confidence = data.get("language_confidence")
 
         # Extract speaker label for diarization (returns "A", "B", ... or "UNKNOWN")
         speaker_label = data.get("speaker_label")
         speaker_id = speaker_label if speaker_label and speaker_label != "UNKNOWN" else None
+
+        # Surface the server's per-turn scores on SpeechData.metadata, reachable
+        # from the SpeechEvent stream (e.g. in an `stt_node` override) without
+        # subclassing the stream. Note that UserInputTranscribedEvent does not
+        # carry metadata, so session-level listeners won't see these. Each key is
+        # attached only when the message carries it, so models that don't emit a
+        # field are unaffected.
+        #
+        # end_of_turn_confidence: on Universal-3.5 Pro (and later) this rises from 0
+        # toward 1 across the partials emitted while a turn is held open between
+        # min_turn_silence and max_turn_silence, letting callers threshold it to
+        # trigger preemptive/eager LLM generation before the final arrives; it is 1.0
+        # on the final.
+        #
+        # language_confidence: sent when the `language_detection` connection param is
+        # on (this plugin's default for the multilingual and U3 Pro models) and scores
+        # the `language_code` on the same message. The confidence score for the detected
+        # language, between 0 (low confidence) and 1 (high confidence). Only populated when
+        # language detection is enabled and an utterance is complete or turn is final.
+        turn_metadata: dict[str, Any] = {}
+        if end_of_turn_confidence is not None:
+            turn_metadata["end_of_turn_confidence"] = end_of_turn_confidence
+        if language_confidence is not None:
+            turn_metadata["language_confidence"] = language_confidence
+        speech_metadata = turn_metadata or None
 
         # transcript (final) and words (interim) are cumulative
         # utterance (preflight) is chunk based
@@ -866,6 +1047,7 @@ class SpeechStream(stt.SpeechStream):
                         words=timed_words,
                         confidence=confidence,
                         speaker_id=speaker_id,
+                        metadata=speech_metadata,
                     )
                 ],
             )
@@ -902,6 +1084,7 @@ class SpeechStream(stt.SpeechStream):
                         words=utterance_words,
                         confidence=utterance_confidence,
                         speaker_id=speaker_id,
+                        metadata=speech_metadata,
                     )
                 ],
             )
@@ -927,6 +1110,7 @@ class SpeechStream(stt.SpeechStream):
                         words=timed_words,
                         confidence=confidence,
                         speaker_id=speaker_id,
+                        metadata=speech_metadata,
                     )
                 ],
             )
@@ -946,7 +1130,14 @@ class SpeechStream(stt.SpeechStream):
                     self._session_id,
                 )
 
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=final_event.alternatives
+                    if words and words[-1].get("end", 0) > 0
+                    else [],
+                )
+            )
 
             if self._speech_duration > 0.0:
                 usage_event = stt.SpeechEvent(

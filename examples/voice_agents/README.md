@@ -11,24 +11,18 @@ from livekit.agents import inference
 
 session = AgentSession(
     stt=inference.STT("deepgram/nova-3"),
-    llm=inference.LLM("openai/gpt-4.1-mini"),
+    llm=inference.LLM("google/gemma-4-31b-it"),  # low-latency gemma, hosted on LiveKit
     tts=inference.TTS("cartesia/sonic-3"),
 )
 ```
 
-**Note:** Real-time voice-to-voice models (Amazon Nova Sonic, xAI Grok, etc.) are not supported by LiveKit Inference and must use the provider plugin directly.
+**Note:** OpenAI Realtime and xAI Grok Voice models are available through `inference.RealtimeModel`, and OpenAI GPT-Live through `inference.DuplexModel(model="openai/gpt-live-1")`; use provider plugin classes for direct credentials or for other real-time models such as Amazon Nova Sonic.
 
 ## Table of Contents
 
 ### Getting Started
 
-- [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent with multilingual STT, turn detection, preemptive generation, and metrics collection
-
-### Real-time Models
-
-> **Note:** Real-time models use provider plugins directly. These examples require provider-specific API keys.
-
-- [`grok/`](./grok/) - xAI Grok Voice Agents API with built-in X.com and web search
+- [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent with STT, turn detection, preemptive generation, and metrics collection; switch its LLM to `inference.responses.LLM` for OpenAI models over the Responses API
 
 ### MCP & External Integrations
 

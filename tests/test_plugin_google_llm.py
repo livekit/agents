@@ -10,6 +10,7 @@ from livekit.agents.llm import ChatContext, function_tool
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.google.llm import LLM, LLMStream
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
+from livekit.plugins.google.tools import GoogleSearch
 
 pytestmark = pytest.mark.plugin("google")
 
@@ -65,6 +66,17 @@ class TestParsePartFunctionCall:
 
     def test_empty_text_part_returns_none(self, llm_stream: LLMStream):
         part = types.Part(text="")
+
+        chunk = llm_stream._parse_part("test-id", part)
+
+        assert chunk is None
+
+    def test_thought_summary_part_returns_none(self, llm_stream: LLMStream):
+        # include_thoughts streams reasoning back as parts flagged thought=True; these
+        # must be dropped so TTS never speaks the model's internal reasoning.
+        part = types.Part(
+            text="**Calculating Refill Dates** I'm processing the timeline", thought=True
+        )
 
         chunk = llm_stream._parse_part("test-id", part)
 
@@ -182,6 +194,41 @@ class TestCachedContentRequestSuppression:
         config = captured["config"]
         assert config.system_instruction is None
         assert config.cached_content == "cachedContents/abc123"
+
+    @pytest.mark.asyncio
+    async def test_dynamic_instructions_become_a_turn_when_cached_content_set(self) -> None:
+        """The static prompt lives in the cache, so ``Instructions.dynamic`` has to
+        reach the model as a turn: folded into the dropped system_instruction it
+        would never be seen."""
+        from livekit.agents.llm.chat_context import Instructions
+        from livekit.agents.voice.generation import update_instructions
+
+        llm = LLM(
+            model="gemini-2.5-flash",
+            api_key="test",
+            cached_content="cachedContents/abc123",
+        )
+
+        chat_ctx = ChatContext.empty()
+        update_instructions(
+            chat_ctx,
+            instructions=Instructions("system prompt that lives in cache", dynamic="Caller: Alex"),
+            add_if_missing=True,
+        )
+        chat_ctx.add_message(role="user", content="hi")
+
+        fake, captured = self._patched_stream_capture()
+        with patch.object(llm._client.aio.models, "generate_content_stream", fake):
+            stream = llm.chat(chat_ctx=chat_ctx)
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+
+        assert captured["config"].system_instruction is None
+        texts = [part.text for content in captured["contents"] for part in content.parts]
+        assert texts == ["<instructions>\nCaller: Alex\n</instructions>", "hi"]
 
     @pytest.mark.asyncio
     async def test_request_omits_tools_when_cached_content_set(self) -> None:
@@ -333,3 +380,288 @@ class TestMediaResolution:
 
         assert config.generation_config
         assert config.generation_config.media_resolution is None
+
+
+class TestMixedToolsRequestConstruction:
+    """Combining built-in (provider) tools with function tools is only supported on the
+    Gemini 3 Developer API (not Vertex). These tests drive ``chat()`` against a stubbed
+    ``generate_content_stream`` and assert on the resulting request config."""
+
+    @staticmethod
+    async def _single_response_async_iter():
+        yield types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(
+                    content=types.Content(role="model", parts=[types.Part(text="ok")]),
+                    finish_reason=types.FinishReason.STOP,
+                )
+            ],
+        )
+
+    @classmethod
+    async def _capture_config(cls, llm_: LLM, **chat_kwargs):
+        captured: dict = {}
+
+        async def fake_stream(**kwargs):
+            captured["config"] = kwargs.get("config")
+            return cls._single_response_async_iter()
+
+        fake = AsyncMock(side_effect=fake_stream)
+        with patch.object(llm_._client.aio.models, "generate_content_stream", fake):
+            stream = llm_.chat(chat_ctx=ChatContext.empty(), **chat_kwargs)
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+        return captured["config"]
+
+    @staticmethod
+    def _weather_tool():
+        @function_tool
+        async def get_weather(city: str) -> str:
+            """Look up the weather."""
+            return city
+
+        return get_weather
+
+    @staticmethod
+    def _has_google_search(config) -> bool:
+        return bool(config.tools) and any(getattr(t, "google_search", None) for t in config.tools)
+
+    @staticmethod
+    def _has_function_declarations(config) -> bool:
+        return bool(config.tools) and any(t.function_declarations for t in config.tools)
+
+    @staticmethod
+    def _server_side_enabled(config) -> bool:
+        return bool(config.tool_config and config.tool_config.include_server_side_tool_invocations)
+
+    @pytest.mark.asyncio
+    async def test_dev_api_enables_server_side_invocations(self) -> None:
+        """Gemini 3 Developer API: both tool types are sent and the circulation flag is set."""
+        llm_ = LLM(model="gemini-3-flash-preview", api_key="test")
+        config = await self._capture_config(llm_, tools=[self._weather_tool(), GoogleSearch()])
+
+        assert self._server_side_enabled(config)
+        assert self._has_function_declarations(config)
+        assert self._has_google_search(config)
+
+    @pytest.mark.asyncio
+    async def test_auto_mode_kept_for_mixed_tools(self) -> None:
+        """``tool_choice='auto'`` is passed through as AUTO alongside the circulation flag.
+        Verified live against the Gemini 3 Developer API: AUTO + built-in tools is accepted,
+        so no VALIDATED upgrade is applied."""
+        llm_ = LLM(model="gemini-3-flash-preview", api_key="test")
+        config = await self._capture_config(
+            llm_, tools=[self._weather_tool(), GoogleSearch()], tool_choice="auto"
+        )
+
+        assert self._server_side_enabled(config)
+        assert (
+            config.tool_config.function_calling_config.mode == types.FunctionCallingConfigMode.AUTO
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_gemini_3_drops_provider_tool(self) -> None:
+        """Below Gemini 3 the provider tool is dropped and no flag is set."""
+        llm_ = LLM(model="gemini-2.5-flash", api_key="test")
+        config = await self._capture_config(llm_, tools=[self._weather_tool(), GoogleSearch()])
+
+        assert not self._server_side_enabled(config)
+        assert self._has_function_declarations(config)
+        assert not self._has_google_search(config)
+
+    @pytest.mark.asyncio
+    async def test_vertex_gemini_3_drops_provider_tool(self) -> None:
+        """Vertex AI does not support mixing, even on Gemini 3: provider tool is dropped."""
+        from google.auth.credentials import AnonymousCredentials
+
+        llm_ = LLM(
+            model="gemini-3-flash-preview",
+            vertexai=True,
+            project="test-project",
+            location="us-central1",
+            credentials=AnonymousCredentials(),
+        )
+        assert llm_._client.vertexai is True
+
+        config = await self._capture_config(llm_, tools=[self._weather_tool(), GoogleSearch()])
+
+        assert not self._server_side_enabled(config)
+        assert self._has_function_declarations(config)
+        assert not self._has_google_search(config)
+
+    @pytest.mark.asyncio
+    async def test_provider_only_does_not_set_flag(self) -> None:
+        """The circulation flag requires BOTH function and provider tools; a provider tool
+        alone is sent without it."""
+        llm_ = LLM(model="gemini-3-flash-preview", api_key="test")
+        config = await self._capture_config(llm_, tools=[GoogleSearch()])
+
+        assert not self._server_side_enabled(config)
+        assert self._has_google_search(config)
+
+    @pytest.mark.asyncio
+    async def test_cached_content_via_extra_kwargs_suppresses_tools(self) -> None:
+        """cached_content passed through ``extra_kwargs`` (not just the constructor) must
+        still skip building tools/tool_config, so the request isn't rejected for combining
+        them with a cache."""
+        llm_ = LLM(model="gemini-3-flash-preview", api_key="test")
+        config = await self._capture_config(
+            llm_,
+            tools=[self._weather_tool(), GoogleSearch()],
+            extra_kwargs={"cached_content": "cachedContents/abc123"},
+        )
+
+        assert config.cached_content == "cachedContents/abc123"
+        assert config.tools is None
+        assert config.tool_config is None
+
+    @pytest.mark.asyncio
+    async def test_cached_content_strips_raw_tools_from_extra_kwargs(self) -> None:
+        """Raw ``tools``/``tool_config`` placed directly in ``extra_kwargs`` must also be
+        stripped when a cache is active — otherwise Gemini rejects the request for
+        combining them with cached_content."""
+        llm_ = LLM(
+            model="gemini-3-flash-preview", api_key="test", cached_content="cachedContents/abc"
+        )
+        config = await self._capture_config(
+            llm_,
+            extra_kwargs={
+                "tools": [types.Tool(google_search=types.GoogleSearch())],
+                "tool_config": types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(
+                        mode=types.FunctionCallingConfigMode.AUTO
+                    )
+                ),
+            },
+        )
+
+        assert config.cached_content == "cachedContents/abc"
+        assert config.tools is None
+        assert config.tool_config is None
+
+
+class TestThinkingConfigRequestConstruction:
+    """Gemini 3 and Gemma 4 configure thinking with ``thinking_level``, every other model with
+    ``thinking_budget``. These tests drive ``chat()`` against a stubbed
+    ``generate_content_stream`` and assert on the ``ThinkingConfig`` it received."""
+
+    @staticmethod
+    async def _single_response_async_iter():
+        yield types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(
+                    content=types.Content(role="model", parts=[types.Part(text="ok")]),
+                    finish_reason=types.FinishReason.STOP,
+                )
+            ],
+        )
+
+    @classmethod
+    async def _capture_thinking_config(
+        cls, model: str, thinking_config: types.ThinkingConfigOrDict
+    ) -> types.ThinkingConfig | None:
+        captured: dict = {}
+
+        async def fake_stream(**kwargs):
+            captured["config"] = kwargs.get("config")
+            return cls._single_response_async_iter()
+
+        llm_ = LLM(model=model, api_key="test", thinking_config=thinking_config)
+        fake = AsyncMock(side_effect=fake_stream)
+        with patch.object(llm_._client.aio.models, "generate_content_stream", fake):
+            stream = llm_.chat(chat_ctx=ChatContext.empty())
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+        return captured["config"].thinking_config
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model", ["gemma-4-31b-it", "models/gemma-4-31b-it"])
+    @pytest.mark.parametrize("level", [types.ThinkingLevel.MINIMAL, types.ThinkingLevel.HIGH])
+    async def test_gemma_4_level_reaches_the_request(
+        self, model: str, level: types.ThinkingLevel
+    ) -> None:
+        """Gemma 4 takes the level it documents, under a bare or a qualified model name."""
+        thinking_config = await self._capture_thinking_config(
+            model, types.ThinkingConfig(thinking_level=level)
+        )
+
+        assert thinking_config is not None
+        assert thinking_config.thinking_level == level
+
+    @pytest.mark.parametrize("level", [types.ThinkingLevel.LOW, types.ThinkingLevel.MEDIUM])
+    def test_gemma_4_rejects_undocumented_levels(self, level: types.ThinkingLevel) -> None:
+        """Gemma 4 answers 'low' and 'medium' with 400 INVALID_ARGUMENT, so the session fails at
+        construction instead of on the first turn."""
+        with pytest.raises(ValueError, match="only supports thinking_level"):
+            LLM(
+                model="gemma-4-31b-it",
+                api_key="test",
+                thinking_config=types.ThinkingConfig(thinking_level=level),
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model", ["gemini-3-pro-preview", "gemma-4-31b-it"])
+    async def test_include_thoughts_survives_the_level_branch(self, model: str) -> None:
+        thinking_config = await self._capture_thinking_config(
+            model, {"thinking_level": "high", "include_thoughts": True}
+        )
+
+        assert thinking_config is not None
+        assert thinking_config.thinking_level == types.ThinkingLevel.HIGH
+        assert thinking_config.include_thoughts is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model,expected_level",
+        [
+            ("gemini-3-flash-preview", types.ThinkingLevel.MINIMAL),
+            ("models/gemini-3-flash-preview", types.ThinkingLevel.MINIMAL),
+            ("gemini-3-pro-preview", types.ThinkingLevel.LOW),
+            # no default is invented for a model whose accepted levels are unknown
+            ("gemma-4-31b-it", None),
+        ],
+    )
+    async def test_default_level_only_for_gemini_3(
+        self, model: str, expected_level: types.ThinkingLevel | None
+    ) -> None:
+        thinking_config = await self._capture_thinking_config(
+            model, types.ThinkingConfig(include_thoughts=False)
+        )
+
+        assert thinking_config is not None
+        assert thinking_config.thinking_level == expected_level
+        assert thinking_config.include_thoughts is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model", ["gemini-3-pro-preview", "gemma-4-31b-it"])
+    async def test_budget_alone_is_dropped_on_level_models(self, model: str) -> None:
+        """A budget on a level model is ignored with a warning, on Gemini 3 and Gemma 4 alike."""
+        thinking_config = await self._capture_thinking_config(
+            model, types.ThinkingConfig(thinking_budget=0)
+        )
+
+        assert thinking_config is not None
+        assert thinking_config.thinking_budget is None
+
+    @pytest.mark.asyncio
+    async def test_budget_still_reaches_gemini_2_5(self) -> None:
+        thinking_config = await self._capture_thinking_config(
+            "gemini-2.5-flash", types.ThinkingConfig(thinking_budget=1024)
+        )
+
+        assert thinking_config is not None
+        assert thinking_config.thinking_budget == 1024
+        assert thinking_config.thinking_level is None
+
+
+def test_default_model_is_not_a_retired_one():
+    # gemini-2.5-* stopped being served on Vertex AI on 2026-10-20
+    retired = {"gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-001"}
+
+    assert LLM(api_key="test-key").model not in retired

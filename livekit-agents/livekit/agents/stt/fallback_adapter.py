@@ -20,6 +20,7 @@ from ..vad import VAD
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
 if TYPE_CHECKING:
+    from ..llm.chat_context import MetricsMetadata
     from ..voice.events import ConversationItemAddedEvent
 
 # don't retry when using the fallback adapter
@@ -60,6 +61,7 @@ class FallbackAdapter(
         if len(stt) < 1:
             raise ValueError("At least one STT instance must be provided.")
 
+        owned_stream_adapters: list[STT] = []
         non_streaming_stt = [t for t in stt if not t.capabilities.streaming]
         if non_streaming_stt:
             if vad is None:
@@ -71,9 +73,13 @@ class FallbackAdapter(
                 )
             from ..stt import StreamAdapter
 
-            stt = [
-                StreamAdapter(stt=t, vad=vad) if not t.capabilities.streaming else t for t in stt
-            ]
+            adapted_stt: list[STT] = []
+            for stt_instance in stt:
+                if not stt_instance.capabilities.streaming:
+                    stt_instance = StreamAdapter(stt=stt_instance, vad=vad)
+                    owned_stream_adapters.append(stt_instance)
+                adapted_stt.append(stt_instance)
+            stt = adapted_stt
 
         # Use the primary STT's aligned_transcript if all providers support it, since
         # the SDK only checks truthiness, not the specific granularity.
@@ -89,10 +95,12 @@ class FallbackAdapter(
                 aligned_transcript=aligned_transcript,
                 keyterms=any(t.capabilities.keyterms for t in stt),
                 chat_context=any(t.capabilities.chat_context for t in stt),
+                manual_flush=all(t.capabilities.manual_flush for t in stt),
             )
         )
 
         self._stt_instances = stt
+        self._owned_stream_adapters = owned_stream_adapters
         self._attempt_timeout = attempt_timeout
         self._max_retry_per_stt = max_retry_per_stt
         self._retry_interval = retry_interval
@@ -106,17 +114,47 @@ class FallbackAdapter(
             for _ in self._stt_instances
         ]
 
+        # the instance that most recently served a request; used to label metrics & traces
+        self._active_instance: STT = self._stt_instances[0]
+
         for stt_instance in self._stt_instances:
             stt_instance.on("metrics_collected", self._on_metrics_collected)
         self._recognize_metrics_needed = False  # don't emit metrics via fallback adapter
 
+    def _next_instance(self) -> STT:
+        """The instance the next request goes to first: the first one marked available, or
+        the primary once all are down (they are then all retried, primary first). A failed
+        instance's recovery task flips it back to available, so a recovered primary is
+        reported again before it has served."""
+        for instance, status in zip(self._stt_instances, self._status, strict=True):
+            if status.available:
+                return instance
+        return self._stt_instances[0]
+
+    @property
+    def capabilities(self) -> STTCapabilities:
+        # update manual_flush as instance might be updated
+        self._capabilities.manual_flush = all(
+            instance.capabilities.manual_flush for instance in self._stt_instances
+        )
+        return self._capabilities
+
     @property
     def model(self) -> str:
-        return "FallbackAdapter"
+        """The model of the instance that serves next (see :meth:`_next_instance`). Spans and
+        metrics read this, so a failover shows the model expected to answer rather than the
+        adapter; the instance that actually served is stamped per request by the stream."""
+        return self._next_instance().model
 
     @property
     def provider(self) -> str:
-        return "livekit"
+        """The provider of the instance that serves next (see :attr:`model`)."""
+        return self._next_instance().provider
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
+        return self._active_instance.metrics_metadata
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         # forward to every underlying STT; unsupported ones warn-and-skip internally
@@ -242,13 +280,15 @@ class FallbackAdapter(
             stt_status = self._status[i]
             if stt_status.available or all_failed:
                 try:
-                    return await self._try_recognize(
+                    event = await self._try_recognize(
                         stt=stt,
                         buffer=buffer,
                         language=language,
                         conn_options=conn_options,
                         recovering=False,
                     )
+                    self._active_instance = stt
+                    return event
                 except Exception:  # exceptions already logged inside _try_recognize
                     if stt_status.available:
                         stt_status.available = False
@@ -280,6 +320,15 @@ class FallbackAdapter(
     ) -> RecognizeStream:
         return FallbackRecognizeStream(stt=self, language=language, conn_options=conn_options)
 
+    def prewarm(self) -> None:
+        """Pre-warm the primary STT.
+
+        Only the first instance is prewarmed; the remaining instances are not expected to
+        serve traffic unless the primary fails.
+        """
+        if self._stt_instances:
+            self._stt_instances[0].prewarm()
+
     async def aclose(self) -> None:
         for stt_status in self._status:
             if stt_status.recovering_recognize_task is not None:
@@ -290,6 +339,9 @@ class FallbackAdapter(
 
         for stt in self._stt_instances:
             stt.off("metrics_collected", self._on_metrics_collected)
+
+        for stream_adapter in self._owned_stream_adapters:
+            await stream_adapter.aclose()
 
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
@@ -316,7 +368,16 @@ class FallbackRecognizeStream(RecognizeStream):
             logger.error("all STTs are unavailable, retrying..")
 
         main_stream: RecognizeStream | None = None
+        # the leg that continues this stream's timeline; a leg created before the timeline
+        # has a start is seeded when its first frame is forwarded
+        seeded_stream: RecognizeStream | None = None
         forward_input_task: asyncio.Task[None] | None = None
+
+        def _seed(stream: RecognizeStream) -> None:
+            nonlocal seeded_stream
+            if (origin := self._input_ch.input_started_at) is not None:
+                stream.start_time_offset = time.time() - origin
+                seeded_stream = stream
 
         async def _forward_input_task() -> None:
             async for data in self._input_ch:
@@ -332,6 +393,8 @@ class FallbackRecognizeStream(RecognizeStream):
                 if main_stream is not None:
                     try:
                         if isinstance(data, rtc.AudioFrame):
+                            if main_stream is not seeded_stream:
+                                _seed(main_stream)
                             main_stream.push_frame(data)
                         elif isinstance(data, self._FlushSentinel):
                             main_stream.flush()
@@ -357,17 +420,19 @@ class FallbackRecognizeStream(RecognizeStream):
                             retry_interval=self._fallback_adapter._retry_interval,
                         ),
                     )
-                    # update main_stream start time offset so transcript timestamps are properly adjusted
-                    main_stream.start_time_offset = self.start_time_offset + (
-                        time.time() - self._start_time
-                    )
+                    main_stream._on_provider_progress = self._mark_provider_progress
+                    _seed(main_stream)
 
                     if forward_input_task is None or forward_input_task.done():
                         forward_input_task = asyncio.create_task(_forward_input_task())
 
                     try:
+                        should_set_active = True
                         async with main_stream:
                             async for ev in main_stream:
+                                if should_set_active:
+                                    should_set_active = False
+                                    self._fallback_adapter._active_instance = stt
                                 self._event_ch.send_nowait(ev)
 
                     except asyncio.TimeoutError:

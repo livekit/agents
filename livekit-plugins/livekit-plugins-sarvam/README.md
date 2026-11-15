@@ -4,7 +4,7 @@ Support for [Sarvam.ai](https://sarvam.ai)'s Indian-language voice AI services i
 
 ## Features
 
-- **Speech-to-Text (STT)**: Convert audio to text using Sarvam's "Saarika" models. See the [STT docs](https://docs.livekit.io/agents/integrations/stt/sarvam/) for more information.
+- **Speech-to-Text (STT)**: Convert audio to text using Sarvam's "Saaras" models. See the [STT docs](https://docs.livekit.io/agents/integrations/stt/sarvam/) for more information.
 - **Text-to-Speech (TTS)**: Convert text to audio using Sarvam's "Bulbul" models. See the [TTS docs](https://docs.livekit.io/agents/integrations/tts/sarvam/) for more information.
 - **LLM (Chat Completions)**: OpenAI-compatible chat-completions support for `sarvam-30b`, `sarvam-30b-16k`, `sarvam-105b` and `sarvam-105b-32k` including tool calling.
 

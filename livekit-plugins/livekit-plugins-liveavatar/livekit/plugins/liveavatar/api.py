@@ -44,7 +44,7 @@ class LiveAvatarAPI:
 
         self._api_url = api_url or DEFAULT_API_URL
         self._conn_options = conn_options
-        self._session = session or aiohttp.ClientSession()
+        self._session = session
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._session is None:
