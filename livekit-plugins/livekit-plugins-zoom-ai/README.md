@@ -104,9 +104,7 @@ session = AgentSession(llm=zoom_ai.realtime.RealtimeModel(voice="jenna"))
 await session.start(Agent(instructions="You are a friendly support agent."), room=ctx.room)
 ```
 
-A runnable version with a function tool is [`examples/voice_agents/zoom_voice_agent.py`](../../examples/voice_agents/zoom_voice_agent.py).
-
-It can also be the model of a single agent in a multi-agent handoff (`Agent(llm=zoom_ai.realtime.RealtimeModel())`); see [`examples/voice_agents/zoom_multi_agent.py`](../../examples/voice_agents/zoom_multi_agent.py).
+It can also be the model of a single agent in a multi-agent handoff (`Agent(llm=zoom_ai.realtime.RealtimeModel())`).
 
 Function tools work as with any model: Zoom asks for the call, the agent runs it, and the plugin returns the result and asks for the follow-up reply.
 

@@ -63,6 +63,8 @@ class FakeVoiceAgent:
         self.on_event: Hook | None = None
         self.reject_update: str | None = None
         self.status = 101
+        # accept the WebSocket, then close it before the session is configured
+        self.close_on_connect = False
         self._new_conn = asyncio.Event()
 
     async def handler(self, request: web.Request) -> web.StreamResponse:
@@ -73,6 +75,9 @@ class FakeVoiceAgent:
         conn = Conn(ws=ws, headers=dict(request.headers), protocol=ws.ws_protocol)
         self.conns.append(conn)
         self._new_conn.set()
+        if self.close_on_connect:
+            await ws.close()
+            return ws
         await conn.emit("session.created", session={"id": "sess_1"})
         async for msg in ws:
             if msg.type != aiohttp.WSMsgType.TEXT:
@@ -438,6 +443,24 @@ async def test_cleared_settings_are_reset_on_later_updates(
     await session.aclose()
 
 
+async def test_tool_choice_changes_zoom_treats_the_same_are_not_sent(
+    server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
+) -> None:
+    fake, url = server
+    session = await start(make_model(url, http))
+    conn = await fake.conn()
+    # what AgentActivity does around a tool reply: both mean "auto" for Zoom
+    session.update_options(tool_choice="auto")
+    session.update_options(tool_choice=None)
+    session.update_options(tool_choice="none")
+    await wait_for(lambda: len(conn.of_type("session.update")) == 2)
+    await asyncio.sleep(0.05)
+    updates = conn.of_type("session.update")
+    assert len(updates) == 2
+    assert updates[1]["session"]["think"]["tool_choice"] == "none"
+    await session.aclose()
+
+
 async def test_history_replaced_before_the_conversation_starts(
     server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
 ) -> None:
@@ -621,6 +644,7 @@ async def test_interrupt_cancels_and_truncate_aligns_history(
     await conn.emit("response.created", response={"id": "resp_9"})
     await wait_for(lambda: session._active_response_id == "resp_9")
     session.interrupt()
+    session.interrupt()  # already being cancelled: no second response.cancel
     session.truncate(message_id="item_9", modalities=["audio", "text"], audio_end_ms=1500)
     await wait_for(lambda: conn.of_type("conversation.item.truncate"))
     assert conn.of_type("response.cancel") == [{"type": "response.cancel", "response_id": "resp_9"}]
@@ -652,6 +676,79 @@ async def test_interrupt_before_creation_discards_the_response(
     await wait_for(lambda: conn.of_type("response.cancel"))
     assert conn.of_type("response.cancel")[0]["response_id"] == "resp_late"
     assert not gens
+    await session.aclose()
+
+
+async def test_interrupt_after_zoom_barge_in_sends_no_cancel(
+    server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
+) -> None:
+    fake, url = server
+    session = await start(make_model(url, http))
+    conn = await fake.conn()
+    await conn.emit("response.created", response={"id": "resp_9"})
+    # the caller talks over the agent: Zoom cancels the response itself
+    await conn.emit("input_audio_buffer.speech_started", item_id="user_2")
+    await wait_for(lambda: session._active_response_cancelled)
+    session.interrupt()  # what AgentActivity does on the barge-in
+    await conn.emit("response.done", response={"id": "resp_9", "status": "cancelled"})
+    await wait_for(lambda: session._active_response_id is None)
+    assert not conn.of_type("response.cancel")
+    await session.aclose()
+
+
+async def test_cancelled_reply_cancels_only_its_own_response(
+    server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
+) -> None:
+    fake, url = server
+    session = await start(make_model(url, http))
+    gens: list[llm.GenerationCreatedEvent] = []
+    session.on("generation_created", gens.append)
+    conn = await fake.conn()
+    old = session.generate_reply()
+    await wait_for(lambda: conn.of_type("response.create"))
+    old.cancel()  # e.g. the user barged in on the reply task
+    new = session.generate_reply()
+    await asyncio.sleep(0.05)
+    assert len(conn.of_type("response.create")) == 1, "waits for the cancelled one's response"
+
+    await conn.emit("response.created", response={"id": "resp_old"})
+    await wait_for(lambda: conn.of_type("response.cancel"))
+    assert conn.of_type("response.cancel") == [
+        {"type": "response.cancel", "response_id": "resp_old"}
+    ]
+    await conn.emit("response.done", response={"id": "resp_old", "status": "cancelled"})
+    await wait_for(lambda: len(conn.of_type("response.create")) == 2)
+    await reply(conn, response_id="resp_new")
+    gen = await asyncio.wait_for(new, 2)
+    assert gen.response_id == "resp_new"
+    assert [g.response_id for g in gens] == ["resp_new"]
+    assert len(conn.of_type("response.cancel")) == 1
+    await session.aclose()
+
+
+async def test_cancelled_reply_refused_leaves_the_next_turn_alone(
+    server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
+) -> None:
+    fake, url = server
+    session = await start(make_model(url, http))
+    gens: list[llm.GenerationCreatedEvent] = []
+    session.on("generation_created", gens.append)
+    conn = await fake.conn()
+    fut = session.generate_reply()
+    await wait_for(lambda: conn.of_type("response.create"))
+    fut.cancel()
+    # refused: a response the server started itself is running
+    await conn.ws.send_json(ACTIVE_RESPONSE_ERROR)
+    await wait_for(lambda: not session._reply_inflight)
+    await conn.emit("response.done", response={"id": "resp_auto", "status": "completed"})
+
+    # Zoom's reply to the caller's next turn plays
+    await reply(conn, response_id="resp_turn")
+    await wait_for(lambda: gens)
+    assert gens[0].response_id == "resp_turn"
+    await asyncio.sleep(0.05)
+    assert not conn.of_type("response.cancel")
+    assert len(conn.of_type("response.create")) == 1, "a cancelled request isn't asked again"
     await session.aclose()
 
 
@@ -773,6 +870,75 @@ async def test_reconnects_with_the_conversation_after_the_server_closes(
     await session.aclose()
 
 
+async def test_reconnect_drops_events_queued_for_the_old_connection(
+    server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
+) -> None:
+    fake, url = server
+    session = await start(
+        make_model(
+            url, http, conn_options=APIConnectOptions(max_retry=2, retry_interval=0.3, timeout=5)
+        )
+    )
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    conn = await fake.conn()
+    await conn.emit("response.created", response={"id": "resp_1"})
+    await wait_for(lambda: session._active_response_id == "resp_1")
+
+    fake.status = 503  # the first retry fails, so the session waits out a backoff
+    await conn.ws.close()
+    await wait_for(lambda: len(errors) >= 2)
+    # queued during the backoff
+    session.interrupt()
+    session.truncate(message_id="item_1", modalities=["audio"], audio_end_ms=500)
+    session.push_audio(
+        rtc.AudioFrame(
+            data=b"\x01\x00" * 1600, sample_rate=16000, num_channels=1, samples_per_channel=1600
+        )
+    )
+    fake.status = 101
+
+    conn2 = await fake.conn(1)
+    await wait_for(lambda: conn2.audio)
+    await asyncio.sleep(0.05)
+    assert [e["type"] for e in conn2.events] == ["session.update", "input_audio_buffer.append"]
+    assert all(e.recoverable for e in errors)
+    await session.aclose()
+
+
+async def test_server_that_closes_right_away_exhausts_the_retries(
+    server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
+) -> None:
+    fake, url = server
+    fake.close_on_connect = True
+    session = await start(make_model(url, http, conn_options=FAST_RETRY))
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    await wait_for(lambda: session._main_atask.done())
+    assert len(fake.conns) == FAST_RETRY.max_retry + 1
+    assert errors and not errors[-1].recoverable
+    await session.aclose()
+
+
+async def test_unexpected_failure_ends_the_session_with_an_error(
+    server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
+) -> None:
+    _, url = server
+    session = make_model(url, http).session()
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+
+    async def _broken_connect() -> aiohttp.ClientWebSocketResponse:
+        raise RuntimeError("boom")
+
+    session._connect = _broken_connect  # type: ignore[method-assign]
+    await session._update_session(instructions="Hi.", chat_ctx=llm.ChatContext.empty(), tools=[])
+    await wait_for(lambda: session._main_atask.done())
+    assert len(errors) == 1 and not errors[0].recoverable
+    assert isinstance(errors[0].error, RuntimeError)
+    await session.aclose()
+
+
 async def test_aclose_before_configuration_never_connects(
     server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
 ) -> None:
@@ -849,7 +1015,8 @@ async def test_agent_session_runs_a_tool_turn_end_to_end(
         )
 
     assert tool_args == ["123"]
-    (update, *_) = conn.of_type("session.update")
+    # the tool reply's tool_choice changes don't change what Zoom applies
+    (update,) = conn.of_type("session.update")
     assert update["session"]["think"]["instructions"].startswith("You track orders.")
     assert [t["name"] for t in update["session"]["think"]["tools"]] == ["get_order_status"]
     assert conn.of_type("conversation.item.create") == [

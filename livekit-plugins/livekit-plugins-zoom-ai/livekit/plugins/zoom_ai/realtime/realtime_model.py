@@ -59,6 +59,7 @@ from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
+    NotGiven,
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
@@ -113,12 +114,12 @@ class RealtimeModel(llm.RealtimeModel):
         voice: Voice | str = DEFAULT_VOICE,
         model: str = DEFAULT_MODEL,
         llm_provider: LLMProvider = "zoom",
-        provider_headers: dict[str, str] | None = None,
-        provider_metadata: dict[str, Any] | None = None,
-        vocabulary: list[str] | None = None,
-        reasoning_effort: str | None = None,
-        response_token_limit: int | Literal["inf"] | None = None,
-        tool_choice: llm.ToolChoice | None = None,
+        provider_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        provider_metadata: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        vocabulary: NotGivenOr[list[str]] = NOT_GIVEN,
+        reasoning_effort: NotGivenOr[str] = NOT_GIVEN,
+        response_token_limit: NotGivenOr[int | Literal["inf"]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         url: str = DEFAULT_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -138,10 +139,10 @@ class RealtimeModel(llm.RealtimeModel):
                 ``{"context_window": 1000000, "max_output_tokens": 128000}``.
             vocabulary: Names and terms that improve transcription accuracy.
             reasoning_effort: Reasoning level, such as ``"low"``. Set once per connection.
-            response_token_limit: Maximum tokens per response; ``None`` uses Zoom's default
+            response_token_limit: Maximum tokens per response; defaults to Zoom's default
                 (``"inf"``).
-            tool_choice: ``"auto"``, ``"none"`` or ``"required"``; ``None`` uses Zoom's
-                default (``"auto"``). A named function is sent as ``"required"``.
+            tool_choice: ``"auto"``, ``"none"`` or ``"required"``; defaults to Zoom's default
+                (``"auto"``). A named function is sent as ``"required"``.
             api_key: Zoom AI Services API key, created at https://www.zoom.ai/. Defaults to
                 ``ZOOM_AI_API_KEY``.
             url: Voice Agent WebSocket endpoint.
@@ -167,7 +168,7 @@ class RealtimeModel(llm.RealtimeModel):
         api_key = api_key if is_given(api_key) else os.environ.get("ZOOM_AI_API_KEY", "")
         if not api_key:
             raise ValueError("Zoom AI API key is required: pass api_key or set ZOOM_AI_API_KEY")
-        if llm_provider != "zoom" and not provider_headers:
+        if llm_provider != "zoom" and not (is_given(provider_headers) and provider_headers):
             raise ValueError(
                 f"llm_provider={llm_provider!r} needs provider_headers with your "
                 f"{llm_provider} API key"
@@ -175,18 +176,20 @@ class RealtimeModel(llm.RealtimeModel):
         if not url.startswith(("wss://", "ws://")):
             raise ValueError(f"url must be a ws(s):// URL, got {url!r}")
 
+        # is_given doesn't narrow a union with a Literal for mypy
+        token_limit = None if isinstance(response_token_limit, NotGiven) else response_token_limit
         self._opts = _RealtimeOptions(
             api_key=api_key,
             url=url,
             model=model,
             llm_provider=llm_provider,
-            provider_headers=dict(provider_headers) if provider_headers else None,
-            provider_metadata=dict(provider_metadata) if provider_metadata else None,
+            provider_headers=dict(provider_headers) if is_given(provider_headers) else None,
+            provider_metadata=dict(provider_metadata) if is_given(provider_metadata) else None,
             voice=voice,
-            vocabulary=list(vocabulary) if vocabulary else None,
-            reasoning_effort=reasoning_effort,
-            response_token_limit=response_token_limit,
-            tool_choice=tool_choice,
+            vocabulary=list(vocabulary) if is_given(vocabulary) and vocabulary else None,
+            reasoning_effort=reasoning_effort if is_given(reasoning_effort) else None,
+            response_token_limit=token_limit,
+            tool_choice=tool_choice if is_given(tool_choice) else None,
             conn_options=conn_options,
         )
         self._http_session = http_session
@@ -272,6 +275,9 @@ class _DiscardedGeneration:
 class _PendingReply:
     fut: asyncio.Future[llm.GenerationCreatedEvent]
     timer: asyncio.TimerHandle | None = None
+    # cancelled after its response.create went out: the response that answers it is
+    # cancelled on creation
+    cancelled: bool = False
 
     def cancel_timer(self) -> None:
         if self.timer:
@@ -305,6 +311,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
         self._closing = False
         # an error before the connection's first session.updated is a configuration error
         self._awaiting_config_ack = False
+        # the current connection got its session.updated, so it counts as established
+        self._config_acked = False
         # optional settings sent on the current connection, which need a reset to clear
         self._sent_optional: set[str] = set()
 
@@ -315,7 +323,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
 
         self._current_generation: _ResponseGeneration | _DiscardedGeneration | None = None
         self._active_response_id: str | None = None
-        self._cancel_on_create = False
+        # the active response is already being cancelled, by us or by Zoom's barge-in
+        self._active_response_cancelled = False
         self._reply_queue: deque[_PendingReply] = deque()
         self._reply_inflight: deque[_PendingReply] = deque()
         self._speech_started_at: float | None = None
@@ -380,9 +389,14 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
         if is_given(voice) and voice != self._opts.voice:
             self._opts.voice = voice
             changed = True
-        if is_given(tool_choice) and tool_choice != self._opts.tool_choice:
+        if is_given(tool_choice):
+            # the framework sets "auto" for a tool reply and None after it; both are "auto"
+            # for Zoom, so only a change in the effective value is sent
+            if _effective_tool_choice(tool_choice) != _effective_tool_choice(
+                self._opts.tool_choice
+            ):
+                changed = True
             self._opts.tool_choice = tool_choice
-            changed = True
         if is_given(vocabulary):
             vocabulary = list(vocabulary) if vocabulary else None
             if vocabulary != self._opts.vocabulary:
@@ -428,15 +442,15 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
         reply = _PendingReply(fut=fut)
 
         def _on_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
-            reply.cancel_timer()
-            if not f.cancelled():
+            if f.cancelled() and reply in self._reply_inflight:
+                # response.create is out: keep the request in flight, marked, so that the
+                # response.created it pops is the one cancelled. Its timer stays, in case
+                # the response never comes.
+                reply.cancelled = True
                 return
-            if reply in self._reply_queue:
+            reply.cancel_timer()
+            if f.cancelled() and reply in self._reply_queue:
                 self._reply_queue.remove(reply)
-            elif reply in self._reply_inflight:
-                # response.create is out; cancel the response once the server creates it
-                self._reply_inflight.remove(reply)
-                self._cancel_on_create = True
 
         fut.add_done_callback(_on_done)
         self._reply_queue.append(reply)
@@ -445,10 +459,14 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
 
     def interrupt(self) -> None:
         if self._active_response_id:
-            self._send({"type": "response.cancel", "response_id": self._active_response_id})
-        elif self._reply_inflight:
-            # requested but not created yet: cancel it when it arrives
-            self._cancel_on_create = True
+            # skip a response already being cancelled (twice, or after Zoom's own barge-in)
+            if not self._active_response_cancelled:
+                self._active_response_cancelled = True
+                self._send({"type": "response.cancel", "response_id": self._active_response_id})
+        else:
+            # requested but not created yet: cancel each one when it arrives
+            for reply in self._reply_inflight:
+                reply.cancelled = True
 
     def truncate(
         self,
@@ -670,15 +688,20 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
         try:
             while not self._msg_ch.closed:
                 try:
+                    self._config_acked = False
                     ws = await self._connect()
                     if reconnecting:
                         self._on_reconnected()
-                    num_retries = 0
                     reconnecting = True
                     await self._run_ws(ws)
                 except APIError as e:
                     if self._closing:
                         break
+                    # Start counting again only after a connection that Zoom accepted the
+                    # configuration on, so a server that accepts and closes straight away
+                    # still exhausts the retries.
+                    if self._config_acked:
+                        num_retries = 0
                     if max_retries == 0 or not e.retryable or num_retries >= max_retries:
                         self._emit_error(e, recoverable=False)
                         raise
@@ -691,6 +714,11 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
                     )
                     num_retries += 1
                     await asyncio.sleep(interval)
+                except Exception as e:
+                    if self._closing:
+                        break
+                    self._emit_error(e, recoverable=False)
+                    raise
         finally:
             self._close_current_generation()
             for reply in (*self._reply_inflight, *self._reply_queue):
@@ -733,11 +761,22 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
         self._history = _render_history(self._chat_ctx.items)
         self._close_current_generation()
         self._active_response_id = None
-        self._cancel_on_create = False
+        self._active_response_cancelled = False
         for reply in reversed(self._reply_inflight):
             reply.cancel_timer()
-            self._reply_queue.appendleft(reply)
+            if not reply.cancelled:
+                self._reply_queue.appendleft(reply)
         self._reply_inflight.clear()
+        # Events queued for the old connection refer to its responses and items (cancels,
+        # truncations, function results, which the history above already carries) and
+        # would be refused by the new session. Keep only the caller's audio.
+        queued: list[dict[str, Any]] = []
+        with contextlib.suppress(utils.aio.channel.ChanEmpty, utils.aio.channel.ChanClosed):
+            while True:
+                queued.append(self._msg_ch.recv_nowait())
+        for event in queued:
+            if event.get("type") == "input_audio_buffer.append":
+                self._send(event)
         logger.debug("reconnected to Zoom Voice Agent")
         self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
 
@@ -817,12 +856,16 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
 
     def _on_session_updated(self, event: dict[str, Any]) -> None:
         self._awaiting_config_ack = False
+        self._config_acked = True
         session = event.get("session")
         if isinstance(session, dict) and isinstance(session.get("id"), str):
             self.session_id = session["id"]
 
     def _on_speech_started(self, event: dict[str, Any]) -> None:
         self._speech_started_at = time.time()
+        if self._active_response_id:
+            # Zoom's barge-in cancels the active response itself
+            self._active_response_cancelled = True
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
     def _on_speech_stopped(self, event: dict[str, Any]) -> None:
@@ -863,6 +906,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
         if not isinstance(response_id, str) or not response_id:
             response_id = utils.shortuuid("zoom_resp_")
         self._active_response_id = response_id
+        self._active_response_cancelled = False
         self._conversation_started = True
 
         # Zoom doesn't echo a client id on responses; the oldest reply request in flight is
@@ -871,11 +915,12 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
         if reply:
             reply.cancel_timer()
 
-        if self._cancel_on_create:
-            self._cancel_on_create = False
+        if reply and reply.cancelled:
+            self._active_response_cancelled = True
             self._send({"type": "response.cancel", "response_id": response_id})
+            self._close_current_generation()
             self._current_generation = _DiscardedGeneration()
-            if reply and not reply.fut.done():
+            if not reply.fut.done():
                 reply.fut.set_exception(llm.RealtimeError("generate_reply interrupted"))
             return
 
@@ -1016,6 +1061,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
 
     def _on_response_done(self, event: dict[str, Any]) -> None:
         self._active_response_id = None
+        self._active_response_cancelled = False
         gen = self._current_generation
         self._current_generation = None
         response = event.get("response")
@@ -1058,9 +1104,16 @@ class RealtimeSession(llm.RealtimeSession[Literal["zoom_server_event_received"]]
             if self._reply_inflight:
                 reply = self._reply_inflight.popleft()
                 reply.cancel_timer()
-                self._reply_queue.appendleft(reply)
+                if not reply.cancelled:
+                    self._reply_queue.appendleft(reply)
+                # a cancelled request is done with: nothing was created for it
             else:
                 logger.debug("reply request answered by the already active response")
+            return
+
+        if "no active response" in message.lower():
+            # a response.cancel that crossed the response's own end
+            logger.debug(f"Zoom Voice Agent: {message}")
             return
 
         if self._awaiting_config_ack:
@@ -1167,6 +1220,11 @@ def _unwrap(data: dict[str, Any]) -> dict[str, Any]:
             payload = {**payload, "type": data["type"]}
         return payload
     return data
+
+
+def _effective_tool_choice(tool_choice: llm.ToolChoice | None) -> ZoomToolChoice:
+    """The tool choice Zoom applies; unset is Zoom's default, ``"auto"``."""
+    return _to_zoom_tool_choice(tool_choice) if tool_choice is not None else "auto"
 
 
 def _to_zoom_tool_choice(tool_choice: llm.ToolChoice) -> ZoomToolChoice:
