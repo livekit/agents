@@ -3215,14 +3215,12 @@ source = { editable = "livekit-plugins/livekit-plugins-gladia" }
 dependencies = [
     { name = "aiohttp" },
     { name = "livekit-agents", extra = ["codecs"] },
-    { name = "numpy" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
-    { name = "numpy", specifier = ">=1.26" },
 ]
 
 [[package]]
