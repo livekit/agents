@@ -931,7 +931,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_crusoe(
         *,
-        model: str | CrusoeChatModels = "zai/GLM-5.2",
+        model: str | CrusoeChatModels = "openai/gpt-oss-120b",
         api_key: str | None = None,
         base_url: str = "https://api.inference.crusoecloud.com/v1/",
         client: openai.AsyncClient | None = None,

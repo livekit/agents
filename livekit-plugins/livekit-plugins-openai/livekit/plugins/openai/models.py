@@ -108,20 +108,15 @@ NebiusChatModels = Literal[
 ]
 
 CrusoeChatModels = Literal[
-    "zai/GLM-5.2",
-    "zai/GLM-5.1",
-    "nvidia/Nemotron-3-Nano-30B-A3B",
-    "nvidia/Nemotron-3-Nano-Omni-Reasoning-30B-A3B",
-    "nvidia/Nemotron-3-Super-120B-A12B",
-    "nvidia/Nemotron-3-Ultra-550B",
-    "google/gemma-4-31b-it",
-    "meta-llama/Llama-3.3-70B-Instruct",
-    "deepseek-ai/DeepSeek-V3-0324",
-    "deepseek-ai/DeepSeek-V4-Flash",
-    "deepseek-ai/DeepSeek-V4-Pro",
     "openai/gpt-oss-120b",
-    "qwen/Qwen3-235B-A22B",
-    "moonshotai/Kimi-K2.6",
+    "deepseek-ai/DeepSeek-V4.1-Flash",
+    "google/gemma-4-31b-it",
+    "nvidia/Nemotron-3-Nano-Omni-Reasoning-30B-A3B",
+    "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "nvidia/nemotron-3.5-super-vl-120b-a12b",
+    "qwen/Qwen3.8-27B",
+    "zai-org/GLM-5.3",
+    "zai-org/GLM-5.3-Flash",
 ]
 
 CerebrasChatModels = Literal[
