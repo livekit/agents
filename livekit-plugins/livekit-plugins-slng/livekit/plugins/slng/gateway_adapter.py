@@ -12,9 +12,15 @@ _MODEL_IDENTIFIER_RE = re.compile(
 _RETRYABLE_CLIENT_STATUS_CODES = {408, 409, 425, 429}
 _ERROR_MESSAGE_MAX_LEN = 500
 
+# The gateway's error codes, mapped to the HTTP status the retry logic reads.
+# A code missing here yields no status, and a status-less error is retried on
+# every candidate in turn, so a permanent failure (a malformed pronunciation
+# reference, say) costs a full walk of the chain on every reply. Keep this in
+# step with the codes the gateway emits on a websocket error frame.
 BRIDGE_ERROR_CODE_STATUS: dict[str, int] = {
     "auth_error": 401,
     "config_error": 400,
+    "configuration_error": 400,
     "invalid_request": 400,
     "payload_too_large": 413,
     "rate_limit": 429,
@@ -28,6 +34,16 @@ BRIDGE_ERROR_CODE_STATUS: dict[str, int] = {
     "provider_error": 502,
     "backend_error": 502,
     "backend_connection_failed": 502,
+    # Pronunciation: a bad reference is permanent, an unreachable dictionary
+    # service is not.
+    "invalid_pronunciation": 400,
+    "pronunciation_unauthenticated": 401,
+    "pronunciation_not_found": 404,
+    "pronunciation_unavailable": 503,
+    # Watermarking, TTS only.
+    "unsupported_watermark_format": 400,
+    "watermarking_error": 500,
+    "watermarking_unavailable": 503,
 }
 
 
@@ -68,26 +84,35 @@ def build_tts_init_payload(
     *,
     model: str,
     voice: str,
-    language: str,
     sample_rate: int,
     encoding: str,
-    speed: float,
+    language: str | None = None,
+    speed: float | None = None,
     model_options: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    config: dict[str, Any] = {
-        "language": language,
-        "encoding": encoding,
-        "sample_rate": sample_rate,
-        "speed": speed,
-        **dict(model_options or {}),
-    }
-    return {
-        "type": "init",
-        "model": model,
-        "voice": voice,
-        "language": language,
-        "config": config,
-    }
+    """Build the Unmute TTS ``init`` message.
+
+    ``encoding`` and ``sample_rate`` are always present in the payload: the
+    plugin needs them to decode the audio it receives. ``language`` and
+    ``speed`` are included only when the caller set them, so the model's
+    catalog defaults apply otherwise. ``model_options`` are passed through
+    verbatim into ``config`` and are applied last, so a key repeated there
+    wins.
+
+    ``language`` is also sent at the top level, where some models read it in
+    preference to ``config``. Both copies carry the same value, including when
+    ``model_options`` overrode it, so the two cannot disagree.
+    """
+    config: dict[str, Any] = {"encoding": encoding, "sample_rate": sample_rate}
+    if language is not None:
+        config["language"] = language
+    if speed is not None:
+        config["speed"] = speed
+    config.update(dict(model_options or {}))
+    payload: dict[str, Any] = {"type": "init", "model": model, "voice": voice, "config": config}
+    if config.get("language") is not None:
+        payload["language"] = config["language"]
+    return payload
 
 
 def build_stt_init_payload(
@@ -129,6 +154,25 @@ def build_stt_init_payload(
     config["enable_partials"] = partials
     config["enable_partial_transcripts"] = partials
     return {"type": "init", "config": config}
+
+
+def merge_init_payload(
+    configured: Mapping[str, Any],
+    current: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Lay ``current`` over a caller's own init message, one level deep.
+
+    Every field of ``configured`` is kept unless ``current`` sets it too, in
+    which case ``current`` wins, both at the top level and inside ``config``.
+    """
+    merged = dict(configured)
+    configured_config = configured.get("config")
+    current_config = current.get("config")
+    if isinstance(current_config, Mapping):
+        base = configured_config if isinstance(configured_config, Mapping) else {}
+        merged["config"] = {**base, **current_config}
+    merged.update({key: value for key, value in current.items() if key != "config"})
+    return merged
 
 
 def normalize_region_override(region_override: str | list[str] | None) -> str | None:
