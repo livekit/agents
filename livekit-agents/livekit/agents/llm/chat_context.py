@@ -22,7 +22,15 @@ import time
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, cast, overload
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    TypeAdapter,
+    field_serializer,
+    field_validator,
+)
 from typing_extensions import TypedDict
 
 from livekit import rtc
@@ -405,6 +413,13 @@ def _fingerprint_default(value: Any) -> Any:
     return str(value)
 
 
+# ``hash`` is a typed ``bytes`` field, so its serialized form needs an explicit
+# marker: plain base64 text would be read back as its own ASCII bytes by
+# pydantic, changing the hash on every save/restore cycle. Unmarked strings
+# are treated as legacy payloads and keep pydantic's default UTF-8 conversion.
+_HASH_DATA_URI_PREFIX = "data:application/octet-stream;base64,"
+
+
 def _json_safe_extra(value: Any) -> Any:
     """Recursively encode ``bytes`` inside ``extra`` as base64.
 
@@ -444,7 +459,14 @@ class ChatMessage(_ChatItemBase):
     def _serialize_hash(self, hash_value: bytes | None) -> str | None:
         if hash_value is None:
             return None
-        return base64.b64encode(hash_value).decode("ascii")
+        return _HASH_DATA_URI_PREFIX + base64.b64encode(hash_value).decode("ascii")
+
+    @field_validator("hash", mode="before")
+    @classmethod
+    def _validate_hash(cls, value: Any) -> Any:
+        if isinstance(value, str) and value.startswith(_HASH_DATA_URI_PREFIX):
+            return base64.b64decode(value[len(_HASH_DATA_URI_PREFIX) :], validate=True)
+        return value
 
     @property
     def text_content(self) -> str | None:
