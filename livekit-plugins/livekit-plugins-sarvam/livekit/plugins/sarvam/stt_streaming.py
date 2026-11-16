@@ -1234,11 +1234,9 @@ class RealtimeSpeechStream(stt.SpeechStream):
             return
 
         # Emitted without alternatives so the agent pipeline treats it as a sentinel
-        # it can hold and release with a concrete transcript. The speech-end
-        # wall-clock anchor rides on speech_end_time: the voice pipeline uses it as
-        # the `_last_speaking_time` anchor in STT turn-detection mode, so
-        # transcription_delay measures Sarvam VAD speech end -> final transcript
-        # received. The audio-timeline end_time stays on the FINAL_TRANSCRIPT event.
+        # it can hold and release with a concrete transcript. speech_end_time is when
+        # Sarvam's VAD speech-end signal arrived; the audio-timeline end_time stays on
+        # the FINAL_TRANSCRIPT event.
         self._event_ch.send_nowait(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.END_OF_SPEECH,

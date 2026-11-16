@@ -4,16 +4,21 @@ import asyncio
 import base64
 import gc
 import json
+import time
 import weakref
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import aiohttp
 import numpy as np
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, llm
+from livekit.agents.voice import AgentSession
+from livekit.agents.voice.audio_recognition import AudioRecognition
+from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.plugins import sarvam
 from livekit.plugins.sarvam import stt as sarvam_stt
 
@@ -390,3 +395,49 @@ async def test_server_end_speech_does_not_flush_next_utterance(
             assert await session.ws.next_message() == {"type": "flush"}
         assert session.ws.sent.empty()
         assert not session.ws.closed
+
+
+@pytest.mark.virtual_time
+async def test_transcription_delay_measures_sarvam_speech_end_to_final(session: _Session) -> None:
+    # Sarvam's VAD owns the turn (turn_detection="stt", no local VAD) and its final carries no
+    # speech_end. The final lands within the EOS grace period, so the plugin emits it before
+    # END_OF_SPEECH, whose speech_end_time must anchor the turn rather than its own arrival.
+    hooks = MagicMock()
+    hooks.retrieve_chat_ctx.return_value = llm.ChatContext()
+    hooks.on_end_of_turn.return_value = True
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        recognition = AudioRecognition(
+            AgentSession(vad=None, turn_handling={"turn_detection": "stt"}),
+            hooks=hooks,
+            endpointing=BaseEndpointing(min_delay=0.5, max_delay=3.0),
+            stt=model,
+            vad=None,
+            interruption_detection=None,
+            turn_detection="stt",
+        )
+        stream = model.stream()
+
+        async def forward() -> None:
+            async for ev in stream:
+                await recognition._on_stt_event(ev)
+
+        forward_task = asyncio.create_task(forward())
+        try:
+            await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+            await asyncio.sleep(1.0)
+            await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+            speech_end = time.time()
+            await asyncio.sleep(0.2)
+            await stream._handle_transcript_data(
+                {"data": {"transcript": "नमस्ते", "language_code": "hi-IN", "metrics": {}}}
+            )
+            while not hooks.on_end_of_turn.called:
+                await asyncio.sleep(0.01)
+        finally:
+            forward_task.cancel()
+            await recognition._aclose()
+
+    metrics = hooks.on_end_of_turn.call_args.args[0].metrics
+    assert metrics.stopped_speaking_at == pytest.approx(speech_end, abs=1e-3)
+    assert metrics.transcription_delay == pytest.approx(0.2, abs=1e-3)
+    assert metrics.end_of_turn_delay == pytest.approx(0.5, abs=1e-3)

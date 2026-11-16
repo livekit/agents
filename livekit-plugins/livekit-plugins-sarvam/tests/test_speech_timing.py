@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -91,11 +90,8 @@ async def test_end_speech_emits_bare_end_of_speech() -> None:
 
 
 async def test_end_of_speech_carries_speech_end_wall_clock() -> None:
-    # The voice pipeline anchors `_last_speaking_time` from END_OF_SPEECH's
-    # speech_end_time (stt turn-detection mode), which makes transcription_delay
-    # measure Sarvam VAD speech end -> final transcript received. The anchor is
-    # the wall-clock moment the plugin received END_SPEECH, not the later moment
-    # the EOS event is actually emitted.
+    # speech_end_time is the wall-clock moment the plugin received END_SPEECH, not
+    # the later moment the EOS fallback task emits the event.
     instance, captured = _make_stream_under_test()
 
     await instance._handle_events(_event("START_SPEECH"))
@@ -106,10 +102,9 @@ async def test_end_of_speech_carries_speech_end_wall_clock() -> None:
     assert len(end_events) == 1
     speech_end = end_events[0].speech_end_time
     assert speech_end is not None
-    assert speech_end <= time.time()
-    # The anchor is captured at END_SPEECH receipt, so it must not be later than
-    # the moment the EOS event was created by the fallback task.
-    assert speech_end <= end_events[0].created_at
+    # The fallback task emits EOS one timeout after END_SPEECH; an anchor taken at
+    # emission would match created_at instead.
+    assert end_events[0].created_at - speech_end >= instance._eos_fallback_timeout
 
 
 async def test_speech_end_wall_clock_resets_on_new_utterance() -> None:
