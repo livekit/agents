@@ -1,0 +1,202 @@
+import asyncio
+import json
+import logging
+import os
+from typing import Any
+
+from dotenv import load_dotenv
+from livekit import rtc
+from livekit.agents import (
+    NOT_GIVEN,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    STTContextOptions,
+    TurnHandlingOptions,
+    UserStateChangedEvent,
+    cli,
+    inference,
+    room_io,
+)
+from livekit.agents.beta.tools import EndCallTool
+from livekit.agents.utils.participant import wait_for_participant_attribute
+from livekit.plugins import ai_coustics
+
+from order_desk import (
+    GREETING,
+    PERSONA,
+    DeliveryUpdate,
+    TakeOrder,
+    caller_script,
+    delivery_opener,
+)
+from phone import PHONE, dial_phone, outbound_line
+from pizzeria import Pizzeria
+from simulation import on_simulation_end
+from suggested_replies import SUGGESTIONS_MODEL, SuggestedReplies
+
+logger = logging.getLogger("agent")
+
+load_dotenv(".env.local")
+
+AGENT_NAME = "restaurant-ordering"
+STT_MODEL = "assemblyai/universal-3-6-pro"
+LLM_MODEL = "google/gemma-4-31b-it"
+TTS_MODEL = "fishaudio/s2.1-pro"
+VOICE = "9a9cf47702da476aa4629e2506d4a857"  # Hannah: a conversational specialist
+KEYTERMS = [
+    "Zappi's",
+    "Gabby",
+    "pepperoni",
+    "margherita",
+    "Hawaiian",
+    "meat lovers",
+    "boneless",
+    "breadsticks",
+    "Caesar",
+    "caprese",
+    "tiramisu",
+    "cannoli",
+    "Marco",
+]
+
+STILL_THERE = "Are you still there?"
+SILENT_GOODBYE = "I'll let you go. Give us a call back anytime."
+
+server = AgentServer()
+
+
+@server.rtc_session(agent_name=AGENT_NAME, on_simulation_end=on_simulation_end)
+async def restaurant(ctx: JobContext) -> None:
+    # which call it is and who it's for: from the dispatch, from a scenario, or, in the
+    # console, from CALL_DIRECTION
+    meta = {
+        "direction": os.getenv("CALL_DIRECTION"),
+        **json.loads(ctx.job.metadata or "{}"),
+    }
+    if sim := ctx.simulation_context():
+        meta |= sim.userdata()
+    delivery_update = meta.get("direction") == "outbound"
+    ctx.log_context_fields = {
+        "room": ctx.room.name,
+        "direction": "outbound" if delivery_update else "inbound",
+    }
+    await ctx.connect()
+
+    dial = meta.get("dial")
+    if dial and await dial_phone(ctx, dial, *outbound_line(meta)) is None:
+        ctx.delete_room()
+        return
+    phone = next(
+        (
+            p
+            for p in ctx.room.remote_participants.values()
+            if p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+        ),
+        None,
+    )
+
+    async def publish(parts: dict[str, Any]) -> None:
+        await ctx.room.local_participant.set_attributes(
+            {f"restaurant.{key}": json.dumps(value) for key, value in parts.items()}
+        )
+
+    pos = (
+        Pizzeria.out_for_delivery(meta.get("name"), publish)
+        if delivery_update
+        else Pizzeria(publish)
+    )
+    await publish(
+        {
+            "call": {
+                "channel": "phone" if phone else "browser",
+                "direction": "outbound" if delivery_update else "inbound",
+                "models": {"stt": STT_MODEL, "llm": LLM_MODEL, "tts": TTS_MODEL},
+            }
+        }
+    )
+    await pos.publish_all()
+
+    session = AgentSession[Pizzeria](
+        userdata=pos,
+        vad=inference.VAD(),
+        stt=inference.STT(model=STT_MODEL, language="en"),
+        stt_context_options=STTContextOptions(
+            keyterms=KEYTERMS, keyterm_detection={"enabled": True}
+        ),
+        llm=inference.LLM(model=LLM_MODEL),
+        tts=inference.TTS(model=TTS_MODEL, voice=VOICE),
+        turn_handling=TurnHandlingOptions(
+            turn_detection=inference.TurnDetector(),
+            interruption={"mode": "adaptive"},
+            preemptive_generation={"enabled": True},
+        ),
+        expressive=True,
+        tools=[
+            EndCallTool(
+                end_instructions="Say what any tool called with this one returned, then a "
+                "short goodbye if you haven't said one."
+            )
+        ],
+    )
+    session.on("close", lambda _: ctx.delete_room())
+    if not ctx.is_fake_job():
+        # a live line: the console's text turns have no silence to check on
+        check_in_when_user_away(session)
+    SuggestedReplies(
+        session,
+        ctx.room,
+        llm=inference.LLM(SUGGESTIONS_MODEL),
+        persona=PERSONA,
+        script=lambda: caller_script(pos),
+    ).attach()
+
+    await session.start(
+        agent=DeliveryUpdate(pos) if delivery_update else TakeOrder(pos),
+        room=ctx.room,
+        room_options=room_io.RoomOptions(
+            participant_identity=PHONE if dial else NOT_GIVEN,
+            audio_input=room_io.AudioInputOptions(
+                noise_cancellation=ai_coustics.audio_enhancement(
+                    model=ai_coustics.EnhancerModel.QUAIL_VF_S
+                ),
+            ),
+        ),
+    )
+
+    if phone:
+        try:
+            await wait_for_participant_attribute(
+                ctx.room,
+                identity=phone.identity,
+                attribute="sip.callStatus",
+                value="active",
+            )
+        except RuntimeError:
+            ctx.shutdown(reason="the call was not answered")
+            return
+    session.say(delivery_opener(pos) if delivery_update else GREETING)
+
+
+def check_in_when_user_away(session: AgentSession) -> None:
+    """Asks once whether the caller's still there when the line goes quiet, and says goodbye
+    if it stays quiet. Fixed lines, so silence never agrees to anything."""
+    check_in: asyncio.Task[None] | None = None
+
+    async def ask_then_hang_up() -> None:
+        await session.say(STILL_THERE)
+        await asyncio.sleep(session.options.user_away_timeout)
+        await session.say(SILENT_GOODBYE, allow_interruptions=False)
+        session.shutdown()
+
+    @session.on("user_state_changed")
+    def on_user_state(ev: UserStateChangedEvent) -> None:
+        nonlocal check_in
+        if check_in:
+            check_in.cancel()
+        if ev.new_state == "away":
+            check_in = asyncio.create_task(ask_then_hang_up())
+
+
+if __name__ == "__main__":
+    cli.run_app(server)

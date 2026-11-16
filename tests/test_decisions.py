@@ -27,7 +27,7 @@ from livekit.agents.llm.decisions import (
 from livekit.agents.metrics import DecisionMetrics
 from livekit.agents.types import APIConnectOptions
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 QUESTIONS: dict[str, decisions.Decision] = {
     "human": decisions.Probability("The caller wants a human."),

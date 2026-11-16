@@ -17,6 +17,7 @@ from livekit import rtc
 
 from ..._exceptions import APITimeoutError
 from ...language import LanguageCode
+from ...llm import ChatContext
 from ...log import logger
 from ...types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -50,8 +51,9 @@ class _StreamingTurnDetectionTransport(Protocol):
 
     async def run(self) -> None: ...
 
-    def run_inference(self, request_id: str) -> None: ...
+    def run_inference(self, request_id: str, *, chat_ctx: ChatContext | None = None) -> None: ...
     def push_frame(self, frame: rtc.AudioFrame) -> None: ...
+    def on_start_of_turn(self, elapsed: float) -> None: ...
     def flush(self) -> None: ...
 
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None: ...
@@ -93,6 +95,28 @@ class _BaseStreamingTurnDetectorStream:
     class _FlushSentinel:
         reason: str | None = None
 
+    @dataclass
+    class _StartOfTurnSentinel:
+        """Queue event: the user turn started.
+
+        ``elapsed`` is the time in seconds from the turn start to the end of the frames queued
+        before this event. The transport counts the turn from that point.
+        """
+
+        elapsed: float
+
+    @dataclass
+    class _InferenceSentinel:
+        """Queue event: run one inference request after the frames queued before it.
+
+        ``request_id`` identifies the request from ``predict()``; the drain loop skips it if a
+        newer request or a cancel replaced it. ``chat_ctx`` holds the chat context items as of
+        ``predict()``, or ``None`` when the caller passed none.
+        """
+
+        request_id: str
+        chat_ctx: ChatContext | None
+
     def __init__(
         self,
         *,
@@ -120,7 +144,10 @@ class _BaseStreamingTurnDetectorStream:
         self._audio_input_num_channels: int | None = None
         self._audio_resampler: rtc.AudioResampler | None = None
         self._audio_ch = aio.Chan[
-            rtc.AudioFrame | _BaseStreamingTurnDetectorStream._FlushSentinel
+            rtc.AudioFrame
+            | _BaseStreamingTurnDetectorStream._FlushSentinel
+            | _BaseStreamingTurnDetectorStream._StartOfTurnSentinel
+            | _BaseStreamingTurnDetectorStream._InferenceSentinel
         ]()
 
         self._request_id: str | None = None
@@ -170,7 +197,7 @@ class _BaseStreamingTurnDetectorStream:
 
     # region: inference requests
 
-    def predict(self) -> asyncio.Future[TurnDetectionEvent]:
+    def predict(self, chat_ctx: ChatContext | None = None) -> asyncio.Future[TurnDetectionEvent]:
         """Start a new inference request and return its future."""
         if self._audio_ch.closed:
             fut: asyncio.Future[TurnDetectionEvent] = asyncio.get_running_loop().create_future()
@@ -184,7 +211,15 @@ class _BaseStreamingTurnDetectorStream:
             fallback_prefix="turn_request_",
         )
         self._request_fut = asyncio.get_running_loop().create_future()
-        self._transport.run_inference(self._request_id)
+        # queued behind the audio so far: the transport runs it after the frames captured before
+        # this call, and the turn length it reports covers them
+        # the items as of this call: the caller may add to chat_ctx before the transport runs it
+        snapshot = ChatContext(items=list(chat_ctx.items)) if chat_ctx is not None else None
+        self._audio_ch.send_nowait(
+            _BaseStreamingTurnDetectorStream._InferenceSentinel(
+                request_id=self._request_id, chat_ctx=snapshot
+            )
+        )
         return self._request_fut
 
     def cancel_inference(self, *, timed_out: bool = False) -> None:
@@ -230,6 +265,17 @@ class _BaseStreamingTurnDetectorStream:
             return
         for resampled_frame in self._resample_audio_frame(frame):
             self._audio_ch.send_nowait(resampled_frame)
+
+    def on_start_of_turn(self, started_at: float) -> None:
+        """The user turn started at ``started_at``; it lasts until the next flush."""
+        if self._audio_ch.closed:
+            return
+        # measured now, while the frames queued so far end at the present; the transport may
+        # drain them much later, e.g. after a cloud reconnect backlog
+        elapsed = max(0.0, time.time() - started_at)
+        self._audio_ch.send_nowait(
+            _BaseStreamingTurnDetectorStream._StartOfTurnSentinel(elapsed=elapsed)
+        )
 
     def end_input(self) -> None:
         self.flush()
@@ -328,15 +374,22 @@ class _BaseStreamingTurnDetectorStream:
         async for item in self._audio_ch:
             if isinstance(item, _BaseStreamingTurnDetectorStream._FlushSentinel):
                 self._transport.flush()
+            elif isinstance(item, _BaseStreamingTurnDetectorStream._StartOfTurnSentinel):
+                self._transport.on_start_of_turn(item.elapsed)
+            elif isinstance(item, _BaseStreamingTurnDetectorStream._InferenceSentinel):
+                # a newer predict, a cancel, or a fallback closed this request while it waited
+                if item.request_id == self._request_id:
+                    self._transport.run_inference(item.request_id, chat_ctx=item.chat_ctx)
             else:
                 self._transport.push_frame(item)
 
     async def _run(self) -> None:
         """Run the active transport, retrying on cloud failure by swapping in
-        a local transport in-place. ``turn-detector-v1-mini`` just runs the
-        transport once and surfaces failures to the caller via
-        ``_resolve_prediction`` (default 1.0). With ``local_fallback=False``
-        there is nothing to swap in, so a dead cloud transport is terminal.
+        a local transport in-place. ``turn-detector-v1-mini`` surfaces a failure
+        to the caller via ``_resolve_prediction`` (default 1.0) and runs the
+        transport again, so it keeps draining the audio and the requests queued
+        behind it. With ``local_fallback=False`` there is nothing to swap in, so
+        a dead cloud transport is terminal.
         """
         while True:
             task = asyncio.create_task(self._transport.run())
@@ -360,8 +413,8 @@ class _BaseStreamingTurnDetectorStream:
                         continue
                     self._degrade(reason=e)
                     return
+                # the failed call consumed its queue item: the next run starts after it
                 self._on_local_failure(reason=e)
-                return
 
     def _degrade(self, *, reason: BaseException) -> None:
         """Give up on detection: no transport is left to drain audio or predict."""

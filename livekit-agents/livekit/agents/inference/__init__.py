@@ -4,6 +4,7 @@ from ._realtime_models import (
     DuplexModels,
     OpenAIRealtimeModels,
     RealtimeModels,
+    RimeRealtimeModels,
     XAIRealtimeModels,
     is_duplex_model,
     is_realtime_model,
@@ -21,7 +22,7 @@ from .llm import LLM, LLMModels, LLMStream, llm_from_model_string
 
 from . import responses  # isort: skip  # must follow .llm
 from .stt import STT, STTModels
-from .tts import TTS, TTSModels
+from .tts import TTS, FallbackActivatedEvent, TTSModels
 from .vad import VAD, VADModels
 
 if TYPE_CHECKING:
@@ -58,6 +59,7 @@ __all__ = [
     "LLMStream",
     "STTModels",
     "TTSModels",
+    "FallbackActivatedEvent",
     "LLMModels",
     "InferenceClass",
     "VADModels",
@@ -75,6 +77,7 @@ __all__ = [
     "RealtimeModels",
     "OpenAIRealtimeModels",
     "XAIRealtimeModels",
+    "RimeRealtimeModels",
     "DuplexModels",
     "is_realtime_model",
     "is_duplex_model",

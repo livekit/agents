@@ -229,6 +229,7 @@ class STT(stt.STT):
         return SpeechStream(
             stt=self,
             conn_options=conn_options,
+            language=language,
         )
 
 
@@ -237,10 +238,12 @@ class SpeechStream(stt.SpeechStream):
         self,
         stt: STT,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        language: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """Set up state and queues for a WebSocket-based transcription stream."""
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._params.sample_rate)
         self._stt: STT = stt
+        self._language_hints = [LanguageCode(language).language] if language else None
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reconnect_event = asyncio.Event()
 
@@ -274,7 +277,7 @@ class SpeechStream(stt.SpeechStream):
             "num_channels": self._stt._params.num_channels or 1,
             "enable_endpoint_detection": True,
             "sample_rate": self._stt._params.sample_rate,
-            "language_hints": self._stt._params.language_hints,
+            "language_hints": self._language_hints or self._stt._params.language_hints,
             "language_hints_strict": self._stt._params.language_hints_strict,
             "context": context_value,
             "enable_speaker_diarization": self._stt._params.enable_speaker_diarization,

@@ -458,6 +458,19 @@ def test_xai_explicit_turn_detection_is_preserved() -> None:
     assert model.capabilities.can_disable_turn_detection is False
 
 
+def test_google_models_keep_server_turn_detection() -> None:
+    model = RealtimeModel("google/gemini-3.8-live", api_key="key", api_secret="secret")
+
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.can_disable_turn_detection is False
+
+
+def test_openai_models_can_hand_turn_detection_to_the_client() -> None:
+    model = RealtimeModel("openai/gpt-realtime", api_key="key", api_secret="secret")
+
+    assert model.capabilities.can_disable_turn_detection is True
+
+
 def _transcript(session: RealtimeSession, item_id: str, text: str, *, status: str | None) -> None:
     payload: dict[str, Any] = {
         "type": "conversation.item.input_audio_transcription.completed",

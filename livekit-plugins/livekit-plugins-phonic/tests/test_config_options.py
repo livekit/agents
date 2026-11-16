@@ -23,3 +23,12 @@ async def test_external_id_is_omitted_when_not_given() -> None:
         assert "external_id" not in options
     finally:
         await session.aclose()
+
+
+async def test_session_reconnects_on_abnormal_disconnect() -> None:
+    model = RealtimeModel(api_key="test")
+    session = model.session()
+    try:
+        assert session._client._client_wrapper._reconnect_conversation_on_abnormal_disconnect
+    finally:
+        await session.aclose()

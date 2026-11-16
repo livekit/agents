@@ -13,10 +13,11 @@ import numpy as np
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from livekit import rtc
-from livekit.local_inference import EOT as _EOT
+from livekit.local_inference import EOT as _EOT, EOT_MAX_SAMPLES
 from livekit.protocol.agent_pb.agent_inference import (
     AUDIO_ENCODING_PCM_S16LE,
     ClientMessage,
+    EotInputChatContext,
     EotPrediction,
     InferenceStart,
     InputAudio,
@@ -25,6 +26,10 @@ from livekit.protocol.agent_pb.agent_inference import (
     SessionCreate,
     SessionFlush,
     SessionSettings,
+)
+from livekit.protocol.agent_pb.agent_session import (
+    ChatMessage as ProtoChatMessage,
+    ChatRole as ProtoChatRole,
 )
 
 from ... import utils
@@ -35,6 +40,7 @@ from ..._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
+from ...llm import ChatContext
 from ...log import logger
 from ...metrics import EOTInferenceMetrics
 from ...metrics.base import Metadata
@@ -60,6 +66,9 @@ __all__ = [
 ]
 
 
+_MAX_UINT32 = 2**32 - 1
+
+
 @dataclass
 class _CloudTransportOptions:
     """Cloud-WebSocket-specific options. Held separately from
@@ -70,10 +79,6 @@ class _CloudTransportOptions:
     api_key: str
     api_secret: str
     conn_options: APIConnectOptions
-
-
-_CLIENT_BUFFER_SECONDS = 1.2
-_CLIENT_BUFFER_SAMPLES = int(_CLIENT_BUFFER_SECONDS * DEFAULT_SAMPLE_RATE)
 
 
 class _CloudTransport:
@@ -95,6 +100,8 @@ class _CloudTransport:
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._session_id: str | None = None
         self._num_retries = 0
+        # the user turn length so far, since the last flush; sent with each inference_start
+        self._turn_samples = 0
 
         self._send_ch: aio.Chan[ClientMessage] | None = None
         self._stream_ref: weakref.ref[_BaseStreamingTurnDetectorStream] | None = None
@@ -106,13 +113,34 @@ class _CloudTransport:
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None:
         self._stream_ref = weakref.ref(stream)
 
-    def run_inference(self, request_id: str) -> None:
-        self._send_message(ClientMessage(inference_start=InferenceStart(request_id=request_id)))
+    def run_inference(self, request_id: str, *, chat_ctx: ChatContext | None = None) -> None:
+        context = EotInputChatContext()
+        if chat_ctx is not None:
+            for item in reversed(chat_ctx.items):
+                if item.type == "message" and item.role == "assistant":
+                    if text := item.text_content:
+                        context.messages.append(
+                            ProtoChatMessage(
+                                role=ProtoChatRole.ASSISTANT,
+                                content=[ProtoChatMessage.ChatContent(text=text)],
+                            )
+                        )
+                    break
+
+        self._send_message(ClientMessage(eot_input_chat_context=context))
+        turn_samples = min(self._turn_samples, _MAX_UINT32)
+        self._send_message(
+            ClientMessage(
+                inference_start=InferenceStart(request_id=request_id, turn_samples=turn_samples)
+            )
+        )
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         pcm_bytes = bytes(frame.data)
         if not pcm_bytes:
             return
+        # count the turn even while disconnected: the user keeps speaking
+        self._turn_samples += frame.samples_per_channel
         audio_created_at = Timestamp()
         audio_created_at.GetCurrentTime()
         self._send_message(
@@ -125,7 +153,16 @@ class _CloudTransport:
             )
         )
 
+    def on_start_of_turn(self, elapsed: float) -> None:
+        """Count the turn from its start, ``elapsed`` seconds before the frames pushed so far end.
+
+        Samples pushed since the last flush but before the turn start stop counting toward the
+        ``turn_samples`` sent with ``inference_start``; the audio already sent is unchanged.
+        """
+        self._turn_samples = min(self._turn_samples, int(elapsed * self._opts.sample_rate))
+
     def flush(self) -> None:
+        self._turn_samples = 0
         self._send_message(ClientMessage(session_flush=SessionFlush()))
 
     def detach(self) -> None:
@@ -387,8 +424,11 @@ class _LocalTransport:
     def __init__(self, *, opts: TurnDetectorOptions) -> None:
         self._opts = opts
         self._buf = utils.AudioArrayBuffer(
-            buffer_size=_CLIENT_BUFFER_SAMPLES, sample_rate=DEFAULT_SAMPLE_RATE
+            buffer_size=EOT_MAX_SAMPLES, sample_rate=DEFAULT_SAMPLE_RATE
         )
+        # the user turn length so far: the model takes it as a feature, beyond the window it
+        # reads. The buffer holds the last EOT_MAX_SAMPLES of the same turn, never more
+        self._turn_samples = 0
         self._eot = _EOT()
         self._stream_ref: weakref.ref[_BaseStreamingTurnDetectorStream] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -400,16 +440,18 @@ class _LocalTransport:
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None:
         self._stream_ref = weakref.ref(stream)
 
-    def run_inference(self, request_id: str) -> None:
-        task = asyncio.create_task(self._predict(request_id, self._buf.read()))
+    def run_inference(self, request_id: str, *, chat_ctx: ChatContext | None = None) -> None:
+        task = asyncio.create_task(self._predict(request_id, self._buf.read(), self._turn_samples))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _predict(self, request_id: str, pcm_snapshot: np.ndarray) -> None:
+    async def _predict(self, request_id: str, pcm_snapshot: np.ndarray, turn_samples: int) -> None:
         prob = 0.0
         t0 = time.monotonic()
         try:
-            prob = float(await asyncio.to_thread(self._eot.predict, pcm_snapshot))
+            prob = float(
+                await asyncio.to_thread(self._eot.predict, pcm_snapshot, turn_samples=turn_samples)
+            )
         except Exception:
             logger.exception("local audio EOT prediction failed")
             prob = 1.0  # positive default, like the other local failures: commit after min_delay
@@ -421,11 +463,22 @@ class _LocalTransport:
         stream._resolve_prediction(request_id, prob, inference_duration=inference_duration)
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
-        self._buf.push_frame(frame)
+        self._turn_samples += self._buf.push_frame(frame)
+
+    def on_start_of_turn(self, elapsed: float) -> None:
+        """Start the turn ``elapsed`` seconds before the frames pushed so far end.
+
+        Samples pushed since the last flush but before the turn start leave both the audio
+        window the model reads and the turn length passed to it.
+        """
+        self._turn_samples = min(self._turn_samples, int(elapsed * DEFAULT_SAMPLE_RATE))
+        if (stale := len(self._buf) - self._turn_samples) > 0:
+            self._buf.shift(stale)
 
     def flush(self) -> None:
         if len(self._buf) > 0:
             self._buf.shift(len(self._buf))
+        self._turn_samples = 0
 
     def detach(self) -> None:
         for task in list(self._tasks):

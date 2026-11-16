@@ -21,7 +21,6 @@ from .._exceptions import (
     APIError,
     APIStatusError,
     APITimeoutError,
-    create_api_error_from_http,
 )
 from ..language import LanguageCode
 from ..log import logger
@@ -36,6 +35,7 @@ from ..utils import is_given
 from ._utils import (
     HEADER_SESSION_ID,
     create_access_token,
+    create_api_error_from_response,
     get_default_inference_url,
     get_inference_headers,
 )
@@ -70,7 +70,10 @@ AssemblyAIModels = Literal[
     "assemblyai/universal-3-5-pro",
     "assemblyai/universal-3-6-pro",
 ]
-XaiModels = Literal["xai/stt-1",]
+XaiModels = Literal[
+    "xai/stt-1",
+    "xai/stt-2",
+]
 SpeechmaticsModels = Literal[
     "speechmatics/enhanced",
     "speechmatics/standard",
@@ -112,7 +115,10 @@ class DeepgramOptions(TypedDict, total=False):
     dictation: bool
     detect_language: bool
     no_delay: bool  # default: True
-    utterance_end: bool
+    # Gap after the last finalized word before Deepgram sends UtteranceEnd: 1000-5000 ms,
+    # and it needs interim_results on. The gateway does not forward the event.
+    utterance_end_ms: int
+    utterance_end: bool  # alias: True is utterance_end_ms=1000; prefer utterance_end_ms
     redact: str | list[str]
     replace: str | list[str]
     search: str | list[str]
@@ -355,6 +361,7 @@ _WORD_ALIGNED_MODELS = frozenset(
         "assemblyai/universal-3-5-pro",
         "assemblyai/universal-3-6-pro",
         "xai/stt-1",
+        "xai/stt-2",
         "speechmatics/enhanced",
         "speechmatics/standard",
     }
@@ -948,6 +955,11 @@ class STT(stt.STT):
             stream._on_session_keyterms_changed()
 
     def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        # a FallbackAdapter forwards every item to each STT it wraps, and the session's
+        # subscription outlives a model switch: skip models that cannot read agent_context
+        if not self._capabilities.chat_context:
+            super()._push_conversation_item(ev)  # warns once, then ignores
+            return
         if (
             (chat_item := ev.item).type == "message"
             and chat_item.role == "assistant"
@@ -1434,7 +1446,7 @@ class SpeechStream(stt.SpeechStream):
             if session_id is not None:
                 self._request_id = session_id
         except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from e
+            raise create_api_error_from_response(e) from e
         except asyncio.TimeoutError as e:
             raise APITimeoutError("LiveKit Inference STT connection timed out.") from e
         except aiohttp.ClientConnectorError as e:
