@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, cast
 from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
-from livekit.api.access_token import Claims
+from livekit.api.access_token import TokenGrants
 from livekit.protocol import agent
 
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
@@ -246,8 +246,8 @@ class _JobTokenClient:
         self._tokens[claims] = (resp.token, now + (resp.expires_at - now) / 2)
         return resp.token
 
-    async def token_source(self, claims: Claims) -> str:
-        """A ``livekit.api.TokenSource`` for ``LiveKitAPI``."""
+    async def token_provider(self, claims: TokenGrants) -> str:
+        """A ``livekit.api.TokenProvider`` for ``LiveKitAPI``."""
         return await self.create_token(json.dumps(claims.asdict()))
 
     def close(self) -> None:

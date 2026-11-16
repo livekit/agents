@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import json
 import os
 import unittest
@@ -25,6 +26,7 @@ from unittest.mock import ANY, AsyncMock, Mock, patch
 import pytest
 
 from livekit import rtc
+from livekit.agents import JobContext
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.plugins.boson_avatar.api import AvatarSessionInfo, AvatarSessionStartError
@@ -32,6 +34,13 @@ from livekit.plugins.boson_avatar.avatar import SAMPLE_RATE, AvatarSession
 from livekit.plugins.boson_avatar.errors import BosonAvatarException
 
 pytestmark = pytest.mark.unit
+
+
+def _job_context(**fields: object) -> SimpleNamespace:
+    """A job context whose create_participant_token signs locally, as outside token mode."""
+    ctx = SimpleNamespace(_job_token_client=None, **fields)
+    ctx.create_participant_token = functools.partial(JobContext.create_participant_token, ctx)
+    return ctx
 
 
 class _Room:
@@ -148,7 +157,7 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
             ),
             patch(
                 "livekit.plugins.boson_avatar.avatar.get_job_context",
-                return_value=SimpleNamespace(
+                return_value=_job_context(
                     job=SimpleNamespace(id="AJ_test"),
                     local_participant_identity="voice-1",
                 ),
@@ -280,7 +289,7 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
             ),
             patch(
                 "livekit.plugins.boson_avatar.avatar.get_job_context",
-                return_value=SimpleNamespace(
+                return_value=_job_context(
                     job=SimpleNamespace(id="AJ_test"),
                     local_participant_identity="voice-1",
                 ),

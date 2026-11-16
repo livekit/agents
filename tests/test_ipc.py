@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import io
+import json
 import logging
 import multiprocessing as mp
 import os
@@ -12,18 +13,21 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from multiprocessing.context import BaseContext
 from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import jwt
 import psutil
 import pytest
 
+from livekit import api
 from livekit.agents import JobContext, JobProcess, ipc, job, utils
 from livekit.agents.ipc.log_queue import LogQueueHandler, LogQueueListener
 from livekit.agents.utils.aio import duplex_unix
 from livekit.agents.voice.events import CloseReason
-from livekit.protocol import agent
+from livekit.protocol import agent, models
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
@@ -987,6 +991,117 @@ async def test_job_token_request_times_out_when_the_worker_never_answers() -> No
     with pytest.raises(RuntimeError, match="worker did not answer the job token request"):
         await client.create_token("{}")
     assert not client._active_requests
+
+
+# -- JobContext.create_participant_token: signed here, or by the server in token mode
+
+_TOKEN_MODE_ENV = {"LIVEKIT_API_KEY": "", "LIVEKIT_API_SECRET": "", "LIVEKIT_TOKEN": "worker-token"}
+_KEY_MODE_ENV = {
+    "LIVEKIT_API_KEY": "devkey",
+    "LIVEKIT_API_SECRET": "secret" * 6,
+    "LIVEKIT_TOKEN": "",
+}
+_AVATAR_TOKEN_ARGS = {
+    "identity": "avatar",
+    "name": "Avatar",
+    "kind": "agent",
+    "attributes": {"lk.publish_on_behalf": "agent"},
+}
+
+
+def _participant_token_ctx(worker: _TokenWorker) -> JobContext:
+    info = job.RunningJobInfo(
+        job=agent.Job(id="AJ_avatar", room=models.Room(name="avatar-room")),
+        url="",
+        token="",
+        accept_arguments=job.JobAcceptArguments(name="", identity="agent", metadata=""),
+        worker_id="AW_test",
+        fake_job=True,
+    )
+    return JobContext(
+        proc=MagicMock(),
+        info=info,
+        room=MagicMock(),
+        on_connect=lambda: None,
+        on_shutdown=lambda _: None,
+        inference_executor=MagicMock(),
+        job_token_client=worker.client,
+    )
+
+
+@pytest.mark.no_concurrent  # patches os.environ
+async def test_participant_token_is_signed_with_the_worker_credentials() -> None:
+    worker = _TokenWorker()
+    ctx = _participant_token_ctx(worker)
+    with patch.dict(os.environ, _KEY_MODE_ENV):
+        token = await ctx.create_participant_token(**_AVATAR_TOKEN_ARGS)  # type: ignore[arg-type]
+        short = await ctx.create_participant_token(identity="avatar", ttl=timedelta(minutes=5))
+
+    payload = jwt.decode(token, "secret" * 6, algorithms=["HS256"])
+    assert payload["iss"] == "devkey"
+    assert payload["sub"] == "avatar"
+    assert payload["name"] == "Avatar"
+    assert payload["kind"] == "agent"
+    assert payload["attributes"] == {"lk.publish_on_behalf": "agent"}
+    assert payload["video"]["roomJoin"] is True
+    assert payload["video"]["room"] == "avatar-room"
+    assert payload["exp"] - payload["nbf"] == 6 * 3600  # the AccessToken default
+    short_payload = jwt.decode(short, "secret" * 6, algorithms=["HS256"])
+    assert short_payload["exp"] - short_payload["nbf"] == 300
+    assert worker.claims == []
+
+
+@pytest.mark.no_concurrent  # patches os.environ
+async def test_participant_token_comes_from_create_job_token_in_token_mode() -> None:
+    worker = _TokenWorker()
+    ctx = _participant_token_ctx(worker)
+    grants = api.VideoGrants(room_join=True, room="avatar-room", can_subscribe=False)
+    with patch.dict(os.environ, _TOKEN_MODE_ENV):
+        token = await ctx.create_participant_token(
+            **_AVATAR_TOKEN_ARGS,  # type: ignore[arg-type]
+            grants=grants,
+            ttl=timedelta(hours=4),  # the server sets the lifetime
+        )
+
+    assert token == "token-1"
+    assert [json.loads(c) for c in worker.claims] == [
+        {
+            "identity": "avatar",
+            "name": "Avatar",
+            "kind": "agent",
+            "video": {
+                "roomJoin": True,
+                "room": "avatar-room",
+                "canPublish": True,
+                "canSubscribe": False,
+                "canPublishData": True,
+            },
+            "attributes": {"lk.publish_on_behalf": "agent"},
+        }
+    ]
+
+
+@pytest.mark.no_concurrent  # patches os.environ
+async def test_participant_token_with_a_given_key_is_signed_here_in_token_mode() -> None:
+    worker = _TokenWorker()
+    ctx = _participant_token_ctx(worker)
+    with patch.dict(os.environ, _TOKEN_MODE_ENV):
+        token = await ctx.create_participant_token(
+            identity="avatar", api_key="otherkey", api_secret="other" * 8
+        )
+
+    assert jwt.decode(token, "other" * 8, algorithms=["HS256"])["iss"] == "otherkey"
+    assert worker.claims == []
+
+
+@pytest.mark.no_concurrent  # patches os.environ
+async def test_participant_token_without_credentials_raises() -> None:
+    ctx = _participant_token_ctx(_TokenWorker())
+    with (
+        patch.dict(os.environ, {**_KEY_MODE_ENV, "LIVEKIT_API_SECRET": ""}),
+        pytest.raises(ValueError, match="api_key and api_secret are required"),
+    ):
+        await ctx.create_participant_token(identity="avatar")
 
 
 _job_token_results: list[str] = []

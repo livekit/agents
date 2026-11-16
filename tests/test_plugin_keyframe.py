@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import re
@@ -15,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from livekit import rtc
-from livekit.agents import AgentSession, tts
+from livekit.agents import AgentSession, JobContext, tts
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     USERDATA_TIMED_TRANSCRIPT,
@@ -39,6 +40,14 @@ from .fake_llm import FakeLLM
 from .fake_tts import FakeChunkedStream, FakeSynthesizeStream, FakeTTS
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+
+
+def _job_context() -> SimpleNamespace:
+    """A job context whose create_participant_token signs locally, as outside token mode."""
+    ctx = SimpleNamespace(local_participant_identity="agent", _job_token_client=None)
+    ctx.create_participant_token = functools.partial(JobContext.create_participant_token, ctx)
+    return ctx
+
 
 SR = _output.SAMPLE_RATE
 AVATAR = "keyframe-avatar-agent"
@@ -417,9 +426,7 @@ async def test_avatar_session_frames_by_model(
     monkeypatch.setattr(BaseAvatarSession, "start", AsyncMock())
     monkeypatch.setattr(avatar, "KeyframeAPI", _FakeAPI)
     monkeypatch.setattr(avatar, "KeyframeAudioOutput", output_cls)
-    monkeypatch.setattr(
-        avatar, "get_job_context", lambda: SimpleNamespace(local_participant_identity="agent")
-    )
+    monkeypatch.setattr(avatar, "get_job_context", _job_context)
 
     session = avatar.AvatarSession(persona_slug="public:cosmo", api_key="keyframe_sk_test")
     room = MagicMock()

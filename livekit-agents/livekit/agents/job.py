@@ -26,6 +26,7 @@ import tempfile
 import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
+from datetime import timedelta
 from enum import Enum, unique
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
@@ -34,7 +35,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 from livekit import api, rtc
-from livekit.api.access_token import Claims
+from livekit.api.access_token import AccessToken, Claims, VideoGrants
 from livekit.protocol import agent, models
 
 from ._token_mode import token_mode_token
@@ -515,11 +516,71 @@ class JobContext:
         """
         if self._job_token_client is not None and token_mode_token() is not None:
             return api.LiveKitAPI(
-                token_source=self._job_token_client.token_source,
+                token_provider=self._job_token_client.token_provider,
                 session=http_context.http_session(),
             )
 
         return api.LiveKitAPI(session=http_context.http_session())
+
+    async def create_participant_token(
+        self,
+        *,
+        identity: str,
+        name: str = "",
+        kind: AccessToken.ParticipantKind | None = None,
+        attributes: dict[str, str] | None = None,
+        grants: VideoGrants | None = None,
+        ttl: timedelta | None = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+    ) -> str:
+        """Creates a token for another participant to join the room, such as an avatar worker.
+
+        The token is signed with ``api_key`` and ``api_secret`` when both are given, else with
+        LIVEKIT_API_KEY and LIVEKIT_API_SECRET. In token mode (LIVEKIT_TOKEN without an API
+        key and secret), the server creates it through the worker and sets its lifetime.
+
+        Args:
+            identity: identity of the participant.
+            name: display name of the participant.
+            kind: participant kind, such as ``"agent"``.
+            attributes: participant attributes.
+            grants: video grants; defaults to joining the job's room.
+            ttl: lifetime of a token signed here; defaults to that of ``AccessToken``.
+                Ignored in token mode.
+            api_key: API key to sign with, in place of LIVEKIT_API_KEY.
+            api_secret: API secret to sign with, in place of LIVEKIT_API_SECRET.
+        """
+        if grants is None:
+            grants = VideoGrants(room_join=True, room=self._info.job.room.name)
+
+        if (
+            not (api_key and api_secret)
+            and self._job_token_client is not None
+            and token_mode_token() is not None
+        ):
+            claims = Claims(
+                identity=identity, name=name, kind=kind or "", video=grants, attributes=attributes
+            )
+            return await self._job_token_client.token_provider(claims)
+
+        api_key = api_key or os.getenv("LIVEKIT_API_KEY")
+        api_secret = api_secret or os.getenv("LIVEKIT_API_SECRET")
+        if not api_key or not api_secret:
+            raise ValueError(
+                "api_key and api_secret are required to create a participant token: pass them, "
+                "or set LIVEKIT_API_KEY and LIVEKIT_API_SECRET"
+            )
+
+        token = AccessToken(api_key, api_secret)
+        token.with_identity(identity).with_name(name).with_grants(grants)
+        if kind is not None:
+            token.with_kind(kind)
+        if attributes is not None:
+            token.with_attributes(attributes)
+        if ttl is not None:
+            token.with_ttl(ttl)
+        return token.to_jwt()
 
     @property
     def proc(self) -> JobProcess:

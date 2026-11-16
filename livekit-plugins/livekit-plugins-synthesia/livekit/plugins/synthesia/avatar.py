@@ -193,8 +193,13 @@ class AvatarSession(BaseAvatarSession):
             # A blank key or secret still mints a syntactically valid token that
             # Synthesia accepts, since it cannot verify a signature made with the
             # developer's own secret. LiveKit only rejects it once the avatar
-            # tries to join, so catch it here instead.
-            if not _present(url) or not _present(lk_key) or not _present(lk_secret):
+            # tries to join, so catch it here instead. Inside a job, a missing key
+            # and secret are left to JobContext.create_participant_token (token mode).
+            if (
+                not _present(url)
+                or any(v and not _present(v) for v in (lk_key, lk_secret))
+                or (get_job_context(required=False) is None and not (lk_key and lk_secret))
+            ):
                 raise SynthesiaError(
                     "LiveKit url, API key, and API secret are required: pass them or "
                     "set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET"
@@ -211,7 +216,7 @@ class AvatarSession(BaseAvatarSession):
 
             try:
                 await super().start(agent_session, room)
-                token = self._mint_token(room=room, lk_key=lk_key, lk_secret=lk_secret)
+                token = await self._mint_token(room=room, lk_key=lk_key, lk_secret=lk_secret)
                 client = SynthesiaAPI(api_key=self._config.api_key, api_url=self._config.api_url)
                 launch_conn = dataclasses.replace(
                     DEFAULT_API_CONNECT_OPTIONS,
@@ -409,7 +414,9 @@ class AvatarSession(BaseAvatarSession):
             raise SynthesiaError(f"avatar swap failed: {detail or raw}")
         return avatar_id_result
 
-    def _mint_token(self, *, room: rtc.Room, lk_key: str, lk_secret: str) -> str:
+    async def _mint_token(
+        self, *, room: rtc.Room, lk_key: str | None, lk_secret: str | None
+    ) -> str:
         # Synthesia rejects a token whose publish-on-behalf attribute is empty,
         # since the worker has no agent to publish the avatar's audio for. Prefer
         # the job context over room.local_participant: inside a job, the room may
@@ -428,21 +435,33 @@ class AvatarSession(BaseAvatarSession):
                 "before starting the avatar session"
             )
 
+        grants = api.VideoGrants(
+            room_join=True,
+            room=room.name,
+            can_publish=True,
+            can_subscribe=True,
+            can_publish_data=True,
+        )
+        attributes = {ATTRIBUTE_PUBLISH_ON_BEHALF: agent_identity}
+        if job_ctx is not None:
+            return await job_ctx.create_participant_token(
+                identity=self.avatar_identity,
+                name=self._avatar_name,
+                kind="agent",
+                grants=grants,
+                attributes=attributes,
+                ttl=TOKEN_TTL,
+                api_key=lk_key,
+                api_secret=lk_secret,
+            )
+
         token = (
             api.AccessToken(lk_key, lk_secret)
             .with_identity(self.avatar_identity)
             .with_name(self._avatar_name)
             .with_kind("agent")
-            .with_grants(
-                api.VideoGrants(
-                    room_join=True,
-                    room=room.name,
-                    can_publish=True,
-                    can_subscribe=True,
-                    can_publish_data=True,
-                )
-            )
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: agent_identity})
+            .with_grants(grants)
+            .with_attributes(attributes)
             .with_ttl(TOKEN_TTL)
         )
         return token.to_jwt()
