@@ -582,7 +582,7 @@ async def test_wrapped_stream_keeps_the_session_start_across_a_wall_clock_step(
             await asyncio.sleep(frame.duration)  # a frame is pushed when its capture ends
             stream.push_frame(frame)
         wrapped = provider.streams[0]
-        while wrapped.input_position < 1.0 - 1e-6:
+        while wrapped._input_clock.dequeued_duration < 1.0 - 1e-6:
             await asyncio.sleep(0)
 
         assert wrapped._input_clock.session_start is session_start

@@ -228,9 +228,7 @@ class STT(stt.STT):
                     # Under client_flush only a flush ends a turn, so LiveKit's
                     # turn handling has to send one when it commits the user's turn.
                     manual_flush=mode == "client_flush",
-                ),
-                # The stream replays audio on reconnect and translates its own events.
-                requires_timestamp_translation=False,
+                )
             )
             self._session = http_session
             self._streams = weakref.WeakSet[stt.SpeechStream]()

@@ -165,7 +165,6 @@ _SAMPLE_RATE = 16000
 # drop: go away (1001, a replica shutting down) on the flush, before its final.
 # drop_once: drop the first connection that way, then reply on the next.
 # drop_second_turn: the first connection answers its first flush, then drops on the next.
-# fail_then_drop: the first connection fails the turn on its first flush, then drops.
 # partial_then_drop: the first connection sends a partial on its first flush, then drops.
 # drop_on_audio: the first connection drops on its first audio, before any flush.
 # A flushed turn with no audio behind it gets an empty final, as from the real server.
@@ -179,7 +178,6 @@ _V2Mode = Literal[
     "drop",
     "drop_once",
     "drop_second_turn",
-    "fail_then_drop",
     "partial_then_drop",
     "drop_on_audio",
 ]
@@ -295,18 +293,6 @@ class _V2Socket(FakeWebSocket):
             or (mode == "drop_once" and first)
             or (mode == "drop_second_turn" and first and self.turn_id == 1)
         ):
-            self.drop(1001)
-            return
-        if mode == "fail_then_drop" and first:
-            # the client cannot tell whether the cap or the flush ended this turn
-            self.respond(
-                {
-                    "type": "transcription.failed",
-                    "turn_id": self.turn_id,
-                    "code": "decode_failed",
-                    "message": "boom",
-                }
-            )
             self.drop(1001)
             return
         # input_audio_buffer.flush
@@ -481,10 +467,9 @@ async def test_client_flush_sends_no_vad_and_asks_livekit_to_flush(
     assert not STT(model="streaming-v2", api_key="k", model_id="m").capabilities.manual_flush
 
 
-def test_only_streaming_v2_remaps_its_own_timestamps() -> None:
-    # streaming-v2 replays audio and emits session timestamps; the other backends
-    # emit connection timestamps for the stream to remap
-    assert not STT(model="streaming-v2", api_key="k", model_id="m").requires_timestamp_translation
+def test_every_backend_emits_connection_timestamps() -> None:
+    # the stream places each backend's times in the session; none places its own
+    assert STT(model="streaming-v2", api_key="k", model_id="m").requires_timestamp_translation
     assert STT(api_key="k", model_endpoint="wss://test.invalid/stt").requires_timestamp_translation
     assert STT(model="qwen3-asr", api_key="k", model_id="m").requires_timestamp_translation
 
@@ -593,6 +578,35 @@ async def test_invalid_event_is_not_retried() -> None:
     assert server.connections == 1
 
 
+@pytest.mark.no_concurrent
+async def test_terminal_error_leaves_newly_queued_audio_unread(monkeypatch) -> None:
+    from livekit.agents.utils.aio.websocket import WebSocketMonitor
+
+    server = _FakeStreamingV2Server()
+    stream = _v2_stream(server)
+
+    def queue_audio() -> None:
+        for _ in range(5):
+            stream.push_frame(_silence(1600))
+
+    async def receive(monitor):
+        asyncio.get_running_loop().call_soon(queue_audio)
+        return aiohttp.WSMessage(
+            aiohttp.WSMsgType.TEXT,
+            json.dumps({"type": "error", "code": "invalid_event", "message": "closing"}),
+            "",
+        )
+
+    monkeypatch.setattr(WebSocketMonitor, "receive", receive)
+    try:
+        with pytest.raises(APIStatusError):
+            await stream._task
+        assert server.audio_bytes == 0
+        assert stream._input_ch.qsize() == 5
+    finally:
+        await stream.aclose()
+
+
 async def test_close_that_skips_an_owed_final_is_a_connection_error() -> None:
     # the input has ended by then, but only the server's 1000 answer to `close`
     # says every final was delivered
@@ -626,65 +640,14 @@ async def test_recognize_reports_a_failed_turn_as_an_error() -> None:
     assert server.connections == 2
 
 
-async def test_stream_reconnect_replays_the_unfinished_turn() -> None:
-    # the first socket takes the whole turn and drops before its final
+async def test_drop_after_the_last_flush_reconnects_without_replay() -> None:
+    # the first socket took the whole turn and dropped before its final. The
+    # turn is not sent again, so the second socket has only the close to send
     server = _FakeStreamingV2Server("drop_once")
     events = await _run_v2_stream(server, samples=2400, max_retry=1)
 
-    assert server.audio_per_connection == [2400 * 2, 2400 * 2]
-    assert server.control == [
-        "input_audio_buffer.flush",
-        "input_audio_buffer.flush",
-        "close",
-    ]
-    assert _v2_final_texts(events) == ["hello world"]
-
-
-async def test_stream_reconnect_under_client_flush_skips_finished_turns() -> None:
-    # turn 1 (3 s) is final before the drop, so only turn 2 (1 s) is sent again
-    server = _FakeStreamingV2Server("drop_second_turn")
-    events = await _run_v2_stream(
-        server, samples=[48000, 16000], max_retry=1, segmentation_mode="client_flush"
-    )
-
-    assert server.audio_per_connection == [64000 * 2, 16000 * 2]
-    assert _v2_final_texts(events) == ["hello world", "hello world"]
-    # the replayed turn is placed after turn 1 on the stream's timeline
-    finals = [ev for ev in events if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
-    assert finals[1].alternatives[0].start_time == pytest.approx(3.5, abs=0.2)
-
-
-async def test_stream_reconnect_under_server_vad_replays_from_the_last_word() -> None:
-    # turn 1's last word ends at 2.5 s of its 3 s: the 0.5 s after it, and all
-    # of turn 2 (1 s), are sent again
-    server = _FakeStreamingV2Server("drop_second_turn")
-    await _run_v2_stream(server, samples=[48000, 16000], max_retry=1)
-
-    assert server.audio_per_connection == [64000 * 2, (8000 + 16000) * 2]
-
-
-async def test_failed_turn_that_may_be_capped_keeps_later_audio_for_replay() -> None:
-    # 3 s before the flush under a 2 s cap: the failure may be the capped first
-    # turn, with the rest still unanswered when the socket drops, so all of it
-    # is sent again
-    server = _FakeStreamingV2Server("fail_then_drop", max_turn_s=2.0)
-    events = await _run_v2_stream(
-        server, samples=48000, max_retry=1, segmentation_mode="client_flush"
-    )
-
-    assert server.audio_per_connection == [48000 * 2, 48000 * 2]
-    assert _v2_final_texts(events) == ["hello world"]
-
-
-async def test_failed_turn_shorter_than_the_cap_is_not_replayed() -> None:
-    # 1 s before the flush under a 2 s cap: the flush ended the failed turn, so
-    # nothing of it is sent again
-    server = _FakeStreamingV2Server("fail_then_drop", max_turn_s=2.0)
-    events = await _run_v2_stream(
-        server, samples=16000, max_retry=1, segmentation_mode="client_flush"
-    )
-
-    assert server.audio_per_connection == [16000 * 2, 0]
+    assert server.connections == 2
+    assert server.audio_per_connection == [2400 * 2, 0]
     assert _v2_final_texts(events) == []
 
 
@@ -695,81 +658,70 @@ async def _push_live(stream: stt.RecognizeStream, samples: int) -> None:
         stream.push_frame(_silence(1600))
 
 
-async def test_transcript_times_are_placed_in_the_session() -> None:
+@pytest.mark.parametrize("pause_s", [0.0, 5.0], ids=["continuous", "input-pause"])
+async def test_reconnect_starts_at_unread_audio_and_keeps_session_times(pause_s: float) -> None:
     # Agent.stt_node starts this stream 40 s into the session, and its first
     # audio comes 1 s later. The first socket finishes turn 1 (3 s) and drops on
-    # turn 2's flush; the second replays turn 2 and goes on to turn 3. The
-    # framework re-anchors start_time_offset on the first frame the second
-    # socket reads (turn 3's), but that socket's clock starts at turn 2, so each
-    # turn must still land where it was spoken
+    # turn 2's flush (1 s). Turn 2 is not sent again: the second socket starts at
+    # turn 3, the first audio it reads, and counts its times from there
     server = _FakeStreamingV2Server("drop_second_turn")
     stream = _v2_stream(server, max_retry=1, segmentation_mode="client_flush")
     stream.start_time_offset = 40.0
     await asyncio.sleep(1.0)
     await _push_live(stream, 48000)
     stream.flush()
+    await asyncio.sleep(pause_s)
     await _push_live(stream, 16000)
     stream.flush()
     await _push_live(stream, 16000)
     stream.end_input()
     events = await _collect(stream)
 
-    finals = [
-        ev.alternatives[0] for ev in events if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
-    ]
-    assert [f.start_time for f in finals] == [
-        pytest.approx(41.5, abs=0.01),
-        pytest.approx(44.5, abs=0.01),
-        pytest.approx(45.5, abs=0.01),
-    ]
-
-
-async def test_transcript_times_follow_the_audio_across_an_input_pause() -> None:
-    # Pause input for 5 s after turn 1, then replay turn 2 on the second socket.
-    # The server counts received audio; turns 2 and 3 must retain their capture
-    # times after the pause.
-    server = _FakeStreamingV2Server("drop_second_turn")
-    stream = _v2_stream(server, max_retry=1, segmentation_mode="client_flush")
-    stream.start_time_offset = 40.0
-    await asyncio.sleep(1.0)
-    await _push_live(stream, 48000)
-    stream.flush()
-    await asyncio.sleep(5.0)
-    await _push_live(stream, 16000)
-    stream.flush()
-    await _push_live(stream, 16000)
-    stream.end_input()
-    events = await _collect(stream)
-
-    finals = [
-        ev.alternatives[0] for ev in events if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
-    ]
     assert server.connections == 2
+    assert server.audio_per_connection == [64000 * 2, 16000 * 2]
+    finals = [
+        ev.alternatives[0] for ev in events if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert [f.text for f in finals] == ["hello world", "hello world"]
+    # words start 0.5 s into each turn: turn 1 at 41 s, turn 3 at 45 s plus the pause
     assert [f.start_time for f in finals] == [
-        pytest.approx(41.5, abs=0.01),
-        pytest.approx(49.5, abs=0.01),
-        pytest.approx(50.5, abs=0.01),
+        pytest.approx(41.5, abs=1e-3),
+        pytest.approx(45.5 + pause_s, abs=1e-3),
+    ]
+    assert [f.end_time for f in finals] == [
+        pytest.approx(43.5, abs=1e-3),
+        pytest.approx(47.5 + pause_s, abs=1e-3),
     ]
 
 
-async def test_reconnect_mid_turn_does_not_start_speech_again() -> None:
-    # the turn opened on the first socket is still open on the event channel;
-    # its replay continues it
+async def test_drop_mid_turn_ends_the_open_turn() -> None:
+    # the turn opened on the first socket is lost with it, so it is closed
+    # rather than left for the next socket's first turn to end
     server = _FakeStreamingV2Server("partial_then_drop")
-    events = await _run_v2_stream(server, max_retry=1)
+    stream = _v2_stream(server, max_retry=1)
+    stream.push_frame(_silence(1600))
+    stream.flush()
+    await wait_until(lambda: server.connections == 2)
+    stream.push_frame(_silence(1600))
+    stream.end_input()
+    events = await _collect(stream)
 
+    assert server.audio_per_connection == [1600 * 2, 1600 * 2]
     assert _types(events) == [
         stt.SpeechEventType.START_OF_SPEECH,
         stt.SpeechEventType.INTERIM_TRANSCRIPT,
+        stt.SpeechEventType.END_OF_SPEECH,
+        stt.SpeechEventType.START_OF_SPEECH,
         stt.SpeechEventType.INTERIM_TRANSCRIPT,
         stt.SpeechEventType.FINAL_TRANSCRIPT,
         stt.SpeechEventType.END_OF_SPEECH,
     ]
 
 
-async def test_audio_held_by_the_chunker_survives_a_reconnect() -> None:
+async def test_partial_chunk_read_by_a_dropped_socket_is_not_sent_again() -> None:
     # 2400 samples go in: one 1600-sample chunk is sent, and the socket drops on
-    # it with the other 800 still waiting in the chunker for the next frame
+    # it with the other 800 still in its chunker. They were read on that socket's
+    # clock, so the next socket starts at the audio pushed after the drop
     server = _FakeStreamingV2Server("drop_on_audio")
     stream = _v2_stream(server, max_retry=1)
     stream.push_frame(_silence(2400))
@@ -778,8 +730,7 @@ async def test_audio_held_by_the_chunker_survives_a_reconnect() -> None:
     stream.end_input()
     await _collect(stream)
 
-    # the replayed chunk, then the held 800 with the new 800
-    assert server.audio_per_connection == [1600 * 2, (1600 + 1600) * 2]
+    assert server.audio_per_connection == [1600 * 2, 800 * 2]
 
 
 def test_mulaw_is_rejected() -> None:

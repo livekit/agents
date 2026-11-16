@@ -140,7 +140,7 @@ async def test_speech_timestamps_follow_first_audio(
         # received the pre-handoff frame.
         while not stream._input_ch.empty():
             await asyncio.sleep(0)
-        provider_end_time = stream.input_position - frame.duration + 0.6
+        provider_end_time = stream._input_clock.dequeued_duration - frame.duration + 0.6
         now = first_audio_at + 0.9
         stream._event_ch.send_nowait(
             stt.SpeechEvent(
@@ -383,7 +383,7 @@ async def test_recreated_stream_keeps_the_session_start_across_a_wall_clock_step
         captured_from = monotonic
         monotonic += frame.duration
         recognition._push_audio(frame)
-        while stream.input_position < frame.duration:
+        while stream._input_clock.dequeued_duration < frame.duration:
             await asyncio.sleep(0)
         stream._event_ch.send_nowait(
             stt.SpeechEvent(

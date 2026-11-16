@@ -545,20 +545,6 @@ class RecognizeStream(ABC):
         self._input_clock.set_session_timeline(value)
 
     @property
-    def input_position(self) -> float:
-        """Stream position of the next frame, in seconds from the stream's first frame.
-
-        The position excludes input gaps and continues across provider reconnects.
-
-        Providers that replay earlier audio record its stream position to place
-        the results of that audio.
-
-        TODO: @chenghao-mou this is needed only for plugins who track buffered/segmented
-        audio. We should simplify those implementation.
-        """
-        return self._input_clock.dequeued_duration
-
-    @property
     def start_time(self) -> float:
         """Wall-clock time of stream creation, reset when each ``_run`` attempt starts.
 

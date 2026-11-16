@@ -39,7 +39,6 @@ import asyncio
 import base64
 import json
 import os
-from collections import deque
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -56,7 +55,6 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.language import LanguageCode
-from livekit.agents.stt.clock import _ConnectionClock
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
@@ -66,9 +64,6 @@ from .log import logger
 SAMPLE_RATE = 16000
 NUM_CHANNELS = 1
 _SAMPLES_PER_CHUNK = SAMPLE_RATE // 10  # 100 ms; the server re-frames any size
-# Audio kept for replay after a dropped socket, at most. Above the server's
-# default 29 s turn cap, so a turn cut short by a reconnect is replayed whole.
-_MAX_REPLAY_S = 60.0
 
 SegmentationMode = Literal["server_vad", "client_flush"]
 
@@ -305,75 +300,8 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
         self._backend = backend
         self._opts = opts
         self._failed_turns = 0
-        # Audio sent but not yet finalized (None marks a flush), so a reconnect
-        # can replay it: the input channel has already handed it over, and a new
-        # session knows nothing of the old one's open turn.
-        self._pending: deque[bytes | None] = deque()
-        self._pending_samples = 0
-        # Where `_pending` starts on the stream's audio timeline, in samples.
-        self._pending_start = 0
-        # The server's turn length cap, from `session.created`; None is no cap.
-        self._max_turn_samples: int | None = None
-        # Per stream rather than per socket: audio the chunker holds has left
-        # the input channel but not been sent, so a reconnect must not drop it.
-        self._chunker = utils.audio.AudioByteStream(
-            sample_rate=SAMPLE_RATE,
-            num_channels=NUM_CHANNELS,
-            samples_per_channel=_SAMPLES_PER_CHUNK,
-        )
-        # Whether a turn is open on the event channel, which a reconnect does
-        # not close: the replay continues that turn.
+        # Whether a turn is open on the event channel.
         self._speaking = False
-
-    def _buffer(self, item: bytes | None) -> None:
-        self._pending.append(item)
-        if item is not None:
-            self._pending_samples += len(item) // 2
-        while self._pending_samples > _MAX_REPLAY_S * SAMPLE_RATE:
-            self._drop_head()
-
-    def _drop_head(self) -> bytes | None:
-        item = self._pending.popleft()
-        if item is not None:
-            self._pending_samples -= len(item) // 2
-            self._pending_start += len(item) // 2
-        return item
-
-    def _finalized_to(self, position: int) -> None:
-        """Forget audio (and flushes) before sample `position`, which a final has covered."""
-        while self._pending and self._pending_start < position:
-            head = self._pending[0]
-            if head is None:
-                self._drop_head()
-                continue
-            if self._pending_start + len(head) // 2 <= position:
-                self._drop_head()
-                continue
-            cut = position - self._pending_start
-            self._pending[0] = head[cut * 2 :]
-            self._pending_samples -= cut
-            self._pending_start += cut
-            break
-
-    def _turn_ends_at_flush(self) -> bool:
-        """Whether the oldest unanswered turn must be the one the oldest flush ends.
-
-        A turn the cap cut is longer than the cap, and `_pending` starts no later
-        than that turn did, so less audio than the cap before the flush rules it out.
-        """
-        samples = 0
-        for item in self._pending:
-            if item is None:
-                return self._max_turn_samples is None or samples < self._max_turn_samples
-            samples += len(item) // 2
-        return False
-
-    def _finalized_through_flush(self) -> None:
-        """Forget everything up to and including the oldest flush, whose turn has ended."""
-        if None not in self._pending:
-            return
-        while self._drop_head() is not None:
-            pass
 
     async def _run(self) -> None:
         try:
@@ -395,17 +323,16 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
             raise APIConnectionError() from e
 
         input_ended = asyncio.Event()
-        # Replayed audio precedes the first frame this socket reads. Remap this
-        # socket's transcripts from the stream position of its first sample.
-        base = self._pending_start
-        clock = _ConnectionClock(self._input_clock, base / SAMPLE_RATE)
-
-        def send_transcript(event: stt_module.SpeechEvent) -> None:
-            self._event_ch.send_nowait(clock.translate_event_timestamps(event))
 
         async def _send() -> None:
             # LiveKit resamples to SAMPLE_RATE for us; the chunker only re-chunks.
-            chunker = self._chunker
+            # It belongs to this socket: a partial chunk it holds when the socket
+            # drops was read on this socket's clock and is not sent on the next.
+            chunker = utils.audio.AudioByteStream(
+                sample_rate=SAMPLE_RATE,
+                num_channels=NUM_CHANNELS,
+                samples_per_channel=_SAMPLES_PER_CHUNK,
+            )
 
             async def send_item(item: bytes | None) -> None:
                 if item is None:
@@ -422,13 +349,10 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
 
             async def append(frames: list[rtc.AudioFrame]) -> None:
                 for frame in frames:
-                    data = frame.data.tobytes()
-                    self._buffer(data)
-                    await send_item(data)
+                    await send_item(frame.data.tobytes())
 
             async def flush() -> None:
                 await append(chunker.flush())
-                self._buffer(None)
                 await send_item(None)
 
             # `end_input()` pushes a flush sentinel *and then* closes the channel,
@@ -437,10 +361,6 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
             # answers an extra, empty turn.
             flushed = False
             try:
-                # After a reconnect, first what the last socket never finalized.
-                for item in list(self._pending):
-                    await send_item(item)
-                    flushed = item is None
                 async for data in self._input_ch:
                     if isinstance(data, self._FlushSentinel):
                         await flush()
@@ -457,150 +377,130 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
                 input_ended.set()
 
         async def _recv() -> None:
-            monitor = utils.aio.WebSocketMonitor(
-                ws, liveness_timeout=self._conn_options.liveness_timeout
-            )
-            while True:
-                msg = await monitor.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    # The server closes with 1000 only in answer to `close`, after
-                    # delivering every final it owed. Any other close, even once the
-                    # input has ended, may have taken a final with it.
-                    if input_ended.is_set() and ws.close_code == aiohttp.WSCloseCode.OK:
-                        return
-                    raise APIConnectionError(
-                        f"Baseten closed the STT websocket (code {ws.close_code})"
-                    )
-                if msg.type is aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError(f"websocket error: {ws.exception()}")
-                if msg.type is not aiohttp.WSMsgType.TEXT:
-                    continue
-
-                event = json.loads(msg.data)
-                kind = event.get("type")
-
-                if kind == "error":
-                    # Always followed by the server's close. at_capacity is the
-                    # one a caller should retry elsewhere, so it keeps a 5xx.
-                    code = event.get("code", "")
-                    raise APIStatusError(
-                        message=f"{code}: {event.get('message', 'unknown STT error')}",
-                        status_code=_ERROR_STATUS.get(code, 500),
-                        request_id=None,
-                        body=None,
-                    )
-
-                if kind == "session.created":
-                    max_turn_s = (event.get("capabilities") or {}).get("max_turn_s")
-                    self._max_turn_samples = round(max_turn_s * SAMPLE_RATE) if max_turn_s else None
-                    continue
-
-                if kind == "session.updated":
-                    # `granted` is authoritative; each refusal says what was
-                    # changed from the request and why. The session goes on.
-                    for refusal in event.get("refusals") or []:
-                        logger.warning(
-                            "Baseten STT did not grant %s=%r (got %r): %s",
-                            refusal.get("parameter"),
-                            refusal.get("requested"),
-                            refusal.get("granted"),
-                            refusal.get("reason"),
-                        )
-                    continue
-
-                if kind == "transcription.failed":
-                    # One turn could not be decoded; the session goes on, so
-                    # answer its flush, close the turn its partials opened and
-                    # keep reading.
-                    self._failed_turns += 1
-                    # A failure says neither where its turn ended nor whether the
-                    # cap ended it. Unless the cap is ruled out, its audio is kept:
-                    # the next final trims it, while forgetting through the flush
-                    # could take later, unanswered turns with it.
-                    if (
-                        self._opts.segmentation_mode == "client_flush"
-                        and self._turn_ends_at_flush()
+            try:
+                monitor = utils.aio.WebSocketMonitor(
+                    ws, liveness_timeout=self._conn_options.liveness_timeout
+                )
+                while True:
+                    msg = await monitor.receive()
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.CLOSING,
                     ):
-                        self._finalized_through_flush()
-                    logger.warning(
-                        "Baseten STT could not transcribe turn %s: %s",
-                        event.get("turn_id"),
-                        event.get("message"),
-                    )
-                    send_transcript(
-                        stt_module.SpeechEvent(
-                            type=stt_module.SpeechEventType.FINAL_TRANSCRIPT,
-                            alternatives=[self._speech_data({}, [], "")],
+                        # The server closes with 1000 only in answer to `close`, after
+                        # delivering every final it owed. Any other close, even once the
+                        # input has ended, may have taken a final with it.
+                        if input_ended.is_set() and ws.close_code == aiohttp.WSCloseCode.OK:
+                            return
+                        raise APIConnectionError(
+                            f"Baseten closed the STT websocket (code {ws.close_code})"
                         )
-                    )
-                    if self._speaking:
+                    if msg.type is aiohttp.WSMsgType.ERROR:
+                        raise APIConnectionError(f"websocket error: {ws.exception()}")
+                    if msg.type is not aiohttp.WSMsgType.TEXT:
+                        continue
+
+                    event = json.loads(msg.data)
+                    kind = event.get("type")
+
+                    if kind == "error":
+                        # Always followed by the server's close. at_capacity is the
+                        # one a caller should retry elsewhere, so it keeps a 5xx.
+                        code = event.get("code", "")
+                        raise APIStatusError(
+                            message=f"{code}: {event.get('message', 'unknown STT error')}",
+                            status_code=_ERROR_STATUS.get(code, 500),
+                            request_id=None,
+                            body=None,
+                        )
+
+                    if kind == "session.updated":
+                        # `granted` is authoritative; each refusal says what was
+                        # changed from the request and why. The session goes on.
+                        for refusal in event.get("refusals") or []:
+                            logger.warning(
+                                "Baseten STT did not grant %s=%r (got %r): %s",
+                                refusal.get("parameter"),
+                                refusal.get("requested"),
+                                refusal.get("granted"),
+                                refusal.get("reason"),
+                            )
+                        continue
+
+                    if kind == "transcription.failed":
+                        # One turn could not be decoded; the session goes on, so
+                        # answer its flush, close the turn its partials opened and
+                        # keep reading.
+                        self._failed_turns += 1
+                        logger.warning(
+                            "Baseten STT could not transcribe turn %s: %s",
+                            event.get("turn_id"),
+                            event.get("message"),
+                        )
+                        self._event_ch.send_nowait(
+                            stt_module.SpeechEvent(
+                                type=stt_module.SpeechEventType.FINAL_TRANSCRIPT,
+                                alternatives=[self._speech_data({}, [], "")],
+                            )
+                        )
+                        if self._speaking:
+                            self._event_ch.send_nowait(
+                                stt_module.SpeechEvent(
+                                    type=stt_module.SpeechEventType.END_OF_SPEECH
+                                )
+                            )
+                            self._speaking = False
+                        continue
+
+                    if kind not in ("transcription.delta", "transcription.done"):
+                        continue
+
+                    transcript = event.get("transcript") or {}
+                    segments = transcript.get("segments") or []
+                    # Each segment carries its own leading separator, so joining
+                    # with "" is right for every script, spaced or not.
+                    text = "".join(s.get("text", "") for s in segments).strip()
+                    is_final = kind == "transcription.done"
+                    self._mark_provider_progress()
+                    # Leaving out partial_interval_s is how partials are turned off,
+                    # but a deployment may send them anyway; interim_results=False
+                    # is a promise to the caller, so it is kept here too.
+                    if not is_final and not self._opts.enable_partial_transcripts:
+                        continue
+
+                    # Only real words open a turn. An empty final (a flush with no
+                    # speech behind it) would otherwise emit START/END_OF_SPEECH and,
+                    # under turn_detection="stt", commit the user's turn so the agent
+                    # answers silence.
+                    if not self._speaking and text:
+                        self._speaking = True
+                        self._event_ch.send_nowait(
+                            stt_module.SpeechEvent(type=stt_module.SpeechEventType.START_OF_SPEECH)
+                        )
+
+                    # A final is sent even when empty: under client_flush it is how
+                    # the framework learns its flush was answered.
+                    if text or is_final:
+                        self._event_ch.send_nowait(
+                            stt_module.SpeechEvent(
+                                type=stt_module.SpeechEventType.FINAL_TRANSCRIPT
+                                if is_final
+                                else stt_module.SpeechEventType.INTERIM_TRANSCRIPT,
+                                alternatives=[self._speech_data(transcript, segments, text)],
+                            )
+                        )
+
+                    # A turn cut at the server's length limit is not the end of
+                    # speech: the speaker carries straight on into the next turn.
+                    if is_final and self._speaking and event.get("ended_by") != "max_turn_length":
                         self._event_ch.send_nowait(
                             stt_module.SpeechEvent(type=stt_module.SpeechEventType.END_OF_SPEECH)
                         )
                         self._speaking = False
-                    continue
-
-                if kind not in ("transcription.delta", "transcription.done"):
-                    continue
-
-                transcript = event.get("transcript") or {}
-                segments = transcript.get("segments") or []
-                # Each segment carries its own leading separator, so joining
-                # with "" is right for every script, spaced or not.
-                text = "".join(s.get("text", "") for s in segments).strip()
-                is_final = kind == "transcription.done"
-                self._mark_provider_progress()
-                if is_final:
-                    # Under client_flush each flush ends exactly one turn, unless
-                    # the length cap ended it first. Otherwise the last word's
-                    # end is as far as this final is known to reach.
-                    if (
-                        self._opts.segmentation_mode == "client_flush"
-                        and event.get("ended_by") != "max_turn_length"
-                    ):
-                        self._finalized_through_flush()
-                    elif segments:
-                        end_s = float(segments[-1].get("end", 0.0))
-                        self._finalized_to(base + round(end_s * SAMPLE_RATE))
-                # Leaving out partial_interval_s is how partials are turned off,
-                # but a deployment may send them anyway; interim_results=False
-                # is a promise to the caller, so it is kept here too.
-                if not is_final and not self._opts.enable_partial_transcripts:
-                    continue
-
-                # Only real words open a turn. An empty final (a flush with no
-                # speech behind it) would otherwise emit START/END_OF_SPEECH and,
-                # under turn_detection="stt", commit the user's turn so the agent
-                # answers silence.
-                if not self._speaking and text:
-                    self._speaking = True
-                    self._event_ch.send_nowait(
-                        stt_module.SpeechEvent(type=stt_module.SpeechEventType.START_OF_SPEECH)
-                    )
-
-                # A final is sent even when empty: under client_flush it is how
-                # the framework learns its flush was answered.
-                if text or is_final:
-                    send_transcript(
-                        stt_module.SpeechEvent(
-                            type=stt_module.SpeechEventType.FINAL_TRANSCRIPT
-                            if is_final
-                            else stt_module.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[self._speech_data(transcript, segments, text)],
-                        )
-                    )
-
-                # A turn cut at the server's length limit is not the end of
-                # speech: the speaker carries straight on into the next turn.
-                if is_final and self._speaking and event.get("ended_by") != "max_turn_length":
-                    self._event_ch.send_nowait(
-                        stt_module.SpeechEvent(type=stt_module.SpeechEventType.END_OF_SPEECH)
-                    )
-                    self._speaking = False
+            finally:
+                # Stop the blocked sender before queued input can wake it.
+                send_task.cancel()
 
         try:
             await ws.send_str(json.dumps(self._opts.session_update()))
@@ -616,6 +516,12 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
             raise APIConnectionError() from e
         finally:
             await ws.close()
+            # Audio is not replayed, so the next socket cannot continue this turn.
+            if self._speaking:
+                self._speaking = False
+                self._event_ch.send_nowait(
+                    stt_module.SpeechEvent(type=stt_module.SpeechEventType.END_OF_SPEECH)
+                )
 
     def _speech_data(
         self,
@@ -623,7 +529,7 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
         segments: list[dict[str, Any]],
         text: str,
     ) -> stt_module.SpeechData:
-        # Server times count the audio this socket was sent.
+        # Server times count the audio this socket was sent, from its first frame.
         return stt_module.SpeechData(
             # The language this turn was decoded in; absent when the server
             # cannot say (detection that does not report what it found).

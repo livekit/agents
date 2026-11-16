@@ -97,8 +97,6 @@ class STT(stt.STT):
                 interim_results=vad is not None,
                 keyterms=True,
             ),
-            # The stream emits stream positions and translates its own events.
-            requires_timestamp_translation=False,
         )
         self._sdk = rimelabs_sdk
         self._language = language

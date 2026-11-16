@@ -572,6 +572,7 @@ async def test_eos_sets_the_last_speaking_time(
     """Provider timing anchors the end of speech; without it the arrival time does."""
     now = 1_700_000_010.0
     monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
+    monkeypatch.setattr(audio_recognition.time, "perf_counter", lambda: now)
     stream = _bare_stream()
     if timed:
         stream._opts.model = "deepgram/nova-3"

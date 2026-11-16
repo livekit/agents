@@ -324,7 +324,7 @@ async def test_stt_stream_fallback_forwards_provider_times_placed_once(nested: b
     await push_live_audio(1.0)
 
     provider_stream = await asyncio.wait_for(provider.stream_ch.recv(), 1.0)
-    while provider_stream.input_position < 2.0 - 1e-6:  # the provider read all the audio
+    while provider_stream._input_clock.dequeued_duration < 2.0 - 1e-6:
         await asyncio.sleep(0)
     for start, end in ((0.5, 0.8), (1.5, 1.8)):  # on the provider's clock
         provider_stream._event_ch.send_nowait(

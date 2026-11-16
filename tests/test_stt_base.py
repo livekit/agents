@@ -487,14 +487,13 @@ def _transcript(start: float = 0.0, end: float = 0.0, **fields: Any) -> SpeechEv
 
 
 async def _send(
-    stream: RecognizeStream, event: SpeechEvent, input_origin: float | None = None
+    stream: RecognizeStream, event: SpeechEvent, connection_start: float | None = None
 ) -> SpeechEvent:
-    """Return the remapped event.
-
-    With ``input_origin``, remap as a replay provider does, from that stream position.
-    """
-    if input_origin is not None:
-        return _ConnectionClock(stream._input_clock, input_origin).translate_event_timestamps(event)
+    """Translate with the selected connection clock and return the event."""
+    if connection_start is not None:
+        return _ConnectionClock(stream._input_clock, connection_start).translate_event_timestamps(
+            event
+        )
     stream._event_ch.send_nowait(event)
     return await stream.__anext__()
 
@@ -504,12 +503,12 @@ async def _emit(
     start: float = 0.0,
     end: float = 0.0,
     *,
-    input_origin: float | None = None,
+    connection_start: float | None = None,
     **fields: Any,
 ) -> SpeechData:
     """Send a transcript and return the consumer's event."""
     event = _transcript(start, end, **fields)
-    return (await _send(stream, event, input_origin)).alternatives[0]
+    return (await _send(stream, event, connection_start)).alternatives[0]
 
 
 async def _end(stream: RecognizeStream, connection_time: float, **kwargs: Any) -> float:
@@ -849,7 +848,7 @@ async def _speech_bounds(
     end: float | None = None,
     *,
     since: float,
-    input_origin: float | None = None,
+    connection_start: float | None = None,
 ) -> tuple[float | None, float | None]:
     """Send speech bounds without a transcript and return wall times relative to ``since``.
 
@@ -857,7 +856,7 @@ async def _speech_bounds(
     """
     event_type = SpeechEventType.END_OF_SPEECH if start is None else SpeechEventType.START_OF_SPEECH
     sent = SpeechEvent(type=event_type, speech_start_time=start, speech_end_time=end)
-    received = await _send(stream, sent, input_origin)
+    received = await _send(stream, sent, connection_start)
     assert (sent.speech_start_time, sent.speech_end_time) == (start, end)
     assert (received.type, received.created_at) == (sent.type, sent.created_at)
     placed_start, placed_end = received.speech_start_time, received.speech_end_time
@@ -1042,30 +1041,32 @@ async def test_event_channel_remaps_each_event_once(monkeypatch: pytest.MonkeyPa
     await stream.aclose()
 
 
-async def test_clock_at_an_earlier_position_places_audio_an_earlier_connection_read() -> None:
-    """Use each replay attempt's origin, including for a delayed response."""
+async def test_earlier_connection_clock_keeps_delayed_result_timestamps() -> None:
+    """Each connection keeps its start position when a response arrives late."""
     stream = _ProviderAudioStream(stt=_DummySTT())
     stream.start_time_offset = 30.0
 
     await _push_live_audio(stream, 1.0)
-    first_attempt_clock = _ConnectionClock(stream._input_clock, 0.0)
+    first_connection_clock = _ConnectionClock(stream._input_clock, 0.0)
     await asyncio.sleep(5.0)
     stream._restart_connection_clock()
     await _push_live_audio(stream, 1.0)
 
-    assert stream.input_position == pytest.approx(2.0)
-    # a clock keeps its attempt's origin after a newer connection reads audio
-    delayed = first_attempt_clock.translate_event_timestamps(_transcript(0.5, 0.8)).alternatives[0]
+    assert stream._input_clock.dequeued_duration == pytest.approx(2.0)
+    # The earlier connection's clock is kept after the next connection reads audio.
+    delayed = first_connection_clock.translate_event_timestamps(_transcript(0.5, 0.8)).alternatives[
+        0
+    ]
     assert (delayed.start_time, delayed.end_time) == pytest.approx((30.5, 30.8))
-    # an attempt that was sent the input from its start
-    assert await _end(stream, 0.5, input_origin=0.0) == pytest.approx(30.5)
-    assert await _end(stream, 1.0, input_origin=0.0) == pytest.approx(31.0)
-    assert await _start(stream, 1.0, input_origin=0.0) == pytest.approx(36.0)
-    assert await _end(stream, 1.5, input_origin=0.0) == pytest.approx(36.5)
-    # an attempt that was sent the input from 0.5 s, and a late event of the first one
-    assert await _end(stream, 0.2, input_origin=0.5) == pytest.approx(30.7)
-    assert await _end(stream, 1.0, input_origin=0.5) == pytest.approx(36.5)
-    assert await _end(stream, 0.7, input_origin=0.0) == pytest.approx(30.7)
+    # The first connection started at stream position zero.
+    assert await _end(stream, 0.5, connection_start=0.0) == pytest.approx(30.5)
+    assert await _end(stream, 1.0, connection_start=0.0) == pytest.approx(31.0)
+    assert await _start(stream, 1.0, connection_start=0.0) == pytest.approx(36.0)
+    assert await _end(stream, 1.5, connection_start=0.0) == pytest.approx(36.5)
+    # Another connection started at stream position 0.5 s.
+    assert await _end(stream, 0.2, connection_start=0.5) == pytest.approx(30.7)
+    assert await _end(stream, 1.0, connection_start=0.5) == pytest.approx(36.5)
+    assert await _end(stream, 0.7, connection_start=0.0) == pytest.approx(30.7)
     # the same audio, counted from the first frame of the current connection
     assert await _end(stream, 0.5) == pytest.approx(36.5)
     await stream.aclose()
