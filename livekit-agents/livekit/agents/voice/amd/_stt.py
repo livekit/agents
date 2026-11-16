@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 
 from livekit import rtc
 
@@ -79,9 +80,10 @@ class AMDTranscriber:
         self._session_enabled = session_stt or model is None
         self._amd_enabled = model is not None
         self._current = AMDTurnTranscriptAccumulator()
-        # the turn just ended before its AMD final arrived: the AMD STT finalizes a sentence
-        # a little after the session commits it, so a final within the wait belongs to it
+        # the AMD STT finalizes a sentence a little after the session commits it, so a final
+        # within a turn's wait belongs to it; the oldest turn still waiting takes the next one
         self._late: LateAMDFinal | None = None
+        self._waits: deque[LateAMDFinal] = deque()
         self._stream: stt.RecognizeStream | None = None
 
         self._reading = False
@@ -112,11 +114,21 @@ class AMDTranscriber:
                 async for event in stream:
                     if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT and event.alternatives:
                         transcript = event.alternatives[0].text.strip()
-                        late, self._late = self._late, None
-                        if late is None or not late.deliver(transcript):
+                        # a blank final must not consume a turn's wait
+                        if transcript and not self._deliver_late(transcript):
                             self.push_transcript(transcript=transcript, source="amd")
         except Exception as exc:
             self.fail(exc)
+
+    def _deliver_late(self, transcript: str) -> bool:
+        """Give the final to the oldest turn still waiting for one."""
+        while self._waits:
+            wait = self._waits.popleft()
+            if wait is self._late:
+                self._late = None
+            if wait.deliver(transcript):
+                return True
+        return False
 
     def push_transcript(
         self, transcript: str, *, replace: bool = False, source: AMDTranscriptSource = "session"
@@ -136,6 +148,8 @@ class AMDTranscriber:
             and (bool(turn.get("session")) or not self._session_enabled)
         )
         self._late = LateAMDFinal(late_wait) if late else None
+        if self._late is not None:
+            self._waits.append(self._late)
         return AMDTranscript(
             session=turn.get("session") if self._session_enabled else None,
             amd=turn.get("amd") if self._amd_enabled else None,
@@ -144,7 +158,7 @@ class AMDTranscriber:
     @property
     def late_final(self) -> LateAMDFinal | None:
         """The wait of the turn just ended for its AMD final; None when it needs no wait.
-        Read it at commit: the next final or turn replaces it."""
+        Read it at commit: the next turn replaces it."""
         return self._late
 
     def close_stream(self) -> None:

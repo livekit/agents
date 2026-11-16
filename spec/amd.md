@@ -279,13 +279,17 @@ all of these are true:
 - the turn has no AMD text
 - the turn has session text, or there is no session STT
 
-The first AMD final within the wait belongs to the committed turn. Later AMD finals
-belong to the next turn. AMD gives the wait to the turn's task at commit, so a final
-that arrives before the task starts still belongs to the turn.
+Each nonblank AMD final goes to the oldest turn whose wait is still open, so when
+two turns commit within the wait, the first final belongs to the first turn. A blank
+final does not end a wait. When no wait is open, AMD finals belong to the next turn.
+AMD gives the wait to the turn's task at commit, so a final that arrives before the
+task starts still belongs to the turn.
 
 - If the turn has text at commit, its request starts at once. Before the model call,
   the request waits for the AMD final and replaces the turn's message in classifier
   history. The `inference_timeout` deadline starts at commit and includes this wait.
+  If a newer turn cancels the request, the AMD final still replaces the message in
+  classifier history.
 - If the turn has no text at commit, there is no session STT. AMD starts the request
   when the AMD final arrives, and the deadline starts then. If no AMD final arrives,
   the empty-turn rules apply (section 7.3). If a pending request already gave the turn
@@ -564,8 +568,10 @@ Replies outside a machine stage do not wait, including replies in the initial st
 ### 10.4 Voicemail delivery
 
 AMD tracks the speech handle of the voicemail reply. The message counts as played
-only when the handle finishes without interruption or error, audio playout advanced,
-and AMD is still active. If AMD completes while the message plays,
+only when the handle finishes without interruption or error, no assistant message of
+the reply is marked interrupted, audio playout advanced, and AMD is still active. A TTS
+failure partway through the message marks the message interrupted without interrupting
+the handle, so the message does not count as played. If AMD completes while the message plays,
 `voicemail_message_played` stays `False`.
 
 The record survives `uncertain`, `wait`, and IVR turns. So a return to `machine-vm`
@@ -684,8 +690,8 @@ deadlines, and cleanup. They do not prove model accuracy.
 - It uses ai-coustics Voice Focus (`QUAIL_VF_S`) on the input audio, so session STT
   and AMD STT hear less noise and fewer background voices. Keep SIP `krisp_enabled`
   off to avoid filtering twice. Voice isolation is not echo cancellation.
-- If the result reports a played voicemail message and no human, it shuts down the
-  job. The shutdown callback deletes the room.
+- If the result reports a played voicemail message and no human, or the category is
+  `machine-unavailable`, it shuts down the job. The shutdown callback deletes the room.
 
 Set `SIP_PHONE_NUMBER`, `SIP_PARTICIPANT_IDENTITY`, and `SIP_OUTBOUND_TRUNK_ID`.
 Then run `uv run python examples/telephony/amd.py dev`.

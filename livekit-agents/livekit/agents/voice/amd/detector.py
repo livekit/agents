@@ -643,6 +643,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         if turn_transcript.transcript:
             self._start_classification(turn, late_final)
             self._add_realtime_transcript(turn)
+            if late_final is not None:
+                self._spawn(self._keep_late_final(turn, late_final))
         elif late_final is not None:
             # no text yet, without session STT: classify once the AMD final arrives
             self._spawn(self._classify_when_heard(turn, late_final))
@@ -694,6 +696,15 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             self._record_prediction(turn, AMDReason.REUSED)
         self._prediction_changed.set()
         self._update_idle()
+
+    async def _keep_late_final(self, turn: Turn, late_final: LateAMDFinal) -> None:
+        """Keep a late AMD final in classifier history when a newer turn cancelled this
+        turn's request before the final arrived."""
+        late = await late_final.wait()
+        if late is None or turn.transcript.amd == late or self.lifecycle is not AMDLifecycle.ACTIVE:
+            return
+        turn.transcript = dataclasses.replace(turn.transcript, amd=late)
+        update_transcript(self._chat_ctx, turn)
 
     def _add_realtime_transcript(self, turn: Turn) -> None:
         """A realtime model without user transcription gets the user turn from AMD."""
@@ -1075,6 +1086,11 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             self.lifecycle is AMDLifecycle.FINISHED
             or handle.interrupted
             or handle.exception() is not None
+            # a TTS failure cuts the message short without interrupting the handle
+            or any(
+                isinstance(item, llm.ChatMessage) and item.role == "assistant" and item.interrupted
+                for item in handle.chat_items
+            )
         ):
             return
         output = self._session.output.audio

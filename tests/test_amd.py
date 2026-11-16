@@ -511,6 +511,41 @@ async def test_without_session_stt_a_final_after_the_wait_belongs_to_the_next_tu
 
 
 @pytest.mark.asyncio
+async def test_finals_go_to_waiting_turns_in_commit_order(
+    transcriber: tuple[AMDTranscriber, DrainingStream],
+) -> None:
+    amd, stream = transcriber
+    amd.end_turn("Hello.", late_wait=0.3)
+    first = amd.late_final
+    amd.end_turn("Leave a message.", late_wait=0.3)
+    second = amd.late_final
+    assert first is not None and second is not None
+    first_heard, second_heard = (
+        asyncio.create_task(first.wait()),
+        asyncio.create_task(second.wait()),
+    )
+    stream.send_fake_transcript("Hello.")
+    assert await first_heard == "Hello."
+    stream.send_fake_transcript("Leave a message.")
+    assert await second_heard == "Leave a message."
+
+
+@pytest.mark.asyncio
+async def test_a_blank_final_keeps_the_turn_waiting(
+    transcriber: tuple[AMDTranscriber, DrainingStream],
+) -> None:
+    amd, stream = transcriber
+    amd.end_turn("Please state your name.", late_wait=0.3)
+    late = amd.late_final
+    assert late is not None
+    heard = asyncio.create_task(late.wait())
+    stream.send_fake_transcript("")
+    stream.send_fake_transcript("Please state your name.")
+    assert await heard == "Please state your name."
+    assert amd.end_turn("").amd == ""
+
+
+@pytest.mark.asyncio
 async def test_a_turn_with_its_amd_final_needs_no_wait(
     transcriber: tuple[AMDTranscriber, DrainingStream],
 ) -> None:
@@ -1407,7 +1442,9 @@ async def test_stale_voicemail_handle_does_not_clear_a_newer_reservation(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["played", "interrupted", "failed", "no_audio", "closed"])
+@pytest.mark.parametrize(
+    "outcome", ["played", "interrupted", "failed", "truncated", "no_audio", "closed"]
+)
 async def test_voicemail_playback_is_recorded_by_its_handle(outcome: str) -> None:
     async with running() as (detector, session, classifier, _):
         hooks = await commit(detector, session, classifier)
@@ -1429,6 +1466,11 @@ async def test_voicemail_playback_is_recorded_by_its_handle(outcome: str) -> Non
             handle.interrupt()
         elif outcome == "closed":
             await detector.aclose()
+        elif outcome == "truncated":
+            # TTS failed partway: the reply marks its message interrupted, not the handle
+            handle._item_added(
+                [llm.ChatMessage(role="assistant", content=["Hi Sam, your"], interrupted=True)]
+            )
 
         completed = asyncio.Event()
         handle.add_done_callback(lambda _: completed.set())
@@ -2860,6 +2902,31 @@ async def test_an_older_turn_final_does_not_cancel_a_newer_turn() -> None:
         classifier.prediction(2, AMDCategory.HUMAN)
         result = await detector.execute()
         assert result.last_prediction.turn_id == 2
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_request_keeps_its_late_final_in_history() -> None:
+    stt = DrainingSTT()
+    async with running(stt=stt, session_options={"stt": FakeSTT()}) as (detector, _, classifier, _):
+        stream = push_audio(detector, stt)
+        # turn 1's request waits for its AMD final; turn 2 commits and cancels it first
+        commit_turn(detector, end_of_turn("Hello."))
+        commit_turn(detector, end_of_turn("Leave a message."))
+        stream.send_fake_transcript("Hello.")  # turn 1's late final
+        second = await classifier.request()
+        assert second.current_turn.extra["turn_id"] == 2
+        # turn 2 does not take turn 1's final
+        assert (
+            second.current_turn.text_content
+            == '{"transcript_1": "Leave a message.", "transcript_2": ""}'
+        )
+        await eventually(lambda: detector._turns[1].transcript.amd == "Hello.")
+        classifier.prediction(2, AMDCategory.UNCERTAIN)
+        commit_turn(detector, end_of_turn("Hi."))
+        third = await classifier.request()
+        assert third.earlier_turns[0].text_content == (
+            '{"transcript_1": "Hello.", "transcript_2": "Hello."}'
+        )
 
 
 @pytest.mark.asyncio
@@ -6409,6 +6476,7 @@ async def test_customer_stop_response_prevents_realtime_generation() -> None:
         "voicemail_menu",
         "voicemail_failed",
         "human_after_voicemail",
+        "unavailable",
         "disconnected",
         "missing",
         "timeout",
@@ -6435,6 +6503,7 @@ async def test_outbound_call_setup(monkeypatch: pytest.MonkeyPatch, outcome: str
         "voicemail": AMDCategory.MACHINE_VM,
         "voicemail_menu": AMDCategory.MACHINE_IVR,
         "voicemail_failed": AMDCategory.MACHINE_VM,
+        "unavailable": AMDCategory.MACHINE_UNAVAILABLE,
     }.get(outcome, AMDCategory.HUMAN)
     result = AMDCompletedEvent(
         category=category,
@@ -6498,10 +6567,13 @@ async def test_outbound_call_setup(monkeypatch: pytest.MonkeyPatch, outcome: str
         "voicemail_menu",
         "voicemail_failed",
         "human_after_voicemail",
+        "unavailable",
     }:
         detector.execute.assert_awaited_once()
         if outcome in {"voicemail", "voicemail_menu"}:
             ctx.shutdown.assert_called_once_with("voicemail completed")
+        elif outcome == "unavailable":
+            ctx.shutdown.assert_called_once_with("machine unavailable")
         else:
             ctx.shutdown.assert_not_called()
     else:

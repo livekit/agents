@@ -141,6 +141,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
     if result.voicemail_message_played and result.category != AMDCategory.HUMAN:
         ctx.shutdown("voicemail completed")
+    elif result.category == AMDCategory.MACHINE_UNAVAILABLE:
+        # nobody can take the call, such as a full mailbox; hang up
+        ctx.shutdown("machine unavailable")
 
 
 if __name__ == "__main__":
