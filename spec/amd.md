@@ -279,17 +279,17 @@ all of these are true:
 - the turn has no AMD text
 - the turn has session text, or there is no session STT
 
-Each nonblank AMD final goes to the oldest turn whose wait is still open, so when
-two turns commit within the wait, the first final belongs to the first turn. A blank
-final does not end a wait. When no wait is open, AMD finals belong to the next turn.
-AMD gives the wait to the turn's task at commit, so a final that arrives before the
-task starts still belongs to the turn.
+The first nonblank AMD final within the wait belongs to the committed turn. A blank
+final does not end the wait. Later AMD finals belong to the next turn. A newer commit
+takes over the wait, so a final that lags behind two quick turns goes to the newer
+turn. With session STT, the classifier sees both transcripts and can tell that the
+AMD one lags. Without session STT, the newer turn still gets text to classify, rather
+than none. AMD gives the wait to the turn's task at commit, so a final that arrives
+before the task starts still belongs to the turn.
 
 - If the turn has text at commit, its request starts at once. Before the model call,
   the request waits for the AMD final and replaces the turn's message in classifier
   history. The `inference_timeout` deadline starts at commit and includes this wait.
-  If a newer turn cancels the request, the AMD final still replaces the message in
-  classifier history.
 - If the turn has no text at commit, there is no session STT. AMD starts the request
   when the AMD final arrives, and the deadline starts then. If no AMD final arrives,
   the empty-turn rules apply (section 7.3). If a pending request already gave the turn

@@ -511,9 +511,10 @@ async def test_without_session_stt_a_final_after_the_wait_belongs_to_the_next_tu
 
 
 @pytest.mark.asyncio
-async def test_finals_go_to_waiting_turns_in_commit_order(
+async def test_a_newer_turn_takes_over_the_wait_for_a_lagging_final(
     transcriber: tuple[AMDTranscriber, DrainingStream],
 ) -> None:
+    # with session STT the classifier sees both transcripts and can tell the AMD one lags
     amd, stream = transcriber
     amd.end_turn("Hello.", late_wait=0.3)
     first = amd.late_final
@@ -525,9 +526,8 @@ async def test_finals_go_to_waiting_turns_in_commit_order(
         asyncio.create_task(second.wait()),
     )
     stream.send_fake_transcript("Hello.")
-    assert await first_heard == "Hello."
-    stream.send_fake_transcript("Leave a message.")
-    assert await second_heard == "Leave a message."
+    assert await second_heard == "Hello."
+    assert await first_heard is None
 
 
 @pytest.mark.asyncio
@@ -2902,31 +2902,6 @@ async def test_an_older_turn_final_does_not_cancel_a_newer_turn() -> None:
         classifier.prediction(2, AMDCategory.HUMAN)
         result = await detector.execute()
         assert result.last_prediction.turn_id == 2
-
-
-@pytest.mark.asyncio
-async def test_a_cancelled_request_keeps_its_late_final_in_history() -> None:
-    stt = DrainingSTT()
-    async with running(stt=stt, session_options={"stt": FakeSTT()}) as (detector, _, classifier, _):
-        stream = push_audio(detector, stt)
-        # turn 1's request waits for its AMD final; turn 2 commits and cancels it first
-        commit_turn(detector, end_of_turn("Hello."))
-        commit_turn(detector, end_of_turn("Leave a message."))
-        stream.send_fake_transcript("Hello.")  # turn 1's late final
-        second = await classifier.request()
-        assert second.current_turn.extra["turn_id"] == 2
-        # turn 2 does not take turn 1's final
-        assert (
-            second.current_turn.text_content
-            == '{"transcript_1": "Leave a message.", "transcript_2": ""}'
-        )
-        await eventually(lambda: detector._turns[1].transcript.amd == "Hello.")
-        classifier.prediction(2, AMDCategory.UNCERTAIN)
-        commit_turn(detector, end_of_turn("Hi."))
-        third = await classifier.request()
-        assert third.earlier_turns[0].text_content == (
-            '{"transcript_1": "Hello.", "transcript_2": "Hello."}'
-        )
 
 
 @pytest.mark.asyncio
