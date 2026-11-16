@@ -426,6 +426,19 @@ async def test_truncating_unplayed_audio_sends_nothing(server: tuple[FakeServer,
         await session.aclose()
 
 
+async def test_truncate_keeps_the_server_item_id(server: tuple[FakeServer, str]) -> None:
+    fake, url = server
+    _, session, _ = await _connect(url, fake)
+    item_id = "item_6901m7k5b248emw95fxdtdpccth0"
+    try:
+        session.truncate(message_id=item_id, modalities=["audio"], audio_end_ms=500)
+        event = await asyncio.wait_for(fake.received.get(), 2)
+        assert event["type"] == "conversation.item.truncate"
+        assert event["item_id"] == item_id
+    finally:
+        await session.aclose()
+
+
 async def test_idle_session_sends_keepalive_audio(
     server: tuple[FakeServer, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

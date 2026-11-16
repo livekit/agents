@@ -40,7 +40,7 @@ from openai.types.realtime.response_text_delta_event import ResponseTextDeltaEve
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
 from livekit.agents.llm._realtime import openai as _openai
-from livekit.agents.llm._realtime.openai_utils import _shorten_id
+from livekit.agents.llm._realtime.openai_utils import _ItemIdMap, _shorten_id
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -179,6 +179,7 @@ class RealtimeSession(_openai.RealtimeSession):
         self._el_tag_tails: dict[str, str] = {}
         self._el_warned: set[str] = set()
         super().__init__(realtime_model, turn_detection_disabled=turn_detection_disabled)
+        self._item_ids = _UnshortenedItemIds()
         self.on("openai_server_event_received", self._el_on_server_event)
 
     def send_event(self, event: Any) -> None:
@@ -363,6 +364,13 @@ class RealtimeSession(_openai.RealtimeSession):
         if key not in self._el_warned:
             self._el_warned.add(key)
             logger.warning(message)
+
+
+class _UnshortenedItemIds(_ItemIdMap):
+    """The server issues item ids longer than 32 characters and accepts ids up to 256 bytes."""
+
+    def shorten(self, event: dict[str, Any]) -> None:
+        return None
 
 
 class _CloseRecordingSocket:
