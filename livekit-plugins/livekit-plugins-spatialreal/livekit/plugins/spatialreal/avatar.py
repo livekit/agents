@@ -126,13 +126,23 @@ class _Reply:
     finished: bool = False
     completion_task: asyncio.Task[None] | None = None
 
+    def _held(self, now: float, hold_started_at: float | None) -> float:
+        assert self.started_at is not None
+        held = self.held
+        if hold_started_at is not None:
+            held += max(0.0, now - max(hold_started_at, self.started_at))
+        return held
+
     def played(self, now: float, hold_started_at: float | None) -> float:
         if self.started_at is None:
             return 0.0
-        held = self.held
-        if hold_started_at is not None:
-            held += now - max(hold_started_at, self.started_at)
-        return min(self.pushed, max(0.0, now - self.started_at - held))
+        played = now - self.started_at - self._held(now, hold_started_at)
+        return min(self.pushed, max(0.0, played))
+
+    def expected_end(self, now: float, hold_started_at: float | None) -> float:
+        """When the reply finishes playing, given the pauses so far."""
+        assert self.started_at is not None
+        return self.started_at + self._held(now, hold_started_at) + self.pushed
 
 
 class AvatarSession(BaseAvatarSession):
@@ -851,6 +861,11 @@ class AvatarSession(BaseAvatarSession):
         if reply.finished:
             return
         reply.finished = True
+        # before the hold is released below: time still held is not played time
+        if interrupted:
+            position = reply.played(time.time(), self._hold_started_at)
+        else:
+            position = reply.pushed
         if reply in self._replies:
             self._replies.remove(reply)
         if self._input is reply:
@@ -862,10 +877,6 @@ class AvatarSession(BaseAvatarSession):
         if not self._replies:
             self._release_hold()
 
-        if interrupted:
-            position = reply.played(time.time(), self._hold_started_at)
-        else:
-            position = reply.pushed
         logger.debug(
             "SpatialReal avatar segment playback completed",
             extra={
@@ -900,15 +911,22 @@ class AvatarSession(BaseAvatarSession):
         )
 
     async def _completion_fallback(self, reply: _Reply) -> None:
+        armed_at = time.time()
         while not reply.finished:
             now = time.time()
             if reply.started_at is None:
-                remaining = reply.pushed + START_ALLOWANCE_SECONDS
+                deadline = armed_at + reply.pushed + START_ALLOWANCE_SECONDS
             else:
-                remaining = reply.pushed - reply.played(now, self._hold_started_at)
-            await asyncio.sleep(remaining + COMPLETION_MARGIN_SECONDS)
-            # time held by a pause isn't playback: wait it out
-            if reply.finished or self._server_holding:
+                # when the reply should have played out; a pause moves it later, so it
+                # is worked out again on every wake-up
+                deadline = reply.expected_end(now, self._hold_started_at)
+            deadline += COMPLETION_MARGIN_SECONDS
+            if now < deadline:
+                await asyncio.sleep(deadline - now)
+                continue
+            if self._server_holding:
+                # time held by a pause isn't playback: wait it out
+                await asyncio.sleep(COMPLETION_MARGIN_SECONDS)
                 continue
             logger.warning(
                 "SpatialReal reported no end of playback; finishing the reply",
