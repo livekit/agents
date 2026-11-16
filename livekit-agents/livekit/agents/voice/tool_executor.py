@@ -30,6 +30,7 @@ from ..llm.utils import prepare_function_arguments, validated_arguments
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .events import (
+    FunctionToolsExecutedEvent,
     RunContext,
     ToolCallEnded,
     ToolCallStarted,
@@ -563,6 +564,14 @@ class _ToolExecutor:
         tool_choice: ToolChoice | None = None,
     ) -> None:
         fnc_call, fnc_call_out = pair
+        # like an inline result, a deferred pair is announced before it is committed, so a
+        # listener's cancel_tool_reply() applies to it
+        ctx.session.emit(
+            "function_tools_executed",
+            FunctionToolsExecutedEvent(
+                function_calls=[fnc_call], function_call_outputs=[fnc_call_out]
+            ),
+        )
         items: list[ChatItem] = [fnc_call, fnc_call_out]
 
         # eager insert so a reply firing before delivery sees the items
