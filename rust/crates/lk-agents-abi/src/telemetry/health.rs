@@ -29,7 +29,7 @@ pub enum PartitionKind {
     Context,
 }
 
-/// A storage write sent again after its acknowledgment was lost.
+/// A storage write whose outcome stayed unknown.
 #[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StorageWrite {
     /// A partition acquire.
@@ -44,6 +44,8 @@ pub enum StorageWrite {
     Commit,
     /// A task's `submitted` row.
     Submit,
+    /// A task taken to `working`.
+    Pickup,
     /// A dead holder's task failed.
     FailOrphan,
     /// A task cancel.

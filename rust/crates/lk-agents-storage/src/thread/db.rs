@@ -692,7 +692,7 @@ pub(crate) async fn resolve_commit(
     let committed = b.add(SelectCommittedRun { partition_key, run_id });
     let partition_fence = b.add(SelectFence { partition_key });
     let task = read_task.map(|task_id| b.add(SelectTask { partition_key, task_id }));
-    let out = super::read_batch(conn, b.0).await?;
+    let out = conn.read_batch(b.0).await?;
     let committed = !out.at(committed)?.rows().is_empty();
     let task = match task {
         Some(i) if committed => {
@@ -775,7 +775,7 @@ pub(crate) async fn list_tasks(
         }
     };
     let count = b.add(CountThreadTasks { partition_key, status, updated_after });
-    let out = super::read_batch(conn, b.0).await?;
+    let out = conn.read_batch(b.0).await?;
 
     let (mut tasks, mut positions) = (Vec::new(), Vec::new());
     for row in out.at(page)?.rows() {

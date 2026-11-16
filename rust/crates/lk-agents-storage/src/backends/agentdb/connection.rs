@@ -15,8 +15,9 @@ use prost::Message as _;
 use tokio::sync::mpsc;
 use wire as pb;
 
+use super::rows::{decode_batch, statement};
 use crate::StorageError;
-use crate::sql::{BatchResult, Row, SqlValue, Statement, StatementResult};
+use crate::sql::{BatchResult, Row, Statement, StatementResult};
 use lk_agents_abi::storage::agentdb_error::ErrorCode;
 
 // Wire protocol: `Hello` first, with a token minted for this dial. `Exec` answers one `ExecResult`;
@@ -29,129 +30,11 @@ use lk_agents_abi::storage::agentdb_error::ErrorCode;
 // redialed at once) or `idle_evicted` (redialed when next needed). The server answered every
 // request it read before its notice, so each one still unanswered applied nothing: like gRPC's
 // transparent retry, it is sent again on the next socket within its deadline, and its caller sees
-// only the answer. A frame the socket fails to send is not sent. Socket-less, the connection is
+// only the answer. A request answered `wrong_shard_server` applied nothing either: it is sent again
+// the same way, while the socket takes no request more and ends, redialed at once, as soon as
+// the requests still in flight on it are answered. A frame the socket fails to send is not sent. Socket-less, the connection is
 // dormant, which no pool takes back. Answers and outgoing frames queue in bounded channels: a full
 // one holds its sender back.
-
-/// A bound value as the wire carries it.
-fn to_wire(v: &SqlValue) -> wire::Value {
-    use wire::value::Value as V;
-    let value = match v {
-        SqlValue::Null => V::NullValue(true),
-        SqlValue::Int(i) => V::IntValue(*i),
-        SqlValue::Double(d) => V::DoubleValue(*d),
-        SqlValue::Text(s) => V::TextValue(s.clone()),
-        SqlValue::Blob(b) => V::BlobValue(b.clone()),
-    };
-    wire::Value { value: Some(value) }
-}
-
-/// A statement as the wire carries it.
-pub fn statement(s: &Statement) -> wire::Statement {
-    wire::Statement {
-        sql: s.sql().to_owned(),
-        params: s.params().iter().map(to_wire).collect(),
-        lang: 0,
-    }
-}
-
-/// A batch's rows. Values are typed per row: walk `types` and take the next entry from the
-/// matching array; text and blobs are concatenated with one exclusive end offset each. A column
-/// that does not hold what its types announce, or text that is not UTF-8, is a malformed answer:
-/// refused, never read as `NULL`.
-pub fn decode_batch(b: &wire::ColumnBatch) -> Result<Vec<Row>, WsdbError> {
-    use wire::ValueType;
-    let malformed = |what: &str| WsdbError::Protocol(format!("a malformed column batch: {what}"));
-    let rows = b.rows as usize;
-    let row_bytes = b
-        .columns
-        .len()
-        .checked_mul(std::mem::size_of::<SqlValue>())
-        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Row>()))
-        .and_then(|bytes| bytes.checked_mul(rows));
-    if row_bytes.is_none_or(|bytes| bytes > MAX_FRAME)
-        || (rows > 0 && b.columns.is_empty())
-        || b.columns.iter().any(|column| column.types.len() != rows)
-    {
-        return Err(malformed("row dimensions exceed the decode budget or column types"));
-    }
-    let mut out: Vec<Row> = (0..rows).map(|_| Vec::with_capacity(b.columns.len())).collect();
-    for col in &b.columns {
-        let (mut ints, mut doubles) = (col.ints.iter(), col.doubles.iter());
-        let (mut texts, mut blobs) = (col.text_ends.iter(), col.blob_ends.iter());
-        let (mut text_at, mut blob_at) = (0usize, 0usize);
-        for (row, tag) in out.iter_mut().zip(&col.types) {
-            let span = |ends: &mut std::slice::Iter<'_, u32>, at: &mut usize, len: usize| {
-                let end = *ends.next()? as usize;
-                let start = std::mem::replace(at, end);
-                (start <= end && end <= len).then_some(start..end)
-            };
-            let cell = match ValueType::try_from(i32::from(*tag)) {
-                Ok(ValueType::Null) => SqlValue::Null,
-                Ok(ValueType::Int) => SqlValue::Int(*ints.next().ok_or_else(|| malformed("ints"))?),
-                Ok(ValueType::Double) => {
-                    SqlValue::Double(*doubles.next().ok_or_else(|| malformed("doubles"))?)
-                }
-                Ok(ValueType::Text) => {
-                    let range = span(&mut texts, &mut text_at, col.text_data.len())
-                        .ok_or_else(|| malformed("text offsets"))?;
-                    let text = std::str::from_utf8(&col.text_data[range])
-                        .map_err(|_| malformed("text that is not UTF-8"))?;
-                    SqlValue::Text(text.to_owned())
-                }
-                Ok(ValueType::Blob) => {
-                    let range = span(&mut blobs, &mut blob_at, col.blob_data.len())
-                        .ok_or_else(|| malformed("blob offsets"))?;
-                    SqlValue::Blob(col.blob_data[range].to_vec())
-                }
-                Err(_) => return Err(malformed("an unknown value type")),
-            };
-            row.push(cell);
-        }
-        if ints.next().is_some()
-            || doubles.next().is_some()
-            || texts.next().is_some()
-            || blobs.next().is_some()
-            || text_at != col.text_data.len()
-            || blob_at != col.blob_data.len()
-        {
-            return Err(malformed("unannounced column values"));
-        }
-    }
-    Ok(out)
-}
-
-/// The inverse of [`decode_batch`], for tests and fakes: rows into one column-oriented batch.
-pub fn encode_batch(rows: &[Row], width: usize) -> wire::ColumnBatch {
-    use wire::ValueType;
-    let mut columns: Vec<wire::Column> = (0..width).map(|_| wire::Column::default()).collect();
-    for row in rows {
-        for (i, col) in columns.iter_mut().enumerate() {
-            match row.get(i).unwrap_or(&SqlValue::Null) {
-                SqlValue::Null => col.types.push(ValueType::Null as u8),
-                SqlValue::Int(v) => {
-                    col.types.push(ValueType::Int as u8);
-                    col.ints.push(*v);
-                }
-                SqlValue::Double(v) => {
-                    col.types.push(ValueType::Double as u8);
-                    col.doubles.push(*v);
-                }
-                SqlValue::Text(s) => {
-                    col.types.push(ValueType::Text as u8);
-                    col.text_data.extend_from_slice(s.as_bytes());
-                    col.text_ends.push(col.text_data.len() as u32);
-                }
-                SqlValue::Blob(b) => {
-                    col.types.push(ValueType::Blob as u8);
-                    col.blob_data.extend_from_slice(b);
-                    col.blob_ends.push(col.blob_data.len() as u32);
-                }
-            }
-        }
-    }
-    wire::ColumnBatch { columns, rows: rows.len() as u32, statement: 0 }
-}
 
 type WsRead = futures_util::stream::SplitStream<RawWebSocket>;
 
@@ -194,7 +77,7 @@ pub enum WriteError {
 
 impl WsdbError {
     /// A `Hello` refusal that redialing cannot repair: a known code that is not retryable.
-    fn is_final(&self) -> bool {
+    pub(crate) fn is_final(&self) -> bool {
         match self {
             Self::Server { code, .. } => code.known() && !code.retryable(),
             Self::Protocol(_) => true,
@@ -311,6 +194,8 @@ struct State {
     /// The live socket's generation, one per `Hello` admitted.
     generation: u64,
     closed: bool,
+    /// The live socket refused a request `wrong_shard_server`: it ends once nothing is in flight.
+    retiring: bool,
     /// Why the connection gave up for good; later calls fail with it.
     fatal: Option<WsdbError>,
     tip: i64,
@@ -325,6 +210,8 @@ struct Inner {
     ready: signal::Cell<bool>,
     /// How many requests wait for a socket: the supervisor redials while any does.
     waiting: signal::Shared<usize>,
+    /// The generation of the last retiring socket left with nothing in flight: its read ends.
+    settled: signal::Shared<u64>,
     /// The executor the connection's supervisor, heartbeat and writer run on.
     spawner: Arc<dyn Spawner>,
     /// What its dial bound, heartbeat, redial backoff and read deadline wait on.
@@ -474,12 +361,14 @@ impl Conn {
                 pending: HashMap::new(),
                 tx: None,
                 generation: 0,
+                retiring: false,
                 closed: false,
                 fatal: None,
                 tip: 0,
             }),
             ready: ready_cell,
             waiting: signal::Shared::new(0),
+            settled: signal::Shared::new(0),
             spawner,
             clock,
             tasks: Arc::default(),
@@ -636,6 +525,7 @@ impl Conn {
             st.tip = st.tip.max(ok.tip); // a reconnect can only observe a later tip
             st.tx = Some(tx);
             st.generation += 1;
+            st.retiring = false;
         }
         let read_deadline = (!ping_interval.is_zero())
             .then(|| ping_interval + ping_timeout + Duration::from_secs(1));
@@ -643,8 +533,17 @@ impl Conn {
     }
 
     async fn read_loop(&self, socket: &mut Socket, ready: &Producer<bool>) -> WsdbError {
+        let generation = self.0.state.lock().generation;
         loop {
-            let routed = match socket.next_message(&*self.0.clock).await {
+            let message = tokio::select! {
+                biased;
+                message = socket.next_message(&*self.0.clock) => message,
+                () = self.0.settled.wait_until(|g| (*g == generation).then_some(())) => {
+                    let message = "the socket retired once its requests were answered".into();
+                    return WsdbError::Server { code: ErrorCode::WRONG_SHARD_SERVER, message };
+                }
+            };
+            let routed = match message {
                 Ok(Message::Binary(bytes)) => self.route_response(bytes.as_ref(), ready).await,
                 Ok(Message::Close(_)) => Err(WsdbError::Io("socket closed".into())),
                 Ok(_) => Ok(()),
@@ -657,20 +556,27 @@ impl Conn {
     }
 
     /// Hands a response to the request awaiting it, waiting while its answers are queued full;
-    /// a pong only proves the socket is alive. The server's drain notice ends the socket.
+    /// a pong only proves the socket is alive. The server's drain notice ends the socket; a
+    /// request answered `wrong_shard_server` alone is drained, and the socket retires.
     async fn route_response(&self, bytes: &[u8], ready: &Producer<bool>) -> Result<(), WsdbError> {
         let resp =
             pb::ServerMessage::decode(bytes).map_err(|e| WsdbError::Protocol(e.to_string()))?;
         match &resp.message {
             Some(pb::server_message::Message::Pong(_)) => return Ok(()),
+            // the gate closes first, so a request registering meanwhile waits for the next socket
             Some(pb::server_message::Message::Error(e))
                 if resp.request_id == 0 && is_notice(ErrorCode(e.code)) =>
             {
-                // the gate closes first, so a request registering meanwhile waits for the next
-                // socket
                 ready.set(false);
-                self.drain();
+                self.drain(None);
                 return Err(WsdbError::server(e.clone()));
+            }
+            Some(pb::server_message::Message::Error(e))
+                if ErrorCode(e.code) == ErrorCode::WRONG_SHARD_SERVER =>
+            {
+                ready.set(false);
+                self.drain(Some(resp.request_id));
+                return Ok(());
             }
             _ => {}
         }
@@ -684,21 +590,36 @@ impl Conn {
     }
 
     /// The server's drain notice, read: it answered every request it read, so each one still
-    /// unanswered on the live socket applied nothing. The socket takes no request more, and each
-    /// of those is handed the drain on request id 0, which sends it again on the next socket. A
-    /// request without its last answer has none queued, so each has room for it; one whose queue
-    /// is full broke that promise and ends `Disconnected` after its answers.
-    fn drain(&self) {
+    /// unanswered on the live socket applied nothing, and the socket takes no request more. Or
+    /// `only` one request, answered `wrong_shard_server`, applied nothing, and the socket retires.
+    /// Each of those is handed the drain on request id 0, which sends it again on the next
+    /// socket. A request without its last answer has none queued, so each has room for it; one
+    /// whose queue is full broke that promise and ends `Disconnected` after its answers.
+    fn drain(&self, only: Option<u32>) {
         let mut st = self.0.state.lock();
-        st.tx = None;
+        match only {
+            Some(_) => st.retiring = true,
+            None => st.tx = None,
+        }
         let live = Some(st.generation);
-        st.pending.retain(|_, p| {
-            if p.socket != live {
+        st.pending.retain(|id, p| {
+            if p.socket != live || only.is_some_and(|only| only != *id) {
                 return true;
             }
             p.socket = None;
             p.answers.try_send(pb::ServerMessage::default()).is_ok()
         });
+        self.settle(&mut st);
+    }
+
+    /// A retiring socket with nothing in flight on it takes no request more, and its read ends.
+    fn settle(&self, st: &mut State) {
+        let live = Some(st.generation);
+        if st.retiring && st.tx.is_some() && !st.pending.values().any(|p| p.socket == live) {
+            st.tx = None;
+            let generation = st.generation;
+            self.0.settled.modify(|settled| *settled = generation);
+        }
     }
 
     /// Fails everything in flight on the socket. Only after the read loop returned, so no
@@ -1097,7 +1018,9 @@ impl Drop for Request<'_> {
         let live = {
             let mut st = self.conn.0.state.lock();
             let socket = st.pending.remove(&self.id).and_then(|p| p.socket);
-            st.tx.is_some() && socket == Some(st.generation)
+            let live = st.tx.is_some() && socket == Some(st.generation);
+            self.conn.settle(&mut st);
+            live
         };
         if live && !self.answered {
             self.conn.try_write(self.id, pb::client_message::Message::Cancel(pb::Cancel {}));

@@ -1,4 +1,6 @@
 use super::*;
+use crate::backends::agentdb::rows::encode_batch;
+use crate::sql::SqlValue;
 use std::sync::atomic::AtomicBool;
 use tokio::net::TcpListener;
 
@@ -647,10 +649,12 @@ fn compressed_rows_cannot_amplify_beyond_the_frame_memory_budget() {
 
 /// Like [`serve`] over [`script`], except that the first frame `drains` picks is never run: the
 /// server ends its socket with `notice` on request id 0, once. A `Hello` it picks is answered
-/// first, so the notice follows it before any request.
+/// first, so the notice follows it before any request. `answered`: the notice is that request's
+/// answer instead, and the server keeps the socket open.
 async fn serve_draining(
     notice: ErrorCode,
     drains: fn(&pb::ClientMessage) -> bool,
+    answered: bool,
 ) -> (String, Served) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/db", listener.local_addr().unwrap());
@@ -671,14 +675,16 @@ async fn serve_draining(
                     let mut answers = if drain && !hello { vec![] } else { script(&msg) };
                     answers.iter_mut().for_each(|a| a.request_id = msg.request_id);
                     if drain {
-                        answers.push(error(notice, "draining"));
+                        let mut notice = error(notice, "draining");
+                        notice.request_id = if answered { msg.request_id } else { 0 };
+                        answers.push(notice);
                     }
                     for answer in answers {
                         if ws.send(Message::binary(answer.encode_to_vec())).await.is_err() {
                             return;
                         }
                     }
-                    if drain {
+                    if drain && !answered {
                         return;
                     }
                 }
@@ -717,7 +723,7 @@ fn is_hello(m: &pb::ClientMessage) -> bool {
 #[tokio::test]
 async fn an_exec_a_drain_notice_left_unanswered_is_served_on_the_next_socket() {
     for notice in NOTICES {
-        let (url, log) = serve_draining(notice, is_exec).await;
+        let (url, log) = serve_draining(notice, is_exec, false).await;
         let conn = dial(&url, "DB_1").await.unwrap();
         let r = conn.exec(&st("INSERT", vec![]), conn.deadline()).await;
         assert_eq!(r.unwrap().rows_affected, 1, "{notice}");
@@ -732,7 +738,7 @@ async fn an_exec_a_drain_notice_left_unanswered_is_served_on_the_next_socket() {
 #[tokio::test]
 async fn a_batch_a_drain_notice_left_unanswered_is_served_on_the_next_socket() {
     for notice in NOTICES {
-        let (url, log) = serve_draining(notice, is_batch).await;
+        let (url, log) = serve_draining(notice, is_batch, false).await;
         let conn = dial(&url, "DB_1").await.unwrap();
         let stmts: Vec<Statement> = (0..4).map(|_| st("S", vec![])).collect();
         let out = conn.batch(&stmts, conn.deadline()).await.unwrap();
@@ -747,7 +753,7 @@ async fn a_batch_a_drain_notice_left_unanswered_is_served_on_the_next_socket() {
 #[tokio::test]
 async fn a_query_a_drain_notice_left_unanswered_is_served_on_the_next_socket() {
     for notice in NOTICES {
-        let (url, log) = serve_draining(notice, is_query).await;
+        let (url, log) = serve_draining(notice, is_query, false).await;
         let conn = dial(&url, "DB_1").await.unwrap();
         let rows = conn.query_all(&st("SELECT", vec![]), conn.deadline()).await.unwrap();
         assert_eq!(rows.len(), 2, "{notice}");
@@ -757,13 +763,105 @@ async fn a_query_a_drain_notice_left_unanswered_is_served_on_the_next_socket() {
     }
 }
 
+/// Catches: a request answered `wrong_shard_server` failing `Unavailable`, a read never sent
+/// again. It applied nothing: each request kind goes out again on a socket redialed at once, and
+/// its caller sees only the answer.
+#[tokio::test]
+async fn a_request_answered_wrong_shard_server_is_served_on_the_next_socket() {
+    let shard = ErrorCode::WRONG_SHARD_SERVER;
+    let (url, log) = serve_draining(shard, is_exec, true).await;
+    let conn = dial(&url, "DB_1").await.unwrap();
+    let r = conn.exec(&st("INSERT", vec![]), conn.deadline()).await;
+    assert_eq!(r.unwrap().rows_affected, 1);
+    assert_eq!((sent(&log, is_exec).len(), hellos(&log)), (2, 2), "exec: on the next socket");
+    conn.close();
+
+    let (url, log) = serve_draining(shard, is_batch, true).await;
+    let conn = dial(&url, "DB_1").await.unwrap();
+    let stmts: Vec<Statement> = (0..4).map(|_| st("S", vec![])).collect();
+    let out = conn.batch(&stmts, conn.deadline()).await.unwrap();
+    assert_eq!(out.results[3].rows().len(), 2);
+    assert_eq!((sent(&log, is_batch).len(), hellos(&log)), (2, 2), "batch: on the next socket");
+    conn.close();
+
+    let (url, log) = serve_draining(shard, is_query, true).await;
+    let conn = dial(&url, "DB_1").await.unwrap();
+    let rows = conn.query_all(&st("SELECT", vec![]), conn.deadline()).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!((sent(&log, is_query).len(), hellos(&log)), (2, 2), "query: on the next socket");
+    conn.close();
+}
+
+/// Catches: a request answered `wrong_shard_server` ending its socket, which left every other
+/// write in flight on it `Disconnected` (outcome unknown). The first socket holds an exec's answer
+/// until it refused a query `wrong_shard_server`: the exec still gets its own answer there, and
+/// the query is served on the next socket once nothing is in flight on the first.
+#[tokio::test]
+async fn a_write_in_flight_when_another_request_is_refused_wrong_shard_gets_its_answer() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/db", listener.local_addr().unwrap());
+    let log: Served = Arc::new(Mutex::new(Vec::new()));
+    let seen = log.clone();
+    tokio::spawn(async move {
+        let first = Arc::new(AtomicBool::new(true));
+        loop {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let (seen, first) = (seen.clone(), first.swap(false, Ordering::SeqCst));
+            tokio::spawn(async move {
+                let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                let (mut exec, mut query) = (None, None);
+                while let Some(Ok(Message::Binary(b))) = ws.next().await {
+                    let msg = pb::ClientMessage::decode(b.as_ref()).unwrap();
+                    seen.lock().push(msg.clone());
+                    let mut answers = Vec::new();
+                    match &msg.message {
+                        Some(pb::client_message::Message::Exec(_)) if first => exec = Some(msg),
+                        Some(pb::client_message::Message::Query(_)) if first => query = Some(msg),
+                        _ => answers.extend(script(&msg).into_iter().map(|mut a| {
+                            a.request_id = msg.request_id;
+                            a
+                        })),
+                    }
+                    if let (Some(e), Some(q)) = (&exec, &query) {
+                        let mut refused = error(ErrorCode::WRONG_SHARD_SERVER, "moved");
+                        refused.request_id = q.request_id;
+                        answers.push(refused);
+                        answers.extend(script(e).into_iter().map(|mut a| {
+                            a.request_id = e.request_id;
+                            a
+                        }));
+                        (exec, query) = (None, None);
+                    }
+                    for answer in answers {
+                        if ws.send(Message::binary(answer.encode_to_vec())).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    let conn = dial(&url, "DB_1").await.unwrap();
+    let (insert, select) = (st("INSERT", vec![]), st("SELECT", vec![]));
+    let (exec, query) = tokio::join!(
+        conn.exec(&insert, conn.deadline()),
+        conn.query_all(&select, conn.deadline()),
+    );
+    assert_eq!(exec.expect("its own answer, not Uncertain").rows_affected, 1);
+    assert_eq!(query.expect("served on the next socket").len(), 2);
+    assert_eq!(sent(&log, is_exec).len(), 1, "the write went out once");
+    assert_eq!(sent(&log, is_query).len(), 2, "the refused query went out again");
+    assert_eq!(hellos(&log), 2);
+    conn.close();
+}
+
 /// Catches: a request racing a notice read right after `Hello` failing, whether it was bound to
 /// the drained socket, written to it, or registered after it. A `wrong_shard_server` socket is
 /// redialed at once, with no request waiting.
 #[tokio::test]
 async fn a_drain_notice_right_after_hello_serves_the_next_request_on_the_next_socket() {
     for notice in NOTICES {
-        let (url, log) = serve_draining(notice, is_hello).await;
+        let (url, log) = serve_draining(notice, is_hello, false).await;
         let conn = dial(&url, "DB_1").await.unwrap();
         if notice == ErrorCode::WRONG_SHARD_SERVER {
             for _ in 0..200 {

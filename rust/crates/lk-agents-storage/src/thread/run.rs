@@ -1,5 +1,4 @@
 pub use lk_agents_abi::telemetry::health::PartitionKind;
-use std::ops::ControlFlow;
 use std::time::Duration;
 
 use crate::thread::db::{Commit, Committed, EventWrite, Fenced, Resolution};
@@ -16,8 +15,7 @@ use crate::sql::Bind as _;
 use crate::thread::lease::Lease;
 use lk_agents_net::clock::unix_now_ms;
 
-use super::{Partition, Resend, db};
-use lk_agents_abi::storage::Unacknowledged;
+use super::{Partition, db};
 use std::collections::BTreeMap;
 
 pub use crate::thread::schema::{ItemRow, PartitionRow, TaskRow};
@@ -485,9 +483,10 @@ impl Run {
 
     /// Leaving normally: one fenced write of everything the run holds. A closed run releases the
     /// lease and writes nothing. `VersionConflict` means its token or version was replaced. The
-    /// write, its resends and the resolution of a lost acknowledgment share the caller's
-    /// deadline; an outcome still unknown at it is `Uncertain`, and the run's dropped lease is
-    /// released by its token, which fences out a write that never applied.
+    /// write, its resends while refused unapplied and the read-back of a lost acknowledgment
+    /// share the caller's deadline; a lost commit is never sent again, and one the read-back
+    /// cannot find is `Uncertain`: the run's dropped lease is released by its token, which fences
+    /// out a write that never applied.
     pub async fn commit(&mut self, opts: CommitOptions) -> Result<Committed, StorageError> {
         let deadline = crate::deadline::or_default(self.partition_key.thread.clock());
         crate::deadline::within(deadline, self.commit_once(opts)).await
@@ -508,11 +507,7 @@ impl Run {
         }
         let lease = opts.lease;
         let out = match self.writes(opts) {
-            Ok(commit) => match self.send_until_answered(&commit, lease).await {
-                Err(StorageError::Uncertain(why)) => {
-                    log::warn!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
-                    self.resolve(&commit, lease, why).await
-                }
+            Ok(commit) => match self.send_resolving(&commit, lease).await {
                 Err(StorageError::Invalid(why)) if !commit.app_writes.is_empty() => {
                     Err(self.refused_commit(&commit, why).await)
                 }
@@ -550,24 +545,34 @@ impl Run {
         }
     }
 
-    /// [`Run::send`] again while it is refused unapplied, until the deadline; a lost
-    /// acknowledgment is left to [`Run::resolve`], which reads back whether it applied.
-    async fn send_until_answered(
+    /// [`Run::send`] again while it is refused unapplied, until the deadline. A lost
+    /// acknowledgment is read back once by the run's identity: committed (its record), rejected
+    /// (`VersionConflict`: the partition moved on without it), else `Uncertain`, never sent
+    /// again: a commit still in flight may yet apply.
+    async fn send_resolving(
         &self,
         commit: &Commit,
         after: LeaseAfterCommit,
     ) -> Result<Committed, StorageError> {
-        let mut resend = self.partition_key.thread.resend(crate::telemetry::StorageWrite::Commit);
-        loop {
-            match resend.attempt(self.send(commit, after)).await {
-                Err(StorageError::Uncertain(why)) => return Err(StorageError::Uncertain(why)),
-                out => {
-                    if let ControlFlow::Break(out) = resend.after(out).await {
-                        return out;
-                    }
-                }
+        let fence = self.lease.as_ref().map(Lease::fence);
+        let (conn, read_task) = (&*self.partition_key.thread.conn, commit.read_task.as_deref());
+        let (partition_key, run_id) = (self.partition_key.name(), self.run_id.as_str());
+        let probe = || async move {
+            match db::resolve_commit(conn, partition_key, run_id, fence, read_task).await {
+                Ok(Resolution::Committed(committed)) => Ok(Some(*committed)),
+                Ok(Resolution::Rejected) => Err(StorageError::VersionConflict {
+                    partition_key: partition_key.to_owned(),
+                    expected: fence.map_or(0, |f| f.version),
+                }),
+                // a read-back that found nothing, or none, leaves the commit unknown
+                Ok(Resolution::NotApplied) | Err(_) => Ok(None),
             }
-        }
+        };
+        self.partition_key
+            .thread
+            .resend(crate::telemetry::StorageWrite::Commit)
+            .probed(|| self.send(commit, after), probe)
+            .await
     }
 
     /// Sends the run's one write, fenced on its lease when it holds one.
@@ -582,38 +587,6 @@ impl Run {
                 .then(|| self.partition_key.thread.timing.millis()),
         });
         db::commit(&*self.partition_key.thread.conn, self.partition_key.name(), commit, fenced)
-            .await
-    }
-
-    /// A commit whose acknowledgment was lost, resolved by the run's identity: committed (its
-    /// record), not applied while the fence holds (sent again: the fence and the run id make it
-    /// safe), or rejected (`VersionConflict`: the partition moved on without it). `Uncertain` once
-    /// the deadline passes with no authoritative answer.
-    async fn resolve(
-        &self,
-        commit: &Commit,
-        lease: LeaseAfterCommit,
-        lost: Unacknowledged,
-    ) -> Result<Committed, StorageError> {
-        let fence = self.lease.as_ref().map(Lease::fence);
-        let (conn, read_task) = (&*self.partition_key.thread.conn, commit.read_task.as_deref());
-        let (partition_key, run_id) = (self.partition_key.name(), self.run_id.as_str());
-        let probe = || async move {
-            match db::resolve_commit(conn, partition_key, run_id, fence, read_task).await {
-                Ok(Resolution::Committed(committed)) => Ok(Some(*committed)),
-                Ok(Resolution::Rejected) => Err(StorageError::VersionConflict {
-                    partition_key: partition_key.to_owned(),
-                    expected: fence.map_or(0, |f| f.version),
-                }),
-                Ok(Resolution::NotApplied) => Ok(None),
-                // a probe that could not be read answers nothing
-                Err(e) => Err(StorageError::Unavailable(format!("resolving: {e}"))),
-            }
-        };
-        let thread = &self.partition_key.thread;
-        let (clock, cx) = (thread.background.clock.clone(), &thread.cx);
-        Resend::after_lost(clock, cx, crate::telemetry::StorageWrite::Commit, lost)
-            .probed(|| self.send(commit, lease), probe)
             .await
     }
 

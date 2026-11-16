@@ -31,7 +31,8 @@ impl Partition {
     }
 
     /// The inbox receive, one atomic batch: the inbox row, the `submitted` task row and the
-    /// lease attempt under `holder`. A lost acknowledgment is retried with the same token.
+    /// lease attempt under `holder`. A refusal that applied nothing is sent again with the same
+    /// token; a lost acknowledgment is `Uncertain`.
     pub async fn receive(
         &self,
         holder: &Holder,
@@ -53,32 +54,9 @@ impl Partition {
         let (thread, write) = (self.thread.clone(), StorageWrite::Receive);
         let mut pending = PendingLease::new(thread, self.name(), holder, None, deadline, write);
         let (received, lease) = loop {
-            let (token, lost) = (pending.token().to_owned(), pending.lost());
-            let request = async {
-                let out = db::receive(
-                    conn,
-                    &self.name,
-                    holder.as_str(),
-                    &token,
-                    lease_ms,
-                    endpoint,
-                    input,
-                );
-                match out.await? {
-                    // a duplicate of this very task after a lost acknowledgment is its own insert
-                    Receive::Duplicate(Some(task)) if lost && task == input.task_id => {
-                        let fence =
-                            self.thread.read(SelectFence { partition_key: &self.name }, |row| {
-                                Ok((row[0].as_i64(), row[1].as_str().map(str::to_owned)))
-                            });
-                        let held = fence.await?.into_iter().next().and_then(|(version, held)| {
-                            version.filter(|_| held.as_deref() == Some(&*token))
-                        });
-                        Ok(Receive::Received(held))
-                    }
-                    received => Ok(received),
-                }
-            };
+            let token = pending.token().to_owned();
+            let request =
+                db::receive(conn, &self.name, holder.as_str(), &token, lease_ms, endpoint, input);
             let version = |received: &Receive| match received {
                 Receive::Received(version) => *version,
                 _ => None,
@@ -95,8 +73,8 @@ impl Partition {
     }
 
     /// A turn's `submitted` row, before the lease is tried; `false` when its task or message id
-    /// already had one. Keyed by the task id: after a lost acknowledgment, the row found under
-    /// it is this insert.
+    /// already had one. Keyed by the task id: after a lost acknowledgment, the row read back
+    /// under it is this insert; none found, it is `Uncertain`.
     pub async fn submit(&self, task: &TaskWrite) -> Result<bool, StorageError> {
         self.submit_at(task, None).await
     }
@@ -123,9 +101,12 @@ impl Partition {
     }
 
     /// Takes a `submitted` or `working` row to `working`. The status it had (`working` means a
-    /// dead holder had it), `None` when the row is terminal or missing.
+    /// dead holder had it), `None` when the row is terminal or missing. Sent again while it is
+    /// refused unapplied; a lost acknowledgment is `Uncertain`.
     pub async fn pickup(&self, task_id: &str) -> Result<Option<TaskState>, StorageError> {
-        db::pickup(&*self.thread.conn, &self.name, task_id).await
+        let conn = &*self.thread.conn;
+        let pickup = || db::pickup(conn, &self.name, task_id);
+        self.thread.resend(StorageWrite::Pickup).send(pickup).await
     }
 
     /// A `working` row whose holder died ends `failed` with the given status message. Keyed by

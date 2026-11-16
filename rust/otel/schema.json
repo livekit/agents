@@ -4967,6 +4967,7 @@
             "extend",
             "commit",
             "submit",
+            "pickup",
             "fail_orphan",
             "cancel",
             "schema",

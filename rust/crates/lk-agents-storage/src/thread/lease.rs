@@ -86,6 +86,18 @@ fn release(
     batch
 }
 
+/// A lost release read back: `Some` once the partition is under another token, or none.
+async fn released(
+    db: &Thread,
+    partition_key: &str,
+    token: &str,
+) -> Result<Option<()>, StorageError> {
+    let tokens =
+        db.read(SelectFence { partition_key }, |row| Ok(row[1].as_str().map(str::to_owned)));
+    let held = tokens.await?.into_iter().any(|t| t.as_deref() == Some(token));
+    Ok((!held).then_some(()))
+}
+
 /// [`release`] from a drop, on the thread's storage executor (the caller may already be gone,
 /// or off the runtime), counted by its owner, until [`HOST_TEARDOWN_TIMEOUT`]: one that could
 /// not land by then is a teardown overrun, and the lease lapses at its TTL.
@@ -124,7 +136,8 @@ pub(crate) struct PendingLease {
 }
 
 impl PendingLease {
-    /// A lost acknowledgment is sent again under the same token until `deadline`.
+    /// A request refused unapplied is sent again under the same token until `deadline`; a lost
+    /// acknowledgment never is.
     pub(crate) fn new(
         db: Thread,
         partition_key: &str,
@@ -144,14 +157,10 @@ impl PendingLease {
         &self.token
     }
 
-    /// Whether an earlier request's answer was lost: it may have taken the partition.
-    pub(crate) fn lost(&self) -> bool {
-        self.resend.lost()
-    }
-
     /// One request that may take the partition under this token, `version` reading from its answer
-    /// the version it took the partition at. `Continue` after a lost acknowledgment, to send it again;
-    /// `Break` once the answer is known, with the lease when it took the partition.
+    /// the version it took the partition at. `Continue` after a refusal that applied nothing, to
+    /// send it again; `Break` once the answer is known, with the lease when it took the
+    /// partition. A lost acknowledgment is `Uncertain`, and the dropped take releases by token.
     pub(crate) async fn attempt<T>(
         &mut self,
         request: impl Future<Output = Result<T, StorageError>>,
@@ -166,8 +175,7 @@ impl PendingLease {
             ControlFlow::Break(Err(error)) => return ControlFlow::Break(Err(error)),
         };
         let Some(version) = version(&answer) else {
-            // after a lost answer the partition may still be held under this token
-            self.armed = self.resend.lost();
+            self.armed = false;
             return ControlFlow::Break(Ok((answer, None)));
         };
         self.armed = false;
@@ -352,8 +360,12 @@ impl Lease {
     pub async fn release(&self, ended: Option<(&str, &EventWrite)>) -> Result<(), StorageError> {
         let Fence { partition_key, token, holder, .. } = &self.inner.fence;
         let (db, conn) = (&self.inner.db, self.inner.db.conn());
-        let batch = || conn.batch(release(partition_key, token, holder.as_str(), ended));
-        db.resend(StorageWrite::Release).send(batch).await?;
+        let batch = || async move {
+            conn.batch(release(partition_key, token, holder.as_str(), ended)).await.map(drop)
+        };
+        db.resend(StorageWrite::Release)
+            .probed(batch, || released(db, partition_key, token))
+            .await?;
         self.mark_released();
         Ok(())
     }
@@ -379,13 +391,7 @@ impl Lease {
         let (partition_key, token) = (&*fence.partition_key, &*fence.token);
         let released = db.resend(StorageWrite::Release).probed(
             || async move { Ok(db.exec(ReleaseLeaseIfDrained { partition_key, token }).await? > 0) },
-            // a lost release left the partition under another token, or none
-            || async move {
-                let tokens =
-                    db.read(SelectFence { partition_key }, |row| Ok(row[1].as_str().map(str::to_owned)));
-                let held = tokens.await?.into_iter().any(|t| t.as_deref() == Some(token));
-                Ok((!held).then_some(true))
-            },
+            || async move { Ok(released(db, partition_key, token).await?.map(|()| true)) },
         );
         if released.await? {
             self.mark_released();

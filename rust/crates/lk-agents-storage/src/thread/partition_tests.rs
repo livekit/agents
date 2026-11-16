@@ -1,13 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::WhenHeld;
 use crate::testing::{Faulty, TempDatabase, WriteFault, background};
-use crate::thread::db::{Receive, ReceiveInput};
+use crate::thread::db::ReceiveInput;
 use crate::thread::schema::TaskData;
 use crate::thread::tests::PARTITION_KEY;
 use crate::thread::{LeaseTiming, SchemaCell};
 use crate::{CommitOptions, Holder, PartitionAccess, RunOptions, RunOutcome, StorageError, Thread};
+use crate::{TaskState, WhenHeld};
 
 // One database file on paused time: its workers are tasks, so a wait is virtual.
 
@@ -153,21 +153,24 @@ async fn a_waiting_acquire_takes_a_partition_another_worker_released_within_a_po
     assert!(at - released <= Duration::from_millis(1_100), "taken {:?} after", at - released);
 }
 
-/// An acquire whose acknowledgment was lost, applied or not, is retried with its token.
+/// Catches: an acquire whose acknowledgment was lost sent again, which could take the partition
+/// twice. Applied or not, it is `Uncertain`; its dropped take releases by its token, so the next
+/// holder takes the partition.
 #[tokio::test(start_paused = true)]
-async fn an_uncertain_acquire_is_retried() {
+async fn an_uncertain_acquire_is_not_sent_again() {
     for fault in [WriteFault::LoseAckBefore, WriteFault::LoseAckAfter] {
         let db = database();
         let owner = Holder::new("voice");
         let (thread, faulty) = faulty(&db, &owner).await;
         faulty.fail_next_lease_take(fault);
-        let mut run =
-            thread.partition(PARTITION_KEY).open(reject("r1"), &owner).await.expect("retried");
-        run.commit(CommitOptions::default()).await.unwrap();
-        assert_eq!(outcome(&thread, "r1").await, Some(RunOutcome::Completed), "{fault:?}");
+        let lost = thread.partition(PARTITION_KEY).open(reject("r1"), &owner).await;
+        assert!(matches!(lost, Err(StorageError::Uncertain(_))), "{fault:?}: {:?}", lost.map(drop));
         let other = handle(&db).await;
-        let mut next =
-            other.partition(PARTITION_KEY).open(reject("r2"), &Holder::new("other")).await.unwrap();
+        let mut next = other
+            .partition(PARTITION_KEY)
+            .open(RunOptions::new("r2", ""), &Holder::new("other"))
+            .await
+            .unwrap();
         next.commit(CommitOptions::default()).await.unwrap();
     }
 }
@@ -191,9 +194,10 @@ async fn another_holders_dropped_acquire_leaves_the_owners_lease() {
     held.commit(CommitOptions::default()).await.expect("the owner kept its lease");
 }
 
-/// An inbox receive whose acknowledgment was lost is retried: the lease it took is returned.
+/// Catches: an inbox receive whose acknowledgment was lost sent again. Applied or not, it is
+/// `Uncertain`; its dropped take releases by its token, so the next holder takes the partition.
 #[tokio::test(start_paused = true)]
-async fn an_uncertain_receive_is_retried() {
+async fn an_uncertain_receive_is_not_sent_again() {
     for fault in [WriteFault::LoseAckBefore, WriteFault::LoseAckAfter] {
         let db = database();
         let owner = Holder::new("request");
@@ -206,20 +210,20 @@ async fn an_uncertain_receive_is_retried() {
         let input =
             ReceiveInput { task_id: "AST_1", message: &message, data: &data, internal: None };
         faulty.fail_next_lease_take(fault);
-        let (received, lease) =
-            thread.partition(PARTITION_KEY).receive(&owner, input).await.expect("retried");
-        assert!(matches!(received, Receive::Received(Some(_))), "{fault:?}: {received:?}");
-        let lease = lease.expect("the receive took the free partition_key");
+        let lost = thread.partition(PARTITION_KEY).receive(&owner, input).await;
+        assert!(matches!(lost, Err(StorageError::Uncertain(_))), "{fault:?}: {:?}", lost.map(drop));
         let other = handle(&db).await;
-        let refused =
-            other.partition(PARTITION_KEY).open(reject("r2"), &Holder::new("other")).await;
-        assert!(matches!(refused, Err(StorageError::Rejected { .. })), "{fault:?}: fenced");
-        lease.release(None).await.unwrap();
+        let mut next = other
+            .partition(PARTITION_KEY)
+            .open(RunOptions::new("r2", ""), &Holder::new("other"))
+            .await
+            .unwrap();
+        next.commit(CommitOptions::default()).await.unwrap();
     }
 }
 
-/// Each partition write whose acknowledgment is lost after it applied is sent again under its key and
-/// answers as applied, never `Uncertain` and never "already there".
+/// Each partition write whose acknowledgment is lost after it applied is read back once under its
+/// key and answers as applied, never sent again, never `Uncertain` and never "already there".
 #[tokio::test(start_paused = true)]
 async fn partition_writes_whose_answer_was_lost_answer_as_applied() {
     let db = database();
@@ -239,7 +243,23 @@ async fn partition_writes_whose_answer_was_lost_answer_as_applied() {
     let held = partition_key.open(RunOptions::new("r1", ""), &owner).await.unwrap();
 
     faulty.fail_next_write("lease_expires_at_ms = 0", WriteFault::LoseAckAfter);
-    held.lease().unwrap().release(None).await.expect("a lost release is sent again");
+    held.lease().unwrap().release(None).await.expect("a lost release is read back");
+}
+
+/// Catches: a pickup refused before it applied failing its turn. It is sent again, and takes
+/// the row to `working`.
+#[tokio::test(start_paused = true)]
+async fn a_pickup_refused_unapplied_is_sent_again() {
+    let db = database();
+    let owner = Holder::new("voice");
+    let (thread, faulty) = faulty(&db, &owner).await;
+    let partition_key = thread.partition(PARTITION_KEY);
+    partition_key.submit(&crate::thread::tests::submitted("AST_1")).await.unwrap();
+    faulty.fail_next_write("SET status = 'working'", WriteFault::EvictIdle);
+    let picked = partition_key.pickup("AST_1").await.expect("sent again");
+    assert_eq!(picked, Some(TaskState::Submitted));
+    let row = partition_key.task("AST_1").await.unwrap().unwrap();
+    assert_eq!(row.status, TaskState::Working);
 }
 
 #[tokio::test(start_paused = true)]

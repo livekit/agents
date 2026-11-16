@@ -66,18 +66,78 @@ impl Default for LeaseTiming {
     }
 }
 
-/// One write's resends: the one retry owner every write shares, as transports never resend. The
-/// write is idempotent by its key (a lease token, a run, task or message id): sent again it
-/// cannot apply twice. Every attempt runs under the caller's deadline, which its requests'
-/// waits inherit. A refusal that applied nothing (`Unavailable`) is sent again while another
-/// attempt can start before that deadline, then reaches the caller as it is; `Uncertain`
-/// reaches the caller only once the deadline left the outcome unknown.
-pub(crate) struct Resend {
+/// Sends again a request refused before it applied: what a write's [`Resend`] and a read share.
+/// Every attempt runs under the caller's deadline, which its requests' waits inherit; another
+/// starts only while it can before that deadline.
+pub(crate) struct Retry {
     clock: Arc<dyn Clock>,
     epoch: Ts,
     deadline: Ts,
     backoff: Backoff,
-    lost: Option<Unacknowledged>,
+}
+
+impl Retry {
+    /// Until the caller's deadline, else [`crate::deadline::REQUEST_WAIT`] from now; its backoff
+    /// waits on `clock`.
+    pub(crate) fn new(clock: Arc<dyn Clock>) -> Self {
+        let deadline = crate::deadline::or_default(&*clock);
+        Self::until(clock, deadline)
+    }
+
+    /// Until `deadline`, never past the caller's.
+    pub(crate) fn until(clock: Arc<dyn Clock>, deadline: Ts) -> Self {
+        let deadline = crate::deadline::current().map_or(deadline, |outer| outer.min(deadline));
+        let epoch = clock.now();
+        let backoff = Backoff::new(Duration::ZERO, deadline.saturating_duration_since(epoch));
+        Self { clock, epoch, deadline, backoff }
+    }
+
+    /// `attempt` under the deadline: what its requests' waits inherit.
+    pub(crate) async fn attempt<F: Future>(&self, attempt: F) -> F::Output {
+        crate::deadline::within(self.deadline, attempt).await
+    }
+
+    /// Waits out the next backoff step; `false`, at once, when no attempt could start after it
+    /// before the deadline.
+    pub(crate) async fn wait(&mut self, why: &str) -> bool {
+        let elapsed = self.clock.now().saturating_duration_since(self.epoch);
+        let Some(at) = self.backoff.next(elapsed).map(|after| self.epoch.saturating_add(after))
+        else {
+            return false;
+        };
+        if at >= self.deadline {
+            return false;
+        }
+        log::debug!(target: lk_agents_abi::LOG_TARGET, "storage request refused unapplied, sending it again: {why}");
+        self.clock.wait_until(at).await;
+        true
+    }
+
+    /// `request` again while it is refused unapplied (`Unavailable`), until the deadline: a read,
+    /// or a request with no effect to apply twice.
+    pub(crate) async fn send<T, R>(
+        mut self,
+        mut request: impl FnMut() -> R,
+    ) -> Result<T, StorageError>
+    where
+        R: Future<Output = Result<T, StorageError>>,
+    {
+        loop {
+            match self.attempt(request()).await {
+                Err(StorageError::Unavailable(why)) if self.wait(&why).await => {}
+                out => return out,
+            }
+        }
+    }
+}
+
+/// One write's resends: the one retry owner every write shares, as transports never resend. A
+/// write refused before it applied (`Unavailable`) is sent again while another attempt can start
+/// before the caller's deadline, then reaches the caller as it is. A write whose outcome is
+/// unknown (`Uncertain`) is never sent again: its probe reads back once whether it applied, else
+/// it reaches the caller `Uncertain`.
+pub(crate) struct Resend {
+    retry: Retry,
     /// Where a write left unresolved is counted, under its kind.
     cx: Cx,
     write: StorageWrite,
@@ -87,82 +147,40 @@ impl Resend {
     /// Until the caller's deadline, else [`crate::deadline::REQUEST_WAIT`] from now; its backoff
     /// waits on `clock`.
     pub(crate) fn new(clock: Arc<dyn Clock>, cx: &Cx, write: StorageWrite) -> Self {
-        let deadline = crate::deadline::or_default(&*clock);
-        Self::until(clock, deadline, cx, write)
+        Self { retry: Retry::new(clock), cx: cx.clone(), write }
     }
 
     /// Until `deadline`, never past the caller's.
     pub(crate) fn until(clock: Arc<dyn Clock>, deadline: Ts, cx: &Cx, write: StorageWrite) -> Self {
-        let deadline = crate::deadline::current().map_or(deadline, |outer| outer.min(deadline));
-        let epoch = clock.now();
-        let backoff = Backoff::new(Duration::ZERO, deadline.saturating_duration_since(epoch));
-        Self { clock, epoch, deadline, backoff, lost: None, cx: cx.clone(), write }
-    }
-
-    /// Resolving a write whose acknowledgment `lost` already reported lost.
-    pub(crate) fn after_lost(
-        clock: Arc<dyn Clock>,
-        cx: &Cx,
-        write: StorageWrite,
-        lost: Unacknowledged,
-    ) -> Self {
-        Self { lost: Some(lost), ..Self::new(clock, cx, write) }
-    }
-
-    fn elapsed(&self) -> Duration {
-        self.clock.now().saturating_duration_since(self.epoch)
-    }
-
-    /// When the next attempt starts, unless it could not start before the deadline.
-    fn next_attempt(&mut self) -> Option<Ts> {
-        let at = self.epoch.saturating_add(self.backoff.next(self.elapsed())?);
-        (at < self.deadline).then_some(at)
-    }
-
-    /// Whether an earlier send may have applied.
-    pub(crate) fn lost(&self) -> bool {
-        self.lost.is_some()
+        Self { retry: Retry::until(clock, deadline), cx: cx.clone(), write }
     }
 
     /// `attempt` under this write's deadline: what its requests' waits inherit.
     pub(crate) async fn attempt<F: Future>(&self, attempt: F) -> F::Output {
-        crate::deadline::within(self.deadline, attempt).await
+        self.retry.attempt(attempt).await
     }
 
-    /// `Break` with the outcome once it is known, else waits out the next backoff step: after a
-    /// refusal that applied nothing, or a lost acknowledgment. After a lost acknowledgment a
-    /// refused connection is still no answer.
+    /// `Break` with the outcome once it is known, else waits out the next backoff step after a
+    /// refusal that applied nothing. An unknown outcome is final, and counted.
     pub(crate) async fn after<T>(
         &mut self,
         out: Result<T, StorageError>,
     ) -> ControlFlow<Result<T, StorageError>> {
-        let lost = match (out, self.lost.take()) {
-            (Err(StorageError::Uncertain(why)), _)
-            | (Err(StorageError::Unavailable(_)), Some(why)) => why,
-            (Err(StorageError::Unavailable(why)), None) => {
-                let Some(at) = self.next_attempt() else {
-                    return ControlFlow::Break(Err(StorageError::Unavailable(why)));
-                };
-                log::debug!(target: lk_agents_abi::LOG_TARGET, "write refused unapplied, sending it again: {why}");
-                self.clock.wait_until(at).await;
-                return ControlFlow::Continue(());
+        match out {
+            Err(StorageError::Unavailable(why)) if self.retry.wait(&why).await => {
+                ControlFlow::Continue(())
             }
-            (out, lost) => {
-                self.lost = lost;
-                return ControlFlow::Break(out);
-            }
-        };
-        let Some(at) = self.next_attempt() else {
-            telemetry::write_uncertain(&self.cx, &*self.clock, self.write);
-            return ControlFlow::Break(Err(StorageError::Uncertain(lost)));
-        };
-        log::debug!(target: lk_agents_abi::LOG_TARGET, "write acknowledgment lost, sending it again: {lost}");
-        self.lost = Some(lost);
-        self.clock.wait_until(at).await;
-        ControlFlow::Continue(())
+            Err(StorageError::Uncertain(lost)) => ControlFlow::Break(Err(self.uncertain(lost))),
+            out => ControlFlow::Break(out),
+        }
     }
 
-    /// `write` until its outcome is known: one that already applied answers as applied.
+    fn uncertain(&self, lost: Unacknowledged) -> StorageError {
+        telemetry::write_uncertain(&self.cx, &*self.retry.clock, self.write);
+        StorageError::Uncertain(lost)
+    }
+
+    /// `write` until its outcome is known or unknowable.
     pub(crate) async fn send<T, W>(self, write: impl FnMut() -> W) -> Result<T, StorageError>
     where
         W: Future<Output = Result<T, StorageError>>,
@@ -170,46 +188,37 @@ impl Resend {
         self.probed(write, || std::future::ready(Ok(None))).await
     }
 
-    /// [`Resend::send`] for a write whose second apply answers differently: after each lost
-    /// acknowledgment `probe` asks once whether it applied, `Some` with its outcome, `None` to
-    /// send it again.
+    /// [`Resend::send`], and after a lost acknowledgment `probe` reads back once whether the
+    /// write applied: `Some` with its outcome; `None`, or a probe refused unapplied, leaves it
+    /// `Uncertain`, as the write may still apply; any other error is the probe's answer.
     pub(crate) async fn probed<T, W, P>(
         mut self,
         mut write: impl FnMut() -> W,
-        mut probe: impl FnMut() -> P,
+        probe: impl FnOnce() -> P,
     ) -> Result<T, StorageError>
     where
         W: Future<Output = Result<T, StorageError>>,
         P: Future<Output = Result<Option<T>, StorageError>>,
     {
-        loop {
-            let attempt = async {
-                match self.lost() {
-                    true => match probe().await {
-                        Ok(Some(applied)) => Ok(applied),
-                        Ok(None) => write().await,
-                        Err(error) => Err(error),
-                    },
-                    false => write().await,
+        let lost = loop {
+            match self.attempt(write()).await {
+                Err(StorageError::Uncertain(lost)) => break lost,
+                out => {
+                    if let ControlFlow::Break(out) = self.after(out).await {
+                        return out;
+                    }
                 }
-            };
-            let out = self.attempt(attempt).await;
-            if let ControlFlow::Break(out) = self.after(out).await {
-                return out;
             }
+        };
+        log::debug!(target: lk_agents_abi::LOG_TARGET, "write acknowledgment lost, reading back whether it applied: {lost}");
+        match self.attempt(probe()).await {
+            Ok(Some(applied)) => Ok(applied),
+            Ok(None) | Err(StorageError::Unavailable(_) | StorageError::Uncertain(_)) => {
+                Err(self.uncertain(lost))
+            }
+            Err(error) => Err(error),
         }
     }
-}
-
-/// A read sent as a batch changed nothing, so its lost answer is only retryable.
-pub(crate) async fn read_batch(
-    conn: &dyn ThreadDbConnection,
-    statements: Vec<Statement>,
-) -> Result<crate::sql::BatchResult, StorageError> {
-    conn.batch(statements).await.map_err(|error| match error {
-        StorageError::Uncertain(why) => StorageError::Unavailable(why.to_string()),
-        error => error,
-    })
 }
 
 /// What the engine knows of a database's schema: `None` until a probe or a write found it.
@@ -444,7 +453,7 @@ impl Thread {
         let mut statements: Vec<Statement> = db::framework_schema().collect();
         statements.push(SelectScopes { partition_key }.bind());
         let scopes = statements.len() - 1;
-        let result = read_batch(&*self.conn, statements).await?;
+        let result = self.conn.read_batch(statements).await?;
         crate::context::scopes_from_rows(result.at(scopes)?.rows())
     }
 }

@@ -617,11 +617,11 @@ async fn a_run_loads_its_whole_history_in_its_acquire(backend: Backend) {
     fx.cleanup(&[&s]).await;
 }
 
-/// A commit whose acknowledgment was lost keeps its lease renewed while it resolves: a probe
-/// delayed past the TTL finds the fence intact, the resend commits, and a waiting holder takes
-/// the partition only after it.
+/// Catches: a lost commit whose read-back failed sent again. The read-back is tried once: one
+/// that cannot read leaves the commit `Uncertain`, and a waiting holder takes the partition
+/// without it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_lost_commit_keeps_its_lease_until_it_resolves() {
+async fn a_lost_commit_whose_read_back_fails_is_uncertain() {
     use crate::testing::WriteFault;
     let fx =
         Backend::Sqlite.fixture(Some((Duration::from_secs(1), Duration::from_millis(200)))).await;
@@ -631,19 +631,15 @@ async fn a_lost_commit_keeps_its_lease_until_it_resolves() {
     let mut run = partition_key.open(RunOptions::new("r1", ""), &owner).await.unwrap();
     run.history_mut().push(message("i1", ChatRole::User, "hi"));
     faulty.fail_next_commit(WriteFault::LoseAckBefore);
-    faulty.probes_unavailable_for(Duration::from_millis(3000));
+    faulty.probes_unavailable_for(Duration::from_secs(3));
+    let committed = run.commit(CommitOptions::default()).await;
+    assert!(matches!(committed, Err(StorageError::Uncertain(_))), "{committed:?}");
+    drop(run);
     let rival = fx.thread().await;
-    let rival_lane = rival.partition(PARTITION_KEY);
-    let rival_owner = crate::Holder::new("other");
-    let waiting = async {
-        let opts =
-            RunOptions { wait_timeout: Duration::from_secs(20), ..RunOptions::new("r2", "") };
-        rival_lane.open(opts, &rival_owner).await
-    };
-    let (committed, taken) = tokio::join!(run.commit(CommitOptions::default()), waiting);
-    committed.expect("the resend commits under the renewed fence");
-    let mut taken = taken.unwrap();
-    assert_eq!(taken.history().len(), 1, "the rival took the partition_key after the commit");
+    let opts = RunOptions { wait_timeout: Duration::from_secs(20), ..RunOptions::new("r2", "") };
+    let mut taken = rival.partition(PARTITION_KEY).open(opts, &crate::Holder::new("other")).await;
+    let taken = taken.as_mut().unwrap();
+    assert_eq!(taken.history().len(), 0, "the lost commit was never sent again");
     taken.commit(CommitOptions::default()).await.unwrap();
     fx.cleanup(&[&thread, &rival]).await;
 }
@@ -721,12 +717,13 @@ async fn a_commit_whose_ack_was_lost_after_it_applied_resolves_to_that_commit() 
     fx.cleanup(&[&s]).await;
 }
 
+/// Catches: a lost commit the read-back did not find sent again, which a first send still in
+/// flight could apply after: the commit is `Uncertain`, and nothing of it is written.
 #[tokio::test]
-async fn a_commit_whose_ack_was_lost_before_it_applied_is_sent_again_under_its_fence() {
+async fn a_commit_whose_ack_was_lost_before_it_applied_is_uncertain_not_sent_again() {
     let (fx, s, committed) = commit_through(crate::testing::WriteFault::LoseAckBefore).await;
-    assert_eq!(committed.unwrap(), 1);
-    assert_eq!(s.partition(PARTITION_KEY).history().await.unwrap().len(), 1);
-    assert_eq!(run_ended_count(&s).await, 1);
+    assert!(matches!(committed, Err(StorageError::Uncertain(_))), "{committed:?}");
+    assert_eq!(s.partition(PARTITION_KEY).history().await.unwrap().len(), 0, "never sent again");
     fx.cleanup(&[&s]).await;
 }
 

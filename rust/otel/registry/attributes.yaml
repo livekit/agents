@@ -102,6 +102,12 @@
                 "stability": "development"
               },
               {
+                "id": "pickup",
+                "value": "pickup",
+                "brief": "pickup",
+                "stability": "development"
+              },
+              {
                 "id": "fail_orphan",
                 "value": "fail_orphan",
                 "brief": "fail_orphan",

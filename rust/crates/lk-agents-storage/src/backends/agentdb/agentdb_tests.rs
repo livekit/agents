@@ -1,4 +1,6 @@
 use lk_agents_abi::storage::{Storage as _, TaskState};
+use std::sync::atomic::AtomicUsize;
+
 use lk_agents_abi::{OwnedTask, SpawnerExt as _};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -146,7 +148,12 @@ async fn a_socket_closed_after_a_write_was_sent_leaves_it_uncertain() {
         };
         let batch = pooled.batch(vec![Statement::raw("UPDATE t SET n = 2")]).await;
         assert!(matches!(batch, Err(StorageError::Uncertain(_))), "redial {redial}: {batch:?}");
-        let read = pooled.query(Statement::raw("SELECT n FROM t")).await;
+        // a read is sent again on every redial until its deadline, then only retryable
+        let clock = lk_agents_net::clock::RealClock::new();
+        let deadline = clock.now().saturating_add(Duration::from_millis(300));
+        let read =
+            crate::deadline::within(deadline, pooled.query(Statement::raw("SELECT n FROM t")));
+        let read = read.await;
         assert!(matches!(read, Err(StorageError::Unavailable(_))), "redial {redial}: {read:?}");
         pooled.conn.aclose().await;
     }
@@ -280,4 +287,215 @@ fn a_sent_write_answered_internal_or_an_unknown_code_is_uncertain() {
         let err: StorageError = WriteError::NotSent(answer).into();
         assert!(matches!(err, StorageError::Invalid(_)), "{code}: unsent, it is final: {err:?}");
     }
+}
+
+/// A pooled connection over the fake `wsdb` server `script` answers.
+async fn pooled(
+    script: fn(&connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage>,
+) -> (Pooled, connection::tests::Served) {
+    let (url, seen) = connection::tests::serve(script, false).await;
+    let conn = connection::tests::dial(&url, "DB_1").await.unwrap();
+    let pool = Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new())));
+    let pooled =
+        Pooled { conn, schema: SchemaCell::default(), pool, closed: AtomicBool::new(false) };
+    (pooled, seen)
+}
+
+/// How many frames of `seen` `kind` picks.
+fn frames(
+    seen: &connection::tests::Served,
+    kind: fn(&connection::wire::ClientMessage) -> bool,
+) -> usize {
+    seen.lock().iter().filter(|m| kind(m)).count()
+}
+
+fn is_batch(m: &connection::wire::ClientMessage) -> bool {
+    matches!(m.message, Some(connection::wire::client_message::Message::Batch(_)))
+}
+
+fn is_query(m: &connection::wire::ClientMessage) -> bool {
+    matches!(m.message, Some(connection::wire::client_message::Message::Query(_)))
+}
+
+/// Answers `code` to every batch, and the shared script otherwise.
+fn batches_answered(
+    code: ErrorCode,
+    m: &connection::wire::ClientMessage,
+) -> Vec<connection::wire::ServerMessage> {
+    match is_batch(m) {
+        true => vec![connection::tests::error(code, "answered")],
+        false => connection::tests::script(m),
+    }
+}
+
+/// Catches: a read refused unapplied failing at once. A query answered `retry` is sent again and
+/// served.
+#[tokio::test]
+async fn a_read_refused_unapplied_is_sent_again() {
+    use std::sync::atomic::AtomicBool as Once;
+    static REFUSED: Once = Once::new(false);
+    fn refuses_once(m: &connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage> {
+        if is_query(m) && !REFUSED.swap(true, Ordering::SeqCst) {
+            return vec![connection::tests::error(ErrorCode::RETRY, "busy")];
+        }
+        connection::tests::script(m)
+    }
+    let (pooled, seen) = pooled(refuses_once).await;
+    let rows = pooled.query(Statement::raw("SELECT")).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(frames(&seen, is_query), 2, "sent again");
+    pooled.conn.aclose().await;
+}
+
+/// Catches: a read batch answered `internal` or a code this build does not know read as
+/// retryable, and a write so answered sent again. The read fails final, the write `Uncertain`;
+/// neither goes out twice.
+#[tokio::test]
+async fn never_retry_codes_are_final_for_reads_and_uncertain_for_writes() {
+    fn internal(m: &connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage> {
+        batches_answered(ErrorCode::INTERNAL, m)
+    }
+    fn unknown(m: &connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage> {
+        batches_answered(ErrorCode(9999), m)
+    }
+    type Script = fn(&connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage>;
+    for script in [internal as Script, unknown] {
+        let (pooled, seen) = pooled(script).await;
+        let read = pooled.read_batch(vec![Statement::raw("SELECT")]).await;
+        assert!(matches!(read, Err(StorageError::Invalid(_))), "{read:?}");
+        assert_eq!(frames(&seen, is_batch), 1, "a read answered a never-retry code is final");
+        let clock = Arc::new(lk_agents_net::clock::RealClock::new());
+        let resend = Resend::new(clock, &Cx::NONE, StorageWrite::Context);
+        let write = resend.send(|| pooled.batch(vec![Statement::raw("UPDATE t SET n = 1")])).await;
+        assert!(matches!(write, Err(StorageError::Uncertain(_))), "{write:?}");
+        assert_eq!(frames(&seen, is_batch), 2, "the write went out once");
+        pooled.conn.aclose().await;
+    }
+}
+
+/// Catches: a database that was not reachable yet failing `open`. A `Hello` refused `retry` is
+/// dialed again within the deadline; one refused for good is final at once.
+#[tokio::test]
+async fn a_dial_refused_unapplied_is_sent_again_and_a_final_refusal_is_not() {
+    use std::sync::atomic::AtomicBool as Once;
+    static REFUSED: Once = Once::new(false);
+    fn hello_refused_once(
+        m: &connection::wire::ClientMessage,
+    ) -> Vec<connection::wire::ServerMessage> {
+        let hello = matches!(m.message, Some(connection::wire::client_message::Message::Hello(_)));
+        if hello && !REFUSED.swap(true, Ordering::SeqCst) {
+            return vec![connection::tests::error(ErrorCode::RETRY, "warming")];
+        }
+        connection::tests::script(m)
+    }
+    let (url, seen) = connection::tests::serve(hello_refused_once, false).await;
+    let http = url.replacen("ws://", "http://", 1).replace("/db", "");
+    let minter = TokenMinter::new("devkey", "secret").unwrap();
+    let storage =
+        AgentDbStorage::new(AgentDbOptions::new(&http), minter, &ProcessEnv::current_runtime())
+            .unwrap();
+    let conn = storage.dial("DB_1").await.expect("dialed again");
+    let hellos = |seen: &connection::tests::Served| {
+        frames(seen, |m| {
+            matches!(m.message, Some(connection::wire::client_message::Message::Hello(_)))
+        })
+    };
+    assert_eq!(hellos(&seen), 2);
+    conn.close();
+    let refused = storage.dial("DB_unknown").await;
+    assert!(matches!(refused, Err(StorageError::NotFound(_))), "{:?}", refused.map(drop));
+    assert_eq!(hellos(&seen), 3, "a final refusal is not dialed again");
+    storage.close().await;
+}
+
+/// A threads service answering each request with the next `(status, body)` of `script`, then
+/// holding every later one unanswered; how many requests it read.
+async fn threads_service(
+    script: Vec<(u16, &'static str)>,
+) -> (String, Arc<AtomicUsize>, OwnedTask) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let count = Arc::new(AtomicUsize::new(0));
+    let counted = count.clone();
+    let task = lk_agents_net::task::TokioSpawner::current().spawn(async move {
+        let mut held = Vec::new();
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut bytes = [0; 4096];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut bytes).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&bytes[..n]);
+            }
+            let index = counted.fetch_add(1, Ordering::SeqCst);
+            let Some(&(status, body)) = script.get(index) else {
+                held.push(socket); // never answered
+                continue;
+            };
+            let header = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len(),
+            );
+            socket.write_all(header.as_bytes()).await.unwrap();
+            socket.write_all(body.as_bytes()).await.unwrap();
+        }
+    });
+    (url, count, task)
+}
+
+fn threads_storage(url: &str) -> AgentDbStorage {
+    let minter = TokenMinter::new("devkey", "secret").unwrap();
+    AgentDbStorage::new(AgentDbOptions::new(url), minter, &ProcessEnv::current_runtime()).unwrap()
+}
+
+/// Catches: a thread read failing on a gateway's bare 503 or 504, or a dropped connection. Each
+/// is sent again, and the read is served. (`livekit-api` reads a bare 502 as `internal`, the code
+/// it also gives a malformed answer, so a 502 stays final.)
+#[tokio::test]
+async fn a_thread_read_is_sent_again_after_a_bare_gateway_error() {
+    let script = vec![(503, "service unavailable"), (504, ""), (200, "{}")];
+    let (url, requests, _task) = threads_service(script).await;
+    let storage = threads_storage(&url);
+    storage.get_thread("AT_1").await.expect("served after the gateway errors");
+    assert_eq!(requests.load(Ordering::SeqCst), 3);
+    storage.close().await;
+}
+
+/// Catches: a thread create refused unapplied failing at once, and an update whose answer may
+/// have applied sent again (a lost update). The create is sent again; the update is `Uncertain`
+/// after one request.
+#[tokio::test]
+async fn a_thread_write_is_sent_again_only_while_nothing_applied() {
+    let (url, requests, _task) = threads_service(vec![(429, ""), (200, "{}")]).await;
+    let storage = threads_storage(&url);
+    storage.create_thread(CreateRequest::default()).await.expect("sent again");
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+    storage.close().await;
+
+    let (url, requests, _task) = threads_service(vec![(503, "")]).await;
+    let storage = threads_storage(&url);
+    let update = UpdateRequest { thread_id: "AT_1".into(), ..Default::default() };
+    let updated = storage.update_thread(update).await;
+    assert!(matches!(updated, Err(StorageError::Uncertain(_))), "{updated:?}");
+    assert_eq!(requests.load(Ordering::SeqCst), 1, "a maybe-applied update is not sent again");
+    storage.close().await;
+}
+
+/// Catches: a thread call waiting past the storage deadline on a service that never answers. A
+/// read is `Unavailable` at the deadline, a write `Uncertain`.
+#[tokio::test]
+async fn thread_calls_end_at_the_storage_deadline() {
+    let (url, _, _task) = threads_service(Vec::new()).await;
+    let storage = threads_storage(&url);
+    let clock = lk_agents_net::clock::RealClock::new();
+    let soon = || clock.now().saturating_add(Duration::from_millis(300));
+    let read = crate::deadline::within(soon(), storage.get_thread("AT_1")).await;
+    assert!(matches!(read, Err(StorageError::Unavailable(_))), "{read:?}");
+    let update = UpdateRequest { thread_id: "AT_1".into(), ..Default::default() };
+    let write = crate::deadline::within(soon(), storage.update_thread(update)).await;
+    assert!(matches!(write, Err(StorageError::Uncertain(_))), "{write:?}");
+    storage.close().await;
 }

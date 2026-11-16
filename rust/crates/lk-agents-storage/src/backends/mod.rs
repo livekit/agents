@@ -17,6 +17,13 @@ pub trait ThreadDbConnection: Send + Sync {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError>;
     /// The statements in one transaction, in order, each answered; success means committed.
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError>;
+    /// Reads sent as one batch: they change nothing, so a lost answer is only retryable.
+    async fn read_batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
+        self.batch(statements).await.map_err(|error| match error {
+            StorageError::Uncertain(why) => StorageError::Unavailable(why.to_string()),
+            error => error,
+        })
+    }
     /// Releases the connection; repeat-safe.
     async fn close(&self);
 }
