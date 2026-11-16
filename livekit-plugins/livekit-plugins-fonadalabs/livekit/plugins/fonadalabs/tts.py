@@ -4,8 +4,12 @@
   (``wss://api.fonada.ai/v1/voice-clone/ws``). One connection carries many
   utterances, so it is the lowest-latency option for voice agents.
 - ``klone_v2_pro``: one-shot ``POST /v1/voice-clone/chunks`` (Pro does not
-  support streaming or the WebSocket). Audio is requested as PCM and pushed to
-  LiveKit as the response body arrives.
+  support streaming or the WebSocket).
+
+Streamed LLM text is split into sentences as it arrives. The first sentence is
+sent on its own so audio starts early; sentences that arrive while it is being
+synthesized are batched into the next request, which keeps the number of
+requests per reply low (the API's default limit is 10 requests per minute).
 
 Docs: https://fonadalabs.ai/docs/text-to-speech/klone-v2-flash
       https://fonadalabs.ai/docs/text-to-speech/klone-v2-pro
@@ -16,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -28,6 +32,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    tokenize,
     tts,
     utils,
 )
@@ -50,7 +55,6 @@ NUM_CHANNELS = 1
 
 # Per-request text limit for both Klone V2 models.
 _MAX_TEXT_CHARS = 5000
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[।.!?\n])\s*")
 
 # The server closes idle WebSockets after 5 minutes.
 _WS_MAX_IDLE_SECS = 240.0
@@ -68,7 +72,7 @@ def _split_text(text: str, max_chars: int = _MAX_TEXT_CHARS) -> list[str]:
 
     chunks: list[str] = []
     buf = ""
-    for sent in (s.strip() for s in _SENTENCE_SPLIT_RE.split(text)):
+    for sent in (s.strip() for s in tokenize.basic.SentenceTokenizer().tokenize(text)):
         if not sent:
             continue
         while len(sent) > max_chars:
@@ -117,6 +121,8 @@ class TTS(tts.TTS):
         num_step:     Diffusion steps, 8–64 (Flash only).
         speed:        Speaking rate, 0.25–4.0. FonadaLabs notes this is currently
                       unreliable on Flash.
+        tokenizer:    Sentence tokenizer for streamed text. Defaults to
+                      :class:`livekit.agents.tokenize.blingfire.SentenceTokenizer`.
         base_url:     Override the API base URL.
         http_session: Reuse an existing :class:`aiohttp.ClientSession`.
     """
@@ -125,12 +131,13 @@ class TTS(tts.TTS):
         self,
         *,
         share_id: str,
-        api_key: str | None = None,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
         model: TTSModels | str = "klone_v2_flash",
         language: TTSFlashLanguages | str = "hi",
-        instruct: str | None = None,
-        num_step: int | None = None,
-        speed: float | None = None,
+        instruct: NotGivenOr[str] = NOT_GIVEN,
+        num_step: NotGivenOr[int] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         base_url: str = FONADALABS_API_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -140,12 +147,15 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        self._api_key = api_key or os.environ.get("FONADALABS_API_KEY")
-        if not self._api_key:
+        fonada_api_key = (
+            api_key if utils.is_given(api_key) else os.environ.get("FONADALABS_API_KEY")
+        )
+        if not fonada_api_key:
             raise ValueError(
                 "FonadaLabs API key is required. "
                 "Pass it directly or set the FONADALABS_API_KEY environment variable."
             )
+        self._api_key = fonada_api_key
 
         if model not in TTS_LANGUAGES:
             raise ValueError(
@@ -156,12 +166,16 @@ class TTS(tts.TTS):
             model=model,
             language=_resolve_tts_language(model, language),
             share_id=_validate_share_id(share_id),
-            instruct=_validate_instruct(instruct),
-            num_step=_validate_num_step(num_step),
-            speed=_validate_speed(speed),
+            instruct=_validate_instruct(instruct if utils.is_given(instruct) else None),
+            num_step=_validate_num_step(num_step if utils.is_given(num_step) else None),
+            speed=_validate_speed(speed if utils.is_given(speed) else None),
         )
-        if model == "klone_v2_pro" and num_step is not None:
+        if model == "klone_v2_pro" and utils.is_given(num_step):
             logger.warning("num_step is only supported by klone_v2_flash; it will be ignored")
+
+        self._sentence_tokenizer = (
+            tokenizer if utils.is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+        )
 
         self._base_url = base_url.rstrip("/")
         self._ws_url = (
@@ -286,19 +300,13 @@ class TTS(tts.TTS):
 
 
 class SynthesizeStream(tts.SynthesizeStream):
-    """Synthesizes one segment (one agent reply) per stream.
-
-    The whole segment is sent as a single request: the server splits it by
-    sentence and starts streaming audio for the first sentence immediately.
-    Sending one request per reply (instead of per sentence) keeps usage within
-    the default rate limit of 10 requests per minute.
-    """
+    """Synthesizes one agent reply per stream, starting as soon as the first
+    sentence is complete."""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._text: str | None = None
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         output_emitter.initialize(
@@ -308,57 +316,92 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type="audio/pcm",
         )
 
-        # _run may be retried; the input channel can only be consumed once.
-        if self._text is None:
-            parts: list[str] = []
+        sent_stream = self._tts._sentence_tokenizer.stream()
+        pending: list[str] = []
+        sentence_ready = asyncio.Event()
+        input_done = False
+
+        async def _input_task() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    break
-                parts.append(data)
-            self._text = "".join(parts)
+                    sent_stream.flush()
+                    continue
+                sent_stream.push_text(data)
+            sent_stream.end_input()
 
-        chunks = _split_text(self._text)
-        if not chunks:
-            return
+        async def _sentence_task() -> None:
+            nonlocal input_done
+            try:
+                async for ev in sent_stream:
+                    if ev.token.strip():
+                        pending.append(ev.token.strip())
+                        sentence_ready.set()
+            finally:
+                input_done = True
+                sentence_ready.set()
 
-        self._mark_started()
+        async def _next_batch() -> str | None:
+            """Wait for at least one sentence, then take every sentence queued so far."""
+            while not pending and not input_done:
+                sentence_ready.clear()
+                await sentence_ready.wait()
+            if not pending:
+                return None
+            batch = " ".join(pending)
+            pending.clear()
+            return batch
 
-        if self._opts.model == "klone_v2_flash":
-            await self._run_ws(chunks, output_emitter)
-        else:
-            for chunk in chunks:
-                await self._run_http(chunk, output_emitter)
+        tasks = [asyncio.create_task(_input_task()), asyncio.create_task(_sentence_task())]
+        try:
+            if self._opts.model == "klone_v2_flash":
+                await self._run_ws(_next_batch, output_emitter)
+            else:
+                while (batch := await _next_batch()) is not None:
+                    for chunk in _split_text(batch):
+                        self._mark_started()
+                        await self._run_http(chunk, output_emitter)
+            output_emitter.flush()
+        finally:
+            await sent_stream.aclose()
+            await utils.aio.gracefully_cancel(*tasks)
 
-        output_emitter.flush()
-
-    async def _run_ws(self, chunks: list[str], output_emitter: tts.AudioEmitter) -> None:
-        ws = await self._tts._pool.get(timeout=self._conn_options.timeout)
-        # Only return the connection to the pool if every utterance finished
-        # cleanly; otherwise leftover audio would leak into the next reply.
+    async def _run_ws(
+        self,
+        next_batch: Callable[[], Awaitable[str | None]],
+        output_emitter: tts.AudioEmitter,
+    ) -> None:
+        ws: aiohttp.ClientWebSocketResponse | None = None
+        sent_any = False
+        # The socket goes back to the pool only if every utterance finished
+        # cleanly. After any error, audio still in flight for the failed request
+        # could otherwise play at the start of the next reply.
         reusable = False
         try:
-            for i, chunk in enumerate(chunks):
-                try:
-                    await self._speak_ws(ws, chunk, output_emitter)
-                except _StaleConnectionError as e:
-                    # The server closed an idle pooled socket. Nothing was sent
-                    # or received for this utterance, so reconnect and resend
-                    # instead of surfacing an error and a framework retry.
-                    if i != 0:
-                        raise
-                    logger.debug(f"TTS pooled WebSocket was stale ({e}); reconnecting")
-                    self._tts._pool.remove(ws)
-                    ws = await self._tts._pool.get(timeout=self._conn_options.timeout)
-                    await self._speak_ws(ws, chunk, output_emitter)
+            while (batch := await next_batch()) is not None:
+                for chunk in _split_text(batch):
+                    self._mark_started()
+                    if ws is None:
+                        ws = await self._tts._pool.get(timeout=self._conn_options.timeout)
+                    try:
+                        await self._speak_ws(ws, chunk, output_emitter)
+                    except _StaleConnectionError as e:
+                        # The server closed an idle pooled socket before answering the
+                        # first request of this reply; nothing was played, so reconnect
+                        # and resend instead of surfacing an error and a retry.
+                        if sent_any:
+                            raise
+                        logger.debug(f"TTS pooled WebSocket was stale ({e}); reconnecting")
+                        self._tts._pool.remove(ws)
+                        ws = await self._tts._pool.get(timeout=self._conn_options.timeout)
+                        await self._speak_ws(ws, chunk, output_emitter)
+                    sent_any = True
             reusable = True
-        except APIStatusError:
-            reusable = not ws.closed  # server keeps the socket open after an error
-            raise
         finally:
-            if reusable:
-                self._tts._pool.put(ws)
-            else:
-                self._tts._pool.remove(ws)
+            if ws is not None:
+                if reusable:
+                    self._tts._pool.put(ws)
+                else:
+                    self._tts._pool.remove(ws)
 
     async def _speak_ws(
         self, ws: aiohttp.ClientWebSocketResponse, text: str, output_emitter: tts.AudioEmitter

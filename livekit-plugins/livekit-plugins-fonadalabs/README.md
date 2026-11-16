@@ -5,9 +5,11 @@ A LiveKit Agents plugin for the FonadaLabs voice AI APIs:
 - **TTS** — Klone V2 Flash (streaming, default) and Klone V2 Pro
 - **STT / ASR** — Kapture V3
 
+More information is available in the docs for the [STT](https://docs.livekit.io/agents/integrations/stt/fonadalabs/) and [TTS](https://docs.livekit.io/agents/integrations/tts/fonadalabs/) integrations.
+
 ## Features
 
-- ⚡ **Low-latency streaming TTS**: Klone V2 Flash streams 24 kHz PCM over a pooled WebSocket — one connection is reused across agent replies
+- ⚡ **Low-latency streaming TTS**: Klone V2 Flash streams 24 kHz PCM over a pooled WebSocket and starts speaking as soon as the first sentence of the LLM reply is complete
 - 🎙️ **Voice Arena voices**: pick any voice by its `share_id`
 - 🇮🇳 **Indian languages**: 12 TTS languages on Flash, 48 on Pro, 11 ASR languages on Kapture V3
 - 🎛️ **Style control**: `instruct` (e.g. `"calm, friendly"`), `num_step`, `speed`
@@ -46,8 +48,8 @@ agent = Agent(
 
 | Model | Transport | Languages | Notes |
 |---|---|---|---|
-| `klone_v2_flash` (default) | WebSocket `wss://api.fonada.ai/v1/voice-clone/ws` | 12 | Streaming, lowest latency, ₹6 / 10K chars |
-| `klone_v2_pro` | HTTPS `POST /v1/voice-clone/chunks` | 48 | Higher quality, no streaming, ₹60 / 10K chars |
+| `klone_v2_flash` (default) | WebSocket `wss://api.fonada.ai/v1/voice-clone/ws` | 12 | Streaming, lowest latency |
+| `klone_v2_pro` | HTTPS `POST /v1/voice-clone/chunks` | 48 | Higher quality, no streaming |
 
 ### Parameters
 
@@ -59,6 +61,7 @@ agent = Agent(
 | `instruct` | Style hint, up to 500 characters |
 | `num_step` | Diffusion steps, 8–64 (Flash only) |
 | `speed` | 0.25–4.0 (FonadaLabs marks this as currently unreliable on Flash) |
+| `tokenizer` | Sentence tokenizer for streamed text (default: `tokenize.blingfire.SentenceTokenizer`) |
 
 Find a voice in Voice Arena and copy its `share_id`. An unknown `share_id` fails with `404 voice_not_found`.
 
@@ -100,6 +103,7 @@ Recognition is VAD-buffered: LiveKit collects each utterance (using Silero VAD) 
 
 ## Documentation
 
+- LiveKit docs: [STT](https://docs.livekit.io/agents/integrations/stt/fonadalabs/), [TTS](https://docs.livekit.io/agents/integrations/tts/fonadalabs/)
 - Klone V2 Flash: https://fonadalabs.ai/docs/text-to-speech/klone-v2-flash
 - Klone V2 Pro: https://fonadalabs.ai/docs/text-to-speech/klone-v2-pro
 - Kapture V3: https://fonadalabs.ai/docs/speech-to-text/kapture-v3
