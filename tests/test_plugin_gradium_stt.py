@@ -101,9 +101,9 @@ async def test_server_log_frames_are_logged_at_their_level(monkeypatch, caplog):
 
 @pytest.mark.parametrize(
     ("ctor", "expected"),
-    [({}, "warning"), ({"log_level": "error"}, "error"), ({"log_level": None}, None)],
+    [({}, None), ({"log_level": "warning"}, "warning"), ({"log_level": "error"}, "error")],
 )
-async def test_setup_asks_for_server_logs_unless_disabled(ctor, expected):
+async def test_setup_asks_for_server_logs_only_when_enabled(ctor, expected):
     from unittest.mock import AsyncMock
 
     from livekit.plugins.gradium import STT

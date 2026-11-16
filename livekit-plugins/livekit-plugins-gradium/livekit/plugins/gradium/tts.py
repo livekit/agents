@@ -104,7 +104,7 @@ class _TTSOptions:
     pronunciation_id: str | None
     word_tokenizer: tokenize.WordTokenizer
     json_config: dict[str, Any] | None = None
-    log_level: LogLevel | None = "warning"
+    log_level: LogLevel | None = None
 
 
 class TTS(tts.TTS):
@@ -120,7 +120,7 @@ class TTS(tts.TTS):
         json_config: dict[str, Any] | None = None,
         http_session: aiohttp.ClientSession | None = None,
         word_tokenizer: tokenize.WordTokenizer | None = None,
-        log_level: LogLevel | None = "warning",
+        log_level: LogLevel | None = None,
     ) -> None:
         """
         Initialize the Gradium TTS.
@@ -134,10 +134,10 @@ class TTS(tts.TTS):
                 default (`DEFAULT_VOICE_ID`) when neither is given.
             pronunciation_id (str): Optional pronunciation ID for controlling TTS pronunciation.
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
-            log_level (LogLevel): Lowest level of the server's log messages to receive ("debug",
-                "info", "warning" or "error"), such as a warning about an unknown or deprecated
-                `json_config` key. They are written to the `livekit.plugins.gradium` logger at
-                their own level. `None` asks for none.
+            log_level (LogLevel): Opt in to the server's log messages, such as a warning about an
+                unknown or deprecated `json_config` key: the lowest level to receive ("debug",
+                "info", "warning" or "error"). They are written to the `livekit.plugins.gradium`
+                logger at their own level. Off by default.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=True),

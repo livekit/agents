@@ -73,8 +73,8 @@ class STTOptions:
     keywords: list[str] | None = None
     # How strongly to favor the keywords, the server defaults to 2.0.
     keyword_boost: float | None = None
-    # Lowest level of the server's log messages to receive, None for none.
-    log_level: LogLevel | None = "warning"
+    # Lowest level of the server's log messages to receive; None asks for none.
+    log_level: LogLevel | None = None
 
 
 class STT(stt.STT):
@@ -96,16 +96,16 @@ class STT(stt.STT):
         language: str = "en",
         keywords: list[str] | None = None,
         keyword_boost: float | None = None,
-        log_level: LogLevel | None = "warning",
+        log_level: LogLevel | None = None,
     ):
         """
         Create a Gradium STT.
 
         Args:
-            log_level: Lowest level of the server's log messages to receive ("debug",
-                "info", "warning" or "error"), such as a warning about an unknown or
-                deprecated setup option. They are written to the `livekit.plugins.gradium`
-                logger at their own level. `None` asks for none.
+            log_level: Opt in to the server's log messages, such as a warning about an
+                unknown or deprecated setup option: the lowest level to receive ("debug",
+                "info", "warning" or "error"). They are written to the
+                `livekit.plugins.gradium` logger at their own level. Off by default.
         """
         super().__init__(
             capabilities=stt.STTCapabilities(

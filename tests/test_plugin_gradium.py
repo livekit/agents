@@ -517,9 +517,9 @@ async def test_server_log_frames_are_logged_at_their_level(drain, caplog):
 @pytest.mark.parametrize("drain", [_drain, _drain_stream])
 @pytest.mark.parametrize(
     ("ctor", "expected"),
-    [({}, "warning"), ({"log_level": "error"}, "error"), ({"log_level": None}, None)],
+    [({}, None), ({"log_level": "warning"}, "warning"), ({"log_level": "error"}, "error")],
 )
-async def test_setup_asks_for_server_logs_unless_disabled(drain, ctor, expected):
+async def test_setup_asks_for_server_logs_only_when_enabled(drain, ctor, expected):
     tts, _, ws = _make_tts([READY, AUDIO, EOS], tts_kwargs=ctor)
     await drain(tts, CONN_OPTS)
     assert ws.sent[0].get("log_level") == expected
