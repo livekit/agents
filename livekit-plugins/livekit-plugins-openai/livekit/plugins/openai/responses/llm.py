@@ -63,6 +63,7 @@ class _LLMOptions:
     use_websocket: bool
     prompt_cache_options: NotGivenOr[PromptCacheOptions]
     prompt_cache_breakpoints: bool | Literal["auto"]
+    emit_phase_on_item_start: bool
 
 
 class LLM(llm.LLM):
@@ -92,6 +93,7 @@ class LLM(llm.LLM):
         prompt_cache_options: NotGivenOr[PromptCacheOptions] = NOT_GIVEN,
         prompt_cache_breakpoints: bool | Literal["auto"] = "auto",
         stream_idle_timeout: float | None = None,
+        emit_phase_on_item_start: bool = False,
     ) -> None:
         """
         Create a new instance of OpenAI Responses LLM.
@@ -112,6 +114,16 @@ class LLM(llm.LLM):
         sent, over both WebSocket and HTTP; WebSocket pings don't count as events. ``None`` uses
         ``conn_options.timeout``; raise it for models that reason or run hosted tools for long
         stretches without emitting events.
+
+        ``emit_phase_on_item_start`` delivers an assistant message's phase (``commentary`` or
+        ``final_answer``) before its text when the provider supplies it at item start. A phase
+        first supplied or changed at item completion is delivered then. With this option on,
+        phase and text chunks carry the message's ``item_id`` and any known ``phase`` in
+        ``delta.extra["openai_item"]``. Phase notifications also set ``delta.extra["openai"]["phase"]``
+        for chat history. Text streams immediately even when its phase is unknown. Completion
+        updates apply to that item and do not revise text already emitted. Use the chunk's
+        response ID and the item ID to correlate updates. The default delivers phase metadata
+        only at item completion.
         """
         super().__init__()
 
@@ -149,6 +161,7 @@ class LLM(llm.LLM):
             use_websocket=use_websocket,
             prompt_cache_options=prompt_cache_options,
             prompt_cache_breakpoints=prompt_cache_breakpoints,
+            emit_phase_on_item_start=emit_phase_on_item_start,
         )
         self._client = client
         self._owns_client = client is None
@@ -302,6 +315,7 @@ class LLM(llm.LLM):
             extra_kwargs=extra,
             prev_resp=prev_resp,
             prompt_cache_breakpoints=self._resolve_prompt_cache_breakpoints(),
+            emit_phase_on_item_start=self._opts.emit_phase_on_item_start,
         )
 
     def _resolve_prompt_cache_breakpoints(self) -> bool:
