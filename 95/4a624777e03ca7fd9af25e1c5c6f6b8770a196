@@ -1,0 +1,27 @@
+livekit-agents/livekit/agents/inference/decision_model.py
+  s_af7bebb99be5ce::t_ed99e31343c6b7 4,18,25,44-50,115-136,140
+livekit-agents/livekit/agents/inference/llm.py
+  s_af7bebb99be5ce::t_8b6ccc84fc73a7 583-585,591
+livekit-agents/livekit/agents/voice/amd/_inference.py
+  s_af7bebb99be5ce::t_f6756391ebe26f 129-135,211
+tests/test_amd.py
+  s_af7bebb99be5ce::t_d986062242214c 474-496
+tests/test_inference_decisions.py
+  s_af7bebb99be5ce::t_93299ca0947609 21,172-193
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "954a624777e03ca7fd9af25e1c5c6f6b8770a196",
+  "prompts": {},
+  "sessions": {
+    "s_af7bebb99be5ce": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_af7bebb99be5ce",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
