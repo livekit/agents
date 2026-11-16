@@ -1139,6 +1139,30 @@ async def test_rejected_update_settings_does_not_kill_the_stream(server, message
     assert len(server.sessions) == 1
 
 
+async def test_rejected_update_settings_does_not_answer_the_pending_utterance(server):
+    """Only a failed transcription answers an utterance. A rejected settings update must not
+    be taken for the reply to speech that is still waiting for its transcript, or the end of
+    the input stops waiting for it."""
+    server.update_error = "Cannot switch language to 'xx-XX': not supported."
+    server.commit_delay = 0.3  # the transcript comes well after the rejection
+    stt_ = _make_stt(server, model="prisma-v3.0", language="hi-IN")
+    stream = stt_.stream(conn_options=OPTS)
+    await _utterance(stream, flush=False)
+    await _wait_for(lambda: server.sessions and server.sessions[0].audio > 0)
+
+    stt_.update_options(format="transcribe")  # rejected by the server
+    await _wait_for(
+        lambda: any(c["type"] == "update_settings" for c in server.sessions[0].controls)
+    )
+    await asyncio.sleep(0.1)  # let the error reach the stream
+
+    stream.flush()  # commit the speech; its transcript is still 300 ms away
+    stream.end_input()
+    events = await _collect(stream)
+
+    assert FINAL in _types(events)
+
+
 async def test_unknown_error_for_the_final_utterance_is_not_swallowed(server):
     """After `end_input()` the stream only drains the reply to the last commit. An error that
     arrives there used to end the receiver while the stream reported success."""

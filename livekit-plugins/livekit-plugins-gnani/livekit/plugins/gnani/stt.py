@@ -109,18 +109,18 @@ _MAX_QUICK_CLOSES = 3
 # Mid-session ``error`` messages that leave the connection open and the session working, so
 # they are logged and the stream carries on. Matched case-insensitively as a substring.
 # Every other mid-session error is treated as fatal and raised (see ``_handle_error``).
-_NON_FATAL_ERRORS = (
-    # an utterance could not be transcribed (noisy or unclear audio)
-    "transcription failed",
-    # an ``update_settings`` was rejected; the session keeps its previous settings
-    "invalid format",
-    "cannot switch language",
-)
+#
+# The two kinds differ in what they mean for the utterance bookkeeping:
+#  * a failed transcription *answers* an utterance (it is the reply to speech we sent);
+#  * a rejected ``update_settings`` answers nothing: any speech sent earlier is still
+#    waiting for its transcript, and the session keeps its previous settings.
+_UTTERANCE_ERRORS = ("transcription failed",)
+_SETTINGS_ERRORS = ("invalid format", "cannot switch language")
 
 
-def _is_non_fatal_error(message: str) -> bool:
+def _error_matches(message: str, known: tuple[str, ...]) -> bool:
     lowered = message.lower()
-    return any(known in lowered for known in _NON_FATAL_ERRORS)
+    return any(text in lowered for text in known)
 
 
 def _has_signal(pcm: bytes) -> bool:
@@ -1008,17 +1008,23 @@ class SpeechStream(stt.RecognizeStream):
             # a rejected handshake is followed by a 1008 close, where the remembered
             # message becomes the error
             return
-        if not _is_non_fatal_error(message):
-            # `error` frames carry no code, so an unknown one may be fatal (for example the
-            # credits ran out) with the connection left open, and the stream would then run
-            # on without ever producing a transcript. Fail loudly instead.
-            raise APIStatusError(
-                f"Gnani STT stream error: {message}",
-                status_code=500,
-                body=message,
-            )
-        self._note_reply()
-        self._end_speech_nowait()
+        if _error_matches(message, _UTTERANCE_ERRORS):
+            # the reply to speech we sent: that utterance is over
+            self._note_reply()
+            self._end_speech_nowait()
+            return
+        if _error_matches(message, _SETTINGS_ERRORS):
+            # a rejected update_settings answers nothing, so speech still waiting for its
+            # transcript stays outstanding
+            return
+        # `error` frames carry no code, so an unknown one may be fatal (for example the
+        # credits ran out) with the connection left open, and the stream would then run
+        # on without ever producing a transcript. Fail loudly instead.
+        raise APIStatusError(
+            f"Gnani STT stream error: {message}",
+            status_code=500,
+            body=message,
+        )
 
     def _end_speech_nowait(self) -> None:
         if self._speaking:
