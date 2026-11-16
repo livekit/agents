@@ -313,6 +313,10 @@ fn is_batch(m: &connection::wire::ClientMessage) -> bool {
     matches!(m.message, Some(connection::wire::client_message::Message::Batch(_)))
 }
 
+fn is_exec(m: &connection::wire::ClientMessage) -> bool {
+    matches!(m.message, Some(connection::wire::client_message::Message::Exec(_)))
+}
+
 fn is_query(m: &connection::wire::ClientMessage) -> bool {
     matches!(m.message, Some(connection::wire::client_message::Message::Query(_)))
 }
@@ -371,6 +375,46 @@ async fn never_retry_codes_are_final_for_reads_and_uncertain_for_writes() {
         assert_eq!(frames(&seen, is_batch), 2, "the write went out once");
         pooled.conn.aclose().await;
     }
+}
+
+/// Catches: a write the server's request timeout cut left `Uncertain`, and one its canceller's
+/// Cancel stopped sent again. A write answered `timed_out` applied nothing and is sent again; one
+/// answered `cancelled` is final, sent once.
+#[tokio::test]
+async fn a_timed_out_write_is_sent_again_and_a_cancelled_one_is_final() {
+    use std::sync::atomic::AtomicBool as Once;
+    static CUT: Once = Once::new(false);
+    fn cut_once(m: &connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage> {
+        if is_exec(m) && !CUT.swap(true, Ordering::SeqCst) {
+            return vec![connection::tests::error(ErrorCode::TIMED_OUT, "request timeout")];
+        }
+        connection::tests::script(m)
+    }
+    fn cancelled(m: &connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage> {
+        match is_exec(m) {
+            true => vec![connection::tests::error(ErrorCode::CANCELLED, "canceled by its client")],
+            false => connection::tests::script(m),
+        }
+    }
+    let clock = Arc::new(lk_agents_net::clock::RealClock::new());
+    let (cut, seen) = pooled(cut_once).await;
+    let resend = Resend::new(clock.clone(), &Cx::NONE, StorageWrite::Context);
+    async fn exec(pooled: &Pooled) -> Result<(), StorageError> {
+        let update = Statement::raw("UPDATE t SET n = 1");
+        pooled.conn.exec(&update, pooled.conn.deadline()).await?;
+        Ok(())
+    }
+    let write = resend.send(|| exec(&cut)).await;
+    assert!(write.is_ok(), "{write:?}");
+    assert_eq!(frames(&seen, is_exec), 2, "sent again");
+    cut.conn.aclose().await;
+
+    let (stopped, seen) = pooled(cancelled).await;
+    let resend = Resend::new(clock, &Cx::NONE, StorageWrite::Context);
+    let write = resend.send(|| exec(&stopped)).await;
+    assert!(matches!(write, Err(StorageError::Invalid(_))), "{write:?}");
+    assert_eq!(frames(&seen, is_exec), 1, "a cancelled write is final");
+    stopped.conn.aclose().await;
 }
 
 /// Catches: a database that was not reachable yet failing `open`. A `Hello` refused `retry` is

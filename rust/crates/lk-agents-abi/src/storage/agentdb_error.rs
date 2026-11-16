@@ -38,6 +38,10 @@ impl ErrorCode {
     pub const RETRY: Self = Self(1003);
     /// The request may have committed, whole, or not at all.
     pub const COMMIT_UNKNOWN_RESULT: Self = Self(1021);
+    /// Its client's Cancel stopped the request before it applied: only the canceller sees it.
+    pub const CANCELLED: Self = Self(1025);
+    /// The server's request timeout cut the request before it applied: send it again.
+    pub const TIMED_OUT: Self = Self(1031);
     pub const INVALID_ARGUMENT: Self = Self(2001);
     pub const SQL_ERROR: Self = Self(2002);
     pub const TOO_LARGE: Self = Self(2003);
@@ -47,11 +51,13 @@ impl ErrorCode {
     pub const PERMISSION_DENIED: Self = Self(6000);
     pub const UNAUTHENTICATED: Self = Self(6001);
 
-    const TABLE: [Declared; 11] = [
+    const TABLE: [Declared; 13] = [
         declared(Self::WRONG_SHARD_SERVER, "wrong_shard_server", true, false),
         declared(Self::IDLE_EVICTED, "idle_evicted", true, false),
         declared(Self::RETRY, "retry", true, false),
         declared(Self::COMMIT_UNKNOWN_RESULT, "commit_unknown_result", true, true),
+        declared(Self::CANCELLED, "cancelled", false, false),
+        declared(Self::TIMED_OUT, "timed_out", true, false),
         declared(Self::INVALID_ARGUMENT, "invalid_argument", false, false),
         declared(Self::SQL_ERROR, "sql_error", false, false),
         declared(Self::TOO_LARGE, "too_large", false, false),
