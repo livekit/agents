@@ -290,6 +290,41 @@ async def test_pause_and_resume_hold_the_reply_on_the_server(
     assert h.buffer.events[-1] == ("finished", 0.5, True)
 
 
+async def test_an_interruption_while_held_does_not_count_the_hold_as_played(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(avatar.time, "time", lambda: clock[0])
+    await h.reply(frames=30, end=False)  # 3s
+    h.signal("p1-req-1")
+
+    clock[0] = 100.5
+    h.session._on_pause()
+    await settle()
+    clock[0] = 102.5
+    h.session._on_clear_buffer()  # confirmed while still held
+    await settle()
+    assert h.buffer.events[-1] == ("finished", 0.5, True)
+
+
+async def test_a_pause_inside_the_fallback_wait_moves_its_deadline(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(avatar, "COMPLETION_MARGIN_SECONDS", 0.1)
+    await h.reply(frames=3)  # 0.3s, its end reported to the server
+    h.signal("p1-req-1")  # playing; with no pause it would be finished at ~0.4s
+
+    await asyncio.sleep(0.05)
+    h.session._on_pause()
+    await asyncio.sleep(0.3)
+    h.session._on_resume()  # held for 0.3s: playback now ends at ~0.6s
+    await asyncio.sleep(0.15)
+    assert h.buffer.finishes() == [], "finished while the resumed audio was still playing"
+
+    await asyncio.sleep(0.4)
+    assert h.buffer.finishes() == [False]
+
+
 async def test_a_pause_before_any_audio_holds_the_reply_from_its_first_frame(h: Harness) -> None:
     h.session._on_pause()
     await settle()
