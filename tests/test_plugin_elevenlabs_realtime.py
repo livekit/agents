@@ -276,7 +276,7 @@ async def test_audio_tags_are_stripped_from_the_transcript(
 
         message = await asyncio.wait_for(generation.message_stream.__anext__(), 2)
         delta = await asyncio.wait_for(message.text_stream.__anext__(), 2)
-        assert delta == " Hello there"
+        assert delta == "Hello there"
     finally:
         await session.aclose()
 
@@ -335,7 +335,30 @@ async def test_audio_tags_split_across_deltas_are_stripped(
                 "item": {"id": "item_1", "type": "message", "role": "assistant", "content": []},
             }
         )
-        assert await asyncio.wait_for(_read_text(message), 2) == "Sure  thing ok"
+        assert await asyncio.wait_for(_read_text(message), 2) == "Sure thing ok"
+    finally:
+        await session.aclose()
+
+
+async def test_a_tag_split_across_deltas_leaves_one_space(
+    server: tuple[FakeServer, str],
+) -> None:
+    fake, url = server
+    _, session, _ = await _connect(url, fake)
+    try:
+        message = await _start_message(fake, session)
+        for n, delta in enumerate(["Yes", " I", " can laugh [", "laugh]", " hello", " there"]):
+            await fake.send(_transcript_delta(delta, n))
+        await fake.send(
+            {
+                "type": "response.output_item.done",
+                "event_id": "ev_item_done",
+                "response_id": "resp_1",
+                "output_index": 0,
+                "item": {"id": "item_1", "type": "message", "role": "assistant", "content": []},
+            }
+        )
+        assert await asyncio.wait_for(_read_text(message), 2) == "Yes I can laugh hello there"
     finally:
         await session.aclose()
 

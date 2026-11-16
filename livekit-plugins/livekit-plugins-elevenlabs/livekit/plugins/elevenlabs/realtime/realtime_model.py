@@ -177,6 +177,7 @@ class RealtimeSession(_openai.RealtimeSession):
         self._el_close: tuple[int, str] | None = None
         self._el_call_ids: dict[str, str] = {}
         self._el_tag_tails: dict[str, str] = {}
+        self._el_unspaced_items: set[str] = set()
         self._el_warned: set[str] = set()
         super().__init__(realtime_model, turn_detection_disabled=turn_detection_disabled)
         self._item_ids = _UnshortenedItemIds()
@@ -318,6 +319,7 @@ class RealtimeSession(_openai.RealtimeSession):
 
     def _handle_response_done(self, event: ResponseDoneEvent) -> None:
         self._el_tag_tails.clear()
+        self._el_unspaced_items.clear()
         super()._handle_response_done(event)
 
     def _el_strip_streamed_tags(self, item_id: str, delta: str) -> str:
@@ -326,12 +328,20 @@ class RealtimeSession(_openai.RealtimeSession):
         start = text.rfind("[")
         if start != -1 and "]" not in text[start:]:
             text, self._el_tag_tails[item_id] = text[:start], text[start:]
-        return _strip_audio_tags(text)
+        text = _strip_audio_tags(text)
+        if item_id not in self._el_unspaced_items:
+            text = text.lstrip(" \t")
+        if text.endswith((" ", "\t")):
+            self._el_unspaced_items.discard(item_id)
+        elif text:
+            self._el_unspaced_items.add(item_id)
+        return text
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         self._el_close = None
         self._el_call_ids.clear()
         self._el_tag_tails.clear()
+        self._el_unspaced_items.clear()
         ws = await super()._create_ws_conn()
         return cast(aiohttp.ClientWebSocketResponse, _CloseRecordingSocket(ws, self))
 
