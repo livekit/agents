@@ -45,3 +45,26 @@ References:
 - [Gemini API Models](https://ai.google.dev/gemini-api/docs/models)
 - [Gemini Live API thinking](https://ai.google.dev/gemini-api/docs/live-api/thinking)
 - [Vertex Live API](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api)
+
+## Live Avatar
+
+On Vertex AI, `gemini-3.8-live` can render a lip-synced talking-head video with its speech. Set `avatar_config` on the `RealtimeModel` and publish the video with `AvatarSession`:
+
+```python
+from google.genai import types
+from livekit.plugins import google
+
+model = google.realtime.RealtimeModel(
+    model="gemini-3.8-live",
+    vertexai=True,
+    avatar_config=types.AvatarConfig(avatar_name="Kira"),
+)
+session = AgentSession(llm=model)
+avatar = google.realtime.AvatarSession(model)
+await avatar.start(session, room=ctx.room)
+await session.start(agent=MyAgent(), room=ctx.room)
+```
+
+The agent participant publishes the avatar as a camera track and a microphone track. One avatar is supported per `RealtimeModel` session.
+
+- [Configure Live Avatars](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/live-api/configure-live-avatars)
