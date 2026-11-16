@@ -205,6 +205,7 @@ class DuplexSession(_GPTLiveSession):
         super().__init__(duplex_model)
 
     def _create_ws_response_error(self, error: aiohttp.ClientResponseError) -> APIStatusError:
+        """Preserve gateway status, quota details, request ID, and retry policy on refusal."""
         return create_api_error_from_response(error)
 
     def _create_ws_url_and_headers(self) -> tuple[str, dict[str, str]]:

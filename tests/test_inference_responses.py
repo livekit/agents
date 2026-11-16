@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any
 
 import aiohttp
@@ -956,6 +957,25 @@ async def test_handshake_refusal_is_not_retryable(
     assert exc_info.value.status_code == status
     assert exc_info.value.retryable is retryable
     await model.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_failed_handshake_explains_exhausted_credits(
+    quota_http_session: SimpleNamespace,
+) -> None:
+    model = _ws_llm()
+    _with_session(model, quota_http_session)
+    try:
+        with pytest.raises(APIStatusError) as caught:
+            await _drain(model, conn_options=APIConnectOptions(max_retry=0))
+    finally:
+        await model.aclose()
+
+    assert "Credit quota exhausted." in caught.value.message
+    assert caught.value.status_code == 429
+    assert caught.value.retryable is False
+    assert caught.value.request_id == "quota-test-request"
+    assert caught.value.body == {"category": "MaxGatewayCredits"}
 
 
 async def test_handshake_429_logs_quota_headers(caplog: pytest.LogCaptureFixture) -> None:
