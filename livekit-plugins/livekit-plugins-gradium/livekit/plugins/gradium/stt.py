@@ -40,7 +40,8 @@ from livekit.agents.utils import AudioBuffer, is_given
 from livekit.rtc import AudioFrame
 
 from .api import ws_headers
-from .log import logger
+from .log import log_server_message, logger
+from .models import LogLevel
 
 STTEncoding = Literal["pcm_s16le"]
 
@@ -72,6 +73,8 @@ class STTOptions:
     keywords: list[str] | None = None
     # How strongly to favor the keywords, the server defaults to 2.0.
     keyword_boost: float | None = None
+    # Lowest level of the server's log messages to receive, None for none.
+    log_level: LogLevel | None = "warning"
 
 
 class STT(stt.STT):
@@ -93,7 +96,17 @@ class STT(stt.STT):
         language: str = "en",
         keywords: list[str] | None = None,
         keyword_boost: float | None = None,
+        log_level: LogLevel | None = "warning",
     ):
+        """
+        Create a Gradium STT.
+
+        Args:
+            log_level: Lowest level of the server's log messages to receive ("debug",
+                "info", "warning" or "error"), such as a warning about an unknown or
+                deprecated setup option. They are written to the `livekit.plugins.gradium`
+                logger at their own level. `None` asks for none.
+        """
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -137,6 +150,7 @@ class STT(stt.STT):
             language=LanguageCode(language),
             keywords=list(keywords) if keywords is not None else None,
             keyword_boost=keyword_boost,
+            log_level=log_level,
         )
 
         if is_given(encoding):
@@ -478,6 +492,8 @@ class SpeechStream(stt.SpeechStream):
                     elif type_ == "end_text":
                         if speaking:
                             speech_end = data.get("stop_s", 0.0)
+                    elif type_ == "log":
+                        log_server_message(data)
                     else:
                         logger.warning(f"Unknown message type from Gradium {type_}")
 
@@ -542,6 +558,8 @@ class SpeechStream(stt.SpeechStream):
                 keywords["boost"] = self._opts.keyword_boost
             json_config["keywords"] = keywords
         setup_msg["json_config"] = json_config
+        if self._opts.log_level is not None:
+            setup_msg["log_level"] = self._opts.log_level
 
         await ws.send_str(json.dumps(setup_msg))
         return ws

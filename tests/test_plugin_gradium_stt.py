@@ -59,6 +59,68 @@ async def test_endpoint_uses_end_text_timing(monkeypatch, stop_s):
         await provider.aclose()
 
 
+async def test_server_log_frames_are_logged_at_their_level(monkeypatch, caplog):
+    import logging
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import aiohttp
+
+    from livekit.agents import stt
+    from livekit.plugins.gradium import stt as gradium_stt
+
+    messages = asyncio.Queue()
+    for data in (
+        {"type": "log", "level": "warning", "message": "delay_in_tokens is deprecated"},
+        {"type": "log", "level": "info", "message": "fyi"},
+        {"type": "log", "level": "unheard-of", "message": "odd"},
+        {"type": "text", "text": "hello", "start_s": 0.1},
+    ):
+        messages.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(data), ""))
+    ws = SimpleNamespace(receive=messages.get, send_str=AsyncMock(), close=AsyncMock())
+    monkeypatch.setattr(gradium_stt.SpeechStream, "_connect_ws", AsyncMock(return_value=ws))
+    provider = gradium_stt.STT(api_key="test-key", http_session=SimpleNamespace())
+    stream = provider.stream()
+    try:
+        with caplog.at_level(logging.DEBUG, logger="livekit.plugins.gradium"):
+            async with asyncio.timeout(2):
+                async for event in stream:
+                    if event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
+                        break
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+    logged = [(r.levelno, r.getMessage()) for r in caplog.records]
+    assert (logging.WARNING, "Gradium warning: delay_in_tokens is deprecated") in logged
+    assert (logging.INFO, "Gradium info: fyi") in logged
+    # a level this plugin does not know is still surfaced, as a warning
+    assert (logging.WARNING, "Gradium warning: odd") in logged
+    assert not any("Unknown message type" in message for _, message in logged)
+
+
+@pytest.mark.parametrize(
+    ("ctor", "expected"),
+    [({}, "warning"), ({"log_level": "error"}, "error"), ({"log_level": None}, None)],
+)
+async def test_setup_asks_for_server_logs_unless_disabled(ctor, expected):
+    from unittest.mock import AsyncMock
+
+    from livekit.plugins.gradium import STT
+
+    ws = AsyncMock()
+    session = MagicMock()
+    session.ws_connect = AsyncMock(return_value=ws)
+    stream = STT(api_key="test-key", http_session=session, **ctor).stream()
+    try:
+        await stream._connect_ws()
+    finally:
+        await stream.aclose()
+
+    setup_msg = json.loads(ws.send_str.call_args_list[0].args[0])
+    assert setup_msg.get("log_level") == expected
+
+
 def test_stt_default_language():
     """STT defaults to English."""
     from livekit.plugins.gradium import STT
