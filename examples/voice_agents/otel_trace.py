@@ -1,7 +1,8 @@
 import logging
 
 from dotenv import load_dotenv
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.context import Context
+from opentelemetry.sdk.trace import Span, SpanProcessor, TracerProvider
 from opentelemetry.util.types import AttributeValue
 
 from livekit.agents import (
@@ -11,6 +12,7 @@ from livekit.agents import (
     JobContext,
     RunContext,
     cli,
+    get_job_context,
     inference,
     metrics,
 )
@@ -27,9 +29,8 @@ load_dotenv()
 
 # This example shows how to trace the agent session with OpenTelemetry.
 # It exports spans over OTLP/HTTP, so it works with any OTLP-compatible backend
-# (Langfuse, Jaeger, Grafana Tempo, Honeycomb, etc.). To enable tracing, set the trace
-# provider with `set_tracer_provider` at the module level or inside the entrypoint
-# before `AgentSession.start()`.
+# (Langfuse, Jaeger, Grafana Tempo, Honeycomb, etc.). Set up the provider once at
+# module scope so jobs in THREAD mode share its exporters and background threads.
 #
 # Configure the destination either by passing `endpoint`/`headers` to `setup_otel`, or
 # by leaving them unset and exporting the standard OTLP environment variables:
@@ -47,8 +48,22 @@ load_dotenv()
 # Refer to their docs for latest instructions: https://langfuse.com/integrations/native/opentelemetry#opentelemetry-endpoint
 
 
+def get_context_data() -> dict[str, AttributeValue]:
+    if (ctx := get_job_context(required=False)) is None:
+        return {}
+    # Use the grouping key expected by your backend, e.g. langfuse.session.id.
+    return {"session.id": ctx.job.room.name}
+
+
+class SessionSpanProcessor(SpanProcessor):
+    def on_start(self, span: Span, parent_context: Context | None = None) -> None:
+        span.set_attributes(get_context_data())
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
+
+
 def setup_otel(
-    metadata: dict[str, AttributeValue] | None = None,
     *,
     endpoint: str | None = None,
     headers: dict[str, str] | None = None,
@@ -59,10 +74,11 @@ def setup_otel(
     # When endpoint/headers are None, the exporter falls back to the standard
     # OTEL_EXPORTER_OTLP_* environment variables.
     trace_provider = TracerProvider()
+    trace_provider.add_span_processor(SessionSpanProcessor())
     trace_provider.add_span_processor(
         BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, headers=headers))
     )
-    set_tracer_provider(trace_provider, metadata=metadata)
+    set_tracer_provider(trace_provider)
     return trace_provider
 
 
@@ -135,19 +151,13 @@ class Alloy(Agent):
         return Kelly()
 
 
+trace_provider = setup_otel()
 server = AgentServer()
 
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
-    # set up the OpenTelemetry tracer
-    trace_provider = setup_otel(
-        # metadata is set as attributes on all spans created by the tracer; some backends
-        # have their own grouping conventions (e.g. Langfuse uses `langfuse.session.id` or `session.id`)
-        metadata={
-            "session.id": ctx.room.name,
-        }
-    )
+    ctx.log_context_fields.update(get_context_data())
 
     # (optional) add a shutdown callback to flush the trace before process exit
     async def flush_trace() -> None:

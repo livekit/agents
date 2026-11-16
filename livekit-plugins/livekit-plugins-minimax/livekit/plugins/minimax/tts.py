@@ -165,6 +165,29 @@ class _TTSOptions:
     audio_format: TTSAudioFormat
 
 
+def _validate_options(
+    *,
+    model: TTSModel | str,
+    emotion: TTSEmotion | None,
+    speed: float,
+    intensity: int | None,
+    timbre: int | None,
+) -> None:
+    if not (0.5 <= speed <= 2.0):
+        raise ValueError(f"speed must be between 0.5 and 2.0, but got {speed}")
+    if intensity is not None and not (-100 <= intensity <= 100):
+        raise ValueError(f"intensity must be between -100 and 100, but got {intensity}")
+    if timbre is not None and not (-100 <= timbre <= 100):
+        raise ValueError(f"timbre must be between -100 and 100, but got {timbre}")
+
+    # Validate fluent emotion is only used with speech-2.6-* models
+    if emotion == "fluent" and not model.startswith("speech-2.6"):
+        raise ValueError(
+            f'"fluent" emotion is only supported by speech-2.6-* models, '
+            f'but got model "{model}". Please use speech-2.6-hd or speech-2.6-turbo.'
+        )
+
+
 class TTS(tts.TTS):
     def __init__(
         self,
@@ -237,19 +260,9 @@ class TTS(tts.TTS):
                 " MINIMAX_API_KEY environment variable"
             )
 
-        if not (0.5 <= speed <= 2.0):
-            raise ValueError(f"speed must be between 0.5 and 2.0, but got {speed}")
-        if intensity is not None and not (-100 <= intensity <= 100):
-            raise ValueError(f"intensity must be between -100 and 100, but got {intensity}")
-        if timbre is not None and not (-100 <= timbre <= 100):
-            raise ValueError(f"timbre must be between -100 and 100, but got {timbre}")
-
-        # Validate fluent emotion is only used with speech-2.6-* models
-        if emotion == "fluent" and not model.startswith("speech-2.6"):
-            raise ValueError(
-                f'"fluent" emotion is only supported by speech-2.6-* models, '
-                f'but got model "{model}". Please use speech-2.6-hd or speech-2.6-turbo.'
-            )
+        _validate_options(
+            model=model, emotion=emotion, speed=speed, intensity=intensity, timbre=timbre
+        )
 
         self._sentence_tokenizer = (
             tokenizer if utils.is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
@@ -308,6 +321,16 @@ class TTS(tts.TTS):
         language_boost: NotGivenOr[TTSLanguageBoost | None] = NOT_GIVEN,
     ) -> None:
         """Update the TTS configuration options."""
+        # check the resulting options before changing any of them, so a rejected update
+        # leaves the current configuration in place
+        _validate_options(
+            model=model if utils.is_given(model) else self._opts.model,
+            emotion=emotion if utils.is_given(emotion) else self._opts.emotion,
+            speed=speed if utils.is_given(speed) else self._opts.speed,
+            intensity=intensity if utils.is_given(intensity) else self._opts.intensity,
+            timbre=timbre if utils.is_given(timbre) else self._opts.timbre,
+        )
+
         if utils.is_given(model):
             self._opts.model = model
 

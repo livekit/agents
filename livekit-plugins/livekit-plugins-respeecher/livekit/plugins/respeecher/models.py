@@ -6,6 +6,14 @@ TTSModels = Literal[
     "/public/tts/en-rt",
     # Respeecher's public Ukrainian model
     "/public/tts/ua-rt",
+    # Respeecher's public Swedish model
+    "/public/tts/sv-rt",
+    # Respeecher's public Brazilian Portuguese model
+    "/public/tts/pt-br-rt",
+    # Respeecher's public German model
+    "/public/tts/de-rt",
+    # Respeecher's public Arabic model
+    "/public/tts/ar-rt",
 ]
 
 TTSEncoding = Literal["pcm_s16le",]

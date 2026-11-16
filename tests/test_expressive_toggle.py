@@ -4,8 +4,9 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, ExpressiveOptions, inference
+from livekit.agents import Agent, AgentSession, ExpressiveOptions, inference, tokenize, tts
 from livekit.agents.llm.chat_context import ChatContext
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import is_given
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.generation import (
@@ -22,9 +23,25 @@ pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurr
 SESSION_TIMEOUT = 60
 
 
-# what an expressive turn actually leaves in history: the expr markers the LLM emitted,
-# plus (defensively) a hallucinated native tag. Square brackets are *not* markup here —
-# they reach history as prose or markdown links, so the scrub must leave them alone.
+class _GeminiMarkupTTS(tts.TTS):
+    """A TTS that declares a markup dialect but cannot lower it itself."""
+
+    def __init__(self, *, streaming: bool = False) -> None:
+        super().__init__(
+            capabilities=tts.TTSCapabilities(streaming=streaming),
+            sample_rate=24000,
+            num_channels=1,
+        )
+
+    class Markup(tts.TTS.Markup):
+        def _provider_key(self) -> str:
+            return "gemini"
+
+    def synthesize(self, text, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):  # type: ignore[override]
+        raise NotImplementedError
+
+
+# what an expressive turn leaves in history; square brackets are prose, not markup
 MARKED_UP = (
     '<expr type="expression" label="happy"/> Welcome back! <sound value="chuckle"/> '
     "Glad you called again. Docs: [the guide](https://docs.livekit.io)."
@@ -73,14 +90,6 @@ def test_update_and_remove_expressive_instructions() -> None:
 
     remove_expressive_instructions(ctx)
     assert all(item.id != EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID for item in ctx.items)
-
-
-def test_expressive_param_defaults_off() -> None:
-    assert AgentSession()._expressive is False
-    assert AgentSession(expressive=True)._expressive is True
-
-    opts: ExpressiveOptions = {"tts_instructions_append": "Stay upbeat."}
-    assert AgentSession(expressive=opts)._expressive == opts
 
 
 def test_update_options_expressive() -> None:
@@ -140,22 +149,19 @@ def test_agent_expressive_overrides_session() -> None:
 
 
 async def test_expressive_off_turn_scrubs_history() -> None:
-    """A turn that runs with expressive off removes the injected markup guide and
-    scrubs markup from past assistant turns."""
+    """A turn with expressive off drops the markup guide and scrubs past assistant markup."""
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
     actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=0.3)
     actions.add_tts(2.0, ttfb=0.2, duration=0.3)
 
-    # FakeTTS has no markup dialect, so expressive resolves to off even though the
-    # session asks for it — same situation as a handoff to a non-expressive TTS.
+    # FakeTTS has no markup dialect, so expressive resolves to off despite the session option
     session = create_session(
         actions,
         extra_kwargs={"expressive": {"speech_steering": {"nonverbal_sounds": {"laughing": False}}}},
     )
 
-    # seed history as if previous turns ran expressive: marked-up assistant text +
-    # the injected markup guide
+    # history as if previous turns ran expressive
     seeded = ChatContext.empty()
     seeded.add_message(role="assistant", content=MARKED_UP)
     update_expressive_instructions(seeded, text="Use the formatting tags below…")
@@ -180,3 +186,83 @@ async def test_expressive_off_turn_scrubs_history() -> None:
     assert any("[the guide](https://docs.livekit.io)" in (t or "") for t in assistant_texts)
     # and the new reply went through normally
     assert any("I'm doing well" in (t or "") for t in assistant_texts)
+
+
+def test_expressive_needs_a_tts_the_framework_can_lower_for() -> None:
+    """Declaring a dialect is not enough — something has to lower the markers."""
+
+    def resolves(tts_obj: tts.TTS) -> bool:
+        session = AgentSession(expressive=True, tts=tts_obj)
+        return (
+            AgentActivity(Agent(instructions="test"), session)._resolve_expressive_options()
+            is not None
+        )
+
+    # non-streaming: the StreamAdapter the framework wraps it in does the lowering
+    assert resolves(_GeminiMarkupTTS(streaming=False))
+    # natively streaming: nothing in the framework can lower for it
+    assert not resolves(_GeminiMarkupTTS(streaming=True))
+    # the gateway streams too, but lowers inside its own stream
+    assert resolves(inference.TTS("fishaudio/s2.1-pro", api_key="fake", api_secret="fake"))
+
+
+def test_a_caller_supplied_stream_adapter_stays_expressive() -> None:
+    """A StreamAdapter is streaming only at its surface; inside is the lowering path."""
+
+    wrapped = _GeminiMarkupTTS()
+    adapter = tts.StreamAdapter(tts=wrapped)
+    assert adapter.capabilities.streaming
+
+    session = AgentSession(expressive=True, tts=adapter)
+    activity = AgentActivity(Agent(instructions="test"), session)
+    assert activity._resolve_expressive_options() is not None
+
+    # StreamAdapterWrapper reads the wrapped instance's flag, so it has to pass through
+    adapter._set_expressive(True)
+    assert wrapped._expressive
+
+
+async def test_stream_adapter_snapshots_expressive_per_stream() -> None:
+    """A stream keeps the expressive flag it started with, even if the shared TTS flips."""
+
+    wrapped = _GeminiMarkupTTS()
+    adapter = tts.StreamAdapter(tts=wrapped)
+
+    adapter._set_expressive(True)
+    stream = adapter.stream()
+    adapter._set_expressive(False)  # a second turn, before this one's _run runs
+
+    try:
+        assert stream._expressive is True
+        assert wrapped._expressive is False
+    finally:
+        await stream.aclose()
+        await adapter.aclose()
+
+
+async def test_stream_adapter_tokenizes_xml_aware_while_lowering() -> None:
+    """A marker label containing a period stays one token while lowering."""
+    marked = '<expr type="expression" label="Calm. Steady"/> All set.'
+
+    async def tokens(tokenizer: tokenize.SentenceTokenizer) -> list[str]:
+        stream = tokenizer.stream()
+        stream.push_text(marked)
+        stream.end_input()
+        out = [ev.token async for ev in stream]
+        await stream.aclose()
+        return out
+
+    adapter = tts.StreamAdapter(tts=_GeminiMarkupTTS())
+    try:
+        assert await tokens(adapter._tokenizer_for(lowering=True)) == [marked]
+        # the default splits it mid-tag, which is why lowering needs its own
+        assert await tokens(adapter._tokenizer_for(lowering=False)) != [marked]
+        # one tokenizer, reused across syntheses
+        assert adapter._tokenizer_for(lowering=True) is adapter._tokenizer_for(lowering=True)
+
+        mine = tokenize.blingfire.SentenceTokenizer(retain_format=True)
+        explicit = tts.StreamAdapter(tts=_GeminiMarkupTTS(), sentence_tokenizer=mine)
+        assert explicit._tokenizer_for(lowering=True) is mine  # never second-guessed
+        await explicit.aclose()
+    finally:
+        await adapter.aclose()

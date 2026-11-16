@@ -196,12 +196,24 @@ class TTS(tts.TTS):
             voice_id (str, optional): The voice ID for the desired voice.
             speed (float, optional): The audio playback speed.
         """
+        connection_params_changed = False
         if is_given(lang_code):
             self._opts.lang_code = LanguageCode(lang_code)
+            connection_params_changed = True
         if is_given(voice_id):
             self._opts.voice_id = voice_id
+            connection_params_changed = True
         if is_given(speed):
             self._opts.speed = speed
+            connection_params_changed = True
+
+        if connection_params_changed:
+            # lang_code, voice_id and speed are all baked into the URL _connect_ws
+            # builds, so a pooled connection keeps synthesising with the previous
+            # settings. mark_refreshed_on_get=True restarts max_session_duration on
+            # every acquire, so under steady use that connection can outlive the
+            # change indefinitely.
+            self._pool.invalidate()
 
     def synthesize(
         self,
@@ -333,7 +345,6 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -345,23 +356,25 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
+        segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
+
         async def _tokenize_input() -> None:
             chunks_stream = None
             async for input in self._input_ch:
                 if isinstance(input, str):
                     if chunks_stream is None:
                         chunks_stream = self._tts._sentence_tokenizer.stream()
-                        self._segments_ch.send_nowait(chunks_stream)
+                        segments_ch.send_nowait(chunks_stream)
                     chunks_stream.push_text(input)
                 elif isinstance(input, self._FlushSentinel):
                     if chunks_stream:
                         chunks_stream.end_input()
                     chunks_stream = None
 
-            self._segments_ch.close()
+            segments_ch.close()
 
         async def _run_segments() -> None:
-            async for chunk_stream in self._segments_ch:
+            async for chunk_stream in segments_ch:
                 await self._run_ws(chunk_stream, output_emitter)
 
         tasks = [

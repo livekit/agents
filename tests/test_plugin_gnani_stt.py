@@ -9,6 +9,38 @@ import pytest
 pytestmark = pytest.mark.plugin("gnani")
 
 
+@pytest.mark.parametrize("event_type", ["speech_end", "vad_end"])
+async def test_endpoint_does_not_use_processing_duration_as_speech_end(event_type):
+    import json
+    from types import SimpleNamespace
+
+    from livekit.agents import stt
+    from livekit.plugins.gnani.stt import SpeechStream
+
+    async def messages():
+        for message in [
+            {
+                "type": "transcript",
+                "text": "hello",
+                "audio_duration_ms": 400,
+                "timestamp": "2026-10-14T00:00:00Z",
+            },
+            {"type": event_type, "timestamp": "2026-10-14T00:00:01Z"},
+        ]:
+            yield json.dumps(message)
+
+    stream = object.__new__(SpeechStream)
+    stream._opts = SimpleNamespace(language="en")
+    stream._on_provider_progress = None
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
+    events = []
+    stream._event_ch = SimpleNamespace(send_nowait=events.append)
+    await stream._recv_messages(messages())
+    assert events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+    assert events[-1].alternatives == []
+    assert events[-1].speech_end_time is None
+
+
 def test_stt_requires_api_key():
     """STT constructor raises when no API key is provided."""
     from livekit.plugins.gnani import STT
@@ -277,3 +309,35 @@ def test_stt_stream_inherits_language():
     with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
         stream = stt.stream()
     assert stream._opts.language == "hi-IN"
+
+
+@pytest.mark.parametrize(
+    "message_type, expected_retries",
+    [
+        ("connected", 2),
+        ("pong", 2),
+        ("processing", 0),
+        ("transcript", 0),
+        ("vad_start", 0),
+        ("vad_end", 0),
+    ],
+)
+async def test_provider_progress_resets_retries_without_transcript(message_type, expected_retries):
+    import json
+    from types import SimpleNamespace
+
+    from livekit.plugins.gnani.stt import SpeechStream
+
+    class Socket:
+        def __aiter__(self):
+            return self.messages()
+
+        async def messages(self):
+            yield json.dumps({"type": message_type, "text": ""})
+
+    stream = SpeechStream.__new__(SpeechStream)
+    stream._event_ch = SimpleNamespace(send_nowait=lambda event: None)
+    stream._on_provider_progress = None
+    stream._num_retries = 2
+    await stream._recv_messages(Socket())
+    assert stream._num_retries == expected_retries

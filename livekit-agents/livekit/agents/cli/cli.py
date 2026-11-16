@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import os
 import signal
 import threading
@@ -10,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from ..job import JobExecutorType
 from ..log import logger
+from ..telemetry import loop_monitor
 from ..voice import AgentSession, io
 from ..voice.transcription import TranscriptSynchronizer
 from ..worker import AgentServer, WorkerOptions
@@ -62,7 +62,6 @@ class AgentsConsole:
 
         self._lock = threading.Lock()
         self._io_acquired = False
-        self._io_acquired_event = threading.Event()
         self._enabled = False
         self._record = False
         self._console_mode: ConsoleMode = "audio"
@@ -86,7 +85,6 @@ class AgentsConsole:
 
             self._io_acquired = True
             self._io_loop = loop
-            self._io_context = contextvars.copy_context()
 
             assert self._tcp_transport is not None
             assert self._tcp_audio_input is not None
@@ -98,7 +96,6 @@ class AgentsConsole:
                 next_in_chain_audio=self._io_audio_output,
                 next_in_chain_text=None,
             )
-            self._io_acquired_event.set()
             self._io_session = session
 
         if session:
@@ -136,46 +133,14 @@ class AgentsConsole:
             return self._io_acquired
 
     @property
-    def io_session(self) -> AgentSession:
-        if not self._io_acquired:
-            raise RuntimeError("AgentsConsole is not acquired")
-        return self._io_session
-
-    @property
     def io_loop(self) -> asyncio.AbstractEventLoop:
         if not self._io_acquired:
             raise RuntimeError("AgentsConsole is not acquired")
         return self._io_loop
 
     @property
-    def io_context(self) -> contextvars.Context:
-        if not self._io_acquired:
-            raise RuntimeError("AgentsConsole is not acquired")
-        return self._io_context
-
-    def wait_for_io_acquisition(self) -> None:
-        self._io_acquired_event.wait()
-
-    @property
     def console_mode(self) -> ConsoleMode:
         return self._console_mode
-
-    @console_mode.setter
-    def console_mode(self, mode: ConsoleMode) -> None:
-        with self._lock:
-            self._console_mode = mode
-
-            if not self._io_acquired:
-                return
-
-            self.io_loop.call_soon_threadsafe(
-                self._update_sess_io,
-                self.io_session,
-                mode,
-                self._io_audio_input,
-                self._io_transcription_sync.audio_output,
-                self._io_transcription_sync.text_output,
-            )
 
     def _update_sess_io(
         self,
@@ -312,6 +277,9 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
     asyncio.set_event_loop(loop)
 
     loop.slow_callback_duration = 0.1  # 100ms
+    # a blocked worker loop delays job dispatch; there is no session to attach a span to here,
+    # so this one logs (and records the metric) only
+    loop_monitor.start_monitoring(loop, name="worker", emit_spans=False)
 
     # exit signalling. A plain `signal.signal` handler runs on the main thread at
     # an arbitrary bytecode boundary — raising from it can land inside whatever
@@ -455,6 +423,7 @@ def _run_worker(server: AgentServer, args: proto.CliArgs) -> None:
         except Exception:
             pass
         finally:
+            loop_monitor.stop_monitoring(loop)
             try:
                 loop.run_until_complete(loop.shutdown_asyncgens())
                 loop.run_until_complete(loop.shutdown_default_executor())

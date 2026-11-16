@@ -13,13 +13,17 @@ from livekit import rtc
 from ... import utils
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
-from ..io import AudioOutput, AudioOutputCapabilities, PlaybackFinishedEvent
+from ..io import AudioOutput, AudioOutputCapabilities, PlaybackFinishedEvent, _CaptureCancelledEvent
 from ._types import AudioReceiver, AudioSegmentEnd
 
 RPC_CLEAR_BUFFER = "lk.clear_buffer"
 RPC_PLAYBACK_FINISHED = "lk.playback_finished"
 RPC_PLAYBACK_STARTED = "lk.playback_started"
 AUDIO_STREAM_TOPIC = "lk.audio_stream"
+
+# Fallback for the last segment: with no chunk or trailer for this long, assume the
+# trailer was lost and end the segment. Generous — audio is pushed faster than realtime.
+STREAM_IDLE_TIMEOUT = 10.0
 
 
 @dataclass
@@ -66,7 +70,8 @@ class DataStreamAudioOutput(AudioOutput):
         # a playback finished event is expected after the clear buffer rpc is performed
         # if not received after the timeout, we still mark the playout is done to avoid deadlock
         self._clear_buffer_timeout = clear_buffer_timeout
-        self._clear_buffer_timeout_handler: asyncio.TimerHandle | None = None
+        # Also includes completion of captures canceled behind the clear.
+        self._clear_buffer_atask: asyncio.Task[None] | None = None
 
         def _on_room_connected(fut: asyncio.Future[None]) -> None:
             if not self._start_atask and not fut.cancelled() and not fut.exception():
@@ -143,6 +148,18 @@ class DataStreamAudioOutput(AudioOutput):
         # we want to avoid OOM & outdated speech?
         await asyncio.shield(self._start_atask)
 
+        # Callers must serialize capture calls, including awaiting their cancellation.
+        # Finish the interrupted playback before newer audio can be queued.
+        while self._clear_buffer_atask is not None and not self._clear_buffer_atask.done():
+            try:
+                await asyncio.shield(self._clear_buffer_atask)
+            except asyncio.CancelledError:
+                task = asyncio.create_task(self._finish_cancelled_capture(self._clear_buffer_atask))
+                self._clear_buffer_atask = task
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
+                raise
+
         await super().capture_frame(frame)
 
         if not self._stream_writer:
@@ -164,6 +181,13 @@ class DataStreamAudioOutput(AudioOutput):
         await self._stream_writer.write(bytes(frame.data))
         self._pushed_duration += frame.duration
 
+    async def _finish_cancelled_capture(self, clear_task: asyncio.Task[None]) -> None:
+        """Finish the zero-audio segment reserved by wrappers for a canceled capture."""
+        await asyncio.shield(clear_task)
+        self._dispatch_playback_finished(
+            _CaptureCancelledEvent(playback_position=0, interrupted=True)
+        )
+
     def flush(self) -> None:
         """Mark end of current audio segment"""
         super().flush()
@@ -178,10 +202,17 @@ class DataStreamAudioOutput(AudioOutput):
         self._stream_writer = None
 
     def clear_buffer(self) -> None:
-        if not self._started:
+        if not self._started or not self._pending_playback_count:
+            return
+        if self._clear_buffer_atask is not None and not self._clear_buffer_atask.done():
             return
 
-        task = asyncio.create_task(self._clear_buffer_task(self._pushed_duration))
+        task = asyncio.create_task(
+            self._clear_buffer_task(self._pushed_duration, self.captured_playout_segments)
+        )
+        # With no fallback, later captures must not wait for remote completion.
+        if self._clear_buffer_timeout is not None:
+            self._clear_buffer_atask = task
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -195,7 +226,7 @@ class DataStreamAudioOutput(AudioOutput):
             "disable `AgentSession.resume_false_interruption` if you are using an avatar plugin."
         )
 
-    async def _clear_buffer_task(self, pushed_duration: float) -> None:
+    async def _clear_buffer_task(self, pushed_duration: float, captured_segments: int) -> None:
         timeout = self._clear_buffer_timeout
         try:
             await self._room.local_participant.perform_rpc(
@@ -207,20 +238,18 @@ class DataStreamAudioOutput(AudioOutput):
             logger.error("failed to perform clear buffer rpc", exc_info=e)
             timeout = 0  # mark playout done immediately if clear buffer rpc fails
 
-        def _on_timeout() -> None:
+        if timeout is None or not self._pending_playback_count:
+            return
+
+        try:
+            await asyncio.wait_for(self.wait_for_playout(), timeout)
+        except asyncio.TimeoutError:
             logger.warning(
                 "didn't receive playback finished event after clear buffer, marking playout as done arbitrarily"
             )
-            self.on_playback_finished(playback_position=pushed_duration, interrupted=True)
-            self._reset_playback_count()
-
-        if self._clear_buffer_timeout_handler:
-            self._clear_buffer_timeout_handler.cancel()
-
-        if timeout is not None:
-            self._clear_buffer_timeout_handler = asyncio.get_event_loop().call_later(
-                timeout, _on_timeout
-            )
+            finished_segments = self.captured_playout_segments - self._pending_playback_count
+            for _ in range(captured_segments - finished_segments):
+                self.on_playback_finished(playback_position=pushed_duration, interrupted=True)
 
     def _handle_playback_finished(self, data: rtc.RpcInvocationData) -> str:
         if data.caller_identity != self._destination_identity:
@@ -237,10 +266,6 @@ class DataStreamAudioOutput(AudioOutput):
             "playback finished event received",
             extra={"caller_identity": data.caller_identity},
         )
-
-        if self._clear_buffer_timeout_handler:
-            self._clear_buffer_timeout_handler.cancel()
-            self._clear_buffer_timeout_handler = None
 
         event = PlaybackFinishedEvent(**json.loads(data.payload))
         self.on_playback_finished(
@@ -363,6 +388,11 @@ class DataStreamAudioReceiver(AudioReceiver):
 
         self._current_reader: rtc.ByteStreamReader | None = None
         self._current_reader_cleared: bool = False
+        # Set when the current reader's trailer no longer matters: a new stream header
+        # arrived with a reader still open (the sender never overlaps streams, so the
+        # trailer was lost — the "avatar stops receiving audio" wedge), or clear_buffer
+        # discarded the segment. Ends the reader instead of blocking forever.
+        self._current_reader_superseded: asyncio.Event = asyncio.Event()
 
         self._rpc_send_ch = utils.aio.Chan[PlaybackFinishedEvent | _PlaybackStartedEvent]()
         self._rpc_max_retries = rpc_max_retries
@@ -394,6 +424,8 @@ class DataStreamAudioReceiver(AudioReceiver):
 
             if self._current_reader:
                 self._current_reader_cleared = True
+                # post-clear data is discarded, so don't wait for a trailer that may be lost
+                self._current_reader_superseded.set()
 
             # clear the audio internal buffer
             while not self._data_ch.empty():
@@ -412,6 +444,9 @@ class DataStreamAudioReceiver(AudioReceiver):
                 return
 
             self._stream_readers.append(reader)
+            if self._current_reader is not None:
+                # new segment started → the open reader's trailer is not coming
+                self._current_reader_superseded.set()
             self._stream_reader_changed.set()
 
         self._register_clear_buffer_rpc(
@@ -491,6 +526,7 @@ class DataStreamAudioReceiver(AudioReceiver):
 
             while self._stream_readers:
                 self._current_reader = self._stream_readers.pop(0)
+                self._current_reader_superseded.clear()
 
                 if (
                     not (attrs := self._current_reader.info.attributes)
@@ -508,7 +544,7 @@ class DataStreamAudioReceiver(AudioReceiver):
                 )
 
                 try:
-                    async for data in self._current_reader:
+                    async for data in self._iter_reader(self._current_reader):
                         if self._current_reader_cleared:
                             # ignore the rest data of the current reader if clear_buffer was called
                             while not self._data_ch.empty():
@@ -533,6 +569,57 @@ class DataStreamAudioReceiver(AudioReceiver):
                     raise
 
             self._stream_reader_changed.clear()
+
+    async def _iter_reader(self, reader: rtc.ByteStreamReader) -> AsyncIterator[bytes]:
+        """Yield the reader's chunks, but end the segment if its trailer is lost.
+
+        A queued chunk or trailer always wins the race, so a healthy segment is
+        unchanged. The segment ends early only when the reader is superseded by a newer
+        stream or a clear_buffer, or stays idle for ``STREAM_IDLE_TIMEOUT``
+        (the last-segment case).
+        """
+        superseded = asyncio.ensure_future(self._current_reader_superseded.wait())
+        try:
+            while True:
+                next_chunk = asyncio.ensure_future(reader.__anext__())
+                try:
+                    done, _ = await asyncio.wait(
+                        {next_chunk, superseded},
+                        timeout=STREAM_IDLE_TIMEOUT,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                except asyncio.CancelledError:
+                    next_chunk.cancel()
+                    raise
+
+                if next_chunk in done:
+                    try:
+                        yield next_chunk.result()
+                    except StopAsyncIteration:
+                        return
+                    continue
+
+                next_chunk.cancel()
+                if self._current_reader_cleared:
+                    # expected after clear_buffer: the rest of the stream is discarded anyway
+                    logger.debug(
+                        "audio stream ended early after clear_buffer",
+                        extra={"stream_id": reader.info.stream_id},
+                    )
+                    return
+                reason = (
+                    "superseded by a newer stream"
+                    if superseded in done
+                    else (f"idle for {STREAM_IDLE_TIMEOUT:g}s")
+                )
+                logger.warning(
+                    "audio stream ended before its trailer arrived (%s)",
+                    reason,
+                    extra={"stream_id": reader.info.stream_id},
+                )
+                return
+        finally:
+            superseded.cancel()
 
     def __aiter__(self) -> AsyncIterator[rtc.AudioFrame | AudioSegmentEnd]:
         return self

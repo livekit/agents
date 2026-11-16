@@ -1,13 +1,15 @@
 import asyncio
 import contextlib
 import gc
+from types import SimpleNamespace
 
 import pytest
+from google.api_core.exceptions import Conflict
 from google.cloud.speech_v1.types import cloud_speech as cloud_speech_v1
 from google.cloud.speech_v2.types import cloud_speech as cloud_speech_v2
 from google.protobuf.duration_pb2 import Duration
 
-from livekit.agents import APIConnectOptions, LanguageCode
+from livekit.agents import APIConnectionError, APIConnectOptions, LanguageCode
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.types import TimedString
 from livekit.agents.utils.aio import ChanClosed
@@ -104,6 +106,101 @@ def _default_stt_options() -> STTOptions:
         min_confidence_threshold=0.65,
         profanity_filter=False,
     )
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("offset", [0.4, 0.0])
+async def test_google_endpoint_preserves_event_offset(version: int, offset: float) -> None:
+    api = cloud_speech_v2 if version == 2 else cloud_speech_v1
+    field = "speech_event_offset" if version == 2 else "speech_event_time"
+    response = api.StreamingRecognizeResponse(
+        speech_event_type=api.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END,
+        **{field: Duration(nanos=round(offset * 1e9))},
+    )
+
+    async def responses():
+        yield response
+
+    async def recognize(**kwargs):
+        return responses()
+
+    options = _default_stt_options()
+    options.model = "chirp_3" if version == 2 else "default"
+    stream = SpeechStream(
+        stt=_FakeSTT(),
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.1),
+        pool=_FakeConnectionPool(SimpleNamespace(streaming_recognize=recognize)),
+        recognizer_cb=lambda _client: "",
+        config=options,
+    )
+    stream.start_time_offset = 7.0
+    try:
+        events = [event async for event in stream]
+        endpoint = next(event for event in events if event.type == SpeechEventType.END_OF_SPEECH)
+        if offset:
+            assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
+        else:
+            assert endpoint.alternatives == []
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("end_time", [0.4, 0.0, None])
+async def test_reconnect_endpoint_preserves_final_timing(monkeypatch, version, end_time):
+    from livekit.plugins.google import stt as google_stt
+
+    monkeypatch.setattr(google_stt, "_max_session_duration", -1)
+    api = cloud_speech_v2 if version == 2 else cloud_speech_v1
+    words = []
+    if end_time is not None:
+        end_field = "end_offset" if version == 2 else "end_time"
+        words = [api.WordInfo(word="hello", **{end_field: Duration(nanos=round(end_time * 1e9))})]
+    calls = 0
+
+    async def responses():
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            return
+        yield api.StreamingRecognizeResponse(
+            speech_event_type=api.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN,
+        )
+        yield api.StreamingRecognizeResponse(
+            results=[
+                api.StreamingRecognitionResult(
+                    is_final=True,
+                    alternatives=[
+                        api.SpeechRecognitionAlternative(transcript="hello", words=words)
+                    ],
+                )
+            ]
+        )
+
+    async def recognize(**kwargs):
+        return responses()
+
+    options = _default_stt_options()
+    options.model = "chirp_3" if version == 2 else "default"
+    stream = SpeechStream(
+        stt=_FakeSTT(),
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.1),
+        pool=_FakeConnectionPool(SimpleNamespace(streaming_recognize=recognize)),
+        recognizer_cb=lambda _client: "",
+        config=options,
+    )
+    stream.start_time_offset = 7.0
+    try:
+        async with asyncio.timeout(2):
+            events = [event async for event in stream]
+        endpoint = next(event for event in events if event.type == SpeechEventType.END_OF_SPEECH)
+        if end_time:
+            assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
+        else:
+            assert endpoint.alternatives == []
+        assert calls == 2
+    finally:
+        await stream.aclose()
 
 
 async def test_google_stt_stream_cancel_does_not_leak_chanclosed_task():
@@ -574,6 +671,104 @@ async def test_voice_activity_timeout_v2_model(mock_google_adc):
     assert stt_v1._config.version == 1
 
 
+async def test_custom_prompt_config_chirp_3(mock_google_adc):
+    """Test custom_prompt_config is applied when using the chirp_3 model."""
+    from livekit.plugins.google import STT
+
+    custom_prompt_config = cloud_speech_v2.CustomPromptConfig(custom_prompt="answer briefly")
+    stt = STT(model="chirp_3", custom_prompt_config=custom_prompt_config)
+    assert stt._config.custom_prompt_config == custom_prompt_config
+
+
+async def test_custom_prompt_config_ignored_for_non_chirp_3_model(mock_google_adc):
+    """Test custom_prompt_config is ignored for models other than chirp_3."""
+    from livekit.agents.types import NOT_GIVEN
+    from livekit.plugins.google import STT
+
+    custom_prompt_config = cloud_speech_v2.CustomPromptConfig(custom_prompt="answer briefly")
+    stt = STT(model="long", custom_prompt_config=custom_prompt_config)
+    assert stt._config.custom_prompt_config is NOT_GIVEN
+
+
+async def test_custom_prompt_config_update_options(mock_google_adc):
+    """Test custom_prompt_config can be updated dynamically, and new values are
+    ignored for models other than chirp_3."""
+    from livekit.agents.types import NOT_GIVEN
+    from livekit.plugins.google import STT
+
+    stt = STT(model="chirp_3")
+    custom_prompt_config = cloud_speech_v2.CustomPromptConfig(custom_prompt="answer briefly")
+    stt.update_options(custom_prompt_config=custom_prompt_config)
+    assert stt._config.custom_prompt_config == custom_prompt_config
+
+    # switching the model away from chirp_3 must drop the now-invalid prompt
+    stt.update_options(model="long")
+    assert stt._config.custom_prompt_config is NOT_GIVEN
+
+    other_custom_prompt_config = cloud_speech_v2.CustomPromptConfig(custom_prompt="be verbose")
+    stt.update_options(custom_prompt_config=other_custom_prompt_config)
+    assert stt._config.custom_prompt_config is NOT_GIVEN
+
+
+async def test_custom_prompt_config_cleared_on_model_switch_from_chirp_3(mock_google_adc):
+    """Test that switching from chirp_3 to another V2 model clears a previously
+    configured custom_prompt_config, so it is not forwarded to a rebuilt
+    non-streaming RecognitionConfig."""
+    from livekit.agents.types import NOT_GIVEN
+    from livekit.plugins.google import STT
+
+    custom_prompt_config = cloud_speech_v2.CustomPromptConfig(custom_prompt="answer briefly")
+    stt = STT(model="chirp_3", custom_prompt_config=custom_prompt_config)
+    assert stt._config.custom_prompt_config == custom_prompt_config
+
+    stt.update_options(model="telephony")
+    assert stt._config.custom_prompt_config is NOT_GIVEN
+
+    config = stt._build_recognition_config(sample_rate=16000, num_channels=1)
+    assert not config.features.custom_prompt_config.custom_prompt
+
+
+async def test_custom_prompt_config_cleared_on_stream_model_switch_from_chirp_3(mock_google_adc):
+    """Test that SpeechStream.update_options also clears a previously configured
+    custom_prompt_config when the model moves away from chirp_3, so an active
+    stream's rebuilt StreamingRecognitionConfig no longer carries the stale prompt."""
+    from livekit.agents.types import NOT_GIVEN
+
+    client = _FakeSpeechClient()
+    custom_prompt_config = cloud_speech_v2.CustomPromptConfig(custom_prompt="answer briefly")
+    options = _default_stt_options()
+    options.model = "chirp_3"
+    options.custom_prompt_config = custom_prompt_config
+    stream = SpeechStream(
+        stt=_FakeSTT(),
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.1),
+        pool=_FakeConnectionPool(client),
+        recognizer_cb=lambda _client: "",
+        config=options,
+    )
+
+    try:
+        assert stream._config.custom_prompt_config == custom_prompt_config
+
+        stream.update_options(model="telephony")
+        assert stream._config.custom_prompt_config is NOT_GIVEN
+
+        streaming_config = stream._build_streaming_config()
+        assert not streaming_config.config.features.custom_prompt_config.custom_prompt
+    finally:
+        await stream.aclose()
+
+
+async def test_custom_prompt_config_in_recognition_config(mock_google_adc):
+    """Test custom_prompt_config is wired into the built RecognitionConfig."""
+    from livekit.plugins.google import STT
+
+    custom_prompt_config = cloud_speech_v2.CustomPromptConfig(custom_prompt="answer briefly")
+    stt = STT(model="chirp_3", custom_prompt_config=custom_prompt_config)
+    config = stt._build_recognition_config(sample_rate=16000, num_channels=1)
+    assert config.features.custom_prompt_config.custom_prompt == "answer briefly"
+
+
 async def test_voice_activity_timeout_update(mock_google_adc):
     """Test that timeout options can be updated dynamically."""
     from livekit.plugins.google import STT
@@ -605,3 +800,119 @@ async def test_voice_activity_timeout_partial_update(mock_google_adc):
     stt.update_options(speech_end_timeout=5.0)
     assert stt._config.speech_start_timeout == 20.0
     assert stt._config.speech_end_timeout == 5.0
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("reason", ["options", "rotation"])
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch, version, reason):
+    from livekit.plugins.google import stt as google_stt
+
+    from .stt_reconnect import ReconnectClock, wait_until
+
+    clock = ReconnectClock(monkeypatch)
+    calls = []
+    api = cloud_speech_v2 if version == 2 else cloud_speech_v1
+
+    class Call:
+        def __init__(self, requests):
+            self.requests = requests
+            self.responses = asyncio.Queue()
+            self.audio = []
+            self.sender = asyncio.create_task(self.send())
+
+        async def send(self):
+            try:
+                async for request in self.requests:
+                    self.audio.append(request)
+            finally:
+                await self.requests.aclose()
+
+        def cancel(self):
+            self.sender.cancel()
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            return await self.responses.get()
+
+    async def recognize(*, requests):
+        call = Call(requests)
+        calls.append(call)
+        return call
+
+    options = _default_stt_options()
+    options.model = "chirp_3" if version == 2 else "default"
+    stream = SpeechStream(
+        stt=_FakeSTT(),
+        conn_options=APIConnectOptions(max_retry=0),
+        pool=_FakeConnectionPool(SimpleNamespace(streaming_recognize=recognize)),
+        recognizer_cb=lambda _client: "",
+        config=options,
+    )
+    stream.start_time_offset = 7.0
+    try:
+        await clock.push(stream, captured_at=1000.0)
+        assert stream.start_time_offset == pytest.approx(7.0)
+        clock.now = 1010.0
+        if reason == "options":
+            stream.update_options(languages=["fr"])
+        else:
+            monkeypatch.setattr(google_stt, "_max_session_duration", 5)
+            calls[0].responses.put_nowait(
+                api.StreamingRecognizeResponse(
+                    results=[
+                        api.StreamingRecognitionResult(
+                            is_final=True,
+                            alternatives=[api.SpeechRecognitionAlternative(transcript="hello")],
+                        )
+                    ],
+                )
+            )
+        await wait_until(lambda: len(calls) == 2)
+        await clock.push(stream, captured_at=1010.0)
+        assert calls[0].sender.done()
+        assert stream.start_time_offset == pytest.approx(17.0)
+        assert len(calls[0].audio) == 2  # configuration and only the first connection's audio
+    finally:
+        await stream.aclose()
+        for call in calls:
+            call.cancel()
+        await asyncio.gather(*(call.sender for call in calls), return_exceptions=True)
+
+
+@pytest.mark.parametrize("processing", [False, True])
+async def test_stream_conflicts_obey_retry_limit(processing):
+    attempts = []
+
+    class Call:
+        def cancel(self):
+            pass
+
+        async def __aiter__(self):
+            if processing and len(attempts) == 1:
+                yield cloud_speech_v2.StreamingRecognizeResponse(
+                    speech_event_type=cloud_speech_v2.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END
+                )
+            raise Conflict("stream timed out")
+
+    class Client:
+        async def streaming_recognize(self, *, requests):
+            attempts.append(None)
+            return Call()
+
+    stream = SpeechStream(
+        stt=_FakeSTT(),
+        conn_options=APIConnectOptions(max_retry=2, retry_interval=0),
+        pool=_FakeConnectionPool(Client()),
+        recognizer_cb=lambda client: "",
+        config=_default_stt_options(),
+    )
+    stream._num_retries = 2
+    try:
+        with pytest.raises(APIConnectionError):
+            await asyncio.wait_for(stream._task, 1)
+        assert len(attempts) == (3 if processing else 1)
+    finally:
+        await stream.aclose()

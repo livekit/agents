@@ -8,6 +8,7 @@ from collections.abc import Callable, Coroutine
 from types import FrameType
 
 from ..log import logger
+from ..telemetry import loop_monitor
 from ..utils import aio, log_exceptions, time_ms
 from .channel import Message, arecv_message, asend_message, recv_message, send_message
 from .proto import (
@@ -62,6 +63,8 @@ class _ProcClient:
         asyncio.set_event_loop(loop)
         loop.set_debug(self._init_req.asyncio_debug)
         loop.slow_callback_duration = 0.1  # 100ms
+        # flag synchronous code blocking the job loop (spans + warnings), see telemetry.loop_monitor
+        loop_monitor.start_monitoring(loop, name="job")
 
         try:
             self._task = loop.create_task(self._monitor_task(), name="proc_client_main")
@@ -76,7 +79,19 @@ class _ProcClient:
         except KeyboardInterrupt:
             pass
         finally:
-            loop.run_until_complete(loop.shutdown_default_executor())
+            loop_monitor.stop_monitoring(loop)
+            # shut the loop down the way asyncio.run() does, a thread runner reuses the process
+            try:
+                pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+                for t in pending:
+                    t.cancel()
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                loop.run_until_complete(loop.shutdown_asyncgens())
+                loop.run_until_complete(loop.shutdown_default_executor())
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
 
     async def send(self, msg: Message) -> None:
         await asend_message(self._acch, msg)

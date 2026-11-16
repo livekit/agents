@@ -28,12 +28,30 @@ if TYPE_CHECKING:
 WRITE_INTERVAL = 2.5
 FFMPEG_STRICT_LEVEL = "experimental"
 
+# the range libopus accepts for a stereo stream
+MIN_BIT_RATE = 500
+MAX_BIT_RATE = 512_000
+
+
+def _validate_bit_rate(bit_rate: int | None) -> None:
+    if bit_rate is not None and not (
+        isinstance(bit_rate, int) and MIN_BIT_RATE <= bit_rate <= MAX_BIT_RATE
+    ):
+        raise ValueError(
+            f"bit_rate must be an int between {MIN_BIT_RATE} and {MAX_BIT_RATE}, got {bit_rate!r}"
+        )
+
+
 # how long the writer waits on a source that stopped delivering before taking the silence as real
 INPUT_STALL_TIMEOUT = 1.0
 
 # a run continues while its own clock stays this close to the timestamps coming in; re-anchoring
 # beyond it keeps a drifting capture clock from sliding the channel
 RESYNC_TOLERANCE = 0.1
+
+# a resampler reports its input as arrived before it emits it, so the writer waits this long for
+# the samples it still holds rather than writing silence over their place
+MAX_RESAMPLER_LAG = 0.1
 
 
 @dataclass
@@ -46,6 +64,11 @@ class _Captured:
 @dataclass
 class _Flush:
     until: float
+
+
+@dataclass
+class _EndRun:
+    channel: int
 
 
 class _Track:
@@ -84,30 +107,43 @@ class _Track:
 
     def push(self, started_at: float, frame: rtc.AudioFrame) -> None:
         """Add audio that began at ``started_at``, extending the open run where it fits."""
-
-        def _place(frames: list[rtc.AudioFrame]) -> None:
-            if not frames:
-                return
-
-            assert self._run_start is not None
-            joined = np.concatenate([np.frombuffer(f.data, dtype=np.int16) for f in frames])
-            samples = joined.astype(np.float32) / 32768.0
-            start = round((self._run_start - self._t0) * self._sample_rate) + self._run_samples
-            self._placed.append((start, samples))
-            self._run_samples += len(samples)
-
         expected = (
             None
             if self._run_start is None
             else self._run_start + self._run_samples / self._sample_rate
         )
         if expected is None or abs(started_at - expected) > RESYNC_TOLERANCE:
-            if self._resampler is not None:
-                # whatever the resampler still holds is the tail of the run that just ended
-                _place(self._resampler.flush())
+            self.end_run()
             self._run_start, self._run_samples = started_at, 0
 
-        _place(self._resample(frame))
+        self._place(self._resample(frame))
+
+    def end_run(self) -> None:
+        """Place the resampler tail while its run can still be written."""
+        if self._resampler is not None:
+            self._place(self._resampler.flush())
+            self._resampler = None
+            self._source_rate = None
+        self._run_start = None
+        self._run_samples = 0
+
+    @property
+    def placed_through(self) -> int | None:
+        """How far the open run reaches, or None when the resampler holds nothing back."""
+        if self._resampler is None or self._run_start is None:
+            return None
+        return round((self._run_start - self._t0) * self._sample_rate) + self._run_samples
+
+    def _place(self, frames: list[rtc.AudioFrame]) -> None:
+        if not frames:
+            return
+
+        assert self._run_start is not None
+        joined = np.concatenate([np.frombuffer(f.data, dtype=np.int16) for f in frames])
+        samples = joined.astype(np.float32) / 32768.0
+        start = round((self._run_start - self._t0) * self._sample_rate) + self._run_samples
+        self._placed.append((start, samples))
+        self._run_samples += len(samples)
 
     def take(self, start: int, end: int) -> np.ndarray:
         """The channel over ``[start, end)``, silent wherever nothing was placed."""
@@ -136,14 +172,33 @@ class RecorderIO:
         *,
         agent_session: AgentSession,
         sample_rate: int = 48000,
+        bit_rate: int | None = None,
+        constant_bit_rate: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
+        """
+        Args:
+            agent_session: The session whose audio is recorded.
+            sample_rate: Sample rate of the recording, in Hz.
+            bit_rate: Target bit rate of the Opus encoder, in bits per second, between 500 and
+                512000. ``None`` keeps the encoder's default.
+            constant_bit_rate: Encode at a constant bit rate instead of a variable one. Players
+                that estimate an Ogg Opus duration from the file size (e.g. macOS Finder and
+                QuickLook) only get it right on a constant bit rate. Applies to libopus only;
+                the native FFmpeg fallback encoder has no such option.
+            loop: Event loop the recorder runs on. Defaults to the current one.
+        """
+        # the encoder opens on its own thread, where a rejected bit rate would only be logged
+        _validate_bit_rate(bit_rate)
+
         self._in_record: RecorderAudioInput | None = None
         self._out_record: RecorderAudioOutput | None = None
 
-        self._q: queue.Queue[_Captured | _Flush | None] = queue.Queue()
+        self._q: queue.Queue[_Captured | _Flush | _EndRun | None] = queue.Queue()
         self._session = agent_session
         self._sample_rate = sample_rate
+        self._bit_rate = bit_rate
+        self._constant_bit_rate = constant_bit_rate
         self._started = False
         self._loop = loop or asyncio.get_event_loop()
         self._lock = asyncio.Lock()
@@ -167,6 +222,8 @@ class RecorderIO:
 
             self._output_path = Path(output_path)
             self._started = True
+            # a fresh queue per run: a run whose encoder failed can leave audio behind
+            self._q = queue.Queue()
             self._close_fut = self._loop.create_future()
             self._t0 = self._input_settled = time.time()
             self._write_atask = asyncio.create_task(self._write_task())
@@ -185,8 +242,10 @@ class RecorderIO:
                 await utils.aio.cancel_and_wait(self._write_atask)
                 self._write_atask = None
 
-            self._q.put_nowait(_Flush(until=time.time()))
-            self._q.put_nowait(None)
+            self._end_run(channel=0)
+            self._end_run(channel=1)
+            self._put(_Flush(until=time.time()))
+            self._put(None)
             await asyncio.shield(self._close_fut)
             self._started = False
 
@@ -195,7 +254,7 @@ class RecorderIO:
         def on_frame(started_at: float, frame: rtc.AudioFrame) -> None:
             # a contiguous stream, so what has arrived is exactly what is settled
             self._input_settled = started_at + frame.duration
-            self._q.put_nowait(_Captured(channel=0, started_at=started_at, frame=frame))
+            self._put(_Captured(channel=0, started_at=started_at, frame=frame))
 
         self._in_record = RecorderAudioInput(
             recording_io=self, source=audio_input, on_frame=on_frame
@@ -205,12 +264,24 @@ class RecorderIO:
     def record_output(self, audio_output: io.AudioOutput) -> RecorderAudioOutput:
 
         def on_played(started_at: float, frame: rtc.AudioFrame) -> None:
-            self._q.put_nowait(_Captured(channel=1, started_at=started_at, frame=frame))
+            self._put(_Captured(channel=1, started_at=started_at, frame=frame))
 
         self._out_record = RecorderAudioOutput(
             recording_io=self, audio_output=audio_output, on_played=on_played
         )
         return self._out_record
+
+    def _end_run(self, *, channel: int) -> None:
+        self._put(_EndRun(channel=channel))
+
+    @property
+    def _encoding(self) -> bool:
+        # once the encode thread has exited nothing consumes audio, so it would pile up
+        return not self._close_fut.done()
+
+    def _put(self, item: _Captured | _Flush | _EndRun | None) -> None:
+        if self._encoding:
+            self._q.put_nowait(item)
 
     @property
     def recording(self) -> bool:
@@ -236,43 +307,63 @@ class RecorderIO:
                 # a segment in flight has not said where its audio went
                 settled = min(settled, pending)
 
-            self._q.put_nowait(_Flush(until=settled))
+            self._put(_Flush(until=settled))
 
     def _encode_thread(self) -> None:
         assert self._output_path is not None and self._t0 is not None
-        self._output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        container = av.open(self._output_path, mode="w", format="ogg")
-
-        # prefer libopus; fallback to native opus only if necessary
-        try:
-            av.Codec("libopus", "w")
-            codec_name = "libopus"
-        except av.codec.codec.UnknownCodecError:
-            logger.trace("libopus codec is not available, using opus")
-            codec_name = "opus"
-
-        stream: av.AudioStream = container.add_stream(  # type: ignore
-            codec_name,
-            rate=self._sample_rate,
-            layout="stereo",
-        )
-
-        # native ffmpeg opus encoder is experimental
-        if codec_name == "opus":
-            stream.codec_context.options["strict"] = FFMPEG_STRICT_LEVEL
-
         tracks = [_Track(sample_rate=self._sample_rate, t0=self._t0) for _ in range(2)]
         cursor = 0
 
+        # setup failures go through the same handler, so aclose() is never left waiting
         try:
-            with container:
+            # prefer libopus; fallback to native opus only if necessary
+            try:
+                av.Codec("libopus", "w")
+                codec_name = "libopus"
+            except av.codec.codec.UnknownCodecError:
+                logger.trace("libopus codec is not available, using opus")
+                codec_name = "opus"
+
+            self._output_path.parent.mkdir(parents=True, exist_ok=True)
+            with av.open(self._output_path, mode="w", format="ogg") as container:
+                stream: av.AudioStream = container.add_stream(  # type: ignore
+                    codec_name,
+                    rate=self._sample_rate,
+                    layout="stereo",
+                )
+
+                # native ffmpeg opus encoder is experimental
+                if codec_name == "opus":
+                    stream.codec_context.options["strict"] = FFMPEG_STRICT_LEVEL
+
+                if self._bit_rate is not None:
+                    stream.codec_context.bit_rate = self._bit_rate
+                if self._constant_bit_rate:
+                    if codec_name == "libopus":
+                        stream.codec_context.options["vbr"] = "off"
+                    else:
+                        logger.warning("constant_bit_rate requires libopus, which is not available")
+
                 while (item := self._q.get()) is not None:
                     if isinstance(item, _Captured):
                         tracks[item.channel].push(item.started_at, item.frame)
                         continue
 
+                    if isinstance(item, _EndRun):
+                        tracks[item.channel].end_run()
+                        continue
+
                     end = round((item.until - self._t0) * self._sample_rate)
+                    held = end - round(MAX_RESAMPLER_LAG * self._sample_rate)
+                    for track in tracks:
+                        if (through := track.placed_through) is None:
+                            continue
+                        if through >= held:
+                            end = min(end, through)
+                        else:
+                            # the source stopped delivering; place what it holds before
+                            # the cursor moves past the run it belongs to
+                            track.end_run()
                     if end <= cursor:
                         continue
 
@@ -398,6 +489,9 @@ class RecorderAudioOutput(io.AudioOutput):
                 duration=playback_position,
             )
 
+        if self.__recording_io.recording:
+            self.__recording_io._end_run(channel=1)
+
         self.__acc = []
         self.__pcm = None
         self.__segment_since = None
@@ -435,7 +529,7 @@ class RecorderAudioOutput(io.AudioOutput):
 
         await super().capture_frame(frame)
 
-        if self.__recording_io.recording:
+        if self.__recording_io.recording and self.__recording_io._encoding:
             if not self.__acc:
                 self.__segment_since = time.time()
             self.__acc.append(frame)

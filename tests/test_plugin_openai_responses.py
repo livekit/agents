@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
-import httpx
+import httpx2 as httpx
 import pytest
 from openai.types import Reasoning
 from openai.types.responses import ResponseCreatedEvent, ResponseIncompleteEvent
@@ -47,7 +48,7 @@ class _RecordingWS:
             raise ConnectionResetError("Cannot write to closing transport")
         self.sent = data
 
-    async def receive(self) -> _FakeWSMsg:
+    async def receive(self, timeout: float | None = None) -> _FakeWSMsg:
         self.receive_calls += 1
         if self.receive_calls > 1:
             raise AssertionError("terminal response must not read another WebSocket frame")
@@ -226,6 +227,113 @@ async def test_create_ws_enables_heartbeat() -> None:
     assert kwargs["heartbeat"] == _WS_HEARTBEAT
 
 
+async def test_responses_llm_prewarms_websocket_pool() -> None:
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    assert llm_model._ws is not None
+    llm_model._ws._pool.prewarm = prewarm = MagicMock()  # type: ignore[method-assign]
+
+    try:
+        await llm_model._prewarm_impl()
+        prewarm.assert_called_once_with()
+    finally:
+        await llm_model.aclose()
+
+
+@pytest.mark.parametrize("connect_timeout", [0.05, 1.0])
+async def test_responses_prewarm_uses_configured_connect_timeout(connect_timeout: float) -> None:
+    llm_model = ResponsesLLM(
+        model="gpt-4.1", api_key="test-key", timeout=httpx.Timeout(connect_timeout)
+    )
+    assert llm_model._ws is not None
+    transport = llm_model._ws
+    ws = _RecordingWS({"type": "response.completed"})
+    timeouts: list[float] = []
+
+    async def connect(timeout: float) -> _RecordingWS:
+        timeouts.append(timeout)
+        return ws
+
+    transport._pool._connect_cb = connect  # type: ignore[assignment]
+    try:
+        await llm_model._prewarm_impl()
+        assert transport._pool._prewarm_task is not None
+        prewarm_task = transport._pool._prewarm_task()
+        assert prewarm_task is not None
+        await asyncio.wait_for(asyncio.shield(prewarm_task), timeout=1.0)
+        assert timeouts == [connect_timeout]
+        assert await transport._acquire_and_send("{}") is cast(aiohttp.ClientWebSocketResponse, ws)
+        assert timeouts == [connect_timeout], "the first turn should reuse the prewarmed socket"
+        transport._pool.put(ws)  # type: ignore[arg-type]
+    finally:
+        await llm_model.aclose()
+    assert ws.closed
+
+
+@pytest.mark.parametrize("cancel_request", [False, True])
+async def test_responses_acquisition_preserves_shared_prewarm(
+    cancel_request: bool,
+) -> None:
+    transport = _ResponsesWebsocket(api_key="test-key", timeout=0.05, model="gpt-4.1")
+    started = asyncio.Event()
+    release = asyncio.Event()
+    ws = _RecordingWS({"type": "response.completed"})
+
+    async def connect(_timeout: float) -> _RecordingWS:
+        started.set()
+        await release.wait()
+        return ws
+
+    transport._pool._connect_cb = connect  # type: ignore[assignment]
+    transport._pool.prewarm()
+    request: asyncio.Task[aiohttp.ClientWebSocketResponse] | None = None
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        assert transport._pool._prewarm_task is not None
+        prewarm_task = transport._pool._prewarm_task()
+        assert prewarm_task is not None
+        request = asyncio.create_task(transport._acquire_and_send("{}"))
+        if cancel_request:
+            await asyncio.sleep(0)
+            request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request
+        else:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(request), timeout=0.1)
+            assert not request.done(), "acquisition should wait for the shared prewarm"
+
+        assert not prewarm_task.done(), "a request must not cancel the shared prewarm"
+        assert ws.sent is None
+        release.set()
+        await asyncio.wait_for(asyncio.shield(prewarm_task), timeout=1.0)
+        if cancel_request:
+            acquired = await transport._acquire_and_send("{}")
+        else:
+            acquired = await asyncio.wait_for(request, timeout=1.0)
+        assert acquired is cast(aiohttp.ClientWebSocketResponse, ws)
+        assert transport._pool.last_connection_reused
+        transport._pool.put(ws)  # type: ignore[arg-type]
+    finally:
+        if request is not None and not request.done():
+            request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
+        await transport.aclose()
+    assert ws.closed
+
+
+async def test_responses_llm_prewarms_http_client() -> None:
+    client = MagicMock()
+    client._base_url = httpx.URL("https://api.openai.com/v1")
+    client.models.list = list_models = AsyncMock()
+    llm_model = ResponsesLLM(model="gpt-4.1", client=client, use_websocket=False)
+
+    try:
+        await llm_model._prewarm_impl()
+        list_models.assert_awaited_once_with()
+    finally:
+        await llm_model.aclose()
+
+
 _RESPONSE_CREATED = {
     "type": "response.created",
     "sequence_number": 0,
@@ -285,7 +393,13 @@ class _ReplayResponsesWS:
         self._frames = frames
         self.attempts = 0
 
-    def generate_response(self, payload: dict):  # noqa: ANN201
+    def generate_response(  # noqa: ANN201
+        self,
+        payload: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
+    ):
         self.attempts += 1
 
         async def _replay():  # noqa: ANN202
@@ -369,7 +483,7 @@ async def test_incomplete_response_is_non_retryable_and_does_not_update_context(
         )
         assert attempts == 1
         assert llm_model._prev_resp_id == ""
-        assert llm_model._prev_chat_ctx is None
+        assert llm_model._prev_resp_items is None
     finally:
         await llm_model.aclose()
 
@@ -384,7 +498,13 @@ class _StallingResponsesWS:
         self._frames = frames
         self.attempts = 0
 
-    def generate_response(self, payload: dict):  # noqa: ANN201
+    def generate_response(  # noqa: ANN201
+        self,
+        payload: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
+    ):
         self.attempts += 1
         frames = self._frames
 
@@ -430,3 +550,315 @@ async def test_response_created_alone_stays_retryable() -> None:
 async def test_generated_text_is_not_retried() -> None:
     """Text already delivered must not be regenerated."""
     assert await _attempts_until_stall([_RESPONSE_CREATED, _TEXT_DELTA], max_retry=2) == 1
+
+
+def _response_completed_with_usage(**usage: dict) -> dict:
+    return {
+        "type": "response.completed",
+        "sequence_number": 1,
+        "response": {**_RESPONSE_CREATED["response"], "status": "completed", "usage": usage},
+    }
+
+
+class _UsageResponsesWS:
+    """Records the chunk the stream sent for the frames it replays."""
+
+    _base_url = "https://api.openai.com/v1"
+
+    def __init__(self, frames: list[dict]) -> None:
+        self._frames = frames
+        self.receive_timeouts: list[float | None] = []
+
+    def generate_response(  # noqa: ANN201
+        self,
+        payload: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
+    ):
+        self.receive_timeouts.append(receive_timeout)
+        frames = self._frames
+
+        async def _replay():  # noqa: ANN202
+            for frame in frames:
+                yield frame
+
+        return _replay()
+
+    async def aclose(self) -> None:
+        pass
+
+
+async def test_plugin_ws_receive_uses_conn_timeout() -> None:
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    transport = _UsageResponsesWS(
+        [
+            _RESPONSE_CREATED,
+            _response_completed_with_usage(
+                input_tokens=1,
+                output_tokens=1,
+                total_tokens=2,
+                input_tokens_details={"cached_tokens": 0, "cache_write_tokens": 0},
+                output_tokens_details={"reasoning_tokens": 0},
+            ),
+        ]
+    )
+    llm_model._ws = transport  # type: ignore[assignment]
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+
+    try:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(timeout=0.05)
+        ) as stream:
+            async for _ in stream:
+                pass
+    finally:
+        await llm_model.aclose()
+
+    assert transport.receive_timeouts == [0.05]
+
+
+async def test_plugin_ws_receive_uses_stream_idle_timeout() -> None:
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key", stream_idle_timeout=2.0)
+    transport = _UsageResponsesWS(
+        [
+            _RESPONSE_CREATED,
+            _response_completed_with_usage(
+                input_tokens=1,
+                output_tokens=1,
+                total_tokens=2,
+                input_tokens_details={"cached_tokens": 0, "cache_write_tokens": 0},
+                output_tokens_details={"reasoning_tokens": 0},
+            ),
+        ]
+    )
+    llm_model._ws = transport  # type: ignore[assignment]
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+
+    try:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(timeout=0.05)
+        ) as stream:
+            async for _ in stream:
+                pass
+    finally:
+        await llm_model.aclose()
+
+    assert transport.receive_timeouts == [2.0]
+
+
+def test_plugin_rejects_zero_stream_idle_timeout() -> None:
+    with pytest.raises(ValueError, match="stream_idle_timeout"):
+        ResponsesLLM(model="gpt-4.1", api_key="test-key", stream_idle_timeout=0)
+
+
+async def _usage_from_frames(frames: list[dict]) -> agents_llm.CompletionUsage:
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    llm_model._ws = _UsageResponsesWS(frames)  # type: ignore[assignment]
+
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+
+    usage: agents_llm.CompletionUsage | None = None
+    try:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(timeout=5.0)
+        ) as stream:
+            async for chunk in stream:
+                if chunk.usage is not None:
+                    usage = chunk.usage
+    finally:
+        await llm_model.aclose()
+
+    assert usage is not None
+    return usage
+
+
+async def test_completed_response_reports_cache_write_tokens() -> None:
+    """`response.usage.input_tokens_details.cache_write_tokens` is the Responses
+    API's cache-write counterpart to the Chat Completions field of the same name.
+    It is a subset of `input_tokens`, so it must not move any total."""
+    usage = await _usage_from_frames(
+        [
+            _RESPONSE_CREATED,
+            _response_completed_with_usage(
+                input_tokens=2596,
+                output_tokens=40,
+                total_tokens=2636,
+                input_tokens_details={"cached_tokens": 1024, "cache_write_tokens": 1536},
+                output_tokens_details={"reasoning_tokens": 0},
+            ),
+        ]
+    )
+
+    assert usage.cache_creation_tokens == 1536
+    assert usage.prompt_cached_tokens == 1024
+    assert usage.prompt_tokens == 2596
+    assert usage.total_tokens == 2636
+
+
+async def test_completed_response_reports_reasoning_tokens() -> None:
+    """`response.usage.output_tokens_details.reasoning_tokens` is the Responses API's
+    counterpart to `completion_tokens_details.reasoning_tokens`. It is already part of
+    `output_tokens`, so it must not move `completion_tokens` or `total_tokens`."""
+    usage = await _usage_from_frames(
+        [
+            _RESPONSE_CREATED,
+            _response_completed_with_usage(
+                input_tokens=100,
+                output_tokens=340,
+                total_tokens=440,
+                input_tokens_details={"cached_tokens": 0, "cache_write_tokens": 0},
+                output_tokens_details={"reasoning_tokens": 300},
+            ),
+        ]
+    )
+
+    assert usage.reasoning_tokens == 300
+    assert usage.completion_tokens == 340
+    assert usage.total_tokens == 440
+
+
+async def test_completed_response_without_cache_write_reports_zero() -> None:
+    usage = await _usage_from_frames(
+        [
+            _RESPONSE_CREATED,
+            _response_completed_with_usage(
+                input_tokens=100,
+                output_tokens=10,
+                total_tokens=110,
+                input_tokens_details={"cached_tokens": 0, "cache_write_tokens": 0},
+                output_tokens_details={"reasoning_tokens": 0},
+            ),
+        ]
+    )
+
+    assert usage.cache_creation_tokens == 0
+
+
+class _ScriptedResponsesWS:
+    """Answers each request with its own scripted response and records the payloads."""
+
+    _base_url = "https://api.openai.com/v1"
+
+    def __init__(self, outputs: list[list[dict]]) -> None:
+        self._outputs = outputs
+        self.payloads: list[dict] = []
+
+    def generate_response(  # noqa: ANN201
+        self,
+        payload: dict,
+        *,
+        receive_timeout: float | None = None,
+        connect_timeout: float | None = None,
+    ):
+        self.payloads.append(payload)
+        resp_id = f"resp_{len(self.payloads)}"
+        output = self._outputs[len(self.payloads) - 1]
+        response = {**_RESPONSE_CREATED["response"], "id": resp_id, "status": "completed"}
+        frames = [
+            {"type": "response.created", "sequence_number": 0, "response": response},
+            {
+                "type": "response.completed",
+                "sequence_number": 1,
+                "response": {**response, "output": output},
+            },
+        ]
+
+        async def _replay():  # noqa: ANN202
+            for frame in frames:
+                yield frame
+
+        return _replay()
+
+    async def aclose(self) -> None:
+        pass
+
+
+def _output_message(text: str) -> dict:
+    return {
+        "type": "message",
+        "id": "msg_1",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": text, "annotations": []}],
+    }
+
+
+def _output_function_call(call_id: str, name: str) -> dict:
+    return {
+        "type": "function_call",
+        "id": f"fc_{call_id}",
+        "call_id": call_id,
+        "name": name,
+        "arguments": '{"city": "Paris"}',
+        "status": "completed",
+    }
+
+
+async def test_chained_request_sends_only_items_after_previous_response() -> None:
+    ws = _ScriptedResponsesWS(
+        [
+            [
+                _output_function_call("call_1", "get_weather"),
+                _output_message("Let me check."),
+                _output_function_call("call_2", "get_time"),
+            ],
+            [_output_message("It's sunny and 3pm, and tomorrow looks fine.")],
+            [_output_message("You're welcome.")],
+            [],
+        ]
+    )
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    llm_model._ws = ws  # type: ignore[assignment]
+
+    async def _turn() -> None:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=0, timeout=5.0)
+        ) as stream:
+            async for _ in stream:
+                pass
+
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Weather and time in Paris?")
+    await _turn()
+
+    # stored the way the agent stores a generation: one message, calls sharing its id, and
+    # each output right after its call
+    chat_ctx.add_message(role="assistant", content="Let me check.", id="item_a")
+    for i, (call_id, name, output) in enumerate(
+        [("call_1", "get_weather", "sunny"), ("call_2", "get_time", "3pm")]
+    ):
+        chat_ctx.items.append(
+            agents_llm.FunctionCall(
+                id=f"item_a/fnc_{i}", call_id=call_id, name=name, arguments='{"city": "Paris"}'
+            )
+        )
+        chat_ctx.items.append(
+            agents_llm.FunctionCallOutput(call_id=call_id, name=name, output=output, is_error=False)
+        )
+    await _turn()
+
+    # an interrupted reply differs from what the server holds
+    chat_ctx.add_message(role="assistant", content="It's sunny and 3pm,", interrupted=True)
+    chat_ctx.add_message(role="user", content="Thanks!")
+    await _turn()
+
+    chat_ctx.add_message(role="assistant", content="You're welcome.")
+    chat_ctx.add_message(role="user", content="Bye")
+    await _turn()
+    await llm_model.aclose()
+
+    first, tools, interrupted, last = ws.payloads
+    assert "previous_response_id" not in first
+    assert tools["previous_response_id"] == "resp_1"
+    assert tools["input"] == [
+        {"type": "function_call_output", "call_id": "call_1", "output": "sunny"},
+        {"type": "function_call_output", "call_id": "call_2", "output": "3pm"},
+    ]
+    assert "previous_response_id" not in interrupted
+    assert len(interrupted["input"]) == 8
+    assert last["previous_response_id"] == "resp_3"
+    assert last["input"] == [{"role": "user", "content": "Bye"}]

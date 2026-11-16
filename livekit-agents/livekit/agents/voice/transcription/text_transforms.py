@@ -109,17 +109,32 @@ def replace(
         m = holdback_re.search(buffer[-max_prefix:])
         return len(m.group()) if m else 0
 
-    async def _transform(text: AsyncIterable[str]) -> AsyncIterable[str]:
-        buffer = ""
-        async for chunk in text:
-            # substitute complete matches, then hold back a trailing partial-key run
-            buffer = _apply(buffer + chunk)
-            flush_to = len(buffer) - _holdback(buffer)
-            if flush_to > 0:
-                yield buffer[:flush_to]
-                buffer = buffer[flush_to:]
+    def _flush_index(buffer: str) -> int:
+        # ``buffer[cut:]`` is kept back because it may still grow into a longer key;
+        # a match that straddles that boundary must be pulled into the flushed part,
+        # otherwise it would be split and never matched.
+        cut = len(buffer) - _holdback(buffer)
+        if pattern is not None:
+            for m in pattern.finditer(buffer):
+                if m.end() <= cut:
+                    continue
+                if m.start() >= cut:
+                    break
+                cut = m.end()
+        return cut
 
-        if buffer:
-            yield buffer
+    async def _transform(text: AsyncIterable[str]) -> AsyncIterable[str]:
+        # ``raw`` only ever holds un-substituted input, so a replacement's own output is
+        # never scanned again (``_apply`` is a single pass, like ``str.replace``).
+        raw = ""
+        async for chunk in text:
+            merged = raw + chunk
+            cut = _flush_index(merged)
+            raw = merged[cut:]
+            if cut:
+                yield _apply(merged[:cut])
+
+        if raw:
+            yield _apply(raw)
 
     return _transform

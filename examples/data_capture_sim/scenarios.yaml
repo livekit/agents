@@ -5,16 +5,18 @@
 # completing with a stale value) at the point where the old code fired a
 # separate generate_reply.
 #
-# Run from the repo root (requires lk >= 2.17.0, which resolves the SDK
-# version from the synced workspace environment):
-#   lk agent simulate examples/data_capture_sim/agent.py \
+# Run from the repo root (requires lk >= 2.18.7 for `simulate text`; lk
+# resolves the SDK version from the synced workspace environment):
+#   lk agent simulate text examples/data_capture_sim/agent.py \
 #     --scenarios examples/data_capture_sim/scenarios.yaml
 
+id: SCNG_Cb34zMzcx47p
 name: Data capture workflows — corrective branches
 
 scenarios:
   # --- email: happy path through the confirm tool ---------------------------
-  - label: Email captured and confirmed
+  - id: SCN_RK6KQ8ey4RdS
+    label: Email captured and confirmed
     instructions: |
       PERSONA: Maya Chen, cooperative caller registering for an event.
       OPENING LINE: "Hi, I'd like to give you my email address."
@@ -35,7 +37,8 @@ scenarios:
       branch: happy_path
 
   # --- email: correction at the confirmation step ---------------------------
-  - label: Email corrected while confirming
+  - id: SCN_4dsn3mWBcPYM
+    label: Email corrected while confirming
     instructions: |
       PERSONA: Jordan Reyes, slightly distracted, initially gives an old email.
       OPENING LINE: "I need to update my email with you."
@@ -60,7 +63,8 @@ scenarios:
       branch: confirm_stale_guard
 
   # --- phone: invalid number, then correction at confirmation ---------------
-  - label: Bad phone number, then a swap during confirmation
+  - id: SCN_8aEM6uomYzGu
+    label: Bad phone number, then a swap during confirmation
     instructions: |
       PERSONA: Sam Okafor, gives a too-short number first, then corrects himself twice.
       OPENING LINE: "Let me give you my phone number."
@@ -87,7 +91,8 @@ scenarios:
       branch: confirm_stale_guard
 
   # --- address: change during confirmation ----------------------------------
-  - label: Address changed while confirming
+  - id: SCN_udfbMD6V8X94
+    label: Address changed while confirming
     instructions: |
       PERSONA: Priya Nair, recently moved, gives the old address by habit.
       OPENING LINE: "I'd like to give you my mailing address."
@@ -112,7 +117,8 @@ scenarios:
       branch: confirm_stale_guard
 
   # --- name: spelling correction at confirmation -----------------------------
-  - label: Name spelling corrected while confirming
+  - id: SCN_t6af9erkiFLo
+    label: Name spelling corrected while confirming
     instructions: |
       PERSONA: Shayne Cole - pronounced "Shane", so say "Shane" conversationally;
       the Y appears only when you spell it.
@@ -133,7 +139,8 @@ scenarios:
       branch: confirm_stale_guard
 
   # --- dob: time of birth offered before the date ----------------------------
-  - label: Time of birth given before the date
+  - id: SCN_UjjovsUx6eTX
+    label: Time of birth given before the date
     instructions: |
       PERSONA: Leo Marsh, proud of knowing his exact time of birth; leads with it.
       OPENING LINE: "I can give you my date of birth - fun fact, I even know the time!"
@@ -163,7 +170,8 @@ scenarios:
       branch: confirm_missing_dob
 
   # --- dob: date changed while confirming ------------------------------------
-  - label: Date of birth corrected while confirming
+  - id: SCN_oSRqRRK4QEyY
+    label: Date of birth corrected while confirming
     instructions: |
       PERSONA: Ana Sofia Torres, mixes up day and month at first.
       OPENING LINE: "I'd like to give you my date of birth."
@@ -187,7 +195,8 @@ scenarios:
       branch: confirm_stale_guard
 
   # --- credit card: number too short, then valid -----------------------------
-  - label: Card number too short on the first try
+  - id: SCN_xBV8hfsrjzZg
+    label: Card number too short on the first try
     instructions: |
       PERSONA: Dana Whitfield, rattles off a partial card number first.
       OPENING LINE: "I'm ready to give you my card details."
@@ -217,7 +226,8 @@ scenarios:
       branch: update_invalid_length
 
   # --- credit card: repeated number doesn't match ----------------------------
-  - label: Card number repeat mismatch
+  - id: SCN_zKdAfPkZuJ3M
+    label: Card number repeat mismatch
     instructions: |
       PERSONA: Omar Haddad, fumbles one digit when repeating his card number.
       OPENING LINE: "Let's do the card details."
@@ -244,7 +254,8 @@ scenarios:
       branch: confirm_mismatch
 
   # --- credit card: expired date, then a valid one ----------------------------
-  - label: Expired card date, then corrected
+  - id: SCN_W9p6MziQFfDQ
+    label: Expired card date, then corrected
     instructions: |
       PERSONA: Grace Lindqvist, reads the date off an old card first.
       OPENING LINE: "I'll give you my card now."

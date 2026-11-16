@@ -6,7 +6,7 @@ from typing import Any
 
 from livekit.agents import llm
 
-from .utils import group_tool_calls
+from .utils import convert_mid_conversation_instructions, group_tool_calls
 
 
 @dataclass
@@ -23,6 +23,8 @@ def to_conversations_ctx(
         A tuple of (entries, instructions) where instructions is the extracted
         system/developer message content (or None if absent).
     """
+    chat_ctx = convert_mid_conversation_instructions(chat_ctx)
+
     item_groups = group_tool_calls(chat_ctx)
     entries: list[dict[str, Any]] = []
     instructions: str | None = None
@@ -37,7 +39,7 @@ def to_conversations_ctx(
                 text_parts = [
                     str(c)
                     for c in item.content
-                    if not isinstance(c, (llm.ImageContent, llm.AudioContent))
+                    if not isinstance(c, (llm.ImageContent, llm.AudioContent, llm.CacheBreakpoint))
                 ]
                 instructions = "\n".join(text_parts) if text_parts else None
                 continue
@@ -92,7 +94,7 @@ def _build_content(msg: llm.ChatMessage) -> str | list[dict[str, Any]]:
     for content in msg.content:
         if isinstance(content, llm.ImageContent):
             list_content.append(_to_image_content(content))
-        elif isinstance(content, llm.AudioContent):
+        elif isinstance(content, (llm.AudioContent, llm.CacheBreakpoint)):
             pass
         else:
             # str or Instructions

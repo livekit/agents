@@ -22,6 +22,11 @@ on:
         type: string
         required: false
         default: "main"
+      release_notes:
+        description: "Draft release notes in the release PR and create a GitHub release on merge"
+        type: boolean
+        required: false
+        default: true
 
   pull_request:
     types: [closed]
@@ -44,6 +49,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ inputs.branch }}
+          fetch-depth: 0
 
       - name: Guard non-main branches
         env:
@@ -64,7 +70,7 @@ jobs:
           python-version: "3.10"
 
       - name: Install dependencies
-        run: pip install click packaging pyyaml colorama
+        run: pip install click openai packaging pyyaml colorama
 
       - name: Bump versions
         env:
@@ -96,6 +102,21 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "New version: $version"
 
+      - name: Draft release notes
+        if: inputs.release_notes
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          previous=$(git describe --tags --abbrev=0 --match 'livekit-agents@*')
+          python .github/release_notes.py \
+            --tag "livekit-agents@${VERSION}" \
+            --target "$(git rev-parse HEAD)" \
+            --previous-tag "$previous" \
+            --repo "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/release_notes.md"
+
       - name: Close existing release PRs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -112,6 +133,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
           BASE_BRANCH: ${{ inputs.branch }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
           branch="release/v${VERSION}"
 
@@ -122,11 +144,33 @@ jobs:
           git commit -m "v${VERSION}"
           git push --force origin "$branch"
 
+          {
+            echo "Merging this PR will publish all packages as **${VERSION}** to PyPI."
+            if [ "$RELEASE_NOTES" = "true" ]; then
+              echo
+              if [ -s "$RUNNER_TEMP/release_notes.md" ]; then
+                echo "On merge, the notes between the markers become the GitHub release, above GitHub's list of merged PRs. They cover the PRs merged up to $(git rev-parse --short HEAD^); dispatch the release again to redraft them. Edit them here, or delete the whole block to skip the GitHub release."
+              else
+                echo "Drafting the release notes failed, see the publish workflow logs. Write the notes between the markers, or the GitHub release is skipped."
+              fi
+              echo
+              echo "<!-- release-notes:start -->"
+              cat "$RUNNER_TEMP/release_notes.md" 2>/dev/null || true
+              echo "<!-- release-notes:end -->"
+              if [ -s "$RUNNER_TEMP/release_notes.md" ]; then
+                # four backticks, so the python blocks in the notes cannot close the fence
+                printf '\n<details>\n<summary>Markdown of the first draft, to copy</summary>\n\n````markdown\n'
+                cat "$RUNNER_TEMP/release_notes.md"
+                printf '````\n</details>\n'
+              fi
+            fi
+          } > "$RUNNER_TEMP/pr_body.md"
+
           gh pr create \
             --base "$BASE_BRANCH" \
             --head "$branch" \
             --title "livekit-agents@${VERSION}" \
-            --body "Merging this PR will publish all packages as **${VERSION}** to PyPI."
+            --body-file "$RUNNER_TEMP/pr_body.md"
 
   # ── Discover, build, publish ────────────────────────────────
   # Triggered by: merging a release PR OR republish dispatch
@@ -235,6 +279,46 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+
+  release:
+    name: Create GitHub release
+    needs: [tag, publish]
+    if: always() && needs.tag.result == 'success' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Create release from the release PR's notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          notes=$(tr -d '\r' <<< "$PR_BODY" \
+            | awk '/<!-- release-notes:end -->/ {f=0} f; /<!-- release-notes:start -->/ {f=1}')
+          if [ -z "${notes//[[:space:]]/}" ]; then
+            echo "The release PR has no release notes, skipping the GitHub release"
+            exit 0
+          fi
+
+          version="${HEAD_REF#release/v}"
+          tag="livekit-agents@${version}"
+          # HEAD carries the new tag, so the previous release is the nearest tag before it
+          previous=$(git describe --tags --abbrev=0 --match 'livekit-agents@*' HEAD^)
+          flags=()
+          if [[ "$version" =~ (a|b|rc|dev)[0-9]+$ ]]; then
+            flags+=(--prerelease --latest=false)
+          fi
+
+          gh release create "$tag" "${flags[@]}" \
+            --verify-tag \
+            --title "$tag" \
+            --notes "$notes" \
+            --generate-notes \
+            --notes-start-tag "$previous"
 
   docs:
     name: Publish docs
