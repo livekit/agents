@@ -9,7 +9,7 @@ from aiohttp import web
 from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
-from livekit.agents import APIConnectOptions, APIStatusError, inference
+from livekit.agents import APIConnectOptions, APIStatusError, inference, llm, utils
 from livekit.agents.inference._utils import create_api_error_from_response
 
 from .fake_vad import FakeVAD
@@ -81,26 +81,29 @@ async def quota_gateway() -> AsyncIterator[str]:
         await runner.cleanup()
 
 
-@pytest.mark.parametrize("service", ["gpt-live", "stt", "tts"])
+@pytest.mark.parametrize("service", ["gpt-live", "responses", "stt", "tts"])
 async def test_failed_handshake_explains_exhausted_credits(
     quota_gateway: str, service: str
 ) -> None:
-    async with aiohttp.ClientSession() as http_session:
+    async with utils.http_context.open() as http_session:
         options = {
             "api_key": "test-key",
             "api_secret": "test-secret-long-enough-for-hs256-signing",
             "base_url": quota_gateway,
-            "http_session": http_session,
         }
         with pytest.raises(APIStatusError) as caught:
             if service == "tts":
-                model = inference.TTS(model="cartesia/sonic-3", **options)
+                model = inference.TTS(
+                    model="cartesia/sonic-3", http_session=http_session, **options
+                )
                 try:
                     await model._connect_ws(timeout=1.0)
                 finally:
                     await model.aclose()
             elif service == "stt":
-                stt_model = inference.STT(model="deepgram/nova-3", vad=FakeVAD(), **options)
+                stt_model = inference.STT(
+                    model="deepgram/nova-3", vad=FakeVAD(), http_session=http_session, **options
+                )
                 stream = stt_model.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
                 try:
                     stream.end_input()
@@ -109,10 +112,26 @@ async def test_failed_handshake_explains_exhausted_credits(
                 finally:
                     await stream.aclose()
                     await stt_model.aclose()
+            elif service == "responses":
+                responses_model = inference.responses.LLM(
+                    model="openai/gpt-4.1", use_websocket=True, **options
+                )
+                chat_ctx = llm.ChatContext()
+                chat_ctx.add_message(role="user", content="hi")
+                try:
+                    async with responses_model.chat(
+                        chat_ctx=chat_ctx,
+                        conn_options=APIConnectOptions(max_retry=0, timeout=1.0),
+                    ) as responses_stream:
+                        async for _ in responses_stream:
+                            pass
+                finally:
+                    await responses_model.aclose()
             else:
                 duplex = inference.DuplexModel(
                     model="openai/gpt-live-1",
                     conn_options=APIConnectOptions(max_retry=0, timeout=1.0),
+                    http_session=http_session,
                     **options,
                 )
                 session = duplex.session()
