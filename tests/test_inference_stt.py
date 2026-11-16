@@ -241,6 +241,7 @@ def test_gateway_ink2_payload_carries_no_word_alignment() -> None:
         ("assemblyai/u3-rt-pro", True),
         ("assemblyai/universal-3-5-pro", True),
         ("assemblyai/universal-3-6-pro", True),
+        ("assemblyai/assemblyai-stt-3-7-realtime-agent", True),
         ("assemblyai/universal-streaming", False),
         ("deepgram/nova-3", False),
     ],
