@@ -103,9 +103,10 @@ class DecisionModel(BaseDecisionModel):
     def provider(self) -> str:
         return "livekit"
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, extra_headers: Mapping[str, str]) -> dict[str, str]:
         # Minted per request: a retry must not reuse a token that may have expired.
         return {
+            **extra_headers,
             **get_inference_headers(),
             "Authorization": f"Bearer {create_access_token(self._api_key, self._api_secret)}",
             "Content-Type": "application/json",
@@ -117,6 +118,7 @@ class DecisionModel(BaseDecisionModel):
         input: str,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         questions = {name: systemone.encode_question(d) for name, d in decisions.items()}
         session = self._session or http_context.http_session()
@@ -124,7 +126,7 @@ class DecisionModel(BaseDecisionModel):
         try:
             async with session.post(
                 url,
-                headers=self._headers(),
+                headers=self._headers(extra_headers),
                 json={"model": self._model, "state": input, "questions": questions},
                 timeout=aiohttp.ClientTimeout(total=conn_options.timeout),
             ) as response:

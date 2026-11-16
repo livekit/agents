@@ -116,6 +116,23 @@ async def test_safety_identifier_is_forwarded_when_given() -> None:
     assert requests[0]["safety_identifier"] == "caller-7"
 
 
+async def test_extra_headers_are_sent() -> None:
+    headers: list[httpx.Headers] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        headers.append(request.headers)
+        return httpx.Response(200, json=response_body())
+
+    client = openai.AsyncClient(
+        api_key="test-key",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    model = DecisionModel(client=client)
+    await model.evaluate(input="", decisions=QUESTIONS, extra_headers={"X-Feature": "test"})
+    assert headers[0]["X-Feature"] == "test"
+
+
 async def test_every_kind_is_decoded_with_distributions_and_usage() -> None:
     model, requests = model_for(response_body())
     metrics = []

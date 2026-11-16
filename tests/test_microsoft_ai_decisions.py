@@ -94,6 +94,16 @@ async def test_entra_token_is_sent_as_bearer() -> None:
     assert "api-key" not in headers
 
 
+async def test_extra_headers_go_out_below_the_auth_header() -> None:
+    model, http = model_for(response_body())
+    await model.evaluate(
+        input="", decisions=QUESTIONS, extra_headers={"X-Feature": "test", "api-key": "caller"}
+    )
+    headers = http.post.call_args.kwargs["headers"]
+    assert (headers["X-Feature"], headers["api-key"]) == ("test", "test-key")
+    assert "X-Feature" not in model._client.headers
+
+
 def test_configuration_is_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MICROSOFT_AI_DECISION_URL", URL)
     monkeypatch.setenv("MICROSOFT_AI_DECISION_MODEL", "env-deployment")

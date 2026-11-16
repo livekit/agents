@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field
 
-from ... import llm
+from ... import inference, llm, stt
+from ...inference._utils import HEADER_CLIENT_FEATURE
 from ...llm.decisions import _format_transcript
-from ...types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ...types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions
 from ._chat_context import AMDRequest
 from .events import AMDCategory, IVRMenuOption
 
@@ -113,6 +114,19 @@ class AMDIVRMenuResponse(BaseModel):
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
+CLIENT_FEATURE = "AMD"
+
+
+def client_feature_kwargs(model: llm.LLM | llm.DecisionModel | stt.STT) -> dict[str, Any]:
+    """AMD's client feature tag as call kwargs; empty unless `model` reaches only Inference.
+
+    An LLM takes them in `extra_kwargs`; `evaluate` and `stream` take them directly.
+    """
+    models = model._llm_instances if isinstance(model, llm.FallbackAdapter) else [model]
+    if all(isinstance(m, (inference.LLM, inference.DecisionModel, inference.STT)) for m in models):
+        return {"extra_headers": {HEADER_CLIENT_FEATURE: CLIENT_FEATURE}}
+    return {}
+
 
 async def _structured_response(
     model: llm.LLM,
@@ -139,6 +153,7 @@ async def _structured_response(
         tool_choice="required",
         parallel_tool_calls=False,
         conn_options=conn_options,
+        extra_kwargs=client_feature_kwargs(model) or NOT_GIVEN,
     ).collect()
 
     if len(response.tool_calls) != 1 or response.tool_calls[0].name != "record_result":
@@ -183,6 +198,7 @@ async def classify(
                 )
             },
             conn_options=conn_options,
+            **client_feature_kwargs(model),
         )
         result = response.results.get("category")
         if not isinstance(result, llm.ChoiceResult):
