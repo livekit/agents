@@ -1,0 +1,29 @@
+examples/telephony/amd.py
+  s_e0d6336a25c167::t_0d1a250ada9eae 144-146
+livekit-agents/livekit/agents/voice/amd/_stt.py
+  s_e0d6336a25c167::t_80bd8979609aa5 6,83-84,86,117-118,123-132,151-152,161
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_e0d6336a25c167::t_f604e7747033f0 646-647,700-708,1089-1093
+spec/amd.md
+  s_e0d6336a25c167::t_d1565a57b5b877 282-286,291-292,571-574,693-694
+tests/test_amd.py
+  s_e0d6336a25c167::t_2c17fa986faaf1 513-547,1445-1447,1469-1473,2907-2931,6479,6506,6570,6575-6576
+tests/test_telemetry_redaction.py
+  s_e0d6336a25c167::t_688fc2f47f21ae 28-36,46,980-1051
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "821ee9de9ab6bab2532318995b8ebe7cb55beac2",
+  "prompts": {},
+  "sessions": {
+    "s_e0d6336a25c167": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_e0d6336a25c167",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
