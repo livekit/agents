@@ -1022,6 +1022,24 @@ class _STTConnection:
     updates_changed: asyncio.Event = field(default_factory=asyncio.Event)
     handoff: _STTHandoffRequest | None = None
 
+    def apply_update(self, settings: dict[str, Any]) -> None:
+        """Record an acknowledged session.update's settings on this connection's options."""
+        _apply_update_settings(self.options, settings)
+
+    def consumed_options(self) -> STTOptions:
+        """The options as of the last update taken from the input queue: acknowledged ones
+        plus those sent and still unacknowledged. Updates still queued are not included."""
+        options = replace(self.options, extra_kwargs=dict(self.options.extra_kwargs))
+        for settings in self.pending_updates:
+            _apply_update_settings(options, settings)
+        return options
+
+
+def _apply_update_settings(options: STTOptions, settings: dict[str, Any]) -> None:
+    if language := settings.get("language", "").strip():
+        options.language = LanguageCode(language.lower())
+    options.extra_kwargs.update(settings.get("extra", {}))
+
 
 class SpeechStream(stt.SpeechStream):
     # a dropped `language_hint` is reported once per stream, not once per seam that finds it
@@ -1252,13 +1270,14 @@ class SpeechStream(stt.SpeechStream):
             return {**extra, **self._keyterm_payload()}
         return dict(extra)
 
-    def _guard_language_hint(self, extra: dict[str, Any]) -> None:
-        """Drop a hint this stream's model and language cannot use, from the extra about to
-        go on the wire. The stream's own report is once-only: an earlier drop, at connect
-        time or on an earlier update, already said it."""
+    def _guard_language_hint(self, extra: dict[str, Any], opts: STTOptions | None = None) -> None:
+        """Drop a hint the model and language of opts (default: this stream's) cannot use,
+        from the extra about to go on the wire. The stream's own report is once-only: an
+        earlier drop, at connect time or on an earlier update, already said it."""
+        opts = opts or self._opts
         if _drop_ineffective_language_hint(
-            self._opts.model,
-            self._opts.language,
+            opts.model,
+            opts.language,
             extra,
             warn=not self._language_hint_reported,
         ):
@@ -1388,8 +1407,10 @@ class SpeechStream(stt.SpeechStream):
                 if vad_stream is not None:
                     with contextlib.suppress(RuntimeError):
                         vad_stream.end_input()
-                await send({"type": "session.finalize"})
+                # Set before the write: the gateway can answer the finalize and close while
+                # the write is still draining, and that close is the normal end.
                 input_ended.set()
+                await send({"type": "session.finalize"})
             except (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError) as exc:
                 if input_ended.is_set() or http_session.closed:
                     return
@@ -1433,9 +1454,7 @@ class SpeechStream(stt.SpeechStream):
                     if connection.pending_updates:
                         settings = connection.pending_updates.popleft()
                         if data.get("success") is True:
-                            if language := settings.get("language", "").strip():
-                                connection.options.language = LanguageCode(language.lower())
-                            connection.options.extra_kwargs.update(settings.get("extra", {}))
+                            connection.apply_update(settings)
                     connection.updates_changed.set()
                     continue
                 if kind == "session.handoff.request":
@@ -1515,7 +1534,9 @@ class SpeechStream(stt.SpeechStream):
             options = replace(
                 self._initial_options, extra_kwargs=dict(self._initial_options.extra_kwargs)
             )
-            self._guard_language_hint(options.extra_kwargs)
+            # Warn only: _connect_ws drops the hint from the wire copy, and the
+            # connection's options keep it for a later language that can use it.
+            self._guard_language_hint(dict(options.extra_kwargs), options)
             ws = await self._connect_ws(http_session, opts=options, session_keyterms=[])
             self._connection = connection = _STTConnection(ws, options)
             self._ws = ws
@@ -1547,10 +1568,10 @@ class SpeechStream(stt.SpeechStream):
             closing_connection = self._connection
             self._connection = None
             self._ws = None
-            self._initial_options = replace(
-                self._opts, extra_kwargs={**self._opts.extra_kwargs, **self._keyterm_payload()}
-            )
             if closing_connection is not None:
+                # Updates still in the input queue reach the replacement after the audio
+                # queued ahead of them, so it starts from what this connection consumed.
+                self._initial_options = closing_connection.consumed_options()
                 if (
                     id(closing_connection.ws) not in session_closed
                     and not closing_connection.ws.closed

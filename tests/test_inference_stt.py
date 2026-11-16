@@ -1766,3 +1766,58 @@ async def test_handoff_abort_write_has_bounded_cleanup(monkeypatch: pytest.Monke
         assert gateway.sockets[0].closed
     finally:
         await stream.aclose()
+
+
+async def test_a_close_while_the_finalize_write_drains_ends_normally() -> None:
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if event["type"] == "session.finalize":
+            ws.reply("final_transcript", transcript="hello", language="en")
+            ws.hang_up()
+            await asyncio.sleep(0.05)
+
+    gateway = _Gateway(handler)
+    assert await _run_to_end(_gateway_stt(gateway)) == ["hello"]
+
+
+async def test_reconnect_starts_from_the_consumed_queue_position() -> None:
+    release = asyncio.Event()
+
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if ws.index == 0 and event["type"] == "input_audio":
+            await release.wait()
+        else:
+            await _handoff_reply(ws, event)
+
+    gateway = _Gateway(handler)
+    stream = _gateway_stt(gateway, language="en").stream(conn_options=_one_retry())
+    try:
+        await _live(stream)
+        stream.push_frame(_silence(16000, 0.05))
+        await gateway.seen["input_audio"].wait()
+        stream.update_options(language="fr")
+        stream.push_frame(_silence(16000, 0.05))
+        gateway.sockets[0].hang_up(1006)
+        while len(gateway.sockets) < 2 or not gateway.messages("session.update"):
+            await asyncio.sleep(0.01)
+    finally:
+        await stream.aclose()
+
+    assert gateway.sockets[1].received[0]["settings"]["language"] == "en"
+    assert gateway.types(1)[:2] == ["session.create", "session.update"]
+    assert gateway.sockets[1].received[1]["settings"]["language"] == "fr"
+
+
+async def test_initial_language_hint_is_judged_on_the_snapshot_sent() -> None:
+    gateway = _Gateway(_handoff_reply)
+    stt = _gateway_stt(gateway, language="multi", extra_kwargs={"language_hint": ["en", "es"]})
+    stream = stt.stream(conn_options=_no_retry())
+    try:
+        stream.update_options(language="en")
+        await _live(stream)
+        await gateway.seen["session.update"].wait()
+    finally:
+        await stream.aclose()
+
+    created = gateway.messages("session.create")[0]["settings"]
+    assert created["language"] == "multi"
+    assert created["extra"]["language_hint"] == ["en", "es"]
