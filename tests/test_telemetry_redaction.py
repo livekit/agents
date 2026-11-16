@@ -263,7 +263,9 @@ SAFE_KEYS = frozenset(
         "lk.tts.streaming",
         "lk.tts.label",
         "lk.response.ttfb",
-        # eou detection (numeric / enum only)
+        # eou detection (model identifiers / numeric / enum)
+        "lk.eou.model",
+        "lk.eou.provider",
         "lk.eou.probability",
         "lk.eou.unlikely_threshold",
         "lk.eou.endpointing_delay",
