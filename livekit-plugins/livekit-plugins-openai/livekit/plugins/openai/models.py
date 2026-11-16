@@ -112,9 +112,9 @@ CrusoeChatModels = Literal[
     "deepseek-ai/DeepSeek-V4.1-Flash",
     "google/gemma-4-31b-it",
     "nvidia/Nemotron-3-Nano-Omni-Reasoning-30B-A3B",
-    "nvidia/nemotron-3.5-lightning-30b-a3b",
-    "nvidia/nemotron-3.5-super-vl-120b-a12b",
-    "qwen/Qwen3.8-27B",
+    "nvidia/Nemotron-3.5-Lightning-30B-A3B",
+    "nvidia/NVIDIA-Nemotron-3.5-Super-VL",
+    "Qwen/Qwen3.8-27B",
     "zai-org/GLM-5.3",
     "zai-org/GLM-5.3-Flash",
 ]
