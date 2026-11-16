@@ -879,8 +879,8 @@ class STT(stt.STT):
         """Create a streaming transcription session.
 
         Args:
-            extra_headers: Headers sent on every connection this stream opens,
-                reconnects included. SDK identification headers take precedence.
+            extra_headers: Headers sent on every connection, reconnects included.
+                SDK headers win on a shared key.
         """
         options = self._sanitize_options(language=language)
         stream = SpeechStream(

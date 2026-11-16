@@ -240,7 +240,7 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
                 transcript of user and assistant text.
             decisions: Decisions keyed by name.
             conn_options: Retry and per-attempt timeout settings.
-            extra_headers: HTTP headers added to every attempt's request.
+            extra_headers: Headers sent with every attempt.
 
         Each requested name appears in either ``results`` or ``errors``. Request failures
         and malformed responses raise.

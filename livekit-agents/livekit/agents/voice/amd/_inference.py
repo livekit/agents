@@ -114,18 +114,14 @@ class AMDIVRMenuResponse(BaseModel):
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
-# value of HEADER_CLIENT_FEATURE on the gateway requests AMD makes itself
 CLIENT_FEATURE = "AMD"
 
 
 def client_feature_kwargs(model: llm.LLM | llm.DecisionModel | stt.STT) -> dict[str, Any]:
-    """Kwargs that tag AMD's request to `model`, or none unless it reaches only Inference.
+    """AMD's client feature tag as call kwargs; empty unless `model` reaches only Inference.
 
-    An LLM takes them inside `extra_kwargs`; a decision model's `evaluate` and an STT's
-    `stream` take them directly.
+    An LLM takes them in `extra_kwargs`; `evaluate` and `stream` take them directly.
     """
-    # other plugins would forward the header to their vendor, and an LLM FallbackAdapter
-    # passes extra_kwargs to every LLM it holds
     models = model._llm_instances if isinstance(model, llm.FallbackAdapter) else [model]
     if all(isinstance(m, (inference.LLM, inference.DecisionModel, inference.STT)) for m in models):
         return {"extra_headers": {HEADER_CLIENT_FEATURE: CLIENT_FEATURE}}

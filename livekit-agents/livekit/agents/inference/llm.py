@@ -581,9 +581,7 @@ class LLM(llm.LLM):
             extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
 
         extra.update(self._opts.extra_kwargs)
-        # merge, don't replace: a turn's headers join the model's own and win on a shared
-        # key (AMD's client feature tag must survive a model-level value), and the stream
-        # stamps its headers on a copy rather than on either caller's dict
+        # a turn's headers win on a shared key; a new dict, as the stream stamps SDK headers on it
         call_headers = extra_kwargs.get("extra_headers") if is_given(extra_kwargs) else None
         model_headers = cast(
             "Mapping[str, str] | None", self._opts.extra_kwargs.get("extra_headers")
