@@ -7,10 +7,10 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field
 
-from ... import inference, llm
+from ... import inference, llm, stt
 from ...inference._utils import HEADER_CLIENT_FEATURE
 from ...llm.decisions import _format_transcript
-from ...types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ...types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions
 from ._chat_context import AMDRequest
 from .events import AMDCategory, IVRMenuOption
 
@@ -118,17 +118,16 @@ ResponseT = TypeVar("ResponseT", bound=BaseModel)
 CLIENT_FEATURE = "AMD"
 
 
-def _reaches_only_inference(model: llm.LLM) -> bool:
-    # other plugins would forward the header to their vendor, and a FallbackAdapter
+def client_feature_kwargs(model: llm.LLM | llm.DecisionModel | stt.STT) -> dict[str, Any]:
+    """Kwargs that tag AMD's request to `model`, or none unless it reaches only Inference.
+
+    An LLM takes them inside `extra_kwargs`; a decision model's `evaluate` and an STT's
+    `stream` take them directly.
+    """
+    # other plugins would forward the header to their vendor, and an LLM FallbackAdapter
     # passes extra_kwargs to every LLM it holds
-    if isinstance(model, llm.FallbackAdapter):
-        return all(isinstance(m, inference.LLM) for m in model._llm_instances)
-    return isinstance(model, inference.LLM)
-
-
-def _decision_feature_kwargs(model: llm.DecisionModel) -> dict[str, Any]:
-    # only inference.DecisionModel.evaluate takes extra_headers
-    if isinstance(model, inference.DecisionModel):
+    models = model._llm_instances if isinstance(model, llm.FallbackAdapter) else [model]
+    if all(isinstance(m, (inference.LLM, inference.DecisionModel, inference.STT)) for m in models):
         return {"extra_headers": {HEADER_CLIENT_FEATURE: CLIENT_FEATURE}}
     return {}
 
@@ -152,18 +151,13 @@ async def _structured_response(
         # never executed; only the schema is sent to the model
         return None
 
-    extra_kwargs: NotGivenOr[dict[str, Any]] = (
-        {"extra_headers": {HEADER_CLIENT_FEATURE: CLIENT_FEATURE}}
-        if _reaches_only_inference(model)
-        else NOT_GIVEN
-    )
     response = await model.chat(
         chat_ctx=chat_ctx,
         tools=[record_result],
         tool_choice="required",
         parallel_tool_calls=False,
         conn_options=conn_options,
-        extra_kwargs=extra_kwargs,
+        extra_kwargs=client_feature_kwargs(model) or NOT_GIVEN,
     ).collect()
 
     if len(response.tool_calls) != 1 or response.tool_calls[0].name != "record_result":
@@ -208,7 +202,7 @@ async def classify(
                 )
             },
             conn_options=conn_options,
-            **_decision_feature_kwargs(model),
+            **client_feature_kwargs(model),
         )
         result = response.results.get("category")
         if not isinstance(result, llm.ChoiceResult):

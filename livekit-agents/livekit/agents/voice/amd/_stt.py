@@ -6,8 +6,7 @@ import asyncio
 
 from livekit import rtc
 
-from ... import inference, stt
-from ...inference._utils import HEADER_CLIENT_FEATURE
+from ... import stt
 from ...log import logger
 from ...types import APIConnectOptions
 from ...utils import aio
@@ -101,13 +100,10 @@ class AMDTranscriber:
         try:
             if self._stream is None:
                 assert self._model is not None
-                if isinstance(self._model, inference.STT):
-                    self._stream = self._model.stream(
-                        conn_options=self._conn_options,
-                        extra_headers={HEADER_CLIENT_FEATURE: _inference.CLIENT_FEATURE},
-                    )
-                else:
-                    self._stream = self._model.stream(conn_options=self._conn_options)
+                self._stream = self._model.stream(
+                    conn_options=self._conn_options,
+                    **_inference.client_feature_kwargs(self._model),
+                )
                 self._stream_read_task = asyncio.create_task(self._read(self._stream))
             self._stream.push_frame(frame)
         except Exception as exc:

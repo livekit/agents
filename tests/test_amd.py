@@ -523,10 +523,11 @@ def test_fallback_adapter_is_tagged_only_when_every_llm_is_inference() -> None:
     gateway = inference.LLM(model="google/gemma-4-31b-it", api_key=_SECRET, api_secret=_SECRET)
     plugin = FakeLLM()
 
-    assert _inference._reaches_only_inference(gateway)
-    assert _inference._reaches_only_inference(llm.FallbackAdapter([gateway, gateway]))
-    assert not _inference._reaches_only_inference(llm.FallbackAdapter([gateway, plugin]))
-    assert not _inference._reaches_only_inference(plugin)
+    tagged = {"extra_headers": {HEADER_CLIENT_FEATURE: "AMD"}}
+    assert _inference.client_feature_kwargs(gateway) == tagged
+    assert _inference.client_feature_kwargs(llm.FallbackAdapter([gateway, gateway])) == tagged
+    assert _inference.client_feature_kwargs(llm.FallbackAdapter([gateway, plugin])) == {}
+    assert _inference.client_feature_kwargs(plugin) == {}
 
 
 # endregion
