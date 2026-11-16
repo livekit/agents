@@ -338,8 +338,7 @@ def _extract_confidence(
     """
     value = payload.get("language_probability")
     # bool is a subclass of int — exclude explicitly so that an accidental
-    # JSON `false` doesn't silently become ``confidence=0.0``. Same pattern
-    # as livekit-plugins-slng/.../stt.py.
+    # JSON `false` doesn't silently become ``confidence=0.0``.
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     if value is not None:
