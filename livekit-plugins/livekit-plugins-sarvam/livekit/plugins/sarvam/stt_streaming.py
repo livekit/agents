@@ -45,12 +45,21 @@ from livekit.agents.utils.misc import is_given
 
 from ._utils import PeriodicCollector
 from .log import logger
-from .stt import _looks_like_error_text
+from .stt import (
+    MAX_KEYTERM_LENGTH,
+    MAX_KEYTERMS,
+    _looks_like_error_text,
+    _model_supports_keyterms,
+    _validate_keyterms,
+)
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 
 SARVAM_STT_REALTIME_URL = "wss://api.sarvam.ai/speech-to-text-realtime/ws"
 REALTIME_MODEL = "saaras:v3-realtime"
+# `saaras:v4` is also served on this endpoint; it is the only model that
+# supports keyterm prompting here.
+REALTIME_MODELS = (REALTIME_MODEL, "saaras:v4")
 
 RealtimeStreamType = Literal["fast", "balanced", "simulated"]
 RealtimeEndpointing = Literal["vad", "manual"]
@@ -153,6 +162,7 @@ class RealtimeSTTOptions:
     model: str = REALTIME_MODEL
     base_url: str = SARVAM_STT_REALTIME_URL
     prompt: str | None = None
+    keyterms: list[str] | None = None
     return_timestamps: bool = False
     vad_sot_threshold: float | None = None
     vad_min_speech_ms: int | None = None
@@ -160,8 +170,8 @@ class RealtimeSTTOptions:
     vad_prefix_padding_ms: int | None = None
 
     def __post_init__(self) -> None:
-        if self.model != REALTIME_MODEL:
-            raise ValueError(f"model must be {REALTIME_MODEL}")
+        if self.model not in REALTIME_MODELS:
+            raise ValueError(f"model must be one of {', '.join(REALTIME_MODELS)}")
         if self.language not in SUPPORTED_LANGUAGES:
             raise ValueError(f"language {self.language} is not supported")
         if self.stream_type not in SUPPORTED_STREAM_TYPES:
@@ -180,6 +190,7 @@ class RealtimeSTTOptions:
             raise ValueError(
                 f"sample_rate must be one of {', '.join(str(r) for r in SUPPORTED_SAMPLE_RATES)}"
             )
+        self.keyterms = _validate_keyterms(self.keyterms)
         if self.vad_sot_threshold is not None and not 0.0 <= self.vad_sot_threshold <= 1.0:
             raise ValueError("vad_sot_threshold must be between 0.0 and 1.0")
         if self.vad_min_speech_ms is not None and self.vad_min_speech_ms < 0:
@@ -204,6 +215,9 @@ def _build_realtime_ws_url(base_url: str, opts: RealtimeSTTOptions) -> str:
     params["return_timestamps"] = str(opts.return_timestamps).lower()
     if opts.prompt is not None:
         params["prompt"] = opts.prompt
+    if opts.keyterms and _model_supports_keyterms(opts.model):
+        # Sarvam expects one JSON-encoded array as the query parameter value.
+        params["keyterms"] = json.dumps(opts.keyterms)
 
     if opts.endpointing == "vad":
         if opts.vad_sot_threshold is not None:
@@ -219,11 +233,12 @@ def _build_realtime_ws_url(base_url: str, opts: RealtimeSTTOptions) -> str:
 
 
 class STTRealtime(stt.STT):
-    """Speech-to-text using Sarvam's realtime WebSocket endpoint (``saaras:v3-realtime``).
+    """Speech-to-text using Sarvam's realtime WebSocket endpoint.
 
     This endpoint streams interim and final transcripts over a single
     WebSocket connection and supports either server-side VAD or
-    client-driven (manual) turn boundaries.
+    client-driven (manual) turn boundaries. It serves ``saaras:v3-realtime``
+    (default) and ``saaras:v4``; the latter also supports keyterm prompting.
     """
 
     def __init__(
@@ -232,10 +247,12 @@ class STTRealtime(stt.STT):
         language: str = "en-IN",
         stream_type: RealtimeStreamType | str = "balanced",
         mode: RealtimeMode | str = "transcribe",
+        model: str = REALTIME_MODEL,
         endpointing: RealtimeEndpointing | str = "vad",
         encoding: RealtimeEncoding | str = "linear16",
         sample_rate: int = 16000,
         prompt: str | None = None,
+        keyterms: list[str] | None = None,
         return_timestamps: bool = False,
         api_key: str | None = None,
         base_url: str = SARVAM_STT_REALTIME_URL,
@@ -252,11 +269,14 @@ class STTRealtime(stt.STT):
             stream_type: Latency profile: ``fast``, ``balanced``, or ``simulated``.
             mode: Task applied to finals: ``transcribe``, ``translate``, ``verbatim``,
                 ``translit``, or ``codemix``.
+            model: ``saaras:v3-realtime`` (default) or ``saaras:v4``.
             endpointing: ``vad`` for server-side turn detection, or ``manual`` when the
                 caller delimits turns by flushing the stream.
             encoding: Wire encoding: ``linear16``, ``linear32``, ``mulaw``, or ``alaw``.
             sample_rate: Audio sample rate in Hz; ``8000`` or ``16000``.
             prompt: Optional context or terminology hint used to bias decoding.
+            keyterms: Optional terms to bias recognition toward, e.g. names and
+                domain words (up to 50 terms of 64 characters; ``saaras:v4`` only).
             return_timestamps: Whether finals should carry segment-level start and end times.
             api_key: Sarvam API key. Falls back to the ``SARVAM_API_KEY`` environment variable.
             base_url: WebSocket URL of the realtime endpoint.
@@ -277,6 +297,7 @@ class STTRealtime(stt.STT):
                 interim_results=True,
                 aligned_transcript=False,
                 offline_recognize=False,
+                keyterms=_model_supports_keyterms(model),
             )
         )
 
@@ -292,11 +313,13 @@ class STTRealtime(stt.STT):
             api_key=api_key,
             stream_type=stream_type,
             mode=mode,
+            model=model,
             endpointing=endpointing,
             encoding=encoding,
             sample_rate=sample_rate,
             base_url=base_url,
             prompt=prompt,
+            keyterms=keyterms,
             return_timestamps=return_timestamps,
             vad_sot_threshold=vad_sot_threshold,
             vad_min_speech_ms=vad_min_speech_ms,
@@ -306,16 +329,57 @@ class STTRealtime(stt.STT):
         self._session = http_session
         self._owns_session = http_session is None
         self._streams = weakref.WeakSet[RealtimeSpeechStream]()
+        # Keyterms passed by the user are kept separate from the framework-managed
+        # session set (see _update_session_keyterms), so detected terms never drop
+        # them. `self._opts.keyterms` always holds the effective merged set.
+        self._user_keyterms: list[str] = list(self._opts.keyterms or [])
+        self._session_keyterms: list[str] = []
 
     @property
     def model(self) -> str:
         """Name of the Sarvam realtime model backing this instance."""
-        return REALTIME_MODEL
+        return self._opts.model
 
     @property
     def provider(self) -> str:
         """Name of the speech-to-text provider."""
         return "Sarvam"
+
+    def _merge_keyterms(self, session_keyterms: list[str]) -> list[str]:
+        """Merge the framework session keyterms into the user's set.
+
+        Capped to Sarvam's limits rather than rejected, so an over-long
+        detected set cannot break the session.
+        """
+        merged = list(dict.fromkeys([*self._user_keyterms, *session_keyterms]))
+        capped = [term for term in merged if len(term) <= MAX_KEYTERM_LENGTH][:MAX_KEYTERMS]
+        if len(capped) != len(merged):
+            logger.warning(
+                f"keyterms exceed Sarvam's limits ({MAX_KEYTERMS} terms of "
+                f"{MAX_KEYTERM_LENGTH} characters); applying {len(capped)} of "
+                f"{len(merged)} terms"
+            )
+        return capped
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        """Apply the framework-managed keyterms merged with the user's own terms.
+
+        Sarvam fixes keyterms when the connection opens, so already-running
+        streams keep their previous set; the merged set applies to streams
+        created afterwards.
+        """
+        if not self._capabilities.keyterms:
+            super()._update_session_keyterms(keyterms)
+            return
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        self._opts.keyterms = self._merge_keyterms(keyterms) or None
+        if self._streams:
+            logger.info(
+                "Sarvam realtime STT keyterms apply when the connection opens; "
+                "updated keyterms will be used by newly created streams"
+            )
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -346,6 +410,7 @@ class STTRealtime(stt.STT):
         endpointing: NotGivenOr[RealtimeEndpointing | str] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         prompt: NotGivenOr[str | None] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str] | None] = NOT_GIVEN,
         return_timestamps: NotGivenOr[bool] = NOT_GIVEN,
         vad_sot_threshold: NotGivenOr[float | None] = NOT_GIVEN,
         vad_min_speech_ms: NotGivenOr[int | None] = NOT_GIVEN,
@@ -355,8 +420,8 @@ class STTRealtime(stt.STT):
         """Update options for this instance and every stream it created.
 
         Options that Sarvam only accepts at connection time (``sample_rate``,
-        ``return_timestamps``, and ``vad_prefix_padding_ms``) take effect on
-        newly created streams only.
+        ``return_timestamps``, ``vad_prefix_padding_ms``, and ``keyterms``) take
+        effect on newly created streams only.
         The remaining options are sent to active streams as an in-band
         ``config.update``, and the boundary-gated ones apply from the next
         utterance boundary.
@@ -368,6 +433,8 @@ class STTRealtime(stt.STT):
             endpointing: ``vad`` for server-side turn detection, or ``manual``.
             sample_rate: Audio sample rate in Hz; applies to new streams only.
             prompt: Context or terminology hint; ``None`` clears it.
+            keyterms: Terms to bias recognition toward (saaras:v4 only); applies
+                to new streams only. ``None`` clears them.
             return_timestamps: Segment-level timestamps; applies to new streams only.
             vad_sot_threshold: VAD activation threshold (``vad`` endpointing only).
             vad_min_speech_ms: Minimum speech duration in ms (``vad`` endpointing only).
@@ -382,11 +449,13 @@ class STTRealtime(stt.STT):
             api_key=self._opts.api_key,
             stream_type=stream_type if is_given(stream_type) else self._opts.stream_type,
             mode=mode if is_given(mode) else self._opts.mode,
+            model=self._opts.model,
             endpointing=endpointing if is_given(endpointing) else self._opts.endpointing,
             encoding=self._opts.encoding,
             sample_rate=sample_rate if is_given(sample_rate) else self._opts.sample_rate,
             base_url=self._opts.base_url,
             prompt=prompt if is_given(prompt) else self._opts.prompt,
+            keyterms=keyterms if is_given(keyterms) else self._opts.keyterms,
             return_timestamps=return_timestamps
             if is_given(return_timestamps)
             else self._opts.return_timestamps,
@@ -403,6 +472,13 @@ class STTRealtime(stt.STT):
             if is_given(vad_prefix_padding_ms)
             else self._opts.vad_prefix_padding_ms,
         )
+        if is_given(keyterms):
+            # An explicit update becomes the new user set, so a later
+            # framework-managed session update merges with it instead of
+            # reverting to the constructor's terms.
+            self._user_keyterms = list(opts.keyterms or [])
+            if self._session_keyterms:
+                opts = replace(opts, keyterms=self._merge_keyterms(self._session_keyterms) or None)
         self._opts = opts
         # Forward the given fields only, so a stream created with a per-stream
         # override (e.g. `stream(language=...)`) keeps it through unrelated updates.
@@ -414,6 +490,7 @@ class STTRealtime(stt.STT):
                 endpointing=endpointing,
                 sample_rate=sample_rate,
                 prompt=prompt,
+                keyterms=keyterms,
                 return_timestamps=return_timestamps,
                 vad_sot_threshold=vad_sot_threshold,
                 vad_min_speech_ms=vad_min_speech_ms,
@@ -443,11 +520,13 @@ class STTRealtime(stt.STT):
             api_key=self._opts.api_key,
             stream_type=self._opts.stream_type,
             mode=self._opts.mode,
+            model=self._opts.model,
             endpointing=self._opts.endpointing,
             encoding=self._opts.encoding,
             sample_rate=self._opts.sample_rate,
             base_url=self._opts.base_url,
             prompt=self._opts.prompt,
+            keyterms=self._opts.keyterms,
             return_timestamps=self._opts.return_timestamps,
             vad_sot_threshold=self._opts.vad_sot_threshold,
             vad_min_speech_ms=self._opts.vad_min_speech_ms,
@@ -545,6 +624,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         endpointing: NotGivenOr[RealtimeEndpointing | str] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         prompt: NotGivenOr[str | None] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str] | None] = NOT_GIVEN,
         return_timestamps: NotGivenOr[bool] = NOT_GIVEN,
         vad_sot_threshold: NotGivenOr[float | None] = NOT_GIVEN,
         vad_min_speech_ms: NotGivenOr[int | None] = NOT_GIVEN,
@@ -555,10 +635,11 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
         Only the options explicitly passed here are changed, so per-stream overrides
         such as a ``language`` given to :meth:`STTRealtime.stream` survive an unrelated
-        update. Connection-time options are retained at their current values and a
-        warning is logged, since changing them would desynchronize the
-        already-negotiated session. Every other change is queued as an in-band
-        ``config.update`` sent before the next audio frame.
+        update. Connection-time options (including ``keyterms``, which Sarvam fixes
+        when the connection opens) are retained at their current values and a warning
+        is logged, since changing them would desynchronize the already-negotiated
+        session. Every other change is queued as an in-band ``config.update`` sent
+        before the next audio frame.
 
         Args:
             language: BCP-47 language code, or ``auto`` for adaptive identification.
@@ -567,6 +648,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
             endpointing: ``vad`` for server-side turn detection, or ``manual``.
             sample_rate: Audio sample rate in Hz; retained on a live stream.
             prompt: Context or terminology hint; ``None`` clears it.
+            keyterms: Terms to bias recognition toward (saaras:v4 only); retained on
+                a live stream.
             return_timestamps: Segment-level timestamps; retained on a live stream.
             vad_sot_threshold: VAD activation threshold (``vad`` endpointing only).
             vad_min_speech_ms: Minimum speech duration in ms (``vad`` endpointing only).
@@ -590,6 +673,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
             requested["sample_rate"] = sample_rate
         if is_given(prompt):
             requested["prompt"] = prompt
+        if is_given(keyterms):
+            requested["keyterms"] = keyterms
         if is_given(return_timestamps):
             requested["return_timestamps"] = return_timestamps
         if is_given(vad_sot_threshold):
@@ -606,6 +691,9 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
         opts = replace(previous_opts, **requested)
         connection_only_options: list[str] = []
+        if opts.keyterms != previous_opts.keyterms:
+            connection_only_options.append("keyterms")
+            opts = replace(opts, keyterms=previous_opts.keyterms)
         if opts.sample_rate != previous_opts.sample_rate:
             connection_only_options.append("sample_rate")
             opts = replace(opts, sample_rate=previous_opts.sample_rate)
@@ -903,7 +991,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             self._logger.error(
                 "Failed to connect to Sarvam realtime STT WebSocket",
-                extra={**self._build_log_context(), "error": str(e), "url": ws_url},
+                # the URL carries the keyterms (PII), so it is marked for redaction
+                extra={**self._build_log_context(), "error": str(e), "lk.pii.url": ws_url},
                 exc_info=True,
             )
             raise
@@ -914,7 +1003,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                     **self._build_log_context(),
                     "error": e.message,
                     "status_code": e.status,
-                    "url": ws_url,
+                    "lk.pii.url": ws_url,
                 },
                 exc_info=True,
             )
@@ -922,7 +1011,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         except Exception as e:
             self._logger.error(
                 "Unexpected Sarvam realtime STT WebSocket connection error",
-                extra={**self._build_log_context(), "error": str(e), "url": ws_url},
+                extra={**self._build_log_context(), "error": str(e), "lk.pii.url": ws_url},
                 exc_info=True,
             )
             raise APIConnectionError("failed to connect to Sarvam realtime STT") from e
