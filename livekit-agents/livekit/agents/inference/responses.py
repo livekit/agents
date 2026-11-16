@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -45,6 +45,7 @@ from ..utils import is_given
 from ._utils import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
+    _terminal_denial,
     create_access_token,
     create_api_error_from_response,
     extract_quota_usage,
@@ -82,12 +83,6 @@ _GATEWAY_ERROR_STATUS: dict[str, tuple[int, bool | None]] = {
     "moderation_blocked": (400, False),
     "in_flight_response": (400, False),
 }
-
-
-def _terminal_denial(headers: Mapping[str, str] | None) -> bool:
-    # quota denials a retry cannot clear (out of credits, project suspended);
-    # httpx and aiohttp header maps are both case-insensitive
-    return (headers or {}).get("X-Should-Retry", "").strip().lower() == "false"
 
 
 class ResponsesOptions(TypedDict, total=False):

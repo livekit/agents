@@ -32,6 +32,12 @@ HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 HEADER_REQUEST_ID = "X-LiveKit-Request-Id"
 
 
+def _terminal_denial(headers: Mapping[str, str] | None) -> bool:
+    # quota denials a retry cannot clear (out of credits, project suspended);
+    # httpx and aiohttp header maps are both case-insensitive
+    return (headers or {}).get("X-Should-Retry", "").strip().lower() == "false"
+
+
 def create_api_error_from_response(error: aiohttp.ClientResponseError) -> APIStatusError:
     """Preserve quota details when a failed WebSocket upgrade hides its body."""
     # UPDATE_ALL_INSTANCES(INFERENCE_QUOTA_ERROR_HEADERS): agent-gateway/pkg/http/header.go.
@@ -44,7 +50,7 @@ def create_api_error_from_response(error: aiohttp.ClientResponseError) -> APISta
         request_id=headers.get(HEADER_REQUEST_ID),
         body={"category": category} if category else None,
     )
-    if headers.get("X-Should-Retry", "").strip().lower() == "false":
+    if _terminal_denial(headers):
         result.retryable = False
     return result
 
