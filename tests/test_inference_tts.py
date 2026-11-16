@@ -10,7 +10,7 @@ import aiohttp
 import pytest
 
 import livekit.agents.inference.tts as inference_tts
-from livekit.agents import APIConnectOptions
+from livekit.agents import APIConnectOptions, APIStatusError
 from livekit.agents.inference import FallbackActivatedEvent
 from livekit.agents.inference._utils import HEADER_SESSION_ID
 from livekit.agents.inference.tts import (
@@ -195,6 +195,24 @@ async def test_model_switch_mid_stream_keeps_the_stream_dialect() -> None:
     packets = [packet for packet in websocket.sent if packet["type"] == "input_transcript"]
     assert [packet["transcript"] for packet in packets] == ["[very sad] Sorry about that. "]
     assert packets[0]["generation_config"]["model"] == "fishaudio/s2.1-pro"
+
+
+@pytest.mark.virtual_time
+async def test_failed_handshake_explains_exhausted_credits(
+    quota_http_session: SimpleNamespace,
+) -> None:
+    tts = _make_tts(http_session=quota_http_session)
+    try:
+        with pytest.raises(APIStatusError) as caught:
+            await tts._connect_ws(timeout=1.0)
+    finally:
+        await tts.aclose()
+
+    assert "Credit quota exhausted." in caught.value.message
+    assert caught.value.status_code == 429
+    assert caught.value.retryable is False
+    assert caught.value.request_id == "quota-test-request"
+    assert caught.value.body == {"category": "MaxGatewayCredits"}
 
 
 async def test_dial_carries_model_and_session_id(monkeypatch: pytest.MonkeyPatch) -> None:

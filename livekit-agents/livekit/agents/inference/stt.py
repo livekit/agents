@@ -21,7 +21,6 @@ from .._exceptions import (
     APIError,
     APIStatusError,
     APITimeoutError,
-    create_api_error_from_http,
 )
 from ..language import LanguageCode
 from ..log import logger
@@ -36,6 +35,7 @@ from ..utils import is_given
 from ._utils import (
     HEADER_SESSION_ID,
     create_access_token,
+    create_api_error_from_response,
     get_default_inference_url,
     get_inference_headers,
 )
@@ -1446,7 +1446,7 @@ class SpeechStream(stt.SpeechStream):
             if session_id is not None:
                 self._request_id = session_id
         except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from e
+            raise create_api_error_from_response(e) from e
         except asyncio.TimeoutError as e:
             raise APITimeoutError("LiveKit Inference STT connection timed out.") from e
         except aiohttp.ClientConnectorError as e:
