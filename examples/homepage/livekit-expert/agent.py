@@ -89,9 +89,8 @@ async def homepage_agent(ctx: JobContext):
     disconnect_scripted_callers(session)
     publish_frontend_attributes(tts_voice=CONFIG.tts_voice_label)
 
-    # Protection against framework bugs AGT-3919 and AGT-3920:
-    # - pre_connect_audio=False disables the pre-connect audio handler, removing AGT-3919 risk
-    # - job_memory_limit_mb=600 caps memory usage, containing both bugs
+    # Protection against framework bug AGT-3920:
+    # - job_memory_limit_mb=600 caps memory usage, containing the unbounded stream reader bug
     # - session_host remains enabled (default True) because the homepage dev panel reads
     #   the lk.agent.session stream (see behaviors/frontend_attributes.py)
     await session.start(
@@ -102,7 +101,6 @@ async def homepage_agent(ctx: JobContext):
                 noise_cancellation=ai_coustics.audio_enhancement(
                     model=ai_coustics.EnhancerModel.QUAIL_VF_S
                 ),
-                pre_connect_audio=False,
             ),
         ),
     )
