@@ -4389,6 +4389,7 @@ class ChoiceModel(llm.DecisionModel):
         input: str,
         decisions: Mapping[str, llm.Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> llm.DecisionResponse:
         self.requests.put_nowait((input, decisions))
         category = await self.answers.get()

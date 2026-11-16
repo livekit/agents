@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextvars
 from collections.abc import Mapping
 from typing import Literal
 
@@ -15,14 +14,13 @@ from .._exceptions import (
     create_api_error_from_http,
 )
 from ..llm import _systemone as systemone
-from ..llm.chat_context import ChatContext
 from ..llm.decisions import (
     Decision,
     DecisionCapabilities,
     DecisionModel as BaseDecisionModel,
     DecisionResponse,
 )
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import http_context, is_given
 from ._utils import (
     HEADER_REQUEST_ID,
@@ -39,13 +37,6 @@ DecisionModels = Literal[
     "typesafe/jev-preview",
     "livekit/clef-omni",
 ]
-
-
-# headers of the evaluate() call in progress; a context var because the base class
-# runs each attempt in its own task and does not pass them to _evaluate_impl
-_call_headers: contextvars.ContextVar[Mapping[str, str] | None] = contextvars.ContextVar(
-    "inference_decision_call_headers", default=None
-)
 
 
 class _GatewayError(BaseModel):
@@ -112,32 +103,10 @@ class DecisionModel(BaseDecisionModel):
     def provider(self) -> str:
         return "livekit"
 
-    async def evaluate(
-        self,
-        *,
-        input: str | ChatContext,
-        decisions: Mapping[str, Decision],
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        extra_headers: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
-    ) -> DecisionResponse:
-        """Evaluate a batch of decisions (see ``llm.DecisionModel.evaluate``).
-
-        Args:
-            extra_headers: Headers sent on every attempt of this evaluation.
-                SDK identification headers take precedence.
-        """
-        token = _call_headers.set(dict(extra_headers) if is_given(extra_headers) else None)
-        try:
-            return await super().evaluate(
-                input=input, decisions=decisions, conn_options=conn_options
-            )
-        finally:
-            _call_headers.reset(token)
-
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, extra_headers: Mapping[str, str]) -> dict[str, str]:
         # Minted per request: a retry must not reuse a token that may have expired.
         return {
-            **(_call_headers.get() or {}),
+            **extra_headers,
             **get_inference_headers(),
             "Authorization": f"Bearer {create_access_token(self._api_key, self._api_secret)}",
             "Content-Type": "application/json",
@@ -149,6 +118,7 @@ class DecisionModel(BaseDecisionModel):
         input: str,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         questions = {name: systemone.encode_question(d) for name, d in decisions.items()}
         session = self._session or http_context.http_session()
@@ -156,7 +126,7 @@ class DecisionModel(BaseDecisionModel):
         try:
             async with session.post(
                 url,
-                headers=self._headers(),
+                headers=self._headers(extra_headers),
                 json={"model": self._model, "state": input, "questions": questions},
                 timeout=aiohttp.ClientTimeout(total=conn_options.timeout),
             ) as response:

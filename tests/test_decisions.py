@@ -63,6 +63,7 @@ class StaticModel(decisions.DecisionModel):
         )
         self.outcomes = list(outcomes)
         self.requests: list[tuple[str, Mapping[str, decisions.Decision]]] = []
+        self.headers: list[Mapping[str, str]] = []
 
     @property
     def model(self) -> str:
@@ -78,8 +79,10 @@ class StaticModel(decisions.DecisionModel):
         input: str,
         decisions: Mapping[str, decisions.Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         self.requests.append((input, decisions))
+        self.headers.append(extra_headers)
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
@@ -231,6 +234,21 @@ async def test_retryable_errors_obey_connection_options() -> None:
     response = await evaluate(model, conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
     assert len(model.requests) == 2
     assert response.errors == {}
+
+
+async def test_extra_headers_reach_every_attempt() -> None:
+    model = StaticModel(
+        APIStatusError("unavailable", status_code=503),
+        DecisionResponse(results=valid_results()),
+        DecisionResponse(results=valid_results()),
+    )
+    await evaluate(
+        model,
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=0),
+        extra_headers={"X-Feature": "test"},
+    )
+    await evaluate(model)
+    assert model.headers == [{"X-Feature": "test"}, {"X-Feature": "test"}, {}]
 
 
 async def test_non_retryable_errors_are_not_retried() -> None:

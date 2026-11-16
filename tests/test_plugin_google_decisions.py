@@ -105,6 +105,20 @@ async def test_batch_is_sent_as_questions_keyed_by_name() -> None:
     ]
 
 
+async def test_extra_headers_are_sent() -> None:
+    model, _ = model_for(response_body())
+    replay = _handlers[-1]
+    headers: list[httpx.Headers] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        headers.append(request.headers)
+        return replay(request)  # type: ignore[no-any-return]
+
+    _handlers.append(handler)
+    await model.evaluate(input="", decisions=QUESTIONS, extra_headers={"X-Feature": "test"})
+    assert headers[0]["X-Feature"] == "test"
+
+
 async def test_every_kind_is_decoded_with_distributions_and_usage() -> None:
     model, requests = model_for(response_body())
     metrics = []
