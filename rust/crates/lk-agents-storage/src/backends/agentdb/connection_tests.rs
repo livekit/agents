@@ -30,7 +30,8 @@ pub(crate) type Served = Arc<Mutex<Vec<pb::ClientMessage>>>;
 
 /// Accepts connections forever; `script` answers one request. Every client frame is kept in
 /// the returned log. An exec of `drop` closes the socket when `drop_once` is set, once. An
-/// `idle_notice` among the answers goes on request id 0, and the socket closes after it.
+/// `idle_notice` among the answers goes on request id 0, and the socket closes after it;
+/// [`serve_draining`] ends a socket with a notice in place of a request's answer.
 pub(crate) async fn serve(
     script: fn(&pb::ClientMessage) -> Vec<pb::ServerMessage>,
     drop_once: bool,
@@ -644,76 +645,140 @@ fn compressed_rows_cannot_amplify_beyond_the_frame_memory_budget() {
     assert!(matches!(decode_batch(&batch), Err(WsdbError::Protocol(_))));
 }
 
-/// Catches: a draining server's `wrong_shard_server` notice read as a lost socket. The request in
-/// flight is answered with the notice (nothing applied, so a write is refused retryable, never
-/// uncertain), and the connection redials at once, with no request waiting.
-#[tokio::test]
-async fn a_wrong_shard_notice_answers_the_request_in_flight_and_redials_at_once() {
-    fn draining(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
-        match &m.message {
-            // read, never run: the node drains and ends the socket with its notice
-            Some(pb::client_message::Message::Exec(s)) if s.sql == "moved" => {
-                vec![error(ErrorCode::WRONG_SHARD_SERVER, "draining")]
-            }
-            _ => script(m),
-        }
-    }
-    let (url, log) = serve_notice(draining).await;
-    let conn = dial(&url, "DB_1").await.unwrap();
-    let err = conn.exec(&st("moved", vec![]), conn.deadline()).await.err().unwrap();
-    assert!(
-        matches!(
-            &err,
-            WriteError::Sent(WsdbError::Server { code: ErrorCode::WRONG_SHARD_SERVER, .. })
-        ),
-        "{err}"
-    );
-    assert!(StorageError::from(err).retryable(), "nothing applied: sent again");
-    for _ in 0..200 {
-        if hellos(&log) == 2 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert_eq!(hellos(&log), 2, "redialed with no request waiting");
-    assert_eq!(conn.exec(&st("INSERT", vec![]), conn.deadline()).await.unwrap().rows_affected, 1);
-    conn.close();
-}
-
-/// Like [`serve`], with an error of `script` for a request sent as the notice on request id 0,
-/// after which the socket ends.
-async fn serve_notice(
-    script: fn(&pb::ClientMessage) -> Vec<pb::ServerMessage>,
+/// Like [`serve`] over [`script`], except that the first frame `drains` picks is never run: the
+/// server ends its socket with `notice` on request id 0, once. A `Hello` it picks is answered
+/// first, so the notice follows it before any request.
+async fn serve_draining(
+    notice: ErrorCode,
+    drains: fn(&pb::ClientMessage) -> bool,
 ) -> (String, Served) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/db", listener.local_addr().unwrap());
     let log: Served = Arc::new(Mutex::new(Vec::new()));
     let seen = log.clone();
     tokio::spawn(async move {
+        let drained = Arc::new(AtomicBool::new(false));
         loop {
             let (tcp, _) = listener.accept().await.unwrap();
-            let seen = seen.clone();
+            let (seen, drained) = (seen.clone(), drained.clone());
             tokio::spawn(async move {
                 let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
                 while let Some(Ok(Message::Binary(b))) = ws.next().await {
                     let msg = pb::ClientMessage::decode(b.as_ref()).unwrap();
                     seen.lock().push(msg.clone());
+                    let drain = drains(&msg) && !drained.swap(true, Ordering::SeqCst);
                     let hello = matches!(msg.message, Some(pb::client_message::Message::Hello(_)));
-                    for mut resp in script(&msg) {
-                        let notice = !hello
-                            && matches!(&resp.message, Some(pb::server_message::Message::Error(e)) if e.code == ErrorCode::WRONG_SHARD_SERVER.0);
-                        if !notice {
-                            resp.request_id = msg.request_id;
-                        }
-                        if ws.send(Message::binary(resp.encode_to_vec())).await.is_err() || notice {
+                    let mut answers = if drain && !hello { vec![] } else { script(&msg) };
+                    answers.iter_mut().for_each(|a| a.request_id = msg.request_id);
+                    if drain {
+                        answers.push(error(notice, "draining"));
+                    }
+                    for answer in answers {
+                        if ws.send(Message::binary(answer.encode_to_vec())).await.is_err() {
                             return;
                         }
+                    }
+                    if drain {
+                        return;
                     }
                 }
             });
         }
     });
     (url, log)
+}
+
+const NOTICES: [ErrorCode; 2] = [ErrorCode::WRONG_SHARD_SERVER, ErrorCode::IDLE_EVICTED];
+
+/// The request ids `log` holds for frames `kind` picks, in the order sent.
+fn sent(log: &Served, kind: fn(&pb::ClientMessage) -> bool) -> Vec<u32> {
+    log.lock().iter().filter(|m| kind(m)).map(|m| m.request_id).collect()
+}
+
+fn is_exec(m: &pb::ClientMessage) -> bool {
+    matches!(m.message, Some(pb::client_message::Message::Exec(_)))
+}
+
+fn is_batch(m: &pb::ClientMessage) -> bool {
+    matches!(m.message, Some(pb::client_message::Message::Batch(_)))
+}
+
+fn is_query(m: &pb::ClientMessage) -> bool {
+    matches!(m.message, Some(pb::client_message::Message::Query(_)))
+}
+
+fn is_hello(m: &pb::ClientMessage) -> bool {
+    matches!(m.message, Some(pb::client_message::Message::Hello(_)))
+}
+
+/// Catches: an exec a drain notice left unanswered failed with the notice instead of sent again.
+/// The server answered every request it read before the notice, so the exec applied nothing: it
+/// goes out again on the next socket, and its caller sees only the answer.
+#[tokio::test]
+async fn an_exec_a_drain_notice_left_unanswered_is_served_on_the_next_socket() {
+    for notice in NOTICES {
+        let (url, log) = serve_draining(notice, is_exec).await;
+        let conn = dial(&url, "DB_1").await.unwrap();
+        let r = conn.exec(&st("INSERT", vec![]), conn.deadline()).await;
+        assert_eq!(r.unwrap().rows_affected, 1, "{notice}");
+        let ids = sent(&log, is_exec);
+        assert!(ids.len() == 2 && ids[0] != ids[1], "{notice}: sent again as a new request");
+        assert_eq!(hellos(&log), 2, "{notice}: on the next socket");
+        conn.close();
+    }
+}
+
+/// Catches: a batch a drain notice left unanswered failed instead of sent again.
+#[tokio::test]
+async fn a_batch_a_drain_notice_left_unanswered_is_served_on_the_next_socket() {
+    for notice in NOTICES {
+        let (url, log) = serve_draining(notice, is_batch).await;
+        let conn = dial(&url, "DB_1").await.unwrap();
+        let stmts: Vec<Statement> = (0..4).map(|_| st("S", vec![])).collect();
+        let out = conn.batch(&stmts, conn.deadline()).await.unwrap();
+        assert_eq!(out.results[3].rows().len(), 2, "{notice}");
+        assert_eq!(sent(&log, is_batch).len(), 2, "{notice}: sent again");
+        assert_eq!(hellos(&log), 2, "{notice}");
+        conn.close();
+    }
+}
+
+/// Catches: a query a drain notice left unanswered failed instead of sent again.
+#[tokio::test]
+async fn a_query_a_drain_notice_left_unanswered_is_served_on_the_next_socket() {
+    for notice in NOTICES {
+        let (url, log) = serve_draining(notice, is_query).await;
+        let conn = dial(&url, "DB_1").await.unwrap();
+        let rows = conn.query_all(&st("SELECT", vec![]), conn.deadline()).await.unwrap();
+        assert_eq!(rows.len(), 2, "{notice}");
+        assert_eq!(sent(&log, is_query).len(), 2, "{notice}: sent again");
+        assert_eq!(hellos(&log), 2, "{notice}");
+        conn.close();
+    }
+}
+
+/// Catches: a request racing a notice read right after `Hello` failing, whether it was bound to
+/// the drained socket, written to it, or registered after it. A `wrong_shard_server` socket is
+/// redialed at once, with no request waiting.
+#[tokio::test]
+async fn a_drain_notice_right_after_hello_serves_the_next_request_on_the_next_socket() {
+    for notice in NOTICES {
+        let (url, log) = serve_draining(notice, is_hello).await;
+        let conn = dial(&url, "DB_1").await.unwrap();
+        if notice == ErrorCode::WRONG_SHARD_SERVER {
+            for _ in 0..200 {
+                if hellos(&log) == 2 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert_eq!(hellos(&log), 2, "redialed with no request waiting");
+        }
+        let r = conn.exec(&st("INSERT", vec![]), conn.deadline()).await;
+        assert_eq!(r.unwrap().rows_affected, 1, "{notice}");
+        assert_eq!(hellos(&log), 2, "{notice}");
+        conn.close();
+    }
 }
 
 /// Catches: a refused upgrade read as one refusal for both causes. 401 is unauthenticated, 403

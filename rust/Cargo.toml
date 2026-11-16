@@ -60,13 +60,13 @@ parking_lot  = "0.12"
 # proto in the workspace; nothing here generates or vendors a `.rs` from a `.proto`.
 #
 # Pin the Agents 2.0 SDK bundle so builds do not depend on a modified sibling checkout.
-livekit-protocol = { git = "https://github.com/livekit/rust-sdks", rev = "9052400c2a6fe6e9932f0e4f45848c8e7cf7d308" }
+livekit-protocol = { git = "https://github.com/livekit/rust-sdks", rev = "805fdf24d53b9fb4878b7f72021a68ba1b4b46c2" }
 # The access token: `AccessToken`/`TokenVerifier`/`Claims` over HS256. The worker's `/agent`
 # credential and a simulated job's participant token need `VideoGrants.agent` and `Claims.kind`.
-livekit-token = { git = "https://github.com/livekit/rust-sdks", rev = "9052400c2a6fe6e9932f0e4f45848c8e7cf7d308" }
+livekit-token = { git = "https://github.com/livekit/rust-sdks", rev = "805fdf24d53b9fb4878b7f72021a68ba1b4b46c2" }
 # Its `ThreadClient` and `DatabaseClient` are the only way to agentstore's threads and databases.
 # Its rustls is pinned to `ring`, the workspace's one crypto provider.
-livekit-api = { git = "https://github.com/livekit/rust-sdks", rev = "9052400c2a6fe6e9932f0e4f45848c8e7cf7d308", default-features = false, features = ["services", "rustls-tls-native-roots"] }
+livekit-api = { git = "https://github.com/livekit/rust-sdks", rev = "805fdf24d53b9fb4878b7f72021a68ba1b4b46c2", default-features = false, features = ["services", "rustls-tls-native-roots"] }
 # `livekit-protocol`'s prost, and therefore the workspace's: prost-derive emits `::prost::` paths,
 # so every crate that names a `Message` from that package must see the same major, 0.14 since
 # livekit/rust-sdks#1447.

@@ -100,9 +100,11 @@ fn refused(code: ErrorCode, message: String) -> StorageError {
 impl From<WsdbError> for StorageError {
     fn from(e: WsdbError) -> Self {
         match e {
-            WsdbError::Closed | WsdbError::Disconnected | WsdbError::Timeout | WsdbError::Io(_) => {
-                StorageError::Unavailable(e.to_string())
-            }
+            WsdbError::Closed
+            | WsdbError::Disconnected
+            | WsdbError::Timeout
+            | WsdbError::Io(_)
+            | WsdbError::Drained => StorageError::Unavailable(e.to_string()),
             WsdbError::Server { code, message } => refused(code, message),
             WsdbError::Protocol(m) => StorageError::Invalid(m),
             WsdbError::TooLarge(_) => {
