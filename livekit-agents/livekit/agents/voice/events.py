@@ -263,7 +263,7 @@ class RunContext(Generic[Userdata_T]):
             self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return
 
-        await self._executor._enqueue_reply(self, [pair[0], pair[1]], tool_choice="none")
+        await self._executor._enqueue_reply(self, pair, tool_choice="none")
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]

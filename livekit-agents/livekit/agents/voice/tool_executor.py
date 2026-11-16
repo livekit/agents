@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from typing_extensions import TypedDict
 
 from .. import utils
-from ..llm.chat_context import ChatContext, ChatItem
+from ..llm.chat_context import ChatContext, ChatItem, FunctionCall, FunctionCallOutput
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
     DuplicateMode,
@@ -438,7 +438,7 @@ class _ToolExecutor:
             run_ctx._updates.append(pair)
             # a return is a result to act on, unlike a report, so the reply that phrases it
             # is as free to call something as the reply to an ordinary tool would be
-            await self._enqueue_reply(run_ctx, [pair[0], pair[1]], tool_choice=None)
+            await self._enqueue_reply(run_ctx, pair, tool_choice=None)
             return output
 
         exe_task = asyncio.create_task(_execute_tool(), name=f"tool_exec_{fnc_name}")
@@ -558,10 +558,13 @@ class _ToolExecutor:
     async def _enqueue_reply(
         self,
         ctx: RunContext,
-        items: list[ChatItem],
+        pair: tuple[FunctionCall, FunctionCallOutput],
         *,
         tool_choice: ToolChoice | None = None,
     ) -> None:
+        fnc_call, fnc_call_out = pair
+        items: list[ChatItem] = [fnc_call, fnc_call_out]
+
         # eager insert so a reply firing before delivery sees the items
         target = (
             self._owning_activity.agent
@@ -576,7 +579,7 @@ class _ToolExecutor:
         )
         ctx.session.history.insert(items)
 
-        if not any(item.type == "function_call_output" and item.reply_required for item in items):
+        if not fnc_call_out.reply_required:
             return
 
         self._pending_updates.append(
