@@ -1415,6 +1415,44 @@ async def test_an_update_during_speech_does_not_flush_deferred_keyterms() -> Non
 # -- coordinated gateway handoff --
 
 
+async def test_handoff_prepares_replacement_before_draining_old_stream() -> None:
+    candidate_created = asyncio.Event()
+
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if event["type"] == "session.create":
+            ws.reply("session.created")
+            if ws.index:
+                candidate_created.set()
+        elif event["type"] == "session.handoff.complete":
+            ws.reply("session.handoff.accepted", handoff_id="h1")
+
+    gateway = _Gateway(handler)
+    stream = _gateway_stt(gateway).stream(conn_options=_no_retry())
+    try:
+        await _live(stream)
+        gateway.sockets[0].reply("session.handoff.request", handoff_id="h1")
+        await asyncio.wait_for(candidate_created.wait(), timeout=0.5)
+        assert gateway.sockets[1].received[0]["handoff_protocol"] == 2
+        assert "session.handoff.prepared" not in gateway.types()
+        gateway.sockets[1].reply("session.handoff.ready", handoff_id="stale")
+        await asyncio.sleep(0.01)
+        assert "session.handoff.prepared" not in gateway.types()
+        gateway.sockets[1].reply("session.handoff.ready", handoff_id="h1")
+        await gateway.seen["session.handoff.prepared"].wait()
+        assert "session.handoff.complete" not in gateway.types()
+        gateway.sockets[0].reply("session.handoff.drained", handoff_id="h1")
+        await gateway.seen["session.handoff.switched"].wait()
+        assert gateway.types() == [
+            "session.create",
+            "session.handoff.pause",
+            "session.handoff.prepared",
+            "session.handoff.complete",
+            "session.handoff.switched",
+        ]
+    finally:
+        await stream.aclose()
+
+
 async def _handoff_reply(ws: _GatewaySocket, event: dict[str, Any]) -> None:
     kind = event["type"]
     if kind == "session.create":
@@ -1423,7 +1461,7 @@ async def _handoff_reply(ws: _GatewaySocket, event: dict[str, Any]) -> None:
             ws.reply("session.handoff.ready", handoff_id="h1")
     elif kind == "session.update":
         ws.reply("session.updated", success=True)
-    elif kind == "session.handoff.pause":
+    elif kind == "session.handoff.prepared":
         ws.reply("session.handoff.drained", handoff_id="h1")
     elif kind == "session.handoff.complete":
         ws.reply("session.handoff.accepted", handoff_id="h1")
@@ -1478,6 +1516,7 @@ async def test_handoff_keeps_updates_and_partial_audio_on_each_side_of_the_barri
             "input_audio",
             "session.update",
             "session.handoff.pause",
+            "session.handoff.prepared",
             "session.handoff.complete",
             "session.handoff.switched",
         ]
@@ -1523,7 +1562,7 @@ async def test_handoff_waits_for_preceding_update_acknowledgments() -> None:
         await stream.aclose()
 
 
-@pytest.mark.parametrize("stage", ["pause", "connect", "ready", "complete", "switched"])
+@pytest.mark.parametrize("stage", ["pause", "connect", "ready", "prepared", "complete", "switched"])
 @pytest.mark.parametrize("failure", ["abort", "disconnect", "candidate_error"])
 async def test_handoff_failure_at_each_stage(stage: str, failure: str) -> None:
     reached = asyncio.Event()
@@ -1534,6 +1573,7 @@ async def test_handoff_failure_at_each_stage(stage: str, failure: str) -> None:
         blocked = (
             (stage == "pause" and kind == "session.handoff.pause")
             or (stage == "ready" and kind == "session.create" and ws.index == 1)
+            or (stage == "prepared" and kind == "session.handoff.prepared")
             or (stage == "complete" and kind == "session.handoff.complete")
             or (stage == "switched" and kind == "session.handoff.switched")
         )
@@ -1587,6 +1627,7 @@ async def test_handoff_failure_at_each_stage(stage: str, failure: str) -> None:
     "blocked_kind",
     [
         "session.handoff.pause",
+        "session.handoff.prepared",
         "session.handoff.complete",
         "session.handoff.switched",
         "session.create",
@@ -1751,7 +1792,7 @@ async def test_handoff_abort_write_has_bounded_cleanup(monkeypatch: pytest.Monke
     async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
         if event["type"] == "session.handoff.abort":
             await asyncio.Event().wait()
-        elif event["type"] != "session.handoff.pause":
+        elif event["type"] != "session.handoff.prepared":
             await _handoff_reply(ws, event)
 
     gateway = _Gateway(handler)

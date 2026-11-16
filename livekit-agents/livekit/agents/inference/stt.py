@@ -1135,7 +1135,6 @@ class SpeechStream(stt.SpeechStream):
             if old.update_uncertain:
                 raise APIConnectionError("STT handoff configuration is uncertain")
             await step(send("session.handoff.pause"))
-            await step(wait_event(old, "session.handoff.drained"))
             # options belongs to this connection, not to later update_options calls.
             options = replace(old.options, extra_kwargs=dict(old.options.extra_kwargs))
 
@@ -1151,6 +1150,8 @@ class SpeechStream(stt.SpeechStream):
             assert candidate is not None
             await step(wait_event(candidate, "session.created"))
             await step(wait_event(candidate, "session.handoff.ready"))
+            await step(send("session.handoff.prepared"))
+            await step(wait_event(old, "session.handoff.drained"))
             await step(send("session.handoff.complete"))
             await step(wait_event(old, "session.handoff.accepted"))
             await step(send("session.handoff.switched"))
@@ -1604,7 +1605,7 @@ class SpeechStream(stt.SpeechStream):
         else:
             _drop_ineffective_language_hint(opts.model, opts.language, extra, warn=False)
         params: dict[str, Any] = {
-            "handoff_protocol": 1,
+            "handoff_protocol": 2,
             "settings": {
                 "sample_rate": str(opts.sample_rate),
                 "encoding": opts.encoding,
