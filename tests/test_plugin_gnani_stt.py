@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -661,6 +662,7 @@ class FakeVachanaSTT:
             await ws.close(code=1001, message=b"idle_timeout")
             return ws
 
+        late_replies: list[asyncio.Future[None]] = []
         async for msg in ws:
             if msg.type == aiohttp.WSMsgType.BINARY:
                 s.audio += len(msg.data)
@@ -705,7 +707,10 @@ class FakeVachanaSTT:
                         )
                         continue
                     if self.commit_delay:
-                        await asyncio.sleep(self.commit_delay)
+                        # reply from a task: like a real server, keep reading (and so
+                        # answer a close) while the transcript is still being produced
+                        late_replies.append(asyncio.ensure_future(self._reply_late(ws, index)))
+                        continue
                     await ws.send_json(self._transcript(index))
                     if self.commit_close_code:  # close_after_transcript
                         await ws.close(code=self.commit_close_code)
@@ -715,7 +720,18 @@ class FakeVachanaSTT:
                         await ws.send_json({"type": "error", "message": self.update_error})
                     else:
                         await ws.send_json({"type": "settings_updated", "config": {}})
+        for reply in late_replies:
+            reply.cancel()
         return ws
+
+    async def _reply_late(self, ws: web.WebSocketResponse, index: int) -> None:
+        await asyncio.sleep(self.commit_delay)
+        if ws.closed:
+            return
+        with contextlib.suppress(Exception):
+            await ws.send_json(self._transcript(index))
+            if self.commit_close_code:  # close_after_transcript
+                await ws.close(code=self.commit_close_code)
 
     def _transcript(self, index: int) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -1354,6 +1370,25 @@ async def test_language_list_change_commits_audio_the_server_has_not_announced_y
 
     assert {"type": "commit"} in server.sessions[0].controls
     assert FINAL in _types(events)
+
+
+async def test_language_list_change_waits_as_long_as_the_request_timeout(server):
+    """The wait for the pending transcript is bounded by the caller's timeout, not by a
+    private shorter one: a transcript slower than five seconds must still arrive."""
+    server.commit_delay = 5.5
+    stt_ = _make_stt(server, model="prisma-v3.0", language="hi-IN")
+    stream = stt_.stream(conn_options=APIConnectOptions(max_retry=0, timeout=10))
+    await _utterance(stream, flush=False)
+    first = await stream.__anext__()
+    assert first.type == SOS
+
+    stt_.update_options(language=["hi-IN", "en-IN"])
+
+    await _wait_for(lambda: len(server.sessions) >= 2, timeout=10)
+    stream.end_input()
+    events = [first, *await _collect(stream)]
+
+    assert FINAL in _types(events)  # the old session was not closed on it after 5 s
 
 
 async def test_language_list_change_survives_audio_flowing_through_the_reconnect(server):

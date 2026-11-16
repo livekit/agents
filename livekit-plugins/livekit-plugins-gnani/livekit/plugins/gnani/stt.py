@@ -775,7 +775,7 @@ class SpeechStream(stt.RecognizeStream):
                 if self._speaking or self._signal_unanswered or self._commits_pending:
                     if self._speaking or self._signal_unanswered:
                         await self._send_commit(ws)
-                    deadline = time.monotonic() + min(self._conn_options.timeout, 5.0)
+                    deadline = time.monotonic() + self._conn_options.timeout
                     while (self._speaking or self._commits_pending) and (
                         time.monotonic() < deadline
                     ):
