@@ -875,6 +875,7 @@ class SpeechStream(stt.RecognizeStream):
 
                     if send_task in done:
                         await self._drain_after_input(recv_task)
+                        self._raise_if_receiver_failed(recv_task)
                         return True
                     return False
                 finally:
@@ -930,6 +931,24 @@ class SpeechStream(stt.RecognizeStream):
                 logger.debug("Gnani STT: no reply for the final utterance before timeout")
                 return
             await asyncio.wait({recv_task}, timeout=min(remaining, 0.05))
+
+    def _raise_if_receiver_failed(self, recv_task: asyncio.Task[None]) -> None:
+        """The receiver may have died while the end of the input was being drained (an
+        unknown server error, a 1008 close, a dropped connection). Report that instead of
+        returning success, unless every committed utterance was already answered: then the
+        result is complete and a connection that drops afterwards is not a failure."""
+        if not recv_task.done() or recv_task.cancelled():
+            return
+        error = recv_task.exception()
+        if error is None:
+            return
+        import websockets
+
+        if isinstance(error, websockets.exceptions.ConnectionClosed) and (
+            self._commits_pending == 0 and not (error.rcvd and error.rcvd.code == 1008)
+        ):
+            return
+        raise error
 
     def _note_reply(self) -> None:
         """A transcript or an utterance error arrived: it answers one outstanding commit,

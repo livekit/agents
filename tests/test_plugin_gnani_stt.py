@@ -625,6 +625,12 @@ class FakeVachanaSTT:
         self.fatal_error: str | None = None
         # reply to `update_settings` with this `error` instead of `settings_updated`
         self.update_error: str | None = None
+        # answer a `commit` with this `error` (connection left open) instead of a transcript
+        self.commit_error: str | None = None
+        # close the connection with this code when a `commit` arrives: instead of answering,
+        # or after sending the transcript when `close_after_transcript` is set
+        self.commit_close_code: int | None = None
+        self.close_after_transcript = False
         # seconds the server takes before it answers the audio it received (speech_start
         # and the transcript both come late), and a switch for a server that never answers
         self.reply_delay = 0.0
@@ -686,6 +692,12 @@ class FakeVachanaSTT:
                 s.controls.append(body)
                 if body["type"] == "commit" and s.speaking:
                     s.speaking = False
+                    if self.commit_error:
+                        await ws.send_json({"type": "error", "message": self.commit_error})
+                        continue
+                    if self.commit_close_code and not self.close_after_transcript:
+                        await ws.close(code=self.commit_close_code)
+                        break
                     if self.utterance_errors_left > 0:
                         self.utterance_errors_left -= 1
                         await ws.send_json(
@@ -695,6 +707,9 @@ class FakeVachanaSTT:
                     if self.commit_delay:
                         await asyncio.sleep(self.commit_delay)
                     await ws.send_json(self._transcript(index))
+                    if self.commit_close_code:  # close_after_transcript
+                        await ws.close(code=self.commit_close_code)
+                        break
                 elif body["type"] == "update_settings":
                     if self.update_error:
                         await ws.send_json({"type": "error", "message": self.update_error})
@@ -1122,6 +1137,44 @@ async def test_rejected_update_settings_does_not_kill_the_stream(server, message
 
     assert FINAL in _types(events)
     assert len(server.sessions) == 1
+
+
+async def test_unknown_error_for_the_final_utterance_is_not_swallowed(server):
+    """After `end_input()` the stream only drains the reply to the last commit. An error that
+    arrives there used to end the receiver while the stream reported success."""
+    server.commit_error = "Insufficient credits"
+    stt_ = _make_stt(server, language="hi-IN")
+    stream = stt_.stream(conn_options=OPTS)
+    await _utterance(stream, flush=False)
+    stream.end_input()
+
+    with pytest.raises(APIStatusError, match="Insufficient credits"):
+        await _collect(stream)
+
+
+async def test_policy_close_while_waiting_for_the_final_utterance_is_an_error(server):
+    server.commit_close_code = 1008
+    stt_ = _make_stt(server, language="hi-IN")
+    stream = stt_.stream(conn_options=OPTS)
+    await _utterance(stream, flush=False)
+    stream.end_input()
+
+    with pytest.raises(APIStatusError):
+        await _collect(stream)
+
+
+async def test_abnormal_close_after_the_final_transcript_is_not_an_error(server):
+    """Everything was delivered, so a connection that drops afterwards must not turn a
+    complete result into a failure."""
+    server.commit_close_code = 1011
+    server.close_after_transcript = True
+    stt_ = _make_stt(server, language="hi-IN")
+    stream = stt_.stream(conn_options=OPTS)
+    await _utterance(stream, flush=False)
+    stream.end_input()
+
+    events = await _collect(stream)
+    assert FINAL in _types(events)
 
 
 async def test_unknown_stream_error_fails_loudly(server):
