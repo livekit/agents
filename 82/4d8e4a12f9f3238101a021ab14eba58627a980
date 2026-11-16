@@ -1,0 +1,21 @@
+livekit-plugins/livekit-plugins-perplexity/livekit/plugins/perplexity/decision_model.py
+  s_cc191f3dfa2b8c::t_0aa4ed05b93f42 126,138
+tests/test_plugin_perplexity_decisions.py
+  s_cc191f3dfa2b8c::t_30bb495c6ca236 102-111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "824d8e4a12f9f3238101a021ab14eba58627a980",
+  "prompts": {},
+  "sessions": {
+    "s_cc191f3dfa2b8c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_cc191f3dfa2b8c",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
