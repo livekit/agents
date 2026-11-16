@@ -1,0 +1,23 @@
+tests/test_plugin_openai_decisions.py
+  s_ed5b414ad37a50::t_f86c48ae20b556 26,90,137
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/decision_model.py
+  s_ed5b414ad37a50::t_f86c48ae20b556 66
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/models.py
+  s_ed5b414ad37a50::t_f86c48ae20b556 71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2207df8f43c41088ad60380f4dcc5deff1b8a2cb",
+  "prompts": {},
+  "sessions": {
+    "s_ed5b414ad37a50": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1e4b4-ff85-7703-8f5a-84631af58931",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
