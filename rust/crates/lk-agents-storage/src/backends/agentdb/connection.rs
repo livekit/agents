@@ -155,7 +155,9 @@ pub struct Options {
     pub database_id: String,
     /// The receive buffer, in batches, per streaming query.
     pub credits: u32,
-    /// Bounds the WebSocket dial plus `Hello`.
+    /// The least time one attempt's WebSocket dial plus `Hello` gets. An attempt gets the longer
+    /// of it and the backoff before the next, so a server slower than this to answer (a cold
+    /// open) is still reached.
     pub dial_timeout: Duration,
     pub reconnect: Reconnect,
 }
@@ -166,7 +168,7 @@ impl Options {
             url: url.into(),
             database_id: database_id.into(),
             credits: 8,
-            dial_timeout: Duration::from_secs(10),
+            dial_timeout: Duration::from_secs(20),
             reconnect: Reconnect::default(),
         }
     }
@@ -375,7 +377,7 @@ impl Conn {
         });
         let guard = Arc::new(CloseOnDrop(Arc::downgrade(&inner)));
         let conn = Conn(inner, Some(guard));
-        let socket = conn.connect().await?;
+        let socket = conn.connect(conn.0.opts.reconnect.min_backoff).await?;
         ready.set(true);
         let ping_interval = socket.ping_interval;
         let supervisor = Supervisor { conn: conn.unguarded(), ready };
@@ -408,16 +410,17 @@ impl Conn {
         crate::deadline::or_default(&*self.0.clock)
     }
 
-    /// Dial, `Hello`, publish the writer.
-    async fn connect(&self) -> Result<Socket, WsdbError> {
+    /// Dial, `Hello`, publish the writer, within the longer of the dial timeout and `backoff`.
+    async fn connect(&self, backoff: Duration) -> Result<Socket, WsdbError> {
         let clock = &*self.0.clock;
-        let deadline = Some(clock.now().saturating_add(self.0.opts.dial_timeout));
+        let timeout = self.0.opts.dial_timeout.max(backoff);
+        let deadline = Some(clock.now().saturating_add(timeout));
         // the dial's own bound, not a caller's deadline: the next attempt may find the database
         // warm
         let timed_out = |_| {
             WsdbError::Io(format!(
-                "dial {}: no answer within the dial timeout, {:?}",
-                self.0.opts.url, self.0.opts.dial_timeout
+                "dial {}: no answer within the dial timeout, {timeout:?}",
+                self.0.opts.url
             ))
         };
         let token = self
@@ -642,7 +645,7 @@ impl Conn {
             if !std::mem::take(&mut now) {
                 self.0.waiting.wait_until(|n| (*n > 0).then_some(())).await;
             }
-            match self.connect().await {
+            match self.connect(backoff).await {
                 Ok(socket) => {
                     log::info!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb reconnected");
                     return Some(socket);

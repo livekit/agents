@@ -921,3 +921,29 @@ async fn a_frame_the_socket_fails_to_send_is_not_sent() {
     assert!(StorageError::from(err).retryable());
     conn.close();
 }
+
+/// An attempt gets the longer of the dial timeout and its backoff: a server slower to answer
+/// `Hello` than the dial timeout (a cold open) is still reached, rather than every attempt giving
+/// up before the answer comes.
+#[tokio::test]
+async fn a_dial_attempt_waits_as_long_as_its_backoff() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/db", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        let Some(Ok(Message::Binary(b))) = ws.next().await else { return };
+        let hello = pb::ClientMessage::decode(b.as_ref()).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let mut ok = hello_ok();
+        ok.request_id = hello.request_id;
+        ws.send(Message::binary(ok.encode_to_vec())).await.unwrap();
+        while ws.next().await.is_some() {}
+    });
+    let mut opts = Options::new(&url, "DB_1");
+    opts.dial_timeout = Duration::from_millis(50);
+    opts.reconnect.min_backoff = Duration::from_secs(1);
+    let background = crate::testing::background();
+    let conn = Conn::dial(opts, minter(), background.spawner, background.clock).await.unwrap();
+    conn.close();
+}
