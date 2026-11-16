@@ -55,6 +55,10 @@ NUM_CHANNELS = 1
 
 # Per-request text limit for both Klone V2 models.
 _MAX_TEXT_CHARS = 5000
+# Pro generates the whole clip before responding (~2.4s per 100 chars measured),
+# so long batches are split to keep each request well inside its timeout and to
+# start playback sooner. Requests near the 5000-char limit also failed upstream.
+_PRO_MAX_CHUNK_CHARS = 1000
 
 # The server closes idle WebSockets after 5 minutes.
 _WS_MAX_IDLE_SECS = 240.0
@@ -244,24 +248,27 @@ class TTS(tts.TTS):
         except aiohttp.ClientError as e:
             raise APIConnectionError(f"Failed to connect to FonadaLabs TTS: {e}") from e
 
+        # The socket is not in the pool yet: close it on any failure, including
+        # cancellation while waiting for the ready message.
         try:
-            msg = await ws.receive(timeout=timeout)
-        except asyncio.TimeoutError as e:
-            await ws.close()
-            raise APITimeoutError("Timed out waiting for FonadaLabs TTS ready message") from e
+            try:
+                msg = await ws.receive(timeout=timeout)
+            except asyncio.TimeoutError as e:
+                raise APITimeoutError("Timed out waiting for FonadaLabs TTS ready message") from e
 
-        if msg.type != aiohttp.WSMsgType.TEXT:
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                raise APIConnectionError(f"FonadaLabs TTS closed before ready ({msg.type})")
+            data = json.loads(msg.data)
+            if data.get("type") != "ready":
+                code, message = parse_error(data)
+                raise APIStatusError(
+                    message=f"FonadaLabs TTS rejected connection [{code}]: {message}",
+                    status_code=int(data.get("status") or 403),
+                    retryable=False,
+                )
+        except BaseException:
             await ws.close()
-            raise APIConnectionError(f"FonadaLabs TTS closed before ready ({msg.type})")
-        data = json.loads(msg.data)
-        if data.get("type") != "ready":
-            await ws.close()
-            code, message = parse_error(data)
-            raise APIStatusError(
-                message=f"FonadaLabs TTS rejected connection [{code}]: {message}",
-                status_code=int(data.get("status") or 403),
-                retryable=False,
-            )
+            raise
         return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -357,7 +364,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await self._run_ws(_next_batch, output_emitter)
             else:
                 while (batch := await _next_batch()) is not None:
-                    for chunk in _split_text(batch):
+                    for chunk in _split_text(batch, _PRO_MAX_CHUNK_CHARS):
                         self._mark_started()
                         await self._run_http(chunk, output_emitter)
             output_emitter.flush()
