@@ -178,15 +178,17 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         llm: Classification and menu model. When omitted, use
             ``google/gemma-4-31b-it`` if LiveKit Cloud credentials are
             available; otherwise use the current Agent's LLM. Pass None to
-            always use the current Agent's LLM. A string selects a LiveKit
-            Inference model. A DecisionModel that supports choice decisions
+            always use the current Agent's LLM, for example to keep AMD within
+            the quota of the session's models. A string selects a LiveKit
+            Inference model. AMD logs the selected models when it starts. A DecisionModel that supports choice decisions
             classifies, but AMD then skips menu extraction. Calls use
             ``session.conn_options.llm_conn_options``. Supplied models stay
             open when AMD completes.
         stt: Optional streaming STT model for AMD. When omitted, use
             ``cartesia/ink-whisper`` if LiveKit Cloud credentials are available;
             otherwise use only the session transcript. Pass None to always use
-            only the session transcript. With session STT configured, the
+            only the session transcript, with no extra STT usage. With session
+            STT configured, the
             classifier sees both transcripts of each turn. A string selects a
             LiveKit Inference model.
         participant_identity: Select the participant before placing an outbound call.
@@ -206,7 +208,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         idle_timeout: Silent, inactive time before AMD completes outside voicemail.
         voicemail_idle_timeout: Silent, inactive time in voicemail. Starts after
             playback finishes, to allow a delayed post-message menu to arrive.
-        timeout: Hard limit from the start of listening.
+        timeout: Hard limit from the start of listening. Tune it for your calls:
+            lower it when AMD only needs to tell a person from a machine and the
+            agent need not answer one, and raise it when the agent must get
+            through screeners, IVR menus, or hold queues.
         inference_timeout: Prediction deadline per committed turn. Late results are ignored.
         machine_silence_threshold: Continuous participant silence before a machine
             reply plays. Includes silence before and during classification. Pipeline
@@ -236,8 +241,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         ivr_instructions: str | None = _DEFAULT_IVR_INSTRUCTIONS,
         human_instructions: str | None = _DEFAULT_HUMAN_INSTRUCTIONS,
         idle_timeout: float = 10.0,
-        voicemail_idle_timeout: float = 60.0,
-        timeout: float = 120.0,
+        voicemail_idle_timeout: float = 10.0,
+        timeout: float = 60.0,
         inference_timeout: float = 2.0,
         machine_silence_threshold: float = _MACHINE_SILENCE_THRESHOLD,
         max_uncertain_turns: int = 3,
@@ -253,6 +258,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             raise ValueError("max_inference_timeouts must be positive")
         if machine_silence_threshold < 0:
             raise ValueError("machine_silence_threshold must be non-negative")
+        llm_source = "custom" if llm is not None else "session"
+        stt_source = "custom" if stt is not None else "session"
         if not is_given(llm) or not is_given(stt):
             api_key = os.getenv("LIVEKIT_INFERENCE_API_KEY") or os.getenv("LIVEKIT_API_KEY")
             api_secret = os.getenv("LIVEKIT_INFERENCE_API_SECRET") or os.getenv(
@@ -263,10 +270,13 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             )
             if not is_given(llm):
                 llm = self._DEFAULT_LLM_MODEL if auto_select else None
+                llm_source = "default" if auto_select else "session"
             if not is_given(stt):
                 stt = self._DEFAULT_STT_MODEL if auto_select else None
+                stt_source = "default" if auto_select else "session"
 
         self._session = session
+        self._model_sources = (llm_source, stt_source)
         self._turn_hooks = _AMDTurnHooks(self)
         self._owns_llm = isinstance(llm, str)
         self._llm_model = llm if isinstance(llm, str) else None
@@ -412,6 +422,22 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             self._lifecycle = AMDLifecycle.FINISHED
             await self._close_resources()
             raise
+
+        llm_source, stt_source = self._model_sources
+        # AMD defaults use their own model quotas, apart from the session's models
+        logger.info(
+            "amd models selected; pass llm= or stt= to AMD to override",
+            extra={
+                "llm": f"{model.provider}/{model.model}",
+                "llm_source": llm_source,
+                "stt": (
+                    f"{self._stt.provider}/{self._stt.model}"
+                    if self._stt is not None
+                    else "session transcript only"
+                ),
+                "stt_source": stt_source,
+            },
+        )
 
         self._lifecycle = AMDLifecycle.PENDING
         try:
@@ -646,6 +672,14 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
     async def _classify_when_heard(self, turn: Turn, late_final: LateAMDFinal) -> None:
         late = await late_final.wait()
         if self.lifecycle is not AMDLifecycle.ACTIVE:
+            return
+        if turn.turn_id != self._turn_id:
+            # a newer turn owns classification and replies; it must not take this turn's
+            # result, and this turn must not cancel its request
+            if late is not None:
+                turn.transcript = dataclasses.replace(turn.transcript, amd=late)
+                self._chat_ctx.add_transcript(turn)
+                self._add_realtime_transcript(turn)
             return
         if late is not None:
             turn.transcript = dataclasses.replace(turn.transcript, amd=late)

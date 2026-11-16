@@ -97,8 +97,8 @@ async with detector:
 | `ivr_instructions` | built in | Reply instructions in `machine-ivr`. `None` makes it a customer-handled stage (section 9.5). |
 | `human_instructions` | built in | Instructions for the reply to the turn whose `human` prediction completes AMD after a machine stage (section 10.2). `None` keeps the Agent's own instructions. |
 | `idle_timeout` | 10 s | Silent, inactive time before completion outside `machine-vm`. |
-| `voicemail_idle_timeout` | 60 s | Silent, inactive time in `machine-vm`. |
-| `timeout` | 120 s | Overall limit from the start of listening (section 5.2). |
+| `voicemail_idle_timeout` | 10 s | Silent, inactive time in `machine-vm`. |
+| `timeout` | 60 s | Overall limit from the start of listening (section 5.2). Lower it when the agent need not answer machines; raise it to get through screeners, IVR menus, or hold queues. |
 | `inference_timeout` | 2 s | Deadline for each request (section 6.2). |
 | `machine_silence_threshold` | 1.5 s | Participant silence before a machine-stage reply plays. `0` disables the silence hold. |
 | `max_uncertain_turns` | 3 | Consecutive `uncertain` predictions before completion. |
@@ -119,7 +119,10 @@ Model rules:
   selects `cartesia/ink-whisper`. Both need a LiveKit Cloud `LIVEKIT_URL`, plus
   `LIVEKIT_INFERENCE_API_KEY` and `LIVEKIT_INFERENCE_API_SECRET`. `LIVEKIT_API_KEY`
   and `LIVEKIT_API_SECRET` are fallbacks. Without them, an omitted value acts as
-  `None`.
+  `None`. These defaults use their own model quotas, apart from the session's
+  models. Pass `None` to keep AMD on the session's models.
+- On entry, AMD logs the selected LLM and STT and where each came from: `custom`,
+  `default`, or `session`.
 - A string selects a LiveKit Inference model. AMD creates it on entry and closes it
   on completion. AMD does not close a supplied model. The LLM must support required
   function calls. Calls use `session.conn_options.llm_conn_options`.
@@ -161,6 +164,7 @@ model (section 11.2).
 | `reason` | Why AMD completed (section 12.1). |
 | `voicemail_message_played` | `True` when the voicemail message played without interruption (section 10.4). |
 | `last_prediction` | The latest prediction, or `None`. It can be an `inference_error` or `inference_timeout` event. |
+| `is_error` | Property, not serialized. `True` when `reason` is `internal_error`, `participant_missing`, `agent_changed`, or `cancelled`: AMD stopped without detecting the call. Timeouts, idle completion, and a participant disconnect are not errors. |
 
 ### 4.4 Categories
 
@@ -287,6 +291,10 @@ that arrives before the task starts still belongs to the turn.
   the empty-turn rules apply (section 7.3). If a pending request already gave the turn
   a reused prediction, AMD keeps that prediction. It adds the AMD final to classifier
   history, and the next request covers it.
+- If a newer turn commits during the wait, the newer turn owns the request and the
+  reply. The older turn starts no request, cancels no request, and gives no reused
+  prediction to the newer turn. Its AMD final, if one arrives, goes to classifier
+  history only.
 
 ### 6.3 AMD STT failure
 
@@ -653,7 +661,7 @@ deadlines, and cleanup. They do not prove model accuracy.
 
 | # | Rule | Section | Test |
 | --- | --- | --- | --- |
-| 1 | Each committed turn gets at most one `amd_prediction` event. A turn gets none when a newer turn with text commits, or AMD completes, before its prediction arrives. | 7.3, 7.4 | `test_empty_turns_do_not_cancel_or_count_against_pending_inference`, `test_a_reused_prediction_is_kept_when_the_turn_final_arrives` |
+| 1 | Each committed turn gets at most one `amd_prediction` event. A turn gets none when a newer turn with text commits, a newer turn commits while it waits for its AMD final, or AMD completes, before its prediction arrives. | 6.2, 7.3, 7.4 | `test_empty_turns_do_not_cancel_or_count_against_pending_inference`, `test_a_reused_prediction_is_kept_when_the_turn_final_arrives`, `test_an_older_turn_wait_does_not_decide_a_newer_waiting_turn`, `test_an_older_turn_final_does_not_cancel_a_newer_turn` |
 | 2 | A stale request never emits a prediction or allows a reply. | 8.4 | `test_classifier_that_ignores_cancellation_cannot_change_state` |
 | 3 | `wait` never allows a reply. | 10.1 | `test_wait_skips_reply_and_allows_a_fresh_prediction` |
 | 4 | `uncertain` and `wait` never change the stage. | 9.2 | `test_wait_and_uncertain_keep_the_stage` |
@@ -673,7 +681,6 @@ deadlines, and cleanup. They do not prove model accuracy.
 `examples/telephony/amd.py` places an outbound call with AMD:
 
 - It hides `end_call` while AMD runs.
-- It sets `voicemail_idle_timeout=10.0`.
 - It uses ai-coustics Voice Focus (`QUAIL_VF_S`) on the input audio, so session STT
   and AMD STT hear less noise and fewer background voices. Keep SIP `krisp_enabled`
   off to avoid filtering twice. Voice isolation is not echo cancellation.

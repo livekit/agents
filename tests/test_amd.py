@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import runpy
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -881,6 +882,24 @@ def test_prediction_event_carries_its_stage() -> None:
     assert event.model_dump()["stage"] == "machine-vm"
 
 
+@pytest.mark.parametrize("reason", list(AMDReason))
+def test_completed_event_is_error_only_when_amd_stopped_without_detecting(
+    reason: AMDReason,
+) -> None:
+    event = AMDCompletedEvent(category=AMDCategory.UNCERTAIN, reason=reason)
+    assert event.is_error is (
+        reason
+        in {
+            AMDReason.INTERNAL_ERROR,
+            AMDReason.PARTICIPANT_MISSING,
+            AMDReason.AGENT_CHANGED,
+            AMDReason.CANCELLED,
+        }
+    )
+    # a property, so the wire format is unchanged
+    assert "is_error" not in event.model_dump()
+
+
 class ClassifierLLM(FakeLLM):
     """Controllable provider model. Tests use the real SDK inference path."""
 
@@ -1618,9 +1637,11 @@ async def test_voicemail_handle_commit_does_not_signal_a_prediction_or_update_id
 
 
 @pytest.mark.asyncio
-async def test_voicemail_idle_defaults_to_one_minute_after_playback() -> None:
+async def test_default_limits_are_ten_seconds_idle_and_one_minute_overall() -> None:
     async with running() as (detector, session, classifier, model):
         loop = asyncio.get_running_loop()
+        assert detector._hard_deadline is not None
+        assert detector._hard_deadline - loop.time() == pytest.approx(60, abs=0.1)
         assert next_deadline(detector) is not None
         assert next_deadline(detector) - loop.time() == pytest.approx(10, abs=0.1)
         await commit(detector, session, classifier, reply=True)
@@ -1629,8 +1650,10 @@ async def test_voicemail_idle_defaults_to_one_minute_after_playback() -> None:
         await eventually(
             lambda: detector._voicemail_message_played and session._activity._no_pending_speech
         )
+        # the voicemail idle timer restarts after playback
+        assert detector._options.voicemail_idle_timeout == 10
         assert next_deadline(detector) is not None
-        assert next_deadline(detector) - loop.time() == pytest.approx(60, abs=0.1)
+        assert next_deadline(detector) - loop.time() == pytest.approx(10, abs=0.1)
         await detector.aclose()
         assert next_deadline(detector) is None
 
@@ -2979,6 +3002,44 @@ async def test_a_reused_prediction_is_kept_when_the_turn_final_arrives() -> None
 
 
 @pytest.mark.asyncio
+async def test_an_older_turn_wait_does_not_decide_a_newer_waiting_turn() -> None:
+    stt = DrainingSTT()
+    async with running(stt=stt) as (detector, _, classifier, _):
+        stream = push_audio(detector, stt)
+        commit_turn(detector, end_of_turn(""))
+        await asyncio.sleep(0.15)
+        commit_turn(detector, end_of_turn(""))
+        await asyncio.sleep(0.17)  # turn 1's wait has expired, turn 2's has not
+        assert detector._turns[2].prediction is None
+        stream.send_fake_transcript("Hello, who is this?")
+        request = await classifier.request()
+        assert request.current_turn.extra["turn_id"] == 2
+        assert request.current_turn.text_content == "Hello, who is this?"
+
+
+@pytest.mark.asyncio
+async def test_an_older_turn_final_does_not_cancel_a_newer_turn() -> None:
+    stt = DrainingSTT()
+    async with running(stt=stt) as (detector, _, classifier, _):
+        push_audio(detector, stt)
+        commit_turn(detector, end_of_turn(""))
+        late = detector._resources.stt.late_final
+        assert late is not None
+        # turn 1's final arrives, then turn 2 commits with text before turn 1's task resumes
+        assert late.deliver("Please hold.")
+        detector._resources.stt.push_transcript("Hello, who is this?", source="amd")
+        commit_turn(detector, end_of_turn(""))
+        request = await classifier.request()
+        assert request.current_turn.extra["turn_id"] == 2
+        assert request.current_turn.text_content == "Hello, who is this?"
+        await asyncio.sleep(0.01)
+        assert classifier.requests.empty()
+        classifier.prediction(2, AMDCategory.HUMAN)
+        result = await detector.execute()
+        assert result.last_prediction.turn_id == 2
+
+
+@pytest.mark.asyncio
 async def test_late_final_after_many_empty_turns_is_committed_at_the_next_eot() -> None:
     stt = DrainingSTT()
     async with running(stt=stt) as (detector, _, classifier, _):
@@ -2991,7 +3052,9 @@ async def test_late_final_after_many_empty_turns_is_committed_at_the_next_eot() 
             _LATE_AMD_FINAL_WAIT + 0.01
         )  # after the wait, a final is the next turn's
         assert detector._turn_id == 21
-        assert all(detector._turns[turn_id].prediction is not None for turn_id in range(1, 22))
+        # only the latest turn takes a reused prediction; older turns never reply
+        assert detector._turns[21].prediction is not None
+        assert all(detector._turns[turn_id].prediction is None for turn_id in range(1, 21))
         stream.send_fake_transcript("Hello, can you hear me?")
         await eventually(
             lambda: detector._resources.stt._current.get("amd") == "Hello, can you hear me?"
@@ -4254,23 +4317,35 @@ async def test_none_always_inherits_the_active_agent_models(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("inherited", ["llm", "stt"])
 async def test_model_selection_is_independent_for_each_model(
-    cloud_credentials: None, model_factories: tuple[Mock, Mock], inherited: str
+    cloud_credentials: None,
+    model_factories: tuple[Mock, Mock],
+    inherited: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     llm_factory, stt_factory = model_factories
     session = AgentSession(llm=FakeLLM(), turn_handling={"turn_detection": "manual"})
     await session.start(Agent(instructions="Call about an appointment."))
     try:
-        async with AMD(session, **{inherited: None}) as detector:
-            if inherited == "llm":
-                llm_factory.assert_not_called()
-                stt_factory.assert_called_once_with("cartesia/ink-whisper")
-                assert detector._llm is None
-            else:
-                llm_factory.assert_called_once_with("google/gemma-4-31b-it")
-                stt_factory.assert_not_called()
-                assert detector._stt is None
+        with caplog.at_level(logging.INFO, logger="livekit.agents"):
+            async with AMD(session, **{inherited: None}) as detector:
+                if inherited == "llm":
+                    llm_factory.assert_not_called()
+                    stt_factory.assert_called_once_with("cartesia/ink-whisper")
+                    assert detector._llm is None
+                else:
+                    llm_factory.assert_called_once_with("google/gemma-4-31b-it")
+                    stt_factory.assert_not_called()
+                    assert detector._stt is None
     finally:
         await session.aclose()
+    # the startup log names each model's source, so users know which quotas AMD uses
+    [record] = [r for r in caplog.records if r.getMessage().startswith("amd models")]
+    if inherited == "llm":
+        assert (record.llm, record.llm_source) == ("unknown/unknown", "session")
+        assert record.stt_source == "default"
+    else:
+        assert record.llm_source == "default"
+        assert (record.stt, record.stt_source) == ("session transcript only", "session")
 
 
 @pytest.mark.asyncio
@@ -6574,6 +6649,7 @@ async def test_outbound_call_setup(monkeypatch: pytest.MonkeyPatch, outcome: str
         api=SimpleNamespace(sip=SimpleNamespace(create_sip_participant=create)),
         shutdown=Mock(),
         add_shutdown_callback=Mock(),
+        delete_room=AsyncMock(),
     )
     if outcome == "console":
         with pytest.raises(RuntimeError, match="not started with a room"):
@@ -6590,6 +6666,10 @@ async def test_outbound_call_setup(monkeypatch: pytest.MonkeyPatch, outcome: str
     create.assert_awaited_once()
     assert create.call_args.args[0].wait_until_answered
     detector.__aexit__.assert_awaited_once()
+    # every exit deletes the room through the shutdown callback
+    [hangup] = ctx.add_shutdown_callback.call_args.args
+    await hangup()
+    ctx.delete_room.assert_awaited_once_with()
     if outcome in {
         "answered",
         "voicemail",

@@ -43,7 +43,9 @@ class MyAgent(Agent):
             ),
             tools=[
                 EndCallTool(
-                    delete_room=False,  # The job shutdown callback deletes the room.
+                    # The default (True) also deletes the room; hangup() already does
+                    # that on every exit path.
+                    delete_room=False,
                     extra_description="Call after completing the appointment conversation with a human.",
                 ),
             ],
@@ -86,12 +88,9 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
 
-    async def hangup():
-        await ctx.api.room.delete_room(
-            api.DeleteRoomRequest(
-                room=ctx.room.name,
-            )
-        )
+    async def hangup() -> None:
+        # every exit deletes the room, so the SIP call ends too (voicemail included)
+        await ctx.delete_room()
 
     ctx.add_shutdown_callback(hangup)
 
@@ -103,11 +102,7 @@ async def entrypoint(ctx: JobContext) -> None:
     # room_io raises when the session was started without a room.
     _ = session.room_io
 
-    detector = AMD(
-        session,
-        participant_identity=participant_identity,
-        voicemail_idle_timeout=10.0,
-    )
+    detector = AMD(session, participant_identity=participant_identity)
 
     @detector.on("amd_prediction")
     def on_prediction(event: AMDPredictionEvent) -> None:

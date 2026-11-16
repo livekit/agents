@@ -94,6 +94,23 @@ class AMDCompletedEvent(BaseModel):
     last_prediction: AMDPredictionEvent | None = None
     """The last classified turn's prediction; None when the run ended before one."""
 
+    @property
+    def is_error(self) -> bool:
+        """Whether AMD stopped without detecting the call, for example after an internal error
+        or a missing participant. Timeouts, idle completions, and a participant
+        disconnect are normal outcomes; read ``category`` for those."""
+        return self.reason in _ERROR_REASONS
+
+
+_ERROR_REASONS = frozenset(
+    {
+        AMDReason.INTERNAL_ERROR,
+        AMDReason.PARTICIPANT_MISSING,
+        AMDReason.AGENT_CHANGED,
+        AMDReason.CANCELLED,
+    }
+)
+
 
 class IVRMenuOption(BaseModel):
     label: str
