@@ -472,6 +472,29 @@ async def test_classifier_tags_only_its_own_request() -> None:
 
 
 @pytest.mark.asyncio
+async def test_classifier_tag_beats_a_model_level_feature_header() -> None:
+    model, requests = _inference_llm()
+    model._opts.extra_kwargs["extra_headers"] = {HEADER_CLIENT_FEATURE: "Agent"}
+
+    await _inference.classify(model, REQUEST)
+
+    assert requests[0].headers[HEADER_CLIENT_FEATURE] == "AMD"
+    assert model._opts.extra_kwargs["extra_headers"] == {HEADER_CLIENT_FEATURE: "Agent"}
+
+
+@pytest.mark.asyncio
+async def test_inference_decision_model_is_tagged() -> None:
+    model = inference.DecisionModel(api_key=_SECRET, api_secret=_SECRET, base_url="http://x/v1")
+    evaluate = AsyncMock(
+        return_value=llm.DecisionResponse(results={"category": llm.ChoiceResult(value="human")})
+    )
+    model.evaluate = evaluate  # type: ignore[method-assign]
+
+    assert (await _inference.classify(model, REQUEST)).category == AMDCategory.HUMAN
+    assert evaluate.call_args.kwargs["extra_headers"] == {HEADER_CLIENT_FEATURE: "AMD"}
+
+
+@pytest.mark.asyncio
 async def test_plugin_llm_gets_no_header() -> None:
     model = FakeLLM(
         fake_responses=[

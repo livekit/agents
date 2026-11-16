@@ -18,7 +18,7 @@ from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIError, APIStatusError
 from livekit.agents.inference import DecisionModel
-from livekit.agents.inference._utils import HEADER_USER_AGENT
+from livekit.agents.inference._utils import HEADER_CLIENT_FEATURE, HEADER_USER_AGENT
 from livekit.agents.llm import ChatContext, decisions
 from livekit.agents.types import APIConnectOptions
 
@@ -167,6 +167,28 @@ async def test_request_targets_gateway_with_minted_token() -> None:
     assert response.provider == "livekit"
     assert response.input_tokens == 50
     assert response.output_tokens == 0
+
+
+async def test_extra_headers_go_out_below_the_sdk_headers_on_that_call_only() -> None:
+    headers: list[dict[str, str]] = []
+
+    async def handler(request: web.Request) -> web.Response:
+        headers.append(dict(request.headers))
+        return web.json_response(response_body())
+
+    async with _gateway(handler) as (url, session):
+        model = _model(url, session)
+        await model.evaluate(
+            input="",
+            decisions=QUESTIONS,
+            extra_headers={HEADER_CLIENT_FEATURE: "AMD", HEADER_USER_AGENT: "caller"},
+        )
+        await model.evaluate(input="", decisions=QUESTIONS)
+
+    tagged, untagged = headers
+    assert tagged[HEADER_CLIENT_FEATURE] == "AMD"
+    assert tagged[HEADER_USER_AGENT].startswith("LiveKit Agents/")
+    assert HEADER_CLIENT_FEATURE not in untagged
 
 
 async def test_request_id_comes_from_gateway_header() -> None:

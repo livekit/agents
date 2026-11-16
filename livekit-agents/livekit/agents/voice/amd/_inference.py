@@ -126,6 +126,13 @@ def _reaches_only_inference(model: llm.LLM) -> bool:
     return isinstance(model, inference.LLM)
 
 
+def _decision_feature_kwargs(model: llm.DecisionModel) -> dict[str, Any]:
+    # only inference.DecisionModel.evaluate takes extra_headers
+    if isinstance(model, inference.DecisionModel):
+        return {"extra_headers": {HEADER_CLIENT_FEATURE: CLIENT_FEATURE}}
+    return {}
+
+
 async def _structured_response(
     model: llm.LLM,
     chat_ctx: llm.ChatContext,
@@ -201,6 +208,7 @@ async def classify(
                 )
             },
             conn_options=conn_options,
+            **_decision_feature_kwargs(model),
         )
         result = response.results.get("category")
         if not isinstance(result, llm.ChoiceResult):
