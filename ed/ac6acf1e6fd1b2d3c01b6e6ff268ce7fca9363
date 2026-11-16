@@ -1,0 +1,43 @@
+livekit-agents/livekit/agents/inference/decision_model.py
+  s_33131aab4e37ee::t_540ab5e5949229 23,106,109,121,129
+livekit-agents/livekit/agents/llm/decisions.py
+  s_33131aab4e37ee::t_a45c010132e1c1 22-23,234,243,259,268-271,322
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/decision_model.py
+  s_33131aab4e37ee::t_ae2599a1b7d707 96,105
+livekit-plugins/livekit-plugins-microsoft-ai/livekit/plugins/microsoft_ai/decision_model.py
+  s_33131aab4e37ee::t_3c5841d9568238 102,109
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/decision_model.py
+  s_33131aab4e37ee::t_20c3566b115c45 105,116
+livekit-plugins/livekit-plugins-typesafe/livekit/plugins/typesafe/decision_model.py
+  s_33131aab4e37ee::t_8c43e9b85c83d7 90,97
+tests/test_amd.py
+  s_33131aab4e37ee::t_267a6067937bfc 4392
+tests/test_decisions.py
+  s_33131aab4e37ee::t_18822be93207ec 66,82,85,239-253
+tests/test_delegation_detection.py
+  s_33131aab4e37ee::t_f3d93db1b3ff88 65-67
+tests/test_microsoft_ai_decisions.py
+  s_33131aab4e37ee::t_2ad2536a29b012 97-106
+tests/test_plugin_google_decisions.py
+  s_33131aab4e37ee::t_de64952c828398 108-121
+tests/test_plugin_openai_decisions.py
+  s_33131aab4e37ee::t_3a2f8ec455d238 119-135
+tests/test_typesafe_decisions.py
+  s_33131aab4e37ee::t_3c77840dd41c55 81-89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "edac6acf1e6fd1b2d3c01b6e6ff268ce7fca9363",
+  "prompts": {},
+  "sessions": {
+    "s_33131aab4e37ee": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_33131aab4e37ee",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
