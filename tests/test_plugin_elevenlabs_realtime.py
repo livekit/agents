@@ -91,12 +91,15 @@ async def _wait_closed(session: realtime.RealtimeSession) -> None:
     assert session._main_atask.done()
 
 
-def _response_created(response_id: str) -> dict[str, Any]:
-    return {
-        "type": "response.created",
-        "event_id": f"ev_{response_id}",
-        "response": {"id": response_id, "object": "realtime.response", "status": "in_progress"},
+def _response_created(response_id: str, client_event_id: str | None = None) -> dict[str, Any]:
+    response: dict[str, Any] = {
+        "id": response_id,
+        "object": "realtime.response",
+        "status": "in_progress",
     }
+    if client_event_id:
+        response["metadata"] = {"client_event_id": client_event_id}
+    return {"type": "response.created", "event_id": f"ev_{response_id}", "response": response}
 
 
 def _response_done(response_id: str) -> dict[str, Any]:
@@ -121,7 +124,7 @@ def test_model_reads_key_from_env_and_reports_its_capabilities() -> None:
     assert caps.turn_detection and caps.user_transcription and caps.auto_tool_reply_generation
     assert caps.mutable_instructions and caps.mutable_tools
     assert not caps.mutable_chat_context
-    assert not caps.can_disable_turn_detection
+    assert caps.can_disable_turn_detection
     assert not caps.per_response_tool_choice
     assert model._opts.max_session_duration is None
 
@@ -201,42 +204,38 @@ async def test_locked_options_are_not_sent_once_the_conversation_started(
         await session.aclose()
 
 
-async def test_unlabeled_response_resolves_the_pending_reply(
+async def test_manual_turn_detection_sends_null_turn_detection(
     server: tuple[FakeServer, str],
 ) -> None:
     fake, url = server
-    _, session, _ = await _connect(url, fake)
+    model = realtime.RealtimeModel(api_key=KEY, base_url=url, http_session=fake.http)
+    session = model.session(turn_detection_disabled=True)
     try:
-        fut = session.generate_reply()
-        await fake.next("response.create")
-        await fake.send(_response_created("resp_1"))
-
-        generation = await asyncio.wait_for(fut, 2)
-        assert generation.user_initiated
-        assert generation.response_id == "resp_1"
+        first = await fake.next("session.update")
+        audio_input = first["session"]["audio"]["input"]
+        assert "turn_detection" in audio_input
+        assert audio_input["turn_detection"] is None
+        assert not session.capabilities.turn_detection
+        assert model.capabilities.turn_detection
     finally:
         await session.aclose()
 
 
-async def test_tool_continuation_is_not_credited_to_a_pending_reply(
+async def test_only_the_labeled_response_resolves_the_pending_reply(
     server: tuple[FakeServer, str],
 ) -> None:
     fake, url = server
     _, session, _ = await _connect(url, fake)
     try:
-        session.send_event(
-            {
-                "type": "conversation.item.create",
-                "item": {"type": "function_call_output", "call_id": "c1", "output": "ok"},
-            }
-        )
         fut = session.generate_reply()
-        await fake.next("response.create")
-        await fake.send(_response_created("resp_continuation"))
-        await fake.send(_response_done("resp_continuation"))
-        await fake.send(_response_created("resp_reply"))
+        request = await fake.next("response.create")
+        client_event_id = request["response"]["metadata"]["client_event_id"]
+        await fake.send(_response_created("resp_server"))
+        await fake.send(_response_done("resp_server"))
+        await fake.send(_response_created("resp_reply", client_event_id))
 
         generation = await asyncio.wait_for(fut, 2)
+        assert generation.user_initiated
         assert generation.response_id == "resp_reply"
     finally:
         await session.aclose()
@@ -249,8 +248,10 @@ async def test_audio_tags_are_stripped_from_the_transcript(
     _, session, _ = await _connect(url, fake)
     try:
         fut = session.generate_reply()
-        await fake.next("response.create")
-        await fake.send(_response_created("resp_1"))
+        request = await fake.next("response.create")
+        await fake.send(
+            _response_created("resp_1", request["response"]["metadata"]["client_event_id"])
+        )
         generation = await asyncio.wait_for(fut, 2)
         await fake.send(
             {
@@ -282,8 +283,8 @@ async def test_audio_tags_are_stripped_from_the_transcript(
 
 async def _start_message(fake: FakeServer, session: realtime.RealtimeSession) -> Any:
     fut = session.generate_reply()
-    await fake.next("response.create")
-    await fake.send(_response_created("resp_1"))
+    request = await fake.next("response.create")
+    await fake.send(_response_created("resp_1", request["response"]["metadata"]["client_event_id"]))
     generation = await asyncio.wait_for(fut, 2)
     await fake.send(
         {
@@ -361,34 +362,6 @@ async def test_unclosed_bracket_is_flushed_when_the_message_ends(
         await session.aclose()
 
 
-async def test_reconnect_forgets_a_pending_tool_continuation(
-    server: tuple[FakeServer, str],
-) -> None:
-    fake, url = server
-    _, session, _ = await _connect(
-        url, fake, conn_options=APIConnectOptions(max_retry=2, retry_interval=0.01)
-    )
-    try:
-        session.send_event(
-            {
-                "type": "conversation.item.create",
-                "item": {"type": "function_call_output", "call_id": "c1", "output": "ok"},
-            }
-        )
-        await fake.next("conversation.item.create")
-        await fake.close(4300, "Agent concurrency limit reached")
-        await fake.reconnected()
-        await fake.next("session.update")
-
-        fut = session.generate_reply()
-        await fake.next("response.create")
-        await fake.send(_response_created("resp_after_reconnect"))
-        generation = await asyncio.wait_for(fut, 2)
-        assert generation.response_id == "resp_after_reconnect"
-    finally:
-        await session.aclose()
-
-
 async def test_seeded_items_carry_no_anchor(server: tuple[FakeServer, str]) -> None:
     fake, url = server
     _, session, _ = await _connect(url, fake)
@@ -432,32 +405,12 @@ async def test_chat_ctx_sync_sends_only_items_the_server_confirms(
 
         events = session._create_update_chat_ctx_events(chat_ctx)
 
-        assert [ev.type for ev in events] == ["conversation.item.create"] * 2
-        user, output = (ev.item for ev in events)
+        assert [ev.type for ev in events] == ["conversation.item.create"] * 3
+        user, output, unknown = (ev.item for ev in events)
         assert user.type == "message" and user.role == "user"
         assert output.type == "function_call_output"
         assert output.call_id == LONG_CALL_ID
-    finally:
-        await session.aclose()
-
-
-async def test_late_tool_output_is_dropped(
-    server: tuple[FakeServer, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake, url = server
-    _, session, _ = await _connect(url, fake)
-    try:
-        session._el_on_server_event(
-            {
-                "type": "response.output_item.done",
-                "item": {"type": "function_call", "call_id": "call_1", "name": "lookup"},
-            }
-        )
-        monkeypatch.setattr(_realtime_model, "TOOL_OUTPUT_DEADLINE", -1.0)
-        chat_ctx = llm.ChatContext(
-            [llm.FunctionCallOutput(call_id="call_1", name="lookup", output="ok", is_error=False)]
-        )
-        assert session._create_update_chat_ctx_events(chat_ctx) == []
+        assert unknown.call_id == "call_unknown"
     finally:
         await session.aclose()
 

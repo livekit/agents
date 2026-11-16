@@ -40,7 +40,7 @@ from openai.types.realtime.response_text_delta_event import ResponseTextDeltaEve
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
 from livekit.agents.llm._realtime import openai as _openai
-from livekit.agents.llm._realtime.openai_utils import _shorten_call_id
+from livekit.agents.llm._realtime.openai_utils import _shorten_id
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -65,10 +65,7 @@ DEFAULT_TURN_DETECTION = SemanticVad(
 )
 
 KEEPALIVE_INTERVAL = 20.0
-"""Seconds of client silence before a keepalive frame; the server closes idle sessions at 60 s."""
-
-TOOL_OUTPUT_DEADLINE = 20.0
-"""Seconds the server waits for a tool result; a later one would swallow the next reply."""
+"""Seconds of client silence before a keepalive frame; the server closes audio sessions idle for 3 min."""
 
 _UNSUPPORTED_SESSION_KEYS = ("truncation", "reasoning")
 _FATAL_CLOSE_CODES = frozenset({1000, 1008, 3000, 4001, 4003})
@@ -148,7 +145,7 @@ class RealtimeModel(_openai.RealtimeModel):
         self._capabilities = dataclasses.replace(
             self._capabilities,
             turn_detection=True,
-            can_disable_turn_detection=False,
+            can_disable_turn_detection=True,
             user_transcription=True,
             auto_tool_reply_generation=True,
             manual_function_calls=False,
@@ -163,12 +160,7 @@ class RealtimeModel(_openai.RealtimeModel):
         return "ElevenLabs"
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
-        if turn_detection_disabled:
-            logger.warning(
-                "ElevenLabs Realtime turn detection is server-side; turn_detection_disabled "
-                "is ignored"
-            )
-        sess = RealtimeSession(self)
+        sess = RealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
         self._sessions.add(sess)
         return sess
 
@@ -176,19 +168,18 @@ class RealtimeModel(_openai.RealtimeModel):
 class RealtimeSession(_openai.RealtimeSession):
     """One conversation on the Eleven Realtime API, created by ``RealtimeModel.session()``."""
 
-    def __init__(self, realtime_model: RealtimeModel) -> None:
+    def __init__(
+        self, realtime_model: RealtimeModel, *, turn_detection_disabled: bool = False
+    ) -> None:
         self._el_model = realtime_model
         self._el_started = False
         self._el_last_sent = time.monotonic()
         self._el_close: tuple[int, str] | None = None
         self._el_call_ids: dict[str, str] = {}
-        self._el_tool_calls: dict[str, float] = {}
-        self._el_tool_continuation_pending = False
         self._el_tag_tails: dict[str, str] = {}
         self._el_warned: set[str] = set()
-        super().__init__(realtime_model)
+        super().__init__(realtime_model, turn_detection_disabled=turn_detection_disabled)
         self.on("openai_server_event_received", self._el_on_server_event)
-        self.on("openai_client_event_queued", self._el_on_client_event)
 
     def send_event(self, event: Any) -> None:
         event_type = event.get("type") if isinstance(event, dict) else getattr(event, "type", None)
@@ -292,18 +283,7 @@ class RealtimeSession(_openai.RealtimeSession):
     def _el_accepts_item(self, item: ConversationItem) -> bool:
         """Whether the server stores the item and confirms it with ``conversation.item.added``."""
         if isinstance(item, RealtimeConversationItemFunctionCallOutput):
-            call_id = self._el_call_ids.get(item.call_id, item.call_id)
-            emitted_at = self._el_tool_calls.pop(call_id, None)
-            if emitted_at is None:
-                logger.debug("dropping a tool result for a call on an earlier connection")
-                return False
-            if time.monotonic() - emitted_at > TOOL_OUTPUT_DEADLINE:
-                logger.warning(
-                    "dropping a tool result the ElevenLabs Realtime server no longer waits for",
-                    extra={"call_id": call_id},
-                )
-                return False
-            item.call_id = call_id
+            item.call_id = self._el_call_ids.get(item.call_id, item.call_id)
             return True
         if isinstance(item, RealtimeConversationItemUserMessage):
             return any(part.type == "input_text" and part.text for part in item.content)
@@ -312,43 +292,13 @@ class RealtimeSession(_openai.RealtimeSession):
         return False
 
     def _el_on_server_event(self, event: dict[str, Any]) -> None:
-        event_type = event.get("type")
-        if event_type == "response.created":
-            self._el_claim_response(event)
-        elif event_type == "response.output_item.done":
-            item = event.get("item")
-            if isinstance(item, dict) and item.get("type") == "function_call":
-                call_id = item.get("call_id")
-                if isinstance(call_id, str):
-                    self._el_call_ids[_shorten_call_id(call_id)] = call_id
-                    self._el_tool_calls[call_id] = time.monotonic()
-
-    def _el_on_client_event(self, event: dict[str, Any]) -> None:
+        if event.get("type") != "response.output_item.done":
+            return
         item = event.get("item")
-        if (
-            event.get("type") == "conversation.item.create"
-            and isinstance(item, dict)
-            and item.get("type") == "function_call_output"
-        ):
-            self._el_tool_continuation_pending = True
-
-    def _el_claim_response(self, event: dict[str, Any]) -> None:
-        response = event.get("response")
-        if not isinstance(response, dict):
-            return
-        metadata = response.get("metadata")
-        if isinstance(metadata, dict) and metadata.get("client_event_id"):
-            return
-        if self._el_tool_continuation_pending:
-            self._el_tool_continuation_pending = False
-            return
-        pending = next(iter(self._response_created_futures), None)
-        if pending is None:
-            return
-        response["metadata"] = {
-            **(metadata if isinstance(metadata, dict) else {}),
-            "client_event_id": pending,
-        }
+        if isinstance(item, dict) and item.get("type") == "function_call":
+            call_id = item.get("call_id")
+            if isinstance(call_id, str):
+                self._el_call_ids[_shorten_id(call_id)] = call_id
 
     def _handle_response_audio_transcript_delta(self, event: dict[str, Any]) -> None:
         event["delta"] = self._el_strip_streamed_tags(event["item_id"], event.get("delta") or "")
@@ -379,10 +329,7 @@ class RealtimeSession(_openai.RealtimeSession):
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         self._el_close = None
-        # a new connection is a new server conversation: earlier tool calls no longer wait
-        self._el_tool_calls.clear()
         self._el_call_ids.clear()
-        self._el_tool_continuation_pending = False
         self._el_tag_tails.clear()
         ws = await super()._create_ws_conn()
         return cast(aiohttp.ClientWebSocketResponse, _CloseRecordingSocket(ws, self))
