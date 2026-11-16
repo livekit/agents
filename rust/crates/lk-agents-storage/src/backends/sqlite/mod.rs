@@ -263,7 +263,6 @@ fn thread_record(row: &Row) -> Result<(ThreadRecord, i64), StorageError> {
         last_active: timestamp(cells.get(4)?),
         expires_at: timestamp(expires_at),
         idle_ttl: Some(pbjson_types::Duration { seconds: cells.get::<i64>(5)? / 1000, nanos: 0 }),
-        database_id: cells.get(0)?,
     };
     Ok((record, expires_at))
 }

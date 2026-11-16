@@ -116,9 +116,16 @@ async fn serve_dev_channel(
     let io = |e: std::io::Error| HostError::new(format!("dev channel: {e}"));
     let mut stream = tokio::net::TcpStream::connect(&cli_addr).await.map_err(io)?;
 
-    send(&mut stream, Message::ServerInfo(ServerInfo { agent_name, url: url.clone() }))
-        .await
-        .map_err(io)?;
+    send(
+        &mut stream,
+        Message::ServerInfo(ServerInfo {
+            agent_name,
+            url: url.clone(),
+            supports_token_mode: false,
+        }),
+    )
+    .await
+    .map_err(io)?;
     send(&mut stream, Message::GetRunningJobsRequest(GetRunningAgentJobsRequest {}))
         .await
         .map_err(io)?;

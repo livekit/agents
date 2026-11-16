@@ -80,12 +80,18 @@ pub(crate) fn reply(m: pb::server_message::Message) -> pb::ServerMessage {
     pb::ServerMessage { request_id: 0, message: Some(m) }
 }
 
+/// An error answer of `code`.
+pub(crate) fn error(code: ErrorCode, description: &str) -> pb::ServerMessage {
+    reply(pb::server_message::Message::Error(pb::Error {
+        code: code.0,
+        name: code.to_string(),
+        description: description.into(),
+    }))
+}
+
 /// The server's notice that it evicted the database while the socket idled.
 pub(crate) fn idle_notice() -> pb::ServerMessage {
-    reply(pb::server_message::Message::Error(pb::Error {
-        code: ErrorCode::IdleEvicted.as_str().into(),
-        message: "evicted while idle".into(),
-    }))
+    error(ErrorCode::IDLE_EVICTED, "evicted while idle")
 }
 
 pub(crate) fn hello_ok() -> pb::ServerMessage {
@@ -103,19 +109,9 @@ pub(crate) fn script(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
         Some(C::Hello(h)) if h.token.split('.').count() == 3 && h.database_id == "DB_1" => {
             vec![hello_ok()]
         }
-        Some(C::Hello(_)) => vec![reply(S::Error(pb::Error {
-            code: "not_found".into(),
-            message: "no such database".into(),
-        }))],
-        Some(C::Exec(s)) if s.sql == "boom" => {
-            vec![reply(S::Error(pb::Error { code: "exec".into(), message: "constraint".into() }))]
-        }
-        Some(C::Exec(s)) if s.sql == "busy" => {
-            vec![reply(S::Error(pb::Error {
-                code: "resource_exhausted".into(),
-                message: "busy".into(),
-            }))]
-        }
+        Some(C::Hello(_)) => vec![error(ErrorCode::NOT_FOUND, "no such database")],
+        Some(C::Exec(s)) if s.sql == "boom" => vec![error(ErrorCode::SQL_ERROR, "constraint")],
+        Some(C::Exec(s)) if s.sql == "busy" => vec![error(ErrorCode::RETRY, "busy")],
         Some(C::Exec(_)) => vec![reply(S::ExecResult(pb::ExecResult {
             rows_affected: 1,
             last_insert_id: 9,
@@ -187,7 +183,7 @@ async fn hello_carries_the_token_and_a_refused_database_is_a_server_error() {
     let conn = dial(&url, "DB_1").await.unwrap();
     assert_eq!(conn.tip(), 7);
     let err = dial(&url, "DB_nope").await.err().unwrap();
-    assert!(matches!(&err, WsdbError::Server { code: ErrorCode::NotFound, .. }), "{err}");
+    assert!(matches!(&err, WsdbError::Server { code: ErrorCode::NOT_FOUND, .. }), "{err}");
     conn.close();
 }
 
@@ -198,13 +194,10 @@ async fn exec_query_and_credits() {
     let r = conn.exec(&st("INSERT", vec!["v".into()]), conn.deadline()).await.unwrap();
     assert_eq!((r.rows_affected, r.last_insert_id, r.tip), (1, 9, 8));
     let err = conn.exec(&st("boom", vec![]), conn.deadline()).await.err().unwrap();
-    assert!(matches!(err, WriteError::Sent(WsdbError::Server { code: ErrorCode::Exec, .. })));
+    assert!(matches!(err, WriteError::Sent(WsdbError::Server { code: ErrorCode::SQL_ERROR, .. })));
     // Backpressure is returned once; the caller owns retry policy.
     let err = conn.exec(&st("busy", vec![]), conn.deadline()).await.err().unwrap();
-    assert!(matches!(
-        err,
-        WriteError::Sent(WsdbError::Server { code: ErrorCode::ResourceExhausted, .. })
-    ));
+    assert!(matches!(err, WriteError::Sent(WsdbError::Server { code: ErrorCode::RETRY, .. })));
     let busy = |log: &Served| {
         log.lock()
             .iter()
@@ -361,10 +354,7 @@ async fn a_redial_the_server_refuses_for_good_fails_later_calls_with_its_error()
             Some(pb::client_message::Message::Hello(_))
                 if HELLOS.fetch_add(1, Ordering::SeqCst) > 0 =>
             {
-                vec![reply(pb::server_message::Message::Error(pb::Error {
-                    code: "not_found".into(),
-                    message: "the database was deleted".into(),
-                }))]
+                vec![error(ErrorCode::NOT_FOUND, "the database was deleted")]
             }
             _ => script(m),
         }
@@ -377,7 +367,7 @@ async fn a_redial_the_server_refuses_for_good_fails_later_calls_with_its_error()
     ));
     let err = conn.exec(&st("INSERT", vec![]), conn.deadline()).await.err().unwrap();
     assert!(
-        matches!(&err, WriteError::NotSent(WsdbError::Server { code: ErrorCode::NotFound, .. })),
+        matches!(&err, WriteError::NotSent(WsdbError::Server { code: ErrorCode::NOT_FOUND, .. })),
         "{err}"
     );
     assert_eq!(hellos(&log), 2, "no redial after a final refusal");
@@ -394,10 +384,7 @@ async fn a_request_waits_for_the_redial_only_until_its_deadline() {
             Some(pb::client_message::Message::Hello(_))
                 if HELLOS.fetch_add(1, Ordering::SeqCst) > 0 =>
             {
-                vec![reply(pb::server_message::Message::Error(pb::Error {
-                    code: ErrorCode::Unavailable.as_str().into(),
-                    message: "draining".into(),
-                }))]
+                vec![error(ErrorCode::RETRY, "draining")]
             }
             _ => script(m),
         }
@@ -655,4 +642,119 @@ fn compressed_rows_cannot_amplify_beyond_the_frame_memory_budget() {
         statement: 0,
     };
     assert!(matches!(decode_batch(&batch), Err(WsdbError::Protocol(_))));
+}
+
+/// Catches: a draining server's `wrong_shard_server` notice read as a lost socket. The request in
+/// flight is answered with the notice (nothing applied, so a write is refused retryable, never
+/// uncertain), and the connection redials at once, with no request waiting.
+#[tokio::test]
+async fn a_wrong_shard_notice_answers_the_request_in_flight_and_redials_at_once() {
+    fn draining(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        match &m.message {
+            // read, never run: the node drains and ends the socket with its notice
+            Some(pb::client_message::Message::Exec(s)) if s.sql == "moved" => {
+                vec![error(ErrorCode::WRONG_SHARD_SERVER, "draining")]
+            }
+            _ => script(m),
+        }
+    }
+    let (url, log) = serve_notice(draining).await;
+    let conn = dial(&url, "DB_1").await.unwrap();
+    let err = conn.exec(&st("moved", vec![]), conn.deadline()).await.err().unwrap();
+    assert!(
+        matches!(
+            &err,
+            WriteError::Sent(WsdbError::Server { code: ErrorCode::WRONG_SHARD_SERVER, .. })
+        ),
+        "{err}"
+    );
+    assert!(StorageError::from(err).retryable(), "nothing applied: sent again");
+    for _ in 0..200 {
+        if hellos(&log) == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(hellos(&log), 2, "redialed with no request waiting");
+    assert_eq!(conn.exec(&st("INSERT", vec![]), conn.deadline()).await.unwrap().rows_affected, 1);
+    conn.close();
+}
+
+/// Like [`serve`], with an error of `script` for a request sent as the notice on request id 0,
+/// after which the socket ends.
+async fn serve_notice(
+    script: fn(&pb::ClientMessage) -> Vec<pb::ServerMessage>,
+) -> (String, Served) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/db", listener.local_addr().unwrap());
+    let log: Served = Arc::new(Mutex::new(Vec::new()));
+    let seen = log.clone();
+    tokio::spawn(async move {
+        loop {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let seen = seen.clone();
+            tokio::spawn(async move {
+                let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                while let Some(Ok(Message::Binary(b))) = ws.next().await {
+                    let msg = pb::ClientMessage::decode(b.as_ref()).unwrap();
+                    seen.lock().push(msg.clone());
+                    let hello = matches!(msg.message, Some(pb::client_message::Message::Hello(_)));
+                    for mut resp in script(&msg) {
+                        let notice = !hello
+                            && matches!(&resp.message, Some(pb::server_message::Message::Error(e)) if e.code == ErrorCode::WRONG_SHARD_SERVER.0);
+                        if !notice {
+                            resp.request_id = msg.request_id;
+                        }
+                        if ws.send(Message::binary(resp.encode_to_vec())).await.is_err() || notice {
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    (url, log)
+}
+
+/// Catches: a refused upgrade read as one refusal for both causes. 401 is unauthenticated, 403
+/// permission denied: both final, neither redialed.
+#[tokio::test]
+async fn a_refused_upgrade_names_its_cause() {
+    for (status, code) in [(401, ErrorCode::UNAUTHENTICATED), (403, ErrorCode::PERMISSION_DENIED)] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/db", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let _ = tcp.read(&mut request).await.unwrap();
+            let response = format!("HTTP/1.1 {status} Refused\r\ncontent-length: 0\r\n\r\n");
+            tcp.write_all(response.as_bytes()).await.unwrap();
+        });
+        let err = dial(&url, "DB_1").await.err().unwrap();
+        assert!(matches!(&err, WsdbError::Server { code: c, .. } if *c == code), "{status}: {err}");
+        assert!(err.is_final(), "{status}: final");
+    }
+}
+
+/// Catches: a frame the socket never took reported as sent. A write queued to a writer whose
+/// socket then fails is not sent: nothing applied, retryable, never uncertain.
+#[tokio::test]
+async fn a_frame_the_socket_fails_to_send_is_not_sent() {
+    let (url, _) = serve(script, false).await;
+    let conn = dial(&url, "DB_1").await.unwrap();
+    // the writer gone, its queue refuses or drops every frame
+    let (tx, rx) = mpsc::channel::<Outgoing>(1);
+    drop(rx);
+    conn.0.state.lock().tx = Some(tx);
+    let err = conn.exec(&st("INSERT", vec![]), conn.deadline()).await.err().unwrap();
+    assert!(matches!(err, WriteError::NotSent(_)), "{err}");
+    // queued, then dropped by a writer that failed before sending it
+    let (tx, mut rx) = mpsc::channel::<Outgoing>(1);
+    conn.0.state.lock().tx = Some(tx);
+    tokio::spawn(async move { drop(rx.recv().await) });
+    let err = conn.exec(&st("INSERT", vec![]), conn.deadline()).await.err().unwrap();
+    assert!(matches!(err, WriteError::NotSent(_)), "{err}");
+    assert!(StorageError::from(err).retryable());
+    conn.close();
 }

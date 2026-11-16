@@ -116,6 +116,7 @@ pub fn encode_wire(
             reason: v.reason,
             transcript: v.transcript,
             delay: Some(encode_duration_secs(v.delay)),
+            ..Default::default()
         }),
         WireEvent::EotPrediction(v) => Event::EotPrediction(pb::EotPrediction {
             // `as f32`, as the reference narrows a float to the proto's `float`.
@@ -302,13 +303,13 @@ macro_rules! same_arm {
 }
 
 /// The name a client emits an arriving event under: `msg.event.WhichOneof("event")`.
-/// Five of these are not in `RemoteSessionEventTypes`.
+/// Includes protocol back-channel events outside `RemoteSessionEventTypes`.
 pub fn event_kind(event: &proto::agent_session_event::Event) -> RemoteSessionEventKind {
     same_arm!(event, proto::agent_session_event::Event => RemoteSessionEventKind:
         AgentStateChanged, UserStateChanged, ConversationItemAdded, UserInputTranscribed,
         FunctionToolsExecuted, Error, OverlappingSpeech, SessionUsageUpdated, AmdPrediction,
         EotPrediction, FunctionToolsStarted, DebugMessage, ToolExecutionUpdated,
-        AgentFalseInterruption)
+        AgentFalseInterruption, AmdCompleted, SessionClosed)
 }
 
 /// Decode a [`DebugMessageWire`](lk_agents_abi::worker::remote_session::DebugMessageWire)'s serialized `DebugMessage` to its `Struct`; `Err` is refused.

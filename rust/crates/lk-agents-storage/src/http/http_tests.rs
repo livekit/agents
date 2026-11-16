@@ -167,7 +167,7 @@ async fn items_and_tasks_page_through_the_existing_client() {
     let page = client
         .tasks(agent_task::GetTasksRequest {
             thread_id: record.thread_id.clone(),
-            status: Some("INPUT_REQUIRED".into()),
+            status: Some(agent_task::Status::InputRequired as i32),
             limit: 1,
             ..Default::default()
         })
@@ -175,7 +175,7 @@ async fn items_and_tasks_page_through_the_existing_client() {
         .unwrap();
     assert_eq!(page.tasks.len(), 1);
     assert_eq!(page.tasks[0].task_id, "task-0");
-    assert_eq!(page.tasks[0].status, "INPUT_REQUIRED");
+    assert_eq!(page.tasks[0].status, agent_task::Status::InputRequired as i32);
     let mut cursor = String::new();
     let mut tasks = Vec::new();
     loop {

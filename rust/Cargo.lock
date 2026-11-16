@@ -515,6 +515,7 @@ checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 [[package]]
 name = "device-info"
 version = "0.1.1"
+source = "git+https://github.com/livekit/rust-sdks?rev=9052400c2a6fe6e9932f0e4f45848c8e7cf7d308#9052400c2a6fe6e9932f0e4f45848c8e7cf7d308"
 dependencies = [
  "core-foundation",
  "jni 0.21.1",
@@ -1446,7 +1447,8 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "livekit-api"
-version = "0.9.1"
+version = "0.10.2"
+source = "git+https://github.com/livekit/rust-sdks?rev=9052400c2a6fe6e9932f0e4f45848c8e7cf7d308#9052400c2a6fe6e9932f0e4f45848c8e7cf7d308"
 dependencies = [
  "chrono",
  "http",
@@ -1472,16 +1474,19 @@ dependencies = [
 
 [[package]]
 name = "livekit-common"
-version = "0.1.6"
+version = "0.1.7"
+source = "git+https://github.com/livekit/rust-sdks?rev=9052400c2a6fe6e9932f0e4f45848c8e7cf7d308#9052400c2a6fe6e9932f0e4f45848c8e7cf7d308"
 dependencies = [
  "livekit-protocol",
 ]
 
 [[package]]
 name = "livekit-net"
-version = "0.1.4"
+version = "0.2.0"
+source = "git+https://github.com/livekit/rust-sdks?rev=9052400c2a6fe6e9932f0e4f45848c8e7cf7d308#9052400c2a6fe6e9932f0e4f45848c8e7cf7d308"
 dependencies = [
  "async-trait",
+ "flate2",
  "http",
  "log",
  "reqwest 0.12.28",
@@ -1493,7 +1498,8 @@ dependencies = [
 
 [[package]]
 name = "livekit-protocol"
-version = "0.8.2"
+version = "0.8.3"
+source = "git+https://github.com/livekit/rust-sdks?rev=9052400c2a6fe6e9932f0e4f45848c8e7cf7d308#9052400c2a6fe6e9932f0e4f45848c8e7cf7d308"
 dependencies = [
  "pbjson",
  "pbjson-types",
@@ -1504,13 +1510,15 @@ dependencies = [
 [[package]]
 name = "livekit-region"
 version = "0.1.1"
+source = "git+https://github.com/livekit/rust-sdks?rev=9052400c2a6fe6e9932f0e4f45848c8e7cf7d308#9052400c2a6fe6e9932f0e4f45848c8e7cf7d308"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "livekit-signaling"
-version = "0.1.7"
+version = "0.2.0"
+source = "git+https://github.com/livekit/rust-sdks?rev=9052400c2a6fe6e9932f0e4f45848c8e7cf7d308#9052400c2a6fe6e9932f0e4f45848c8e7cf7d308"
 dependencies = [
  "base64 0.21.7",
  "device-info",
@@ -1527,12 +1535,14 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-util",
  "url",
 ]
 
 [[package]]
 name = "livekit-token"
-version = "0.3.1"
+version = "0.4.1"
+source = "git+https://github.com/livekit/rust-sdks?rev=9052400c2a6fe6e9932f0e4f45848c8e7cf7d308#9052400c2a6fe6e9932f0e4f45848c8e7cf7d308"
 dependencies = [
  "hmac",
  "jsonwebtoken",

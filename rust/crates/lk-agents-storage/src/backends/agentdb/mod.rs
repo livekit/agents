@@ -10,12 +10,15 @@ use crate::StorageError;
 use crate::sql::{BatchResult, Row, Statement};
 use async_trait::async_trait;
 use livekit_api::services::threads::ThreadClient;
-use livekit_api::services::{LiveKitApi, ServerError, ServiceError, public_api_url};
+use livekit_api::services::{
+    LiveKitApi, ServerError, ServerErrorCode, ServiceError, public_api_url,
+};
+use livekit_protocol::agent::agent_task::{GetTasksRequest, Status as TaskStatus};
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
 use lk_agents_abi::storage::Unacknowledged;
-use lk_agents_abi::storage::agentdb_error::{Applied, ErrorCode, Retry};
+use lk_agents_abi::storage::agentdb_error::ErrorCode;
 use lk_agents_abi::{Clock, Ts};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::owned::Background;
@@ -27,16 +30,68 @@ pub use connection::{Conn, Options as ConnOptions, TokenMinter, WriteError, Wsdb
 
 // The threads service owns thread metadata; agent-db holds each thread's database, over `wsdb`.
 
+fn task_status(state: crate::TaskState) -> TaskStatus {
+    match state {
+        crate::TaskState::Submitted => TaskStatus::Submitted,
+        crate::TaskState::Working => TaskStatus::Working,
+        crate::TaskState::InputRequired => TaskStatus::InputRequired,
+        crate::TaskState::Completed => TaskStatus::Completed,
+        crate::TaskState::Failed => TaskStatus::Failed,
+        crate::TaskState::Canceled => TaskStatus::Canceled,
+        crate::TaskState::Rejected => TaskStatus::Rejected,
+    }
+}
+
+fn task_state(status: i32) -> Result<crate::TaskState, StorageError> {
+    match TaskStatus::try_from(status) {
+        Ok(TaskStatus::Submitted) => Ok(crate::TaskState::Submitted),
+        Ok(TaskStatus::Working) => Ok(crate::TaskState::Working),
+        Ok(TaskStatus::InputRequired) => Ok(crate::TaskState::InputRequired),
+        Ok(TaskStatus::Completed) => Ok(crate::TaskState::Completed),
+        Ok(TaskStatus::Failed) => Ok(crate::TaskState::Failed),
+        Ok(TaskStatus::Canceled) => Ok(crate::TaskState::Canceled),
+        Ok(TaskStatus::Rejected) => Ok(crate::TaskState::Rejected),
+        Ok(TaskStatus::Unspecified) | Err(_) => {
+            Err(StorageError::Invalid(format!("unknown task state {status}")))
+        }
+    }
+}
+
+/// The agent-db code a management call's REST error body `code` answers, as agent-store's
+/// `errcode.OfStatus` maps its gRPC status; a code that says nothing of its request's effect is
+/// unknown: maybe applied, final.
+fn api_code(code: &str) -> ErrorCode {
+    type T = ServerErrorCode;
+    match code {
+        T::NOT_FOUND => ErrorCode::NOT_FOUND,
+        T::PERMISSION_DENIED => ErrorCode::PERMISSION_DENIED,
+        T::UNAUTHENTICATED => ErrorCode::UNAUTHENTICATED,
+        T::INVALID_ARGUMENT
+        | T::MALFORMED
+        | T::BAD_ROUTE
+        | T::FAILED_PRECONDITION
+        | T::OUT_OF_RANGE
+        | T::ALREADY_EXISTS
+        | T::UNIMPLEMENTED => ErrorCode::INVALID_ARGUMENT,
+        // a conflict with a concurrent change, or pressure that passes: nothing applied
+        T::ABORTED | T::RESOURCE_EXHAUSTED => ErrorCode::RETRY,
+        T::UNAVAILABLE | T::DEADLINE_EXCEEDED | T::CANCELED => ErrorCode::COMMIT_UNKNOWN_RESULT,
+        T::INTERNAL | T::DATA_LOSS => ErrorCode::INTERNAL,
+        _ => ErrorCode(0),
+    }
+}
+
 /// A server's refusal of a request that changed nothing, by its code: the codes naming a cause of
-/// their own as it, one that may succeed if sent again `Unavailable`, any other final.
+/// their own as it, one that may succeed if sent again `Unavailable`, any other final (`too_large`
+/// included: no caller branches on it, its description names the limit).
 fn refused(code: ErrorCode, message: String) -> StorageError {
     match code {
-        ErrorCode::NotFound => StorageError::NotFound(message),
-        ErrorCode::Unauthenticated | ErrorCode::PermissionDenied => {
+        ErrorCode::NOT_FOUND => StorageError::NotFound(message),
+        ErrorCode::UNAUTHENTICATED | ErrorCode::PERMISSION_DENIED => {
             StorageError::Unauthorized(message)
         }
-        _ if code.retry() != Retry::Never => StorageError::Unavailable(message),
-        _ => StorageError::Invalid(format!("{}: {message}", code.as_str())),
+        _ if code.retryable() => StorageError::Unavailable(format!("{code}: {message}")),
+        _ => StorageError::Invalid(format!("{code}: {message}")),
     }
 }
 
@@ -65,9 +120,7 @@ impl From<WriteError> for StorageError {
     fn from(e: WriteError) -> Self {
         match e {
             WriteError::NotSent(e) => e.into(),
-            WriteError::Sent(e @ WsdbError::Server { code, .. })
-                if code.applied() == Applied::No =>
-            {
+            WriteError::Sent(e @ WsdbError::Server { code, .. }) if !code.maybe_applied() => {
                 e.into()
             }
             WriteError::Sent(e) => StorageError::Uncertain(Unacknowledged::sent(e)),
@@ -76,11 +129,11 @@ impl From<WriteError> for StorageError {
 }
 
 /// A `livekit-api` failure as a storage error: a lost request is `Unavailable`, an answered one
-/// is refused by its code, whose names are agent-db's.
+/// is refused by the agent-db code its REST error body's `code` answers.
 pub fn service_error(e: ServiceError) -> StorageError {
     match e {
         ServiceError::Twirp(ServerError::Request(e)) => StorageError::Unavailable(e.to_string()),
-        ServiceError::Twirp(ServerError::Twirp(c)) => refused(ErrorCode::from_wire(&c.code), c.msg),
+        ServiceError::Twirp(ServerError::Twirp(c)) => refused(api_code(&c.code), c.msg),
         ServiceError::Twirp(e) => StorageError::Invalid(e.to_string()),
         other => StorageError::Invalid(other.to_string()),
     }
@@ -93,9 +146,7 @@ fn service_write_error(e: ServiceError) -> StorageError {
         ServiceError::Twirp(ServerError::Request(e)) if !e.is_connect() && !e.is_builder() => {
             StorageError::Uncertain(Unacknowledged::sent(e))
         }
-        ServiceError::Twirp(ServerError::Twirp(c))
-            if ErrorCode::from_wire(&c.code).applied() == Applied::Maybe =>
-        {
+        ServiceError::Twirp(ServerError::Twirp(c)) if api_code(&c.code).maybe_applied() => {
             StorageError::Uncertain(Unacknowledged::sent(format!("{}: {}", c.code, c.msg)))
         }
         e => service_error(e),
@@ -289,22 +340,15 @@ impl Storage for AgentDbStorage {
         let mut tasks = Vec::new();
         let mut page_token = String::new();
         loop {
-            let request = livekit_protocol::agent::agent_task::GetTasksRequest {
+            let request = GetTasksRequest {
                 thread_id: id.into(),
-                status: status.map(|s| crate::http::task_status(s).as_str().to_owned()),
+                status: status.map(|state| task_status(state) as i32),
                 page_token,
                 ..Default::default()
             };
             let page = self.threads().tasks(request).await.map_err(service_error)?;
             for task in page.tasks {
-                let state = serde_json::from_value::<crate::http::generated::TaskStatus>(
-                    serde_json::Value::String(task.status.clone()),
-                )
-                .ok()
-                .and_then(crate::http::task_filter)
-                .ok_or_else(|| {
-                    StorageError::Invalid(format!("unknown task state {}", task.status))
-                })?;
+                let state = task_state(task.status)?;
                 tasks.push(ThreadTask {
                     task_id: task.task_id,
                     thread_id: task.thread_id,

@@ -238,6 +238,8 @@ impl Worker {
             // The server is draining; reconnecting is the transport's job, so nothing to decide.
             Some(M::GoAway(_)) => {}
             Some(M::Pong(_)) | None => {}
+            // This worker does not request replacement job tokens.
+            Some(M::CreateJobToken(_)) => {}
         }
     }
 
@@ -702,6 +704,7 @@ pub(super) fn update_job(job_id: &str, status: JobStatus) -> WorkerMessage {
         job_id: job_id.to_string(),
         status: status as i32,
         error: String::new(),
+        ..Default::default()
     }))
 }
 

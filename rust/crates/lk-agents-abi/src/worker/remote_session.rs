@@ -289,6 +289,8 @@ pub enum RemoteSessionEventKind {
     OverlappingSpeech,
     SessionUsageUpdated,
     AmdPrediction,
+    AmdCompleted,
+    SessionClosed,
     EotPrediction,
     FunctionToolsStarted,
     DebugMessage,

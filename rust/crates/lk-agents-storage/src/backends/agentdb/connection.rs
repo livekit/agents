@@ -17,17 +17,20 @@ use wire as pb;
 
 use crate::StorageError;
 use crate::sql::{BatchResult, Row, SqlValue, Statement, StatementResult};
-use lk_agents_abi::storage::agentdb_error::{ErrorCode, Retry};
+use lk_agents_abi::storage::agentdb_error::ErrorCode;
 
 // Wire protocol: `Hello` first, with a token minted for this dial. `Exec` answers one `ExecResult`;
 // `Query` streams `Columns`, `ColumnBatch`* and `Done`, paced by `Credit`; `Batch` applies its
 // statements atomically, one result per statement, then `Done`. Every request carries its caller's
 // deadline: it waits for a socket and for its answer until then, and is never sent again here. A
-// dropped socket (the server's `idle_evicted` notice on request id 0 included) is redialed only
-// while a request waits for it, so the redial lives exactly as long as a caller's deadline; those
-// in flight fail `Disconnected` (outcome unknown). Socket-less, the connection is dormant, which
-// no pool takes back. Answers and outgoing frames queue in bounded channels: a full one holds its
-// sender back.
+// dropped socket is redialed only while a request waits for it, so the redial lives exactly as
+// long as a caller's deadline; those in flight fail `Disconnected` (outcome unknown). The server
+// ends a socket with a notice on request id 0, as HTTP/2's GOAWAY does: `wrong_shard_server` (the
+// database moved or is draining: redialed at once) or `idle_evicted` (redialed when next needed).
+// Every request in flight on it is answered with the notice: nothing applied, sent again. A frame
+// the socket fails to send is not sent. Socket-less, the connection is dormant, which no pool
+// takes back. Answers and outgoing frames queue in bounded channels: a full one holds its sender
+// back.
 
 /// A bound value as the wire carries it.
 fn to_wire(v: &SqlValue) -> wire::Value {
@@ -159,9 +162,9 @@ pub enum WsdbError {
     /// The connection dropped with this request in flight; a write's outcome is unknown.
     #[error("agentdb client: connection lost, request outcome unknown")]
     Disconnected,
-    /// A server-reported error with its stable code (`not_found`, `unauthenticated`, `unavailable`,
-    /// `retry`, `outcome_unknown`, ..).
-    #[error("agentdb {}: {message}", code.as_str())]
+    /// A server-reported error: its code, which says whether the request may have applied and
+    /// may be sent again, and its description.
+    #[error("agentdb {code}: {message}")]
     Server { code: ErrorCode, message: String },
     #[error("agentdb client: protocol: {0}")]
     Protocol(String),
@@ -185,28 +188,52 @@ pub enum WriteError {
 }
 
 impl WsdbError {
-    /// A `Hello` refusal that redialing cannot repair.
+    /// A `Hello` refusal that redialing cannot repair: a known code that is not retryable.
     fn is_final(&self) -> bool {
         match self {
-            Self::Server { code, .. } => code.retry() == Retry::Never,
+            Self::Server { code, .. } => code.known() && !code.retryable(),
             Self::Protocol(_) => true,
             _ => false,
         }
     }
 
-    /// A code this build does not know keeps its name in the message.
+    /// A code this build does not know keeps the name the server gave it in the message.
     fn server(error: pb::Error) -> Self {
-        let code = ErrorCode::from_wire(&error.code);
-        let message = match code {
-            ErrorCode::Unknown => format!("{}: {}", error.code, error.message),
-            _ => error.message,
+        let code = ErrorCode(error.code);
+        let message = if code.known() {
+            error.description
+        } else {
+            format!("{}: {}", error.name, error.description)
         };
         Self::Server { code, message }
     }
+
+    /// The server's notice ending the socket, sent on request id 0.
+    fn notice(&self) -> Option<ErrorCode> {
+        match self {
+            Self::Server { code, .. } if is_notice(*code) => Some(*code),
+            _ => None,
+        }
+    }
 }
 
-/// The largest frame the server reads; a larger one closes the socket.
+/// The largest frame either way, as the protocol fixes it.
 pub const MAX_FRAME: usize = 16 << 20;
+
+/// What this client names itself in `Hello`.
+const CLIENT_VERSION: &str = concat!("lk-agents/", env!("CARGO_PKG_VERSION"));
+
+/// The codes the server ends a socket with, on request id 0.
+fn is_notice(code: ErrorCode) -> bool {
+    code == ErrorCode::IDLE_EVICTED || code == ErrorCode::WRONG_SHARD_SERVER
+}
+
+/// A frame for the socket writer, and who learns that the socket took all of it.
+struct Outgoing {
+    bytes: Vec<u8>,
+    sent: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
 /// How long a frame may take to send, and the read deadline past a missed pong, when the server
 /// names no ping timeout.
 const DEFAULT_PING_TIMEOUT: Duration = Duration::from_secs(10);
@@ -267,7 +294,7 @@ pub struct ExecResult {
 struct State {
     pending: HashMap<u32, mpsc::Sender<pb::ServerMessage>>,
     /// The live socket's writer; `None` between a drop and the redial.
-    tx: Option<mpsc::Sender<Vec<u8>>>,
+    tx: Option<mpsc::Sender<Outgoing>>,
     closed: bool,
     /// Why the connection gave up for good; later calls fail with it.
     fatal: Option<WsdbError>,
@@ -387,7 +414,9 @@ impl Supervisor {
             if conn.0.opts.reconnect.disable {
                 return;
             }
-            match conn.redial().await {
+            // a database that moved or drains is redialed at once; any other drop when needed
+            let now = cause.notice() == Some(ErrorCode::WRONG_SHARD_SERVER);
+            match conn.redial(now).await {
                 Some(next) => socket = next,
                 None => return,
             }
@@ -477,6 +506,14 @@ impl Conn {
     async fn connect(&self) -> Result<Socket, WsdbError> {
         let clock = &*self.0.clock;
         let deadline = Some(clock.now().saturating_add(self.0.opts.dial_timeout));
+        // the dial's own bound, not a caller's deadline: the next attempt may find the database
+        // warm
+        let timed_out = |_| {
+            WsdbError::Io(format!(
+                "dial {}: no answer within the dial timeout, {:?}",
+                self.0.opts.url, self.0.opts.dial_timeout
+            ))
+        };
         let token = self
             .0
             .minter
@@ -487,30 +524,33 @@ impl Conn {
         let mut headers = Headers::new();
         headers.insert("Authorization", format!("Bearer {token}"));
         let dial = connect_with_limit(&self.0.opts.url, headers, Some(MAX_FRAME));
-        let ws = lk_agents_abi::before(clock, deadline, dial)
-            .await
-            .map_err(|_| WsdbError::Timeout)?
-            .map_err(|e| match e {
+        let ws = lk_agents_abi::before(clock, deadline, dial).await.map_err(timed_out)?.map_err(
+            |e| match e {
                 // the upgrade's own refusal is final, as the same refusal at `Hello` is
-                TransportError::Status { status: 401 | 403, message, .. } => {
-                    WsdbError::Server { code: ErrorCode::Unauthenticated, message }
+                TransportError::Status { status: 401, message, .. } => {
+                    WsdbError::Server { code: ErrorCode::UNAUTHENTICATED, message }
+                }
+                TransportError::Status { status: 403, message, .. } => {
+                    WsdbError::Server { code: ErrorCode::PERMISSION_DENIED, message }
                 }
                 TransportError::Status { status: 404, message, .. } => {
-                    WsdbError::Server { code: ErrorCode::NotFound, message }
+                    WsdbError::Server { code: ErrorCode::NOT_FOUND, message }
                 }
                 e => WsdbError::Io(format!("dial {}: {e}", self.0.opts.url)),
-            })?;
+            },
+        )?;
         let (mut sink, mut read) = ws.split();
         let hello = pb::ClientMessage {
             request_id: self.next_id(),
             message: Some(pb::client_message::Message::Hello(pb::Hello {
                 token,
                 database_id: self.0.opts.database_id.clone(),
+                client_version: CLIENT_VERSION.into(),
             })),
         };
         lk_agents_abi::before(clock, deadline, sink.send(Message::binary(hello.encode_to_vec())))
             .await
-            .map_err(|_| WsdbError::Timeout)?
+            .map_err(timed_out)?
             .map_err(|e| WsdbError::Io(e.to_string()))?;
         let first = async {
             loop {
@@ -527,9 +567,7 @@ impl Conn {
                 }
             }
         };
-        let resp = lk_agents_abi::before(clock, deadline, first)
-            .await
-            .map_err(|_| WsdbError::Timeout)??;
+        let resp = lk_agents_abi::before(clock, deadline, first).await.map_err(timed_out)??;
         if resp.request_id != hello.request_id {
             return Err(WsdbError::Protocol("Hello response has a different request id".into()));
         }
@@ -549,7 +587,7 @@ impl Conn {
         };
         // the writer owns the sink; a send that does not finish within the ping timeout is a dead
         // socket
-        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(WRITE_QUEUE);
+        let (tx, mut rx) = mpsc::channel::<Outgoing>(WRITE_QUEUE);
         let (gone, writer_gone) = tokio::sync::oneshot::channel();
         let writer_clock = self.0.clock.clone();
         // Refused once the connection closed: the sink and `gone` then drop unstarted.
@@ -557,11 +595,18 @@ impl Conn {
             // Declared first, so `gone` reports the writer stopped after the sink dropped.
             let _gone = gone;
             let (mut sink, clock) = (sink, &*writer_clock);
-            while let Some(bytes) = rx.recv().await {
-                let sent =
+            // a frame that fails is not sent: its `sent` drops unanswered, and so does every one
+            // queued behind it
+            while let Some(Outgoing { bytes, sent }) = rx.recv().await {
+                let send =
                     lk_agents_abi::timeout(clock, ping_timeout, sink.send(Message::binary(bytes)));
-                if !matches!(sent.await, Ok(Ok(()))) {
+                if !matches!(send.await, Ok(Ok(()))) {
                     return;
+                }
+                if let Some(sent) = sent
+                    && sent.send(()).is_err()
+                {
+                    log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb frame sent for a request dropped meanwhile");
                 }
             }
             // The peer's close frame is a courtesy: the socket drops either way.
@@ -600,10 +645,9 @@ impl Conn {
             pb::ServerMessage::decode(bytes).map_err(|e| WsdbError::Protocol(e.to_string()))?;
         match &resp.message {
             Some(pb::server_message::Message::Pong(_)) => return Ok(()),
-            // the connection's own notice, answering no request: its socket ends for being idle
+            // the connection's own notice, answering no request: its socket ends
             Some(pb::server_message::Message::Error(e))
-                if resp.request_id == 0
-                    && ErrorCode::from_wire(&e.code) == ErrorCode::IdleEvicted =>
+                if resp.request_id == 0 && is_notice(ErrorCode(e.code)) =>
             {
                 return Err(WsdbError::server(e.clone()));
             }
@@ -619,22 +663,42 @@ impl Conn {
     }
 
     /// Fails everything in flight. Only after the read loop returned, so no response can still be
-    /// delivered.
+    /// delivered. A notice answers each request with itself (nothing applied, sent again), after
+    /// whatever answers it already queued; any other drop fails it `Disconnected`.
     fn dropped(&self, cause: &WsdbError) {
         let mut st = self.0.state.lock();
-        st.pending.clear();
+        let pending = std::mem::take(&mut st.pending);
         st.tx = None;
         drop(st);
+        if let (Some(code), WsdbError::Server { message, .. }) = (cause.notice(), cause) {
+            for (request_id, tx) in pending {
+                let notice = pb::Error {
+                    code: code.0,
+                    name: code.to_string(),
+                    description: message.clone(),
+                };
+                let answer = pb::ServerMessage {
+                    request_id,
+                    message: Some(pb::server_message::Message::Error(notice)),
+                };
+                // a queue held full by unread answers ends `Disconnected` after them
+                if tx.try_send(answer).is_err() {
+                    log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb notice not queued for request {request_id}");
+                }
+            }
+        }
         log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb connection lost: {cause}");
     }
 
-    /// Dials once a request waits for the socket, again with exponential backoff while one
-    /// still does; `None` once a refusal is final.
-    async fn redial(&self) -> Option<Socket> {
+    /// Dials once a request waits for the socket (`now`: at once), again with exponential
+    /// backoff while one still does; `None` once a refusal is final.
+    async fn redial(&self, mut now: bool) -> Option<Socket> {
         let (r, clock) = (&self.0.opts.reconnect, &*self.0.clock);
         let mut backoff = r.min_backoff;
         loop {
-            self.0.waiting.wait_until(|n| (*n > 0).then_some(())).await;
+            if !std::mem::take(&mut now) {
+                self.0.waiting.wait_until(|n| (*n > 0).then_some(())).await;
+            }
             match self.connect().await {
                 Ok(socket) => {
                     log::info!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb reconnected");
@@ -747,7 +811,7 @@ impl Conn {
     }
 
     /// The live socket's writer.
-    fn writer(&self) -> Result<mpsc::Sender<Vec<u8>>, WsdbError> {
+    fn writer(&self) -> Result<mpsc::Sender<Outgoing>, WsdbError> {
         let st = self.0.state.lock();
         if st.closed {
             drop(st);
@@ -756,21 +820,36 @@ impl Conn {
         st.tx.clone().ok_or(WsdbError::Disconnected)
     }
 
-    /// Queues a frame for the socket, waiting while the writer's queue is full.
+    /// Sends a frame on the socket, waiting while the writer's queue is full; an error when the
+    /// socket did not take all of it, which no server reads as a request.
     async fn write(
         &self,
         request_id: u32,
         message: pb::client_message::Message,
     ) -> Result<(), WsdbError> {
         let bytes = Self::frame(request_id, message)?;
-        self.writer()?.send(bytes).await.map_err(|_| WsdbError::Disconnected)
+        let (sent, taken) = tokio::sync::oneshot::channel();
+        let outgoing = Outgoing { bytes, sent: Some(sent) };
+        self.writer()?.send(outgoing).await.map_err(|_| WsdbError::Disconnected)?;
+        taken.await.map_err(|_| WsdbError::Disconnected)
+    }
+
+    /// A credit for a request's stream. Failing, the socket is gone: the request then reads what
+    /// it already queued, then its end.
+    async fn credit(&self, request_id: u32, batches: u32) {
+        let credit = pb::client_message::Message::Credit(pb::Credit { batches });
+        if let Err(error) = self.write(request_id, credit).await {
+            log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb credit not sent: {error}");
+        }
     }
 
     /// Queues a frame nothing waits on (a ping, a cancel), dropped when the writer's queue is
     /// full or the socket is gone: neither changes what the server committed.
     fn try_write(&self, request_id: u32, message: pb::client_message::Message) {
-        let queued = Self::frame(request_id, message)
-            .and_then(|bytes| self.writer()?.try_send(bytes).map_err(|_| WsdbError::Disconnected));
+        let queued = Self::frame(request_id, message).and_then(|bytes| {
+            let outgoing = Outgoing { bytes, sent: None };
+            self.writer()?.try_send(outgoing).map_err(|_| WsdbError::Disconnected)
+        });
         if let Err(error) = queued {
             log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb frame not queued: {error}");
         }
@@ -837,8 +916,7 @@ impl Conn {
                 Some(pb::server_message::Message::Columns(columns)) => results.columns(columns)?,
                 Some(pb::server_message::Message::ColumnBatch(batch)) => {
                     results.batch(batch)?;
-                    let credit = pb::client_message::Message::Credit(pb::Credit { batches: 1 });
-                    self.write(id, credit).await?;
+                    self.credit(id, 1).await;
                 }
                 Some(pb::server_message::Message::Done(done)) => {
                     let mut result = results.finish(&done)?;
@@ -878,16 +956,14 @@ impl Conn {
         n: usize,
     ) -> Result<BatchResult, WsdbError> {
         let id = req.id;
-        let credit = pb::Credit { batches: self.0.opts.credits };
-        self.write(id, pb::client_message::Message::Credit(credit)).await?;
+        self.credit(id, self.0.opts.credits).await;
         let mut results = Results::new(n);
         loop {
             match req.next().await?.message {
                 Some(pb::server_message::Message::Columns(columns)) => results.columns(columns)?,
                 Some(pb::server_message::Message::ColumnBatch(batch)) => {
                     results.batch(batch)?;
-                    let credit = pb::client_message::Message::Credit(pb::Credit { batches: 1 });
-                    self.write(id, credit).await?;
+                    self.credit(id, 1).await;
                 }
                 Some(pb::server_message::Message::ExecResult(result)) => results.exec(result)?,
                 Some(pb::server_message::Message::Done(done)) => {

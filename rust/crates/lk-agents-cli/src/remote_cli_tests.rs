@@ -38,7 +38,7 @@ async fn receive_errors_escape_both_the_initial_reply_and_the_request_loop() {
             let message = |m: Option<AgentDevMessage>| m.unwrap().message;
             assert!(matches!(
                 message(recv(&mut socket).await.unwrap()),
-                Some(Message::ServerInfo(_))
+                Some(Message::ServerInfo(info)) if !info.supports_token_mode
             ));
             assert!(matches!(
                 message(recv(&mut socket).await.unwrap()),
@@ -106,6 +106,7 @@ async fn oversized_frames_are_refused_before_sending() {
     let info = livekit_protocol::agent::ServerInfo {
         agent_name: "a".repeat(DEV_FRAME_LIMIT),
         url: String::new(),
+        supports_token_mode: false,
     };
     let error = send(&mut wire, Message::ServerInfo(info)).await.unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);

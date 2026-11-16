@@ -8,8 +8,10 @@ use std::time::Duration;
 
 use lk_agents_abi::{Clock, Ts};
 
-/// The deadline of an operation whose caller set none.
-pub const REQUEST_WAIT: Duration = Duration::from_secs(10);
+/// The deadline of an operation whose caller set none: past agent-db's request timeout
+/// (`agentdb.request_timeout`, 10 s in production), which ends the request on the server first,
+/// by a margin for its answer's way back.
+pub const REQUEST_WAIT: Duration = Duration::from_secs(15);
 
 tokio::task_local! {
     static DEADLINE: Ts;

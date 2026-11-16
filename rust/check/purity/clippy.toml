@@ -45,7 +45,7 @@ disallowed-methods = [
   { path = "std::env::var_os", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
   { path = "std::env::vars", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
   { path = "std::env::vars_os", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
-  { path = "uuid::Uuid::new_v4", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
+  { path = "uuid::Uuid::new_v4", allow-invalid = true, reason = "Decision cores consume supplied IDs; keep this forbidden even when uuid is not in their dependency tree." },
   { path = "rand::random", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
   { path = "rand::random_range", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
   { path = "rand::rng", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },

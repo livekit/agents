@@ -9,16 +9,13 @@ use crate::storage::Namespace;
 
 #[tokio::test]
 async fn unavailable_after_sending_a_commit_is_uncertain_and_is_not_resent() {
-    use connection::tests::{dial, hello_ok, reply, serve};
+    use connection::tests::{dial, error, hello_ok, serve};
     use connection::wire as pb;
     fn dying(message: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
         match &message.message {
             Some(pb::client_message::Message::Hello(_)) => vec![hello_ok()],
             Some(pb::client_message::Message::Batch(_)) => {
-                vec![reply(pb::server_message::Message::Error(pb::Error {
-                    code: "unavailable".into(),
-                    message: "database is shutting down".into(),
-                }))]
+                vec![error(ErrorCode::COMMIT_UNKNOWN_RESULT, "database is shutting down")]
             }
             _ => Vec::new(),
         }
@@ -46,33 +43,29 @@ async fn unavailable_after_sending_a_commit_is_uncertain_and_is_not_resent() {
     pooled.conn.aclose().await;
 }
 
-/// agent-store answers `retry` when a write applied nothing and `outcome_unknown` when its durable
-/// flush failed after SQLite committed: the first is a retryable refusal, the second `Uncertain`.
-/// Before, both were unknown codes, so a write failed `Invalid` and was never retried.
+/// agent-store answers `retry` (1003) when a write applied nothing and `commit_unknown_result`
+/// (1021) when its durable flush failed after SQLite committed: the first is a retryable refusal,
+/// the second `Uncertain`. Before, both were unknown codes, so a write failed `Invalid` and was
+/// never retried.
 #[tokio::test]
-async fn retry_refuses_a_sent_write_and_outcome_unknown_leaves_it_uncertain() {
-    use connection::tests::{dial, hello_ok, reply, serve};
+async fn retry_refuses_a_sent_write_and_commit_unknown_result_leaves_it_uncertain() {
+    use connection::tests::{dial, error, hello_ok, serve};
     use connection::wire as pb;
-    fn answers(code: &str, message: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+    fn answers(code: ErrorCode, message: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
         match &message.message {
             Some(pb::client_message::Message::Hello(_)) => vec![hello_ok()],
-            Some(pb::client_message::Message::Batch(_)) => {
-                vec![reply(pb::server_message::Message::Error(pb::Error {
-                    code: code.into(),
-                    message: code.into(),
-                }))]
-            }
+            Some(pb::client_message::Message::Batch(_)) => vec![error(code, "refused")],
             _ => Vec::new(),
         }
     }
     fn retry(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
-        answers("retry", m)
+        answers(ErrorCode::RETRY, m)
     }
-    fn outcome_unknown(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
-        answers("outcome_unknown", m)
+    fn commit_unknown(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        answers(ErrorCode::COMMIT_UNKNOWN_RESULT, m)
     }
     type Script = fn(&pb::ClientMessage) -> Vec<pb::ServerMessage>;
-    for (code, script) in [("retry", retry as Script), ("outcome_unknown", outcome_unknown)] {
+    for (code, script) in [("retry", retry as Script), ("commit_unknown_result", commit_unknown)] {
         let (url, _) = serve(script, false).await;
         let conn = dial(&url, "DB_1").await.unwrap();
         let pooled = Pooled {
@@ -184,7 +177,20 @@ impl Peer {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let task = lk_agents_net::task::TokioSpawner::current().spawn(async move {
-            for (index, status) in ["INPUT_REQUIRED", "not-a-state"].into_iter().enumerate() {
+            let statuses = [
+                TaskStatus::Submitted,
+                TaskStatus::Working,
+                TaskStatus::InputRequired,
+                TaskStatus::Completed,
+                TaskStatus::Failed,
+                TaskStatus::Canceled,
+                TaskStatus::Rejected,
+            ];
+            let responses = statuses
+                .into_iter()
+                .map(|status| json!(status.as_str_name()))
+                .chain([json!(0), json!(999), json!("not-a-state")]);
+            for (index, status) in responses.enumerate() {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = Vec::new();
                 let mut bytes = [0; 4096];
@@ -194,9 +200,9 @@ impl Peer {
                     request.extend_from_slice(&bytes[..n]);
                 }
                 let head = String::from_utf8(request).unwrap();
-                if index == 0 {
+                if index < statuses.len() {
                     assert!(head.starts_with("GET /v0/projects/p_/threads/AT_1/tasks?"));
-                    assert!(head.contains("status=INPUT_REQUIRED"));
+                    assert!(head.contains(&format!("status={}", statuses[index].as_str_name())));
                 }
                 let body = serde_json::to_vec(&json!({
                     "items": [
@@ -223,7 +229,7 @@ impl Peer {
 }
 
 #[tokio::test]
-async fn cloud_task_views_preserve_waiting_state_and_label_presence_and_refuse_unknown_states() {
+async fn cloud_task_views_preserve_every_state_and_label_presence_and_refuse_invalid_states() {
     let mut peer = Peer::tasks().await;
     let storage = Namespace::new(
         &ProcessEnv::current_runtime(),
@@ -236,16 +242,28 @@ async fn cloud_task_views_preserve_waiting_state_and_label_presence_and_refuse_u
         None,
     )
     .unwrap();
-    let tasks =
-        storage.get_thread_tasks("AT_1".into(), Some(TaskState::InputRequired)).await.unwrap();
-    assert_eq!(tasks.len(), 2);
-    assert_eq!(tasks[0].status, TaskState::InputRequired);
-    assert_eq!(tasks[0].name, None);
-    assert_eq!(tasks[1].name.as_deref(), Some(""));
-    assert!(matches!(
-        storage.get_thread_tasks("AT_1".into(), None).await,
-        Err(StorageError::Invalid(_))
-    ));
+    for state in [
+        TaskState::Submitted,
+        TaskState::Working,
+        TaskState::InputRequired,
+        TaskState::Completed,
+        TaskState::Failed,
+        TaskState::Canceled,
+        TaskState::Rejected,
+    ] {
+        let tasks = storage.get_thread_tasks("AT_1".into(), Some(state)).await.unwrap();
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].status, state);
+        assert_eq!(tasks[1].status, state);
+        assert_eq!(tasks[0].name, None);
+        assert_eq!(tasks[1].name.as_deref(), Some(""));
+    }
+    for _ in 0..3 {
+        assert!(matches!(
+            storage.get_thread_tasks("AT_1".into(), None).await,
+            Err(StorageError::Invalid(_))
+        ));
+    }
     storage.aclose().await;
     peer.close().await;
 }
@@ -255,8 +273,8 @@ async fn cloud_task_views_preserve_waiting_state_and_label_presence_and_refuse_u
 /// never a refusal that would drop a write that committed.
 #[test]
 fn a_sent_write_answered_internal_or_an_unknown_code_is_uncertain() {
-    for code in ["internal", "a_code_from_a_newer_server"] {
-        let answer = WsdbError::Server { code: ErrorCode::from_wire(code), message: code.into() };
+    for code in [ErrorCode::INTERNAL, ErrorCode(9999)] {
+        let answer = WsdbError::Server { code, message: code.to_string() };
         let err: StorageError = WriteError::Sent(answer.clone()).into();
         assert!(matches!(err, StorageError::Uncertain(_)), "{code}: {err:?}");
         let err: StorageError = WriteError::NotSent(answer).into();

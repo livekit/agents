@@ -340,6 +340,7 @@ impl EotTransport for CloudTransport {
     fn run_inference(&self, request_id: &EotRequestId) {
         self.send_message(Message::InferenceStart(proto::InferenceStart {
             request_id: request_id.as_str().to_owned(),
+            ..Default::default()
         }));
     }
 
