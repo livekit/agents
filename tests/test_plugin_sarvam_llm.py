@@ -101,54 +101,53 @@ async def test_base_url_routing(kwargs: dict[str, Any], base_url: str) -> None:
     await llm.aclose()
 
 
-@pytest.mark.parametrize("kwargs", [{}, {"reasoning_effort": None}])
-def test_reasoning_by_default_model_warns(
-    caplog: pytest.LogCaptureFixture, kwargs: dict[str, Any]
+async def test_sarvam_105b_reasoning_is_off_by_default() -> None:
+    stream = _llm(model="sarvam-105b").chat(chat_ctx=_chat_ctx())
+    assert stream._extra_kwargs["reasoning_effort"] == "none"
+    await stream.aclose()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "chat_kwargs", "expected"),
+    [
+        ({"reasoning_effort": "low"}, {}, "low"),
+        ({"reasoning_effort": None}, {}, None),  # explicit None: the endpoint's default
+        ({}, {"extra_kwargs": {"reasoning_effort": "high"}}, "high"),
+    ],
+)
+async def test_sarvam_105b_keeps_an_explicit_reasoning_effort(
+    kwargs: dict[str, Any], chat_kwargs: dict[str, Any], expected: str | None
 ) -> None:
-    with caplog.at_level("WARNING", logger="livekit.plugins.sarvam"):
-        _llm(model="sarvam-105b", **kwargs)
-    assert "reasoning_effort='none'" in caplog.text
+    stream = _llm(model="sarvam-105b", **kwargs).chat(chat_ctx=_chat_ctx(), **chat_kwargs)
+    assert stream._extra_kwargs["reasoning_effort"] == expected
+    await stream.aclose()
 
 
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"model": _CONVERSATIONS},
         {"model": "gemma4"},
-        {"model": "sarvam-105b", "base_url": "https://example.invalid/v1"},
-        {"model": "sarvam-105b", "reasoning_effort": "none"},
-        {"model": "sarvam-105b", "reasoning_effort": "low"},
+        {"model": "glm5.2"},
+        {"model": "sarvam-105b", "base_url": "https://api.sarvam.ai/v1"},
     ],
 )
-def test_no_reasoning_warning_otherwise(
-    caplog: pytest.LogCaptureFixture, kwargs: dict[str, Any]
-) -> None:
-    with caplog.at_level("WARNING", logger="livekit.plugins.sarvam"):
-        _llm(**kwargs)
-    assert "reasons before every answer" not in caplog.text
+async def test_no_reasoning_default_otherwise(kwargs: dict[str, Any]) -> None:
+    stream = _llm(**kwargs).chat(chat_ctx=_chat_ctx())
+    assert "reasoning_effort" not in stream._extra_kwargs
+    await stream.aclose()
 
 
-def test_switching_to_reasoning_by_default_model_warns(caplog: pytest.LogCaptureFixture) -> None:
+async def test_reasoning_default_follows_model_switches() -> None:
     llm = _llm(model="gemma4")
-    with caplog.at_level("WARNING", logger="livekit.plugins.sarvam"):
-        llm.update_options(model="sarvam-105b")
-    assert "reasons before every answer" in caplog.text
+    llm.update_options(model="sarvam-105b")
+    stream = llm.chat(chat_ctx=_chat_ctx())
+    assert stream._extra_kwargs["reasoning_effort"] == "none"
+    await stream.aclose()
 
-
-def test_no_warning_on_model_switch_with_reasoning_off(caplog: pytest.LogCaptureFixture) -> None:
-    llm = _llm(model="gemma4", reasoning_effort="none")
-    with caplog.at_level("WARNING", logger="livekit.plugins.sarvam"):
-        llm.update_options(model="sarvam-105b")
-    assert "reasons before every answer" not in caplog.text
-
-
-def test_no_warning_on_model_switch_with_explicit_base_url(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    llm = _llm(model="gemma4", base_url="https://api.sarvam.ai/v1")
-    with caplog.at_level("WARNING", logger="livekit.plugins.sarvam"):
-        llm.update_options(model="sarvam-105b")
-    assert "reasons before every answer" not in caplog.text
+    llm.update_options(model="glm5.2")
+    stream = llm.chat(chat_ctx=_chat_ctx())
+    assert "reasoning_effort" not in stream._extra_kwargs
+    await stream.aclose()
 
 
 def test_request_fields_are_forwarded_and_unsupported_ones_dropped() -> None:

@@ -34,7 +34,6 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.plugins.openai.llm import LLM as OpenAILLM
 
-from ..log import logger
 from .models import SarvamLLMModels
 
 SARVAM_API_BASE = "https://api.sarvam.ai"
@@ -70,7 +69,9 @@ _REASONING_EFFORT_MODELS: set[str] = {
     "glm5.2",
 }
 
-# Models that reason before every answer on /v2 unless ``reasoning_effort="none"``
+# Models that reason before every answer on /v2 unless ``reasoning_effort="none"``, which
+# costs seconds of first-token latency; the plugin sends "none" for them unless the caller
+# sets reasoning_effort
 _REASONING_BY_DEFAULT_MODELS: set[str] = {
     "sarvam-105b",
 }
@@ -123,20 +124,6 @@ def _validate_model(model: str) -> str:
     return model
 
 
-def _warn_if_reasoning_by_default(
-    model: str, reasoning_effort: NotGivenOr[ReasoningEffort]
-) -> None:
-    # an explicit level, "none" included, is the caller's choice
-    if model in _REASONING_BY_DEFAULT_MODELS and (
-        not is_given(reasoning_effort) or reasoning_effort is None
-    ):
-        logger.warning(
-            "%s reasons before every answer on /v2 unless reasoning_effort='none', "
-            "which adds seconds to the first token; for voice agents pass reasoning_effort='none'",
-            model,
-        )
-
-
 def _get_api_key(key: NotGivenOr[str]) -> str:
     sarvam_api_key = key if is_given(key) else os.environ.get("SARVAM_API_KEY")
     if not sarvam_api_key:
@@ -168,9 +155,10 @@ class LLM(OpenAILLM):
     Supports four models:
 
     * ``gemma4`` — vision-capable, ``/v2`` endpoint
-    * ``sarvam-105b`` — text-only, ``/v2`` endpoint; reasons before answering unless
-      ``reasoning_effort="none"``, so first tokens take seconds. Pass
-      ``reasoning_effort="none"`` for voice agents
+    * ``sarvam-105b`` — text-only, ``/v2`` endpoint. It reasons before every answer
+      unless ``reasoning_effort="none"``, which adds seconds to the first token, so the
+      plugin sends ``"none"`` unless you set ``reasoning_effort`` (or an explicit
+      ``base_url``) yourself; pass a level such as ``"low"`` to turn reasoning back on
     * ``glm5.2`` — text-only, ``/v2`` endpoint
     * ``sarvam-105b-conversations`` — multi-turn optimized, ``/v1`` endpoint
 
@@ -212,10 +200,9 @@ class LLM(OpenAILLM):
 
         # Resolve base URL: explicit > model-derived
         resolved_base_url = base_url if is_given(base_url) else _resolve_base_url(validated_model)
-        # with an explicit base_url the caller chose the endpoint, so don't warn about /v2
+        # with an explicit base_url the caller chose the endpoint, and /v1 rejects "none",
+        # so the reasoning default below is left to them
         self._sarvam_endpoint_pinned = is_given(base_url)
-        if not self._sarvam_endpoint_pinned:
-            _warn_if_reasoning_by_default(validated_model, reasoning_effort)
 
         # ---- Merge auth / telemetry headers (always enforced) ----
         merged_headers: dict[str, str] = {}
@@ -303,9 +290,6 @@ class LLM(OpenAILLM):
 
         new_model = _validate_model(model)
         new_version = _api_version(new_model)
-        if new_model != self._opts.model and not self._sarvam_endpoint_pinned:
-            _warn_if_reasoning_by_default(new_model, self._opts.reasoning_effort)
-
         if new_version != self._sarvam_api_version:
             # Endpoint changed — recreate the client pointing at the new URL
             new_base_url = _resolve_base_url(new_model)
@@ -332,7 +316,8 @@ class LLM(OpenAILLM):
 
         * Strips ``stream_options``, ``max_completion_tokens``, ``service_tier``
           (the Sarvam API does not accept these OpenAI SDK fields).
-        * Strips ``reasoning_effort`` for models that don't support it.
+        * Strips ``reasoning_effort`` for models that don't support it, and sends ``"none"``
+          for ``sarvam-105b`` when the caller didn't set it.
         * Rejects images sent to non-vision models (client-side ``ValueError``).
         * Rejects ``tool_choice`` without a non-empty ``tools`` array.
         * Strips function calls from the history when the turn declares no tools.
@@ -378,6 +363,15 @@ class LLM(OpenAILLM):
         # Strip reasoning_effort for unsupported models at chat-time too
         if model not in _REASONING_EFFORT_MODELS:
             merged_extra.pop("reasoning_effort", None)
+        elif (
+            model in _REASONING_BY_DEFAULT_MODELS
+            and not self._sarvam_endpoint_pinned
+            and not is_given(self._opts.reasoning_effort)
+            and "reasoning_effort" not in merged_extra
+        ):
+            # per request rather than in the options, so switching to a model that
+            # reasons by choice (glm5.2, gemma4) doesn't inherit it
+            merged_extra["reasoning_effort"] = "none"
 
         return super().chat(
             chat_ctx=chat_ctx,
