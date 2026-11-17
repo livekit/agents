@@ -41,6 +41,14 @@ pub enum SessionInputCommand {
     Correct { request: InputRequestRef, previous_message_id: String, message_id: String },
 }
 
+/// Detector correlation only: matching a response does not approve a business operation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputRoute {
+    NoMatch,
+    Matched(Vec<InputRequestRef>),
+    Unclear,
+}
+
 /// Serialized conversation authority. No host policy callback or saved command capability.
 #[crate::host(native(refused = "expected the active native conversation owner"))]
 pub trait SessionCommands: Send + Sync {
@@ -48,6 +56,12 @@ pub trait SessionCommands: Send + Sync {
         &'a self,
         command: SessionInputCommand,
     ) -> crate::BoxFuture<'a, Result<(), crate::storage::StorageError>>;
+
+    /// Canonical held human response, before any outgoing request has reserved it.
+    fn response<'a>(
+        &'a self,
+        reference: &'a InputRequestRef,
+    ) -> crate::BoxFuture<'a, Result<crate::ChatMessage, crate::storage::StorageError>>;
 
     fn recover<'a>(
         &'a self,
@@ -164,7 +178,7 @@ pub enum InputRequestState {
 pub struct AgentInputRequest {
     /// This occurrence's response lifecycle, independent of its asking tool's completion.
     pub state: InputRequestState,
-    /// The question delivered to the person.
+    /// The requested question; native delivery receipts separately establish presentation.
     pub source_message: crate::ChatMessage,
     /// Human response reserved for this occurrence, if one was selected.
     pub response_message: Option<crate::ChatMessage>,

@@ -354,14 +354,48 @@ impl Driver {
         // crosses this boundary, just as the host codec reconstructs its ChatItem records.
         Self::new(self.config.clone(), Some(self.turn().state), text)
     }
+
+    fn present_text(&mut self) {
+        let Phase::Releasing(invocation, InvocationRelease::Settled(result, ..)) =
+            &self.session.phase
+        else {
+            panic!("the invocation is waiting for its delivery receipts")
+        };
+        let invocation_id = invocation.id.clone();
+        let delivered = result
+            .new_messages
+            .iter()
+            .filter_map(|item| {
+                let message = item.as_message()?;
+                (message.role == Role::Assistant)
+                    .then(|| (message.id.clone(), message.raw_text_content().unwrap_or_default()))
+            })
+            .collect();
+        self.send(SessionEvent::InvocationReleased { invocation_id, delivered });
+    }
+
+    fn route_answer(&mut self) {
+        let Phase::Routing { message, candidates } = &self.session.phase else {
+            panic!("a presented question awaits routing")
+        };
+        self.send(SessionEvent::InputRouted {
+            message_id: message.id.clone(),
+            result: Some(Ok(InputRoute::Matched(
+                candidates.iter().map(|candidate| candidate.reference.clone()).collect(),
+            ))),
+            usage: Default::default(),
+        });
+    }
 }
 
 #[test]
 fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_resolution() {
     let cfg = config(true, ChatHistory::Fork, true);
     let mut first = Driver::new(cfg, None, "Book a room");
+    first.auto_release = false;
     first.reply("", &[("book", json!({"nights":"2"}))]);
     first.prepare(json!({"nights":2}));
+    first.present_text();
     let waiting = first.turn();
     let root_id = waiting.state.root_frame_id.clone();
     let pending = &waiting.state.frames[&root_id].pending_calls[0];
@@ -371,6 +405,7 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
     assert_eq!(waiting.state.frames.len(), 1);
 
     let mut second = first.reconstruct("yes");
+    second.route_answer();
     second.reply("", &[("book", json!({"nights":2}))]);
     second.prepare(json!({"nights":2}));
     let child_id = second.session.state.active_frame_id.clone();
@@ -401,6 +436,7 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
     });
     second.send(SessionEvent::InvocationReleased { invocation_id, delivered: Default::default() });
     let mut third = Driver::new(second.config.clone(), Some(second.turn().state), "Friday");
+    third.route_answer();
     assert_eq!(third.session.state.active_frame_id, child_id);
     assert_eq!(
         third.session.state.frames[&root_id].history,
@@ -469,17 +505,20 @@ fn an_answer_without_a_repeated_call_consumes_the_child_approval() {
             root.definition.tools.push(details);
             root.agent_tools.insert("details".into(), root.agent_tools["book"].clone());
             let mut first = Driver::new(cfg, None, "Book");
+            first.auto_release = false;
             first.reply("", &[("book", json!({"nights":2}))]);
             first.prepare(json!({"nights":2}));
+            first.present_text();
             let asked = first.turn().state.frames.values().next().unwrap().pending_calls[0]
                 .parent
                 .call_id
                 .clone();
             let mut next = first.reconstruct(answer);
+            next.route_answer();
             let request = next.request().1;
             assert!(request.items.iter().any(|i| matches!(i,
-                ChatItem::FunctionCallOutput(o) if o.call_id == asked
-                    && o.output == approval::answered_text("book", answer))));
+                ChatItem::Message(message) if message.role == Role::System
+                    && message.raw_text_content().as_deref() == Some(approval::answered_text("book", answer).as_str()))));
             let mut later = if delegate {
                 next.reply("", &[("details", json!({"nights":1}))]);
                 next.prepare(json!({"nights":1}));
@@ -495,7 +534,8 @@ fn an_answer_without_a_repeated_call_consumes_the_child_approval() {
             let root = &later.session.state.frames[&root_id];
             assert!(root.pending_calls.is_empty());
             assert!(root.history.iter().any(|i| matches!(i,
-                ChatItem::FunctionCallOutput(o) if o.call_id == asked && o.output == answer)));
+                ChatItem::FunctionCallOutput(o) if o.call_id == asked
+                    && o.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX))));
             let frames = later.session.state.frames.len();
             later.reply("", &[("book", json!({"nights":2}))]);
             later.prepare(json!({"nights":2}));

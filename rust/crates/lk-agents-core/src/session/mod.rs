@@ -1,6 +1,7 @@
 //! Conversation coordination shared by execution modes; no I/O or host resources.
 
 pub mod effects;
+pub mod input_routing;
 mod machine;
 mod resume;
 mod routing;
@@ -23,6 +24,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+pub use lk_agents_abi::session::InputRoute;
 pub use lk_agents_abi::text_session::{
     ChildCallStatus, FrameId, ParentCall, PendingChildCall, SessionFrame, SessionSnapshot,
     TextSessionError, TextSessionTurn,
@@ -46,18 +48,33 @@ pub struct SessionInput {
 }
 
 /// Ephemeral detector input, resolved from canonical content and actual presentation evidence.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InputCandidate {
     pub reference: lk_agents_abi::session::InputRequestRef,
     pub question: String,
     pub presentation: ChatMessage,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct InputRoutingRequest {
+    pub message: ChatMessage,
+    pub history: Vec<ChatMessage>,
+    pub candidates: Vec<InputCandidate>,
+}
+
 /// Every event belonging to an invocation carries its identity. Late receipts cannot mutate
 /// a new invocation of the same frame, nor a new request reconstructed from the returned state.
+#[derive(Clone)]
 pub enum SessionEvent {
     PersistenceFailed(lk_agents_abi::storage::StorageError),
     Start(ChatMessage),
+    InputRouted {
+        message_id: String,
+        /// Dropping the producer reports task death; it cannot leave admission waiting.
+        result: Option<Result<InputRoute, lk_agents_abi::errors::ProviderError>>,
+        usage: Usage,
+    },
+    InputRoutingUnavailable,
     Run {
         invocation_id: String,
         event: agent_run::AgentRunEvent,
@@ -119,6 +136,7 @@ struct Invocation {
 
 enum Phase {
     NotStarted,
+    Routing { message: ChatMessage, candidates: Vec<InputCandidate> },
     Running(Invocation),
     Releasing(Invocation, InvocationRelease),
     Done,
@@ -128,14 +146,14 @@ impl Phase {
     fn invocation(&self) -> Option<&Invocation> {
         match self {
             Self::Running(invocation) | Self::Releasing(invocation, _) => Some(invocation),
-            Self::NotStarted | Self::Done => None,
+            Self::NotStarted | Self::Routing { .. } | Self::Done => None,
         }
     }
 
     fn invocation_mut(&mut self) -> Option<&mut Invocation> {
         match self {
             Self::Running(invocation) | Self::Releasing(invocation, _) => Some(invocation),
-            Self::NotStarted | Self::Done => None,
+            Self::NotStarted | Self::Routing { .. } | Self::Done => None,
         }
     }
 }

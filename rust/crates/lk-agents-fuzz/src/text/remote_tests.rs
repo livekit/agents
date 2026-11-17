@@ -410,8 +410,14 @@ async fn owner(
     };
     let binding = Arc::new(SessionBinding::new(store, view.clone()).unwrap());
     let runner = Arc::new(
-        lk_agents_runtime::text_session::Runner::new(&env.process, "desk".into(), vec![agent], 4)
-            .unwrap(),
+        lk_agents_runtime::text_session::Runner::new(
+            &env.process,
+            "desk".into(),
+            vec![agent],
+            4,
+            None,
+        )
+        .unwrap(),
     );
     let updates = runner
         .run(TextSessionRequest {

@@ -627,6 +627,20 @@ fn a_tool_question_is_worded_by_the_facing_agent_only() {
     );
 }
 
+#[test]
+fn an_empty_phrasing_reply_streams_the_original_question_before_settlement() {
+    let mut driver = Driver::new(text_agent(vec![string_tool("photo", "x")]), "claim", vec![]);
+    driver.reply("", &[("photo", json!({"x":"1"}))]);
+    driver.run_tools(|_| ToolOutcome::InputRequired {
+        question: "Photo of the damage?".into(),
+        verbatim: false,
+        tool: None,
+    });
+    driver.reply("", &[]);
+    assert!(driver.effects.iter().any(|effect| matches!(effect,
+        AgentRunEffect::Emit(StreamEvent::TextDelta { delta, .. }) if delta == "Photo of the damage?")));
+}
+
 // Catches: `InputRequired(tool=)`'s answer going to the model instead of the named tool, or the
 // waiting placeholder left in the history once answered.
 #[test]

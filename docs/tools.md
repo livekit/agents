@@ -286,8 +286,11 @@ async def request_photo(ctx: RunContext[LossContext]) -> InputRequired:
 ```
 
 The tool finishes with its question recorded as its outcome. The invocation
-returns a result with `status="input_required"` and `question`. Save the
-updated history and context, then deliver `result.question`.
+returns a result with `status="input_required"` and `question`. Questions use the text stream's
+delivery boundary; a transport exposes the final question without wording it again.
+Bound conversations retain their input state through the store, while application fields
+still use explicit saves. See [response routing](text-session.md#responses-to-requests-for-input)
+and [persistence](persistence.md).
 The input API is `InputRequired(question, verbatim=False)`; it does not accept
 a tool to invoke with the person's next message.
 

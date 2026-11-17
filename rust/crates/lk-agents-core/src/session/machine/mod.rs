@@ -53,7 +53,6 @@ impl Session {
                     error: None,
                     input_requests: BTreeMap::new(),
                     pending_calls: Vec::new(),
-                    answer_tool: None,
                     visible_dialogue: Vec::new(),
                     starting_history_ids: BTreeSet::new(),
                     options: Default::default(),
@@ -136,6 +135,7 @@ impl Session {
         if command.remote_id.is_empty() || command.endpoint.is_empty() {
             return Err(StorageError::Invalid("remote identity and endpoint are required".into()));
         }
+        self.validate_input_dispatch(&command)?;
         let remote_id = command.remote_id;
         let remote = self
             .state
@@ -252,11 +252,35 @@ impl Session {
             }
             SessionEvent::Start(message) if matches!(self.phase, Phase::NotStarted) => {
                 self.record_dialogue(message.clone());
-                let frame = self.active_frame_mut();
-                // An answered read-back is now ordinary history. AgentRun alone decides whether
-                // a repeated validated call consumes it; a model argument cannot grant approval.
-                frame.pending_calls.retain(|p| p.status != ChildCallStatus::Approval);
-                self.invoke(Some(message), now, &mut effects);
+                let candidates = self.input_candidates();
+                if candidates.is_empty()
+                    || message.raw_text_content().unwrap_or_default().trim().is_empty()
+                {
+                    self.invoke(Some(message), now, &mut effects);
+                } else {
+                    // Receipt and human input precede classification. The detector never sees
+                    // a queued question or an agent's private model history.
+                    effects.push(SessionEffect::RouteInput(super::InputRoutingRequest {
+                        message: message.clone(),
+                        history: self.state.chat_history.clone(),
+                        candidates: candidates.clone(),
+                    }));
+                    self.phase = Phase::Routing { message, candidates };
+                }
+            }
+            SessionEvent::InputRouted { message_id, result, usage } => {
+                self.input_routed(message_id, result, usage, now, &mut effects);
+            }
+            SessionEvent::InputRoutingUnavailable
+                if matches!(self.phase, Phase::Routing { .. }) =>
+            {
+                self.finish(
+                    Err(TextSessionError::Routing(RoutingError::InvalidState(
+                        "presented input requests require DelegationOptions(routing_model=...)"
+                            .into(),
+                    ))),
+                    &mut effects,
+                );
             }
             SessionEvent::Run { invocation_id, event } if self.is_current(&invocation_id) => {
                 self.run_event(event, now, &mut effects);
@@ -284,7 +308,9 @@ impl Session {
             SessionEvent::InvocationReleased { invocation_id, delivered } if matches!(&self.phase, Phase::Releasing(invocation, _) if invocation.id == invocation_id) =>
             {
                 self.receipts(&delivered);
-                let phase = std::mem::replace(&mut self.phase, Phase::Done);
+                // Release has ended this invocation, not the owner. Its delivery receipts
+                // still admit presented input occurrences before settlement or continuation.
+                let phase = std::mem::replace(&mut self.phase, Phase::NotStarted);
                 let Phase::Releasing(invocation, release) = phase else { return effects };
                 self.usage.absorb(invocation.run.ledger());
                 match release {
@@ -346,6 +372,7 @@ impl Session {
                     matches!(
                         effect,
                         SessionEffect::InvocationStarted { .. }
+                            | SessionEffect::RouteInput(_)
                             | SessionEffect::InvocationParked { .. }
                             | SessionEffect::InvocationSettled { .. }
                             | SessionEffect::Finished { result: Ok(_), .. }
@@ -381,10 +408,59 @@ impl Session {
 
     fn invoke(&mut self, message: Option<ChatMessage>, now: Ts, effects: &mut Vec<SessionEffect>) {
         let invocation_id = self.mint("invocation");
+        let mut answered = BTreeSet::new();
+        let stamp = self.stamp(now);
+        let mut notices = Vec::new();
         let frame = self.active_frame_mut();
         frame.completed = false;
         frame.output = None;
         frame.error = None;
+        for request in frame.input_requests.values_mut() {
+            if request.state != lk_agents_abi::session::InputRequestState::Responding {
+                continue;
+            }
+            let Some(response) = &request.response_message else { continue };
+            if let Some(origin) = &request.origin {
+                answered.insert(origin.call_id.clone());
+                if let Some(call) = frame.history.iter().find_map(|item| match item {
+                    ChatItem::FunctionCall(call)
+                        if call.call_id == origin.call_id
+                            && approval::mark(call)
+                                == Some(lk_agents_abi::llm::tool_executor::Approval::Asked) =>
+                    {
+                        Some(call)
+                    }
+                    _ => None,
+                }) {
+                    notices.push(
+                        ChatMessage::text(
+                            format!("{invocation_id}/approval/{}", origin.call_id),
+                            Role::System,
+                            approval::answered_text(
+                                &call.name,
+                                &response.raw_text_content().unwrap_or_default(),
+                            ),
+                            stamp,
+                        )
+                        .into(),
+                    );
+                }
+            }
+            if message.as_ref().is_none_or(|incoming| incoming.id != response.id)
+                && !frame.history.iter().any(|item| item.id() == response.id)
+            {
+                frame.history.push(response.clone().into());
+            }
+            // Admission to the owning agent's history is local delivery. Its origin call is
+            // provenance, not a directive to invoke that tool with the person's raw words.
+            request.state = lk_agents_abi::session::InputRequestState::Responded;
+        }
+        // A side question leaves approval and its accepted arguments unresolved. Remove that
+        // admission only when the owner delivered a response to the corresponding read-back.
+        frame.pending_calls.retain(|call| {
+            call.status != ChildCallStatus::Approval || !answered.contains(&call.parent.call_id)
+        });
+        frame.history.extend(notices);
         let frame = &self.state.frames[&self.state.active_frame_id];
         let agent = &self.config.agents[&frame.agent_name];
         let resume = message.is_none();
@@ -402,7 +478,7 @@ impl Session {
             id_seed: lk_agents_abi::types::ids::splitmix64(self.id_seed, self.state.next_id),
             opening: Opening::Message(Box::new(message)),
             history: frame.history.clone(),
-            answer_tool: frame.answer_tool.clone(),
+            answer_tool: None,
             delegated: self.delegated,
             mode: crate::tool_outcome::Mode::Text,
             llm: agent.llm.clone(),
@@ -418,11 +494,8 @@ impl Session {
         };
         let mut run = match AgentRun::new(agent.definition.clone(), input) {
             Ok(run) => {
-                if self.checkpoints {
-                    run.with_checkpoints()
-                } else {
-                    run
-                }
+                let run = run.with_input_answers(answered);
+                if self.checkpoints { run.with_checkpoints() } else { run }
             }
             Err(error) => {
                 self.finish(Err(TextSessionError::Routing(RoutingError::Agent(error))), effects);
@@ -515,6 +588,7 @@ impl Session {
                         invocation_id,
                         *result,
                         input_requirements,
+                        now,
                         effects,
                     ),
                 other => effects.push(SessionEffect::Run { invocation_id, effect: other }),
@@ -600,11 +674,24 @@ impl Session {
         invocation_id: String,
         result: Result<RunResult, RunError>,
         input_requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
+        now: Ts,
         effects: &mut Vec<SessionEffect>,
     ) {
         let result = match result {
             Ok(result) => result,
             Err(error) => {
+                if let Some(invocation) = self.phase.invocation() {
+                    let history = invocation.run.progress_history();
+                    let mut approvals = self.approvals(invocation, &history);
+                    let stamp = self.stamp(now);
+                    let frame = self.active_frame_mut();
+                    frame.history = history;
+                    continuation::retain_approvals(&mut approvals, &frame.pending_calls);
+                    frame.pending_calls = approvals;
+                    for requirement in &input_requirements {
+                        continuation::retain_input(frame, requirement, stamp);
+                    }
+                }
                 self.failure_input_requirements = input_requirements;
                 return self.finish(Err(TextSessionError::Run(error)), effects);
             }
@@ -612,7 +699,7 @@ impl Session {
         let phase = std::mem::replace(&mut self.phase, Phase::Done);
         let (Phase::Running(invocation) | Phase::Releasing(invocation, _)) = phase else { return };
         let output = validated_output(&invocation, &result.outcome);
-        let approvals = self.approvals(&invocation, &result);
+        let approvals = self.approvals(&invocation, &result.all_messages);
         effects.push(SessionEffect::InvocationSettled {
             frame_id,
             invocation_id,
@@ -648,7 +735,7 @@ impl Session {
         }
     }
 
-    fn approvals(&self, invocation: &Invocation, result: &RunResult) -> Vec<PendingChildCall> {
+    fn approvals(&self, invocation: &Invocation, history: &[ChatItem]) -> Vec<PendingChildCall> {
         invocation
             .children
             .values()
@@ -657,7 +744,7 @@ impl Session {
                 Child::Preparing(_) => None,
             })
             .filter_map(|child| {
-                result.all_messages.iter().find_map(|item| match item {
+                history.iter().find_map(|item| match item {
                     ChatItem::FunctionCall(call)
                         if call.call_id == child.function_call.call_id
                             && approval::mark(call)
@@ -725,6 +812,10 @@ impl Session {
                 ))
             })
             .collect();
+        continuation::retain_approvals(
+            &mut pending,
+            &self.state.frames[&invocation.frame_id].pending_calls,
+        );
         // Validation/launch arrival order must not change the model's sibling order.
         pending.sort_by_key(|p| {
             history

@@ -5901,6 +5901,35 @@ pub mod dates {
     }
 }
 
+pub mod delegation {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/delegation/mod.rs.
+    static DELEGATION_OPTIONS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn delegation_options_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::delegation::DelegationOptions> {
+        let py = obj.py();
+        if !obj.is_instance(DELEGATION_OPTIONS.import(
+            py,
+            "livekit.agents._generated.delegation",
+            "DelegationOptions",
+        )?)? {
+            return Err(super::not_a(obj, "DelegationOptions"));
+        }
+        Ok(::lk_agents_abi::delegation::DelegationOptions {
+            routing_model: crate::py_values::attr_with(
+                obj,
+                "DelegationOptions",
+                "routing_model",
+                |v| crate::generated::llm::LlmProxy::from_host(v.as_any()),
+            )?,
+        })
+    }
+}
+
 pub mod delegation_remote {
     use pyo3::prelude::*;
 
@@ -18452,13 +18481,6 @@ pub mod session_snapshot {
                     }
                 },
             )?,
-            answer_tool: crate::py_values::attr_with(obj, "SessionFrame", "answer_tool", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (v.extract::<::std::string::String>()).map(Some)
-                }
-            })?,
             visible_dialogue: crate::py_values::attr_with(
                 obj,
                 "SessionFrame",
@@ -18513,7 +18535,6 @@ pub mod session_snapshot {
             error,
             input_requests,
             pending_calls,
-            answer_tool,
             visible_dialogue,
             starting_history_ids,
             options,
@@ -18578,13 +18599,6 @@ pub mod session_snapshot {
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
-        )?;
-        kwargs.set_item(
-            "answer_tool",
-            match answer_tool {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
         )?;
         kwargs.set_item(
             "visible_dialogue",

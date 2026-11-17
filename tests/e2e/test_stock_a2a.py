@@ -40,6 +40,13 @@ async def test_a_stock_input_required_task_resumes_after_frontend_restart(e2e: E
 
     await desk.restart()
     async with e2e.text_client(desk) as client:
+        reply = await client.send("Why do you need the date?", thread_id=thread)
+        explanation = [update async for update in reply]
+    assert explanation[-1].state == pb.TASK_STATE_COMPLETED
+    assert text(explanation[-1]) == "The travel agent needs it to check availability."
+
+    await desk.restart()
+    async with e2e.text_client(desk) as client:
         reply = await client.send("Friday", thread_id=thread)
         updates = [update async for update in reply]
     assert updates[-1].state == pb.TASK_STATE_COMPLETED

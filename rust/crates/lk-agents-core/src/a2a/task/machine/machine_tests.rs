@@ -575,7 +575,7 @@ fn a_refused_commit_of_an_unwritten_receipt_answers_the_error() {
 
 /// A2A_SEED=68 88 130 (one_question_pending, Partition): a reply naming a question that a turn ahead
 /// already merged found no pending question and asked its own beside the newer one still waiting.
-/// The reply answers the question waiting now.
+/// Task correlation uses the waiting row, while the owner still classifies the human input.
 #[test]
 fn a_reply_to_a_merged_question_answers_the_one_waiting_now() {
     let mut m = continuing(Policy::Queue, Some("merged"));
@@ -588,7 +588,11 @@ fn a_reply_to_a_merged_question_answers_the_one_waiting_now() {
     };
     let waiting = staged.transitions.iter().find(|t| t.task_id == "waiting").expect("settled");
     assert_eq!(waiting.status, TaskState::Completed);
-    assert!(matches!(&staged.edits[..], [crate::a2a::HistoryEdit::Answer { .. }]));
+    assert!(staged.edits.is_empty(), "transport admission cannot rewrite a tool result");
+    let Operation::Handle(handle) = step(&mut m, Completion::Done) else {
+        panic!("the handler receives the whole message")
+    };
+    assert_eq!(handle.answer_tool, None, "only the conversation owner decides the destination");
 }
 
 /// A2A_SEED=181 350 616 (commit_is_what_the_run_staged, Concurrent): overlapping concurrent turns

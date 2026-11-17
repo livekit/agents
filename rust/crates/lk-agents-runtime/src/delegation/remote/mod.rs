@@ -311,6 +311,19 @@ impl Delegation {
                 ));
             }
             None => {
+                let selected = self.interaction.0.lock().policy.snapshot().input_request;
+                let (arguments, structured) = match (&self.request.owner, selected) {
+                    (Some(owner), Some(reference)) => {
+                        let response = owner.response(&reference).await.map_err(protocol)?;
+                        // Classification reserved this exact human message. A model's rewritten
+                        // tool arguments cannot change it or turn a side question into an answer.
+                        (
+                            serde_json::json!({"request": response.raw_text_content().unwrap_or_default()}),
+                            false,
+                        )
+                    }
+                    _ => (self.request.arguments.clone(), self.request.structured),
+                };
                 let default_context = match &self.request.owner {
                     Some(owner) => {
                         let endpoint = self.interaction.0.lock().policy.snapshot().id.endpoint;
@@ -322,8 +335,8 @@ impl Delegation {
                     None => None,
                 };
                 let message = self.interaction.message(
-                    self.request.arguments.clone(),
-                    self.request.structured,
+                    arguments,
+                    structured,
                     self.client.offers_extension(),
                     &self.request.history,
                     self.request.shared.clone(),

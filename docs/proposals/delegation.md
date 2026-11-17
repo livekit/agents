@@ -227,7 +227,7 @@ coordinates all exposed remote tools. Automatic detection requires an explicitly
 separate routing model for every frontend type, including pipeline and realtime voice. There
 is no fallback to the frontend model or implicit provider credentials. A decision model or
 Gemma can be an application choice; no model family is hardcoded by the framework. Reusing a
-frontend model is a later optimization. DelegationOptions/delegation are proposed spellings;
+frontend model is a later optimization. DelegationOptions/delegation are the common configuration;
 these controls do not belong on individual as_tool calls.
 
 | Surface | Meaning |
@@ -857,7 +857,8 @@ a public Python export or an additional SDK constructor.
 | RemoteTaskRef | Reuse/promote the current core A2A TaskRef shape. | Context/task addressing; keep internal unless a public control signature requires it. |
 | InputRequestRef | New shared reference, not a lifecycle owner. | Qualify a local or remote input occurrence; keep internal by default. |
 | InputCandidate | Ephemeral detector input resolved by the core. | The qualified reference, question and canonical assistant presentation; no private model history or authority to dispatch. |
-| InputRoute, proposed | New internal parsed detector verdict. | Match zero/one/several input references or request clarification; use existing LLM interfaces rather than a new public detector base class. |
+| InputRoutingRequest | Ephemeral native request for the configured routing model. | Canonical human message, visible history and presented candidates; no persisted command or second history. |
+| InputRoute | Internal ABI detector verdict. | Match zero/one/several input references or request clarification; use existing LLM interfaces rather than a new public detector base class. |
 | PresentationEvent | Evolve existing voice Presentation/ExpertInboxEvent records. | Transient normalized notification with original correlation, grouping and exact-output information. |
 | SessionCheckpoint, proposed | New typed batch extending the existing checkpoint contract. | Atomically commit related framework state/history/task/journal changes without arbitrary application-field saves. |
 | VoiceHistory, private I/O record | Captures the conversation and the database baseline observed by that snapshot. | Reconciled receipts retain their fence and observation order; overlapping writes cannot relabel a stale snapshot as a new local edit. This is not a persisted format or a public constructor. |
@@ -1097,13 +1098,32 @@ passes deterministic stock-peer transport and failure tests.
 
 ### 3. Question routing
 
-- [ ] Add detector port/provider, usage accounting, cancellation and bounded retries.
+- [x] Add detector port/provider, usage accounting, cancellation and bounded retries.
+  The separate configured model runs through the existing LLM provider and retry interfaces.
+  Native text admission validates its offered candidate indices; invalid/unclear/failed
+  classification leaves requests open for clarification. The model's task and stream cleanup
+  are owned and cancelable, and its consumption is included in the turn's usage.
 - [ ] Recognize responses to previously presented requests at input admission, including when
   the current agent lacks the matching remote tool. Persist held responses, revalidate before
   dispatch and deduplicate against later tool calls using the same shared reservation path.
+  TextSession and bound Agent.run now gate input through that native admission path. The
+  current agent receives the complete human message once and a private routing observation.
+  A2A task correlation no longer rewrites a tool outcome or forces a tool invocation; managed
+  AgentRun startup uses the owner's admitted origins instead of claiming the latest question.
+  Delivery receipts cover verbatim and empty-phrasing fallback questions as well as model text.
+  Remote questions retain one owner rather than a duplicate local question. Voice admission,
+  dispatch when an eligible agent returns and multiple-task explicit selection remain open.
+  Binding stories also prove that a side question or another child call cannot discard a
+  waiting agent approval. A phrasing failure saves the tool's source request but does not
+  make that unheard question a detector candidate; a later validated repeat still owns approval.
 - [ ] Allow corrections to held responses before dispatch begins; invalidate stale detector
   decisions by reservation revision. After dispatch may have begun, preserve the original
   message/operation and reconcile it; a correction is a separate continuation, not an overwrite.
+  The native command path supports atomic grouped responses and held-response correction.
+  It retires unsent older intents without editing their journal bodies. Preparation checks
+  the current canonical response, covering correction after a transport read but before
+  preparation; a possibly dispatched response cannot be overwritten. Automatic/public
+  correction selection still needs the same owner integration as deferred dispatch.
 - [ ] Implement explicit references and the shared validation/reservation/dispatch path.
 - [ ] Implement eligibility, incarnations, passing, fairness and nested references.
 - [ ] Use source_message_id/response_message_id for remote input occurrences and canonical

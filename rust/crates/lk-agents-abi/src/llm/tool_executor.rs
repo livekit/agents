@@ -4,7 +4,7 @@ pub const INTERNAL_ERROR_OUTPUT: &str = "An internal error occurred";
 /// `make_function_call_output`'s text for a return value the model cannot be told about.
 pub const INVALID_OUTPUT: &str = "the tool returned an invalid output";
 
-/// How a call's output reads while it waits on the person; the answer replaces it.
+/// The tool's recorded input-required outcome. Human replies remain separate messages.
 pub const WAITING_PREFIX: &str = "waiting for the person's answer to: ";
 
 /// What the model reads as the output of a verbatim result it did not write.

@@ -103,33 +103,6 @@ pub fn answer_pending_input(
     answered
 }
 
-/// Recover an approval answer written by a transport before the invocation starts: a selected
-/// read-back whose output holds an answer, not the waiting placeholder. A retained sibling
-/// question is not answered merely because it belongs to the same turn.
-pub(crate) fn answered_approval_calls(history: &[ChatItem]) -> std::collections::BTreeSet<String> {
-    history
-        .iter()
-        .filter_map(|item| match item {
-            ChatItem::FunctionCall(call)
-                if selected(call)
-                    && approval::mark(call)
-                        == Some(lk_agents_abi::llm::tool_executor::Approval::Asked) =>
-            {
-                Some(call)
-            }
-            _ => None,
-        })
-        .filter(|call| {
-            history.iter().any(|item| {
-                matches!(item, ChatItem::FunctionCallOutput(output)
-                    if output.call_id == call.call_id
-                    && !output.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX))
-            })
-        })
-        .map(|call| call.call_id.clone())
-        .collect()
-}
-
 fn selected(call: &lk_agents_abi::FunctionCall) -> bool {
     call.extra
         .get(INPUT_REQUESTED_KEY)

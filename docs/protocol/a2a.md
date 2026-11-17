@@ -122,9 +122,12 @@ final text without another model call. A handler without a model sends the
 question as written. The pending call stays in the history with a placeholder output,
 `waiting for the person's answer to: <question>`.
 
-The next message in the thread answers it: its text replaces the
-placeholder, and the model continues from the history, on whatever worker
-takes the message.
+The next message reaches the conversation owner on whichever worker takes the message.
+Task correlation alone does not prove that this message answers the question. The owner
+recognizes responses to presented input requests, keeps side questions and new topics with
+the current agent, and retains unresolved requests. The tool's recorded outcome stays intact;
+transport admission does not replace it with arbitrary human text or invoke an answer tool.
+See [response routing](../text-session.md#responses-to-requests-for-input).
 
 - With the waiting task's `taskId`, the answer comes back on that task.
 - Without one, the answer is a new task, and the waiting task ends

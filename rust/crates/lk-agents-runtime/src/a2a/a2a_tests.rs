@@ -9,7 +9,7 @@ use std::time::Duration;
 use crate::a2a::Turn;
 use livekit_protocol::agent::chat_context::{ChatItem, chat_item};
 use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
-use livekit_protocol::agent::{ChatMessage, ChatRole, FunctionCall, FunctionCallOutput};
+use livekit_protocol::agent::{ChatMessage, ChatRole, FunctionCall};
 use lk_agents_abi::a2a::turn::HandlerPort;
 use lk_agents_abi::a2a::turn::TurnContext;
 use lk_agents_abi::errors::{HostError, HostErrorKind, ProviderError};
@@ -607,7 +607,7 @@ async fn a_lapsed_lease_fails_the_orphan_worker_lost(backend: Backend) {
     fx.cleanup(&[&a, &b]).await;
 }
 
-async fn input_required_pending_call_is_the_next_messages_output(backend: Backend) {
+async fn input_required_task_correlation_does_not_fabricate_a_tools_output(backend: Backend) {
     let fx = backend.fixture(None).await;
     let s = fx.thread().await;
     let first = run_turn(
@@ -641,27 +641,21 @@ async fn input_required_pending_call_is_the_next_messages_output(backend: Backen
             .unwrap();
     assert_eq!(second.output, Some(json!("thanks")));
     let items = s.partition(PARTITION_KEY).history().await.unwrap();
-    let outputs: Vec<&FunctionCallOutput> = items
-        .iter()
-        .filter_map(|i| match i.kind() {
-            Some(chat_item::Item::FunctionCallOutput(o)) if o.call_id == "p1" => Some(o),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(outputs.len(), 1);
-    assert_eq!(
-        (outputs[0].output.as_str(), outputs[0].name.as_str(), outputs[0].is_error),
-        ("here it is", "request_photo", false)
+    assert!(
+        !items.iter().any(|item| matches!(item.kind(),
+        Some(chat_item::Item::FunctionCallOutput(output)) if output.call_id == "p1")),
+        "the conversation owner records tool outcomes; arbitrary input cannot replace them"
     );
     assert_eq!(
         items.iter().map(kind_of).collect::<Vec<_>>(),
-        vec!["message", "function_call", "function_call_output", "message", "message"]
+        vec!["message", "function_call", "message", "message"]
     );
     assert_eq!(
         host.calls()[0].history.len(),
-        3,
-        "the handler sees the question, the call and the answer"
+        2,
+        "the handler sees the previous items without a fabricated tool result"
     );
+    assert_eq!(host.calls()[0].message, vec!["here it is"]);
     let answered = s.partition(PARTITION_KEY).task(&first.task.task_id).await.unwrap().unwrap();
     assert_eq!(answered.status, TaskState::Completed);
     assert_eq!(answered.data.metadata.get(MERGED_INTO_KEY), Some(&json!(second.task.task_id)));
@@ -910,7 +904,7 @@ lk_agents_storage::contract!(
     the_inbox_batches_a_burst_into_one_reply,
     a_message_id_resend_returns_the_existing_task,
     a_lapsed_lease_fails_the_orphan_worker_lost,
-    input_required_pending_call_is_the_next_messages_output,
+    input_required_task_correlation_does_not_fabricate_a_tools_output,
     concurrent_runs_append_without_a_lease,
     reject_refuses_while_a_turn_runs,
     a_submitted_row_exists_while_the_turn_runs,

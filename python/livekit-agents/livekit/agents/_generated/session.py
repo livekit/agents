@@ -61,7 +61,7 @@ class AgentInputRequest:
     state: InputRequestState
     """This occurrence's response lifecycle, independent of its asking tool's completion."""
     source_message: ChatMessage
-    """The question delivered to the person."""
+    """The requested question; native delivery receipts separately establish presentation."""
     response_message: ChatMessage | None
     """Human response reserved for this occurrence, if one was selected."""
     origin: ToolCallRef | None

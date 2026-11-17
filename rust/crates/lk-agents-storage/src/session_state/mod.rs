@@ -81,7 +81,6 @@ fn initial_voice(agent: String, history: Vec<ChatItem>) -> SessionSnapshot {
         error: None,
         input_requests: BTreeMap::new(),
         pending_calls: Vec::new(),
-        answer_tool: None,
         visible_dialogue: chat_history.clone(),
         starting_history_ids: Default::default(),
         options: Default::default(),

@@ -11,7 +11,7 @@ an explicitly bound store. Without a binding, a run starts a fresh conversation.
 
 ```python
 from dataclasses import dataclass
-from livekit.agents import Agent, SessionState, TextSession, persisted
+from livekit.agents import Agent, DelegationOptions, SessionState, TextSession, persisted
 
 @dataclass
 class BookingContext:
@@ -31,7 +31,10 @@ front_desk = Agent(
     llm=frontend_model,
     tools=[booking.as_tool(needs_approval=True, merge_chat_ctx=True)],
 )
-session = TextSession(agent=front_desk)
+session = TextSession(
+    agent=front_desk,
+    delegation=DelegationOptions(routing_model=routing_model),
+)
 
 app = await ctx.store.load_context(BookingContext(services=services))
 result = await session.run(ctx.message, context=ctx.store.bind(app))
@@ -99,6 +102,32 @@ store binding. SessionSnapshot is private native data, not another public state 
 model context. Human dialogue remains in chat_history regardless of that option. After the
 parent receives the child's accepted output and selected dialogue, the completed child is
 removed from the active agent map.
+
+## Responses to requests for input
+
+Configure a separate routing model with `DelegationOptions(routing_model=...)` on TextSession,
+or pass the same options as `delegation=` to a bound Agent.run or Agent.run_stream. This is
+conversation-wide configuration shared by every remote tool and local agent. The framework
+does not reuse the frontend model or select a provider implicitly.
+
+Before the current agent handles a new message, the routing model checks unresolved input
+requests that were actually presented. This includes a single question and earlier presented
+questions from inactive agents. A side question such as "Why do you need the date?" leaves the
+date request open. An unclear or failed classification lets the current agent clarify; it does
+not guess a destination. Without presented candidates, no classification call is made.
+
+The current agent still receives the entire human message and a private routing observation.
+The native owner validates selected occurrences and checkpoints their canonical human response
+before dispatch. Recognition can retain an answer while another agent is current. It does not
+switch agents, approve a business operation or prove that a remote received the response.
+When a selected response continues a remote task, it keeps that task's context and sends the
+person's reserved words. Model-generated tool arguments cannot rewrite them.
+
+Text consumed from run_stream establishes delivery at that output boundary. Verbatim tool
+questions use the same stream and receipts as model text. Reading only a result without
+consuming its text does not establish presentation. Routing model consumption is included in
+the turn's usage. The [delegation design](proposals/delegation.md#input-response-detection)
+describes grouping, dispatch eligibility and recovery across execution modes.
 
 ## Local agents as tools
 

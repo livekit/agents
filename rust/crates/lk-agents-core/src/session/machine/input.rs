@@ -6,6 +6,129 @@ use lk_agents_abi::{ChatMessage, Role};
 use std::collections::BTreeSet;
 
 impl Session {
+    pub(super) fn validate_input_dispatch(
+        &self,
+        command: &lk_agents_abi::delegation::remote::RemoteCommand,
+    ) -> Result<(), StorageError> {
+        use lk_agents_abi::delegation::remote::{A2ARequest, RemoteInput};
+        let RemoteInput::Prepare {
+            request: A2ARequest::Send(send),
+            input_request: Some(reference),
+            ..
+        } = &command.input
+        else {
+            return Ok(());
+        };
+        let InputRequestRef::RemoteTask { remote_id, task, request_id } = reference else {
+            return Ok(());
+        };
+        let response = self
+            .state
+            .remote_agents
+            .get(remote_id)
+            .and_then(|remote| remote.tasks.get(&task.task_id))
+            .filter(|saved| saved.task.context_id == task.context_id)
+            .and_then(|task| task.input_requests.get(request_id))
+            .and_then(|input| input.human_response_id.as_deref());
+        if let Some(id) = response {
+            let human = canonical(&self.state.chat_history, id, Role::User)?;
+            if send.message.text() != human.raw_text_content().as_deref() {
+                return Err(invalid(
+                    "the prepared response no longer matches the reserved human message",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn input_response(&self, reference: &InputRequestRef) -> Result<ChatMessage, StorageError> {
+        if self.closing || self.persistence_failure.is_some() || matches!(self.phase, Phase::Done) {
+            return Err(invalid("the conversation owner is closing or ended"));
+        }
+        let id = match reference {
+            InputRequestRef::Agent { agent_id, request_id } => self
+                .state
+                .frames
+                .get(&lk_agents_abi::text_session::FrameId { value: agent_id.clone() })
+                .and_then(|agent| agent.input_requests.get(request_id))
+                .filter(|input| input.state == InputRequestState::Responding)
+                .and_then(|input| input.response_message.as_ref())
+                .map(|message| &message.id),
+            InputRequestRef::RemoteTask { remote_id, task, request_id } => self
+                .state
+                .remote_agents
+                .get(remote_id)
+                .and_then(|remote| remote.tasks.get(&task.task_id))
+                .filter(|saved| saved.task.context_id == task.context_id)
+                .and_then(|task| task.input_requests.get(request_id))
+                .filter(|input| {
+                    input.state == InputRequestState::Responding
+                        && input.response_message_id.is_none()
+                })
+                .and_then(|input| input.human_response_id.as_ref()),
+        }
+        .ok_or_else(|| invalid("the input request has no held response; do not guess an answer"))?;
+        canonical(&self.state.chat_history, id, Role::User).cloned()
+    }
+
+    pub(super) fn input_routed(
+        &mut self,
+        message_id: String,
+        result: Option<Result<super::InputRoute, lk_agents_abi::errors::ProviderError>>,
+        usage: lk_agents_abi::usage::Usage,
+        now: lk_agents_abi::Ts,
+        effects: &mut Vec<super::SessionEffect>,
+    ) {
+        let Phase::Routing { message, candidates } = &self.phase else { return };
+        if message.id != message_id {
+            return;
+        }
+        let message = message.clone();
+        let allowed: BTreeSet<_> =
+            candidates.iter().map(|candidate| candidate.reference.clone()).collect();
+        self.usage.add(&usage);
+        let observation = match result {
+            Some(Ok(super::InputRoute::Matched(requests)))
+                if requests.iter().all(|reference| allowed.contains(reference)) =>
+            {
+                let selected = self
+                    .input(SessionInputCommand::Respond { requests: requests.clone(), message_id });
+                match selected {
+                    Ok(()) => format!(
+                        "This human message responds to these presented input requests: {}. \
+                         The responses are reserved; they are not proof of remote delivery. \
+                         Continue handling the entire message, including any other topic. \
+                         Recognition is not approval for a business operation.",
+                        serde_json::to_string(&requests).expect("input references serialize"),
+                    ),
+                    Err(_) => {
+                        "The selected input requests changed. Keep them pending and clarify; \
+                        do not guess a destination or forward an answer automatically."
+                            .into()
+                    }
+                }
+            }
+            Some(Ok(super::InputRoute::NoMatch)) => {
+                "This message was not recognized as a response \
+                to a presented input request. Handle it as the current agent. Leave those \
+                requests pending; do not forward it automatically as an answer."
+                    .into()
+            }
+            _ => "Response routing was unclear or unavailable. Handle the message and clarify \
+                its intended destination naturally. Keep the input requests pending and do \
+                not guess an answer destination."
+                .into(),
+        };
+        // The current agent receives the same human message exactly once and a private
+        // framework observation. It does not lose the conversational floor to the detector.
+        let id = self.mint("input_route");
+        let observation = ChatMessage::text(id, Role::System, observation, self.stamp(now));
+        let frame = self.active_frame_mut();
+        frame.history.push(observation.into());
+        self.phase = Phase::NotStarted;
+        self.invoke(Some(message), now, effects);
+    }
+
     /// Select every target against one snapshot, then commit them together. An invalid or stale
     /// member cannot reserve the rest of a grouped answer. Runtime checkpoints before replying.
     pub fn input(&mut self, command: SessionInputCommand) -> Result<(), StorageError> {

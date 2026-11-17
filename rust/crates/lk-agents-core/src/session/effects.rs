@@ -7,6 +7,9 @@ use lk_agents_abi::agent::run::{RunResult, StreamEvent};
 pub enum SessionEffect {
     /// A consistent accepted state before subsequent model/tool work.
     Checkpoint(Box<super::SessionSnapshot>),
+    /// Classify presented questions before starting the current agent's turn. The runtime
+    /// calls the configured separate model; the core admits its result against current state.
+    RouteInput(super::InputRoutingRequest),
     /// The runtime binds this invocation to its frame and execution identity.
     InvocationStarted {
         frame_id: FrameId,

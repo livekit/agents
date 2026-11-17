@@ -70,7 +70,6 @@ pub struct SessionFrame {
     #[host(default_factory = "dict")]
     pub input_requests: BTreeMap<String, crate::session::AgentInputRequest>,
     pub pending_calls: Vec<PendingChildCall>,
-    pub answer_tool: Option<String>,
     /// Delivery receipts, in conversation order, excluding the initial tool task and fork.
     pub visible_dialogue: Vec<ChatMessage>,
     pub starting_history_ids: BTreeSet<String>,

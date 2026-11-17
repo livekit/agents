@@ -15,10 +15,36 @@ struct Control {
     release: mpsc::Sender<Release>,
     progress: mpsc::Sender<(String, u64, String)>,
     usage: signal::Cell<Usage>,
-    remote: mpsc::Sender<RemoteCommand>,
+    commands: mpsc::Sender<SessionCommand>,
 }
 
 impl lk_agents_abi::session::SessionCommands for Runner {
+    fn response<'a>(
+        &'a self,
+        reference: &'a lk_agents_abi::session::InputRequestRef,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<lk_agents_abi::ChatMessage, lk_agents_abi::storage::StorageError>,
+    > {
+        Box::pin(async move {
+            use lk_agents_abi::storage::StorageError;
+            let sender =
+                self.control.lock().as_ref().map(|control| control.commands.clone()).ok_or_else(
+                    || StorageError::Invalid("the conversation owner is not running".into()),
+                )?;
+            let (done, settled) = signal::once();
+            sender
+                .send(SessionCommand::Response { reference: reference.clone(), done })
+                .await
+                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
+            settled.wait().await.map_err(|_| {
+                StorageError::Invalid(
+                    "the conversation owner ended before reading the response".into(),
+                )
+            })?
+        })
+    }
+
     fn input<'a>(
         &'a self,
         command: lk_agents_abi::session::SessionInputCommand,
@@ -26,12 +52,12 @@ impl lk_agents_abi::session::SessionCommands for Runner {
         Box::pin(async move {
             use lk_agents_abi::storage::StorageError;
             let sender =
-                self.control.lock().as_ref().map(|control| control.remote.clone()).ok_or_else(
+                self.control.lock().as_ref().map(|control| control.commands.clone()).ok_or_else(
                     || StorageError::Invalid("the conversation owner is not running".into()),
                 )?;
             let (done, settled) = signal::once();
             sender
-                .send(RemoteCommand::Input { command, done })
+                .send(SessionCommand::Input { command, done })
                 .await
                 .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
             settled.wait().await.map_err(|_| {
@@ -57,12 +83,12 @@ impl lk_agents_abi::session::SessionCommands for Runner {
         Box::pin(async move {
             use lk_agents_abi::storage::StorageError;
             let sender =
-                self.control.lock().as_ref().map(|control| control.remote.clone()).ok_or_else(
+                self.control.lock().as_ref().map(|control| control.commands.clone()).ok_or_else(
                     || StorageError::Invalid("the conversation owner is not running".into()),
                 )?;
             let (done, settled) = signal::once();
             sender
-                .send(RemoteCommand::Recover {
+                .send(SessionCommand::Recover {
                     remote_id: remote_id.into(),
                     endpoint: endpoint.into(),
                     origin: origin.clone(),
@@ -85,12 +111,12 @@ impl lk_agents_abi::session::SessionCommands for Runner {
         Box::pin(async move {
             use lk_agents_abi::storage::StorageError;
             let sender =
-                self.control.lock().as_ref().map(|control| control.remote.clone()).ok_or_else(
+                self.control.lock().as_ref().map(|control| control.commands.clone()).ok_or_else(
                     || StorageError::Invalid("the conversation owner is not running".into()),
                 )?;
             let (done, settled) = signal::once();
             sender
-                .send(RemoteCommand::DefaultContext {
+                .send(SessionCommand::DefaultContext {
                     remote_id: remote_id.into(),
                     endpoint: endpoint.into(),
                     done,
@@ -116,12 +142,12 @@ impl lk_agents_abi::session::SessionCommands for Runner {
         Box::pin(async move {
             use lk_agents_abi::storage::StorageError;
             let sender =
-                self.control.lock().as_ref().map(|control| control.remote.clone()).ok_or_else(
+                self.control.lock().as_ref().map(|control| control.commands.clone()).ok_or_else(
                     || StorageError::Invalid("the conversation owner is not running".into()),
                 )?;
             let (done, settled) = signal::once();
             sender
-                .send(RemoteCommand::Apply { command: Box::new(command), done })
+                .send(SessionCommand::Apply { command: Box::new(command), done })
                 .await
                 .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
             settled.wait().await.map_err(|_| {
@@ -133,6 +159,7 @@ impl lk_agents_abi::session::SessionCommands for Runner {
 
 pub struct Runner {
     config: SessionConfig,
+    delegation: Option<lk_agents_abi::delegation::DelegationOptions>,
     /// Handed to the one request: its host callbacks reach the host's run, which holds this
     /// runner, so they live only as long as that request.
     agents: Mutex<Option<BTreeMap<String, TextSessionAgent>>>,
@@ -153,6 +180,7 @@ impl TextSessionRunner for Runner {
         root_agent: String,
         agents: Vec<TextSessionAgent>,
         max_depth: usize,
+        delegation: Option<lk_agents_abi::delegation::DelegationOptions>,
     ) -> Result<Self, Invalid> {
         // what the model writes that is not for the person never reaches a run
         let agents: Vec<TextSessionAgent> = agents
@@ -177,7 +205,15 @@ impl TextSessionRunner for Runner {
             agents.into_iter().map(|agent| (agent.definition.name.clone(), agent)).collect(),
         ));
         let (control, spawner, clock) = (Mutex::new(None), env.spawner, env.clock.clone());
-        Ok(Self { config, agents: resources, control, spawner, clock, tracer: env.tracer.clone() })
+        Ok(Self {
+            config,
+            delegation,
+            agents: resources,
+            control,
+            spawner,
+            clock,
+            tracer: env.tracer.clone(),
+        })
     }
 
     fn run(&self, request: TextSessionRequest) -> Result<Updates, Invalid> {
@@ -185,14 +221,7 @@ impl TextSessionRunner for Runner {
         let mut current = self.control.lock();
         let agents =
             self.agents.lock().take().ok_or_else(|| Invalid("this runner already ran".into()))?;
-        let (updates, control) = start(
-            spawner,
-            self.config.clone(),
-            agents,
-            request,
-            self.clock.clone(),
-            self.tracer.root(),
-        )?;
+        let (updates, control) = start(self, spawner, agents, request)?;
         *current = Some(control);
         Ok(updates)
     }
@@ -261,13 +290,12 @@ impl TextSessionRunner for Runner {
 }
 
 fn start(
+    runner: &Runner,
     spawner: Arc<dyn Spawner>,
-    config: SessionConfig,
     agents: BTreeMap<String, TextSessionAgent>,
     request: TextSessionRequest,
-    clock: Arc<dyn Clock>,
-    cx: telemetry::Cx,
 ) -> Result<(Updates, Control), Invalid> {
+    let clock = runner.clock.clone();
     let ChatItem::Message(message) = request.message.clone() else {
         return Err(Invalid("a session message must be a ChatMessage".into()));
     };
@@ -279,7 +307,7 @@ fn start(
         .map_err(|error| Invalid(error.to_string()))?
         .flatten();
     let mut session = Session::new(
-        config,
+        runner.config.clone(),
         SessionInput {
             session_id: state
                 .as_ref()
@@ -303,16 +331,23 @@ fn start(
     let (events_tx, events) = mpsc::channel(64);
     let (progress_tx, progress) = mpsc::channel(32);
     let (release_tx, releases) = mpsc::channel(1);
-    let (remote_tx, remote) = mpsc::channel(32);
+    let (commands_tx, commands) = mpsc::channel(32);
     let (usage_tx, usage) = signal::signal(session.usage());
     let driver = Driver {
+        delegation: runner.delegation.clone(),
+        routing: None,
+        routing_background: lk_agents_net::owned::Background::new(
+            Arc::new(TaskSet::default()),
+            spawner.clone(),
+            clock.clone(),
+        ),
         usage: usage_tx,
         published: session.usage_revision(),
         session,
         agents,
         request,
         clock: clock.clone(),
-        cx,
+        cx: runner.tracer.root(),
         spawner: spawner.clone(),
         events_tx,
         updates,
@@ -326,11 +361,11 @@ fn start(
     driving.spawn(
         &*spawner,
         "text session",
-        driver.drive(message, events, progress, releases, remote, cancel.clone()),
+        driver.drive(message, events, progress, releases, commands, cancel.clone()),
     );
     Ok((
         Updates { cancel, receiver, clock, _driver: driving },
-        Control { release: release_tx, progress: progress_tx, usage, remote: remote_tx },
+        Control { release: release_tx, progress: progress_tx, usage, commands: commands_tx },
     ))
 }
 

@@ -316,6 +316,7 @@ impl Env {
             "desk".into(),
             vec![agent],
             4,
+            None,
         )
         .expect("a valid session");
         let request = TextSessionRequest {

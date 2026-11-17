@@ -80,7 +80,6 @@ class SessionFrame:
     error: str | None = None
     input_requests: dict[str, AgentInputRequest] = field(default_factory=dict)
     pending_calls: list[PendingChildCall]
-    answer_tool: str | None
     visible_dialogue: list[ChatMessage]
     """Delivery receipts, in conversation order, excluding the initial tool task and fork."""
     starting_history_ids: frozenset[str]

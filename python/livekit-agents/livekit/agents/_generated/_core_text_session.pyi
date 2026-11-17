@@ -13,6 +13,7 @@ from livekit.agents.a2a import _Delegation
 from .._core import _core_RunResources, _core_RunStream
 from .chat_items import ChatItem
 from .connect import APIConnectOptions
+from .delegation import DelegationOptions
 from .text_session import (
     LocalAgentTool,
     TextSessionAgent,
@@ -29,6 +30,7 @@ class TextSessionRunner:
         root_agent: str,
         agents: Sequence[TextSessionAgent],
         max_depth: int,
+        delegation: DelegationOptions | None = None,
     ) -> Self: ...
     def run(self, request: TextSessionRequest) -> TextSessionUpdates:
         """Runs the one request a runner serves; a second is refused."""

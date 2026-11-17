@@ -239,6 +239,9 @@ pub struct AgentRun {
     /// The dynamic instructions last rendered, for a phrasing request.
     dynamic: Option<String>,
     approval_answers: BTreeSet<String>,
+    /// A conversation owner already admitted these response origins. None is a direct run,
+    /// whose caller still supplies history without a shared input owner.
+    input_answers: Option<BTreeSet<String>>,
     checkpoints: bool,
     /// Coordinated: the history up to here was handed to the coordinator's planner.
     planned: usize,
@@ -358,6 +361,7 @@ impl AgentRun {
             output_retries: 0,
             dynamic: None,
             approval_answers: BTreeSet::new(),
+            input_answers: None,
             checkpoints: false,
             planned: 0,
             tools_forbidden: false,
@@ -370,6 +374,13 @@ impl AgentRun {
             Phase::Aborting { deadline, .. } => Some(*deadline),
             _ => None,
         }
+    }
+
+    /// Shared owners provide correlation; invocation startup must not consume another pending
+    /// question simply because a new human message arrived. Approval still requires a repeat.
+    pub fn with_input_answers(mut self, answered: BTreeSet<String>) -> Self {
+        self.input_answers = Some(answered);
+        self
     }
 
     pub fn handle(&mut self, event: AgentRunEvent, now: Ts) -> Vec<AgentRunEffect> {
@@ -612,12 +623,10 @@ impl AgentRun {
             }
         };
         let answer = message.raw_text_content().unwrap_or_default();
-        self.approval_answers = planning::answer_pending_input(&mut self.history, &answer);
-        // A transport (the A2A door) may already have written the selected call's answer.
-        // Retained sibling read-backs remain waiting and cannot grant their repeats.
-        if let Some((at, _)) = execution::pending_turn(&self.history) {
-            self.approval_answers.extend(planning::answered_approval_calls(&self.history[at..]));
-        }
+        self.approval_answers = match self.input_answers.take() {
+            Some(answered) => answered,
+            None => planning::answer_pending_input(&mut self.history, &answer),
+        };
         self.first_new = self.history.len();
         self.history.push(ChatItem::Message(message));
         // The answer is that tool's: it takes it as its first string parameter, no model turn.
@@ -803,7 +812,12 @@ impl AgentRun {
         if let Purpose::Phrase(ask) = purpose {
             let text = response.text.trim();
             let question = if text.is_empty() { ask.question.clone() } else { text.to_owned() };
-            return self.asked(RunQuestion { question, ..ask }, Some(message_id), now, fx);
+            return self.asked(
+                RunQuestion { question, ..ask },
+                (!text.is_empty()).then_some(message_id),
+                now,
+                fx,
+            );
         }
         if !response.text.is_empty() {
             self.record(
@@ -958,8 +972,23 @@ impl AgentRun {
         now: Ts,
         fx: &mut Vec<AgentRunEffect>,
     ) {
+        let streamed = message_id.is_some();
         let id = message_id.unwrap_or_else(|| self.item_id());
-        self.record(ChatMessage::text(id, Role::Assistant, &ask.question, self.stamp(now)).into());
+        self.record(
+            ChatMessage::text(id.clone(), Role::Assistant, &ask.question, self.stamp(now)).into(),
+        );
+        if !streamed {
+            // Exact tool questions use the same delivery boundary as model text. Merely
+            // retaining a question in the result cannot establish that it was presented.
+            fx.push(AgentRunEffect::Emit(StreamEvent::TextDelta {
+                message_id: id.clone(),
+                delta: ask.question.clone(),
+            }));
+            fx.push(AgentRunEffect::Emit(StreamEvent::TextEnd {
+                message_id: id,
+                interrupted: false,
+            }));
+        }
         self.settle_ask(ask, fx)
     }
 

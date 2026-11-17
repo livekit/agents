@@ -7,6 +7,7 @@ from typing import Any, Generic
 
 from . import _core, llm, utils
 from ._generated import public_text_session as _public, text_session as records
+from ._generated.delegation import DelegationOptions
 from ._generated.public_text_session import *  # noqa: F403
 from ._generated.run_result import Output_T
 from .storage.session_state import BoundContext
@@ -23,9 +24,11 @@ class TextSession(Generic[Context_T, Output_T]):
         *,
         agent: Agent[Context_T, Output_T],
         max_depth: int = 8,
+        delegation: DelegationOptions | None = None,
     ) -> None:
         self._agent = agent
         self._max_depth = max_depth
+        self._delegation = delegation
 
     async def run(
         self,
@@ -122,7 +125,9 @@ class TextSession(Generic[Context_T, Output_T]):
                             tools_host=run.tools.flatten(),
                         )
                     )
-                runner = _core.TextSessionRunner(self._agent.name, bindings, self._max_depth)
+                runner = _core.TextSessionRunner(
+                    self._agent.name, bindings, self._max_depth, self._delegation
+                )
                 for run in runs.values():
                     run.runner = runner
                 runner.run_stream(

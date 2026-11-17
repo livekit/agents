@@ -32,6 +32,7 @@ from .._generated.agent_authoring import (
     ToolOptionsKwargs,
 )
 from .._generated.agent_run import AgentDefinition
+from .._generated.delegation import DelegationOptions
 from .._generated.public_voice import *  # noqa: F403
 from .._generated.text_session import LocalAgentTool
 from .._generated.vad import VAD
@@ -338,6 +339,7 @@ class Agent(Generic[Context_T, Output_T]):
         message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
         context: Context_T | BoundContext[Context_T] | None = None,
         retries: int | AgentRetries | None = None,
+        delegation: DelegationOptions | None = None,
     ) -> RunResult[Output_T]:
         """Run the model and tool loop until an accepted output or a request for human input.
 
@@ -346,6 +348,7 @@ class Agent(Generic[Context_T, Output_T]):
             message_history: The conversation so far; omit for a fresh one.
             context: Application data and dependencies, read as ``ctx.context``.
             retries: The agent's retry budgets for this run (``AgentRetries``); an int sets both.
+            delegation: Conversation-wide response routing, using a separate model.
         """
         from ..storage.session_state import BoundContext
         from .agent_run import door_hooks
@@ -355,7 +358,9 @@ class Agent(Generic[Context_T, Output_T]):
                 raise ValueError("explicit history cannot be combined with a bound context")
             from ..text_session import TextSession
 
-            return await TextSession(agent=self).run(message, context=context, retries=retries)
+            return await TextSession(agent=self, delegation=delegation).run(
+                message, context=context, retries=retries
+            )
 
         hooks = door_hooks()
         async with self.run_stream(
@@ -363,6 +368,7 @@ class Agent(Generic[Context_T, Output_T]):
             message_history=message_history,
             context=context,
             retries=retries,
+            delegation=delegation,
         ) as stream:
             if hooks is not None and hooks.on_token is not None:
                 async for delta in stream.stream_text(delta=True):
@@ -376,6 +382,7 @@ class Agent(Generic[Context_T, Output_T]):
         message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
         context: Context_T | BoundContext[Context_T] | None = None,
         retries: int | AgentRetries | None = None,
+        delegation: DelegationOptions | None = None,
     ) -> RunStream[RunResult[Output_T]]:
         """``run()`` as an async context manager streaming text and events; it starts on entry::
 
@@ -393,7 +400,20 @@ class Agent(Generic[Context_T, Output_T]):
                 raise ValueError("explicit history cannot be combined with a bound context")
             from ..text_session import TextSession
 
-            return TextSession(agent=self).run_stream(message, context=context, retries=retries)
+            return TextSession(agent=self, delegation=delegation).run_stream(
+                message, context=context, retries=retries
+            )
+
+        if delegation is not None:
+            if message_history is not None:
+                raise ValueError(
+                    "delegation routing requires a session binding or a fresh conversation"
+                )
+            from ..text_session import TextSession
+
+            return TextSession(agent=self, delegation=delegation).run_stream(
+                message, context=context, retries=retries
+            )
 
         async def start(stream: _core._core_RunStream) -> _Started[RunResult[Output_T]]:
             run = await start_run(

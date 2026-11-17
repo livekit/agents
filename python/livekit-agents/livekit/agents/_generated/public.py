@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from .._core import ProviderAttempts as ProviderAttempts
+from .delegation import DelegationOptions as DelegationOptions
 from .job_records import JobExecutorType as JobExecutorType
 from .language import LanguageCode as LanguageCode
 from .usage import (
@@ -23,6 +24,7 @@ from .worker_options import (
 )
 
 __all__: list[str] = [
+    "DelegationOptions",
     "TokenUsage",
     "LLMUsage",
     "STTUsage",

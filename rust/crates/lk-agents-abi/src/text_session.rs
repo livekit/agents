@@ -238,6 +238,7 @@ pub trait TextSessionRunner: Send + Sync + Sized + 'static {
         root_agent: String,
         agents: Vec<TextSessionAgent>,
         max_depth: usize,
+        #[host(default = None)] delegation: Option<crate::delegation::DelegationOptions>,
     ) -> Result<Self, Invalid>;
 
     /// Runs the one request a runner serves; a second is refused.

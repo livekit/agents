@@ -28,6 +28,7 @@ from livekit import rtc
 from livekit.agents import (
     Agent,
     APIError,
+    DelegationOptions,
     JobContext,
     ModelSettings,
     RunContext,
@@ -511,8 +512,18 @@ async def test_a_resumed_session_gives_callbacks_the_new_requests_context() -> N
     first_app, second_app = ServiceApp(), ServiceApp()
 
     store = ContextStore()
-    first = await TextSession(agent=parent).run("Book a room", context=store.bind(first_app))
-    second = await TextSession(agent=parent).run("Friday", context=store.bind(second_app))
+    session = TextSession(
+        agent=parent,
+        delegation=DelegationOptions(
+            routing_model=FakeLLM(
+                [
+                    tool_call("route_input_response", candidates=[0], unclear=False),
+                ]
+            )
+        ),
+    )
+    first = await session.run("Book a room", context=store.bind(first_app))
+    second = await session.run("Friday", context=store.bind(second_app))
 
     assert first.status == "input_required"
     assert second.status == "completed" and second.output == "Booked."

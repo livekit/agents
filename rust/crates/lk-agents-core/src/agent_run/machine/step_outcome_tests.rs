@@ -175,11 +175,10 @@ fn approval_survives_output_validation_feedback_in_the_answering_invocation() {
     assert_eq!(second.executes().len(), 1, "validation feedback does not answer a read-back");
 }
 
-// Catches: an A2A continuation never granting the repeat, because the door wrote the person's
-// answer over the waiting output before the run started and the run counted only the answers it
-// wrote itself; or because stored history read the JSON identity back as the arguments object.
+// Recorded text alone is not response admission. A restored JSON argument identity still
+// grants the same validated repeat when its owner explicitly admits the response origin.
 #[test]
-fn a_read_back_the_transport_answered_grants_the_repeat() {
+fn a_recorded_response_requires_owner_admission_before_granting_a_readback_repeat() {
     let validated = json!({"date": "Monday", "notify": true});
     let first = turn(vec![], "cancel", json!({"date": "Monday"}), validated.clone());
     let mut history = first.result().all_messages.clone();
@@ -194,11 +193,33 @@ fn a_read_back_the_transport_answered_grants_the_repeat() {
             _ => {}
         }
     }
-    let mut second = Driver::new(text_agent(vec![cancel_tool()]), "yes", history);
-    second.reply("", &[("cancel_appointment", json!({"date": "Monday"}))]);
-    let (call, _) = second.prepares()[0].clone();
-    second.prepared(call, validated);
-    assert_eq!(second.executes().len(), 1, "the approved repeat runs");
+    for admitted in [false, true] {
+        let run = AgentRun::new(
+            text_agent(vec![cancel_tool()]),
+            input(Opening::Message(Box::new(user("answer", "yes"))), history.clone()),
+        )
+        .unwrap();
+        let run = if admitted {
+            run.with_input_answers(BTreeSet::from([first
+                .result()
+                .pending_call
+                .as_ref()
+                .unwrap()
+                .call_id
+                .clone()]))
+        } else {
+            run
+        };
+        let mut second = Driver::start(run);
+        second.reply("", &[("cancel_appointment", json!({"date": "Monday"}))]);
+        let (call, _) = second.prepares()[0].clone();
+        second.prepared(call, validated.clone());
+        assert_eq!(
+            second.executes().len(),
+            usize::from(admitted),
+            "only an admitted response can grant the validated repeat"
+        );
+    }
 }
 
 #[test]
@@ -314,8 +335,22 @@ fn approval_tools() -> Vec<lk_agents_abi::agent::FunctionToolInfo> {
         .collect()
 }
 
-fn repeat_approval(history: Vec<ChatItem>, name: &str, target: &str) -> Driver {
-    let mut driver = Driver::new(text_agent(approval_tools()), "yes", history);
+fn repeat_approval(
+    history: Vec<ChatItem>,
+    name: &str,
+    target: &str,
+    admitted: Option<BTreeSet<String>>,
+) -> Driver {
+    let run = AgentRun::new(
+        text_agent(approval_tools()),
+        input(Opening::Message(Box::new(user("answer", "yes"))), history),
+    )
+    .unwrap();
+    let run = match admitted {
+        Some(answered) => run.with_input_answers(answered),
+        None => run,
+    };
+    let mut driver = Driver::start(run);
     let (request, _, _) = driver.request();
     driver.send(AgentRunEvent::LlmChunk {
         request,
@@ -339,7 +374,7 @@ fn repeat_approval(history: Vec<ChatItem>, name: &str, target: &str) -> Driver {
 
 #[test]
 fn answering_one_approval_never_grants_a_retained_siblings_repeat() {
-    for transport_answered in [false, true] {
+    for owner_admitted in [false, true] {
         let mut first = Driver::new(text_agent(approval_tools()), "consider both", Vec::new());
         first.reply(
             "",
@@ -352,19 +387,11 @@ fn answering_one_approval_never_grants_a_retained_siblings_repeat() {
         let result = first.result();
         assert_eq!(result.input_requirements.len(), 2);
         let selected = &result.input_requirements[0].call.call_id;
-        let mut history = result.all_messages.clone();
-        if transport_answered {
-            for item in &mut history {
-                if let ChatItem::FunctionCallOutput(output) = item
-                    && &output.call_id == selected
-                {
-                    output.output = "yes".into();
-                }
-            }
-        }
-        let repeated = repeat_approval(history.clone(), "delete_first", "one");
+        let history = result.all_messages.clone();
+        let admitted = owner_admitted.then(|| BTreeSet::from([selected.clone()]));
+        let repeated = repeat_approval(history.clone(), "delete_first", "one", admitted.clone());
         assert_eq!(repeated.executes().len(), 1, "the selected read-back was answered");
-        let repeated = repeat_approval(history, "delete_second", "two");
+        let repeated = repeat_approval(history, "delete_second", "two", admitted);
         assert!(repeated.executes().is_empty(), "the retained sibling was never answered");
         assert_eq!(repeated.result().input_requirements[0].call.name, "delete_second");
     }
@@ -386,7 +413,7 @@ fn an_unselected_read_back_cannot_grant_even_if_a_transport_rewrites_its_output(
             _ => {}
         }
     }
-    let repeated = repeat_approval(history, "delete_first", "one");
+    let repeated = repeat_approval(history, "delete_first", "one", None);
     assert!(repeated.executes().is_empty());
 }
 

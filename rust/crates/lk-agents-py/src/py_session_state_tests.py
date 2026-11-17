@@ -4,7 +4,15 @@ from dataclasses import dataclass
 
 import pytest
 
-from livekit.agents import Agent, InputRequired, SessionState, TextSession, VoiceSession, persisted
+from livekit.agents import (
+    Agent,
+    DelegationOptions,
+    InputRequired,
+    SessionState,
+    TextSession,
+    VoiceSession,
+    persisted,
+)
 from livekit.agents.llm import ChatContext
 from livekit.agents.storage import ContextStore
 from tests.fakes import FakeLLM, tool_call, until
@@ -64,7 +72,16 @@ async def test_a_childs_call_ref_and_pending_arguments_are_owned_by_its_parent()
         tools=[child.as_tool()],
         llm=FakeLLM([tool_call("booking", call_id="parent"), "done"]),
     )
-    session = TextSession(agent=root)
+    session = TextSession(
+        agent=root,
+        delegation=DelegationOptions(
+            routing_model=FakeLLM(
+                [
+                    tool_call("route_input_response", candidates=[0], unclear=False),
+                ]
+            )
+        ),
+    )
     await session.run("Book a room.", context=store.bind(app))
     detached = app.session.snapshot()
     current, parent = app.session.current_agent, app.session.root_agent

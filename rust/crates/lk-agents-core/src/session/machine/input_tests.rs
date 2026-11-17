@@ -215,7 +215,7 @@ fn a_correction_retires_unsent_intent_and_preserves_its_original_journal_body() 
     );
     let restored = serde_json::from_value(serde_json::to_value(snapshot).unwrap()).unwrap();
     let mut restored = Session::new(driver.config, input(Some(restored))).unwrap();
-    remote(&mut restored, send("corrected", "Saturday", Some(reference)));
+    remote(&mut restored, send("corrected", "Actually Saturday", Some(reference)));
     remote(&mut restored, RemoteInput::DispatchStarted { request_id: "corrected".into() });
     assert!(restored.snapshot().remote_agents["flights"].requests["corrected"].dispatch_started);
 }
@@ -244,6 +244,38 @@ fn a_response_cannot_be_corrected_after_dispatch_may_have_started() {
 }
 
 #[test]
+fn a_correction_between_reading_the_response_and_preparation_refuses_the_stale_send() {
+    let mut driver = Driver::new(config(false, ChatHistory::Fresh, false), None, "Find flights");
+    let reference = question(&mut driver.session);
+    present(&mut driver, vec![reference.clone()]);
+    answer(&mut driver.session, vec![reference.clone()], "Friday");
+    let human = driver.session.input_response(&reference).unwrap();
+    let stale = send("stale", &human.raw_text_content().unwrap(), Some(reference.clone()));
+    driver.session.record_dialogue(message("correction", Role::User, "Saturday"));
+    driver
+        .session
+        .input(SessionInputCommand::Correct {
+            request: reference.clone(),
+            previous_message_id: "answer".into(),
+            message_id: "correction".into(),
+        })
+        .unwrap();
+    assert!(
+        driver
+            .session
+            .remote(RemoteCommand {
+                remote_id: "flights".into(),
+                endpoint: "https://flights.test".into(),
+                input: stale,
+            })
+            .is_err(),
+        "a previously read answer must not claim the corrected reservation"
+    );
+    remote(&mut driver.session, send("current", "Saturday", Some(reference)));
+    assert_eq!(driver.session.snapshot().remote_agents["flights"].requests.len(), 2);
+}
+
+#[test]
 fn a_forged_human_or_presentation_reference_cannot_restore_as_a_routable_question() {
     let mut driver = Driver::new(config(false, ChatHistory::Fresh, false), None, "Find flights");
     let reference = question(&mut driver.session);
@@ -267,5 +299,127 @@ fn a_forged_human_or_presentation_reference_cannot_restore_as_a_routable_questio
             input.human_response_id = Some("heard".into());
         }
         assert!(Session::new(driver.config.clone(), super::input(Some(state))).is_err());
+    }
+}
+
+#[test]
+fn routing_precedes_the_current_agents_turn_and_checkpoints_the_selected_response() {
+    let mut previous = Driver::new(config(false, ChatHistory::Fresh, false), None, "Find flights");
+    let reference = question(&mut previous.session);
+    present(&mut previous, vec![reference.clone()]);
+    previous.reply("", &[("book", json!({"nights":2}))]);
+    previous.prepare(json!({"nights":2}));
+    let mut session = Session::new(previous.config, input(Some(previous.session.snapshot())))
+        .unwrap()
+        .with_persistence();
+    let child_id = session.state.active_frame_id.clone();
+    let effects = session.handle(
+        SessionEvent::Start(message("reply", Role::User, "Friday, and what is checkout time?")),
+        Ts::ZERO,
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [SessionEffect::Checkpoint(_), SessionEffect::RouteInput(_)]
+    ));
+    assert_eq!(session.snapshot().chat_history.last().unwrap().id, "reply");
+    let effects = session.handle(
+        SessionEvent::InputRouted {
+            message_id: "reply".into(),
+            result: Some(Ok(InputRoute::Matched(vec![reference.clone()]))),
+            usage: Default::default(),
+        },
+        Ts::ZERO,
+    );
+    assert!(matches!(effects.first(), Some(SessionEffect::Checkpoint(_))));
+    assert_eq!(session.snapshot().active_frame_id, child_id);
+    let input = &session.state.remote_agents["flights"].tasks["flight"].input_requests
+        [reference.remote().unwrap().2];
+    assert_eq!(input.human_response_id.as_deref(), Some("reply"));
+    let history = effects
+        .iter()
+        .find_map(|effect| match effect {
+            SessionEffect::Run {
+                effect: agent_run::AgentRunEffect::LlmRequestStart { chat_ctx, .. },
+                ..
+            } => Some(chat_ctx),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(history.items.iter().filter(|item| item.id() == "reply").count(), 1);
+    assert!(history.items.iter().filter_map(ChatItem::as_message).any(|message| {
+        message.role == Role::System
+            && message
+                .raw_text_content()
+                .unwrap_or_default()
+                .contains("not proof of remote delivery")
+    }));
+}
+
+#[test]
+fn side_questions_ambiguous_verdicts_and_router_death_preserve_the_open_request() {
+    for result in [Some(Ok(InputRoute::NoMatch)), Some(Ok(InputRoute::Unclear)), None] {
+        let mut previous =
+            Driver::new(config(false, ChatHistory::Fresh, false), None, "Find flights");
+        let reference = question(&mut previous.session);
+        present(&mut previous, vec![reference.clone()]);
+        let mut session =
+            Session::new(previous.config, input(Some(previous.session.snapshot()))).unwrap();
+        session.handle(
+            SessionEvent::Start(message("reply", Role::User, "Why do you need that?")),
+            Ts::ZERO,
+        );
+        session.handle(
+            SessionEvent::InputRouted {
+                message_id: "reply".into(),
+                result,
+                usage: Default::default(),
+            },
+            Ts::ZERO,
+        );
+        assert!(matches!(session.phase, Phase::Running(_)));
+        assert_eq!(
+            session.state.remote_agents["flights"].tasks["flight"].input_requests
+                [reference.remote().unwrap().2]
+                .state,
+            InputRequestState::Open
+        );
+    }
+}
+
+#[test]
+fn a_stale_or_late_detector_cannot_reserve_or_reopen_a_request() {
+    for cancel in [false, true] {
+        let mut previous =
+            Driver::new(config(false, ChatHistory::Fresh, false), None, "Find flights");
+        let reference = question(&mut previous.session);
+        present(&mut previous, vec![reference.clone()]);
+        let mut session =
+            Session::new(previous.config, input(Some(previous.session.snapshot()))).unwrap();
+        session.handle(SessionEvent::Start(message("reply", Role::User, "Friday")), Ts::ZERO);
+        if cancel {
+            session.handle(SessionEvent::Cancel, Ts::ZERO);
+        } else {
+            remote(&mut session, RemoteInput::Response {
+                request_id: "start".into(), response: Box::new(A2AResponse::Stream(serde_json::from_value(json!({
+                    "task":{"id":"flight", "contextId":"trip", "status":{"state":"TASK_STATE_COMPLETED"}}
+                })).unwrap())),
+            });
+        }
+        session.handle(
+            SessionEvent::InputRouted {
+                message_id: "reply".into(),
+                result: Some(Ok(InputRoute::Matched(vec![reference.clone()]))),
+                usage: Default::default(),
+            },
+            Ts::ZERO,
+        );
+        let observed = &session.state.remote_agents["flights"].tasks["flight"].input_requests
+            [reference.remote().unwrap().2];
+        assert_eq!(observed.human_response_id, None);
+        assert_eq!(
+            observed.state,
+            if cancel { InputRequestState::Open } else { InputRequestState::Closed }
+        );
+        assert_eq!(matches!(session.phase, Phase::Done), cancel);
     }
 }

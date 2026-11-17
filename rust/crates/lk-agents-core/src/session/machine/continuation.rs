@@ -12,7 +12,11 @@ impl Session {
     pub(super) fn next_child(&mut self, now: Ts, effects: &mut Vec<SessionEffect>) {
         loop {
             let parent_id = self.state.active_frame_id.clone();
-            let pending = self.state.frames[&parent_id].pending_calls.first().cloned();
+            let pending = self.state.frames[&parent_id]
+                .pending_calls
+                .iter()
+                .find(|call| call.status != ChildCallStatus::Approval)
+                .cloned();
             let Some(pending) = pending else {
                 self.invoke(None, now, effects);
                 return;
@@ -66,7 +70,6 @@ impl Session {
                 error: None,
                 input_requests: Default::default(),
                 pending_calls: Vec::new(),
-                answer_tool: None,
                 visible_dialogue: Vec::new(),
                 starting_history_ids,
                 options: lk_agents_abi::text_session::FrameOptions { merge_chat_ctx },
@@ -75,7 +78,10 @@ impl Session {
                 .frames
                 .get_mut(&parent_id)
                 .expect("a pending call's parent frame exists")
-                .pending_calls[0]
+                .pending_calls
+                .iter_mut()
+                .find(|call| call.parent == pending.parent)
+                .expect("the selected child call remains in its parent")
                 .status = ChildCallStatus::Running { frame_id: frame_id.clone() };
             self.state.frames.insert(frame_id.clone(), frame);
             self.state.ancestors.push(parent_id);
@@ -109,9 +115,22 @@ impl Session {
     ) {
         let active_id = self.state.active_frame_id.clone();
         let stamp = self.stamp(now);
+        let fallback = match &result.outcome {
+            RunOutcome::InputRequired(_)
+                if result.pending_call.as_ref().is_none_or(|call| {
+                    !result.input_requirements.iter().any(|requirement| &requirement.call == call)
+                }) =>
+            {
+                Some(self.mint("input"))
+            }
+            _ => None,
+        };
+        let mut presentations = Vec::new();
         let frame = self.active_frame_mut();
         frame.history = result.all_messages.clone();
-        frame.pending_calls = approvals;
+        let mut pending = approvals;
+        retain_approvals(&mut pending, &frame.pending_calls);
+        frame.pending_calls = pending;
         frame.completed = matches!(result.outcome, RunOutcome::Completed { .. });
         frame.output = output.clone().or_else(|| match &result.outcome {
             RunOutcome::Completed { output: lk_agents_abi::agent::run::Output::Text(text) } => {
@@ -120,37 +139,71 @@ impl Session {
             _ => None,
         });
         frame.error = None;
+        let delivered_question = match &result.outcome {
+            RunOutcome::InputRequired(question) => result.new_messages.iter().find_map(|item| {
+                let message = item.as_message()?;
+                (message.role == lk_agents_abi::Role::Assistant
+                    && message.raw_text_content().as_deref() == Some(question.question.as_str()))
+                .then(|| {
+                    frame.visible_dialogue.iter().find(|delivered| {
+                        delivered.id == message.id
+                            && !delivered.interrupted
+                            && delivered.raw_text_content() == message.raw_text_content()
+                    })
+                })
+                .flatten()
+                .map(|message| message.id.clone())
+            }),
+            _ => None,
+        };
         for requirement in &result.input_requirements {
-            let id = format!("{}/input/{}", requirement.invocation_id, requirement.call.call_id);
-            frame.input_requests.entry(id.clone()).or_insert_with(|| {
+            let reference = retain_input(frame, requirement, stamp);
+            if result.pending_call.as_ref() == Some(&requirement.call)
+                && let Some(message_id) = &delivered_question
+            {
+                presentations.push((reference, message_id.clone()));
+            }
+        }
+        // Framework read-backs and a structured child's own question have no tool-body
+        // requirement. They still own an input occurrence, under the same delivery rules.
+        if let (Some(id), RunOutcome::InputRequired(question)) = (fallback, &result.outcome) {
+            frame.input_requests.insert(
+                id.clone(),
                 lk_agents_abi::session::AgentInputRequest {
                     state: lk_agents_abi::session::InputRequestState::Open,
                     source_message: lk_agents_abi::ChatMessage::text(
-                        id,
+                        &id,
                         lk_agents_abi::Role::Assistant,
-                        &requirement.question,
+                        &question.question,
                         stamp,
                     ),
                     response_message: None,
-                    origin: Some(lk_agents_abi::session::ToolCallRef {
-                        agent_id: active_id.value.clone(),
-                        call_id: requirement.call.call_id.clone(),
+                    origin: result.pending_call.as_ref().map(|call| {
+                        lk_agents_abi::session::ToolCallRef {
+                            agent_id: active_id.value.clone(),
+                            call_id: call.call_id.clone(),
+                        }
                     }),
                     presented_message_id: None,
-                }
-            });
+                },
+            );
+            if let Some(message_id) = &delivered_question {
+                presentations.push((
+                    lk_agents_abi::session::InputRequestRef::Agent {
+                        agent_id: active_id.value.clone(),
+                        request_id: id,
+                    },
+                    message_id.clone(),
+                ));
+            }
         }
-        if frame.completed {
+        if frame.completed && frame.parent.is_some() {
             for request in frame.input_requests.values_mut() {
                 if matches!(request.state, lk_agents_abi::session::InputRequestState::Open) {
                     request.state = lk_agents_abi::session::InputRequestState::Closed;
                 }
             }
         }
-        frame.answer_tool = match &result.outcome {
-            RunOutcome::InputRequired(ask) => ask.answer_tool.clone(),
-            _ => None,
-        };
         let parent_call = match frame.parent.clone() {
             Some(parent)
                 if !result.interrupted
@@ -159,6 +212,17 @@ impl Session {
                 parent
             }
             _ => {
+                for (reference, message_id) in presentations {
+                    if let Err(error) =
+                        self.input(lk_agents_abi::session::SessionInputCommand::Presented {
+                            requests: vec![reference],
+                            message_id,
+                        })
+                    {
+                        self.finish(Err(TextSessionError::Storage(error)), effects);
+                        return;
+                    }
+                }
                 self.finish(Ok(TextSessionTurn { result, state: self.state.clone() }), effects);
                 return;
             }
@@ -269,9 +333,61 @@ impl Session {
         Ok(())
     }
 
-    fn stamp(&self, now: Ts) -> std::time::SystemTime {
+    pub(super) fn stamp(&self, now: Ts) -> std::time::SystemTime {
         std::time::UNIX_EPOCH
             + std::time::Duration::try_from_secs_f64(self.wall.seconds(now).max(0.0))
                 .unwrap_or_default()
+    }
+}
+
+/// Retain the source even when phrasing or delivery fails. Presentation requires its own receipt.
+pub(super) fn retain_input(
+    frame: &mut SessionFrame,
+    requirement: &lk_agents_abi::agent::run::RunInputRequirement,
+    stamp: std::time::SystemTime,
+) -> lk_agents_abi::session::InputRequestRef {
+    let remote = frame.history.iter().find_map(|item| {
+        let ChatItem::FunctionCall(call) = item else { return None };
+        if call.call_id != requirement.call.call_id {
+            return None;
+        }
+        let value = call.extra.get(crate::delegation::remote::retained::STATE_KEY)?;
+        let state: crate::delegation::remote::InteractionState =
+            serde_json::from_value(value.clone()).ok()?;
+        state.input_request
+    });
+    remote.unwrap_or_else(|| {
+        let id = format!("{}/input/{}", requirement.invocation_id, requirement.call.call_id);
+        frame.input_requests.entry(id.clone()).or_insert_with(|| {
+            lk_agents_abi::session::AgentInputRequest {
+                state: lk_agents_abi::session::InputRequestState::Open,
+                source_message: lk_agents_abi::ChatMessage::text(
+                    id.clone(),
+                    lk_agents_abi::Role::Assistant,
+                    &requirement.question,
+                    stamp,
+                ),
+                response_message: None,
+                origin: Some(lk_agents_abi::session::ToolCallRef {
+                    agent_id: frame.id.value.clone(),
+                    call_id: requirement.call.call_id.clone(),
+                }),
+                presented_message_id: None,
+            }
+        });
+        lk_agents_abi::session::InputRequestRef::Agent {
+            agent_id: frame.id.value.clone(),
+            request_id: id,
+        }
+    })
+}
+
+pub(super) fn retain_approvals(pending: &mut Vec<PendingChildCall>, previous: &[PendingChildCall]) {
+    for call in previous {
+        if call.status == ChildCallStatus::Approval
+            && !pending.iter().any(|kept| kept.parent == call.parent)
+        {
+            pending.push(call.clone());
+        }
     }
 }

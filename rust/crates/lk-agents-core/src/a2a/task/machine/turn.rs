@@ -41,7 +41,6 @@ pub(super) struct Turning {
     /// Unix seconds: after everything the run loaded.
     at: f64,
     answer_task: String,
-    answer_tool: Option<String>,
     /// The question of the task the message continues.
     continued: Option<Ask>,
     /// The pending question's settlement, staged before the handler runs.
@@ -74,7 +73,6 @@ impl TaskMachine {
             drain,
             at,
             answer_task,
-            answer_tool: None,
             continued: None,
             staged: Stage::default(),
             user_message: None,
@@ -167,21 +165,15 @@ impl TaskMachine {
         Ok(Some(operation))
     }
 
-    /// Stage the pending question's settlement before opening the handler.
+    /// Stage transport task correlation. Human response admission belongs to the owner.
     fn prepare(&mut self, pending: Option<&TaskRow>) -> Operation {
-        let item_id = self.mint("item");
         let turn = self.turning();
         let last = turn.batch.last().expect("a turn has a message");
         let received = turn.task_ids.last().expect("a turn has a task").clone();
-        let answer = answer_pending(pending, last, &received, turn.at, item_id);
+        let answer = answer_pending(pending, last, &received);
         turn.answer_task = answer.answer_task.clone();
-        turn.answer_tool = answer.answer_tool;
         turn.continued = answer.continued;
-        turn.staged = Stage {
-            edits: answer.edit.into_iter().collect(),
-            transitions: answer.transitions,
-            ..Stage::default()
-        };
+        turn.staged = Stage { transitions: answer.transitions, ..Stage::default() };
         if turn.staged == Stage::default() {
             return self.open_handler();
         }
@@ -211,7 +203,7 @@ impl TaskMachine {
             message,
             batch: turn.batch.clone(),
             task_id: turn.answer_task.clone(),
-            answer_tool: turn.answer_tool.clone(),
+            answer_tool: None,
         };
         self.phase = Phase::Turn(Step::Handle);
         Operation::Handle(Box::new(handle))

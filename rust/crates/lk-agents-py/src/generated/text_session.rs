@@ -33,13 +33,14 @@ pub struct TextSessionRunner(pub(crate) ::std::sync::Arc<TextSessionRunnerImpl>)
 #[pymethods]
 impl TextSessionRunner {
     #[new]
-    #[pyo3(signature = (root_agent, agents, max_depth))]
+    #[pyo3(signature = (root_agent, agents, max_depth, delegation = None))]
     fn new(
         py: Python<'_>,
         root_agent: ::std::string::String,
         agents: Bound<'_, PyAny>,
         #[pyo3(from_py_with = _extract_text_session_runner_new_max_depth)]
         max_depth: TextSessionRunnerNewMaxDepthInput,
+        delegation: Option<Bound<'_, PyAny>>,
     ) -> PyResult<TextSessionRunner> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
@@ -53,10 +54,13 @@ impl TextSessionRunner {
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
+        let delegation = delegation
+            .map(|v| crate::generated::records::delegation::delegation_options_from_py(v.as_any()))
+            .transpose()?;
         let out = py
             .detach(|| {
                 <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::new(
-                    &env, root_agent, agents, max_depth,
+                    &env, root_agent, agents, max_depth, delegation,
                 )
             })
             .map_err(|e: ::lk_agents_abi::errors::Invalid| {

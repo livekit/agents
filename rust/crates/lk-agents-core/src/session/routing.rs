@@ -84,7 +84,17 @@ impl SessionConfig {
                 for input in task.input_requests.values() {
                     delivery(state, input.presented_message_id.as_deref())?;
                     if let Some(id) = &input.human_response_id {
-                        human_response(state, id)?;
+                        let human = human_response(state, id)?;
+                        if let Some(outgoing) = input
+                            .response_message_id
+                            .as_ref()
+                            .and_then(|id| remote.messages.get(id))
+                            && outgoing.text() != human.raw_text_content().as_deref()
+                        {
+                            return Err(invalid(
+                                "remote input response differs from its canonical human message",
+                            ));
+                        }
                     }
                 }
             }
@@ -115,6 +125,13 @@ impl SessionConfig {
             }
             for input in frame.input_requests.values() {
                 delivery(state, input.presented_message_id.as_deref())?;
+                if let Some(origin) = &input.origin
+                    && (origin.agent_id != id.value
+                        || !frame.history.iter().any(|item| matches!(item,
+                            lk_agents_abi::ChatItem::FunctionCall(call) if call.call_id == origin.call_id)))
+                {
+                    return Err(invalid("local input origin has no owning tool call"));
+                }
                 if let Some(response) = &input.response_message
                     && response != human_response(state, &response.id)?
                 {

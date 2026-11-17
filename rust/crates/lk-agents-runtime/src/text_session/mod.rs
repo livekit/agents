@@ -1,3 +1,4 @@
+mod input;
 mod runner;
 pub use runner::{Runner, Updates};
 
@@ -31,7 +32,13 @@ pub(super) struct Release {
     delivered: BTreeMap<String, String>,
 }
 
-pub(super) enum RemoteCommand {
+pub(super) enum SessionCommand {
+    Response {
+        reference: lk_agents_abi::session::InputRequestRef,
+        done: signal::Producer<
+            Option<Result<lk_agents_abi::ChatMessage, lk_agents_abi::storage::StorageError>>,
+        >,
+    },
     Input {
         command: lk_agents_abi::session::SessionInputCommand,
         done: signal::Producer<Option<Result<(), lk_agents_abi::storage::StorageError>>>,
@@ -70,7 +77,8 @@ pub(super) enum RemoteCommand {
 
 enum DriverEvent {
     Core(Option<Box<SessionEvent>>),
-    Remote(Box<RemoteCommand>),
+    Routed(Box<SessionEvent>),
+    Command(Box<SessionCommand>),
 }
 
 /// What opens an invocation: the core's `InvocationStarted`.
@@ -83,6 +91,9 @@ struct InvocationStart {
 }
 
 pub(super) struct Driver {
+    delegation: Option<lk_agents_abi::delegation::DelegationOptions>,
+    routing: Option<input::RoutingWork>,
+    routing_background: lk_agents_net::owned::Background,
     session: Session,
     /// Republished whenever the turn's usage moved.
     usage: signal::Producer<Usage>,
@@ -111,7 +122,7 @@ impl Driver {
         mut events: mpsc::Receiver<(String, Report)>,
         mut progress: mpsc::Receiver<(String, u64, String)>,
         mut releases: mpsc::Receiver<Release>,
-        mut remote: mpsc::Receiver<RemoteCommand>,
+        mut commands: mpsc::Receiver<SessionCommand>,
         cancelled: CancellationToken,
     ) {
         let mut cancel_seen = false;
@@ -141,7 +152,7 @@ impl Driver {
             // Retain work after a core cleanup deadline: its callbacks and provider requests
             // remain owned until their real settlement, including late prepared resources.
             self.work.retain(|id, work| self.pending.contains_key(id) || !work.idle());
-            if self.finished && self.work.is_empty() {
+            if self.finished && self.work.is_empty() && self.routing_background.tasks.is_empty() {
                 return;
             }
             let clock = self.clock.clone();
@@ -157,44 +168,54 @@ impl Driver {
                     self.releases.push_back(release);
                     DriverEvent::Core(None)
                 }
-                Some(command) = remote.recv() => DriverEvent::Remote(Box::new(command)),
+                Some(command) = commands.recv() => DriverEvent::Command(Box::new(command)),
                 Some((invocation_id, operation, message)) = progress.recv() => {
                     DriverEvent::Core(self.progress_event(invocation_id, operation, message).map(Box::new))
                 }
                 Some((invocation_id, report)) = events.recv() => {
                     DriverEvent::Core(self.report_event(invocation_id, report).map(Box::new))
                 }
+                event = input::routed(&self.routing) => DriverEvent::Routed(Box::new(event)),
                 _ = settle_work(&mut self.work) => DriverEvent::Core(None),
+                _ = self.routing_background.tasks.wait_empty(&*clock, None), if self.finished => DriverEvent::Core(None),
             };
             let event = match ready {
-                DriverEvent::Remote(command) => {
-                    self.remote(*command, &mut effects).await;
+                DriverEvent::Command(command) => {
+                    self.command(*command, &mut effects).await;
                     continue;
                 }
                 DriverEvent::Core(event) => event.map(|event| *event),
+                DriverEvent::Routed(event) => {
+                    self.routing.take();
+                    Some(*event)
+                }
             };
             let Some(event) = event else { continue };
             effects.extend(self.session.handle(event, self.clock.now()));
         }
     }
 
-    async fn remote(&mut self, command: RemoteCommand, effects: &mut VecDeque<SessionEffect>) {
+    async fn command(&mut self, command: SessionCommand, effects: &mut VecDeque<SessionEffect>) {
         let (command, done) = match command {
-            RemoteCommand::Input { command, done } => {
+            SessionCommand::Response { reference, done } => {
+                done.resolve(self.session.input_response(&reference));
+                return;
+            }
+            SessionCommand::Input { command, done } => {
                 let result = self.session.input(command);
                 let persisted = self.checkpoint_command(effects).await;
                 done.resolve(persisted.and(result));
                 return;
             }
-            RemoteCommand::Recover { remote_id, endpoint, origin, done } => {
+            SessionCommand::Recover { remote_id, endpoint, origin, done } => {
                 done.resolve(self.session.remote_recovery(&remote_id, &endpoint, &origin));
                 return;
             }
-            RemoteCommand::DefaultContext { remote_id, endpoint, done } => {
+            SessionCommand::DefaultContext { remote_id, endpoint, done } => {
                 done.resolve(self.session.remote_context(&remote_id, &endpoint));
                 return;
             }
-            RemoteCommand::Apply { command, done } => (command, done),
+            SessionCommand::Apply { command, done } => (command, done),
         };
         let result = self.session.remote(*command);
         // A valid observation can be journaled even when its projection is refused. Persist
@@ -264,6 +285,7 @@ impl Driver {
             SessionEffect::Checkpoint(_) => {
                 unreachable!("checkpoints execute before dependent effects")
             }
+            SessionEffect::RouteInput(input) => self.route(input),
             SessionEffect::InvocationStarted {
                 frame_id,
                 agent_name,
@@ -358,6 +380,7 @@ impl Driver {
         input_requirements: Vec<RunInputRequirement>,
     ) {
         self.finished = true;
+        self.routing.take();
         self.pending.clear();
         self.releases.clear();
         let update = match result {

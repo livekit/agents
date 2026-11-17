@@ -25,6 +25,7 @@ class Peer:
         self.hold = False
         self.fail: str | None = None
         self.auth_required = False
+        self.question: str | None = None
         self.direct_reply: Json | None = None
         self.messages: list[Json] = []
         """Each message a ``SendStreamingMessage`` carried."""
@@ -109,6 +110,8 @@ class Peer:
             return
         if self.auth_required:
             events.append(_status(task, "AUTH_REQUIRED", "Sign in to continue."))
+        elif self.question is not None and "taskId" not in message:
+            events.append(_status(task, "INPUT_REQUIRED", self.question))
         elif self.fail is not None:
             events.append(_status(task, "FAILED", self.fail))
         else:

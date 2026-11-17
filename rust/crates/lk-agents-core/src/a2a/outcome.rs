@@ -2,11 +2,10 @@ use lk_agents_abi::a2a_protocol as a2a;
 use serde_json::{Map, Value};
 
 use lk_agents_abi::a2a::metadata::{INTERRUPTED_KEY, MERGED_INTO_KEY, REASON_KEY};
+use lk_agents_abi::livekit_protocol::agent::ChatRole;
 use lk_agents_abi::livekit_protocol::agent::chat_context::chat_item;
-use lk_agents_abi::livekit_protocol::agent::{ChatRole, FunctionCallOutput};
 use lk_agents_abi::storage::journal::JournalEvent;
 use lk_agents_abi::storage::thread::TaskData;
-use lk_agents_abi::storage::thread::timestamp;
 use lk_agents_abi::storage::thread::{
     ItemRow, RunOutcome, TaskPatch, TaskReason, TaskRow, WaitOptions, agent_message, wait_patch,
 };
@@ -45,9 +44,6 @@ pub enum HistoryEdit {
     /// The item, by its `created_at`, unless an item with its id is there; `message_id` (the A2A
     /// `messageId` it came from) is stamped on the stored item.
     Add { item: ItemRow, message_id: Option<String> },
-    /// A pending call's answer: its placeholder output takes `output`'s text and time, else
-    /// `output` is added.
-    Answer { output: ItemRow },
 }
 
 impl HistoryEdit {
@@ -64,24 +60,6 @@ impl HistoryEdit {
                     stored.message_id = Some(message_id);
                 }
             }
-            HistoryEdit::Answer { output } => {
-                let Some(chat_item::Item::FunctionCallOutput(answer)) = output.kind() else {
-                    return;
-                };
-                let placeholder = history.iter_mut().rev().find_map(|i| match i.kind_mut() {
-                    Some(chat_item::Item::FunctionCallOutput(o)) if o.call_id == answer.call_id => {
-                        Some(o)
-                    }
-                    _ => None,
-                });
-                match placeholder {
-                    Some(o) => {
-                        o.output = answer.output.clone();
-                        o.created_at = answer.created_at;
-                    }
-                    None => insert_by_created_at(history, output),
-                }
-            }
         }
     }
 }
@@ -91,17 +69,13 @@ impl HistoryEdit {
 pub struct PendingAnswer {
     /// The task that carries the reply.
     pub answer_task: String,
-    /// The tool the answer is handed to before the model runs, when the question named one.
-    pub answer_tool: Option<String>,
     pub transitions: Vec<TaskTransition>,
-    /// The call's output, when the question came from a conversation tool's call.
-    pub edit: Option<HistoryEdit>,
     /// The question of the task the message continues by its `taskId`.
     pub continued: Option<Ask>,
 }
 
-/// A conversation tool's pending `InputRequired`, if `pending` holds one: the last message is
-/// the call's output (replacing the placeholder the run recorded, else added as item `item_id`).
+/// Correlate an incoming message with transport tasks. The conversation owner recognizes a
+/// human response; transport admission never turns arbitrary input into a tool result.
 /// Continuing the waiting task (`taskId`) makes it the answer, working again with the message
 /// appended to its history, and merges the row the message came in under into it; otherwise the
 /// waiting task completes merged into this one.
@@ -109,32 +83,16 @@ pub fn answer_pending(
     pending: Option<&TaskRow>,
     last: &Message,
     received_task: &str,
-    now: f64,
-    item_id: String,
 ) -> PendingAnswer {
     let mut out = PendingAnswer {
         answer_task: received_task.to_owned(),
-        answer_tool: None,
         transitions: Vec::new(),
-        edit: None,
         continued: None,
     };
-    let nonempty = |s: &Option<String>| s.clone().filter(|s| !s.is_empty());
     let Some(pending) = pending else { return out };
     let Some(ask) = pending.internal.as_ref().and_then(|internal| internal.ask.as_ref()) else {
         return out;
     };
-    out.answer_tool = nonempty(&ask.answer_tool);
-    out.edit = nonempty(&ask.call_id).map(|call_id| HistoryEdit::Answer {
-        output: ItemRow::new(chat_item::Item::FunctionCallOutput(FunctionCallOutput {
-            id: item_id,
-            name: nonempty(&ask.tool).unwrap_or_default(),
-            call_id,
-            output: last.text(),
-            is_error: false,
-            created_at: Some(timestamp(now - ITEM_ORDER_STEP)),
-        })),
-    });
     if last.task_id.as_deref() == Some(pending.task_id.as_str()) {
         out.answer_task = pending.task_id.clone();
         out.continued = Some(ask.clone());
@@ -711,7 +669,7 @@ mod tests {
         wire.message_id = "answer".into();
         wire.task_id = Some("AST_waiting".into());
         let message = Message::from_a2a(&wire, 0.0, None).unwrap();
-        let answer = answer_pending(Some(&waiting), &message, "AST_receipt", 0.0, "item".into());
+        let answer = answer_pending(Some(&waiting), &message, "AST_receipt");
         assert_eq!(answer.answer_task, "AST_waiting");
         assert_eq!(answer.transitions[0].task_id, "AST_receipt");
     }
@@ -757,7 +715,7 @@ mod tests {
             let i = rows.iter().position(|r| r.task_id == t.task_id).unwrap();
             rows[i] = merge_write(&t.task_id, Some(&rows[i]), t.status, t.patch).unwrap();
         };
-        let pending = answer_pending(Some(&waiting), &answer, "AST_receipt", 2.0, "i".into());
+        let pending = answer_pending(Some(&waiting), &answer, "AST_receipt");
         pending.transitions.iter().cloned().for_each(&mut write);
         let batch = [answer.clone()];
         let settled = settle(Settle {
