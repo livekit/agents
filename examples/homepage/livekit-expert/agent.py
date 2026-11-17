@@ -63,7 +63,9 @@ class Assistant(Agent):
         )
 
 
-server = AgentServer()
+server = AgentServer(
+    job_memory_limit_mb=600,
+)
 
 
 @server.rtc_session(agent_name=CONFIG.name)
@@ -87,6 +89,10 @@ async def homepage_agent(ctx: JobContext):
     disconnect_scripted_callers(session)
     publish_frontend_attributes(tts_voice=CONFIG.tts_voice_label)
 
+    # Protection against framework bug AGT-3920:
+    # - job_memory_limit_mb=600 caps memory usage, containing the unbounded stream reader bug
+    # - session_host remains enabled (default True) because the homepage dev panel reads
+    #   the lk.agent.session stream (see behaviors/frontend_attributes.py)
     await session.start(
         agent=Assistant(),
         room=ctx.room,

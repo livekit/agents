@@ -17,10 +17,10 @@
 See https://docs.livekit.io/agents/integrations/stt/gladia/ for more information.
 """
 
-from .stt import STT, AudioEnergyFilter, SpeechStream
+from .stt import STT, SpeechStream
 from .version import __version__
 
-__all__ = ["STT", "SpeechStream", "AudioEnergyFilter", "__version__"]
+__all__ = ["STT", "SpeechStream", "__version__"]
 
 
 from livekit.agents import Plugin

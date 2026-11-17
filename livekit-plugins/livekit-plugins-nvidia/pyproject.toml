@@ -27,13 +27,13 @@ classifiers = [
 ]
 dependencies = [
     "grpcio>=1.51.1",
-    "livekit-agents>=1.8.11",
+    "livekit-agents>=1.8.12",
     "nvidia-riva-client>=2.16",
 ]
 
 [project.optional-dependencies]
 personaplex = [
-    "livekit-agents[codecs]>=1.8.11",
+    "livekit-agents[codecs]>=1.8.12",
     "sphn>=0.2.0",
 ]
 
