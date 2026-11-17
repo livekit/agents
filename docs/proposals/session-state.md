@@ -273,8 +273,8 @@ These dataclasses show the logical relationships together, not the serialization
 application constructors. root_agent and current_agent are views over the internal records;
 they can refer to the same record. chat_history is the conversation projection described
 above, not an independent copy of every chat item. The internal map owns each agent state;
-root and current IDs identify entries in it. The encoding and initialization rules still need
-a concrete persistence schema.
+root and current IDs identify entries in it. Native snapshot records define the persisted
+layout and initialization; this sketch describes the relationships applications can inspect.
 
 ```python
 from collections.abc import Mapping
@@ -597,7 +597,7 @@ tasks, silently discard content or treat arbitrary JSON as a valid A2A response 
 ```python
 from collections.abc import Mapping, Sequence
 
-# Protocol names below denote the existing A2A SDK types; generated host exports are TBD.
+# Protocol names below denote the existing A2A SDK types.
 # Common SDK operations shown; the generated aliases must cover every supported client method.
 A2ARequest: TypeAlias = (
     SendMessageRequest | GetTaskRequest | ListTasksRequest
@@ -757,6 +757,13 @@ does not prove remote admission or semantic satisfaction. Confirmation/reconcili
 the input state to responded; ambiguous input leaves it open. Do not create a new task to
 escape an uncertain response send.
 
+Before dispatch starts, a replacement question or a task that stops requesting input retires
+the unsent response. Revalidate that reservation at the dispatch checkpoint. After dispatch
+may have started, keep its original correlation until peer evidence resolves admission.
+An admitted response can leave the same task input-required again: create a new occurrence,
+even if its question message ID is reused or absent. Repeated observations of an unanswered
+occurrence do not create extra questions. Responded means admitted, not that the input sufficed.
+
 ### Current state and communication history
 
 Store changing facts as current state, using the same ownership model as tasks and input_requests:
@@ -776,6 +783,12 @@ means an attempt may have happened, not that the peer received it. Response/erro
 stream lifetime belong to that state too. Exact internal fields and retry-attempt bookkeeping
 remain implementation details to finalize. Core owns transitions; runtime executes storage and
 network effects. No dispatch-start or stream-end entry is appended merely to change local state.
+
+If an observer fails before dispatch starts, a fresh observer can prepare the unchanged
+request again with the same message and operation identities. Reopen its local stream lifetime
+without duplicating request content or deleting earlier errors. Historical errors do not
+determine the current stream's ended field. A retired input reservation instead requires
+reconciliation; it does not regain permission to send just because no attempt started.
 
 Local failure and remote outcome are independent facts. Once dispatch_started is persisted,
 an error or local stream/call termination must not clear it or establish that nothing happened
@@ -976,7 +989,7 @@ await ctx.store.save_context(app)  # Application fields only; not an implicit se
 # app.session is the framework-maintained state view.
 ```
 
-Agent.run binding is proposed; VoiceSession/TextSession already accept it. The store's selected
+Agent.run, VoiceSession and TextSession accept the same binding. The store's selected
 conversation supplies the execution state. An optional app.session field exposes that state;
 it is not a second state source to merge with the binding. Without such a field, use
 store.bind() to manage the conversation internally. Taking a snapshot does not create another

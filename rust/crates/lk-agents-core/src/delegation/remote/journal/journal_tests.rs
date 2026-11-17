@@ -76,6 +76,38 @@ fn a_lost_initial_response_stays_uncertain_after_restart_without_resending_work(
 }
 
 #[test]
+fn an_undispatched_request_can_resume_after_its_local_observer_failed() {
+    let mut state = RemoteAgentState::new("https://booking.test".into());
+    let request = send("reserve", "Reserve a seat", None);
+    apply(&mut state, request.clone()).unwrap();
+    apply(
+        &mut state,
+        RemoteInput::Error {
+            request_id: "reserve".into(),
+            error: RemoteFailure::Protocol {
+                message: "the local observer stopped before dispatch".into(),
+            },
+        },
+    )
+    .unwrap();
+    let mut restored: RemoteAgentState =
+        serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+    validate(&restored).unwrap();
+    assert_eq!(recovery(&restored, "reserve").unwrap(), Recovery::Dispatch);
+    apply(&mut restored, request.clone()).unwrap();
+    validate(&restored).unwrap();
+    assert!(!restored.requests["reserve"].ended);
+    apply(&mut restored, RemoteInput::DispatchStarted { request_id: "reserve".into() }).unwrap();
+    assert!(
+        apply(&mut restored, request).is_err(),
+        "a started dispatch cannot be retried this way"
+    );
+    assert_eq!(restored.events.len(), 2, "preparation keeps one immutable request and its error");
+    assert_eq!(restored.messages.len(), 1, "the outgoing message keeps its original identity");
+    validate(&restored).unwrap();
+}
+
+#[test]
 fn a_lost_input_response_is_reconciled_from_the_same_task_without_another_send() {
     let mut state = RemoteAgentState::new("https://booking.test".into());
     dispatched(&mut state, "start", send("start", "Book a seat", None));
@@ -179,6 +211,114 @@ fn repeated_questions_keep_their_occurrence_but_identical_wording_is_not_identit
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].state, InputRequestState::Superseded);
     assert_eq!(requests[1].state, InputRequestState::Open);
+}
+
+#[test]
+fn an_acknowledged_response_can_lead_to_another_input_occurrence_with_the_same_question() {
+    for with_message in [false, true] {
+        let mut state = RemoteAgentState::new("https://booking.test".into());
+        let mut question = input_task();
+        if !with_message {
+            question["task"]["status"].as_object_mut().unwrap().remove("message");
+        }
+        dispatched(&mut state, "start", send("start", "Book a seat", None));
+        observe(&mut state, "start", question.clone());
+        // Continue past single-digit occurrence IDs: map string order is not question order.
+        for round in 0..12 {
+            let occurrence_id = state.tasks["booking"]
+                .input_requests
+                .iter()
+                .find(|(_, input)| input.state == InputRequestState::Open)
+                .map(|(id, _)| id.clone())
+                .unwrap();
+            let request_id = format!("answer_{round}");
+            let mut response = send(&request_id, "A partial response", Some(("trip", "booking")));
+            if let RemoteInput::Prepare { input_request, .. } = &mut response {
+                *input_request = Some(InputRequestRef {
+                    task: RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() },
+                    occurrence_id: occurrence_id.clone(),
+                });
+            }
+            dispatched(&mut state, &request_id, response);
+            // The peer admits the response and asks for input again, without a new message ID
+            // or an intervening working status. Admission does not mean the content sufficed.
+            observe(&mut state, &request_id, question.clone());
+            let requests = &state.tasks["booking"].input_requests;
+            assert_eq!(requests.len(), round + 2);
+            assert_eq!(requests[&occurrence_id].state, InputRequestState::Responded);
+            assert_eq!(
+                requests.values().filter(|input| input.state == InputRequestState::Open).count(),
+                1
+            );
+            observe(&mut state, &request_id, question.clone());
+            assert_eq!(
+                state.tasks["booking"].input_requests.len(),
+                round + 2,
+                "repeating that observation is not another question"
+            );
+            validate(&state).unwrap();
+        }
+    }
+}
+
+#[test]
+fn a_replaced_input_request_retires_an_unsent_response_but_keeps_dispatch_uncertainty() {
+    for started in [false, true] {
+        let mut state = RemoteAgentState::new("https://booking.test".into());
+        dispatched(&mut state, "start", send("start", "Book a seat", None));
+        observe(&mut state, "start", input_task());
+        let occurrence_id = state.tasks["booking"].input_requests.keys().next().unwrap().clone();
+        let mut response = send("answer", "Friday", Some(("trip", "booking")));
+        if let RemoteInput::Prepare { input_request, .. } = &mut response {
+            *input_request = Some(InputRequestRef {
+                task: RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() },
+                occurrence_id: occurrence_id.clone(),
+            });
+        }
+        apply(&mut state, response).unwrap();
+        if started {
+            apply(&mut state, RemoteInput::DispatchStarted { request_id: "answer".into() })
+                .unwrap();
+        }
+        // A subscription observes the task asking something else before this send starts,
+        // or while a sent response still has no acknowledgement.
+        dispatched(
+            &mut state,
+            "observe",
+            RemoteInput::Prepare {
+                request_id: "observe".into(),
+                request: A2ARequest::Subscribe(a2a::SubscribeToTaskRequest {
+                    id: "booking".into(),
+                    tenant: None,
+                }),
+                streaming: true,
+                origin: None,
+                input_request: None,
+            },
+        );
+        let mut next = input_task();
+        next["task"]["status"]["message"]["messageId"] = json!("question_2");
+        observe(&mut state, "observe", next);
+        let input = &state.tasks["booking"].input_requests[&occurrence_id];
+        assert_eq!(
+            input.state,
+            if started { InputRequestState::Responding } else { InputRequestState::Superseded }
+        );
+        assert_eq!(input.response_message_id.as_deref(), Some("message_answer"));
+        assert!(
+            apply(&mut state, RemoteInput::DispatchStarted { request_id: "answer".into() })
+                .is_err()
+        );
+        assert_eq!(state.requests["answer"].dispatch_started, started);
+        assert_eq!(
+            recovery(&state, "answer").unwrap(),
+            Recovery::GetTask(RemoteTaskRef {
+                context_id: "trip".into(),
+                task_id: "booking".into()
+            })
+        );
+        validate(&state).unwrap();
+    }
 }
 
 #[test]

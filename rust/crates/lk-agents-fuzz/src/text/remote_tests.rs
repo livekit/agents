@@ -8,6 +8,7 @@ use lk_agents_abi::delegation::remote::{
 use lk_agents_abi::storage::context::ContextActivation as _;
 use lk_agents_abi::storage::session::{PersistedSessionState as _, SessionBinding as _};
 use lk_agents_abi::{BoxFuture, Closed};
+use lk_agents_core::a2a::client::ClientError;
 use lk_agents_core::delegation::remote::journal::{Recovery, recovery};
 use lk_agents_core::request::AttemptFailure;
 use lk_agents_runtime::delegation::remote::journal::Journal;
@@ -25,6 +26,7 @@ const ENDPOINT: &str = "https://booking.test";
 #[derive(Default)]
 struct Service {
     messages: Mutex<Vec<a2a::Message>>,
+    bookings: Mutex<Vec<String>>,
     lose_initial: bool,
 }
 
@@ -51,6 +53,18 @@ impl HttpExchangePort for Service {
                         let send: a2a::SendMessageRequest =
                             serde_json::from_value(rpc.params.unwrap()).unwrap();
                         let responding = send.message.task_id.is_some();
+                        if responding {
+                            let date = send
+                                .message
+                                .parts
+                                .iter()
+                                .filter_map(|part| match &part.content {
+                                    a2a::PartContent::Text(text) => Some(text.as_str()),
+                                    _ => None,
+                                })
+                                .collect();
+                            self.bookings.lock().push(date);
+                        }
                         self.messages.lock().push(send.message);
                         if responding || self.lose_initial {
                             // The service accepted the answer and performed the booking. The
@@ -65,9 +79,10 @@ impl HttpExchangePort for Service {
                         }}})
                     }
                     a2a::methods::GET_TASK => {
+                        let booked = !self.bookings.lock().is_empty();
                         json!({"jsonrpc":"2.0","id":rpc.id,"result":{
-                            "id":"booking","contextId":"trip","status":{"state":"TASK_STATE_COMPLETED"},
-                            "history":self.messages.lock().clone(),"artifacts":[{"artifactId":"receipt","parts":[{"text":"Booked"}]}]
+                            "id":"booking","contextId":"trip","status":{"state":if booked { "TASK_STATE_COMPLETED" } else { "TASK_STATE_INPUT_REQUIRED" }},
+                            "history":self.messages.lock().clone(),"artifacts":booked.then(|| json!([{"artifactId":"receipt","parts":[{"text":"Booked"}]}]))
                         }})
                     }
                     method => panic!("unexpected operation {method}"),
@@ -239,7 +254,114 @@ fn journal(owner: Arc<dyn RemoteCommands>, id: &str) -> Arc<dyn RequestObserver>
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_fresh_owner_dispatches_an_unsent_intent_once_with_its_original_message() {
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_runtime::net::clock::SimClock::new());
+    let env = environment(clock.clone());
+    let database = Store::open(47, false, clock.clone()).await;
+    let service = Arc::new(Service::default());
+    let store = ContextStore::bound(
+        database.backend.clone(),
+        database.thread_id.clone(),
+        PARTITION_KEY.into(),
+        env.tracer.root(),
+    )
+    .await
+    .unwrap();
+    let (first, updates, binding, _) = owner(&env, store.clone()).await;
+    first
+        .remote(RemoteCommand {
+            remote_id: ENDPOINT.into(),
+            endpoint: ENDPOINT.into(),
+            input: RemoteInput::Prepare {
+                request_id: "start".into(),
+                request: lk_agents_abi::delegation::remote::A2ARequest::Send(Box::new(
+                    a2a::SendMessageRequest {
+                        message: message("start", "Book a seat", false),
+                        configuration: None,
+                        metadata: None,
+                        tenant: None,
+                    },
+                )),
+                streaming: true,
+                origin: None,
+                input_request: None,
+            },
+        })
+        .await
+        .unwrap();
+    // The intent is durable, but the observer ended before its dispatch checkpoint.
+    journal(first.clone(), "start")
+        .ended(Some(ClientError::Protocol("the local observer ended before dispatch".into())))
+        .await
+        .unwrap();
+    assert!(service.messages.lock().is_empty());
+    assert_eq!(
+        Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,
+        Closed::Clean
+    );
+    binding.close();
+    store.finish_session(false).await.unwrap();
+    drop(first);
+
+    let fresh_store = ContextStore::bound(
+        database.backend.clone(),
+        database.thread_id.clone(),
+        PARTITION_KEY.into(),
+        env.tracer.root(),
+    )
+    .await
+    .unwrap();
+    let (second, updates, binding, view) = owner(&env, fresh_store.clone()).await;
+    let restored = view._snapshot_data().unwrap().unwrap();
+    assert_eq!(recovery(&restored.remote_agents[ENDPOINT], "start").unwrap(), Recovery::Dispatch);
+    let client = AgentClient::with_transport(
+        ENDPOINT.into(),
+        None,
+        Default::default(),
+        service.clone(),
+        (env.process.spawner)().unwrap(),
+        clock.clone(),
+    )
+    .unwrap();
+    let reply = client
+        .send_observed(
+            message("start", "Book a seat", false),
+            None,
+            None,
+            None,
+            &env.tracer.root(),
+            Some(journal(second.clone(), "start")),
+        )
+        .await
+        .unwrap();
+    reply.aclose(clock.now().saturating_add(Duration::from_secs(1))).await;
+    let snapshot = view._snapshot_data().unwrap().unwrap();
+    let remote = &snapshot.remote_agents[ENDPOINT];
+    assert_eq!(service.messages.lock().as_slice(), [message("start", "Book a seat", false)]);
+    assert!(remote.requests["start"].dispatch_started);
+    assert_eq!(remote.events.len(), 3, "one request, the earlier error and the observed task");
+    assert_eq!(remote.tasks.len(), 1);
+    client.aclose().await;
+    assert_eq!(
+        Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,
+        Closed::Clean
+    );
+    binding.close();
+    fresh_store.finish_session(false).await.unwrap();
+    assert!(!database.held(PARTITION_KEY).await);
+}
+
+#[tokio::test(start_paused = true)]
 async fn accepted_response_lost_then_fresh_owner_reads_the_same_task_without_booking_twice() {
+    reconcile_a_booked_task(false).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn lost_intent_write_ack_and_remote_response_do_not_book_twice_after_restart() {
+    reconcile_a_booked_task(true).await;
+}
+
+async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
     let clock: Arc<dyn Clock> = Arc::new(lk_agents_runtime::net::clock::SimClock::new());
     let env = environment(clock.clone());
     let database = Store::open(23, false, clock.clone()).await;
@@ -287,6 +409,9 @@ async fn accepted_response_lost_then_fresh_owner_reads_the_same_task_without_boo
         task: RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() },
         occurrence_id: occurrence.clone(),
     };
+    if lose_intent_write_ack {
+        database.lose_next_write_acknowledgement();
+    }
     first
         .remote(RemoteCommand {
             remote_id: ENDPOINT.into(),
@@ -308,6 +433,13 @@ async fn accepted_response_lost_then_fresh_owner_reads_the_same_task_without_boo
         })
         .await
         .unwrap();
+    if lose_intent_write_ack {
+        assert!(
+            database.faulted(),
+            "SQLite committed the intent before losing its acknowledgement"
+        );
+    }
+    assert!(service.bookings.lock().is_empty(), "the durable intent alone did not book anything");
     // Use the journal's reservation on the same operation, never a second prepared request.
     let observer = journal(first.clone(), "answer");
     let answer = client
@@ -376,6 +508,8 @@ async fn accepted_response_lost_then_fresh_owner_reads_the_same_task_without_boo
         2,
         "one original request and one answer, never a replay"
     );
+    assert_eq!(service.bookings.lock().as_slice(), ["Friday"], "one committed business booking");
+    assert_eq!(remote.events.len(), 6, "a retried checkpoint cannot append communication twice");
     assert_eq!(remote.tasks["booking"].task.artifacts.as_ref().unwrap().len(), 1);
     client.aclose().await;
     assert_eq!(

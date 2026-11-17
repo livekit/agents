@@ -2,7 +2,7 @@ use super::{RemoteError, conflict, invalid};
 use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::delegation::remote::*;
 use lk_agents_abi::session::InputRequestState;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn response(
     state: &mut RemoteAgentState,
@@ -164,6 +164,14 @@ fn task(state: &mut RemoteAgentState, observed: a2a::Task) -> Result<(), RemoteE
         enrich(&mut item.task_id, Some(observed.id.clone()), &item.message_id)?;
         message(&mut state.messages, item)?;
     }
+    let dispatched: BTreeSet<_> = state
+        .requests
+        .values()
+        .filter(|request| request.dispatch_started)
+        .filter_map(|request| request.input_request.as_ref())
+        .filter(|reference| reference.task.task_id == observed.id)
+        .map(|reference| reference.occurrence_id.as_str())
+        .collect();
     let saved = state.tasks.entry(observed.id.clone()).or_insert_with(|| RemoteTaskState {
         task: observed.clone(),
         input_requests: BTreeMap::new(),
@@ -184,18 +192,24 @@ fn task(state: &mut RemoteAgentState, observed: a2a::Task) -> Result<(), RemoteE
     }
     let source_id = observed.status.message.as_ref().map(|message| message.message_id.clone());
     if observed.status.state == a2a::TaskState::InputRequired {
+        // Older uncertain responses can remain in the map. Only the latest occurrence can
+        // keep this question open; a newly admitted response can lead to the same question.
+        let latest = saved.next_input.checked_sub(1).and_then(|sequence| {
+            saved.input_requests.get(&format!("{}/input_{sequence}", observed.id))
+        });
         let same_occurrence = saved.task.status.state == a2a::TaskState::InputRequired
             && saved.task.status.message.as_ref().map(|message| &message.message_id)
                 == source_id.as_ref()
-            && !saved.input_requests.is_empty();
+            && latest.is_some_and(|input| {
+                matches!(input.state, InputRequestState::Open | InputRequestState::Responding)
+            });
         if !same_occurrence {
-            for input in saved.input_requests.values_mut() {
-                if input.state == InputRequestState::Open {
-                    input.state = InputRequestState::Superseded;
-                }
-            }
+            retire_inputs(&mut saved.input_requests, InputRequestState::Superseded, &dispatched);
             let occurrence_id = format!("{}/input_{}", observed.id, saved.next_input);
-            saved.next_input += 1;
+            saved.next_input = saved
+                .next_input
+                .checked_add(1)
+                .ok_or_else(|| invalid("input occurrence identity exhausted"))?;
             saved.input_requests.insert(
                 occurrence_id,
                 InputRequest {
@@ -206,11 +220,7 @@ fn task(state: &mut RemoteAgentState, observed: a2a::Task) -> Result<(), RemoteE
             );
         }
     } else {
-        for input in saved.input_requests.values_mut() {
-            if input.state == InputRequestState::Open {
-                input.state = InputRequestState::Closed;
-            }
-        }
+        retire_inputs(&mut saved.input_requests, InputRequestState::Closed, &dispatched);
     }
     // A limited getTask response may omit optional history/artifacts. Omission does not erase
     // earlier observations; original response appearances remain unchanged in the journal.
@@ -223,6 +233,22 @@ fn task(state: &mut RemoteAgentState, observed: a2a::Task) -> Result<(), RemoteE
     }
     saved.task = observed;
     Ok(())
+}
+
+/// A new question or status retires unsent selections. Once dispatch may have started, keep
+/// the original response correlation until remote evidence resolves its admission.
+fn retire_inputs(
+    inputs: &mut BTreeMap<String, InputRequest>,
+    disposition: InputRequestState,
+    dispatched: &BTreeSet<&str>,
+) {
+    for (id, input) in inputs {
+        if input.state == InputRequestState::Open
+            || input.state == InputRequestState::Responding && !dispatched.contains(id.as_str())
+        {
+            input.state = disposition;
+        }
+    }
 }
 
 pub(super) fn message(

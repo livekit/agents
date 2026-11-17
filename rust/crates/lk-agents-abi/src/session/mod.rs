@@ -72,10 +72,15 @@ pub struct AgentCallState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InputRequestState {
+    /// Waiting for a response to this occurrence.
     Open,
+    /// A response is reserved; its remote admission is not yet confirmed.
     Responding,
+    /// A successful response or observed task history confirmed admission.
     Responded,
+    /// A replacement input occurrence retired this unsent selection.
     Superseded,
+    /// Input is no longer requested; retained correlation does not prove admission.
     Closed,
 }
 

@@ -33,6 +33,8 @@ pub struct Store {
 struct Faults {
     rng: Mutex<fastrand::Rng>,
     enabled: AtomicBool,
+    /// An authored fault at the next write, independent of the random campaign.
+    forced_write: Mutex<Option<Plan>>,
     down_until: Mutex<Ts>,
     faulted: AtomicBool,
     dying: Arc<Dying>,
@@ -55,6 +57,7 @@ impl Store {
         let faults = Arc::new(Faults {
             rng: Mutex::new(rng),
             enabled: AtomicBool::new(faults),
+            forced_write: Mutex::new(None),
             down_until: Mutex::new(Ts::ZERO),
             faulted: AtomicBool::new(false),
             dying,
@@ -83,6 +86,7 @@ impl Store {
     /// The database answers every request from now on.
     pub fn heal(&self) {
         self.faults.enabled.store(false, Ordering::Release);
+        *self.faults.forced_write.lock() = None;
         *self.faults.down_until.lock() = Ts::ZERO;
     }
 
@@ -92,6 +96,15 @@ impl Store {
 
     pub fn faulted(&self) -> bool {
         self.faults.faulted.load(Ordering::Acquire)
+    }
+
+    /// The next write commits on SQLite, then loses its acknowledgement. Retry must use the
+    /// existing write identity, not repeat its state/log append or authorize network work early.
+    #[cfg(test)]
+    pub fn lose_next_write_acknowledgement(&self) {
+        let mut forced = self.faults.forced_write.lock();
+        assert!(forced.is_none(), "only one authored write fault is armed");
+        *forced = Some(Plan { answer_lost: true, ..Plan::default() });
     }
 
     /// Whether a lease holds `partition_key` now, by the database's clock.
@@ -119,6 +132,9 @@ struct Plan {
 impl Faults {
     /// Stress frequencies, not measured rates.
     fn plan(&self, write: bool) -> Plan {
+        if write && let Some(plan) = self.forced_write.lock().take() {
+            return plan;
+        }
         let mut plan = Plan::default();
         if !self.enabled.load(Ordering::Acquire) {
             return plan;
@@ -201,6 +217,7 @@ impl ThreadDbConnection for FaultyConnection {
         }
         let result = self.inner.batch(statements).await;
         if !self.faults.wait(plan.after).await || plan.answer_lost && result.is_ok() {
+            self.faults.faulted.store(true, Ordering::Release);
             return Err(StorageError::Uncertain(Unacknowledged::sent("the answer was lost")));
         }
         result

@@ -960,8 +960,9 @@ Routine private type layout and generator work do not require another public pri
   should expose that error as its JSON mapping or through the existing typed client exception;
   neither choice should introduce a second wire schema or discard protocol error details.
 
-- What exact explicit input-reference spelling should a custom RemoteAgent tool expose? It
-  must identify an input occurrence as well as its task, and reject schema-name collisions.
+- What exact explicit input-reference spelling should a custom RemoteAgent tool expose? The
+  current recommendation is `response_to`, with `input_request_id` as the alternative. It must
+  identify an input occurrence as well as its task, and reject schema-name collisions.
 - Which existing typed error should a task cancellation expose when a peer refuses cancellation
   or its outcome remains unknown after reconciliation? Successful cancellation still requires
   a persisted observed canceled state.
@@ -970,6 +971,10 @@ Routine private type layout and generator work do not require another public pri
 - For a text-to-voice transition while a local child is current, confirm that VoiceSession.start
   receives the configured root graph and restores the saved child from it. Supplying only the
   child cannot reconstruct missing parent behavior; it must not discard the saved parent call.
+- During a VoiceTask, should `SessionState.current_agent` show the task's live agent or the
+  durable parent? The recommendation is the live agent for inspection, with restart restoring
+  the parent because the task's Python await is transient. Delivered dialogue remains in
+  `chat_history` either way.
 
 ## Implementation checklist
 
@@ -1042,8 +1047,11 @@ than another simulation framework. Stock-peer HTTP and AgentDB conformance remai
 - [x] Add the native exchange seam and a readable text DST story: a known task accepts a
   response, the reply is lost, the owner crashes and a fresh owner reconciles it. Check stored
   state and remote/service observations. A companion unprovable outcome remains unknown.
-- [ ] Cover pre-dispatch failure and a database commit whose acknowledgement was lost;
+- [x] Cover pre-dispatch failure and a database commit whose acknowledgement was lost;
   framework writes remain atomic and application-field mutations remain unsaved until explicit save.
+  A fresh-owner DST story now covers an observer ending before dispatch: the original intent
+  is sent once with unchanged identities. A separate case loses the committed intent's write
+  acknowledgement and the remote response, then recovers with one booking in the service ledger.
 
 **Exit:** generated views and atomic checkpoints pass; fresh-owner text recovery uses the real
 client/executors/storage without blind resend or duplicated accepted outcomes. The client

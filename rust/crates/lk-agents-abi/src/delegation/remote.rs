@@ -130,6 +130,7 @@ pub struct RemoteRequestState {
     /// Persisted before I/O: an attempt may have happened, not proof of admission.
     pub dispatch_started: bool,
     /// The local observation stream settled; this does not complete remote business work.
+    /// Preparing the unchanged request may reopen it only before dispatch started.
     pub ended: bool,
     /// A known remote task for reconciliation after a lost connection.
     pub task: Option<RemoteTaskRef>,

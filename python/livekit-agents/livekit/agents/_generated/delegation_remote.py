@@ -101,7 +101,9 @@ class RemoteRequestState:
     dispatch_started: bool
     """Persisted before I/O: an attempt may have happened, not proof of admission."""
     ended: bool
-    """The local observation stream settled; this does not complete remote business work."""
+    """The local observation stream settled; this does not complete remote business work.
+    Preparing the unchanged request may reopen it only before dispatch started.
+    """
     task: RemoteTaskRef | None
     """A known remote task for reconciliation after a lost connection."""
     origin: ToolCallRef | None

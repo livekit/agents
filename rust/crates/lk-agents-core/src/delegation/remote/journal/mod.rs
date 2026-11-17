@@ -22,7 +22,7 @@ pub fn apply(state: &mut RemoteAgentState, input: RemoteInput) -> Result<(), Rem
             if request_id.is_empty() {
                 return Err(invalid("request identity is empty"));
             }
-            if let Some(existing) = state.requests.get(&request_id) {
+            if let Some(existing) = state.requests.get_mut(&request_id) {
                 let original = state.events.get(existing.request_event as usize);
                 let same_body = original.is_some_and(|entry| {
                     matches!(
@@ -32,12 +32,12 @@ pub fn apply(state: &mut RemoteAgentState, input: RemoteInput) -> Result<(), Rem
                 if same_body
                     && existing.method == request.method(streaming)
                     && !existing.dispatch_started
-                    && !existing.ended
                     && (input_request.is_none() || input_request == existing.input_request)
                     && (origin.is_none() || origin == existing.origin)
                 {
-                    // A router can reserve a response before handing its immutable body to
-                    // the client. Preparation confirms that body; it does not append it twice.
+                    // Before dispatch, a fresh observer may retry this exact prepared body.
+                    // Retain its original content and errors rather than recording it twice.
+                    existing.ended = false;
                     return Ok(());
                 }
                 return Err(invalid("request identity is already prepared or may have been sent"));
@@ -92,11 +92,17 @@ pub fn apply(state: &mut RemoteAgentState, input: RemoteInput) -> Result<(), Rem
             *state = next;
         }
         RemoteInput::DispatchStarted { request_id } => {
-            let request = request_mut(state, &request_id)?;
+            let request =
+                state.requests.get(&request_id).ok_or_else(|| invalid("unknown request"))?;
             if request.ended || request.dispatch_started {
                 return Err(invalid("this request may already have been sent; reconcile it"));
             }
-            request.dispatch_started = true;
+            if let Some(reference) = &request.input_request
+                && !response_reserved(state, reference)
+            {
+                return Err(invalid("the input occurrence no longer accepts this response"));
+            }
+            request_mut(state, &request_id)?.dispatch_started = true;
         }
         RemoteInput::Response { request_id, response } => {
             let request = request_mut(state, &request_id)?.clone();
@@ -111,18 +117,20 @@ pub fn apply(state: &mut RemoteAgentState, input: RemoteInput) -> Result<(), Rem
                 A2AJournalPayload::Response(response.clone()),
             );
             let mut next = state.clone();
-            let task = projection::response(&mut next, &request, *response)?;
-            if let Some(task) = task {
-                next.requests.get_mut(&request_id).expect("request was validated").task =
-                    Some(task);
-            }
-            if let Some(reference) = request.input_request {
+            // Admission resolves this occurrence before interpreting the peer's next question.
+            // Projection errors discard this staged change along with the rest of `next`.
+            if let Some(reference) = &request.input_request {
                 let input = next
                     .tasks
                     .get_mut(&reference.task.task_id)
                     .and_then(|task| task.input_requests.get_mut(&reference.occurrence_id))
                     .ok_or_else(|| invalid("the reserved input occurrence is missing"))?;
                 input.state = InputRequestState::Responded;
+            }
+            let task = projection::response(&mut next, &request, *response)?;
+            if let Some(task) = task {
+                next.requests.get_mut(&request_id).expect("request was validated").task =
+                    Some(task);
             }
             *state = next;
         }
@@ -150,6 +158,11 @@ pub fn apply(state: &mut RemoteAgentState, input: RemoteInput) -> Result<(), Rem
 pub fn recovery(state: &RemoteAgentState, request_id: &str) -> Result<Recovery, RemoteError> {
     let request = state.requests.get(request_id).ok_or_else(|| invalid("unknown request"))?;
     if !request.dispatch_started {
+        if let Some(reference) = &request.input_request
+            && !response_reserved(state, reference)
+        {
+            return Ok(Recovery::GetTask(reference.task.clone()));
+        }
         return Ok(Recovery::Dispatch);
     }
     if let Some(task) = &request.task {
@@ -163,6 +176,15 @@ pub fn recovery(state: &RemoteAgentState, request_id: &str) -> Result<Recovery, 
     } else {
         Ok(Recovery::Uncertain)
     }
+}
+
+fn response_reserved(state: &RemoteAgentState, reference: &InputRequestRef) -> bool {
+    state
+        .tasks
+        .get(&reference.task.task_id)
+        .filter(|task| task.task.context_id == reference.task.context_id)
+        .and_then(|task| task.input_requests.get(&reference.occurrence_id))
+        .is_some_and(|input| input.state == InputRequestState::Responding)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

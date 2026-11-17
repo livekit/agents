@@ -29,7 +29,9 @@ pub fn validate(state: &RemoteAgentState) -> Result<(), RemoteError> {
             }
             (A2AJournalKind::ResponseReceived, A2AJournalPayload::Response(_))
                 if request.dispatch_started => {}
-            (A2AJournalKind::RequestError, A2AJournalPayload::Error(_)) if request.ended => {}
+            // An earlier observer can fail before dispatch and be replaced. Historical
+            // failures do not reconstruct the current stream's mutable lifetime.
+            (A2AJournalKind::RequestError, A2AJournalPayload::Error(_)) => {}
             _ => return Err(invalid("journal kind disagrees with its content or dispatch facts")),
         }
     }
