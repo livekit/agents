@@ -24,6 +24,7 @@ from pydantic import (
     model_validator,
 )
 
+from livekit.agents._bindings import APIError
 from livekit.agents.inference import AdaptiveInterruptionDetector, InterruptionDetectionError
 from livekit.agents.llm import AgentHandoff, RealtimeModel, RealtimeModelError
 from livekit.agents.stt import STT, STTError
@@ -71,10 +72,18 @@ class ConversationItemAddedEvent(BaseModel):
 
 
 class CloseEvent(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["close"] = "close"
-    error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | None = None
+    error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | APIError | None = None
+    """The captured provider record, or an APIError when conversation storage failed."""
     reason: CloseReason
     created_at: float = Field(default_factory=time.time)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> object:
+        from .. import _bindings
+
+        return _bindings.session_close_serialize(self, handler)
 
 
 class FunctionToolsExecutedEvent(BaseModel):

@@ -197,7 +197,7 @@ fn acquiring_storage_uses_the_conversation_record_instead_of_a_private_prompt() 
             _ => None,
         })
         .expect("the reply starts");
-    let SpeechHistory::VoicePartition { history } = history else {
+    let SpeechHistory::VoicePartition { history, .. } = history else {
         panic!("the bound reply acquires its partition")
     };
     assert_eq!(history.items, expected);

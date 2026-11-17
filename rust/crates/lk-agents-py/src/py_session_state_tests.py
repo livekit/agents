@@ -8,6 +8,7 @@ import pytest
 
 from livekit.agents import (
     Agent,
+    APIError,
     Completed,
     DelegationOptions,
     InputRequired,
@@ -20,6 +21,7 @@ from livekit.agents import (
 )
 from livekit.agents.llm import ChatContext
 from livekit.agents.storage import ContextStore, SQLiteStorage, Thread
+from livekit.agents.voice.events import CloseEvent, event_dict
 from tests.fakes import FakeLLM, tool_call, until
 
 pytestmark = pytest.mark.unit
@@ -197,6 +199,49 @@ async def test_voice_refuses_saved_local_agent_work_without_changing_it(
         with pytest.raises(ValueError, match="local agent.*TextSession"):
             await voice.start(child if start_with_child else root)
     assert app.session._to_json() == before, "voice startup cannot reset a saved text continuation"
+
+
+async def test_voice_refuses_text_local_work_loaded_between_speeches(tmp_path: Path) -> None:
+    storage = SQLiteStorage(directory=tmp_path)
+    thread_id = (await storage.threads.create_thread()).thread_id
+    thread = Thread(storage, thread_id, partition_key="desk")
+    activation = await storage.threads._core_context_store(thread_id, "desk")
+    store = ContextStore(activation=activation, scope_id="root:desk", thread=thread)
+    other_activation = await storage.threads._core_context_store(thread_id, "desk")
+    text_store = ContextStore(activation=other_activation, scope_id="root:desk", thread=thread)
+    child = Agent(
+        name="booking", instructions="Book.", output_type=str, llm=FakeLLM([tool_call("date")])
+    )
+
+    @child.tool
+    async def date() -> InputRequired:
+        """Ask for the date."""
+        return InputRequired("Which date?", verbatim=True)
+
+    model = FakeLLM(["Hello.", tool_call("booking"), "Done."])
+    root = Agent(name="desk", instructions="Help.", tools=[child.as_tool()], llm=model)
+    closes: list[CloseEvent] = []
+    try:
+        app = await store.load_context(App())
+        async with VoiceSession(context=store.bind(app), vad=None) as voice:
+            voice.on("close", closes.append)
+            await voice.start(root)
+            await voice.generate_reply(user_input="Hello")
+            text_app = await text_store.load_context(App())
+            result = await TextSession(agent=root).run("Book", context=text_store.bind(text_app))
+            assert result.status == "input_required"
+            before = text_app.session._to_json()
+            await voice.generate_reply(user_input="Continue by voice")
+            await until(lambda: closes, "voice did not refuse the saved text-local continuation")
+            assert closes[0].reason.value == "error" and isinstance(closes[0].error, APIError)
+            assert isinstance(event_dict(closes[0], json=True)["error"], str)
+            assert len(model.requests) == 2, "voice must refuse before starting another model call"
+        saved = await text_store.load_session()
+        assert saved._to_json() == before, "voice cannot rewrite the text-local agent tree"
+    finally:
+        store._close()
+        text_store._close()
+        await storage.aclose()
 
 
 @pytest.mark.parametrize("persist", [False, True])

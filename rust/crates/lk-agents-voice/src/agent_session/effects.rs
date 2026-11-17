@@ -14,7 +14,11 @@ use std::sync::Arc;
 pub enum SpeechHistory {
     /// The speech takes the partition using conversation items, never its private model prompt.
     /// The core replans from the reconciled record before the model reads it.
-    VoicePartition { history: lk_agents_abi::storage::voice::VoiceHistory },
+    VoicePartition {
+        history: lk_agents_abi::storage::voice::VoiceHistory,
+        /// Immutable configured root; transient speaking roles cannot select a saved child.
+        root_agent: String,
+    },
     /// The session's history in memory, with no store.
     InMemory,
 }

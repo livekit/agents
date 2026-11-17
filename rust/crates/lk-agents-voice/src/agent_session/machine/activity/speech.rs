@@ -580,7 +580,10 @@ impl VoiceDriver {
                 turn.scheduled(now);
             }
             let history = if self.session.storage.enabled {
-                SpeechHistory::VoicePartition { history: self.checkpoint_history() }
+                SpeechHistory::VoicePartition {
+                    history: self.checkpoint_history(),
+                    root_agent: self.session.root_agent.clone(),
+                }
             } else {
                 SpeechHistory::InMemory
             };

@@ -468,19 +468,20 @@ impl VoiceRuntime {
         let shared = Arc::clone(&self.shared);
         let task = Arc::clone(&handle);
         let mut storage = match history {
-            SpeechHistory::VoicePartition { history } => {
-                self.storage.clone().map(|storage| (storage, history))
+            SpeechHistory::VoicePartition { history, root_agent } => {
+                self.storage.clone().map(|storage| (storage, history, root_agent))
             }
             SpeechHistory::InMemory => None,
         };
         let queue = self.reports.clone();
         if player.is_some()
-            && let Some((storage, local)) = storage.take()
+            && let Some((storage, local, root_agent)) = storage.take()
         {
             let queue = queue.clone();
             let speech = Arc::clone(&handle);
+            let sink = self.session_sink.clone();
             let reload = async move {
-                match reload_history(&speech, storage, local, &queue).await {
+                match reload_history(&speech, storage, local, &queue, sink, &root_agent).await {
                     // Reported to the core either way, which hands it to the playing speech.
                     Ok(_) | Err(_) => {}
                 }
@@ -490,13 +491,14 @@ impl VoiceRuntime {
         let speeches = self.speeches.clone();
         // A speech task that panics never reports `Done` or `Failed`: its death is the input.
         let reports = Arc::clone(&self.shared);
+        let sink = self.session_sink.clone();
         let lost = move || {
             let error = Box::new(lk_agents_voice::generation::fatal("the speech's task panicked"));
             reports.report(GenEvent::Failed { speech, error });
         };
         self.speeches.spawn_feeding(handle.id(), "speech", lost, async move {
-            if let Some((storage, local)) = storage {
-                match reload_history(&task, storage, local, &queue).await {
+            if let Some((storage, local, root_agent)) = storage {
+                match reload_history(&task, storage, local, &queue, sink, &root_agent).await {
                     // The core receives the reconciled record before startup asks it to replan.
                     // An interrupted speech settles through the normal core path.
                     Ok(_) => {}
@@ -773,6 +775,8 @@ async fn reload_history(
     storage: Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>,
     local: lk_agents_abi::storage::voice::VoiceHistory,
     queue: &crate::voice::session::Tx,
+    sink: Option<Arc<dyn lk_agents_abi::text_session::SessionStateSink>>,
+    root_agent: &str,
 ) -> Result<Option<lk_agents_abi::storage::voice::VoiceHistory>, lk_agents_abi::storage::StorageError>
 {
     let speech = handle.id();
@@ -788,6 +792,15 @@ async fn reload_history(
             return Ok(None);
         }
     };
+    let acquired = acquired.and_then(|history| {
+        if let Some(sink) = sink
+            && let Some(state) = sink.restore()?
+        {
+            lk_agents_core::session::validate_voice(&state, root_agent)
+                .map_err(|error| lk_agents_abi::storage::StorageError::Invalid(error.0))?;
+        }
+        Ok(history)
+    });
     match acquired {
         Ok(history) => {
             let _ = queue

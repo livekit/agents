@@ -188,6 +188,10 @@ state= continuation argument. Runtime services, Python stacks and media connecti
 serialized. Storage uses one shared conversation encoding.
 Durable local Agent-as-tool continuations run in text. Voice handoffs and VoiceTasks remain
 transient; starting voice with unresolved text-local agent work is refused without resetting it.
+The same check runs after each new voice lease reloads storage: an intervening text turn cannot
+make voice resume its local child. Refusal closes the call before another model request and
+leaves the saved text continuation intact. Its close event exposes the storage failure as an
+APIError and remains serializable.
 Closing voice releases its binding while preserving an application-supplied ContextStore for
 subsequent execution.
 See [TextSession](text-session.md#running-a-conversation) and

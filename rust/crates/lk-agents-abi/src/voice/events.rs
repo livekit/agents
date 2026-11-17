@@ -962,10 +962,13 @@ pub struct ConversationItemAddedEvent {
     module = "session_events",
     path = "livekit.agents.voice.events",
     pydantic,
-    constant(type = "close")
+    arbitrary_types,
+    constant(type = "close"),
+    serializer = "session_close_serialize"
 ))]
 pub struct CloseEvent {
-    #[host(default = None, annotation = ".llm.LLMError | livekit.agents.stt.STTError | livekit.agents.tts.TTSError | livekit.agents.llm.RealtimeModelError | livekit.agents.inference.InterruptionDetectionError | None")]
+    /// The captured provider record, or an APIError when conversation storage failed.
+    #[host(default = None, annotation = ".llm.LLMError | livekit.agents.stt.STTError | livekit.agents.tts.TTSError | livekit.agents.llm.RealtimeModelError | livekit.agents.inference.InterruptionDetectionError | livekit.agents._bindings.APIError | None")]
     pub error: Option<crate::HostRef>,
     pub reason: CloseReason,
     #[host(default_factory = "time.time")]

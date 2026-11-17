@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from ._generated.llm import ChatChunk
     from ._generated.llm_fallback import AvailabilityChanged
     from ._generated.run_result import _Settled
-    from ._generated.session_events import ErrorEvent, FunctionToolsExecutedEvent
+    from ._generated.session_events import CloseEvent, ErrorEvent, FunctionToolsExecutedEvent
     from ._generated.stt import STT, SpeechData, SpeechEvent
     from ._generated.tool_options import ProviderToolDeclaration, ToolSpec
     from ._generated.types import ErrorKind
@@ -420,6 +420,14 @@ def verify_lists_length(self: _FunctionToolsEventT) -> _FunctionToolsEventT:
     if len(self.function_calls) != len(self.function_call_outputs):
         raise ValueError("The number of function_calls and function_call_outputs must match.")
     return self
+
+
+def session_close_serialize(event: CloseEvent, handler: SerializerFunctionWrapHandler) -> object:
+    if isinstance(event.error, BaseException):
+        out = cast(dict[str, object], handler(event.model_copy(update={"error": None})))
+        out["error"] = repr(event.error)
+        return out
+    return handler(event)
 
 
 def session_error_serialize(event: ErrorEvent, handler: SerializerFunctionWrapHandler) -> object:

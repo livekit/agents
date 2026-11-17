@@ -414,6 +414,8 @@ def _on_metrics(self: VoiceSession[Any], wire: MetricsCollectedWire) -> None:
 
 
 def _error_record(self: VoiceSession[Any], wire: SessionErrorWire) -> tuple[Any, Any]:
+    if wire.source == "storage_error":
+        return wire.error, self.store
     if (failure := wire.processor_failure) is not None:
         error = AudioProcessingError(label=failure.label, error=cast(Exception, failure.error))
         return error, failure.processor
