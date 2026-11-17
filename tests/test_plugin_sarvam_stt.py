@@ -1331,6 +1331,30 @@ async def test_stt_stream_waits_for_the_utterance_to_end(ws_session: _KeytermSes
 
 
 @pytest.mark.virtual_time
+async def test_stt_stream_waits_past_a_final_that_arrives_mid_utterance(
+    ws_session: _KeytermSession,
+) -> None:
+    """A final while the user is still speaking doesn't let a keyterm reconnect through."""
+    async with sarvam_stt.STT(api_key="sk_test") as stt:
+        stream = stt.stream()
+        await ws_session.wait_for_connections(1)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+        await stream._handle_transcript_data(
+            {"data": {"transcript": "Vistaar", "language_code": "hi-IN"}}
+        )
+
+        stt._update_session_keyterms(["Vistaar"])
+        assert stream._pending_keyterms == ["Vistaar"]  # held until the utterance ends
+        await asyncio.sleep(0.05)
+        assert len(ws_session.sockets) == 1
+
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+        await ws_session.wait_for_connections(2)
+        assert ws_session.keyterms(1) == ["Vistaar"]
+        await stream.aclose()
+
+
+@pytest.mark.virtual_time
 async def test_stt_stream_drops_removed_session_keyterms(ws_session: _KeytermSession) -> None:
     """With no user terms, session terms the framework removes don't stick around."""
     async with sarvam_stt.STT(api_key="sk_test") as stt:

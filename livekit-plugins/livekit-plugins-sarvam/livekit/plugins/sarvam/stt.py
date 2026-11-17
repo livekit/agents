@@ -1256,7 +1256,7 @@ class SpeechStream(stt.SpeechStream):
         if self._audio_task is not None and self._audio_task.done():
             # input has ended; a reconnect now would only cut the stream's tail short
             return
-        if not self._utterance_settled.is_set():
+        if self._speaking or self._pending_eos:
             # reconnecting mid-utterance would cut it off, so wait for its end
             self._pending_keyterms = merged
             return
