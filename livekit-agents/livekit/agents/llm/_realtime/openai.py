@@ -933,6 +933,8 @@ class RealtimeSession(
         self.send_event(self._create_session_update_event())
 
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
+        # set to close the current connection at a quiet point and reconnect with a replay
+        self._recycle_requested = asyncio.Event()
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
 
@@ -1294,7 +1296,7 @@ class RealtimeSession(
                         event["delta"] = event["delta"][:10] + "..."
                     logger.exception("failed to handle event", extra={"lk.pii.event": event})
 
-        tasks = [
+        tasks: list[asyncio.Task[Any]] = [
             asyncio.create_task(_recv_task(), name="_recv_task"),
             asyncio.create_task(_send_task(), name="_send_task"),
         ]
@@ -1305,12 +1307,15 @@ class RealtimeSession(
                 name="_timeout_task",
             )
             tasks.append(wait_reconnect_task)
+        self._recycle_requested.clear()
+        recycle_task = asyncio.create_task(self._recycle_requested.wait(), name="_recycle_task")
+        tasks.append(recycle_task)
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
             # propagate exceptions from completed tasks
             for task in done:
-                if task != wait_reconnect_task:
+                if task not in (wait_reconnect_task, recycle_task):
                     task.result()
 
             if (
@@ -1322,9 +1327,16 @@ class RealtimeSession(
                 await self._current_generation._done_fut
                 closing = True
 
+            if recycle_task in done:
+                closing = True
+                await self._before_recycle(ws_conn)
+
         finally:
             await utils.aio.cancel_and_wait(*tasks)
             await ws_conn.close()
+
+    async def _before_recycle(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
+        """Runs on the old connection after a requested recycle, before it closes."""
 
     def _wrap_session_update(
         self, event_id: str, session: RealtimeSessionCreateRequest

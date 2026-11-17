@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from collections import deque
@@ -129,7 +130,13 @@ class _FakePool:
 
         class _Context:
             async def __aenter__(self):  # noqa: ANN204
-                return SimpleNamespace(ws=websocket, session_id="inference_connection")
+                return SimpleNamespace(
+                    ws=websocket,
+                    session_id="inference_connection",
+                    receive=websocket.receive,
+                    in_use=False,
+                    handoff_id=None,
+                )
 
             async def __aexit__(self, *_exc: object) -> bool:  # noqa: ANN204
                 return False
@@ -218,3 +225,142 @@ async def test_dial_carries_model_and_session_id(monkeypatch: pytest.MonkeyPatch
     assert http_session.headers[HEADER_SESSION_ID] == "inference_connection"
     assert connection.session_id == "inference_connection"
     assert connection.ws is websocket
+
+
+# -- coordinated gateway handoff --
+
+
+class _GatewaySocket:
+    """One in-memory `/tts` connection; `reply` and `hang_up` act as the gateway."""
+
+    def __init__(self, index: int) -> None:
+        self.index = index
+        self.closed = False
+        self.sent: list[dict[str, Any]] = []
+        self._inbox: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+
+    async def send_str(self, data: str) -> None:
+        if self.closed:
+            raise ConnectionResetError("socket is closed")
+        event = json.loads(data)
+        self.sent.append(event)
+        if event["type"] == "session.flush":
+            self.reply("output_audio", audio=_AUDIO["audio"])
+            self.reply("done")
+
+    async def receive(self, timeout: float | None = None) -> aiohttp.WSMessage:
+        return await self._inbox.get()
+
+    async def close(self, **kwargs: Any) -> bool:
+        self.closed = True
+        self._inbox.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, None))
+        return True
+
+    def reply(self, msg_type: str, **fields: Any) -> None:
+        payload = json.dumps({"type": msg_type, "session_id": f"s{self.index}", **fields})
+        self._inbox.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, payload, None))
+
+    def hang_up(self) -> None:
+        self._inbox.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1001, None))
+
+    def types(self) -> list[str]:
+        return [e["type"] for e in self.sent]
+
+
+class _Gateway:
+    closed = False
+
+    def __init__(self) -> None:
+        self.sockets: list[_GatewaySocket] = []
+
+    async def ws_connect(self, url: str, **kwargs: Any) -> _GatewaySocket:
+        socket = _GatewaySocket(len(self.sockets))
+        self.sockets.append(socket)
+        return socket
+
+
+async def _speak(tts: TTS, text: str) -> float:
+    async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
+        stream.push_text(text)
+        stream.end_input()
+        return sum([event.frame.duration async for event in stream])
+
+
+async def _until(condition: Any) -> None:
+    async with asyncio.timeout(1.0):
+        while not condition():
+            await asyncio.sleep(0.005)
+
+
+async def test_session_create_advertises_handoff_protocol() -> None:
+    gateway = _Gateway()
+    tts = _make_tts(http_session=gateway)
+    try:
+        await _speak(tts, "hello.")
+        assert gateway.sockets[0].sent[0]["type"] == "session.create"
+        assert gateway.sockets[0].sent[0]["handoff_protocol"] == 1
+    finally:
+        await tts.aclose()
+
+
+async def test_idle_connection_leaves_on_handoff_request() -> None:
+    gateway = _Gateway()
+    errors: list[Any] = []
+    tts = _make_tts(http_session=gateway)
+    tts.on("error", errors.append)
+    try:
+        await _speak(tts, "first.")
+        old = gateway.sockets[0]
+        old.reply("session.handoff.request", handoff_id="h1")
+        await _until(lambda: old.closed)
+        assert old.sent[-1] == {"type": "session.handoff.complete", "handoff_id": "h1"}
+
+        assert await _speak(tts, "second.") > 0
+        assert "input_transcript" not in old.types()[old.types().index("session.flush") + 1 :]
+        assert any("input_transcript" in s.types() for s in gateway.sockets[1:])
+        assert errors == []
+    finally:
+        await tts.aclose()
+
+
+async def test_busy_connection_finishes_its_turn_before_leaving() -> None:
+    gateway = _Gateway()
+    tts = _make_tts(http_session=gateway)
+    try:
+        async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
+            stream.push_text("first.")
+            stream.flush()
+            await _until(
+                lambda: gateway.sockets and "input_transcript" in gateway.sockets[0].types()
+            )
+            old = gateway.sockets[0]
+            old.reply("session.handoff.request", handoff_id="h1")
+            await asyncio.sleep(0.02)
+            assert not old.closed
+            stream.end_input()
+            audio = sum([event.frame.duration async for event in stream])
+
+        assert audio > 0
+        await _until(lambda: old.closed)
+        assert old.types()[-2:] == ["session.flush", "session.handoff.complete"]
+        assert await _speak(tts, "second.") > 0
+        assert old.types().count("input_transcript") == 1
+    finally:
+        await tts.aclose()
+
+
+async def test_idle_connection_closed_by_the_gateway_is_not_reused() -> None:
+    gateway = _Gateway()
+    errors: list[Any] = []
+    tts = _make_tts(http_session=gateway)
+    tts.on("error", errors.append)
+    try:
+        await _speak(tts, "first.")
+        gateway.sockets[0].hang_up()
+        await asyncio.sleep(0.02)
+
+        assert await _speak(tts, "second.") > 0
+        assert gateway.sockets[0].types().count("input_transcript") == 1
+        assert errors == []
+    finally:
+        await tts.aclose()

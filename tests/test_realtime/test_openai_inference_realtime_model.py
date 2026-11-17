@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+import aiohttp
 import pytest
 from openai.types.realtime import (
     ConversationItemAdded,
@@ -690,3 +691,135 @@ async def test_update_options_voice_omits_empty_audio_input_subobject(
 
     assert update["session"]["audio"] == {"output": {"voice": "rex"}}
     await session.aclose()
+
+
+# -- coordinated gateway handoff --
+
+
+class _GatewaySocket:
+    """One in-memory `/realtime` connection; `reply` acts as the gateway."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.sent: list[dict[str, Any]] = []
+        self._inbox: asyncio.Queue[Any] = asyncio.Queue()
+
+    async def send_str(self, data: str) -> None:
+        if self.closed:
+            raise ConnectionResetError("socket is closed")
+        self.sent.append(json.loads(data))
+
+    async def receive(self) -> Any:
+        return await self._inbox.get()
+
+    async def close(self) -> None:
+        self.closed = True
+        self._inbox.put_nowait(SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=None))
+
+    def reply(self, msg_type: str, **fields: Any) -> None:
+        payload = json.dumps({"type": msg_type, **fields})
+        self._inbox.put_nowait(SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=payload))
+
+    def types(self) -> list[str]:
+        return [e["type"] for e in self.sent]
+
+
+class _Gateway:
+    def __init__(self) -> None:
+        self.sockets: list[_GatewaySocket] = []
+        self.headers: list[dict[str, str]] = []
+
+    async def ws_connect(self, *, url: str, headers: dict[str, str]) -> _GatewaySocket:
+        socket = _GatewaySocket()
+        self.sockets.append(socket)
+        self.headers.append(headers)
+        return socket
+
+
+def _gateway_session(gateway: _Gateway, **kwargs: Any) -> RealtimeSession:
+    model = RealtimeModel(
+        "openai/gpt-realtime",
+        api_key="key",
+        api_secret="secret",
+        http_session=gateway,  # type: ignore[arg-type]
+    )
+    return model.session(**kwargs)
+
+
+async def _until(condition: Any) -> None:
+    async with asyncio.timeout(1.0):
+        while not condition():
+            await asyncio.sleep(0.005)
+
+
+async def test_handoff_header_requires_server_turn_detection(paused_realtime_main: None) -> None:
+    gateway = _Gateway()
+    for disabled, expected in ((False, "1"), (True, None)):
+        session = _gateway_session(gateway, turn_detection_disabled=disabled)
+        await session._create_ws_conn()
+        assert gateway.headers[-1].get("X-LiveKit-Handoff-Protocol") == expected
+        await session.aclose()
+
+
+async def test_quiet_session_leaves_a_draining_gateway() -> None:
+    gateway = _Gateway()
+    session = _gateway_session(gateway)
+    errors: list[Any] = []
+    reconnected: list[Any] = []
+    session.on("error", errors.append)
+    session.on("session_reconnected", reconnected.append)
+    try:
+        await _until(lambda: gateway.sockets and gateway.sockets[0].sent)
+        old = gateway.sockets[0]
+        old.reply("session.handoff.request", handoff_id="h1")
+
+        await _until(lambda: len(gateway.sockets) == 2 and reconnected)
+        assert old.closed
+        assert old.sent[-1] == {"type": "session.handoff.complete", "handoff_id": "h1"}
+        assert "session.update" in gateway.sockets[1].types()
+        assert errors == []
+    finally:
+        await session.aclose()
+
+
+async def test_handoff_waits_for_the_user_to_finish_speaking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(inference_realtime, "_HANDOFF_RESPONSE_GRACE", 0.05)
+    gateway = _Gateway()
+    session = _gateway_session(gateway)
+    try:
+        await _until(lambda: gateway.sockets and gateway.sockets[0].sent)
+        old = gateway.sockets[0]
+        old.reply("input_audio_buffer.speech_started", item_id="i1", audio_start_ms=0)
+        old.reply("session.handoff.request", handoff_id="h1")
+        await asyncio.sleep(0.08)
+        assert "session.handoff.complete" not in old.types()
+
+        old.reply("input_audio_buffer.speech_stopped", item_id="i1", audio_end_ms=500)
+        await asyncio.sleep(0.02)
+        assert "session.handoff.complete" not in old.types()
+
+        await _until(lambda: "session.handoff.complete" in old.types())
+        await _until(lambda: len(gateway.sockets) == 2)
+    finally:
+        await session.aclose()
+
+
+async def test_handoff_waits_for_the_reply_in_progress() -> None:
+    gateway = _Gateway()
+    session = _gateway_session(gateway)
+    try:
+        await _until(lambda: gateway.sockets and gateway.sockets[0].sent)
+        old = gateway.sockets[0]
+        done: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        session._current_generation = SimpleNamespace(_done_fut=done)  # type: ignore[assignment]
+        old.reply("session.handoff.request", handoff_id="h1")
+        await asyncio.sleep(0.08)
+        assert "session.handoff.complete" not in old.types()
+
+        done.set_result(None)
+        await _until(lambda: "session.handoff.complete" in old.types())
+    finally:
+        session._current_generation = None
+        await session.aclose()
