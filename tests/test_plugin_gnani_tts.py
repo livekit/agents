@@ -539,10 +539,20 @@ def test_tts_voice_catalogues_are_disjoint():
     )
 
     v25, v30 = set(get_args(GnaniTTSV25Voices)), set(get_args(GnaniTTSV30Voices))
-    assert len(v30) == 13
+    assert len(v30) == 34
+    assert {"Anitasingh", "Rajni", "Swathi"} <= v30
     assert not v25 & v30
     assert "Pranav" in v25 and "Avinash" in v30
     assert set(get_args(GnaniTTSVoices)) == v25 | v30
+
+
+@pytest.mark.parametrize("voice", ["Anitasingh", "Rajni", "Swathi", "Lakshmidevi"])
+def test_tts_new_v30_voices_are_bound_to_v30(voice):
+    from livekit.plugins.gnani import TTS
+
+    assert TTS(api_key="k", model="timbre-v3.0", voice=voice)._opts.voice == voice
+    with pytest.raises(ValueError, match="timbre-v3.0"):
+        TTS(api_key="k", model="timbre-v2.5", voice=voice)
 
 
 def test_tts_bitrates_match_what_the_api_accepts():

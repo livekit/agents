@@ -60,7 +60,8 @@ RETIRED_MODELS = frozenset({"timbre-v2.0"})
 # are used for editor autocomplete and to fail fast on a *known* cross-model
 # mismatch only. Any other voice string is passed through, so voices that Gnani
 # adds later keep working without a plugin release. The API stays the source of
-# truth. Catalogues as returned by the API on 2026-10-30.
+# truth. The timbre-v2.5 catalogue is as returned by the API on 2026-10-30. The
+# timbre-v3.0 catalogue (34 voices) was checked against the production API on 2026-11-17.
 GnaniTTSV25Voices = Literal[
     "Aarohi",
     "Abhimanyu",
@@ -139,18 +140,39 @@ GnaniTTSV25Voices = Literal[
 """Voices of ``timbre-v2.5``."""
 
 GnaniTTSV30Voices = Literal[
+    "Anitasingh",
+    "Arko",
     "Avinash",
     "Chetana",
     "Devansh",
     "Harshad",
     "Kalpana",
     "Lakshmi",
+    "Lakshmidevi",
+    "Mahendra",
+    "Manjunath",
+    "Neelam",
+    "Nitin",
     "Prakash",
+    "Priyasharm",
+    "Rahulmehta",
+    "Rajeev",
+    "Rajni",
+    "Rakesh",
+    "Rekha",
     "Riyaa",
+    "Santosh",
     "Shivani",
+    "Shruthi",
     "Shubham",
+    "Sneha",
+    "Sohini",
+    "Sunaina",
+    "Swathi",
     "Tarika",
     "Vasudha",
+    "Vikramdasu",
+    "Vinod",
     "Yashraj",
 ]
 """Voices of ``timbre-v3.0``."""

@@ -199,7 +199,7 @@ tts = TTS(
 
 ### Text-to-Speech (Timbre v3.0)
 
-Timbre v3.0 has 13 voices that each speak all supported languages, and supports
+Timbre v3.0 has 34 voices that each speak all supported languages, and supports
 [audio tags](https://docs.gnani.ai/api/TTS/tts-audio-tags) for expressive delivery.
 Voices belong to a model, so pass a Timbre v3.0 voice (or omit `voice` to get `Avinash`).
 
@@ -356,9 +356,9 @@ from livekit.plugins.gnani import TTS
 tts = TTS(model="timbre-v2.5", voice="Nalini", language="hi-IN")
 ```
 
-### timbre-v3.0 (13 voices)
+### timbre-v3.0 (34 voices)
 
-`Avinash` (default), `Chetana`, `Devansh`, `Harshad`, `Kalpana`, `Lakshmi`, `Prakash`, `Riyaa`, `Shivani`, `Shubham`, `Tarika`, `Vasudha`, `Yashraj`. Every voice speaks all supported languages and supports audio tags.
+`Avinash` (default), `Anitasingh`, `Arko`, `Chetana`, `Devansh`, `Harshad`, `Kalpana`, `Lakshmi`, `Lakshmidevi`, `Mahendra`, `Manjunath`, `Neelam`, `Nitin`, `Prakash`, `Priyasharm`, `Rahulmehta`, `Rajeev`, `Rajni`, `Rakesh`, `Rekha`, `Riyaa`, `Santosh`, `Shivani`, `Shruthi`, `Shubham`, `Sneha`, `Sohini`, `Sunaina`, `Swathi`, `Tarika`, `Vasudha`, `Vikramdasu`, `Vinod`, `Yashraj`. Every voice speaks all supported languages and supports audio tags. Voice names are case-sensitive.
 
 ### Voice validation
 
