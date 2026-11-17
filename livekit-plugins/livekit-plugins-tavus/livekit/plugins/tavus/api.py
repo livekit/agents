@@ -201,8 +201,10 @@ class TavusAPI:
                         )
                     try:
                         return await response.json()  # type: ignore
-                    except ValueError as e:
+                    except (aiohttp.ContentTypeError, ValueError) as e:
                         # Tavus already accepted the POST; retrying could create a duplicate.
+                        # A non-JSON content type raises ContentTypeError, a ClientError,
+                        # which the network-error branch below would otherwise retry.
                         raise APIConnectionError(
                             "Tavus returned an invalid response", retryable=False
                         ) from e
