@@ -155,6 +155,38 @@ def test_streaming_disables_connection_retries(
     assert stream_conn_options.timeout == 12.0
 
 
+def test_streaming_selects_saaras_v4(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _CapturedStream:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(stt_streaming, "RealtimeSpeechStream", _CapturedStream)
+    stt = stt_streaming.STTRealtime(
+        api_key="sk_test",
+        model="saaras:v4",
+        http_session=object(),  # type: ignore[arg-type]
+    )
+    stt.update_options(language="hi-IN")
+    stt.stream()
+
+    assert stt.model == "saaras:v4"
+    opts = captured["opts"]
+    assert isinstance(opts, stt_streaming.RealtimeSTTOptions)
+    assert opts.model == "saaras:v4"
+    params = _parse_ws_url(
+        stt_streaming._build_realtime_ws_url(stt_streaming.SARVAM_STT_REALTIME_URL, opts)
+    )
+    assert params["model"] == "saaras:v4"
+
+
+def test_streaming_defaults_to_v3_realtime_and_rejects_unknown_models() -> None:
+    assert stt_streaming.STTRealtime(api_key="sk_test").model == "saaras:v3-realtime"
+    with pytest.raises(ValueError, match="model must be one of"):
+        stt_streaming.STTRealtime(api_key="sk_test", model="saaras:v3")
+
+
 def test_realtime_ws_url_includes_core_and_vad_params() -> None:
     opts = stt_streaming.RealtimeSTTOptions(
         language="hi-IN",
@@ -483,6 +515,32 @@ async def test_instance_update_preserves_per_stream_language_override(
 
     await stream.aclose()
     await stt_impl.aclose()
+
+
+def test_update_options_switches_model_for_new_streams(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[stt_streaming.RealtimeSTTOptions] = []
+
+    class _CapturedStream:
+        def __init__(self, **kwargs: object) -> None:
+            opts = kwargs["opts"]
+            assert isinstance(opts, stt_streaming.RealtimeSTTOptions)
+            captured.append(opts)
+
+        def update_options(self, **kwargs: object) -> None:
+            assert "model" not in kwargs  # open streams keep their connection's model
+
+    monkeypatch.setattr(stt_streaming, "RealtimeSpeechStream", _CapturedStream)
+    stt = stt_streaming.STTRealtime(api_key="sk_test", http_session=object())  # type: ignore[arg-type]
+    stt.stream()
+
+    stt.update_options(model="saaras:v4")
+    stt.stream()
+
+    assert stt.model == "saaras:v4"
+    assert [opts.model for opts in captured] == ["saaras:v3-realtime", "saaras:v4"]
+    with pytest.raises(ValueError, match="model must be one of"):
+        stt.update_options(model="saaras:v3")
+    assert stt.model == "saaras:v4"
 
 
 def test_stream_update_options_without_arguments_is_a_no_op() -> None:

@@ -66,6 +66,32 @@ def _supports_thinking_level(model: str) -> bool:
     return _is_gemini_3_or_newer(model) or _is_gemma_4_model(model)
 
 
+def _supports_xhigh_thinking(model: str) -> bool:
+    """Check if model accepts thinking_level "xhigh", its maximum reasoning depth"""
+    return "gemini-4-hydrogen" in model.lower()
+
+
+def _validate_thinking_level(model: str, level: str | types.ThinkingLevel | None) -> None:
+    """Raise if the model does not accept the thinking level"""
+    if level is not None and level.upper() == "XHIGH" and not _supports_xhigh_thinking(model):
+        raise ValueError(f"Model {model} does not support thinking_level 'xhigh'.")
+
+
+def _normalize_thinking_config(thinking_config: types.ThinkingConfigOrDict) -> types.ThinkingConfig:
+    """Put the thinking level in the API's upper case.
+
+    google-genai has no XHIGH member and would send an unknown level as typed.
+    """
+    if isinstance(thinking_config, dict):
+        thinking_config = types.ThinkingConfig.model_validate(thinking_config)
+    level = thinking_config.thinking_level
+    if level is None:
+        return thinking_config
+    return thinking_config.model_copy(
+        update={"thinking_level": types.ThinkingLevel(level.value.upper())}
+    )
+
+
 def _ignores_sampling_params(model: str) -> bool:
     """Check if model ignores temperature/top_p/top_k, which later ones will reject outright"""
     return _is_gemini_4_model(model)
@@ -297,6 +323,8 @@ class LLM(llm.LLM):
                     f"or 'high' (thinking on), got {_thinking_level!r}."
                 )
 
+            _validate_thinking_level(model, _thinking_level)
+
         self._opts = _LLMOptions(
             model=model,
             temperature=temperature,
@@ -516,6 +544,12 @@ class LLM(llm.LLM):
                 else:
                     # Pass through original config if no specific handling needed
                     extra["thinking_config"] = self._opts.thinking_config
+
+        # a thinking_config can also arrive through extra_kwargs, so check what will be sent
+        if extra.get("thinking_config") is not None:
+            thinking_cfg = _normalize_thinking_config(extra["thinking_config"])
+            _validate_thinking_level(self._opts.model, thinking_cfg.thinking_level)
+            extra["thinking_config"] = thinking_cfg
 
         if is_given(self._opts.automatic_function_calling_config):
             extra["automatic_function_calling"] = self._opts.automatic_function_calling_config

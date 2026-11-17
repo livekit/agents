@@ -18,7 +18,14 @@ import pytest
 from aiohttp import web
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, APIError, inference, llm
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIError,
+    APIStatusError,
+    inference,
+    llm,
+)
 from livekit.agents.inference.realtime import gpt_live as inference_gpt_live
 from livekit.agents.llm._realtime import gpt_live as gpt_live_model
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
@@ -2084,6 +2091,21 @@ def _inference_model(**kwargs: Any) -> inference.DuplexModel:
     )
 
 
+@pytest.mark.parametrize("kwargs", [{}, {"provider": None}, {"provider": "openai"}])
+def test_inference_provider_pinning_warns_only_when_explicitly_passed(
+    kwargs: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        _inference_model(**kwargs)
+
+    if kwargs:
+        assert len(caplog.messages) == 1
+        assert "provider is deprecated and will be removed on March 1, 2027" in caplog.text
+        assert "Omit this argument" in caplog.text
+    else:
+        assert not caplog.messages
+
+
 def test_the_plugin_and_inference_share_one_client() -> None:
     from livekit.plugins.openai.realtime import gpt_live_types
 
@@ -2146,6 +2168,30 @@ async def test_inference_connects_to_the_gateway_with_a_livekit_token(
         assert headers["Authorization"] == "Bearer token-two:lk-key"
     finally:
         await session.aclose()
+
+
+async def test_failed_handshake_explains_exhausted_credits(
+    quota_http_session: SimpleNamespace,
+) -> None:
+    model = _inference_model(
+        http_session=quota_http_session,
+        conn_options=APIConnectOptions(max_retry=0, timeout=1.0),
+    )
+    session = model.session()
+    errors: asyncio.Queue[llm.RealtimeModelError] = asyncio.Queue()
+    session.on("error", errors.put_nowait)
+    try:
+        event = await asyncio.wait_for(errors.get(), timeout=1.0)
+        assert isinstance(event.error, APIStatusError)
+        assert "Credit quota exhausted." in event.error.message
+        assert event.error.status_code == 429
+        assert event.error.retryable is False
+        assert event.error.request_id == "quota-test-request"
+        assert event.error.body == {"category": "MaxGatewayCredits"}
+    finally:
+        with contextlib.suppress(APIError):
+            await session.aclose()
+        await model.aclose()
 
 
 async def test_inference_refuses_hosted_tools_the_gateway_cannot_meter(

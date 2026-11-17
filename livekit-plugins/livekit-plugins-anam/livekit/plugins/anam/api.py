@@ -128,6 +128,16 @@ class AnamAPI:
                 session_options.show_ai_avatar_disclosure
             )
 
+        if session_options is not None and session_options.region is not None:
+            if "sessionOptions" not in payload:
+                payload["sessionOptions"] = {}
+            payload["sessionOptions"]["region"] = session_options.region
+
+        if session_options is not None and session_options.region_policy is not None:
+            if "sessionOptions" not in payload:
+                payload["sessionOptions"] = {}
+            payload["sessionOptions"]["regionPolicy"] = session_options.region_policy
+
         headers = {
             "Authorization": f"Bearer {self._api_key}",  # Use API Key here
             "Content-Type": "application/json",

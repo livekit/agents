@@ -23,6 +23,7 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
+    APIStatusError,
     EndpointingOptions,
     InterruptionOptions,
     TurnHandlingOptions,
@@ -240,6 +241,7 @@ def test_gateway_ink2_payload_carries_no_word_alignment() -> None:
         ("assemblyai/u3-rt-pro", True),
         ("assemblyai/universal-3-5-pro", True),
         ("assemblyai/universal-3-6-pro", True),
+        ("assemblyai/assemblyai-stt-3-7-realtime-agent", True),
         ("assemblyai/universal-streaming", False),
         ("deepgram/nova-3", False),
     ],
@@ -768,6 +770,23 @@ async def _run_to_end(stt: STT, **stream_kwargs: Any) -> list[str]:
         return await asyncio.wait_for(_finals(stream), timeout=5.0)
     finally:
         await stream.aclose()
+
+
+async def test_failed_handshake_explains_exhausted_credits(
+    quota_http_session: SimpleNamespace,
+) -> None:
+    stt = _make_stt(http_session=quota_http_session)
+    try:
+        with pytest.raises(APIStatusError) as caught:
+            await _run_to_end(stt)
+    finally:
+        await stt.aclose()
+
+    assert "Credit quota exhausted." in caught.value.message
+    assert caught.value.status_code == 429
+    assert caught.value.retryable is False
+    assert caught.value.request_id == "quota-test-request"
+    assert caught.value.body == {"category": "MaxGatewayCredits"}
 
 
 def _silence(sample_rate: int, seconds: float = 0.1) -> rtc.AudioFrame:
