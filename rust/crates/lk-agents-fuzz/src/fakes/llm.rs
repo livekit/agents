@@ -169,12 +169,41 @@ pub(super) fn deliver(
             };
             sender.send(Ok(finish)).is_ok() && sender.send(Ok(usage)).is_ok()
         }
-        Input::LlmFail { .. } => sender
-            .send(Err(ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+        Input::LlmFail { .. } => {
+            let mut error = lk_agents_abi::errors::ApiError::new(
                 lk_agents_abi::errors::ErrorKind::Server,
                 "injected provider failure",
-            ))))
-            .is_ok(),
+            );
+            // A failed stream has the same provider identity as its preceding chunks, even
+            // without a usage event. Concurrent requests can have identical prompt histories.
+            error.request_id = Some(response_id);
+            sender.send(Err(ProviderError::Local(error))).is_ok()
+        }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_stream_failure_retains_the_chunks_opaque_provider_identity() {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let id = "opaque-request";
+        let chat = crate::input::Ref::new(0);
+        assert!(deliver(
+            &sender,
+            0,
+            id.into(),
+            &Input::LlmText { chat, text: AgentText("Partial reply".into()) },
+            1
+        ));
+        assert!(deliver(&sender, 0, id.into(), &Input::LlmFail { chat }, 2));
+        let chunk = receiver.recv().await.unwrap().unwrap();
+        let ProviderError::Local(error) = receiver.recv().await.unwrap().unwrap_err() else {
+            panic!("the fake models a native provider error")
+        };
+        assert_eq!(error.request_id.as_deref(), Some(chunk.id.as_str()));
     }
 }

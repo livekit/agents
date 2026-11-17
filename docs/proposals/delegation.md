@@ -943,8 +943,12 @@ speech is interrupted; speech interruption does not end application work.
 Retained replays include seed 1,646 under Arrival, seeds 3,024 and 3,642 under BasicPos, and
 seed 4,110 under TaskBridge. Rerun a finding with `VOICE_SEED=<seed> VOICE_POLICY=<policy>` on
 its recorded revision. The latest full campaign still finds payload preservation, input
-resolution and voice/media failures. Its retained storage replay starts at seed 14,379 under
-TaskBridge. Smaller passing windows do not close that gate.
+resolution and voice/media failures. Focused storage replays 14,379 (TaskBridge) and 21,482
+(BasicPos) now pass; the remaining payload finding starts at seed 32,820. The selected-question
+finding at seed 6,074 remains open; blank input no longer consumes its pending requirement.
+Provider errors now carry their opaque request identity, correcting the harness attribution
+in replay 6,569 after a different request's open hung. Smaller passing windows do not close
+the full gate.
 
 Local real-process E2E and all v1 client compatibility stories pass. Cloud AgentDB conformance
 has not run: this environment has no LiveKit project configuration. Local SQLite tests and
@@ -970,6 +974,9 @@ Routine private type layout and generator work do not require another public pri
 - Which existing typed error should a task cancellation expose when a peer refuses cancellation
   or its outcome remains unknown after reconciliation? Successful cancellation still requires
   a persisted observed canceled state.
+- Should `RemoteTask.cancel()` work between agent runs by opening a short native operation
+  under the conversation lease with current application credentials? The recommendation is
+  yes; detached snapshots stay read-only, and restoring state does not restore authority.
 - The bounded protected-business-step API is deferred with the existing interruption-policy
   TODO; no implicit protected section is introduced by this work.
 - For a text-to-voice transition while a local child is current, confirm that VoiceSession.start

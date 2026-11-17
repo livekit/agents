@@ -422,18 +422,34 @@ impl Run {
             self.take_retried_chats();
         }
         self.take_retried_chats();
-        // A request's own metrics name its speech exactly, so they have the last word.
+        // A request's own metrics or error name its speech exactly, so they have the last word.
+        // Context matching alone can confuse a hung open with a later identical request.
         for position in from_host..self.record.host().len() {
-            let Host::Session(SessionEvent::MetricsCollected {
-                metrics, speech: Some(speech), ..
-            }) = &self.record.host()[position].1
-            else {
-                continue;
+            let (request_id, speech) = match &self.record.host()[position].1 {
+                Host::Session(SessionEvent::MetricsCollected {
+                    metrics,
+                    speech: Some(speech),
+                    ..
+                }) => {
+                    let AgentMetrics::Llm(metrics) = &**metrics else { continue };
+                    (metrics.request_id.as_str(), *speech)
+                }
+                Host::Session(SessionEvent::Error(error))
+                    if error.source == lk_agents_voice::events::ErrorSource::Llm =>
+                {
+                    let lk_agents_abi::errors::ProviderError::Local(provider) = &error.error else {
+                        continue;
+                    };
+                    let (Some(request_id), Some(speech)) = (&provider.request_id, error.speech)
+                    else {
+                        continue;
+                    };
+                    (request_id.as_str(), speech)
+                }
+                _ => continue,
             };
-            let AgentMetrics::Llm(metrics) = &**metrics else { continue };
-            let Some(chat) = self.registry.request_of(&metrics.request_id) else { continue };
-            let speech = speech.0;
-            self.record.attribute_chat(chat, speech);
+            let Some(chat) = self.registry.request_of(request_id) else { continue };
+            self.record.attribute_chat(chat, speech.0);
         }
     }
 

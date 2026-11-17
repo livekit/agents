@@ -1039,7 +1039,7 @@ impl<'a> InferenceView<'a> {
             .collect()
     }
 
-    /// The requests the driver made for one speech, as its own metrics attribute them.
+    /// The requests the driver made for one speech, as observed metrics and errors attribute them.
     pub fn requests_for(&self, speech: u64) -> Vec<u32> {
         self.requests()
             .into_iter()
@@ -1152,7 +1152,7 @@ impl RequestView<'_> {
         self.opened.nth
     }
 
-    /// The speech the driver made it for, once its metrics have said.
+    /// The speech the driver made it for, once its metrics or error have said.
     pub fn speech(&self) -> Option<u64> {
         match &self.opened.detail {
             Detail::Chat { speech, .. } => *speech,
