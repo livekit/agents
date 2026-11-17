@@ -8,6 +8,7 @@ import weakref
 from dataclasses import dataclass, replace
 from typing import Any
 
+import aiohttp
 from humain_voice.tts import TTSClient, get_sample_rate
 
 from livekit.agents import (
@@ -142,17 +143,19 @@ class TTS(tts.TTS):
                     # A no-op while connected. After a dropped socket, the SDK would
                     # otherwise reconnect inside the request, before its timeout applies.
                     await asyncio.wait_for(cached.connect(), timeout)
-                except BaseException:
+                except BaseException as e:
                     self._client = None
                     await asyncio.shield(cached.close())
+                    _raise_if_rejected(e)
                     raise
                 return cached, True
             client = TTSClient(api_url=self._api_url, api_key=self._api_key)
             try:
                 await asyncio.wait_for(client.connect(), timeout)
-            except BaseException:
+            except BaseException as e:
                 # Don't leak a half-open connection on timeout or cancellation.
                 await asyncio.shield(client.close())
+                _raise_if_rejected(e)
                 raise
             self._client = client
             return client, False
@@ -236,6 +239,27 @@ class TTS(tts.TTS):
         if self._prewarm_task is not None:
             await utils.aio.cancel_and_wait(self._prewarm_task)
         await self._reset_client()
+
+
+def _raise_if_rejected(exc: BaseException) -> None:
+    """Raise a status error when HUMAIN refused the connection handshake (e.g. a bad key).
+
+    The Socket.IO client reports every failed connect as a generic ``ConnectionError``;
+    the HTTP status survives only on the handshake error further down the chain. A 4xx
+    fails the same way on every retry, so it must not be retried as a connection error.
+    """
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, aiohttp.ClientResponseError) and 400 <= cur.status < 500:
+            # The request info holds the API key header: attach nothing from it.
+            raise APIStatusError(
+                "HUMAIN Voice rejected the connection",
+                status_code=cur.status,
+                retryable=cur.status in (408, 429),
+            ) from None
+        cur = cur.__cause__ or cur.__context__
 
 
 async def _synthesize_one(

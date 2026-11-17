@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import patch
 
+import aiohttp
 import pytest
 
 from livekit.agents import (
@@ -60,6 +61,19 @@ class _FakeClient:
     async def connect(self) -> None:
         if _FakeClient.mode == "connect-hangs":
             await asyncio.sleep(10)
+        elif _FakeClient.mode.startswith("connect-status:"):
+            # What python-socketio raises for a refused handshake: a generic
+            # ConnectionError whose context holds aiohttp's handshake error.
+            status = int(_FakeClient.mode.split(":", 1)[1])
+            try:
+                raise aiohttp.WSServerHandshakeError(
+                    request_info=None,  # type: ignore[arg-type]
+                    history=(),
+                    status=status,
+                    message="Invalid response status",
+                )
+            except aiohttp.WSServerHandshakeError:
+                raise ConnectionError("Connection error")  # noqa: B904
 
     async def close(self) -> None:
         self.closed = True
@@ -277,6 +291,33 @@ async def test_a_dropped_connection_reconnects_on_the_next_request(fake_client: 
     await t.aclose()
     assert len(fake_client.instances) == 2
     assert fake_client.instances[0].closed
+
+
+@pytest.mark.parametrize(("status", "retryable"), [(401, False), (403, False), (429, True)])
+async def test_a_refused_connection_is_a_status_error(
+    fake_client: Any, status: int, retryable: bool
+):
+    from livekit.plugins.humain import TTS
+
+    fake_client.mode = f"connect-status:{status}"
+    t = TTS(api_key="bad")
+    with pytest.raises(APIStatusError) as exc_info:
+        await t.synthesize("أهلا", conn_options=_OPTS).collect()
+    await t.aclose()
+    assert exc_info.value.status_code == status
+    assert exc_info.value.retryable is retryable
+    assert exc_info.value.__cause__ is None
+    assert fake_client.instances[0].closed
+
+
+async def test_a_server_error_on_connect_stays_a_connection_error(fake_client: Any):
+    from livekit.plugins.humain import TTS
+
+    fake_client.mode = "connect-status:503"
+    t = TTS(api_key="k")
+    with pytest.raises(APIConnectionError):
+        await t.synthesize("أهلا", conn_options=_OPTS).collect()
+    await t.aclose()
 
 
 # --- stream() ---
