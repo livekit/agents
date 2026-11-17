@@ -149,21 +149,25 @@ impl Port for LocalInteraction {
         usage.snapshot()
     }
 
-    fn progress(
+    async fn progress(
         &self,
         invocation_id: &str,
         operation: u64,
         message: String,
     ) -> Result<(), Invalid> {
-        let shared = self.shared.lock();
-        match &shared.live {
-            Some((id, progress, _)) if id == invocation_id => {
-                // A full queue drops the update, as for a direct run's.
-                let _ = progress.report(operation, message);
-                Ok(())
-            }
-            _ => Err(Invalid(format!("invocation {invocation_id} is not running"))),
+        let progress = {
+            let shared = self.shared.lock();
+            shared
+                .live
+                .as_ref()
+                .filter(|(id, ..)| id == invocation_id)
+                .map(|(_, progress, _)| progress.clone())
         }
+        .ok_or_else(|| Invalid(format!("invocation {invocation_id} is not running")))?;
+        progress
+            .report(operation, message)
+            .await
+            .map_err(|_| Invalid(format!("invocation {invocation_id} is not running")))
     }
 }
 

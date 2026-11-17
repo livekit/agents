@@ -59,21 +59,19 @@ pub struct ActiveRun {
 }
 
 /// Where a tool body's `ctx.update(message)` reaches its run: the host operation running the body
-/// and the message. The host's loop never waits on it: an update finding the bounded queue full is
-/// refused (the driver is behind by [`PROGRESS_QUEUE`] updates), and one whose call settled first
-/// is dropped by the driver (the update raced the call's end).
+/// and the message. Admission waits while the bounded queue is full; the owning tool cannot
+/// finish ahead of an awaited update. Closing the invocation ends every waiting admission.
 #[derive(Clone)]
 pub struct Progress(mpsc::Sender<(u64, String)>);
 
 impl Progress {
-    /// `Full` when [`PROGRESS_QUEUE`] updates are waiting (this one is dropped), `Closed` once
-    /// the run ended.
-    pub fn report(
+    /// Wait for capacity without dropping the update. An ended run closes the admission port.
+    pub async fn report(
         &self,
         operation: u64,
         message: String,
-    ) -> Result<(), mpsc::error::TrySendError<(u64, String)>> {
-        self.0.try_send((operation, message))
+    ) -> Result<(), mpsc::error::SendError<(u64, String)>> {
+        self.0.send((operation, message)).await
     }
 
     pub fn ended(&self) -> bool {

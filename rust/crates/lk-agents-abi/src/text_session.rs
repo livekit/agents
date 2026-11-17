@@ -260,9 +260,13 @@ pub trait TextSessionRunner: Send + Sync + Sized + 'static {
     #[host(call)]
     fn release(&self, delivery: TextSessionDelivery) -> Result<(), Invalid>;
 
-    #[host(call)]
-    fn progress(&self, invocation_id: &str, operation: u64, message: String)
-    -> Result<(), Invalid>;
+    #[host(await)]
+    async fn progress(
+        &self,
+        invocation_id: &str,
+        operation: u64,
+        message: String,
+    ) -> Result<(), Invalid>;
 }
 
 /// One call of an agent tool outside a TextSession: the child agent runs in process as a delegate
@@ -319,7 +323,11 @@ pub trait LocalInteraction: Send + Sync + Sized + 'static {
     fn usage(&self) -> crate::usage::Usage;
 
     /// `ctx.update(message)` from a tool body of the child's invocation `invocation_id`.
-    #[host(call)]
-    fn progress(&self, invocation_id: &str, operation: u64, message: String)
-    -> Result<(), Invalid>;
+    #[host(await)]
+    async fn progress(
+        &self,
+        invocation_id: &str,
+        operation: u64,
+        message: String,
+    ) -> Result<(), Invalid>;
 }

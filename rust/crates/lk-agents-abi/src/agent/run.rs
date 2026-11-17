@@ -435,9 +435,13 @@ pub trait AgentRunner: Send + Sync + Sized + 'static {
     fn usage(&self, invocation_id: &str) -> Result<crate::usage::Usage, Invalid>;
 
     /// `ctx.update(message)` from the tool body running as host `operation` of invocation
-    /// `invocation_id`: the run streams it as progress. Never waits; an update racing its call's
-    /// end is dropped. Refused for an invocation this runner is not running.
-    #[host(call)]
-    fn progress(&self, invocation_id: &str, operation: u64, message: String)
-    -> Result<(), Invalid>;
+    /// `invocation_id`: the run streams it as progress. Waits for queue admission rather than
+    /// dropping an update under pressure. Refused once this runner no longer owns the invocation.
+    #[host(await)]
+    async fn progress(
+        &self,
+        invocation_id: &str,
+        operation: u64,
+        message: String,
+    ) -> Result<(), Invalid>;
 }

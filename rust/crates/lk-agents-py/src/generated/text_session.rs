@@ -151,27 +151,21 @@ impl TextSessionRunner {
     }
 
     #[pyo3(signature = (invocation_id, operation, message))]
-    fn progress(
+    fn progress<'py>(
         &self,
-        py: Python<'_>,
+        py: Python<'py>,
         invocation_id: ::std::string::String,
         #[pyo3(from_py_with = _extract_text_session_runner_progress_operation)]
         operation: TextSessionRunnerProgressOperationInput,
         message: ::std::string::String,
-    ) -> PyResult<()> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        py.detach(|| {
-            <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::progress(
-                &self.0,
-                &invocation_id,
-                operation,
-                message,
-            )
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::progress(&this, &invocation_id, operation, message)
+                .await.map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
-        .map_err(|e: ::lk_agents_abi::errors::Invalid| {
-            <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
-        })?;
-        Ok(())
     }
 }
 
@@ -361,27 +355,21 @@ impl CoreLocalInteraction {
 
     /// `ctx.update(message)` from a tool body of the child's invocation `invocation_id`.
     #[pyo3(signature = (invocation_id, operation, message))]
-    fn progress(
+    fn progress<'py>(
         &self,
-        py: Python<'_>,
+        py: Python<'py>,
         invocation_id: ::std::string::String,
         #[pyo3(from_py_with = _extract_local_interaction_progress_operation)]
         operation: LocalInteractionProgressOperationInput,
         message: ::std::string::String,
-    ) -> PyResult<()> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        py.detach(|| {
-            <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::progress(
-                &self.0,
-                &invocation_id,
-                operation,
-                message,
-            )
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::progress(&this, &invocation_id, operation, message)
+                .await.map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
-        .map_err(|e: ::lk_agents_abi::errors::Invalid| {
-            <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
-        })?;
-        Ok(())
     }
 }
 

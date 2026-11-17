@@ -1106,6 +1106,9 @@ passes deterministic stock-peer transport and failure tests.
 
 - [ ] Connect question/exact-text presentation to pipeline/realtime delivery receipts.
 - [ ] Implement immediate update/say receipts, request-view notes and interruption handling.
+  Awaited progress admission is now bounded and lossless for direct runs, TextSession and local
+  agent delegates. A public streaming regression covers a burst of one thousand updates before
+  the tool result. Immediate unawaited enqueue and exact-output receipts remain separate work.
 - [ ] Prove that slow/stalled remote reasoning, tools and reads do not hold the frontend's
   conversational floor or delay interruption handling. Record foreground responsiveness
   separately from remote task duration; preserve existing false-interruption behavior.

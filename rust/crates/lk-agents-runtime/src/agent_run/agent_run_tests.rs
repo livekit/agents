@@ -27,7 +27,6 @@ use lk_agents_core::tool_outcome::Mode;
 use lk_agents_net::clock::RealClock;
 use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
-use tokio::sync::mpsc::error::TrySendError;
 
 use super::*;
 
@@ -282,7 +281,10 @@ impl AgentCallbacks for FakeHost {
                 Body::Stuck => std::future::pending::<()>().await,
                 Body::Reports => {
                     let progress = self.progress.lock().clone().expect("the run started");
-                    assert_eq!(progress.report(invocation.operation, "halfway".into()), Ok(()));
+                    assert_eq!(
+                        progress.report(invocation.operation, "halfway".into()).await,
+                        Ok(())
+                    );
                 }
             }
             Ok(lk_agents_abi::agent::ToolCompletion {
@@ -510,19 +512,23 @@ async fn a_tool_bodys_progress_streams_before_its_result() {
     assert!(finished(&updates).is_ok());
 }
 
-// Catches: progress queued without bound while the driver is behind (the host loop never waits
-// on it, so a flood must be refused, not retained).
+// Catches: pressure dropping progress, or an admission waiting forever after its run ends.
 #[tokio::test]
-async fn progress_past_its_bound_is_refused_not_queued() {
-    let (tx, mut rx) = mpsc::channel(PROGRESS_QUEUE);
+async fn progress_waits_for_capacity_and_ends_when_the_receiver_closes() {
+    use futures_util::FutureExt as _;
+    let (tx, mut rx) = mpsc::channel(1);
     let progress = Progress(tx);
-    for i in 0..PROGRESS_QUEUE {
-        assert!(progress.report(1, format!("{i}")).is_ok());
-    }
-    assert!(matches!(progress.report(1, "over".into()), Err(TrySendError::Full(_))));
-    assert_eq!(rx.recv().await.map(|(_, m)| m).as_deref(), Some("0"));
+    progress.report(1, "first".into()).await.unwrap();
+    let waiting = progress.report(1, "second".into());
+    tokio::pin!(waiting);
+    assert!((&mut waiting).now_or_never().is_none());
+    assert_eq!(rx.recv().await.map(|(_, m)| m).as_deref(), Some("first"));
+    waiting.await.unwrap();
+    let waiting = progress.report(1, "after close".into());
+    tokio::pin!(waiting);
+    assert!((&mut waiting).now_or_never().is_none());
     drop(rx);
-    assert!(matches!(progress.report(1, "late".into()), Err(TrySendError::Closed(_))));
+    assert!(waiting.await.is_err());
 }
 
 // Catches: a callback run without its call's invocation scope (or a scope leaking into another

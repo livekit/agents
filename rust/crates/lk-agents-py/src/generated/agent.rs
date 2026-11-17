@@ -648,30 +648,32 @@ impl AgentRunner {
     }
 
     /// `ctx.update(message)` from the tool body running as host `operation` of invocation
-    /// `invocation_id`: the run streams it as progress. Never waits; an update racing its call's
-    /// end is dropped. Refused for an invocation this runner is not running.
+    /// `invocation_id`: the run streams it as progress. Waits for queue admission rather than
+    /// dropping an update under pressure. Refused once this runner no longer owns the invocation.
     #[pyo3(signature = (invocation_id, operation, message))]
-    fn progress(
+    fn progress<'py>(
         &self,
-        py: Python<'_>,
+        py: Python<'py>,
         invocation_id: ::std::string::String,
         #[pyo3(from_py_with = _extract_agent_runner_progress_operation)]
         operation: AgentRunnerProgressOperationInput,
         message: ::std::string::String,
-    ) -> PyResult<()> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        py.detach(|| {
-            <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::progress(
-                &self.0,
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::progress(
+                &this,
                 &invocation_id,
                 operation,
                 message,
             )
+            .await
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+            })?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
-        .map_err(|e: ::lk_agents_abi::errors::Invalid| {
-            <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
-        })?;
-        Ok(())
     }
 }
 

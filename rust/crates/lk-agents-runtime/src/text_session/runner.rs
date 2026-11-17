@@ -178,18 +178,21 @@ impl TextSessionRunner for Runner {
             .map_err(|e| Invalid(e.to_string()))
     }
 
-    fn progress(
+    async fn progress(
         &self,
         invocation_id: &str,
         operation: u64,
         message: String,
     ) -> Result<(), Invalid> {
-        let current = self.control.lock();
-        let control =
-            current.as_ref().ok_or_else(|| Invalid("session request is not running".into()))?;
-        control
-            .progress
-            .try_send((invocation_id.into(), operation, message))
+        let progress = self
+            .control
+            .lock()
+            .as_ref()
+            .map(|control| control.progress.clone())
+            .ok_or_else(|| Invalid("session request is not running".into()))?;
+        progress
+            .send((invocation_id.into(), operation, message))
+            .await
             .map_err(|e| Invalid(e.to_string()))
     }
 }

@@ -203,9 +203,9 @@ use plain `Agent.run()` or a text session. Frontend event recovery is optional
 and separate from backend persistence.
 
 Backend agents can attach the same remote tool through `tools=`. In that case,
-`TextSession` owns the pending call across requests and the application
-explicitly saves its returned backend routing state. No frontend event queue
-or live session is created by a backend run.
+`TextSession` owns the pending call across requests. `context=store.bind(...)` checkpoints
+framework continuation state; application-field changes still require explicit saves.
+No frontend event queue or live session is created by a backend run.
 
 The adapter manages connection lifecycle, authentication, task correlation,
 and delegation metadata. Applications configure the endpoint and attach its
@@ -215,9 +215,10 @@ the endpoint moved included; each update is recorded on the function call's
 `extra` before its progress text reaches `ctx.update()`. On a call the request
 is announced to the person once sent, and each question the expert asks is put
 to the person, whose reply answers it; off a call the question ends the tool call
-as `InputRequired`. Cancelling the tool call records the cancellation in `extra`,
-then closes its reply, which cancels the remote task, and its connection before
-the cancellation propagates.
+as `InputRequired`. Canceling the local tool wait closes its observation resources and
+retains its remote references. Remote business work continues; stopping the frontend does
+not send a task cancellation. Explicit cancellation is a separate task operation, described
+in [endpoint clients](clients.md#a-client-for-an-endpoint).
 
 When the caller holds
 [explicit authority](protocol/a2a.md#delegation-and-conversation-data) to share

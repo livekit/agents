@@ -13,9 +13,8 @@ use lk_agents_core::tool_outcome::Mode;
 use lk_agents_core::{Opening, RunInput};
 use lk_agents_net::signal;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TrySendError;
 
-use super::{ActiveRun, PROGRESS_QUEUE, Progress, RunSetup, start};
+use super::{ActiveRun, Progress, RunSetup, start};
 use crate::telemetry;
 use lk_agents_net::env::ProcessEnv;
 
@@ -150,27 +149,22 @@ impl AgentRunner for Runner {
         Ok(usage.get())
     }
 
-    fn progress(
+    async fn progress(
         &self,
         invocation_id: &str,
         operation: u64,
         message: String,
     ) -> Result<(), Invalid> {
-        let reported = {
+        let progress = {
             let running = self.running.lock();
             let progress = running.iter().find(|(id, ..)| id == invocation_id).map(|(_, p, _)| p);
-            progress.map(|p| p.report(operation, message))
-        };
-        match reported {
-            Some(Ok(())) => Ok(()),
-            Some(Err(TrySendError::Full(_))) => {
-                log::warn!(target: lk_agents_abi::LOG_TARGET, "invocation {invocation_id}: a progress update was dropped, {PROGRESS_QUEUE} are waiting");
-                Ok(())
-            }
-            None | Some(Err(TrySendError::Closed(_))) => {
-                Err(Invalid(format!("invocation {invocation_id} is not running")))
-            }
+            progress.cloned()
         }
+        .ok_or_else(|| Invalid(format!("invocation {invocation_id} is not running")))?;
+        progress
+            .report(operation, message)
+            .await
+            .map_err(|_| Invalid(format!("invocation {invocation_id} is not running")))
     }
 }
 

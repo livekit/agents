@@ -37,6 +37,7 @@ from livekit.agents.a2a import (  # type: ignore[attr-defined]  # public through
     TextPart,
 )
 from livekit.agents.llm import Toolset
+from livekit.agents.storage import ContextStore
 from livekit.agents.utils import media
 from livekit.agents.voice.events import (
     ToolCallEnded,
@@ -44,7 +45,7 @@ from livekit.agents.voice.events import (
     ToolCallUpdated,
     ToolExecutionUpdatedEvent,
 )
-from tests.fakes import FakeLLM, tool_call
+from tests.fakes import FakeLLM, tool_call, until
 
 from .a2a_peer import URI, Peer
 
@@ -184,6 +185,38 @@ async def test_tool_progress_and_completion_reach_session_listeners() -> None:
     assert isinstance(progress, ToolCallUpdated) and isinstance(ended, ToolCallEnded)
     assert (progress.call_id, progress.message) == ("booking-1", "Checking the booking system.")
     assert (ended.call_id, ended.message, ended.status) == ("booking-1", "Confirmed.", "done")
+
+
+@pytest.mark.parametrize("bound", [False, True], ids=["agent-run", "bound-session"])
+async def test_a_burst_of_awaited_updates_reaches_the_stream_before_the_tool_result(
+    bound: bool,
+) -> None:
+    started = asyncio.Event()
+    messages = [f"Step {index}" for index in range(1000)]
+    agent = Agent(
+        instructions="Do the work.",
+        llm=FakeLLM([tool_call("work"), "Done."]),
+    )
+
+    @agent.tool
+    async def work(ctx: RunContext) -> str:
+        """Report progress while working."""
+        started.set()
+        for message in messages:
+            await ctx.update(message)
+        return "finished"
+
+    context = ContextStore().bind() if bound else None
+    async with agent.run_stream("Work", context=context) as stream:
+        await until(started.is_set, "the tool started its burst of progress")
+        events = [event async for event in stream.stream_events()]
+        result = await stream.result()
+
+    assert result.status == "completed" and result.output == "Done."
+    assert [event.message for event in events if event.type == "progress"] == messages
+    output = next(item for item in result.new_messages() if item.type == "function_call_output")
+    assert not output.is_error and output.output == "finished"
+    assert events[-1].type != "progress", "the outcome follows every admitted progress update"
 
 
 async def test_an_a2a_message_reaches_the_peer_with_its_parts_and_metadata(peer: Peer) -> None:

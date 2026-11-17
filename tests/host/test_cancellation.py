@@ -254,6 +254,40 @@ async def test_cancelling_a_delegating_run_preserves_the_remote_task(peer: Peer)
     assert len(peer.messages) == 1
 
 
+@pytest.mark.parametrize("bound", [False, True], ids=["agent-run", "bound-session"])
+async def test_canceling_a_run_with_queued_progress_settles_the_producing_tool(bound: bool) -> None:
+    cleaned = asyncio.Event()
+    completed: list[bool] = []
+    agent = Agent(instructions="Work.", llm=FakeLLM([tool_call("work")]))
+
+    @agent.tool
+    async def work(ctx: RunContext) -> str:
+        """Report progress while working."""
+        try:
+            for index in range(1000):
+                await ctx.update(f"Step {index}")
+            completed.append(True)
+            return "finished"
+        finally:
+            cleaned.set()
+
+    context = ContextStore().bind() if bound else None
+    async with agent.run_stream("Work", context=context) as stream:
+        events = stream.stream_events()
+        async for event in events:
+            if event.type == "progress":
+                break
+        stream.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            async for _ in events:
+                pass
+        with pytest.raises(asyncio.CancelledError):
+            await stream.result()
+
+    assert cleaned.is_set(), "the producing tool settled before the run returned"
+    assert not completed, "queued progress did not let the unfinished tool escape cancellation"
+
+
 async def test_cancelling_a_toolset_setup_waits_for_its_cleanup() -> None:
     """A run cancelled during a toolset's setup returns only after that setup's `finally` has
     finished."""

@@ -502,7 +502,8 @@ stop unfinished work, call `cancel()` or leave the context. Stream events are
 single-consumer notifications, not a durable replay subscription.
 
 Buffering is bounded. A slow consumer applies backpressure to notification
-production; text, questions, and terminal tool outcomes are not silently dropped.
+production; text, admitted progress, questions, and terminal tool outcomes are not silently dropped.
+`await ctx.update(text)` waits for progress admission when the run's queue is full.
 Cancellation and cleanup must remain responsive while a consumer is blocked.
 The frontend's separate progress-coalescing queue does not change this run
 stream's event identity or history contract.

@@ -208,7 +208,7 @@ class RunContext(_facades.RunContext[Context_T]):
                 and self._run.runner is not None
                 and self._invocation is not None
             ):
-                self._run.runner.progress(
+                await self._run.runner.progress(
                     self._invocation.invocation_id, self._invocation.operation, message
                 )
             hooks = self._run.hooks if self._run is not None else None
