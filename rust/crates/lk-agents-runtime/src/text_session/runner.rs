@@ -15,7 +15,17 @@ struct Control {
     release: mpsc::Sender<Release>,
     progress: mpsc::Sender<(String, u64, String)>,
     usage: signal::Cell<Usage>,
-    commands: mpsc::Sender<SessionCommand>,
+    commands: CommandPort,
+}
+
+impl Runner {
+    fn commands(&self) -> Result<CommandPort, lk_agents_abi::storage::StorageError> {
+        self.control.lock().as_ref().map(|control| control.commands.clone()).ok_or_else(|| {
+            lk_agents_abi::storage::StorageError::Invalid(
+                "the conversation owner is not running".into(),
+            )
+        })
+    }
 }
 
 impl lk_agents_abi::session::SessionCommands for Runner {
@@ -30,27 +40,7 @@ impl lk_agents_abi::session::SessionCommands for Runner {
             lk_agents_abi::storage::StorageError,
         >,
     > {
-        Box::pin(async move {
-            use lk_agents_abi::storage::StorageError;
-            let sender =
-                self.control.lock().as_ref().map(|control| control.commands.clone()).ok_or_else(
-                    || StorageError::Invalid("the conversation owner is not running".into()),
-                )?;
-            let (done, settled) = signal::once();
-            sender
-                .send(SessionCommand::HeldInput {
-                    remote_id: remote_id.into(),
-                    endpoint: endpoint.into(),
-                    done,
-                })
-                .await
-                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
-            settled.wait().await.map_err(|_| {
-                StorageError::Invalid(
-                    "the conversation owner ended before selecting the response".into(),
-                )
-            })?
-        })
+        Box::pin(async move { self.commands()?.held_input(remote_id, endpoint).await })
     }
 
     fn response<'a>(
@@ -60,46 +50,14 @@ impl lk_agents_abi::session::SessionCommands for Runner {
         'a,
         Result<lk_agents_abi::ChatMessage, lk_agents_abi::storage::StorageError>,
     > {
-        Box::pin(async move {
-            use lk_agents_abi::storage::StorageError;
-            let sender =
-                self.control.lock().as_ref().map(|control| control.commands.clone()).ok_or_else(
-                    || StorageError::Invalid("the conversation owner is not running".into()),
-                )?;
-            let (done, settled) = signal::once();
-            sender
-                .send(SessionCommand::Response { reference: reference.clone(), done })
-                .await
-                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
-            settled.wait().await.map_err(|_| {
-                StorageError::Invalid(
-                    "the conversation owner ended before reading the response".into(),
-                )
-            })?
-        })
+        Box::pin(async move { self.commands()?.response(reference).await })
     }
 
     fn input<'a>(
         &'a self,
         command: lk_agents_abi::session::SessionInputCommand,
     ) -> lk_agents_abi::BoxFuture<'a, Result<(), lk_agents_abi::storage::StorageError>> {
-        Box::pin(async move {
-            use lk_agents_abi::storage::StorageError;
-            let sender =
-                self.control.lock().as_ref().map(|control| control.commands.clone()).ok_or_else(
-                    || StorageError::Invalid("the conversation owner is not running".into()),
-                )?;
-            let (done, settled) = signal::once();
-            sender
-                .send(SessionCommand::Input { command, done })
-                .await
-                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
-            settled.wait().await.map_err(|_| {
-                StorageError::Invalid(
-                    "the conversation owner ended before checkpointing input".into(),
-                )
-            })?
-        })
+        Box::pin(async move { self.commands()?.input(command).await })
     }
 
     fn recover<'a>(
@@ -114,26 +72,7 @@ impl lk_agents_abi::session::SessionCommands for Runner {
             lk_agents_abi::storage::StorageError,
         >,
     > {
-        Box::pin(async move {
-            use lk_agents_abi::storage::StorageError;
-            let sender =
-                self.control.lock().as_ref().map(|control| control.commands.clone()).ok_or_else(
-                    || StorageError::Invalid("the conversation owner is not running".into()),
-                )?;
-            let (done, settled) = signal::once();
-            sender
-                .send(SessionCommand::Recover {
-                    remote_id: remote_id.into(),
-                    endpoint: endpoint.into(),
-                    origin: origin.clone(),
-                    done,
-                })
-                .await
-                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
-            settled.wait().await.map_err(|_| {
-                StorageError::Invalid("the conversation owner ended before reading recovery".into())
-            })?
-        })
+        Box::pin(async move { self.commands()?.recover(remote_id, endpoint, origin).await })
     }
 
     fn default_context<'a>(
@@ -142,25 +81,7 @@ impl lk_agents_abi::session::SessionCommands for Runner {
         endpoint: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Option<String>, lk_agents_abi::storage::StorageError>>
     {
-        Box::pin(async move {
-            use lk_agents_abi::storage::StorageError;
-            let sender =
-                self.control.lock().as_ref().map(|control| control.commands.clone()).ok_or_else(
-                    || StorageError::Invalid("the conversation owner is not running".into()),
-                )?;
-            let (done, settled) = signal::once();
-            sender
-                .send(SessionCommand::DefaultContext {
-                    remote_id: remote_id.into(),
-                    endpoint: endpoint.into(),
-                    done,
-                })
-                .await
-                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
-            settled.wait().await.map_err(|_| {
-                StorageError::Invalid("the conversation owner ended before reading context".into())
-            })?
-        })
+        Box::pin(async move { self.commands()?.default_context(remote_id, endpoint).await })
     }
 
     fn remote<'a>(
@@ -173,21 +94,7 @@ impl lk_agents_abi::session::SessionCommands for Runner {
             lk_agents_abi::storage::StorageError,
         >,
     > {
-        Box::pin(async move {
-            use lk_agents_abi::storage::StorageError;
-            let sender =
-                self.control.lock().as_ref().map(|control| control.commands.clone()).ok_or_else(
-                    || StorageError::Invalid("the conversation owner is not running".into()),
-                )?;
-            let (done, settled) = signal::once();
-            sender
-                .send(SessionCommand::Apply { command: Box::new(command), done })
-                .await
-                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
-            settled.wait().await.map_err(|_| {
-                StorageError::Invalid("the conversation owner ended before checkpointing".into())
-            })?
-        })
+        Box::pin(async move { self.commands()?.remote(command).await })
     }
 }
 
@@ -365,7 +272,7 @@ fn start(
     let (events_tx, events) = mpsc::channel(64);
     let (progress_tx, progress) = mpsc::channel(32);
     let (release_tx, releases) = mpsc::channel(1);
-    let (commands_tx, commands) = mpsc::channel(32);
+    let (commands_tx, commands) = CommandPort::channel(32);
     let (usage_tx, usage) = signal::signal(session.usage());
     let driver = Driver {
         delegation: runner.delegation.clone(),

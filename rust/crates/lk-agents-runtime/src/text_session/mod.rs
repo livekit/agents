@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent_run::RunSetup;
 use crate::agent_run::execution::{Execution, Report, Reporter};
+use crate::session::{CommandPort, SessionCommand};
 use crate::telemetry;
 
 const UPDATE_QUEUE: usize = 16;
@@ -30,61 +31,6 @@ const UPDATE_QUEUE: usize = 16;
 pub(super) struct Release {
     invocation_id: String,
     delivered: BTreeMap<String, String>,
-}
-
-pub(super) enum SessionCommand {
-    HeldInput {
-        remote_id: String,
-        endpoint: String,
-        done: signal::Producer<
-            Option<
-                Result<
-                    Option<lk_agents_abi::session::InputRequestRef>,
-                    lk_agents_abi::storage::StorageError,
-                >,
-            >,
-        >,
-    },
-    Response {
-        reference: lk_agents_abi::session::InputRequestRef,
-        done: signal::Producer<
-            Option<Result<lk_agents_abi::ChatMessage, lk_agents_abi::storage::StorageError>>,
-        >,
-    },
-    Input {
-        command: lk_agents_abi::session::SessionInputCommand,
-        done: signal::Producer<Option<Result<(), lk_agents_abi::storage::StorageError>>>,
-    },
-    Apply {
-        command: Box<lk_agents_abi::delegation::remote::RemoteCommand>,
-        done: signal::Producer<
-            Option<
-                Result<
-                    Option<lk_agents_abi::delegation::remote::InputRequestRef>,
-                    lk_agents_abi::storage::StorageError,
-                >,
-            >,
-        >,
-    },
-    DefaultContext {
-        remote_id: String,
-        endpoint: String,
-        done:
-            signal::Producer<Option<Result<Option<String>, lk_agents_abi::storage::StorageError>>>,
-    },
-    Recover {
-        remote_id: String,
-        endpoint: String,
-        origin: lk_agents_abi::session::ToolCallRef,
-        done: signal::Producer<
-            Option<
-                Result<
-                    Option<lk_agents_abi::delegation::remote::RemoteRecovery>,
-                    lk_agents_abi::storage::StorageError,
-                >,
-            >,
-        >,
-    },
 }
 
 enum DriverEvent {

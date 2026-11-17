@@ -69,6 +69,11 @@ checkpoint related state before acknowledging a command or allowing dependent I/
 results carry their classification identity; a transcript revision invalidates the old verdict
 even when the human message retains its ID.
 
+The runtime's `session::CommandPort` carries these commands through bounded admission to the
+execution owner. Each queued command owns its response producer; owner loss settles received,
+queued and capacity-waiting calls even if a client retains its sender. The port has no routing
+policy, saved authority or Python-facing constructor.
+
 These entrypoints use one shared Rust implementation of agent execution:
 request planning, model/tool step decisions, argument preparation, approval,
 result interpretation, usage, recovery and output acceptance. Sharing contracts

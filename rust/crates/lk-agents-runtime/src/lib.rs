@@ -50,6 +50,7 @@ pub mod mcp;
 mod output_validation;
 pub mod process;
 pub mod recording;
+mod session;
 pub mod telemetry;
 
 pub mod text_session;
