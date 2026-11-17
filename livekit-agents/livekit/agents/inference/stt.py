@@ -148,6 +148,7 @@ class AssemblyaiOptions(TypedDict, total=False):
     format_turns: bool  # default: False
     end_of_turn_confidence_threshold: float  # default: 0.01
     min_end_of_turn_silence_when_confident: int  # default: 0
+    min_turn_silence: int  # current name of min_end_of_turn_silence_when_confident
     max_turn_silence: int  # default: not specified
     keyterms_prompt: list[str]  # default: not specified
     language_detection: bool
@@ -158,7 +159,7 @@ class AssemblyaiOptions(TypedDict, total=False):
     previous_context_n_turns: int  # prior turns carried as context; 0 disables (u3-rt-pro only)
     voice_focus: Literal["near-field", "far-field"]  # isolate primary voice (u3-rt-pro only)
     voice_focus_threshold: float  # background suppression strength (u3-rt-pro only)
-    mode: Literal["min_latency", "balanced", "max_accuracy"]  # accuracy/latency preset (u3-rt-pro)
+    mode: Literal["min_latency", "balanced", "max_accuracy", "manual"]  # manual requires U3.7
 
 
 class SpeechmaticsOptions(TypedDict, total=False):
@@ -462,7 +463,11 @@ def _warn_if_sample_rate_refused(model: NotGivenOr[STTModels | str], sample_rate
 def _resolve_vad_for_model(
     model: NotGivenOr[STTModels | str],
     vad_instance: vad.VAD | None,
+    *,
+    external_endpointing: bool = False,
 ) -> vad.VAD | None:
+    if external_endpointing and _provider_for_model(model) == "assemblyai":
+        return vad_instance
     needs_vad = _needs_client_endpointing(model)
     if vad_instance is not None and not needs_vad:
         logger.warning(
@@ -523,6 +528,7 @@ class STTOptions:
     extra_kwargs: dict[str, Any]
     fallback: NotGivenOr[list[FallbackModel]]
     conn_options: NotGivenOr[APIConnectOptions]
+    external_endpointing: bool = False
 
 
 class STT(stt.STT):
@@ -592,6 +598,8 @@ class STT(stt.STT):
         extra_kwargs: NotGivenOr[AssemblyaiOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        external_endpointing: bool = False,
     ) -> None: ...
 
     @overload
@@ -696,6 +704,8 @@ class STT(stt.STT):
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        external_endpointing: bool = False,
     ) -> None: ...
 
     def __init__(
@@ -724,6 +734,7 @@ class STT(stt.STT):
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        external_endpointing: bool = False,
     ) -> None:
         """Livekit Cloud Inference STT
 
@@ -743,9 +754,13 @@ class STT(stt.STT):
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
             vad (VAD, optional): External Voice Activity Detector. When provided, each audio
                 frame is forwarded to the VAD and `session.finalize` is sent to the inference
-                gateway on end of speech. Only applicable to models that detect no turns
-                themselves: the Speechmatics RT models (enhanced/standard) and OpenAI
-                gpt-live-transcribe. They get a default VAD when none is passed.
+                gateway on end of speech. Used for Speechmatics RT (enhanced/standard), OpenAI
+                gpt-live-transcribe, and AssemblyAI with `external_endpointing=True`.
+                Speechmatics RT and OpenAI use a default VAD when none is passed.
+            external_endpointing (bool): Let AgentSession's turn handling or a direct call to
+                the stream's `flush()` finalize a turn on AssemblyAI. A supplied `vad` drives
+                finalization instead. Defaults to False. Configure AssemblyAI's own turn
+                detection via `extra_kwargs`, such as `{"mode": "manual"}` for U3.7 Realtime Agent.
         """
         # Infer diarization capability from provider-specific extra_kwargs
         # keys (see _DIARIZATION_EXTRA_KEYS). xAI uses "diarize" (same as
@@ -761,7 +776,10 @@ class STT(stt.STT):
             if is_given(parsed_language) and not is_given(language):
                 language = parsed_language
 
-        vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
+        configured_vad = vad if is_given(vad) else None
+        vad = _resolve_vad_for_model(
+            model, configured_vad, external_endpointing=external_endpointing
+        )
         resolved_sample_rate = (
             sample_rate
             if is_given(sample_rate)
@@ -789,6 +807,9 @@ class STT(stt.STT):
                 offline_recognize=False,
                 keyterms=_keyterms_extra_for_model(model) is not None,
                 chat_context=_supports_agent_context_carryover(model),
+                manual_flush=external_endpointing
+                and _provider_for_model(model) == "assemblyai"
+                and vad is None,
             ),
         )
 
@@ -825,10 +846,12 @@ class STT(stt.STT):
             extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else {},
             fallback=fallback_models,
             conn_options=conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS,
+            external_endpointing=external_endpointing,
         )
 
         self._session = http_session
         self._vad = vad
+        self._configured_vad = configured_vad
         # a default sample rate follows the model; an explicit one is the caller's choice
         self._explicit_sample_rate = is_given(sample_rate)
         self._session_keyterms: list[str] = []  # framework-managed; merged into extra_kwargs
@@ -908,7 +931,11 @@ class STT(stt.STT):
                     language = parsed_language
 
             self._opts.model = model
-            self._vad = _resolve_vad_for_model(model, self._vad)
+            self._vad = _resolve_vad_for_model(
+                model,
+                self._configured_vad if self._opts.external_endpointing else self._vad,
+                external_endpointing=self._opts.external_endpointing,
+            )
             if not self._explicit_sample_rate:
                 # the default rate follows the model; a live stream's own rate stays
                 # fixed at its creation, but streams created from now on must work
@@ -921,6 +948,9 @@ class STT(stt.STT):
                 self._capabilities,
                 keyterms=_keyterms_extra_for_model(self._opts.model) is not None,
                 chat_context=_supports_agent_context_carryover(self._opts.model),
+                manual_flush=self._opts.external_endpointing
+                and _provider_for_model(model) == "assemblyai"
+                and self._vad is None,
                 aligned_transcript=(
                     "word" if all(_aligned_transcript_for_model(item) for item in models) else False
                 ),
@@ -993,6 +1023,9 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     # a dropped `language_hint` is reported once per stream, not once per seam that finds it
     _language_hint_reported: bool = False
+
+    class _FinalizeSentinel(stt.SpeechStream._FlushSentinel):
+        pass
 
     def __init__(
         self,
@@ -1184,13 +1217,22 @@ class SpeechStream(stt.SpeechStream):
 
     @utils.log_exceptions(logger=logger)
     async def _vad_finalize_task(
-        self, ws: aiohttp.ClientWebSocketResponse, stream: vad.VADStream
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+        stream: vad.VADStream,
+        finalize: _FinalizeSentinel | None,
     ) -> None:
         async for ev in stream:
             if ev.type != vad.VADEventType.END_OF_SPEECH:
                 continue
             if ws.closed:
                 return
+            if finalize is not None:
+                try:
+                    self._input_ch.send_nowait(finalize)
+                except utils.aio.ChanClosed:
+                    return  # the writer sends the final finalize when input ends
+                continue
             try:
                 await ws.send_str(json.dumps({"type": "session.finalize"}))
             except Exception:
@@ -1206,6 +1248,14 @@ class SpeechStream(stt.SpeechStream):
         # one VAD stream per session: the session's model (and so whether it needs
         # client endpointing) is fixed for its lifetime
         vad_stream: vad.VADStream | None = self._vad.stream() if self._vad is not None else None
+        assemblyai_external = (
+            self._opts.external_endpointing
+            and _provider_for_model(self._opts.model) == "assemblyai"
+        )
+        assemblyai_finalize = (
+            self._FinalizeSentinel() if assemblyai_external and vad_stream is not None else None
+        )
+        finalize_msg = json.dumps({"type": "session.finalize"})
 
         async def wait_for_inactivity() -> None:
             await input_ended.wait()
@@ -1213,31 +1263,53 @@ class SpeechStream(stt.SpeechStream):
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            samples_per_chunk = self._opts.sample_rate // 20
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
-                samples_per_channel=self._opts.sample_rate // 20,  # 50ms
+                samples_per_channel=samples_per_chunk,
             )
 
             try:
                 async for ev in self._input_ch:
                     frames: list[rtc.AudioFrame] = []
+                    flush_turn = False
                     if isinstance(ev, rtc.AudioFrame):
-                        if vad_stream is not None:
+                        if vad_stream is not None and assemblyai_finalize is None:
                             vad_stream.push_frame(ev)
                         frames.extend(audio_bstream.push(ev.data))
+                    elif isinstance(ev, self._FinalizeSentinel):
+                        # Ignore queued endpoint events from a previous connection attempt.
+                        if ev is assemblyai_finalize:
+                            await ws.send_str(finalize_msg)
                     elif isinstance(ev, self._FlushSentinel):
                         frames.extend(audio_bstream.flush())
+                        # end_input enqueues a last flush and closes the queue. The EOF
+                        # finalize below already handles that last boundary.
+                        flush_turn = (
+                            assemblyai_external
+                            and vad_stream is None
+                            and not (self._input_ch.closed and self._input_ch.empty())
+                        )
 
                     for frame in frames:
                         self._speech_duration += frame.duration
                         audio_bytes = frame.data.tobytes()
+                        if assemblyai_external:
+                            # AssemblyAI requires at least 50 ms even for a flushed tail.
+                            audio_bytes = audio_bytes.ljust(samples_per_chunk * 2, b"\0")
                         base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
                         audio_msg = {
                             "type": "input_audio",
                             "audio": base64_audio,
                         }
                         await ws.send_str(json.dumps(audio_msg))
+                        # Feed the VAD only after the audio it saw reached the writer.
+                        if vad_stream is not None and assemblyai_finalize is not None:
+                            vad_stream.push_frame(frame)
+
+                    if flush_turn:
+                        await ws.send_str(finalize_msg)
 
                 if vad_stream is not None:
                     # the VAD may have ended on its own already (e.g. it closed its stream
@@ -1246,10 +1318,7 @@ class SpeechStream(stt.SpeechStream):
                         vad_stream.end_input()
 
                 input_ended.set()
-                finalize_msg = {
-                    "type": "session.finalize",
-                }
-                await ws.send_str(json.dumps(finalize_msg))
+                await ws.send_str(finalize_msg)
             except (aiohttp.ClientError, ConnectionError) as e:
                 if input_ended.is_set() or http_session.closed:
                     return
@@ -1354,7 +1423,11 @@ class SpeechStream(stt.SpeechStream):
                 inactivity,
             ]
             if vad_stream is not None:
-                tasks.append(asyncio.create_task(self._vad_finalize_task(ws, vad_stream)))
+                tasks.append(
+                    asyncio.create_task(
+                        self._vad_finalize_task(ws, vad_stream, assemblyai_finalize)
+                    )
+                )
             try:
                 pending = set(tasks)
                 while True:

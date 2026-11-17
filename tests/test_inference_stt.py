@@ -42,6 +42,7 @@ from livekit.agents.llm import AgentHandoff, ChatMessage
 from livekit.agents.stt import FallbackAdapter, RecognizeStream, SpeechEvent, SpeechEventType
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils.aio.channel import Chan, ChanEmpty
+from livekit.agents.vad import VADEvent, VADEventType, VADStream
 from livekit.agents.voice import audio_recognition
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.events import ConversationItemAddedEvent
@@ -351,14 +352,21 @@ def test_openai_keeps_a_passed_vad() -> None:
     assert _make_stt("openai/gpt-live-transcribe", vad=vad)._vad is vad
 
 
+@pytest.mark.parametrize("model", ["deepgram/nova-3", "assemblyai/universal-3-6-pro"])
 def test_vad_is_dropped_for_models_that_end_turns_server_side(
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, model: str
 ) -> None:
     with caplog.at_level(logging.WARNING):
-        stt = _make_stt(vad=FakeVAD())
+        stt = _make_stt(model, vad=FakeVAD())
 
     assert stt._vad is None
+    assert not stt.capabilities.manual_flush
     assert "`vad` will be ignored" in caplog.text
+
+
+def test_opted_in_assemblyai_can_use_session_turn_detection() -> None:
+    stt = _make_stt("assemblyai/universal-3-6-pro", external_endpointing=True)
+    assert stt.capabilities.manual_flush
 
 
 def test_switching_model_re_resolves_vad_and_default_rate() -> None:
@@ -1234,6 +1242,113 @@ async def test_end_of_speech_finalizes_the_turn_while_input_is_open() -> None:
     assert gateway.messages("session.create")[0]["settings"]["sample_rate"] == "24000"
     audio_bytes = sum(len(base64.b64decode(m["audio"])) for m in gateway.messages("input_audio"))
     assert 0 < audio_bytes <= 24000 * 2 // 10, "more than 100 ms of 24 kHz PCM was sent"
+
+
+@pytest.mark.parametrize(
+    ("model", "extra"),
+    [
+        ("assemblyai/universal-3-6-pro", {"min_turn_silence": 10000, "max_turn_silence": 10000}),
+        ("assemblyai/assemblyai-stt-3-7-realtime-agent", {"mode": "manual"}),
+    ],
+)
+async def test_assemblyai_can_finalize_turns_in_order_while_input_is_open(
+    model: str, extra: dict[str, Any]
+) -> None:
+    samples_seen: list[int] = []
+    sending_audio = asyncio.Event()
+    release_audio = asyncio.Event()
+
+    class EndOnChunkStream(VADStream):
+        def push_frame(self, frame: rtc.AudioFrame) -> None:
+            samples_seen.append(frame.samples_per_channel)
+            super().push_frame(frame)
+
+        async def _main_task(self) -> None:
+            async for frame in self._input_ch:
+                if isinstance(frame, rtc.AudioFrame):
+                    self._event_ch.send_nowait(
+                        VADEvent(
+                            type=VADEventType.END_OF_SPEECH,
+                            samples_index=frame.samples_per_channel,
+                            timestamp=0.0,
+                            speech_duration=frame.duration,
+                            silence_duration=0.0,
+                        )
+                    )
+
+    class EndOnChunkVAD(FakeVAD):
+        def stream(self) -> VADStream:
+            return EndOnChunkStream(self)
+
+    async def on_send(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if event["type"] == "input_audio":
+            sending_audio.set()
+            await release_audio.wait()
+        await _final_then_finalized(ws, event)
+
+    gateway = _Gateway(on_send)
+    stt = _gateway_stt(
+        gateway, model, vad=EndOnChunkVAD(), external_endpointing=True, extra_kwargs=extra
+    )
+    assert not stt.capabilities.manual_flush
+    stream = stt.stream(conn_options=_no_retry())
+    try:
+        for turn in range(2):
+            stream.push_frame(_silence(16000, 0.02))
+            stream.push_frame(_silence(16000, 0.03))
+            await asyncio.wait_for(sending_audio.wait(), timeout=1)
+            assert samples_seen == [800] * turn
+            assert gateway.types()[-1] == "input_audio"
+            release_audio.set()
+            event = await asyncio.wait_for(_first_final(stream), timeout=1)
+            assert event.alternatives[0].text == "hello"
+            sending_audio.clear()
+            release_audio.clear()
+        assert gateway.types() == [
+            "session.create",
+            "input_audio",
+            "session.finalize",
+            "input_audio",
+            "session.finalize",
+        ]
+    finally:
+        await stream.aclose()
+
+    assert len(gateway.sockets) == 1
+    assert samples_seen == [800, 800]
+    forwarded_extra = gateway.messages("session.create")[0]["settings"]["extra"]
+    assert {key: forwarded_extra[key] for key in extra} == extra
+    assert "external_endpointing" not in forwarded_extra
+
+
+async def test_assemblyai_external_flush_sends_short_audio_before_each_finalize() -> None:
+    gateway = _Gateway(_final_then_finalized)
+    stt = _gateway_stt(gateway, "assemblyai/universal-3-6-pro", external_endpointing=True)
+    stream = stt.stream(conn_options=_no_retry())
+    audio = b"\x01\x00" * 320
+    frame = rtc.AudioFrame(audio, sample_rate=16000, num_channels=1, samples_per_channel=320)
+    try:
+        # Queue both boundaries before the writer runs, including the one at end of input.
+        stream.push_frame(frame)
+        stream.flush()
+        stream.push_frame(frame)
+        stream.end_input()
+        for _ in range(2):
+            assert (await asyncio.wait_for(_first_final(stream), timeout=1)).alternatives[
+                0
+            ].text == ("hello")
+        assert gateway.types() == [
+            "session.create",
+            "input_audio",
+            "session.finalize",
+            "input_audio",
+            "session.finalize",
+        ]
+        assert [base64.b64decode(m["audio"]) for m in gateway.messages("input_audio")] == [
+            audio.ljust(1600, b"\0"),
+        ] * 2
+    finally:
+        await stream.aclose()
 
 
 async def test_a_closed_vad_still_lets_input_end_finalize() -> None:
