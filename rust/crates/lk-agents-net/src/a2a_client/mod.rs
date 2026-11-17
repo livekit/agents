@@ -301,11 +301,13 @@ impl AgentClient {
         &self,
         task: TaskRef,
         reason: Option<&str>,
+        cx: &lk_agents_telemetry::Cx,
+        observer: Option<Arc<dyn observer::RequestObserver>>,
     ) -> Result<TaskUpdate, ClientError> {
         self.connect().await?;
         let id = self.inner.next_id();
         let request = self.inner.core.lock().cancel(&task, reason, JsonRpcId::Number(id as i64))?;
-        let (_, mut updates) = self.open(id, request, None).await?;
+        let (_, mut updates) = self.open(id, request.traced(cx.span()), observer).await?;
         updates.recv().await?.and_then(|event| event.update).ok_or_else(ClientError::incomplete)
     }
 

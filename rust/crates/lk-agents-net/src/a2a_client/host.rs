@@ -76,6 +76,7 @@ impl port::AgentClient for AgentClient {
         task_id: String,
         thread_id: Option<String>,
         reason: Option<String>,
+        cx: lk_agents_telemetry::Cx,
     ) -> Result<TaskUpdate, AgentClientError> {
         let thread_id = thread_id
             .or_else(|| self.inner.core.lock().last_context().map(str::to_owned))
@@ -88,6 +89,8 @@ impl port::AgentClient for AgentClient {
             self,
             TaskRef { id: task_id, context_id: thread_id },
             reason.as_deref(),
+            &cx,
+            None,
         )
         .await?;
         Ok(update_from_wire(update))

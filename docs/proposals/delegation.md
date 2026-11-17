@@ -1044,6 +1044,10 @@ than another simulation framework. Stock-peer HTTP and AgentDB conformance remai
   message-id execution is safe, or unknown task identity can always be recovered.
 - [ ] Preserve cancellation intent versus observed outcome; handle refused/lost cancel responses,
   stale snapshots and overlapping subscriptions without duplicate artifact appends.
+  Native client cancellation now uses the same journal/checkpoint seam as sends and task reads.
+  Authored DST stories cover a persisted canceled receipt, a refused request with its SDK error
+  details, and an applied cancellation whose lost reply is reconciled by a fresh owner without
+  issuing a second cancel. The bound public task command remains to be connected.
 - [x] Add the native exchange seam and a readable text DST story: a known task accepts a
   response, the reply is lost, the owner crashes and a fresh owner reconciles it. Check stored
   state and remote/service observations. A companion unprovable outcome remains unknown.

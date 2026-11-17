@@ -23,11 +23,22 @@ use lk_agents_runtime::storage::session_state::SessionState;
 
 const ENDPOINT: &str = "https://booking.test";
 
+#[derive(Clone, Copy, Default)]
+enum CancelReply {
+    #[default]
+    Confirmed,
+    Refused,
+    Lost,
+}
+
 #[derive(Default)]
 struct Service {
     messages: Mutex<Vec<a2a::Message>>,
     bookings: Mutex<Vec<String>>,
     lose_initial: bool,
+    cancel_reply: CancelReply,
+    cancellations: Mutex<u32>,
+    canceled: Mutex<bool>,
 }
 
 impl HttpExchangePort for Service {
@@ -80,10 +91,41 @@ impl HttpExchangePort for Service {
                     }
                     a2a::methods::GET_TASK => {
                         let booked = !self.bookings.lock().is_empty();
+                        let state = if *self.canceled.lock() {
+                            "TASK_STATE_CANCELED"
+                        } else if booked {
+                            "TASK_STATE_COMPLETED"
+                        } else {
+                            "TASK_STATE_INPUT_REQUIRED"
+                        };
                         json!({"jsonrpc":"2.0","id":rpc.id,"result":{
-                            "id":"booking","contextId":"trip","status":{"state":if booked { "TASK_STATE_COMPLETED" } else { "TASK_STATE_INPUT_REQUIRED" }},
+                            "id":"booking","contextId":"trip","status":{"state":state},
                             "history":self.messages.lock().clone(),"artifacts":booked.then(|| json!([{"artifactId":"receipt","parts":[{"text":"Booked"}]}]))
                         }})
+                    }
+                    a2a::methods::CANCEL_TASK => {
+                        let params = rpc.params.unwrap();
+                        assert_eq!(params["id"], "booking");
+                        assert_eq!(params["contextId"], "trip");
+                        *self.cancellations.lock() += 1;
+                        match self.cancel_reply {
+                            CancelReply::Refused => json!({"jsonrpc":"2.0","id":rpc.id,
+                                "error":{"code":a2a::error_code::TASK_NOT_CANCELABLE,
+                                    "message":"Booking is protected","data":{"stage":"booking"}}}),
+                            CancelReply::Confirmed | CancelReply::Lost => {
+                                *self.canceled.lock() = true;
+                                if matches!(self.cancel_reply, CancelReply::Lost) {
+                                    return Err(AttemptFailure::Connection(
+                                        "the cancellation was applied before its reply was lost"
+                                            .into(),
+                                    ));
+                                }
+                                json!({"jsonrpc":"2.0","id":rpc.id,"result":{
+                                    "id":"booking","contextId":"trip",
+                                    "status":{"state":"TASK_STATE_CANCELED"}
+                                }})
+                            }
+                        }
                     }
                     method => panic!("unexpected operation {method}"),
                 }
@@ -359,6 +401,151 @@ async fn accepted_response_lost_then_fresh_owner_reads_the_same_task_without_boo
 #[tokio::test(start_paused = true)]
 async fn lost_intent_write_ack_and_remote_response_do_not_book_twice_after_restart() {
     reconcile_a_booked_task(true).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_observed_cancellation_is_checkpointed_before_its_receipt() {
+    reconcile_cancellation(CancelReply::Confirmed).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lost_cancellation_reply_is_reconciled_after_restart_without_canceling_twice() {
+    reconcile_cancellation(CancelReply::Lost).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refused_cancellation_retains_its_protocol_error_and_does_not_invent_success() {
+    reconcile_cancellation(CancelReply::Refused).await;
+}
+
+async fn reconcile_cancellation(cancel_reply: CancelReply) {
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_runtime::net::clock::SimClock::new());
+    let env = environment(clock.clone());
+    let database = Store::open(59, false, clock.clone()).await;
+    let service = Arc::new(Service { cancel_reply, ..Default::default() });
+    let store = ContextStore::bound(
+        database.backend.clone(),
+        database.thread_id.clone(),
+        PARTITION_KEY.into(),
+        env.tracer.root(),
+    )
+    .await
+    .unwrap();
+    let (first, updates, binding, view) = owner(&env, store.clone()).await;
+    let client = AgentClient::with_transport(
+        ENDPOINT.into(),
+        None,
+        Default::default(),
+        service.clone(),
+        (env.process.spawner)().unwrap(),
+        clock.clone(),
+    )
+    .unwrap();
+    let reply = client
+        .send_observed(
+            message("start", "Book a seat", false),
+            None,
+            None,
+            None,
+            &env.tracer.root(),
+            Some(journal(first.clone(), "start")),
+        )
+        .await
+        .unwrap();
+    reply.aclose(clock.now().saturating_add(Duration::from_secs(1))).await;
+    assert_eq!(*service.cancellations.lock(), 0, "closing observation did not cancel work");
+    let task =
+        lk_agents_core::a2a::rpc::TaskRef { id: "booking".into(), context_id: "trip".into() };
+    let result = client
+        .cancel(task.clone(), None, &env.tracer.root(), Some(journal(first.clone(), "cancel")))
+        .await;
+    let snapshot = view._snapshot_data().unwrap().unwrap();
+    let remote = &snapshot.remote_agents[ENDPOINT];
+    assert!(remote.tasks["booking"].cancel_requested);
+    match cancel_reply {
+        CancelReply::Confirmed => {
+            assert_eq!(result.unwrap().state, lk_agents_abi::storage::TaskState::Canceled);
+            assert_eq!(remote.tasks["booking"].task.status.state, a2a::TaskState::Canceled);
+        }
+        CancelReply::Refused => {
+            assert!(matches!(result, Err(ClientError::Rpc { code, .. })
+                if code == a2a::error_code::TASK_NOT_CANCELABLE));
+            let error = remote
+                .events
+                .iter()
+                .find_map(|event| match &event.payload {
+                    lk_agents_abi::delegation::remote::A2AJournalPayload::Error(
+                        lk_agents_abi::delegation::remote::RemoteFailure::Rpc { error },
+                    ) => Some(error),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(error.data, Some(json!({"stage":"booking"})));
+            assert_eq!(remote.tasks["booking"].task.status.state, a2a::TaskState::InputRequired);
+        }
+        CancelReply::Lost => {
+            assert!(result.is_err());
+            assert_eq!(remote.tasks["booking"].task.status.state, a2a::TaskState::InputRequired);
+        }
+    }
+    client.aclose().await;
+    assert_eq!(
+        Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,
+        Closed::Clean
+    );
+    binding.close();
+    store.finish_session(false).await.unwrap();
+    drop(first);
+
+    // A fresh owner reconciles the recorded task; it does not repeat the control request.
+    let store = ContextStore::bound(
+        database.backend.clone(),
+        database.thread_id.clone(),
+        PARTITION_KEY.into(),
+        env.tracer.root(),
+    )
+    .await
+    .unwrap();
+    let (second, updates, binding, view) = owner(&env, store.clone()).await;
+    let restored = view._snapshot_data().unwrap().unwrap();
+    assert_eq!(
+        recovery(&restored.remote_agents[ENDPOINT], "cancel").unwrap(),
+        Recovery::GetTask(RemoteTaskRef {
+            task_id: task.id.clone(),
+            context_id: task.context_id.clone()
+        })
+    );
+    let client = AgentClient::with_transport(
+        ENDPOINT.into(),
+        None,
+        Default::default(),
+        service.clone(),
+        (env.process.spawner)().unwrap(),
+        clock.clone(),
+    )
+    .unwrap();
+    let observed = client
+        .get_task(task, &env.tracer.root(), Some(journal(second.clone(), "reconcile")))
+        .await
+        .unwrap();
+    let expected = match cancel_reply {
+        CancelReply::Confirmed | CancelReply::Lost => a2a::TaskState::Canceled,
+        CancelReply::Refused => a2a::TaskState::InputRequired,
+    };
+    assert_eq!(observed.status.state, expected);
+    let snapshot = view._snapshot_data().unwrap().unwrap();
+    assert_eq!(snapshot.remote_agents[ENDPOINT].tasks["booking"].task.status.state, expected);
+    assert_eq!(*service.cancellations.lock(), 1, "recovery did not repeat cancellation");
+    assert_eq!(service.messages.lock().len(), 1, "recovery did not repeat the business request");
+    assert!(service.bookings.lock().is_empty());
+    client.aclose().await;
+    assert_eq!(
+        Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,
+        Closed::Clean
+    );
+    binding.close();
+    store.finish_session(false).await.unwrap();
+    assert!(!database.held(PARTITION_KEY).await);
 }
 
 async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {

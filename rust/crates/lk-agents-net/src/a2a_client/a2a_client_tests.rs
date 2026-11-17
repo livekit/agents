@@ -413,6 +413,8 @@ async fn agent_client_peer_matrix_preserves_task_continuation_artifacts_and_vers
             .cancel(
                 TaskRef { id: id.into(), context_id: "cancel-context".into() },
                 Some("user-canceled"),
+                &Cx::NONE,
+                None,
             )
             .await
             .unwrap();
@@ -657,6 +659,8 @@ async fn client_close_owns_a_stalled_cancel_request_until_its_original_ack_is_dr
                 .cancel(
                     TaskRef { id: "cancel-task".into(), context_id: "cancel-context".into() },
                     Some("user-canceled"),
+                    &Cx::NONE,
+                    None,
                 )
                 .await
         }
@@ -705,6 +709,8 @@ async fn client_close_waits_for_the_original_cancel_settlement_past_the_old_clea
                 .cancel(
                     TaskRef { id: "slow-cancel".into(), context_id: "slow-context".into() },
                     Some("user-canceled"),
+                    &Cx::NONE,
+                    None,
                 )
                 .await
         }
@@ -764,6 +770,8 @@ async fn discovery_rpc_and_cancel_stalls_name_their_timeout() {
                 client
                     .cancel(
                         TaskRef { id: "stalled-task".into(), context_id: "stalled-context".into() },
+                        None,
+                        &Cx::NONE,
                         None,
                     )
                     .await

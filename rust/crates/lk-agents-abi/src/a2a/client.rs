@@ -221,6 +221,7 @@ pub trait AgentClient: Send + Sync + Sized + 'static {
         task_id: String,
         #[host(kw, default = None)] thread_id: Option<String>,
         #[host(default = None)] reason: Option<String>,
+        cx: crate::telemetry::Cx,
     ) -> Result<TaskUpdate, AgentClientError>;
     #[host(await)]
     async fn aclose(&self);
