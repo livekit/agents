@@ -34,13 +34,15 @@ impl ErrorCode {
     /// On request id 0: the database was evicted while the socket idled, and the socket ends.
     /// Redial when next needed.
     pub const IDLE_EVICTED: Self = Self(1002);
-    /// Refused for pressure that passes: send it again after a backoff.
+    /// Refused for pressure that passes, or cut while it waited its turn: send it again after a
+    /// backoff.
     pub const RETRY: Self = Self(1003);
     /// The request may have committed, whole, or not at all.
     pub const COMMIT_UNKNOWN_RESULT: Self = Self(1021);
     /// Its client's Cancel stopped the request before it applied: only the canceller sees it.
     pub const CANCELLED: Self = Self(1025);
-    /// The server's request timeout cut the request before it applied: send it again.
+    /// The request ran out of time while it ran, cut by the server's request timeout before it
+    /// applied: final, as FoundationDB's `transaction_timed_out`.
     pub const TIMED_OUT: Self = Self(1031);
     pub const INVALID_ARGUMENT: Self = Self(2001);
     pub const SQL_ERROR: Self = Self(2002);
@@ -57,7 +59,7 @@ impl ErrorCode {
         declared(Self::RETRY, "retry", true, false),
         declared(Self::COMMIT_UNKNOWN_RESULT, "commit_unknown_result", true, true),
         declared(Self::CANCELLED, "cancelled", false, false),
-        declared(Self::TIMED_OUT, "timed_out", true, false),
+        declared(Self::TIMED_OUT, "timed_out", false, false),
         declared(Self::INVALID_ARGUMENT, "invalid_argument", false, false),
         declared(Self::SQL_ERROR, "sql_error", false, false),
         declared(Self::TOO_LARGE, "too_large", false, false),
