@@ -1,7 +1,7 @@
 //! One deadline per storage operation: every request and every resend inside it share the
-//! caller's, so no layer waits on a budget of its own. A transport waits for its socket and its
-//! answer until that deadline; the one retry owner ([`crate::thread::Resend`]) sends again only
-//! before it.
+//! caller's, so no layer waits on a budget of its own. A transport waits for its socket until
+//! that deadline, and for a sent request's answer [`REQUEST_WAIT`] from its send; the one retry
+//! owner ([`crate::thread::Resend`]) sends again only before it.
 
 use std::future::Future;
 use std::time::Duration;
@@ -10,7 +10,7 @@ use lk_agents_abi::{Clock, Ts};
 
 /// The deadline of an operation whose caller set none: past agent-db's request timeout
 /// (`agentdb.request_timeout`, 10 s in production), which ends the request on the server first,
-/// by a margin for its answer's way back.
+/// by a margin for its answer's way back. A sent request waits as long for its answer.
 pub const REQUEST_WAIT: Duration = Duration::from_secs(15);
 
 tokio::task_local! {

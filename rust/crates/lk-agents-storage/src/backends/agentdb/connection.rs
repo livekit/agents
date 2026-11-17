@@ -17,17 +17,20 @@ use wire as pb;
 
 use super::TokenMinter;
 use super::rows::{Results, statement};
+use crate::deadline::REQUEST_WAIT;
 use crate::sql::{BatchResult, Row, Statement, StatementResult};
 use lk_agents_abi::storage::agentdb_error::ErrorCode;
 
 // Wire protocol: `Hello` first, with a token minted for this dial. `Exec` answers one `ExecResult`;
 // `Query` streams `Columns`, `ColumnBatch`* and `Done`, paced by `Credit` past the server's initial
-// window; `Batch` applies its statements atomically, one result per statement, then `Done`. Every
-// request carries its caller's deadline: it waits for a socket and for its answer until then. A
-// dropped socket is redialed only while a request waits for it, so the redial lives exactly as
-// long as a caller's deadline; those in flight fail `Disconnected` (outcome unknown). The server
-// ends a socket with a notice on request id 0, as HTTP/2's GOAWAY does: `wrong_shard_server` (the
-// database moved or is draining: redialed at once) or `idle_evicted` (redialed when next needed).
+// window; `Batch` applies its statements atomically, one result per statement, then `Done`. A
+// request waits for a socket until its caller's deadline, and for its answer `REQUEST_WAIT` from
+// the moment its frame was sent whole, as net/http's `ResponseHeaderTimeout`: one queued behind
+// big frames does not spend its answer's wait being written. A dropped socket is redialed only
+// while a request waits for it, so the redial lives exactly as long as a caller's deadline; those
+// in flight fail `Disconnected` (outcome unknown). The server ends a socket with a notice on
+// request id 0, as HTTP/2's GOAWAY does: `wrong_shard_server` (the database moved or is draining:
+// redialed at once) or `idle_evicted` (redialed when next needed).
 // The server answered every request it read before its notice, so each one still unanswered
 // applied nothing: like gRPC's transparent retry, it is sent again on the next socket within its
 // deadline, and its caller sees only the answer. A request answered `wrong_shard_server` applied
@@ -388,9 +391,16 @@ impl Supervisor {
                     conn.0.tasks.try_spawn(spawner, "agentdb retiring reader", retiring);
                     None
                 }
-                // only a retiring socket settles
-                End::Settled => Some(WsdbError::Disconnected),
-                End::Dropped(cause) => Some(cause),
+                // Dropped here, its writer stops with it: a frame it never sent fails unsent
+                // rather than wait out the redial. Only a retiring socket settles.
+                End::Settled => {
+                    drop(socket);
+                    Some(WsdbError::Disconnected)
+                }
+                End::Dropped(cause) => {
+                    drop(socket);
+                    Some(cause)
+                }
             };
             let now = match cause {
                 None => true,
@@ -919,10 +929,13 @@ impl Conn {
         answers: usize,
     ) -> Result<Request<'_>, WsdbError> {
         loop {
-            let req = self.register(deadline, answers).await?;
+            let mut req = self.register(deadline, answers).await?;
             frame.request_id = req.id;
             match self.write(frame).await {
-                Ok(()) => return Ok(req),
+                Ok(()) => {
+                    req.deadline = self.0.clock.now().saturating_add(REQUEST_WAIT);
+                    return Ok(req);
+                }
                 Err(WsdbError::Drained) => {}
                 Err(error) => return Err(error),
             }
@@ -1024,7 +1037,7 @@ impl Conn {
         st.tip = st.tip.max(tip);
     }
 
-    /// One write statement; returns once durable, or fails by `deadline`.
+    /// One write statement; returns once durable, or fails unsent past `deadline`.
     pub async fn exec(&self, s: &Statement, deadline: Ts) -> Result<ExecResult, WriteError> {
         let exec = pb::client_message::Message::Exec(statement(s));
         let mut frame = pb::ClientMessage { request_id: 0, message: Some(exec) };
@@ -1060,7 +1073,7 @@ impl Conn {
         self.0.opts.credits as usize + 2
     }
 
-    /// A query's rows, all of them, by `deadline`: one credit back per batch consumed, so the
+    /// A query's rows, all of them, sent by `deadline`: one credit back per batch consumed, so the
     /// server sends no further than the caller reads.
     pub async fn query_all(&self, s: &Statement, deadline: Ts) -> Result<Vec<Row>, WsdbError> {
         let query = pb::client_message::Message::Query(statement(s));
@@ -1102,7 +1115,7 @@ impl Conn {
         }
     }
 
-    /// Statements applied atomically, in order, each answered in order, by `deadline`.
+    /// Statements applied atomically, in order, each answered in order, sent by `deadline`.
     pub async fn batch(
         &self,
         statements: &[Statement],
@@ -1163,7 +1176,8 @@ struct Request<'a> {
     conn: &'a Conn,
     id: u32,
     rx: mpsc::Receiver<Answer>,
-    /// The caller's: its answer is awaited until then.
+    /// The caller's until its frame was sent, then `REQUEST_WAIT` after: its answer is awaited
+    /// until then.
     deadline: Ts,
     /// Whether any answer arrived: a drain after one breaks the notice's promise.
     heard: bool,
