@@ -1,0 +1,88 @@
+tests/test_telemetry_redaction.py
+  s_64f4ed07eec395::t_a631ca259fe250 893-901,906-907,915-931,938-946
+  s_64f4ed07eec395::t_be0263f20f927a 908-913,932-937
+  s_64f4ed07eec395::t_0749266db991bc 902-905,914
+scripts/check_exception_logging.py
+  s_64f4ed07eec395::t_8d4eb42e9478df 15,39-44,46,103
+  s_64f4ed07eec395::t_d630ccc63df842 34-38,45,47-55,126-128
+  s_64f4ed07eec395::t_be5b0e1a8b77a7 56-57,60,63,66,70,73,79,82,88,100,104-105,129-130
+tests/test_check_exception_logging.py
+  s_64f4ed07eec395::t_d630ccc63df842 31-33,61,63-64,68-72,74-81,83-86
+  s_64f4ed07eec395::t_fc81f1e530a39f 62,73,82,87-89,97-113
+livekit-agents/livekit/agents/telemetry/traces.py
+  s_64f4ed07eec395::t_d630ccc63df842 68,590-604
+livekit-agents/livekit/agents/inference/avatar.py
+  s_64f4ed07eec395::t_be823f65773f2c 462-466,474-478
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_64f4ed07eec395::t_90a819e656fa53 2454-2458,3623-3627,4382,4404-4408,4468,4942-4946,4996-5000,5119-5124,5524,5526-5527
+livekit-agents/livekit/agents/voice/generation.py
+  s_64f4ed07eec395::t_3754f20fe7e90c 955-956
+livekit-agents/livekit/agents/worker.py
+  s_64f4ed07eec395::t_3ae324637db29c 1210
+livekit-plugins/livekit-plugins-anam/livekit/plugins/anam/api.py
+  s_64f4ed07eec395::t_a3505d577edb79 177,185
+livekit-plugins/livekit-plugins-atmee/livekit/plugins/atmee/api.py
+  s_64f4ed07eec395::t_1ae747b7572089 341-345
+livekit-plugins/livekit-plugins-atmee/livekit/plugins/atmee/avatar.py
+  s_64f4ed07eec395::t_81785c8d209f3a 425-430,435-440
+livekit-plugins/livekit-plugins-avatario/livekit/plugins/avatario/api.py
+  s_64f4ed07eec395::t_fad06a791d3848 139-148
+livekit-plugins/livekit-plugins-bey/livekit/plugins/bey/avatar.py
+  s_64f4ed07eec395::t_d7f374ee9dfdce 156-161,169-173
+livekit-plugins/livekit-plugins-bithuman/livekit/plugins/bithuman/avatar.py
+  s_64f4ed07eec395::t_56440a0190589e 673-678,686-690
+livekit-plugins/livekit-plugins-bland/livekit/plugins/bland/tts.py
+  s_64f4ed07eec395::t_bbc2d3e6859de3 237-240,535-538
+livekit-plugins/livekit-plugins-did/livekit/plugins/did/api.py
+  s_64f4ed07eec395::t_a701c0851e13e4 86
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/tts.py
+  s_64f4ed07eec395::t_5252d82240a053 434-438,1290-1294,1408-1412
+livekit-plugins/livekit-plugins-inworld/livekit/plugins/inworld/tts.py
+  s_64f4ed07eec395::t_2cd1f8e03c3d88 558-561,1100-1101
+livekit-plugins/livekit-plugins-keyframe/livekit/plugins/keyframe/api.py
+  s_64f4ed07eec395::t_db578d6e409495 110-111
+livekit-plugins/livekit-plugins-lemonslice/livekit/plugins/lemonslice/api.py
+  s_64f4ed07eec395::t_154319944e248c 278-279,288-289
+livekit-plugins/livekit-plugins-liveavatar/livekit/plugins/liveavatar/api.py
+  s_64f4ed07eec395::t_476c2339f0375a 130
+livekit-plugins/livekit-plugins-runway/livekit/plugins/runway/avatar.py
+  s_64f4ed07eec395::t_d210edfdfa7774 196,235,276-280
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  s_64f4ed07eec395::t_066caaa698e176 1456,1466-1470
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt_streaming.py
+  s_aaf78334cb7322::t_5cf5063a033d81 906-911,930-935
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/tts.py
+  s_64f4ed07eec395::t_a43e6a21dc4123 588,664
+livekit-plugins/livekit-plugins-simli/livekit/plugins/simli/avatar.py
+  s_64f4ed07eec395::t_9c876efda4a901 226-231,235-238,253-258,263-264,311-316,324-328
+livekit-plugins/livekit-plugins-spatius/livekit/plugins/spatius/avatar.py
+  s_64f4ed07eec395::t_e8803b4705bf1c 337-341
+livekit-plugins/livekit-plugins-tavus/livekit/plugins/tavus/api.py
+  s_64f4ed07eec395::t_c923402faf9451 215-220,228-232
+livekit-plugins/livekit-plugins-trugen/livekit/plugins/trugen/avatar.py
+  s_64f4ed07eec395::t_664f5cd156b4db 167-172,179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a2eb8f1c154e62d39c8df00ab4b38b6ec34d2b13",
+  "prompts": {},
+  "sessions": {
+    "s_64f4ed07eec395": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1e9f7-b2d8-7663-a1e4-d6ecad76c415",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    },
+    "s_aaf78334cb7322": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d2193486-0057-4a50-bb24-44082ff248d9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
