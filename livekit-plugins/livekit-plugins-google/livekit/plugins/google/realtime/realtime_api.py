@@ -58,6 +58,8 @@ class _ChatCtxToolResponse(types.LiveClientToolResponse):
     """Tool responses built from chat ctx items; the ids let the send task mark them sent."""
 
     item_ids: set[str] = Field(default_factory=set, exclude=True)
+    # the answered calls that were open when this was queued
+    call_ids: set[str] = Field(default_factory=set, exclude=True)
 
 
 # stop rejecting tool calls after this many in a row to avoid a loop (tool_choice="none")
@@ -103,6 +105,15 @@ def _default_tool_behavior(model: str) -> NotGivenOr[types.Behavior]:
     if any(tag in model for tag in MODELS_DEFAULT_NON_BLOCKING):
         return types.Behavior.NON_BLOCKING
     return NOT_GIVEN
+
+
+def _supports_context_update(model: str, use_vertexai: bool) -> bool:
+    return bool(use_vertexai and "3.8" in model)
+
+
+def _has_retrieval_tool(tools: list[types.Tool]) -> bool:
+    """Whether `tools` holds a retrieval tool, which a context_update rejects with INVALID_ARGUMENT."""
+    return any(tool.retrieval is not None for tool in tools)
 
 
 def _warn_model_api_mismatch(model: str, use_vertexai: bool) -> None:
@@ -193,6 +204,7 @@ class _RealtimeOptions:
     tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
     session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
+    labels: NotGivenOr[dict[str, str]] = NOT_GIVEN
     credentials: google.auth.credentials.Credentials | None = None
 
 
@@ -270,6 +282,7 @@ class RealtimeModel(llm.RealtimeModel):
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
+        labels: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
         """
@@ -311,6 +324,7 @@ class RealtimeModel(llm.RealtimeModel):
             session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
                 thinking_level is not supported by gemini-3.8-live on the Gemini API.
+            labels (dict[str, str], optional): Custom labels to attach to the Vertex AI request. Defaults to None.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
 
         Raises:
@@ -353,7 +367,7 @@ class RealtimeModel(llm.RealtimeModel):
                 manual_function_calls=False,
                 mutable_chat_context=True,
                 mutable_instructions=True,
-                mutable_tools=False,
+                mutable_tools=_supports_context_update(model, use_vertexai),
                 per_response_tool_choice=False,
             )
         )
@@ -436,6 +450,7 @@ class RealtimeModel(llm.RealtimeModel):
             media_resolution=media_resolution,
             thinking_config=thinking_config,
             session_resumption=session_resumption,
+            labels=labels,
             credentials=credentials,
         )
 
@@ -557,6 +572,16 @@ class RealtimeSession(llm.RealtimeSession):
         # not carry an id, since the server never issued it. kept for the session's lifetime: a
         # resumption can replay a response long after it was first queued
         self._synthetic_call_ids: set[str] = set()
+        # server-issued calls whose response has not been sent yet
+        self._open_call_ids: set[str] = set()
+        # a config change happened, so the next connect must not resume the old session
+        self._fresh_session_needed = False
+        # a context_update changed the instructions/tools of this session. a resumed
+        # session keeps the ones it was created with, so they are sent again on resume
+        self._context_updated = False
+        # 3.x takes tool calls and results as initial history; 2.5 closes with 1007 on them
+        # and Vertex is unverified
+        self._replay_tool_history = not self._opts.vertexai and "2.5" not in self._opts.model
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
@@ -601,6 +626,10 @@ class RealtimeSession(llm.RealtimeSession):
                         )
 
             self._msg_ch = utils.aio.Chan[ClientEvents]()
+
+        if not on_error:
+            # a resumed session keeps its old instructions and tools
+            self._fresh_session_needed = True
 
     def update_options(
         self,
@@ -661,8 +690,18 @@ class RealtimeSession(llm.RealtimeSession):
                     self._mark_restart_needed()
                     return
 
-            if not self._realtime_model.capabilities.mutable_instructions:
-                return
+                if not self._realtime_model.capabilities.mutable_instructions:
+                    return
+
+                if _supports_context_update(self._opts.model, self._opts.vertexai):
+                    logger.debug("Updating instructions mid-session via context_update")
+                    self._context_updated = True
+                    self._send_client_event(
+                        types.LiveClientContextUpdate(
+                            system_instruction=types.Content(parts=[types.Part(text=instructions)])
+                        )
+                    )
+                    return
 
             # Active session exists — send mid-session system instruction update (no reconnect needed)
             logger.debug("Updating instructions mid-session")
@@ -774,7 +813,14 @@ class RealtimeSession(llm.RealtimeSession):
                 self._unsent_item_ids |= item_ids
                 self._send_client_event(
                     _ChatCtxToolResponse(
-                        function_responses=tool_results.function_responses, item_ids=item_ids
+                        function_responses=tool_results.function_responses,
+                        item_ids=item_ids,
+                        call_ids={
+                            item.call_id
+                            for item in append_ctx.items
+                            if item.type == "function_call_output"
+                            and item.call_id in self._open_call_ids
+                        },
                     )
                 )
 
@@ -787,8 +833,31 @@ class RealtimeSession(llm.RealtimeSession):
         if self._tools == tool_ctx:
             return
 
+        had_retrieval = _has_retrieval_tool(self._tools_config())
         self._tools = tool_ctx
-        self._mark_restart_needed()
+        if not self._realtime_model.capabilities.mutable_tools:
+            self._mark_restart_needed()
+            return
+
+        tools_config = self._tools_config()
+        if had_retrieval or _has_retrieval_tool(tools_config):
+            # the server rejects retrieval tools (e.g. VertexRAGRetrieval) in a context_update,
+            # and a context_update can't drop one either, so start a fresh session instead
+            self._mark_restart_needed()
+            return
+
+        async with self._session_lock:
+            if not self._active_session:
+                self._mark_restart_needed()
+                return
+
+            logger.debug("Updating tools mid-session via context_update")
+            self._context_updated = True
+            self._send_client_event(
+                types.LiveClientContextUpdate(
+                    tools=types.LiveClientContextUpdateTools(tools=tools_config)
+                )
+            )
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -985,6 +1054,12 @@ class RealtimeSession(llm.RealtimeSession):
             await self._close_active_session()
 
             self._session_should_close.clear()
+            if self._fresh_session_needed:
+                # cleared only now, after the old receive task can no longer store a handle
+                self._fresh_session_needed = False
+                self._context_updated = False
+                self._session_resumption_handle = None
+                self._resumption_chat_ctx = None
             session = None
             try:
                 config = self._build_connect_config()
@@ -996,6 +1071,33 @@ class RealtimeSession(llm.RealtimeSession):
                     self._report_connection_acquired(time.perf_counter() - t0)
                     async with self._session_lock:
                         self._active_session = session
+                        if self._session_should_close.is_set():
+                            # the config changed while connecting; replay into the next session
+                            continue
+
+                        if self._session_resumption_handle is not None and self._context_updated:
+                            # the handle restores the conversation, but with the
+                            # instructions/tools the session had when it was created. a
+                            # handle may also predate the last context_update, so the
+                            # current ones are sent again rather than trusting it. sent
+                            # before the pending chat context is taken, so a failure here
+                            # leaves it in place for the retry
+                            tools_config = self._tools_config()
+                            # a retrieval tool can't go in a context_update. tools holding one
+                            # never change by context_update (update_tools starts a fresh
+                            # session), so the resumed session already has the current ones
+                            resend_tools: types.ToolListUnion | None = (
+                                None if _has_retrieval_tool(tools_config) else list(tools_config)
+                            )
+                            if is_given(self._opts.instructions) or resend_tools is not None:
+                                await session.send_context_update(
+                                    system_instruction=types.Content(
+                                        parts=[types.Part(text=self._opts.instructions)]
+                                    )
+                                    if is_given(self._opts.instructions)
+                                    else None,
+                                    tools=resend_tools,
+                                )
 
                         pending_ctx, self._pending_chat_ctx = self._pending_chat_ctx, None
                         if self._session_resumption_handle is not None:
@@ -1023,20 +1125,84 @@ class RealtimeSession(llm.RealtimeSession):
                                     f"update_instructions() to set system-level context instead."
                                 )
 
-                            turns_dict, _ = self._chat_ctx.copy(
-                                exclude_function_call=True,
-                                exclude_handoff=True,
-                                exclude_instructions=True,
-                                exclude_empty_message=True,
-                                exclude_config_update=True,
-                            ).to_provider_format(format="google", inject_dummy_user_message=False)
+                            # results of calls still open go out as tool responses so they get a reply
+                            answered = {
+                                item.call_id
+                                for item in self._chat_ctx.items
+                                if item.type == "function_call_output"
+                                and item.call_id in self._open_call_ids
+                            }
+                            turns_dict, _ = (
+                                llm.ChatContext(
+                                    [
+                                        item
+                                        for item in self._chat_ctx.items
+                                        if not (
+                                            item.type in ("function_call", "function_call_output")
+                                            and item.call_id in self._open_call_ids
+                                        )
+                                    ]
+                                )
+                                .copy(
+                                    exclude_function_call=not self._replay_tool_history,
+                                    exclude_handoff=True,
+                                    exclude_instructions=True,
+                                    exclude_empty_message=True,
+                                    exclude_config_update=True,
+                                )
+                                .to_provider_format(
+                                    format="google", inject_dummy_user_message=False
+                                )
+                            )
                             turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                            # the formatter drops a call without its result, so the open calls
+                            # close the history by hand; their results go out as tool responses,
+                            # below or once the tool finishes
+                            open_calls = [
+                                types.Part(
+                                    function_call=types.FunctionCall(
+                                        id=item.call_id,
+                                        name=item.name,
+                                        args=json.loads(item.arguments or "{}"),
+                                    )
+                                )
+                                for item in self._chat_ctx.items
+                                if item.type == "function_call"
+                                and item.call_id in self._open_call_ids
+                            ]
+                            if self._replay_tool_history and open_calls:
+                                turns.append(types.Content(role="model", parts=open_calls))
                             if turns:
                                 await session.send_client_content(
                                     turns=turns,  # type: ignore
-                                    turn_complete=False,
+                                    # in history mode this closes the history; it starts no reply
+                                    turn_complete=self._replay_tool_history,
                                 )
+                            if tool_results := get_tool_results_for_realtime(
+                                llm.ChatContext(
+                                    [
+                                        item
+                                        for item in self._chat_ctx.items
+                                        if item.type == "function_call_output"
+                                        and item.call_id in answered
+                                    ]
+                                ),
+                                vertexai=self._opts.vertexai,
+                                tool_response_scheduling=self._opts.tool_response_scheduling,
+                                supports_silent_scheduling=not self._opts.vertexai
+                                and self._opts.tool_behavior == types.Behavior.NON_BLOCKING,
+                                synthetic_call_ids=self._synthetic_call_ids,
+                            ):
+                                await session.send_tool_response(
+                                    function_responses=tool_results.function_responses or []
+                                )
+                                self._open_call_ids -= answered
                             self._unsent_item_ids.clear()
+
+                        if self._replay_tool_history:
+                            # client content counts as history until the first realtime input;
+                            # a generate_reply sent before it is absorbed and never answered
+                            await session.send_realtime_input(audio_stream_end=True)
 
                     # queue up existing chat context
                     send_task = asyncio.create_task(
@@ -1142,7 +1308,15 @@ class RealtimeSession(llm.RealtimeSession):
                         turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
                     )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
-                    await session.send_tool_response(function_responses=msg.function_responses)
+                    # skip a response the replay of a fresh connect already sent
+                    if not (
+                        isinstance(msg, _ChatCtxToolResponse)
+                        and msg.call_ids
+                        and not msg.call_ids & self._open_call_ids
+                    ):
+                        await session.send_tool_response(function_responses=msg.function_responses)
+                    if isinstance(msg, _ChatCtxToolResponse):
+                        self._open_call_ids -= msg.call_ids
                 elif isinstance(msg, types.LiveClientRealtimeInput):
                     if msg.audio:
                         await session.send_realtime_input(audio=msg.audio)
@@ -1154,6 +1328,11 @@ class RealtimeSession(llm.RealtimeSession):
                         await session.send_realtime_input(activity_start=msg.activity_start)
                     elif msg.activity_end:
                         await session.send_realtime_input(activity_end=msg.activity_end)
+                elif isinstance(msg, types.LiveClientContextUpdate):
+                    await session.send_context_update(
+                        system_instruction=msg.system_instruction,
+                        tools=msg.tools.tools if msg.tools is not None else None,
+                    )
                 else:
                     logger.warning(f"Warning: Received unhandled message type: {type(msg)}")
 
@@ -1165,6 +1344,7 @@ class RealtimeSession(llm.RealtimeSession):
                         types.LiveClientContent,
                         types.LiveClientToolResponse,
                         types.LiveClientRealtimeInput,
+                        types.LiveClientContextUpdate,
                     ),
                 ):
                     if not isinstance(msg, types.LiveClientRealtimeInput) or not (
@@ -1276,19 +1456,25 @@ class RealtimeSession(llm.RealtimeSession):
         finally:
             self._mark_current_generation_done()
 
-    def _build_connect_config(self) -> types.LiveConnectConfig:
-        temp = self._opts.temperature if is_given(self._opts.temperature) else None
-
+    def _tools_config(self) -> list[types.Tool]:
         tools_config, _ = create_tools_config(
             self._tools,
             tool_behavior=self._opts.tool_behavior,
             use_parameters_json_schema=False,
         )
+        return tools_config
+
+    def _build_connect_config(self) -> types.LiveConnectConfig:
+        temp = self._opts.temperature if is_given(self._opts.temperature) else None
+
+        tools_config = self._tools_config()
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
-            history_config=types.HistoryConfig(initial_history_in_client_content=True)
-            if not self._realtime_model.capabilities.mutable_chat_context
-            else None,
+            history_config=(
+                types.HistoryConfig(initial_history_in_client_content=True)
+                if self._replay_tool_history
+                else None
+            ),
             generation_config=types.GenerationConfig(
                 candidate_count=self._opts.candidate_count,
                 temperature=temp,
@@ -1335,6 +1521,8 @@ class RealtimeSession(llm.RealtimeSession):
             conf.realtime_input_config = self._opts.realtime_input_config
         if is_given(self._opts.context_window_compression):
             conf.context_window_compression = self._opts.context_window_compression
+        if is_given(self._opts.labels):
+            conf.labels = self._opts.labels
 
         return conf
 
@@ -1582,12 +1770,15 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         gen = self._current_generation
+        calls: list[tuple[str, str, str]] = []
         for fnc_call in tool_call.function_calls or []:
             arguments = json.dumps(fnc_call.args)
             call_id = fnc_call.id
             if not call_id:
                 call_id = utils.shortuuid("fnc-call-")
                 self._synthetic_call_ids.add(call_id)
+            self._open_call_ids.add(call_id)
+            calls.append((call_id, fnc_call.name or "", arguments))
 
             gen.function_ch.send_nowait(
                 llm.FunctionCall(
@@ -1598,6 +1789,11 @@ class RealtimeSession(llm.RealtimeSession):
             )
         self._mark_current_generation_done()
 
+        # mirror the server history, after the turn's messages added above, so the
+        # tool results the framework appends to `chat_ctx` keep their calls
+        for call_id, name, arguments in calls:
+            self._chat_ctx.insert(llm.FunctionCall(call_id=call_id, name=name, arguments=arguments))
+
     def _handle_tool_call_cancellation(
         self, tool_call_cancellation: types.LiveServerToolCallCancellation
     ) -> None:
@@ -1605,6 +1801,7 @@ class RealtimeSession(llm.RealtimeSession):
             "server cancelled tool calls",
             extra={"function_call_ids": tool_call_cancellation.ids},
         )
+        self._open_call_ids -= set(tool_call_cancellation.ids or ())
 
     def _handle_usage_metadata(self, usage_metadata: types.UsageMetadata) -> None:
         current_gen = self._current_generation
