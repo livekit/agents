@@ -338,7 +338,7 @@ class AtmeeAPI:
             # for the slower generation; the start reports real failures.
             logger.debug(
                 "could not read the atmee avatar's generation; allowing for a v2 start",
-                extra={"avatar_id": avatar_id, "error": str(e)},
+                extra={"avatar_id": avatar_id, "lk.pii.error": str(e)},
             )
             return _START_TOTAL_TIMEOUT["v2"][wait_for]
         generation = "v2" if info.engine in _V2_ENGINES else "v1"
@@ -500,7 +500,7 @@ class AtmeeAPI:
             if attempt < attempts - 1:
                 logger.warning(
                     "atmee api call failed; retrying",
-                    extra={"path": path, "attempt": attempt + 1, "error": str(last_error)},
+                    extra={"path": path, "attempt": attempt + 1, "lk.pii.error": str(last_error)},
                 )
                 pause = self._conn_options.retry_interval
                 if deadline is not None:

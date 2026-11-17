@@ -227,7 +227,7 @@ class AvatarSession(BaseAvatarSession):
             )
             return
         except (APIConnectionError, ValueError, KeyError, TypeError) as e:
-            logger.error("failed to create simli session token", extra={"error": repr(e)})
+            logger.error("failed to create simli session token", extra={"lk.pii.error": repr(e)})
             return
 
         try:
@@ -246,7 +246,9 @@ class AvatarSession(BaseAvatarSession):
             )
             return
         except APIConnectionError as e:
-            logger.error("failed to connect to simli avatar session", extra={"error": repr(e)})
+            logger.error(
+                "failed to connect to simli avatar session", extra={"lk.pii.error": repr(e)}
+            )
             return
 
         agent_session.output.replace_audio_tail(
@@ -299,7 +301,8 @@ class AvatarSession(BaseAvatarSession):
                 await asyncio.sleep(self._conn_options.retry_interval)
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning(
-                    "failed to call simli api", extra={"attempt": attempt + 1, "error": str(e)}
+                    "failed to call simli api",
+                    extra={"attempt": attempt + 1, "lk.pii.error": str(e)},
                 )
                 if attempt >= self._conn_options.max_retry:
                     raise APIConnectionError("Failed to call Simli API after all retries") from e

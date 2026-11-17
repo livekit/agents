@@ -161,7 +161,7 @@ class AvatarSession(BaseAvatarSession):
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning(
                     "failed to call bey presence api",
-                    extra={"attempt": attempt + 1, "error": str(e)},
+                    extra={"attempt": attempt + 1, "lk.pii.error": str(e)},
                 )
                 if attempt >= self._conn_options.max_retry:
                     raise APIConnectionError(

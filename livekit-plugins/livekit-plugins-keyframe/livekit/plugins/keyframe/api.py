@@ -106,7 +106,9 @@ class KeyframeAPI:
                         ) from e
 
                     if isinstance(e, APIConnectionError):
-                        logger.warning("Failed to call Keyframe API", extra={"error": str(e)})
+                        logger.warning(
+                            "Failed to call Keyframe API", extra={"lk.pii.error": str(e)}
+                        )
                     else:
                         logger.exception("Failed to call Keyframe API")
 

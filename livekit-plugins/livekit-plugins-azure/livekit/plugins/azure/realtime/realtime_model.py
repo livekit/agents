@@ -1303,8 +1303,8 @@ class RealtimeSession(
                     if self._remote_chat_ctx.get(replayed_id) is not None:
                         self._remote_chat_ctx.delete(replayed_id)
                     logger.warning(
-                        f"Azure Voice Live rejected a replayed conversation item: {message}",
-                        extra={"item_id": replayed_id, "code": code},
+                        "Azure Voice Live rejected a replayed conversation item",
+                        extra={"item_id": replayed_id, "code": code, "lk.pii.error": message},
                     )
                     self._check_established()
                     return
@@ -1330,7 +1330,7 @@ class RealtimeSession(
 
             if event_id in self._ignored_error_event_ids:
                 self._ignored_error_event_ids.discard(event_id)
-                logger.debug(f"Azure Voice Live (ignored): {message}")
+                logger.debug("Azure Voice Live error ignored", extra={"lk.pii.error": message})
                 return
 
             # a rejected conversation.item.create fails its update_chat_ctx
@@ -1349,10 +1349,10 @@ class RealtimeSession(
         # cancelling a response that already ended is a harmless race
         lowered = message.lower()
         if code == "response_cancel_not_active" or "no active response" in lowered:
-            logger.debug(f"Azure Voice Live (suppressed): {message}")
+            logger.debug("Azure Voice Live error suppressed", extra={"lk.pii.error": message})
             return
 
-        logger.error(f"Azure Voice Live error: {message}", extra={"code": code})
+        logger.error("Azure Voice Live error", extra={"code": code, "lk.pii.error": message})
         self._emit_error(
             APIError(f"Azure Voice Live error: {message}", body=error, retryable=True),
             recoverable=True,

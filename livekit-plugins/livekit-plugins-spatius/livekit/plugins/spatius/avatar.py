@@ -334,7 +334,7 @@ class AvatarSession(BaseAvatarSession):
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as e:
             logger.warning(
                 "invalid Spatius playback-finished RPC payload",
-                extra={"payload": data.payload, "error": str(e)},
+                extra={"payload": data.payload, "lk.pii.error": str(e)},
             )
             return "reject"
 

@@ -570,7 +570,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             ) from None
         except aiohttp.ClientResponseError as e:
             logger.error(
-                f"WebSocket HTTP error: status={e.status}, message={e.message}, trace_id={trace_id}",
+                "WebSocket HTTP error",
+                extra={"status": e.status, "trace_id": trace_id},
                 exc_info=True,
             )
             raise APIStatusError(
@@ -582,7 +583,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             if not isinstance(e, (APIStatusError, APITimeoutError, APIConnectionError)):
                 logger.error(
-                    f"MiniMax WebSocket unexpected error: {type(e).__name__}: {e}, trace_id={trace_id}",
+                    "MiniMax WebSocket unexpected error",
+                    extra={"trace_id": trace_id},
                     exc_info=True,
                 )
             raise APIConnectionError(
@@ -692,7 +694,7 @@ class ChunkedStream(tts.ChunkedStream):
                 f"TTS synthesis timed out after {self._conn_options.timeout}s"
             ) from None
         except aiohttp.ClientResponseError as e:
-            logger.error(f"HTTP error: status={e.status}, message={e.message}", exc_info=True)
+            logger.error("HTTP error", extra={"status": e.status}, exc_info=True)
             raise APIStatusError(
                 message=f"HTTP {e.status}: {e.message}",
                 status_code=e.status,
@@ -701,9 +703,7 @@ class ChunkedStream(tts.ChunkedStream):
             ) from e
         except Exception as e:
             if not isinstance(e, (APIStatusError, APITimeoutError, APIConnectionError)):
-                logger.error(
-                    f"Minimax TTS unexpected error: {type(e).__name__}: {e}", exc_info=True
-                )
+                logger.error("Minimax TTS unexpected error", exc_info=True)
             raise APIConnectionError(f"Connection failed: {type(e).__name__}: {e}") from e
 
 

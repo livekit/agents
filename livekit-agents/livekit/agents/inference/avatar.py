@@ -459,7 +459,7 @@ class AvatarSession(BaseAvatarSession):
                     last_exc = APIConnectionError(str(e))
                     logger.warning(
                         "failed to call avatar gateway",
-                        extra={"provider": self._provider, "error": str(e)},
+                        extra={"provider": self._provider, "lk.pii.error": str(e)},
                     )
                 except APIError as e:
                     last_exc = e
@@ -467,7 +467,7 @@ class AvatarSession(BaseAvatarSession):
                         raise
                     logger.warning(
                         "avatar gateway returned a retryable error",
-                        extra={"provider": self._provider, "error": str(e)},
+                        extra={"provider": self._provider, "lk.pii.error": str(e)},
                     )
 
                 if i < self._conn_options.max_retry:

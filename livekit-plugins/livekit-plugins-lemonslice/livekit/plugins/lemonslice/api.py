@@ -276,13 +276,15 @@ class LemonSliceAPI:
                             "LemonSlice API returned an error",
                             extra={
                                 "status_code": e.status_code,
-                                "body": e.body,
+                                "lk.pii.body": e.body,
                             },
                         )
                         if not e.retryable:
                             raise e
                     elif isinstance(e, APIConnectionError):
-                        logger.warning("failed to call LemonSlice api", extra={"error": str(e)})
+                        logger.warning(
+                            "failed to call LemonSlice api", extra={"lk.pii.error": str(e)}
+                        )
                     else:
                         logger.exception("failed to call lemonslice api")
 

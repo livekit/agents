@@ -291,7 +291,7 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
 
             return identity
         except Exception as e:
-            logger.error(f"[CREDS] Failed to load AWS credentials: {str(e)}")
+            logger.error("[CREDS] Failed to load AWS credentials", exc_info=e)
             raise ValueError(f"Failed to load AWS credentials: {str(e)}")  # noqa: B904
 
     def get_credential_expiry_time(self) -> float | None:
@@ -314,7 +314,7 @@ class Boto3CredentialsResolver(IdentityResolver):  # type: ignore[misc]
                 return float(expiry_time.timestamp())
             return None
         except Exception as e:
-            logger.warning(f"[CREDS] Failed to get credential expiry: {e}")
+            logger.warning("[CREDS] Failed to get credential expiry", exc_info=e)
             return None
 
 
@@ -791,7 +791,7 @@ class RealtimeSession(  # noqa: F811
             logger.debug("[SESSION] Recycle timer cancelled")
             raise
         except Exception as e:
-            logger.error(f"[SESSION] Error in recycle timer: {e}")
+            logger.error("[SESSION] Error in recycle timer", exc_info=e)
 
     async def _graceful_session_recycle(self) -> None:
         """Gracefully recycle the session, preserving conversation state."""
@@ -816,7 +816,7 @@ class RealtimeSession(  # noqa: F811
                 logger.debug("[SESSION] No more pending tool results")
                 break
             except Exception as e:
-                logger.warning(f"[SESSION] Error draining tool result: {e}")
+                logger.warning("[SESSION] Error draining tool result", exc_info=e)
                 break
 
         # Step 2: Signal tasks to stop
@@ -850,7 +850,7 @@ class RealtimeSession(  # noqa: F811
                 if not self._stream_response.input_stream.closed:
                     await self._stream_response.input_stream.close()
             except Exception as e:
-                logger.debug(f"[SESSION] Error closing stream (expected): {e}")
+                logger.debug("[SESSION] Error closing stream (expected)", exc_info=e)
 
         # Step 6: Reset state for new session
         self._stream_response = None
@@ -1128,7 +1128,7 @@ class RealtimeSession(  # noqa: F811
 
             logger.debug("Stream initialized successfully")
         except Exception as e:
-            logger.debug(f"Failed to initialize stream: {str(e)}")
+            logger.debug("Failed to initialize stream", exc_info=e)
             raise
         return self
 
@@ -1656,11 +1656,11 @@ class RealtimeSession(  # noqa: F811
                     # failures. Recover by restarting the Sonic session instead of tearing
                     # down the LiveKit session.
                     if _is_recoverable_validation_error(ve):
-                        logger.warning(f"Validation error: {ve}\nAttempting to recover...")
+                        logger.warning("Validation error\nAttempting to recover...", exc_info=ve)
                         await self._restart_session(ve)
                     elif "Tool Response parsing error" in ve.message:
                         # Tool parsing errors are recoverable - log and continue
-                        logger.warning(f"Tool response parsing error (recoverable): {ve}")
+                        logger.warning("Tool response parsing error (recoverable)", exc_info=ve)
 
                         # Close current generation to unblock the model
                         if self._current_generation:
@@ -1689,7 +1689,7 @@ class RealtimeSession(  # noqa: F811
                         )
                         # Don't raise - continue processing
                     else:
-                        logger.error(f"Validation error: {ve}")
+                        logger.error("Validation error", exc_info=ve)
                         self.emit(
                             "error",
                             llm.RealtimeModelError(
@@ -1713,15 +1713,11 @@ class RealtimeSession(  # noqa: F811
                     ModelStreamErrorException,
                     InvalidEventBytes,
                 ) as re:
-                    logger.warning(
-                        f"Retryable error: {re}\nAttempting to recover...", exc_info=True
-                    )
+                    logger.warning("Retryable error\nAttempting to recover...", exc_info=True)
                     await self._restart_session(re)
                     break
                 except ModelTimeoutException as mte:
-                    logger.warning(
-                        f"Model timeout error: {mte}\nAttempting to recover...", exc_info=True
-                    )
+                    logger.warning("Model timeout error\nAttempting to recover...", exc_info=True)
                     await self._restart_session(mte)
                     break
                 except ValueError as val_err:
@@ -1734,7 +1730,7 @@ class RealtimeSession(  # noqa: F811
                     break
                 except Exception as e:
                     err_msg = getattr(e, "message", str(e))
-                    logger.error(f"Response processing error: {err_msg} (type: {type(e)})")
+                    logger.error("Response processing error", exc_info=e)
                     request_id = None
                     try:
                         request_id = err_msg.split(" ")[0].split("=")[1]

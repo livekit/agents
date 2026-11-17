@@ -154,4 +154,4 @@ class AvatarSession(BaseAvatarSession):
                 ),
             )
         except AvatarTalkException as e:
-            logger.error(e)
+            logger.error("AvatarTalk session failed", exc_info=e)

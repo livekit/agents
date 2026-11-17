@@ -181,13 +181,13 @@ class RTZROpenAPIClient:
                 self._token = {"access_token": access_token, "expire_at": float(expire_at)}
                 logger.debug("Successfully refreshed RTZR access token")
         except aiohttp.ClientResponseError as e:
-            logger.error("RTZR authentication failed: %s %s", e.status, e.message)
+            logger.error("RTZR authentication failed", exc_info=e)
             raise RTZRStatusError(
                 message=f"Authentication failed: {e.message}",
                 status_code=e.status,
             ) from e
         except aiohttp.ClientError as e:
-            logger.error("RTZR authentication connection error: %s", e)
+            logger.error("RTZR authentication connection error", exc_info=e)
             raise RTZRConnectionError("Failed to authenticate with RTZR API") from e
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
@@ -230,13 +230,13 @@ class RTZROpenAPIClient:
             logger.debug("Connected to RTZR WebSocket at %s", url)
             return ws
         except aiohttp.ClientResponseError as e:
-            logger.error("RTZR WebSocket connection failed: %s %s", e.status, e.message)
+            logger.error("RTZR WebSocket connection failed", exc_info=e)
             raise RTZRStatusError(
                 message=f"WebSocket connection failed: {e.message}",
                 status_code=e.status,
             ) from e
         except aiohttp.ClientError as e:
-            logger.error("RTZR WebSocket client error: %s", e)
+            logger.error("RTZR WebSocket client error", exc_info=e)
             raise RTZRConnectionError("WebSocket connection failed") from e
 
     def build_config(

@@ -175,7 +175,9 @@ class DelegationDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
             )
             result = response.results.get("delegate")
             if not isinstance(result, ProbabilityResult):
-                logger.warning("delegation decision failed", extra={"errors": response.errors})
+                logger.warning(
+                    "delegation decision failed", extra={"lk.pii.errors": response.errors}
+                )
                 return False
             delegate = result.value >= 0.5
         else:

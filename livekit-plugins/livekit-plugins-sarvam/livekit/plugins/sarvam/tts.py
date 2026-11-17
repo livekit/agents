@@ -585,7 +585,7 @@ class TTS(tts.TTS):
         except Exception as e:
             logger.error(
                 "Failed to connect to Sarvam TTS WebSocket",
-                extra={"error": str(e), "url": ws_url},
+                extra={"lk.pii.error": str(e), "url": ws_url},
                 exc_info=True,
             )
             raise APIConnectionError(f"WebSocket connection failed: {e}") from e
@@ -661,7 +661,7 @@ class TTS(tts.TTS):
                     except Exception as e:
                         logger.debug(
                             "Sarvam TTS keepalive ping failed; evicting connection from pool",
-                            extra={"error": str(e)},
+                            extra={"lk.pii.error": str(e)},
                         )
                         with contextlib.suppress(Exception):
                             self._pool.remove(ws)
@@ -1081,14 +1081,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     raise APIConnectionError(
                         "Sarvam TTS WebSocket transport closed before send completed"
                     ) from e
-                logger.error(
-                    f"Error in send task: {e}", extra=self._build_log_context(), exc_info=True
-                )
+                logger.error("Error in send task", extra=self._build_log_context(), exc_info=True)
                 raise APIConnectionError(f"Send task failed: {e}") from e
             except Exception as e:
-                logger.error(
-                    f"Error in send task: {e}", extra=self._build_log_context(), exc_info=True
-                )
+                logger.error("Error in send task", extra=self._build_log_context(), exc_info=True)
                 raise APIConnectionError(f"Send task failed: {e}") from e
             finally:
                 input_sent_event.set()
@@ -1171,12 +1167,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                         "Sarvam TTS WebSocket transport closed during receive"
                     ) from e
                 logger.error(
-                    f"Error in receive task: {e}", extra=self._build_log_context(), exc_info=True
+                    "Error in receive task", extra=self._build_log_context(), exc_info=True
                 )
                 raise
-            except Exception as e:
+            except Exception:
                 logger.error(
-                    f"Error in receive task: {e}", extra=self._build_log_context(), exc_info=True
+                    "Error in receive task", extra=self._build_log_context(), exc_info=True
                 )
                 raise
 
@@ -1234,7 +1230,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             self._connection_state = ConnectionState.FAILED
-            logger.error(f"Connection failed: {e}", extra=self._build_log_context())
+            logger.error("Connection failed", extra=self._build_log_context(), exc_info=e)
             raise APIConnectionError(f"Failed to connect to TTS WebSocket: {e}") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
             self._connection_state = ConnectionState.FAILED
@@ -1242,7 +1238,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             self._connection_state = ConnectionState.FAILED
             logger.error(
-                f"Unexpected error in WebSocket session: {e}",
+                "Unexpected error in WebSocket session",
                 extra=self._build_log_context(),
                 exc_info=True,
             )
@@ -1291,8 +1287,9 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         except json.JSONDecodeError as e:
             logger.warning(
-                f"Invalid JSON in WebSocket message: {e}",
+                "Invalid JSON in WebSocket message",
                 extra={**self._build_log_context(), "lk.pii.raw_data": msg_data[:200]},
+                exc_info=e,
             )
             return True  # Continue processing
         except (APIStatusError, APIConnectionError):
@@ -1300,9 +1297,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise
         except Exception as e:
             logger.error(
-                f"Error processing WebSocket message: {e}",
-                extra=self._build_log_context(),
-                exc_info=True,
+                "Error processing WebSocket message", extra=self._build_log_context(), exc_info=True
             )
             raise APIStatusError(
                 message=f"Message processing error: {e}. Raw server message: {msg_data}",
@@ -1325,7 +1320,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             return True
 
         except Exception as e:  # base64 decode error
-            logger.error(f"Invalid base64 audio data: {e}", extra=self._build_log_context())
+            logger.error("Invalid base64 audio data", extra=self._build_log_context(), exc_info=e)
             # Don't stop processing for audio decode errors
             return True
 

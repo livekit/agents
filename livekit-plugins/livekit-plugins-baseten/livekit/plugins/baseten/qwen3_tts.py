@@ -415,7 +415,7 @@ class _Qwen3Backend:
                     logger.warning("keepalive rejected: %s", event.get("message"))
                     return False
         except Exception as e:  # noqa: BLE001
-            logger.debug("keepalive failed (%s); dropping socket", e)
+            logger.debug("keepalive failed; dropping socket", exc_info=e)
             return False
 
     async def _shutdown_ws(self, ws: aiohttp.ClientWebSocketResponse, *, notify: bool) -> None:

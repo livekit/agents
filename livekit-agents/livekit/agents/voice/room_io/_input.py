@@ -514,10 +514,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                 try:
                     yield self._processor._process(frame)
                 except Exception as e:
-                    logger.warning(
-                        "error pre-processing audio frame: %s",
-                        e,
-                    )
+                    logger.warning("error pre-processing audio frame", exc_info=e)
                     yield frame
             else:
                 yield frame

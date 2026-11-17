@@ -351,8 +351,8 @@ class AvatarSession(BaseAvatarSession):
                     )
                     if data["code"] <= 200:
                         logger.info(f"LiveAvatar session stopped: {self._session_id}")
-            except Exception as e:
-                logger.warning(f"Failed to stop LiveAvatar session: {e}", exc_info=True)
+            except Exception:
+                logger.warning("Failed to stop LiveAvatar session", exc_info=True)
 
             await self._audio_buffer.aclose()
             await ws_conn.close()

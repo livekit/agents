@@ -92,7 +92,7 @@ class ConnectionPool(Generic[T]):
             try:
                 await self._maybe_close_connection(conn)
             except Exception as e:
-                logger.warning("error closing connection %s: %s", conn, e)
+                logger.warning("error closing connection %s", conn, exc_info=e)
             except BaseException:
                 # the connection has already left _to_close and is not in _connections,
                 # so nothing else owns it. put it back before unwinding, otherwise a

@@ -903,7 +903,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             self._logger.error(
                 "Failed to connect to Sarvam realtime STT WebSocket",
-                extra={**self._build_log_context(), "error": str(e), "url": ws_url},
+                extra={**self._build_log_context(), "lk.pii.error": str(e), "url": ws_url},
                 exc_info=True,
             )
             raise
@@ -912,7 +912,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 "Sarvam realtime STT WebSocket handshake failed",
                 extra={
                     **self._build_log_context(),
-                    "error": e.message,
+                    "lk.pii.error": e.message,
                     "status_code": e.status,
                     "url": ws_url,
                 },
@@ -922,7 +922,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         except Exception as e:
             self._logger.error(
                 "Unexpected Sarvam realtime STT WebSocket connection error",
-                extra={**self._build_log_context(), "error": str(e), "url": ws_url},
+                extra={**self._build_log_context(), "lk.pii.error": str(e), "url": ws_url},
                 exc_info=True,
             )
             raise APIConnectionError("failed to connect to Sarvam realtime STT") from e

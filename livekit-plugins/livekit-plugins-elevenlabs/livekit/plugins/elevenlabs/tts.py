@@ -1022,7 +1022,11 @@ class _Connection:
                 if error := data.get("error"):
                     logger.error(
                         "elevenlabs tts returned error",
-                        extra={"context_id": context_id, "error": error, "lk.pii.data": data},
+                        extra={
+                            "context_id": context_id,
+                            "lk.pii.error": error,
+                            "lk.pii.data": data,
+                        },
                     )
                     if context_id is not None:
                         if ctx and not ctx.waiter.done():

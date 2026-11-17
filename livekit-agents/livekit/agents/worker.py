@@ -1203,7 +1203,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
                 logger.warning(
                     f"failed to connect to livekit, retrying in {retry_delay}s",
-                    extra={"retry_count": retry_count, "max_retry": self._max_retry, "error": e},
+                    extra={
+                        "retry_count": retry_count,
+                        "max_retry": self._max_retry,
+                        "lk.pii.error": e,
+                    },
                 )
                 await asyncio.sleep(retry_delay)
             finally:

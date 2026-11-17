@@ -127,7 +127,7 @@ class LiveAvatarAPI:
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning(
                     f"API request to {url} failed on attempt {i}",
-                    extra={"error": str(e)},
+                    extra={"lk.pii.error": str(e)},
                 )
             except Exception:
                 logger.exception("failed to call LiveAvatar API")
