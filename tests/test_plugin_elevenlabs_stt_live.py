@@ -36,7 +36,7 @@ class _FixedTurnDetector:
         return self.probability
 
 
-@pytest.mark.parametrize("turn_detection", ["vad", "manual", 0.1, 0.9])
+@pytest.mark.parametrize("turn_detection", ["vad", "manual", 0.1, 0.9, "stt"])
 async def test_live_flush_preserves_each_turn(turn_detection) -> None:
     load_dotenv(Path(__file__).parents[1] / ".env")
     if not os.environ.get("ELEVEN_API_KEY"):
@@ -48,7 +48,12 @@ async def test_live_flush_preserves_each_turn(turn_detection) -> None:
         audio = wav.readframes(wav.getnframes())
 
     async with aiohttp.ClientSession() as http:
-        stt = elevenlabs.STT(model="scribe_v2_realtime", language_code="en", http_session=http)
+        stt = elevenlabs.STT(
+            model="scribe_v3_live" if turn_detection == "stt" else "scribe_v2_realtime",
+            commit_strategy="turn_prediction" if turn_detection == "stt" else "manual",
+            language_code="en",
+            http_session=http,
+        )
         session = AgentSession(
             stt=stt,
             vad=silero.VAD.load(),

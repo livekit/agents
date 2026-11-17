@@ -93,6 +93,13 @@ ElevenLabsSTTModels = Literal[
 # Models served over the realtime WebSocket endpoint instead of the batch API.
 _REALTIME_MODELS = ("scribe_v2_realtime", "scribe_v3_live")
 
+CommitStrategy = Literal["manual", "vad", "turn_prediction"]
+
+
+def _validate_commit_strategy(model: str, commit_strategy: NotGivenOr[CommitStrategy]) -> None:
+    if commit_strategy == "turn_prediction" and model != "scribe_v3_live":
+        raise ValueError("turn_prediction is only supported for scribe_v3_live")
+
 
 @dataclass
 class STTOptions:
@@ -111,6 +118,13 @@ class STTOptions:
     enable_logging: bool
     previous_text: str | None
     audio_chunk_duration_ms: int = 50
+    commit_strategy: NotGivenOr[CommitStrategy] = NOT_GIVEN
+
+    @property
+    def resolved_commit_strategy(self) -> CommitStrategy:
+        if is_given(self.commit_strategy):
+            return self.commit_strategy
+        return "vad" if is_given(self.server_vad) and self.server_vad is not None else "manual"
 
 
 class STT(stt.STT):
@@ -127,6 +141,7 @@ class STT(stt.STT):
         sample_rate: STTRealtimeSampleRates = 16000,
         audio_chunk_duration_ms: int = 50,
         server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
+        commit_strategy: NotGivenOr[CommitStrategy] = NOT_GIVEN,
         include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
         model: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
@@ -163,8 +178,13 @@ class STT(stt.STT):
                 message frequency but increase buffering latency. Flushes send any shorter
                 remaining chunk before committing. Only used for realtime models.
             server_vad (NotGivenOr[VADOptions | None]): Server-side VAD options, only supported for realtime models.
-                At construction, omit or set to None to use manual commits. Pass {} to enable server VAD defaults.
-                In update_options(), omission keeps the current setting; None disables server VAD and restores manual commits.
+                Pass a dict to configure VAD for the vad or turn_prediction commit strategy.
+                When commit_strategy is omitted, a dict enables VAD commits and None uses manual commits.
+                In update_options(), omission keeps the current setting.
+            commit_strategy (NotGivenOr[CommitStrategy]): Realtime transcript commit strategy.
+                If omitted, uses vad when server_vad is a dict, otherwise manual.
+                An explicit strategy takes precedence over server_vad. turn_prediction is only
+                supported for scribe_v3_live and uses VAD as a fallback.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             model (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
                 be selected based on parameters provided.
@@ -212,6 +232,7 @@ class STT(stt.STT):
                 model = "scribe_v2_realtime" if use_realtime else "scribe_v1"
         model = model if is_given(model) else "scribe_v1"
         use_realtime = model in _REALTIME_MODELS
+        _validate_commit_strategy(model, commit_strategy)
 
         if not use_realtime and is_given(server_vad):
             logger.warning("Server-side VAD is only supported for realtime models")
@@ -236,15 +257,6 @@ class STT(stt.STT):
             )
             resolved_previous_text = None
 
-        super().__init__(
-            capabilities=STTCapabilities(
-                streaming=use_realtime,
-                interim_results=True,
-                aligned_transcript="word" if include_timestamps and use_realtime else False,
-                manual_flush=use_realtime and (not is_given(server_vad) or server_vad is None),
-            )
-        )
-
         elevenlabs_api_key = api_key if is_given(api_key) else os.environ.get("ELEVEN_API_KEY")
         if not elevenlabs_api_key:
             raise ValueError(
@@ -264,12 +276,21 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             audio_chunk_duration_ms=audio_chunk_duration_ms,
             server_vad=server_vad,
+            commit_strategy=commit_strategy,
             include_timestamps=include_timestamps,
             model_id=model,
             keyterms=keyterms,
             no_verbatim=no_verbatim if is_given(no_verbatim) else False,
             enable_logging=enable_logging,
             previous_text=resolved_previous_text,
+        )
+        super().__init__(
+            capabilities=STTCapabilities(
+                streaming=use_realtime,
+                interim_results=True,
+                aligned_transcript="word" if include_timestamps and use_realtime else False,
+                manual_flush=use_realtime and self._opts.resolved_commit_strategy == "manual",
+            )
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
@@ -407,23 +428,31 @@ class STT(stt.STT):
         *,
         tag_audio_events: NotGivenOr[bool] = NOT_GIVEN,
         server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
+        commit_strategy: NotGivenOr[CommitStrategy] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         secondary_languages: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """Update STT options. Omitted options keep their current values.
 
-        Set server_vad to None to disable server VAD and use manual commits.
-        Pass {} to enable server VAD with defaults, or a VADOptions dict to configure it.
-        Changing server_vad reconnects active streams and can discard unfinished transcripts.
+        An explicit commit_strategy takes precedence over server_vad.
+        Without an explicit strategy, server_vad=None uses manual commits and a dict enables VAD.
+        VAD options also configure the fallback for turn_prediction.
+        Changing these options reconnects active streams and can discard unfinished transcripts.
         Wait for the current turn's final transcript before changing the commit strategy.
         """
+        _validate_commit_strategy(self._opts.model_id, commit_strategy)
+
         if is_given(tag_audio_events):
             self._opts.tag_audio_events = tag_audio_events
 
         if is_given(server_vad):
             self._opts.server_vad = server_vad
-            self._capabilities.manual_flush = self._capabilities.streaming and server_vad is None
+        if is_given(commit_strategy):
+            self._opts.commit_strategy = commit_strategy
+        self._capabilities.manual_flush = (
+            self._capabilities.streaming and self._opts.resolved_commit_strategy == "manual"
+        )
 
         if is_given(keyterms):
             self._opts.keyterms = keyterms
@@ -446,6 +475,7 @@ class STT(stt.STT):
         for stream in self._streams:
             stream.update_options(
                 server_vad=server_vad,
+                commit_strategy=commit_strategy,
                 no_verbatim=no_verbatim,
                 keyterms=keyterms,
                 secondary_languages=secondary_languages,
@@ -497,17 +527,23 @@ class SpeechStream(stt.SpeechStream):
         self,
         *,
         server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
+        commit_strategy: NotGivenOr[CommitStrategy] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         secondary_languages: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         """Update stream options. Omitted options keep their current values.
 
-        Set server_vad to None to disable server VAD and use manual commits.
-        Pass {} to enable server VAD with defaults, or a VADOptions dict to configure it.
+        An explicit commit_strategy takes precedence over server_vad.
+        Without an explicit strategy, server_vad=None uses manual commits and a dict enables VAD.
+        VAD options also configure the fallback for turn_prediction.
         Changes reconnect the stream and can discard unfinished transcripts.
         Wait for the current turn's final transcript before changing these options.
         """
+        _validate_commit_strategy(self._opts.model_id, commit_strategy)
+        if is_given(commit_strategy):
+            self._opts.commit_strategy = commit_strategy
+            self._reconnect_event.set()
         if is_given(server_vad):
             self._opts.server_vad = server_vad
             self._reconnect_event.set()
@@ -739,11 +775,10 @@ class SpeechStream(stt.SpeechStream):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Establish WebSocket connection to the ElevenLabs Scribe realtime API"""
-        commit_strategy = "vad" if self._server_vad is not None else "manual"
         params = [
             f"model_id={self._opts.model_id}",
             f"audio_format=pcm_{self._opts.sample_rate}",
-            f"commit_strategy={commit_strategy}",
+            f"commit_strategy={self._opts.resolved_commit_strategy}",
             f"enable_logging={str(self._opts.enable_logging).lower()}",
         ]
 
@@ -881,7 +916,7 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._event_ch.send_nowait(final_event)
 
-            if self._speaking and (not text or self._server_vad is not None):
+            if self._speaking and (not text or self._opts.resolved_commit_strategy != "manual"):
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=SpeechEventType.END_OF_SPEECH,

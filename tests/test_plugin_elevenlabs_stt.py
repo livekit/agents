@@ -45,6 +45,7 @@ class _EventSink:
 def _new_stream(
     *,
     server_vad=NOT_GIVEN,
+    commit_strategy=NOT_GIVEN,
     language: str | None = "en",
     include_timestamps: bool = False,
     include_language_detection=NOT_GIVEN,
@@ -65,6 +66,7 @@ def _new_stream(
         include_timestamps=include_timestamps,
         sample_rate=16000,
         server_vad=server_vad,
+        commit_strategy=commit_strategy,
         keyterms=NOT_GIVEN,
         no_verbatim=False,
         enable_logging=True,
@@ -333,6 +335,126 @@ async def _connect_ws_url(stream: elevenlabs_stt.SpeechStream) -> str:
 
     await stream._connect_ws()
     return captured["url"]
+
+
+@pytest.mark.parametrize(
+    ("commit_strategy", "server_vad", "expected"),
+    [
+        (NOT_GIVEN, NOT_GIVEN, "manual"),
+        (NOT_GIVEN, None, "manual"),
+        (NOT_GIVEN, {}, "vad"),
+        ("manual", {}, "manual"),
+        ("vad", None, "vad"),
+        ("turn_prediction", NOT_GIVEN, "turn_prediction"),
+        ("turn_prediction", None, "turn_prediction"),
+        ("turn_prediction", {}, "turn_prediction"),
+    ],
+)
+async def test_commit_strategy_controls_connection_and_manual_flush(
+    commit_strategy, server_vad, expected
+) -> None:
+    instance = elevenlabs_stt.STT(
+        api_key="test-key",
+        model="scribe_v3_live",
+        commit_strategy=commit_strategy,
+        server_vad=server_vad,
+    )
+    stream = _new_stream()
+    stream._opts = instance._opts
+    query = URL(await _connect_ws_url(stream)).query
+    assert query["commit_strategy"] == expected
+    assert instance.capabilities.manual_flush is (expected == "manual")
+
+
+async def test_turn_prediction_passes_vad_fallback_options() -> None:
+    options = {
+        "vad_silence_threshold_secs": 2.0,
+        "vad_threshold": 0.3,
+        "min_speech_duration_ms": 100,
+        "min_silence_duration_ms": 200,
+    }
+    stream = _new_stream(commit_strategy="turn_prediction", server_vad=options)
+    stream._opts.model_id = "scribe_v3_live"
+    query = URL(await _connect_ws_url(stream)).query
+    assert query["commit_strategy"] == "turn_prediction"
+    for name, value in options.items():
+        assert query[name] == str(value)
+
+
+@pytest.mark.parametrize("model", ["scribe_v1", "scribe_v2", "scribe_v2_realtime", "scribe_v3"])
+def test_turn_prediction_rejects_unsupported_models(model: str) -> None:
+    with pytest.raises(ValueError, match="turn_prediction is only supported for scribe_v3_live"):
+        elevenlabs_stt.STT(api_key="test-key", model=model, commit_strategy="turn_prediction")
+
+    instance = elevenlabs_stt.STT(api_key="test-key", model=model)
+    with pytest.raises(ValueError, match="turn_prediction is only supported for scribe_v3_live"):
+        instance.update_options(commit_strategy="turn_prediction", server_vad={})
+    assert instance._opts.commit_strategy is NOT_GIVEN
+    assert instance._opts.server_vad is NOT_GIVEN
+
+
+@pytest.mark.parametrize("include_timestamps", [False, True])
+@pytest.mark.parametrize("include_language_detection", [False, True])
+def test_turn_prediction_waits_for_server_commit_and_emits_one_end_of_speech(
+    include_timestamps: bool, include_language_detection: bool
+) -> None:
+    stream = _new_stream(
+        commit_strategy="turn_prediction",
+        include_timestamps=include_timestamps,
+        include_language_detection=include_language_detection,
+    )
+    stream._opts.model_id = "scribe_v3_live"
+    for probability in (0.08, 0.95):
+        stream._process_stream_event(
+            {**_partial_transcript("hello"), "turn_probability": probability}
+        )
+    assert [event.type for event in stream._event_ch.events] == [
+        stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.INTERIM_TRANSCRIPT,
+    ]
+    for with_timestamps in (False, True):
+        stream._process_stream_event(
+            _committed_transcript("hello", with_timestamps=with_timestamps)
+        )
+    assert [event.type for event in stream._event_ch.events[2:]] == [
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
+        stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    assert stream._event_ch.events[-1].alternatives[0].text == "hello"
+    assert stream._speaking is False
+
+
+async def test_update_commit_strategy_reconnects_active_stream_and_updates_capabilities() -> None:
+    instance = elevenlabs_stt.STT(api_key="test-key", model="scribe_v3_live")
+    stream = _new_stream()
+    stream._opts = instance._opts
+    stream._reconnect_event = asyncio.Event()
+    instance._streams.add(stream)
+
+    for strategy in ("turn_prediction", "manual", "vad"):
+        stream._reconnect_event.clear()
+        instance.update_options(commit_strategy=strategy)
+        assert stream._reconnect_event.is_set()
+        assert instance.capabilities.manual_flush is (strategy == "manual")
+        assert URL(await _connect_ws_url(stream)).query["commit_strategy"] == strategy
+
+    instance.update_options(server_vad=None)
+    assert instance.capabilities.manual_flush is False
+    assert URL(await _connect_ws_url(stream)).query["commit_strategy"] == "vad"
+
+
+def test_stream_commit_strategy_update_validates_before_changing_options() -> None:
+    stream = _new_stream()
+    stream._reconnect_event = asyncio.Event()
+    with pytest.raises(ValueError, match="turn_prediction is only supported for scribe_v3_live"):
+        stream.update_options(commit_strategy="turn_prediction", server_vad={})
+    assert not stream._reconnect_event.is_set()
+    assert stream._opts.server_vad is NOT_GIVEN
+
+    stream._opts.model_id = "scribe_v3_live"
+    stream.update_options(commit_strategy="turn_prediction")
+    assert stream._reconnect_event.is_set()
+    assert stream._opts.resolved_commit_strategy == "turn_prediction"
 
 
 async def test_connect_ws_includes_keyterms() -> None:

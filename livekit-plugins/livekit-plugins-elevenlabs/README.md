@@ -34,3 +34,26 @@ chunks do not pace reconnect backlogs or guarantee that provider queue errors
 are avoided. Flushes send any remaining partial chunk before the commit.
 
 This option applies only to realtime STT and is set at construction time.
+
+## Scribe v3 Live turn prediction
+
+Enable server-side turn prediction with `scribe_v3_live`:
+
+```python
+stt = elevenlabs.STT(
+    model="scribe_v3_live",
+    commit_strategy="turn_prediction",
+    server_vad={"vad_silence_threshold_secs": 2.0},
+)
+```
+
+Set `turn_handling={"turn_detection": "stt"}` on `AgentSession` to use the
+server's commits as turn boundaries. `server_vad` is optional and configures the
+VAD fallback. Other models do not support `turn_prediction`.
+
+The other commit strategies are `manual` and `vad`. If `commit_strategy` is
+omitted, the plugin uses `vad` when `server_vad` is a dict and `manual` otherwise.
+An explicit strategy takes precedence over `server_vad`.
+
+Use `stt.update_options(commit_strategy=...)` to change strategies. This reconnects
+active streams, so wait for the current turn's final transcript first.
