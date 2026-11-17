@@ -5,7 +5,7 @@ import base64
 import json
 import os
 import weakref
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, TypedDict, cast, overload
 from urllib.parse import urlencode
 
@@ -319,6 +319,7 @@ def _build_session_create_payload(opts: _TTSOptions) -> dict[str, Any]:
             "timeout": opts.conn_options.timeout,
             "retries": opts.conn_options.max_retry,
         }
+    params["handoff_protocol"] = 1
 
     return params
 
@@ -327,6 +328,16 @@ def _build_session_create_payload(opts: _TTSOptions) -> dict[str, Any]:
 class _TTSConnection:
     ws: aiohttp.ClientWebSocketResponse
     session_id: str | None
+    # One reader owns the socket, so a gateway frame reaches the client even
+    # while the connection sits idle in the pool.
+    inbox: asyncio.Queue[aiohttp.WSMessage] = field(default_factory=asyncio.Queue)
+    reader: asyncio.Task[None] | None = None
+    in_use: bool = False
+    handoff_id: str | None = None
+    retired: bool = False
+
+    async def receive(self, timeout: float) -> aiohttp.WSMessage:
+        return await asyncio.wait_for(self.inbox.get(), timeout)
 
 
 class TTS(tts.TTS[Literal["fallback_activated"]]):
@@ -679,10 +690,56 @@ class TTS(tts.TTS[Literal["fallback_activated"]]):
                 "failed to send session.create message to LiveKit Inference TTS"
             ) from e
 
-        return _TTSConnection(ws=ws, session_id=session_id)
+        connection = _TTSConnection(ws=ws, session_id=session_id)
+        connection.reader = asyncio.create_task(self._read_ws(connection))
+        return connection
 
     async def _close_ws(self, connection: _TTSConnection) -> None:
+        if connection.reader is not None:
+            connection.reader.cancel()
         await connection.ws.close()
+
+    async def _read_ws(self, connection: _TTSConnection) -> None:
+        while True:
+            msg = await connection.ws.receive()
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                try:
+                    data = json.loads(msg.data)
+                except ValueError:
+                    data = {}
+                if data.get("type") == "session.handoff.request":
+                    # the gateway is draining: finish any turn here, then leave
+                    connection.handoff_id = str(data.get("handoff_id", ""))
+                    if not connection.in_use:
+                        await self._retire(connection)
+                    continue
+            connection.inbox.put_nowait(msg)
+            if msg.type in (
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSING,
+                aiohttp.WSMsgType.ERROR,
+            ):
+                if not connection.in_use:
+                    self._pool.remove(connection)
+                return
+
+    async def _retire(self, connection: _TTSConnection) -> None:
+        """Leave a draining gateway: acknowledge, close, and open the next connection elsewhere."""
+        if connection.retired:
+            return
+        connection.retired = True
+        self._pool.remove(connection)
+        try:
+            await connection.ws.send_str(
+                json.dumps(
+                    {"type": "session.handoff.complete", "handoff_id": connection.handoff_id}
+                )
+            )
+        except Exception:
+            pass
+        await connection.ws.close()
+        self._pool.prewarm()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -812,12 +869,12 @@ class SynthesizeStream(tts.SynthesizeStream):
             # needed in case empty input is sent
             input_sent_event.set()
 
-        async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _recv_task(connection: _TTSConnection) -> None:
             current_session_id: str | None = None
             await input_sent_event.wait()
 
             while True:
-                msg = await ws.receive(timeout=self._conn_options.timeout)
+                msg = await connection.receive(timeout=self._conn_options.timeout)
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -825,6 +882,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ):
                     raise APIStatusError(
                         "Gateway connection closed unexpectedly", request_id=request_id
+                    )
+
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    raise APIConnectionError("Gateway connection lost") from (
+                        msg.data if isinstance(msg.data, BaseException) else None
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -913,18 +975,22 @@ class SynthesizeStream(tts.SynthesizeStream):
                     mime_type="audio/pcm",
                 )
                 ws = connection.ws
+                connection.in_use = True
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws)),
-                    asyncio.create_task(_recv_task(ws)),
+                    asyncio.create_task(_recv_task(connection)),
                 ]
 
                 try:
                     await asyncio.gather(*tasks)
                 finally:
+                    connection.in_use = False
                     input_sent_event.set()
                     await sent_tokenizer_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
+                if connection.handoff_id is not None:
+                    await self._tts._retire(connection)
 
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
