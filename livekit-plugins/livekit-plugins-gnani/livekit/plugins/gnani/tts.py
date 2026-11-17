@@ -55,6 +55,8 @@ from .models import (
     MAX_SPEED,
     MIN_SPEED,
     RETIRED_MODELS,
+    SOURCE_HEADER,
+    SOURCE_VALUE,
     GnaniTTSBitrates,
     GnaniTTSContainers,
     GnaniTTSEncodings,
@@ -64,6 +66,7 @@ from .models import (
     GnaniTTSV30Voices,
     GnaniTTSVoices,
 )
+from .request_id import REQUEST_ID_HEADER, generate_request_id
 
 GNANI_TTS_BASE_URL = "https://api.vachana.ai"
 
@@ -324,8 +327,11 @@ def _build_payload(opts: GnaniTTSOptions, text: str) -> dict:
 
 
 def _build_headers(opts: GnaniTTSOptions) -> dict[str, str]:
+    """Headers for one outbound request: a new request ID each time it is called."""
     return {
         "X-API-Key-ID": opts.api_key,
+        SOURCE_HEADER: SOURCE_VALUE,
+        REQUEST_ID_HEADER: generate_request_id(),
         "Content-Type": "application/json",
     }
 

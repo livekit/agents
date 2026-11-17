@@ -393,6 +393,8 @@ def test_ws_headers_single_language():
     assert h["language_code"] == "ta-IN"
     assert "x-language-candidates" not in h
     assert h["x-api-key-id"] == "k"
+    assert h["x-source"] == "livekit"
+    assert h["x-api-request-id"].startswith("lk_req_")
     assert h["x-sample-rate"] == "16000"
 
 
@@ -514,7 +516,10 @@ def test_session_tuning_is_sent_and_validated():
 
     unset = _build_ws_headers(_stt()._opts)
     assert not [
-        k for k in unset if k.startswith("x-") and k not in ("x-api-key-id", "x-sample-rate")
+        k
+        for k in unset
+        if k.startswith("x-")
+        and k not in ("x-api-key-id", "x-source", "x-api-request-id", "x-sample-rate")
     ]
 
     # the server clamps silently, so out-of-range values are rejected here
@@ -642,6 +647,7 @@ class FakeVachanaSTT:
         self.auto_finalize = False
         self.rest_calls: list[dict[str, Any]] = []
         self.rest_status = 200
+        self.rest_request_id: str | None = "req-1"
 
     async def ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
@@ -758,10 +764,11 @@ class FakeVachanaSTT:
             )
         body: dict[str, Any] = {
             "success": True,
-            "request_id": "req-1",
             "transcript": self.text,
             "model": form.get("model", "prisma-v2.5"),
         }
+        if self.rest_request_id:
+            body["request_id"] = self.rest_request_id
         if self.detected:
             body["detected_language_code"] = self.detected
         return web.json_response(body)
@@ -846,6 +853,8 @@ async def test_stream_sends_the_expected_handshake(server):
 
     h = server.sessions[0].headers
     assert h["x-api-key-id"] == "test-key"
+    assert h["x-source"] == "livekit"  # on the real upgrade request
+    assert h["x-api-request-id"].startswith("lk_req_")
     assert h["model"] == "prisma-v3.0"
     assert h["language_code"] == "indic-auto"
     assert h["x-language-candidates"] == "hi-IN,en-IN"
@@ -1314,6 +1323,8 @@ async def test_language_list_changes_reconnect_with_the_new_handshake(
         assert new[key] == value
     if "x-language-candidates" not in headers:
         assert "x-language-candidates" not in new
+    # each connection is its own API request, so it carries its own ID
+    assert new["x-api-request-id"] != server.sessions[0].headers["x-api-request-id"]
 
 
 async def test_single_language_change_still_updates_live(server):
@@ -1498,9 +1509,23 @@ async def test_recognize_sends_model_aware_form_and_reports_detected_language(se
     assert json.loads(call["keyterms"]) == ["Gnani"]
     assert call["topic"] == "recharge"
     assert call["_headers"]["X-API-Key-ID"] == "test-key"
+    assert call["_headers"]["X-Source"] == "livekit"
     assert event.alternatives[0].text == server.text
     assert event.alternatives[0].language == "en-IN"
     assert event.request_id == "req-1"
+
+
+async def test_recognize_sends_a_request_id_and_falls_back_to_it(server):
+    stt_ = _make_stt(server, language="hi-IN")
+
+    await stt_.recognize(FRAME, conn_options=OPTS)  # the server answers with its own ID
+    server.rest_request_id = None
+    event = await stt_.recognize(FRAME, conn_options=OPTS)  # no ID in the response
+
+    first, second = (c["_headers"]["X-API-Request-ID"] for c in server.rest_calls)
+    assert first.startswith("lk_req_") and second.startswith("lk_req_")
+    assert first != second  # one per request
+    assert event.request_id == second  # what we sent stands in for the missing one
 
 
 async def test_recognize_default_model_sends_no_model(server):

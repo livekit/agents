@@ -1,5 +1,10 @@
 from typing import Literal
 
+SOURCE_HEADER = "X-Source"
+SOURCE_VALUE = "livekit"
+"""Sent on every request so the Vachana API can tell traffic from this plugin apart from
+other clients (the default ``User-Agent`` only names the HTTP library)."""
+
 ###############################################################################
 #                                    STT                                       #
 ###############################################################################
@@ -183,4 +188,4 @@ MAX_SPEED = 1.15
 
 GnaniTTSEncodings = Literal["linear_pcm", "oggopus"]
 GnaniTTSContainers = Literal["raw", "mp3", "wav", "ogg"]
-GnaniTTSBitrates = Literal["96k", "128k", "192k"]
+GnaniTTSBitrates = Literal["32k", "64k", "96k", "128k", "192k"]

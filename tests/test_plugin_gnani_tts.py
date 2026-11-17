@@ -545,6 +545,16 @@ def test_tts_voice_catalogues_are_disjoint():
     assert set(get_args(GnaniTTSVoices)) == v25 | v30
 
 
+def test_tts_bitrates_match_what_the_api_accepts():
+    """The API rejects anything outside this list with a 400 ("Input should be '32k',
+    '64k', '96k', '128k' or '192k'")."""
+    from typing import get_args
+
+    from livekit.plugins.gnani.models import GnaniTTSBitrates
+
+    assert get_args(GnaniTTSBitrates) == ("32k", "64k", "96k", "128k", "192k")
+
+
 def test_tts_speed_validation():
     from livekit.plugins.gnani import TTS
 
@@ -797,7 +807,18 @@ async def test_synthesize_sends_model_aware_request_and_returns_clean_audio(serv
     assert sent["speed"] == 1.1
     assert sent["text"] == "namaste"
     assert server.headers[-1]["X-API-Key-ID"] == "test-key"
+    assert server.headers[-1]["X-Source"] == "livekit"  # rest, sse and websocket
+    assert server.headers[-1]["X-API-Request-ID"].startswith("lk_req_")
     _assert_is_the_speech(audio)
+
+
+@pytest.mark.parametrize("method", ["rest", "sse", "websocket"])
+async def test_every_request_gets_its_own_request_id(server, method):
+    tts = _make_tts(server, model="timbre-v3.0", synthesize_method=method)
+    await _synthesize(tts)
+    await _synthesize(tts)
+    ids = [h["X-API-Request-ID"] for h in server.headers[-2:]]
+    assert len(set(ids)) == 2
 
 
 @pytest.mark.parametrize("method", ["rest", "sse", "websocket"])

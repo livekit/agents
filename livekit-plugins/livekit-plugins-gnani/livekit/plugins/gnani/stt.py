@@ -55,11 +55,14 @@ from .models import (
     DEFAULT_STT_MODEL,
     INDIC_AUTO,
     PRISMA_V30,
+    SOURCE_HEADER,
+    SOURCE_VALUE,
     STT_MODELS,
     GnaniSTTFormats,
     GnaniSTTLanguages,
     GnaniSTTModels,
 )
+from .request_id import REQUEST_ID_HEADER, generate_request_id
 
 GnaniSTTFormat = GnaniSTTFormats
 
@@ -339,6 +342,8 @@ def _build_ws_headers(opts: GnaniSTTOptions) -> dict[str, str]:
     values are JSON-escaped (``ensure_ascii``) as the API documents."""
     headers: dict[str, str] = {
         "x-api-key-id": opts.api_key,
+        SOURCE_HEADER.lower(): SOURCE_VALUE,
+        REQUEST_ID_HEADER.lower(): generate_request_id(),
         "x-sample-rate": str(opts.sample_rate),
         # Always explicit: omitting it makes prisma-v3.0 default to "transcribe" for
         # single hi-IN/en-IN, while prisma-v2.5 defaults to "verbatim".
@@ -592,8 +597,11 @@ class STT(stt.STT):
         for name, value in _build_rest_fields(opts, lang):
             form_data.add_field(name, value)
 
+        sent_request_id = generate_request_id()
         headers: dict[str, str] = {
             "X-API-Key-ID": self._opts.api_key,
+            SOURCE_HEADER: SOURCE_VALUE,
+            REQUEST_ID_HEADER: sent_request_id,
         }
 
         try:
@@ -617,7 +625,8 @@ class STT(stt.STT):
 
                 response_json = await res.json()
                 transcript = response_json.get("transcript", "")
-                request_id = response_json.get("request_id", "")
+                # the server's own ID when it sends one, else the one we sent
+                request_id = response_json.get("request_id") or sent_request_id
                 detected = response_json.get("detected_language_code")
 
                 return stt.SpeechEvent(
