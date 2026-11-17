@@ -3184,6 +3184,8 @@ class AgentActivity(RecognitionHooks):
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
 
     def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
+        if self._session._amd is not None:
+            return  # AMD owns replies while it runs, and a voicemail greeting runs long
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(
                 "skipping user turn exceeded, speech scheduling is paused",

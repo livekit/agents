@@ -33,6 +33,7 @@ from livekit.agents import (
     LanguageCode,
     StopResponse,
     UserStateChangedEvent,
+    UserTurnExceededEvent,
     inference,
     llm,
     stt,
@@ -2294,6 +2295,24 @@ async def test_amd_cannot_enter_while_an_agent_task_runs() -> None:
         assert results == ["done"]
         async with detector:
             assert session.amd is detector
+
+
+@pytest.mark.asyncio
+async def test_user_turn_limit_does_not_reply_while_amd_runs() -> None:
+    async with running() as (detector, session, _, _):
+        activity = session._activity
+        assert activity is not None
+        # a voicemail greeting can run past the limit; AMD owns replies
+        activity.on_user_turn_exceeded(
+            UserTurnExceededEvent(
+                transcript="Hi, you've reached Sam.",
+                accumulated_transcript="Hi, you've reached Sam.",
+                accumulated_word_count=50,
+                duration=30.0,
+            )
+        )
+        assert activity._user_turn_exceeded_atask is None
+        assert detector.lifecycle is AMDLifecycle.ACTIVE
 
 
 @pytest.mark.asyncio

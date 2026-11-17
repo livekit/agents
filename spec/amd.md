@@ -249,8 +249,10 @@ does not make the SIP provider send early media.
   completes AMD with `agent_changed` (section 10.1).
 - `session.say()` and `session.generate_reply()` raise `RuntimeError` while AMD runs.
   AMD would hold the speech, which keeps the idle timer off, and play it after AMD
-  completes. If a realtime model fails over while AMD runs, the fallback adapter does
-  not regenerate the interrupted reply.
+  completes. While AMD runs, a few paths that would call them skip their reply
+  instead: a realtime fallback swap does not regenerate the interrupted reply, a
+  deferred tool reply is dropped (its updates stay in the chat context), and the user
+  turn limit does not call `on_user_turn_exceeded`.
 
 ## 6. Transcripts
 
