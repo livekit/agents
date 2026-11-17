@@ -44,10 +44,64 @@ fn input_task() -> serde_json::Value {
 }
 
 #[test]
+fn a_rejected_response_cannot_complete_recovery_just_because_it_is_journaled() {
+    let mut state = RemoteAgentState::new("https://booking.test".into());
+    dispatched(&mut state, "start", send("start", "Hello", None));
+    let response = serde_json::from_value(json!({"message":{
+        "messageId":"", "role":"ROLE_AGENT", "parts":[{"text":"Invalid identity"}]
+    }}))
+    .unwrap();
+    assert!(
+        apply(
+            &mut state,
+            RemoteInput::Response {
+                request_id: "start".into(),
+                response: Box::new(A2AResponse::Stream(response)),
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(state.events.len(), 2, "the refused wire payload remains available for diagnosis");
+    assert_eq!(recovery(&state, "start").unwrap(), RemoteRecovery::Uncertain);
+}
+
+#[test]
+fn new_work_cannot_be_retargeted_by_a_task_or_message_from_another_context() {
+    for response in [
+        json!({"task":{"id":"foreign-task","contextId":"foreign","status":{"state":"TASK_STATE_WORKING"}}}),
+        json!({"message":{"messageId":"foreign-message","contextId":"foreign","role":"ROLE_AGENT","parts":[{"text":"Wrong conversation"}]}}),
+    ] {
+        let mut state = RemoteAgentState::new("https://booking.test".into());
+        let mut input = send("start", "Hello", None);
+        let RemoteInput::Prepare { request: A2ARequest::Send(body), .. } = &mut input else {
+            unreachable!()
+        };
+        body.message.context_id = Some("trip".into());
+        dispatched(&mut state, "start", input);
+        assert!(
+            apply(
+                &mut state,
+                RemoteInput::Response {
+                    request_id: "start".into(),
+                    response: Box::new(A2AResponse::Stream(
+                        serde_json::from_value(response).unwrap()
+                    )),
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(state.events.len(), 2);
+        assert!(state.tasks.is_empty());
+        assert!(!state.messages.contains_key("foreign-message"));
+        assert_eq!(recovery(&state, "start").unwrap(), RemoteRecovery::Uncertain);
+    }
+}
+
+#[test]
 fn a_lost_initial_response_stays_uncertain_after_restart_without_resending_work() {
     let mut state = RemoteAgentState::new("https://booking.test".into());
     apply(&mut state, send("reserve", "Reserve a seat", None)).unwrap();
-    assert_eq!(recovery(&state, "reserve").unwrap(), Recovery::Dispatch);
+    assert!(matches!(recovery(&state, "reserve").unwrap(), RemoteRecovery::Dispatch { .. }));
     apply(&mut state, RemoteInput::DispatchStarted { request_id: "reserve".into() }).unwrap();
     apply(
         &mut state,
@@ -63,7 +117,7 @@ fn a_lost_initial_response_stays_uncertain_after_restart_without_resending_work(
     .unwrap();
     let mut restarted: RemoteAgentState =
         serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
-    assert_eq!(recovery(&restarted, "reserve").unwrap(), Recovery::Uncertain);
+    assert_eq!(recovery(&restarted, "reserve").unwrap(), RemoteRecovery::Uncertain);
     assert!(
         apply(&mut restarted, RemoteInput::DispatchStarted { request_id: "reserve".into() })
             .is_err()
@@ -93,7 +147,7 @@ fn an_undispatched_request_can_resume_after_its_local_observer_failed() {
     let mut restored: RemoteAgentState =
         serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
     validate(&restored).unwrap();
-    assert_eq!(recovery(&restored, "reserve").unwrap(), Recovery::Dispatch);
+    assert!(matches!(recovery(&restored, "reserve").unwrap(), RemoteRecovery::Dispatch { .. }));
     apply(&mut restored, request.clone()).unwrap();
     validate(&restored).unwrap();
     assert!(!restored.requests["reserve"].ended);
@@ -137,7 +191,10 @@ fn a_lost_input_response_is_reconciled_from_the_same_task_without_another_send()
         serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
     assert_eq!(
         recovery(&restarted, "answer").unwrap(),
-        Recovery::GetTask(RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() })
+        RemoteRecovery::GetTask(RemoteTaskRef {
+            context_id: "trip".into(),
+            task_id: "booking".into()
+        })
     );
     let input = &restarted.tasks["booking"].input_requests[&occurrence_id];
     assert_eq!(input.state, InputRequestState::Responding);
@@ -312,7 +369,7 @@ fn a_replaced_input_request_retires_an_unsent_response_but_keeps_dispatch_uncert
         assert_eq!(state.requests["answer"].dispatch_started, started);
         assert_eq!(
             recovery(&state, "answer").unwrap(),
-            Recovery::GetTask(RemoteTaskRef {
+            RemoteRecovery::GetTask(RemoteTaskRef {
                 context_id: "trip".into(),
                 task_id: "booking".into()
             })
@@ -333,7 +390,9 @@ fn direct_contextless_messages_and_several_tasks_are_independent_exchanges() {
         json!({"message":{"messageId":"hello_reply","role":"ROLE_AGENT","parts":[{"data":{"ok":true}}]}}),
     );
     assert!(state.tasks.is_empty());
-    assert_eq!(recovery(&state, "hello").unwrap(), Recovery::Observed);
+    assert!(
+        matches!(recovery(&state, "hello").unwrap(), RemoteRecovery::Observed(message) if message.message_id == "hello_reply")
+    );
     for id in ["first", "second"] {
         observe(
             &mut state,

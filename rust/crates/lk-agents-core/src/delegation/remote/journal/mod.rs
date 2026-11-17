@@ -155,27 +155,57 @@ pub fn apply(state: &mut RemoteAgentState, input: RemoteInput) -> Result<(), Rem
 }
 
 /// Recovery never replays a send merely to discover the task it may have created.
-pub fn recovery(state: &RemoteAgentState, request_id: &str) -> Result<Recovery, RemoteError> {
+pub fn recovery(state: &RemoteAgentState, request_id: &str) -> Result<RemoteRecovery, RemoteError> {
     let request = state.requests.get(request_id).ok_or_else(|| invalid("unknown request"))?;
     if !request.dispatch_started {
         if let Some(reference) = &request.input_request
             && !response_reserved(state, reference)
         {
-            return Ok(Recovery::GetTask(reference.task.clone()));
+            return Ok(RemoteRecovery::GetTask(reference.task.clone()));
         }
-        return Ok(Recovery::Dispatch);
+        let entry = state
+            .events
+            .get(request.request_event as usize)
+            .ok_or_else(|| invalid("missing request content"))?;
+        let A2AJournalPayload::Request(body) = &entry.payload else {
+            return Err(invalid("request position does not contain a request"));
+        };
+        return Ok(RemoteRecovery::Dispatch {
+            request_id: request_id.into(),
+            request: Box::new(body.clone()),
+            streaming: matches!(
+                request.method.as_str(),
+                lk_agents_abi::a2a_protocol::methods::SEND_STREAMING_MESSAGE
+                    | lk_agents_abi::a2a_protocol::methods::SUBSCRIBE_TO_TASK
+            ),
+        });
     }
     if let Some(task) = &request.task {
-        return Ok(Recovery::GetTask(task.clone()));
+        return Ok(RemoteRecovery::GetTask(task.clone()));
     }
     // A received message-only reply is already proof of the exchange, even without a task.
-    if state.events.iter().any(|event| {
-        event.request_id == request_id && event.kind == A2AJournalKind::ResponseReceived
-    }) {
-        Ok(Recovery::Observed)
-    } else {
-        Ok(Recovery::Uncertain)
+    for event in state.events.iter().rev().filter(|event| event.request_id == request_id) {
+        let A2AJournalPayload::Response(response) = &event.payload else { continue };
+        let message = match (request.method.as_str(), response.as_ref()) {
+            (
+                lk_agents_abi::a2a_protocol::methods::SEND_MESSAGE,
+                A2AResponse::Send(lk_agents_abi::a2a_protocol::SendMessageResponse::Message(
+                    message,
+                )),
+            )
+            | (
+                lk_agents_abi::a2a_protocol::methods::SEND_STREAMING_MESSAGE,
+                A2AResponse::Stream(lk_agents_abi::a2a_protocol::StreamResponse::Message(message)),
+            ) => message,
+            _ => continue,
+        };
+        // Rejected protocol evidence is still journaled. Only the accepted projection can
+        // settle a restored call; merely observing a malformed response proves no outcome.
+        if state.messages.get(&message.message_id) == Some(message) {
+            return Ok(RemoteRecovery::Observed(Box::new(message.clone())));
+        }
     }
+    Ok(RemoteRecovery::Uncertain)
 }
 
 fn response_reserved(state: &RemoteAgentState, reference: &InputRequestRef) -> bool {
@@ -185,14 +215,6 @@ fn response_reserved(state: &RemoteAgentState, reference: &InputRequestRef) -> b
         .filter(|task| task.task.context_id == reference.task.context_id)
         .and_then(|task| task.input_requests.get(&reference.occurrence_id))
         .is_some_and(|input| input.state == InputRequestState::Responding)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Recovery {
-    Dispatch,
-    GetTask(RemoteTaskRef),
-    Observed,
-    Uncertain,
 }
 
 fn request_task(

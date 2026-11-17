@@ -42,6 +42,19 @@ pub(super) enum RemoteCommand {
         done:
             signal::Producer<Option<Result<Option<String>, lk_agents_abi::storage::StorageError>>>,
     },
+    Recover {
+        remote_id: String,
+        endpoint: String,
+        origin: lk_agents_abi::session::ToolCallRef,
+        done: signal::Producer<
+            Option<
+                Result<
+                    Option<lk_agents_abi::delegation::remote::RemoteRecovery>,
+                    lk_agents_abi::storage::StorageError,
+                >,
+            >,
+        >,
+    },
 }
 
 enum DriverEvent {
@@ -156,6 +169,10 @@ impl Driver {
 
     async fn remote(&mut self, command: RemoteCommand, effects: &mut VecDeque<SessionEffect>) {
         let (command, done) = match command {
+            RemoteCommand::Recover { remote_id, endpoint, origin, done } => {
+                done.resolve(self.session.remote_recovery(&remote_id, &endpoint, &origin));
+                return;
+            }
             RemoteCommand::DefaultContext { remote_id, endpoint, done } => {
                 done.resolve(self.session.remote_context(&remote_id, &endpoint));
                 return;

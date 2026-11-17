@@ -264,15 +264,16 @@ The framework owns update delivery, but cannot make an arbitrary booking API ide
 Omitting an await allows the tool to proceed while owned delivery continues; it does not discard
 the message. Exact output still follows the interaction's delivery order.
 
-With detection disabled, the tool schema has a fixed optional reference field, provisionally
-`task_id`. The framework supplies eligible references in model context:
+With detection disabled, the tool schema has a fixed optional input-reference field. Its
+spelling remains an open question below; `<reference-field>` is a placeholder in this draft.
+The framework supplies eligible references in model context:
 
 ```json
 {"request": "Find flights from Paris to Rome"}
 ```
 
 ```json
-{"request": "Next Friday", "task_id": "<pending reference>"}
+{"request": "Next Friday", "<reference-field>": "<task-and-input-occurrence>"}
 ```
 
 Validate references against the conversation, expert, task, question incarnation and access.
@@ -850,6 +851,8 @@ a public Python export or an additional SDK constructor.
 | RemoteTaskState, internal data | Persisted data underlying the public RemoteTask view. | SDK Task observation, task-owned input state and cancellation intent; no serialized command capability. |
 | RemoteAgentView, RemoteContextView and RemoteTaskView, internal ABI traits | Generated bindings for the three public inspection types. | Native storage handles retain the enclosing SessionState's bound or detached owner. Getter results copy SDK values; grouping adds no duplicate histories or network calls. |
 | RemoteCommands, RemoteCommand and RemoteInput, internal ABI port/data | Serializes communication observations through the active owner. | Preparation, dispatch markers, responses and errors receive their checkpoint before the transport continues; no host policy or stored command capability. |
+| RemoteRecovery, internal ABI decision | Reuses the core journal's recovery classification. | Carries an unsent original SDK request, a task to read, an accepted direct reply or uncertainty. Returned through the native owner; neither serialized nor exported as Python state classes. |
+| RemoteInvocation, internal runtime input | Groups the existing invocation arguments and services. | Production and DST use the same remote executor; only its endpoint client is injected. No new Python API or second controller. |
 | RemoteTaskCommands, conditional internal ABI port | Extend the existing binding/owner command path where possible. | Bound RemoteTask.cancel() reaches the authorized owner without putting a runtime dependency in storage or adding a public controller. |
 | RemoteTaskRef | Reuse/promote the current core A2A TaskRef shape. | Context/task addressing; keep internal unless a public control signature requires it. |
 | InputRequestRef | New shared reference, not a lifecycle owner. | Qualify a local or remote input occurrence; keep internal by default. |
@@ -1043,6 +1046,11 @@ than another simulation framework. Stock-peer HTTP and AgentDB conformance remai
 - [ ] Assemble append/replacement/interleaved artifacts; define answer selection and typed-output validation.
 - [ ] Support existing/new verbatim metadata without required LiveKit negotiation. Unflagged working text remains status.
 - [ ] Add bounded card/503/stream recovery and reconciliation of potentially accepted sends.
+  Restored bound text tool calls now query the native owner by their original ToolCallRef.
+  The real delegation executor dispatches an unsent original intent, reads a known task,
+  returns an accepted direct message, or reports unknown outcome without resending work.
+  Invalid journaled responses do not count as accepted replies. Recovery preserves the SDK
+  body and method and refuses a response that changes an explicitly addressed context.
 - [ ] Define the stock-peer snapshot/resubscribe fallback without assuming replay, repeated
   message-id execution is safe, or unknown task identity can always be recovered.
   New tool calls resolve the saved default remote context through the serialized native owner.
@@ -1062,6 +1070,9 @@ than another simulation framework. Stock-peer HTTP and AgentDB conformance remai
   A fresh-owner DST story now covers an observer ending before dispatch: the original intent
   is sent once with unchanged identities. A separate case loses the committed intent's write
   acknowledgement and the remote response, then recovers with one booking in the service ledger.
+  These restart stories now invoke the production remote delegation executor over its injected
+  endpoint client rather than manually choosing the recovery action in the test. A direct-message
+  restart story verifies that consuming a retained reply appends no second exchange.
 
 **Exit:** generated views and atomic checkpoints pass; fresh-owner text recovery uses the real
 client/executors/storage without blind resend or duplicated accepted outcomes. The client

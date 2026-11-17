@@ -182,7 +182,7 @@ SessionState.snapshot() returns a detached inspection view. It is not an executi
 Agent.run, TextSession and VoiceSession continue the selected conversation through store.bind().
 TextSession returns RunResult directly, like Agent.run; there is no result/state envelope or
 state= continuation argument. Runtime services, Python stacks and media connections are not
-serialized. Storage uses one shared conversation encoding and has no legacy mode migration.
+serialized. Storage uses one shared conversation encoding.
 See [TextSession](text-session.md#running-a-conversation) and
 [voice persistence](voice-session.md#the-calls-thread).
 
@@ -212,6 +212,25 @@ partial. A task can exist without a full history or status snapshot. Collections
 values returned to Python are copies; editing them does not change the conversation. Retained
 remote/task views follow their bound SessionState. Views obtained through `state.snapshot()`
 stay detached and fixed.
+
+### Resuming a remote call
+
+When an unresolved remote-tool call resumes, the native owner finds its latest outgoing
+request by the originating `ToolCallRef`. Another local call does not consume that receipt.
+The saved endpoint remains pinned to the original destination.
+
+- An intent saved before dispatch can be sent with its original SDK body, method, request ID
+  and message ID.
+- A request that may have been sent and has a known task is reconciled with `GetTask`.
+  Observation then continues where the peer supports it. The business message is not resent.
+- An accepted message-only reply is returned from saved state without another exchange.
+- A potentially sent request with no accepted task or reply remains uncertain. Recovery
+  reports that uncertainty instead of guessing an outcome or starting the work again.
+
+Protocol content rejected during validation stays in the journal for diagnosis; it cannot
+settle a restored call. A snapshot or resubscription cannot promise every missed progress
+update was recovered. Restoring a call also does not restore a Python stack, cancel its remote
+task, or prove that an earlier spoken result was heard.
 
 ## Application records and transactions
 

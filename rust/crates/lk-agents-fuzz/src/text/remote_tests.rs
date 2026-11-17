@@ -2,14 +2,16 @@
 
 use super::*;
 use lk_agents_abi::a2a_protocol as a2a;
+use lk_agents_abi::delegation::remote::RemoteRecovery;
 use lk_agents_abi::delegation::remote::{
     InputRequestRef, RemoteCommand, RemoteCommands, RemoteInput, RemoteTaskRef,
 };
+use lk_agents_abi::errors::HostError;
 use lk_agents_abi::storage::context::ContextActivation as _;
 use lk_agents_abi::storage::session::{PersistedSessionState as _, SessionBinding as _};
 use lk_agents_abi::{BoxFuture, Closed};
 use lk_agents_core::a2a::client::ClientError;
-use lk_agents_core::delegation::remote::journal::{Recovery, recovery};
+use lk_agents_core::delegation::remote::journal::recovery;
 use lk_agents_core::request::AttemptFailure;
 use lk_agents_runtime::delegation::remote::journal::Journal;
 use lk_agents_runtime::net::a2a_client::{AgentClient, observer::RequestObserver};
@@ -20,6 +22,7 @@ use lk_agents_runtime::net::transport::HttpRequest;
 use lk_agents_runtime::storage::context::store::ContextStore;
 use lk_agents_runtime::storage::session_binding::SessionBinding;
 use lk_agents_runtime::storage::session_state::SessionState;
+use serde_json::Value;
 
 const ENDPOINT: &str = "https://booking.test";
 
@@ -36,6 +39,7 @@ struct Service {
     messages: Mutex<Vec<a2a::Message>>,
     bookings: Mutex<Vec<String>>,
     lose_initial: bool,
+    direct_reply: bool,
     cancel_reply: CancelReply,
     cancellations: Mutex<u32>,
     canceled: Mutex<bool>,
@@ -77,17 +81,23 @@ impl HttpExchangePort for Service {
                             self.bookings.lock().push(date);
                         }
                         self.messages.lock().push(send.message);
-                        if responding || self.lose_initial {
-                            // The service accepted the answer and performed the booking. The
-                            // socket died before the caller received any acknowledgement.
-                            return Err(AttemptFailure::Connection(
-                                "response lost after booking".into(),
-                            ));
+                        if self.direct_reply {
+                            json!({"jsonrpc":"2.0","id":rpc.id,"result":{"message":{
+                                "messageId":"receipt","role":"ROLE_AGENT","parts":[{"text":"Booked"}]
+                            }}})
+                        } else {
+                            if responding || self.lose_initial {
+                                // The service accepted the answer and performed the booking. The
+                                // socket died before the caller received any acknowledgement.
+                                return Err(AttemptFailure::Connection(
+                                    "response lost after booking".into(),
+                                ));
+                            }
+                            json!({"jsonrpc":"2.0","id":rpc.id,"result":{"task":{
+                                "id":"booking","contextId":"trip","status":{"state":"TASK_STATE_INPUT_REQUIRED",
+                                "message":{"messageId":"date","role":"ROLE_AGENT","parts":[{"text":"Which day?"}]}}
+                            }}})
                         }
-                        json!({"jsonrpc":"2.0","id":rpc.id,"result":{"task":{
-                            "id":"booking","contextId":"trip","status":{"state":"TASK_STATE_INPUT_REQUIRED",
-                            "message":{"messageId":"date","role":"ROLE_AGENT","parts":[{"text":"Which day?"}]}}
-                        }}})
                     }
                     a2a::methods::GET_TASK => {
                         let booked = !self.bookings.lock().is_empty();
@@ -199,9 +209,13 @@ async fn accepted_initial_send_without_a_task_reference_remains_unknown_after_re
     let (second, updates, binding, view) = owner(&env, fresh_store.clone()).await;
     let snapshot = view._snapshot_data().unwrap().unwrap();
     let remote = &snapshot.remote_agents[ENDPOINT];
-    assert_eq!(recovery(remote, "start").unwrap(), Recovery::Uncertain);
+    assert_eq!(recovery(remote, "start").unwrap(), RemoteRecovery::Uncertain);
     assert!(remote.tasks.is_empty(), "unknown task identity is not fabricated");
     assert_eq!(remote.events.len(), 2, "only the request and observed failure are journaled");
+    assert!(
+        resume(&env, service.clone(), second.clone()).await.is_err(),
+        "an uncertain original send cannot become new work after restart"
+    );
     assert_eq!(service.messages.lock().len(), 1, "the accepted request was never resent");
     assert_eq!(
         Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,
@@ -210,6 +224,69 @@ async fn accepted_initial_send_without_a_task_reference_remains_unknown_after_re
     binding.close();
     fresh_store.finish_session(false).await.unwrap();
     drop(second);
+    assert!(!database.held(PARTITION_KEY).await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_fresh_owner_returns_an_observed_message_reply_without_another_business_send() {
+    use lk_agents_abi::a2a::remote::RemoteEvent;
+    use lk_agents_abi::llm::tool_executor::ToolOutcome;
+
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_runtime::net::clock::SimClock::new());
+    let env = environment(clock.clone());
+    let database = Store::open(73, false, clock.clone()).await;
+    let service = Arc::new(Service { direct_reply: true, ..Default::default() });
+    let store = ContextStore::bound(
+        database.backend.clone(),
+        database.thread_id.clone(),
+        PARTITION_KEY.into(),
+        env.tracer.root(),
+    )
+    .await
+    .unwrap();
+    let (first, updates, binding, _) = owner(&env, store.clone()).await;
+    assert!(matches!(resume(&env, service.clone(), first.clone()).await.unwrap(),
+        RemoteEvent::Outcome { outcome: ToolOutcome::Value { text, .. } } if text == "Booked"));
+    assert_eq!(
+        Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,
+        Closed::Clean
+    );
+    binding.close();
+    store.finish_session(false).await.unwrap();
+    drop(first);
+
+    let store = ContextStore::bound(
+        database.backend.clone(),
+        database.thread_id.clone(),
+        PARTITION_KEY.into(),
+        env.tracer.root(),
+    )
+    .await
+    .unwrap();
+    let (second, updates, binding, view) = owner(&env, store.clone()).await;
+    let before = view._snapshot_data().unwrap().unwrap().remote_agents;
+    let mut another_call = origin();
+    another_call.call_id = "another-local-call".into();
+    assert_eq!(
+        second.recover(ENDPOINT, ENDPOINT, &another_call).await.unwrap(),
+        None,
+        "new work does not consume a different local call's receipt"
+    );
+    assert!(second.recover(ENDPOINT, "https://another.test", &origin()).await.is_err());
+    assert!(matches!(resume(&env, service.clone(), second.clone()).await.unwrap(),
+        RemoteEvent::Outcome { outcome: ToolOutcome::Value { text, .. } } if text == "Booked"));
+    assert_eq!(service.messages.lock().len(), 1, "the original business message was not resent");
+    assert_eq!(
+        view._snapshot_data().unwrap().unwrap().remote_agents,
+        before,
+        "reading an accepted reply does not journal a second exchange"
+    );
+    assert_eq!(
+        Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,
+        Closed::Clean
+    );
+    binding.close();
+    store.finish_session(false).await.unwrap();
     assert!(!database.held(PARTITION_KEY).await);
 }
 
@@ -285,13 +362,103 @@ async fn owner(
     (runner, updates, binding, view)
 }
 
+fn origin() -> lk_agents_abi::session::ToolCallRef {
+    lk_agents_abi::session::ToolCallRef { agent_id: "root".into(), call_id: "book-seat".into() }
+}
+
+struct Presenter;
+
+impl lk_agents_abi::a2a::remote::DelegationHost for Presenter {
+    fn progress<'a>(
+        &'a self,
+        _: &lk_agents_abi::telemetry::Cx,
+        _: &'a lk_agents_abi::invoke::CallContext,
+        _: Option<String>,
+        _: serde_json::Map<String, Value>,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn delegated<'a>(
+        &'a self,
+        _: &lk_agents_abi::telemetry::Cx,
+        _: &'a lk_agents_abi::invoke::CallContext,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn ask<'a>(
+        &'a self,
+        _: &lk_agents_abi::telemetry::Cx,
+        _: &'a lk_agents_abi::invoke::CallContext,
+        _: String,
+        _: bool,
+    ) -> BoxFuture<'a, Result<String, HostError>> {
+        unreachable!("a text invocation returns its input request")
+    }
+}
+
+async fn resume(
+    env: &Arc<Env>,
+    service: Arc<Service>,
+    owner: Arc<dyn RemoteCommands>,
+) -> Result<lk_agents_abi::a2a::remote::RemoteEvent, lk_agents_abi::a2a::client::AgentClientError> {
+    use lk_agents_abi::a2a::remote::RemoteInteraction as _;
+    use lk_agents_runtime::delegation::remote::{RemoteInteraction, RemoteInvocation};
+    let interaction = RemoteInteraction::new(
+        ENDPOINT.into(),
+        "booking".into(),
+        ChatItem::FunctionCall(lk_agents_abi::FunctionCall {
+            id: "local-call".into(),
+            call_id: origin().call_id,
+            name: "booking".into(),
+            arguments: "{}".into(),
+            created_at: std::time::UNIX_EPOCH,
+            extra: Default::default(),
+            group_id: None,
+        }),
+        Vec::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+    let client = AgentClient::with_transport(
+        ENDPOINT.into(),
+        None,
+        Default::default(),
+        service,
+        (env.process.spawner)().unwrap(),
+        env.clock.clone(),
+    )
+    .unwrap();
+    let result = interaction
+        .run_with_client(
+            &env.process,
+            client,
+            RemoteInvocation {
+                arguments: json!({"request":"Book a seat"}),
+                structured: false,
+                history: Vec::new(),
+                shared: None,
+                live: false,
+                host: Arc::new(Presenter),
+                context: Default::default(),
+                cx: env.tracer.root(),
+                owner: Some(owner),
+                origin: Some(origin()),
+            },
+        )
+        .await;
+    interaction.settled().await;
+    result
+}
+
 fn journal(owner: Arc<dyn RemoteCommands>, id: &str) -> Arc<dyn RequestObserver> {
     Arc::new(Journal {
         owner,
         endpoint: ENDPOINT.into(),
         remote_id: ENDPOINT.into(),
         request_id: id.into(),
-        origin: None,
+        origin: Some(origin()),
     })
 }
 
@@ -325,7 +492,7 @@ async fn a_fresh_owner_dispatches_an_unsent_intent_once_with_its_original_messag
                     },
                 )),
                 streaming: true,
-                origin: None,
+                origin: Some(origin()),
                 input_request: None,
             },
         })
@@ -355,35 +522,20 @@ async fn a_fresh_owner_dispatches_an_unsent_intent_once_with_its_original_messag
     .unwrap();
     let (second, updates, binding, view) = owner(&env, fresh_store.clone()).await;
     let restored = view._snapshot_data().unwrap().unwrap();
-    assert_eq!(recovery(&restored.remote_agents[ENDPOINT], "start").unwrap(), Recovery::Dispatch);
-    let client = AgentClient::with_transport(
-        ENDPOINT.into(),
-        None,
-        Default::default(),
-        service.clone(),
-        (env.process.spawner)().unwrap(),
-        clock.clone(),
-    )
-    .unwrap();
-    let reply = client
-        .send_observed(
-            message("start", "Book a seat", false),
-            None,
-            None,
-            None,
-            &env.tracer.root(),
-            Some(journal(second.clone(), "start")),
-        )
-        .await
-        .unwrap();
-    reply.aclose(clock.now().saturating_add(Duration::from_secs(1))).await;
+    assert!(matches!(
+        recovery(&restored.remote_agents[ENDPOINT], "start").unwrap(),
+        RemoteRecovery::Dispatch { .. }
+    ));
+    let event = resume(&env, service.clone(), second.clone()).await.unwrap();
+    assert!(
+        matches!(event, lk_agents_abi::a2a::remote::RemoteEvent::InputRequired { question, .. } if question == "Which day?")
+    );
     let snapshot = view._snapshot_data().unwrap().unwrap();
     let remote = &snapshot.remote_agents[ENDPOINT];
     assert_eq!(service.messages.lock().as_slice(), [message("start", "Book a seat", false)]);
     assert!(remote.requests["start"].dispatch_started);
     assert_eq!(remote.events.len(), 3, "one request, the earlier error and the observed task");
     assert_eq!(remote.tasks.len(), 1);
-    client.aclose().await;
     assert_eq!(
         Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,
         Closed::Clean
@@ -510,7 +662,7 @@ async fn reconcile_cancellation(cancel_reply: CancelReply) {
     let restored = view._snapshot_data().unwrap().unwrap();
     assert_eq!(
         recovery(&restored.remote_agents[ENDPOINT], "cancel").unwrap(),
-        Recovery::GetTask(RemoteTaskRef {
+        RemoteRecovery::GetTask(RemoteTaskRef {
             task_id: task.id.clone(),
             context_id: task.context_id.clone()
         })
@@ -614,7 +766,7 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
                     },
                 )),
                 streaming: true,
-                origin: None,
+                origin: Some(origin()),
                 input_request: Some(input),
             },
         })
@@ -661,7 +813,7 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
     let (second, updates, binding, view) = owner(&env, fresh_store.clone()).await;
     let restored = view._snapshot_data().unwrap().unwrap();
     let remote = &restored.remote_agents[ENDPOINT];
-    assert!(matches!(recovery(remote, "answer").unwrap(), Recovery::GetTask(_)));
+    assert!(matches!(recovery(remote, "answer").unwrap(), RemoteRecovery::GetTask(_)));
     assert_eq!(second.default_context(ENDPOINT, ENDPOINT).await.unwrap().as_deref(), Some("trip"));
     assert!(second.default_context(ENDPOINT, "https://another.test").await.is_err());
     assert_eq!(
@@ -677,24 +829,10 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
         remote.tasks["booking"].input_requests[&occurrence].response_message_id.as_deref(),
         Some("answer")
     );
-    let client = AgentClient::with_transport(
-        ENDPOINT.into(),
-        None,
-        Default::default(),
-        service.clone(),
-        (env.process.spawner)().unwrap(),
-        clock.clone(),
-    )
-    .unwrap();
-    let task = client
-        .get_task(
-            lk_agents_core::a2a::rpc::TaskRef { id: "booking".into(), context_id: "trip".into() },
-            &env.tracer.root(),
-            Some(journal(second.clone(), "reconcile")),
-        )
-        .await
-        .unwrap();
-    assert_eq!(task.status.state, a2a::TaskState::Completed);
+    let event = resume(&env, service.clone(), second.clone()).await.unwrap();
+    assert!(matches!(event, lk_agents_abi::a2a::remote::RemoteEvent::Outcome {
+        outcome: lk_agents_abi::llm::tool_executor::ToolOutcome::Value { text, .. }
+    } if text == "Booked"));
     let final_state = view._snapshot_data().unwrap().unwrap();
     let remote = &final_state.remote_agents[ENDPOINT];
     assert_eq!(
@@ -709,7 +847,6 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
     assert_eq!(service.bookings.lock().as_slice(), ["Friday"], "one committed business booking");
     assert_eq!(remote.events.len(), 6, "a retried checkpoint cannot append communication twice");
     assert_eq!(remote.tasks["booking"].task.artifacts.as_ref().unwrap().len(), 1);
-    client.aclose().await;
     assert_eq!(
         Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,
         Closed::Clean

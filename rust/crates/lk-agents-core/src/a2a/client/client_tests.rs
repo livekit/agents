@@ -17,6 +17,27 @@ fn connected() -> Client {
     client
 }
 
+#[test]
+fn resuming_an_unsent_intent_preserves_its_sdk_body_method_and_explicit_routing() {
+    let mut client = connected();
+    client.acknowledge_context("unrelated-last-context").unwrap();
+    let body: a2a::SendMessageRequest = serde_json::from_value(json!({
+        "message":{"messageId":"original", "role":"ROLE_USER", "parts":[{"text":"Book"}]},
+        "configuration":{"acceptedOutputModes":["text/plain"],"returnImmediately":true},
+        "metadata":{"priority":3}, "tenant":"tenant"
+    }))
+    .unwrap();
+    let request = client.resume_send(body.clone(), false, JsonRpcId::Number(7)).unwrap();
+    let rpc: JsonRpcRequest = serde_json::from_slice(&request.body).unwrap();
+    assert_eq!(rpc.method, a2a::methods::SEND_MESSAGE);
+    assert_eq!(rpc.params, Some(serde_json::to_value(body).unwrap()));
+    assert_eq!(
+        request.context_id, None,
+        "an unrelated discovery context cannot retarget the intent"
+    );
+    assert!(!request.replay_safe, "an unsent intent does not grant transport retry permission");
+}
+
 fn message(id: &str) -> Message {
     Message {
         message_id: id.into(),

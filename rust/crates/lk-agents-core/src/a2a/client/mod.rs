@@ -204,26 +204,46 @@ impl Client {
         let routing = (context_id.map(str::to_owned), task_id.map(str::to_owned));
         message.context_id = routing.0;
         message.task_id = routing.1;
+        let streaming = self.card.as_ref().is_some_and(|c| c.capabilities.streaming == Some(true));
+        self.resume_send(
+            SendMessageRequest { message, configuration: None, metadata: None, tenant: None },
+            streaming,
+            request_id,
+        )
+    }
+
+    /// An unsent durable intent keeps its original SDK body and method. Discovery can change
+    /// capabilities, but cannot rewrite the saved operation into different business work.
+    pub fn resume_send(
+        &self,
+        request: SendMessageRequest,
+        streaming: bool,
+        request_id: JsonRpcId,
+    ) -> Result<Request, ClientError> {
+        self.ensure_connected()?;
+        self.validate_message(&request.message, None, None)?;
+        let message = &request.message;
+        if message.task_id.is_some() && message.context_id.is_none() {
+            return Err(ClientError::InvalidInput("a saved task message needs its context".into()));
+        }
+        if streaming && !self.card.as_ref().is_some_and(|c| c.capabilities.streaming == Some(true))
+        {
+            return Err(ClientError::InvalidInput(
+                "the peer no longer supports the saved streaming operation".into(),
+            ));
+        }
         let task = message
             .task_id
             .as_ref()
             .zip(message.context_id.as_ref())
             .map(|(id, context_id)| TaskRef { id: id.clone(), context_id: context_id.clone() });
         let context_id = message.context_id.clone();
-        let streaming = self.card.as_ref().is_some_and(|c| c.capabilities.streaming == Some(true));
         let method = if streaming {
             a2a::methods::SEND_STREAMING_MESSAGE
         } else {
             a2a::methods::SEND_MESSAGE
         };
-        self.rpc(
-            method,
-            SendMessageRequest { message, configuration: None, metadata: None, tenant: None },
-            request_id,
-            streaming,
-            task,
-            context_id,
-        )
+        self.rpc(method, request, request_id, streaming, task, context_id)
     }
 
     pub fn cancel(

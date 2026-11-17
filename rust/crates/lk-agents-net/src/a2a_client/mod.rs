@@ -220,6 +220,22 @@ impl AgentClient {
         self.subscribe_observed(task, offset, cx, None).await
     }
 
+    /// Dispatch an intent the native owner proved was never attempted. The observer reopens
+    /// the same request identity before its first dispatch marker is committed.
+    pub async fn resume_send(
+        &self,
+        request: a2a::SendMessageRequest,
+        streaming: bool,
+        cx: &lk_agents_telemetry::Cx,
+        observer: Arc<dyn observer::RequestObserver>,
+    ) -> Result<Reply, ClientError> {
+        self.connect().await?;
+        let id = self.inner.next_id();
+        let request =
+            self.inner.core.lock().resume_send(request, streaming, JsonRpcId::Number(id as i64))?;
+        self.start(id, request.traced(cx.span()), Some(observer)).await
+    }
+
     pub async fn subscribe_observed(
         &self,
         task: TaskRef,

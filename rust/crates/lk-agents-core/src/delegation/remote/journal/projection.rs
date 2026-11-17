@@ -59,6 +59,21 @@ pub(super) fn response(
             context_id: update.context_id.clone(),
         }),
     };
+    let entry = state
+        .events
+        .get(request.request_event as usize)
+        .ok_or_else(|| invalid("missing request content"))?;
+    if let A2AJournalPayload::Request(A2ARequest::Send(body)) = &entry.payload
+        && let Some(expected) = &body.message.context_id
+    {
+        let observed = reference.as_ref().map(|task| &task.context_id).or(match &event {
+            a2a::StreamResponse::Message(message) => message.context_id.as_ref(),
+            _ => None,
+        });
+        if observed != Some(expected) {
+            return Err(invalid("the response belongs to another conversation context"));
+        }
+    }
     if let Some(reference) = &reference {
         if reference.task_id.is_empty() || reference.context_id.is_empty() {
             return Err(invalid("an observed task requires nonempty task and context IDs"));

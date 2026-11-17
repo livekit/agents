@@ -144,12 +144,14 @@ impl Session {
             .map_err(|error| StorageError::Invalid(error.to_string()))
     }
 
-    /// A saved context is routing data for this destination, never authority for another one.
-    pub fn remote_context(
+    fn remote_state(
         &self,
         remote_id: &str,
         endpoint: &str,
-    ) -> Result<Option<String>, lk_agents_abi::storage::StorageError> {
+    ) -> Result<
+        Option<&lk_agents_abi::delegation::remote::RemoteAgentState>,
+        lk_agents_abi::storage::StorageError,
+    > {
         use lk_agents_abi::storage::StorageError;
         if self.closing || self.persistence_failure.is_some() || matches!(self.phase, Phase::Done) {
             return Err(StorageError::Invalid("the conversation owner is closing or ended".into()));
@@ -161,7 +163,48 @@ impl Session {
         if remote.endpoint != endpoint {
             return Err(StorageError::Invalid("the saved remote endpoint changed".into()));
         }
-        Ok(remote.default_context_id.clone())
+        Ok(Some(remote))
+    }
+
+    /// A saved context is routing data for this destination, never authority for another one.
+    pub fn remote_context(
+        &self,
+        remote_id: &str,
+        endpoint: &str,
+    ) -> Result<Option<String>, lk_agents_abi::storage::StorageError> {
+        Ok(self
+            .remote_state(remote_id, endpoint)?
+            .and_then(|state| state.default_context_id.clone()))
+    }
+
+    /// Only the initiating local call can recover its previous send. Controls such as GetTask
+    /// observe that send; they never replace it as the operation whose outcome is recovered.
+    pub fn remote_recovery(
+        &self,
+        remote_id: &str,
+        endpoint: &str,
+        origin: &lk_agents_abi::session::ToolCallRef,
+    ) -> Result<
+        Option<lk_agents_abi::delegation::remote::RemoteRecovery>,
+        lk_agents_abi::storage::StorageError,
+    > {
+        use lk_agents_abi::delegation::remote::A2AJournalPayload;
+        use lk_agents_abi::delegation::remote::A2ARequest;
+        let Some(state) = self.remote_state(remote_id, endpoint)? else { return Ok(None) };
+        let request = state
+            .requests
+            .iter()
+            .filter(|(_, request)| {
+                request.origin.as_ref() == Some(origin)
+                    && state.events.get(request.request_event as usize).is_some_and(|event| {
+                        matches!(event.payload, A2AJournalPayload::Request(A2ARequest::Send(_)))
+                    })
+            })
+            .max_by_key(|(_, request)| request.request_event);
+        let Some((id, _)) = request else { return Ok(None) };
+        crate::delegation::remote::journal::recovery(state, id)
+            .map(Some)
+            .map_err(|error| lk_agents_abi::storage::StorageError::Invalid(error.to_string()))
     }
 
     pub fn snapshot(&self) -> SessionSnapshot {

@@ -298,6 +298,32 @@ impl RemoteInteraction {
         Ok(outcome)
     }
 
+    /// Reconciliation is an observation of the original call, never a new message. Its saved
+    /// owner has already checked the destination and origin; stale presentation state cannot
+    /// redirect that observation. Working tasks continue through the ordinary follow path.
+    pub fn reconcile(
+        &mut self,
+        response: a2a::StreamResponse,
+    ) -> Result<DelegationUpdate, DelegationError> {
+        let update = crate::a2a::client::ReplyState::default()
+            .accept(response)
+            .map_err(|_| DelegationError::InvalidState)?
+            .ok_or(DelegationError::InvalidState)?;
+        let mut restored = Self::new(self.state.id.clone())?;
+        restored.state.question_sequence = self.state.question_sequence;
+        let event = restored.update(&update)?;
+        self.state = restored.state;
+        Ok(match event {
+            DelegationUpdate::Pending | DelegationUpdate::Progress(_) => {
+                DelegationUpdate::Follow(TaskRef {
+                    id: update.task_id,
+                    context_id: update.context_id,
+                })
+            }
+            event => event,
+        })
+    }
+
     fn identify(&mut self, update: &TaskUpdate) -> Result<(), DelegationError> {
         if self.state.context_id.as_ref().is_some_and(|id| id != &update.context_id)
             || self.state.pending_task_id.as_ref().is_some_and(|id| id != &update.task_id)

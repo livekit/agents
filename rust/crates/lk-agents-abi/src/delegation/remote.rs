@@ -213,9 +213,30 @@ pub struct RemoteCommand {
     pub input: RemoteInput,
 }
 
+/// A native recovery decision, read from the saved request rather than inferred by I/O.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RemoteRecovery {
+    /// No dispatch marker was committed. Only this original operation may be sent.
+    Dispatch { request_id: String, request: Box<A2ARequest>, streaming: bool },
+    /// A send may have reached the peer. Read this task; never repeat its business message.
+    GetTask(RemoteTaskRef),
+    /// The peer already supplied an accepted message-only reply.
+    Observed(Box<crate::a2a::protocol::Message>),
+    /// Dispatch may have happened, but no accepted task or reply identifies its outcome.
+    Uncertain,
+}
+
 /// A serialized native command port, never a host policy callback or a stored resource.
 #[crate::host(native(refused = "expected the active native conversation owner"))]
 pub trait RemoteCommands: Send + Sync {
+    /// Resume the latest send of this exact local call, without admitting another operation.
+    fn recover<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        origin: &'a ToolCallRef,
+    ) -> crate::BoxFuture<'a, Result<Option<RemoteRecovery>, crate::storage::StorageError>>;
+
     /// Reuse only this conversation's saved remote context, after checking its pinned endpoint.
     /// This read neither dispatches work nor appends a communication event.
     fn default_context<'a>(
