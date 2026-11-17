@@ -585,7 +585,7 @@ class TTS(tts.TTS):
         except Exception as e:
             logger.error(
                 "Failed to connect to Sarvam TTS WebSocket",
-                extra={"lk.pii.error": str(e), "url": ws_url},
+                extra={"url": ws_url, "lk.pii.error": str(e), "error_type": type(e).__name__},
                 exc_info=True,
             )
             raise APIConnectionError(f"WebSocket connection failed: {e}") from e
@@ -661,7 +661,7 @@ class TTS(tts.TTS):
                     except Exception as e:
                         logger.debug(
                             "Sarvam TTS keepalive ping failed; evicting connection from pool",
-                            extra={"lk.pii.error": str(e)},
+                            extra={"lk.pii.error": str(e), "error_type": type(e).__name__},
                         )
                         with contextlib.suppress(Exception):
                             self._pool.remove(ws)

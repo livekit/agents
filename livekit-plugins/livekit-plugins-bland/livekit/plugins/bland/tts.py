@@ -234,7 +234,10 @@ class TTS(tts.TTS):
             await ws.send_str(json.dumps({"type": "close"}))
             await asyncio.wait_for(ws.receive(), timeout=1.0)
         except Exception as e:
-            logger.debug("Bland TTS close handshake skipped", extra={"lk.pii.error": str(e)})
+            logger.debug(
+                "Bland TTS close handshake skipped",
+                extra={"lk.pii.error": str(e), "error_type": type(e).__name__},
+            )
         finally:
             await ws.close()
 
@@ -529,7 +532,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                             # close, with the one cancellation already spent.
                             logger.debug(
                                 "Bland cancel handshake failed",
-                                extra={"lk.pii.error": str(drain_error)},
+                                extra={
+                                    "lk.pii.error": str(drain_error),
+                                    "error_type": type(drain_error).__name__,
+                                },
                             )
                             try:
                                 await ws.close()

@@ -422,16 +422,22 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
                     # side: nothing left to end, retrying would not help.
                     self._ended = True
                 logger.warning(
-                    "failed to end atmee avatar session; the worker's own report or the "
-                    "session ceiling will settle it",
-                    extra={"session_id": self.session_id, "lk.pii.error": str(e)},
+                    "failed to end atmee avatar session; the worker's own report or the session ceiling will settle it",
+                    extra={
+                        "session_id": self.session_id,
+                        "lk.pii.error": str(e),
+                        "error_type": type(e).__name__,
+                    },
                 )
                 return
             except Exception as e:  # never let a billing hint break teardown
                 logger.warning(
-                    "failed to end atmee avatar session; the worker's own report or the "
-                    "session ceiling will settle it",
-                    extra={"session_id": self.session_id, "lk.pii.error": str(e)},
+                    "failed to end atmee avatar session; the worker's own report or the session ceiling will settle it",
+                    extra={
+                        "session_id": self.session_id,
+                        "lk.pii.error": str(e),
+                        "error_type": type(e).__name__,
+                    },
                 )
                 return
             self._ended = True

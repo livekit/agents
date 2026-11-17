@@ -1453,6 +1453,7 @@ class SpeechStream(stt.SpeechStream):
                                 **self._build_log_context(),
                                 "lk.pii.raw_data": msg.data,
                                 "lk.pii.error": str(e),
+                                "error_type": type(e).__name__,
                             },
                         )
                         continue  # Skip malformed message
@@ -1462,7 +1463,11 @@ class SpeechStream(stt.SpeechStream):
                     except Exception as e:
                         self._logger.error(
                             "Error processing WebSocket message",
-                            extra={**self._build_log_context(), "lk.pii.error": str(e)},
+                            extra={
+                                **self._build_log_context(),
+                                "lk.pii.error": str(e),
+                                "error_type": type(e).__name__,
+                            },
                             exc_info=True,
                         )
                         raise APIStatusError(

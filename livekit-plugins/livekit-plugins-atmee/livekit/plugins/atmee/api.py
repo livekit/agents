@@ -338,7 +338,11 @@ class AtmeeAPI:
             # for the slower generation; the start reports real failures.
             logger.debug(
                 "could not read the atmee avatar's generation; allowing for a v2 start",
-                extra={"avatar_id": avatar_id, "lk.pii.error": str(e)},
+                extra={
+                    "avatar_id": avatar_id,
+                    "lk.pii.error": str(e),
+                    "error_type": type(e).__name__,
+                },
             )
             return _START_TOTAL_TIMEOUT["v2"][wait_for]
         generation = "v2" if info.engine in _V2_ENGINES else "v1"

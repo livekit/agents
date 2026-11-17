@@ -12,11 +12,10 @@ LOG_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "critic
 class ExceptionLogVisitor(ast.NodeVisitor):
     def __init__(self) -> None:
         self.exceptions: dict[str, str] = {}
+        self.whole_exceptions: set[str] = set()
         self.calls: list[tuple[ast.Call, str]] = []
 
     def exception_in(self, node: ast.AST) -> str | None:
-        if isinstance(node, ast.Attribute) and node.attr in {"error", "exception", "message"}:
-            return ast.unparse(node)
         # Exception class names are safe metadata, unlike the exception's free-form text.
         if (
             isinstance(node, ast.Call)
@@ -32,29 +31,61 @@ class ExceptionLogVisitor(ast.NodeVisitor):
             None,
         )
 
+    def whole_exception_in(self, node: ast.AST) -> str | None:
+        # Picking a field is an explicit, reviewable decision. Its name alone cannot
+        # tell us whether it is sensitive (e.g. a status code or a fixed SDK message).
+        if isinstance(node, (ast.Attribute, ast.Subscript)):
+            return None
+        if isinstance(node, ast.Call):
+            if not (
+                isinstance(node.func, ast.Name)
+                and node.func.id in {"str", "repr", "format"}
+                or isinstance(node.func, ast.Attribute)
+                and node.func.attr == "format"
+            ):
+                return None
+        if isinstance(node, ast.Name):
+            return self.exceptions.get(node.id) if node.id in self.whole_exceptions else None
+        return next(
+            (
+                exc
+                for child in ast.iter_child_nodes(node)
+                if (exc := self.whole_exception_in(child))
+            ),
+            None,
+        )
+
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
         previous = self.exceptions.copy()
+        previous_whole = self.whole_exceptions.copy()
         if node.name:
             self.exceptions[node.name] = node.name
+            self.whole_exceptions.add(node.name)
         self.generic_visit(node)
         self.exceptions = previous
+        self.whole_exceptions = previous_whole
 
     def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         previous = self.exceptions.copy()
+        previous_whole = self.whole_exceptions.copy()
         for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs):
             self.exceptions.pop(arg.arg, None)
+            self.whole_exceptions.discard(arg.arg)
             if arg.annotation and any(
                 isinstance(n, ast.Name) and n.id.endswith(("Error", "Exception"))
                 for n in ast.walk(arg.annotation)
             ):
                 self.exceptions[arg.arg] = arg.arg
+                self.whole_exceptions.add(arg.arg)
         self.generic_visit(node)
         self.exceptions = previous
+        self.whole_exceptions = previous_whole
 
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def visit_Assign(self, node: ast.Assign) -> None:
         exception = self.exception_in(node.value)
+        whole_exception = self.whole_exception_in(node.value)
         if isinstance(node.value, ast.Call):
             func = node.value.func
             name = (
@@ -66,8 +97,12 @@ class ExceptionLogVisitor(ast.NodeVisitor):
             )
             if name.endswith(("Error", "Exception")) or name in {"exception", "_error_from_frame"}:
                 exception = next((t.id for t in node.targets if isinstance(t, ast.Name)), None)
+                whole_exception = exception
         for target in node.targets:
             if isinstance(target, ast.Name):
+                self.whole_exceptions.discard(target.id)
+                if whole_exception:
+                    self.whole_exceptions.add(target.id)
                 if exception:
                     self.exceptions[target.id] = exception
                 else:
@@ -88,14 +123,11 @@ class ExceptionLogVisitor(ast.NodeVisitor):
             for keyword in node.keywords:
                 if keyword.arg != "extra" or not isinstance(keyword.value, ast.Dict):
                     continue
-                for key in keyword.value.keys:
-                    if isinstance(key, ast.Constant) and key.value in {
-                        "error",
-                        "err",
-                        "errors",
-                        "exception",
-                    }:
-                        self.calls.append((node, f"extra[{key.value!r}]"))
+                for key, value in zip(keyword.value.keys, keyword.value.values, strict=True):
+                    if isinstance(key, ast.Constant) and "pii" in str(key.value).split("."):
+                        continue
+                    if exception := self.whole_exception_in(value):
+                        self.calls.append((node, exception))
         self.generic_visit(node)
 
 

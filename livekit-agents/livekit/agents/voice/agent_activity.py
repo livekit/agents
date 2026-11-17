@@ -2451,7 +2451,11 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.delegate(verdict if isinstance(verdict, str) else None)
         except llm.RealtimeError as e:
             # a fallback swap during the check can leave a model that cannot delegate
-            logger.warning("could not start the delegation the detector asked for", exc_info=e)
+            logger.warning(
+                "could not start the delegation the detector asked for",
+                exc_info=e,
+                extra={"error_code": e.code},
+            )
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
         if ev.user_initiated:
@@ -3616,7 +3620,11 @@ class AgentActivity(RecognitionHooks):
             except llm.RealtimeError as e:
                 logger.warning(
                     "failed to add the spoken message to the realtime chat context",
-                    extra={"lk.pii.error": str(e)},
+                    extra={
+                        "lk.pii.error": str(e),
+                        "error_type": type(e).__name__,
+                        "error_code": e.code,
+                    },
                 )
 
     def _on_enter_ignored_tools(self, tool_ctx: llm.ToolContext) -> list[llm.Tool]:
@@ -4371,7 +4379,7 @@ class AgentActivity(RecognitionHooks):
             try:
                 generation_ev = await self._rt_session.say(text)
             except llm.RealtimeError as e:
-                logger.error("failed to say text", exc_info=e)
+                logger.error("failed to say text", exc_info=e, extra={"error_code": e.code})
                 speech_handle._mark_done(error=e)
                 return
 
@@ -4393,7 +4401,11 @@ class AgentActivity(RecognitionHooks):
                 # so still generate the reply rather than dropping the whole turn
                 logger.warning(
                     "failed to update the chat context before generating the reply",
-                    extra={"lk.pii.error": str(e)},
+                    extra={
+                        "lk.pii.error": str(e),
+                        "error_type": type(e).__name__,
+                        "error_code": e.code,
+                    },
                 )
             except Exception as e:
                 logger.exception("failed to update the chat context before generating the reply")
@@ -4453,6 +4465,7 @@ class AgentActivity(RecognitionHooks):
                     "failed to generate a reply%s",
                     " after tool execution" if tool_reply else "",
                     exc_info=e,
+                    extra={"error_code": e.code},
                 )
                 speech_handle._mark_done(error=e)
                 self._session._update_agent_state("listening")
@@ -4926,7 +4939,11 @@ class AgentActivity(RecognitionHooks):
             except llm.RealtimeError as e:
                 logger.warning(
                     "failed to sync chat context to remove never-played messages",
-                    extra={"lk.pii.error": str(e)},
+                    extra={
+                        "lk.pii.error": str(e),
+                        "error_type": type(e).__name__,
+                        "error_code": e.code,
+                    },
                 )
 
         for entry in message_outputs:
@@ -4976,7 +4993,11 @@ class AgentActivity(RecognitionHooks):
                 except llm.RealtimeError as e:
                     logger.warning(
                         "failed to sync the tool results of an interrupted generation",
-                        extra={"lk.pii.error": str(e)},
+                        extra={
+                            "lk.pii.error": str(e),
+                            "error_type": type(e).__name__,
+                            "error_code": e.code,
+                        },
                     )
             if timeout_cancel is not None:
                 raise timeout_cancel
@@ -5095,8 +5116,12 @@ class AgentActivity(RecognitionHooks):
                         await self._rt_session.update_chat_ctx(chat_ctx)
                 except llm.RealtimeError as e:
                     logger.warning(
-                        "failed to update chat context before generating the function calls results",  # noqa: E501
-                        extra={"lk.pii.error": str(e)},
+                        "failed to update chat context before generating the function calls results",
+                        extra={
+                            "lk.pii.error": str(e),
+                            "error_type": type(e).__name__,
+                            "error_code": e.code,
+                        },
                     )
                     if auto_reply_fut is not None and not auto_reply_fut.done():
                         if self._pending_auto_tool_reply_fut is auto_reply_fut:
@@ -5496,8 +5521,10 @@ class AgentActivity(RecognitionHooks):
         try:
             detector = inference.AdaptiveInterruptionDetector()
         except ValueError as e:
+            # This constructor's validation errors contain fixed SDK messages, not credentials.
             logger.warning(
-                "failed to create AdaptiveInterruptionDetector", extra={"lk.pii.error": str(e)}
+                "failed to create AdaptiveInterruptionDetector",
+                extra={"error_message": e.args[0]},
             )
             return None
 

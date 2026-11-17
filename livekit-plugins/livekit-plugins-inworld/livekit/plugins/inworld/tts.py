@@ -555,7 +555,10 @@ class _InworldConnection:
             try:
                 await self._ws.close()
             except Exception as e:
-                logger.debug("Error closing Inworld TTS WebSocket", extra={"lk.pii.error": str(e)})
+                logger.debug(
+                    "Error closing Inworld TTS WebSocket",
+                    extra={"lk.pii.error": str(e), "error_type": type(e).__name__},
+                )
 
     async def aclose(self) -> None:
         """Close the connection and all contexts."""
@@ -1094,7 +1097,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise
         except Exception as e:
             logger.error(
-                "Inworld stream error", extra={"context_id": context_id, "lk.pii.error": e}
+                "Inworld stream error",
+                extra={"context_id": context_id, "lk.pii.error": e, "error_type": type(e).__name__},
             )
             connection.close_context(context_id, cancel=True)
             raise APIConnectionError() from e

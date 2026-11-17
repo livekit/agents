@@ -223,11 +223,19 @@ class AvatarSession(BaseAvatarSession):
         except APIStatusError as e:
             logger.error(
                 "failed to create simli session token",
-                extra={"status_code": e.status_code, "lk.pii.body": e.body},
+                extra={
+                    "error_message": e.message,
+                    "retryable": e.retryable,
+                    "status_code": e.status_code,
+                    "lk.pii.body": e.body,
+                },
             )
             return
         except (APIConnectionError, ValueError, KeyError, TypeError) as e:
-            logger.error("failed to create simli session token", extra={"lk.pii.error": repr(e)})
+            logger.error(
+                "failed to create simli session token",
+                extra={"lk.pii.error": repr(e), "error_type": type(e).__name__},
+            )
             return
 
         try:
@@ -242,12 +250,18 @@ class AvatarSession(BaseAvatarSession):
         except APIStatusError as e:
             logger.error(
                 "failed to connect to simli avatar session",
-                extra={"status_code": e.status_code, "lk.pii.body": e.body},
+                extra={
+                    "error_message": e.message,
+                    "retryable": e.retryable,
+                    "status_code": e.status_code,
+                    "lk.pii.body": e.body,
+                },
             )
             return
         except APIConnectionError as e:
             logger.error(
-                "failed to connect to simli avatar session", extra={"lk.pii.error": repr(e)}
+                "failed to connect to simli avatar session",
+                extra={"lk.pii.error": repr(e), "error_type": type(e).__name__},
             )
             return
 
@@ -294,7 +308,12 @@ class AvatarSession(BaseAvatarSession):
                     raise
                 logger.warning(
                     "failed to call simli api",
-                    extra={"attempt": attempt + 1, "status_code": e.status_code},
+                    extra={
+                        "error_message": e.message,
+                        "retryable": e.retryable,
+                        "attempt": attempt + 1,
+                        "status_code": e.status_code,
+                    },
                 )
                 if attempt >= self._conn_options.max_retry:
                     raise
@@ -302,7 +321,11 @@ class AvatarSession(BaseAvatarSession):
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning(
                     "failed to call simli api",
-                    extra={"attempt": attempt + 1, "lk.pii.error": str(e)},
+                    extra={
+                        "attempt": attempt + 1,
+                        "lk.pii.error": str(e),
+                        "error_type": type(e).__name__,
+                    },
                 )
                 if attempt >= self._conn_options.max_retry:
                     raise APIConnectionError("Failed to call Simli API after all retries") from e

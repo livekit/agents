@@ -431,7 +431,11 @@ class TTS(tts.TTS):
                     if not exc.retryable:
                         logger.warning(
                             "elevenlabs prewarm stopped after non-retryable API error",
-                            extra={"status_code": exc.status_code, "lk.pii.error": str(exc)},
+                            extra={
+                                "status_code": exc.status_code,
+                                "lk.pii.error": str(exc),
+                                "error_type": type(exc).__name__,
+                            },
                         )
                         return
                     await asyncio.sleep(retry_delay)
@@ -1283,7 +1287,11 @@ class _DialogueConnection(_Connection):
         except Exception as e:
             logger.warning(
                 "dialogue send loop error",
-                extra={"exception_type": type(e).__name__, "lk.pii.error": str(e)},
+                extra={
+                    "exception_type": type(e).__name__,
+                    "lk.pii.error": str(e),
+                    "error_type": type(e).__name__,
+                },
             )
         finally:
             if not self._closed:
@@ -1397,7 +1405,11 @@ class _DialogueConnection(_Connection):
         except Exception as e:
             logger.warning(
                 "dialogue recv loop error",
-                extra={"exception_type": type(e).__name__, "lk.pii.error": str(e)},
+                extra={
+                    "exception_type": type(e).__name__,
+                    "lk.pii.error": str(e),
+                    "error_type": type(e).__name__,
+                },
             )
             for ctx in self._context_data.values():
                 if not ctx.waiter.done():

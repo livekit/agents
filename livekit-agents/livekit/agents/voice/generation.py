@@ -951,8 +951,9 @@ async def _execute_tools_task(
                     extra={
                         "function": fnc_call.name,
                         "lk.pii.arguments": fnc_call.arguments,
-                        "lk.pii.error": str(e),
                         "speech_id": speech_handle.id,
+                        "lk.pii.error": str(e),
+                        "error_type": type(e).__name__,
                     },
                 )
                 _tool_completed(

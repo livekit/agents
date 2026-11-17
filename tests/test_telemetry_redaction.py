@@ -890,6 +890,60 @@ def test_exception_text_in_pii_extra_is_redacted(
     assert (secret in str(dict(translated.attributes or {}))) is not redaction_enabled
 
 
+@pytest.mark.parametrize("redaction_enabled", [False, True])
+def test_selected_framework_diagnostics_survive_a_sensitive_exception(
+    monkeypatch: pytest.MonkeyPatch, redaction_enabled: bool
+) -> None:
+    secret = "provider body contains canary@example.com"
+    # The SDK owns this message; __str__ also includes an untrusted response body.
+    failure = APIStatusError(
+        "Server returned an error", status_code=503, request_id="request-123", body=secret
+    )
+    try:
+        raise failure
+    except APIStatusError:
+        exc_info = sys.exc_info()
+    logger = logging.getLogger("livekit.agents.test")
+    record = logger.makeRecord(
+        logger.name,
+        logging.WARNING,
+        __file__,
+        1,
+        "provider failed",
+        (),
+        exc_info,
+        extra={"error_message": failure.message, "code": failure.status_code},
+    )
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: redaction_enabled)
+    translated = _TraceLevelLoggingHandler()._translate(record)
+    attributes = dict(translated.attributes or {})
+    assert attributes["error_message"] == "Server returned an error"
+    assert attributes["code"] == attributes["status_code"] == 503
+    assert attributes["request_id"] == "request-123"
+    assert attributes["retryable"] is True
+    assert (secret in str(attributes)) is not redaction_enabled
+
+
+def test_provider_message_is_not_trusted_by_exception_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = APIStatusError("provider rejected canary@example.com", status_code=429)
+    record = logging.LogRecord(
+        "livekit.agents.test",
+        logging.WARNING,
+        __file__,
+        1,
+        "provider failed",
+        (),
+        (type(failure), failure, None),
+    )
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: True)
+    translated = _TraceLevelLoggingHandler()._translate(record)
+    attributes = dict(translated.attributes or {})
+    assert attributes["status_code"] == 429
+    assert "canary@example.com" not in str(attributes)
+
+
 def test_redacted_exception_log_can_be_otlp_encoded(monkeypatch: pytest.MonkeyPatch) -> None:
     exporter = InMemoryLogRecordExporter()
     provider = LoggerProvider()

@@ -164,14 +164,19 @@ class AvatarSession(BaseAvatarSession):
                 if isinstance(e, APIStatusError):
                     logger.warning(
                         "API Error; Unable to trigger TruGen.AI API backend.",
-                        extra={"status_code": e.status_code, "lk.pii.body": e.body},
+                        extra={
+                            "error_message": e.message,
+                            "retryable": e.retryable,
+                            "status_code": e.status_code,
+                            "lk.pii.body": e.body,
+                        },
                     )
                     if not e.retryable:
                         raise
                 else:
                     logger.warning(
                         "API Error; Unable to trigger TruGen.AI API backend.",
-                        extra={"lk.pii.error": str(e)},
+                        extra={"lk.pii.error": str(e), "error_type": type(e).__name__},
                     )
 
                 if i < self._conn_options.max_retry:
