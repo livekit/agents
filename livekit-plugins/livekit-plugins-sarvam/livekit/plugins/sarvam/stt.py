@@ -1286,6 +1286,12 @@ class SpeechStream(stt.SpeechStream):
             if pending:
                 await utils.aio.cancel_and_wait(*pending)
 
+            if self._pending_eos and not self._eos_emitted_for_utterance:
+                # the socket is closing, so close the turn rather than leave it to the
+                # fallback timer that the cleanup below cancels
+                self._try_commit_utterance()
+                self._emit_end_of_speech()
+
             # Check for exceptions in completed tasks
             for task in done:
                 if task != reconnect_task:
@@ -1408,7 +1414,12 @@ class SpeechStream(stt.SpeechStream):
                         flushed = True
 
             await send_tail()
-            if not flushed:
+            utterance_open = self._speaking or self._pending_eos
+            if utterance_open:
+                # a final from earlier in the utterance doesn't cover the audio sent since,
+                # so only one answering this flush settles it
+                self._utterance_settled.clear()
+            if not flushed or utterance_open:
                 # Sarvam has no end-of-stream message; a flush finalizes the open utterance
                 # (with or without flush_signal), so trailing speech isn't lost.
                 await ws.send_str(json.dumps({"type": "flush"}))
@@ -1601,6 +1612,9 @@ class SpeechStream(stt.SpeechStream):
 
         if not transcript_text:
             self._logger.debug("Received empty transcript", extra=self._build_log_context())
+            if self._pending_eos:
+                # nothing to transcribe, so END_SPEECH needn't wait for a final
+                self._emit_end_of_speech()
             return
 
         try:
