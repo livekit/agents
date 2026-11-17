@@ -667,6 +667,59 @@ async def test_reconnect_waits_for_the_flushed_transcript(
 
 
 @pytest.mark.virtual_time
+async def test_reconnect_after_end_speech_waits_for_the_final(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reconnect between END_SPEECH and the final keeps the final and closes the turn."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    old = session.sockets[0]
+    await _wait_until(lambda: {"type": "flush"} in old.sent)
+    await asyncio.sleep(sarvam_stt.EOS_FALLBACK_TIMEOUT + 0.1)
+    assert not old.closed  # waiting on the final, not the fallback timer
+    await stream._handle_transcript_data({"data": {"transcript": "नमस्ते", "language_code": "hi-IN"}})
+
+    await _wait_until(lambda: len(session.sockets) == 2)
+    events = [event.type for event in await _next_events(stream, 4)]
+    assert events == [
+        sarvam_stt.stt.SpeechEventType.START_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.RECOGNITION_USAGE,
+        sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT,
+        sarvam_stt.stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_settles_on_an_empty_final(monkeypatch: pytest.MonkeyPatch) -> None:
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    old = session.sockets[0]
+    await _wait_until(lambda: {"type": "flush"} in old.sent)
+    await stream._handle_transcript_data({"data": {"transcript": "", "language_code": "hi-IN"}})
+
+    # settles at once rather than after RECONNECT_SETTLE_TIMEOUT
+    await asyncio.wait_for(_wait_until(lambda: len(session.sockets) == 2), timeout=0.5)
+    events = [event.type for event in await _next_events(stream, 2)]
+    assert events == [
+        sarvam_stt.stt.SpeechEventType.START_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
 async def test_reconnect_ends_the_turn_when_no_transcript_arrives(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
