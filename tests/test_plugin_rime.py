@@ -4119,6 +4119,41 @@ class TestRealtime:
             assert model._turn_detection.end_of_turn_min_silence_ms == 750
             assert model._turn_detection.interrupt_phrases == ()
 
+    @pytest.mark.parametrize("speed", [0.84, 1.31, True, "1.0"])
+    async def test_prism_speed_rejected_before_connect(self, speed):
+        async with Rime(api_key="test") as client:
+            with pytest.raises(RimeInputError, match="0.85 to 1.3"):
+                rime.realtime.RealtimeModel(client=client, speed=speed)
+            model = rime.realtime.RealtimeModel(client=client, speed=1.1)
+            try:
+                with pytest.raises(RimeInputError, match="0.85 to 1.3"):
+                    model.update_options(speed=speed)
+                assert model._speed == 1.1
+                model.update_options(speed=0.85)
+                assert model._speed == 0.85
+                model.update_options(speed=1.3)
+                assert model._speed == 1.3
+            finally:
+                await model.aclose()
+
+    @pytest.mark.parametrize("via_session", [False, True])
+    async def test_prism_live_speed_rejected_without_sending_update(self, via_session):
+        async with peer_model(speed=1.1) as (peer, model, _):
+            session = model.session()
+            await session._update_session(instructions="Help")
+            errors: list[llm.RealtimeModelError] = []
+            session.on("error", errors.append)
+            target = session if via_session else model
+            with pytest.raises(RimeInputError, match="0.85 to 1.3"):
+                target.update_options(speed=2.0)
+            assert model._speed == 1.1
+            updates = len(peer.updates)
+            target.update_options(speed=0.9)
+            await wait_until(lambda: model._speed == 0.9)
+            # a queued bad value would have surfaced as an error event before this update
+            assert errors == []
+            assert peer.updates[updates:] == [{"speed": 0.9}]
+
     async def test_prism_cumulative_transcript_corrects_and_clears_caption(self):
         async with peer_model() as (peer, model, _):
             session = model.session()

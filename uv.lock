@@ -3688,7 +3688,7 @@ requires-dist = [
     { name = "protobuf", specifier = ">=5.29.6" },
     { name = "rime-api", specifier = ">=0.3.0" },
     { name = "rimelabs-sdk", marker = "python_full_version >= '3.11' and extra == 'realtime'", specifier = ">=0.1.0a30" },
-    { name = "rimelabs-sdk", marker = "python_full_version >= '3.11' and extra == 'stt'", specifier = ">=0.1.0a29" },
+    { name = "rimelabs-sdk", marker = "python_full_version >= '3.11' and extra == 'stt'", specifier = ">=0.1.0a30" },
 ]
 provides-extras = ["realtime", "stt"]
 

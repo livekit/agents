@@ -68,6 +68,14 @@ class _Edit:
 _edit: ContextVar[_Edit | None] = ContextVar("rime_history_edit", default=None)
 
 
+def _validate_speed(value: float) -> float:
+    """Reject speeds Prism refuses, before they can fail a session at connect."""
+    # Mirrors the SDK's private range check, which only runs when settings are sent.
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.85 <= value <= 1.3:
+        raise RimeInputError("Speed must be a number from 0.85 to 1.3")
+    return value
+
+
 def _startup_retryable(error: Exception) -> bool:
     # Older SDKs have no structured status. Unknown failures must not be replayed.
     return isinstance(error, (RimeUnavailableError, RimeResourceLimitError)) and getattr(
@@ -100,7 +108,8 @@ class RealtimeModel(llm.RealtimeModel):
     Omit endpoint to use public Prism. An injected Rime client stays caller-owned.
     Otherwise Rime reads RIME_API_KEY. update_options() queues live settings updates
     and returns immediately. Stored settings change after provider acknowledgment;
-    refusals are reported through error events.
+    refusals are reported through error events. An out-of-range speed raises
+    RimeInputError immediately.
     Context updates preserve omitted history by default. Use context_mode="strict"
     for replacement semantics through Agent.update_chat_ctx().
     A closed session may be replaced with a fresh conversation, such as an
@@ -156,7 +165,7 @@ class RealtimeModel(llm.RealtimeModel):
         self._endpoint = endpoint
         self._voice = voice
         self._turn_detection = turn_detection
-        self._speed = speed
+        self._speed = _validate_speed(speed) if speed is not None else None
         self._review = review
         self._truncation = truncation
         self._timeouts = timeouts or r.RealtimeTimeouts()
@@ -251,7 +260,10 @@ class RealtimeModel(llm.RealtimeModel):
 
         Live updates return immediately. Refusals are reported through error events;
         stored settings change only after the provider acknowledges the update.
+        An out-of-range speed raises RimeInputError immediately and changes nothing.
         """
+        if is_given(speed):
+            _validate_speed(speed)
         if self._session is None:
             if is_given(voice):
                 self._voice = voice
@@ -673,9 +685,14 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         speed: NotGivenOr[float] = NOT_GIVEN,
         turn_detection: NotGivenOr[r.TurnDetectionUpdate] = NOT_GIVEN,
     ) -> None:
-        """Set tool choice and queue provider options without waiting for acknowledgment."""
+        """Set tool choice and queue provider options without waiting for acknowledgment.
+
+        An out-of-range speed raises RimeInputError immediately and queues nothing.
+        """
         if self._failure is not None or self._closed:
             self._require()
+        if is_given(speed):
+            _validate_speed(speed)
         if is_given(tool_choice):
             if tool_choice not in (None, "auto", "none"):
                 raise llm.RealtimeError("Prism supports only tool_choice='auto' or 'none'")
@@ -1150,7 +1167,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
             stopped = llm.InputSpeechStoppedEvent(user_transcription_enabled=True)
             self.emit("input_speech_stopped", stopped)
         elif isinstance(payload, r.TranscriptDelta):
-            cumulative = getattr(payload, "transcript", None)
+            cumulative = payload.transcript
             text = (
                 cumulative
                 if cumulative is not None
