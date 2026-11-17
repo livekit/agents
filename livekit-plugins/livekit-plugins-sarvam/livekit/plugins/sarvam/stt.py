@@ -1045,7 +1045,6 @@ class SpeechStream(stt.SpeechStream):
         )
         self._eos_emitted_for_utterance = True
         self._pending_eos = False
-        self._utterance_settled.set()
 
     async def _emit_pending_eos_after_timeout(self) -> None:
         try:
@@ -1328,6 +1327,22 @@ class SpeechStream(stt.SpeechStream):
                 "Timed out waiting for the final transcript after audio input ended"
             ) from None
 
+    async def _send_pcm(self, ws: aiohttp.ClientWebSocketResponse, pcm: bytes) -> None:
+        """Send 16-bit PCM samples in Sarvam's audio message."""
+        import base64
+
+        await ws.send_str(
+            json.dumps(
+                {
+                    "audio": {
+                        "data": base64.b64encode(pcm).decode("utf-8"),
+                        "encoding": self._audio_encoding,
+                        "sample_rate": self._opts.sample_rate,
+                    }
+                }
+            )
+        )
+
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Process audio frames and send them in chunks."""
@@ -1345,18 +1360,7 @@ class SpeechStream(stt.SpeechStream):
             nonlocal flushed
             if not audio_buffer:
                 return
-            tail = np.array(audio_buffer, dtype=np.int16).tobytes()
-            await ws.send_str(
-                json.dumps(
-                    {
-                        "audio": {
-                            "data": base64.b64encode(tail).decode("utf-8"),
-                            "encoding": self._audio_encoding,
-                            "sample_rate": self._opts.sample_rate,
-                        }
-                    }
-                )
-            )
+            await self._send_pcm(ws, np.array(audio_buffer, dtype=np.int16).tobytes())
             audio_buffer.clear()
             flushed = False
 
@@ -1376,22 +1380,8 @@ class SpeechStream(stt.SpeechStream):
 
                         # Check if we have enough data for a chunk
                         while len(audio_buffer) >= chunk_size:
-                            # Convert to Int16Array
                             chunk_data = np.array(audio_buffer[:chunk_size], dtype=np.int16)
-
-                            # Convert to base64
-                            base64_audio = base64.b64encode(chunk_data.tobytes()).decode("utf-8")
-
-                            # Send audio in the required format
-                            audio_message = {
-                                "audio": {
-                                    "data": base64_audio,
-                                    "encoding": self._audio_encoding,
-                                    "sample_rate": self._opts.sample_rate,
-                                }
-                            }
-
-                            await ws.send_str(json.dumps(audio_message))
+                            await self._send_pcm(ws, chunk_data.tobytes())
                             chunks_sent += 1
                             flushed = False
 
@@ -1607,6 +1597,9 @@ class SpeechStream(stt.SpeechStream):
         # Prefer the per-message request_id from the server; fall back to the
         # session-wide server request_id captured from an earlier message.
         request_id = transcript_data.get("request_id") or self._server_request_id or ""
+        # the utterance is settled once Sarvam has transcribed it, even to nothing; the
+        # END_OF_SPEECH fallback can fire before that, so it doesn't count
+        self._utterance_settled.set()
 
         if not transcript_text:
             self._logger.debug("Received empty transcript", extra=self._build_log_context())

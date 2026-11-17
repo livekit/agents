@@ -388,6 +388,52 @@ async def test_end_input_waits_for_the_open_utterance(session: _Session) -> None
 
 
 @pytest.mark.virtual_time
+async def test_end_input_waits_past_the_eos_fallback_for_the_transcript(
+    session: _Session,
+) -> None:
+    """The END_OF_SPEECH fallback firing first doesn't close the socket on a slow final."""
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream()
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+
+        stream.end_input()
+        assert await session.ws.next_message() == {"type": "flush"}
+        await asyncio.sleep(sarvam_stt.EOS_FALLBACK_TIMEOUT + 0.1)  # the fallback fires
+        assert not session.ws.closed  # the final transcript hasn't arrived yet
+
+        await stream._handle_transcript_data(
+            {"data": {"transcript": "नमस्ते", "language_code": "hi-IN"}}
+        )
+        events = [event.type async for event in stream]
+
+        assert stt.SpeechEventType.FINAL_TRANSCRIPT in events
+        assert session.ws.closed
+
+
+@pytest.mark.virtual_time
+async def test_end_input_settles_on_an_empty_transcript(session: _Session) -> None:
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream()
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+        stream.end_input()
+        assert await session.ws.next_message() == {"type": "flush"}
+        await stream._handle_transcript_data({"data": {"transcript": "", "language_code": "hi-IN"}})
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+        events = [event.type async for event in stream]
+
+        assert stt.SpeechEventType.FINAL_TRANSCRIPT not in events
+        assert session.ws.closed
+
+
+@pytest.mark.virtual_time
 async def test_end_input_times_out_when_the_utterance_never_finishes(session: _Session) -> None:
     async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
         stream = model.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.2))
