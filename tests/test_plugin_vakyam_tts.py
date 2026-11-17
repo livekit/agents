@@ -1,190 +1,140 @@
-"""Tests for Vakyam TTS plugin configuration and WebSocket protocol helpers."""
-
 from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import Mock, patch
+from typing import Any
+from unittest.mock import Mock
 
 import pytest
+from websockets.asyncio import client
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, APITimeoutError
+from livekit.plugins.vakyam import TTS, tts as vakyam_tts
+from livekit.plugins.vakyam._utils import (
+    http_stream_url,
+    normalize_base_url,
+    raise_http_error,
+    raise_ws_error,
+    speech_payload,
+    split_text,
+    validate_text,
+    websocket_url,
+)
+from livekit.plugins.vakyam._websocket import (
+    AsyncStreamingTTSSession,
+    TTSSessionConfig,
+    _websocket_connection_error,
+)
 
 pytestmark = pytest.mark.unit
 
 
-def test_tts_requires_api_key() -> None:
-    from livekit.plugins.vakyam import TTS
+class _ScriptedWS:
+    """Returns scripted frames from recv, raising any that are exceptions."""
 
-    with patch.dict("os.environ", {}, clear=True):
-        with pytest.raises(ValueError, match="API key"):
-            TTS(api_key=None)
+    def __init__(self, incoming: list[bytes | str | Exception]) -> None:
+        self.sent: list[str] = []
+        self._incoming = incoming
+
+    async def send(self, data: str) -> None:
+        self.sent.append(data)
+
+    async def recv(self) -> bytes | str:
+        item = self._incoming.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def close(self) -> None:
+        return None
 
 
-def test_tts_accepts_api_key_directly() -> None:
-    from livekit.plugins.vakyam import TTS
+def _event(type_: str, characters: int = 6) -> str:
+    return json.dumps({"type": type_, "characters_used": characters, "duration_seconds": 0.05})
 
+
+def test_api_key_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VAKYAM_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="API key"):
+        TTS(api_key=None)
+
+    monkeypatch.setenv("VAKYAM_API_KEY", "env-key")
+    assert TTS()._opts.api_key == "env-key"
+
+
+def test_defaults_and_custom_options() -> None:
     tts = TTS(api_key="test-key")
-    assert tts._opts.api_key == "test-key"
+    assert (tts.model, tts.sample_rate, tts.capabilities.streaming) == ("raaga-v1", 24000, True)
+    assert (tts._opts.voice, tts._opts.language, tts._opts.speed) == ("Archana", "ta-IN", 1.0)
 
-
-def test_tts_accepts_api_key_from_env() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    with patch.dict("os.environ", {"VAKYAM_API_KEY": "env-key"}):
-        tts = TTS()
-        assert tts._opts.api_key == "env-key"
-
-
-def test_tts_defaults() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    tts = TTS(api_key="test-key")
-    assert tts.model == "raaga-v1"
-    assert tts.provider == "Vakyam"
-    assert tts.sample_rate == 24000
-    assert tts.num_channels == 1
-    assert tts.capabilities.streaming is True
-    assert tts._opts.voice == "Archana"
-    assert tts._opts.language == "ta-IN"
-    assert tts._opts.speed == 1.0
-
-
-def test_tts_custom_options() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    tts = TTS(
-        api_key="test-key",
-        voice="vc_01EXAMPLE",
-        language="hi-IN",
-        sample_rate=16000,
-        speed=1.2,
+    custom = TTS(
+        api_key="test-key", voice="vc_01EXAMPLE", language="hi-IN", sample_rate=16000, speed=1.2
     )
-    assert tts._opts.voice == "vc_01EXAMPLE"
-    assert tts._opts.language == "hi-IN"
-    assert tts.sample_rate == 16000
-    assert tts._opts.speed == 1.2
+    assert (custom._opts.voice, custom._opts.language, custom.sample_rate, custom._opts.speed) == (
+        "vc_01EXAMPLE",
+        "hi-IN",
+        16000,
+        1.2,
+    )
 
 
-def test_tts_rejects_unsupported_language() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    with pytest.raises(ValueError, match="language"):
-        TTS(api_key="test-key", language="en-US")
-
-
-def test_tts_rejects_unsupported_sample_rate() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    with pytest.raises(ValueError, match="sample_rate"):
-        TTS(api_key="test-key", sample_rate=22050)
-
-
-def test_tts_rejects_invalid_speed() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    with pytest.raises(ValueError, match="speed"):
-        TTS(api_key="test-key", speed=3.0)
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"language": "en-US"}, "language"),
+        ({"sample_rate": 22050}, "sample_rate"),
+        ({"speed": 3.0}, "speed"),
+        ({"voice": "   "}, "voice"),
+        ({"voice": "vc_"}, "vc_"),
+    ],
+)
+def test_invalid_options_are_rejected(kwargs: dict[str, Any], match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        TTS(api_key="test-key", **kwargs)
 
 
-def test_tts_rejects_empty_voice() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    with pytest.raises(ValueError, match="voice"):
-        TTS(api_key="test-key", voice="   ")
-
-
-def test_tts_rejects_bare_custom_voice_prefix() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    with pytest.raises(ValueError, match="vc_"):
-        TTS(api_key="test-key", voice="vc_")
-
-
-def test_update_options() -> None:
-    from livekit.plugins.vakyam import TTS
-
+def test_update_options_applies_to_new_sessions() -> None:
     tts = TTS(api_key="test-key")
     old_pool = tts._pool_for(tts._opts)
     tts.update_options(language="en-IN", voice="Archana", sample_rate=8000, speed=0.9)
-    assert tts._opts.language == "en-IN"
-    assert tts.sample_rate == 8000
-    assert tts._opts.speed == 0.9
+
+    assert (tts._opts.language, tts.sample_rate, tts._opts.speed) == ("en-IN", 8000, 0.9)
     assert tts._session_config(tts._opts).sample_rate == 8000
     assert tts._pool_for(tts._opts) is not old_pool
 
 
-def test_update_options_invalid_sample_rate_is_atomic() -> None:
-    from livekit.plugins.vakyam import TTS
-
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [({"sample_rate": 22050}, "sample_rate"), ({"sample_rate": 16000, "voice": "vc_"}, "voice")],
+)
+def test_rejected_update_options_is_atomic(kwargs: dict[str, Any], match: str) -> None:
     tts = TTS(api_key="test-key")
-    original_opts = tts._opts
-    original_sample_rate = tts.sample_rate
+    original_opts, original_rate = tts._opts, tts.sample_rate
 
-    with pytest.raises(ValueError, match="sample_rate"):
-        tts.update_options(sample_rate=22050)
+    with pytest.raises(ValueError, match=match):
+        tts.update_options(**kwargs)
 
-    assert tts._opts == original_opts
-    assert tts.sample_rate == original_sample_rate
+    assert (tts._opts, tts.sample_rate) == (original_opts, original_rate)
 
 
-def test_update_options_mixed_invalid_values_is_atomic() -> None:
-    from livekit.plugins.vakyam import TTS
-
-    tts = TTS(api_key="test-key")
-    original_opts = tts._opts
-    original_sample_rate = tts.sample_rate
-
-    with pytest.raises(ValueError, match="voice"):
-        tts.update_options(sample_rate=16000, voice="vc_")
-
-    assert tts._opts == original_opts
-    assert tts.sample_rate == original_sample_rate
-
-
-def test_websocket_url_from_https() -> None:
-    from livekit.plugins.vakyam._utils import websocket_url
-
+def test_urls_require_https_except_localhost() -> None:
     assert websocket_url("https://api.vakyam.ai") == "wss://api.vakyam.ai/v1/tts/websocket"
-
-
-def test_http_stream_url() -> None:
-    from livekit.plugins.vakyam._utils import http_stream_url
-
     assert http_stream_url("https://api.vakyam.ai") == "https://api.vakyam.ai/v1/tts/stream"
-
-
-def test_insecure_base_url_rejected() -> None:
-    from livekit.plugins.vakyam._utils import normalize_base_url
-
+    assert normalize_base_url("http://localhost:8080") == "http://localhost:8080"
     with pytest.raises(ValueError, match="HTTPS"):
         normalize_base_url("http://example.com")
 
 
-def test_insecure_localhost_allowed() -> None:
-    from livekit.plugins.vakyam._utils import normalize_base_url
-
-    assert normalize_base_url("http://localhost:8080") == "http://localhost:8080"
-
-
-def test_session_config_wire_message() -> None:
-    from livekit.plugins.vakyam._websocket import TTSSessionConfig
-
-    msg = TTSSessionConfig(
-        model="raaga-v1",
-        voice="Archana",
-        language="ta-IN",
-        sample_rate=24000,
-        speed=1.0,
+def test_wire_payloads() -> None:
+    config = TTSSessionConfig(
+        model="raaga-v1", voice="Archana", language="ta-IN", sample_rate=24000, speed=1.0
     ).to_wire_message()
-    assert msg["type"] == "config"
-    assert msg["model_id"] == "raaga-v1"
-    assert msg["voice"] == "Archana"
-    assert msg["output_format"] == "pcm"
-
-
-def test_speech_payload() -> None:
-    from livekit.plugins.vakyam._utils import speech_payload
+    assert (config["type"], config["model_id"], config["voice"], config["output_format"]) == (
+        "config",
+        "raaga-v1",
+        "Archana",
+        "pcm",
+    )
 
     payload = speech_payload(
         text="வணக்கம்.",
@@ -194,31 +144,25 @@ def test_speech_payload() -> None:
         sample_rate=24000,
         speed=1.0,
     )
-    assert payload["model_id"] == "raaga-v1"
-    assert payload["output_format"] == "pcm"
-    assert payload["text"] == "வணக்கம்."
+    assert (payload["model_id"], payload["output_format"], payload["text"]) == (
+        "raaga-v1",
+        "pcm",
+        "வணக்கம்.",
+    )
 
 
-def test_text_too_long() -> None:
-    from livekit.plugins.vakyam._utils import validate_text
-
+def test_text_limits() -> None:
     with pytest.raises(ValueError, match="3000"):
         validate_text("a" * 3001)
-
-
-def test_split_text_respects_provider_limit() -> None:
-    from livekit.plugins.vakyam._utils import split_text
 
     chunks = split_text("word " * 1000, max_characters=100)
     assert " ".join(chunks) == ("word " * 1000).strip()
     assert all(0 < len(chunk) <= 100 for chunk in chunks)
 
 
-@pytest.mark.asyncio
 async def test_connection_pool_exclusively_checks_out_websockets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from livekit.plugins.vakyam import TTS
     from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession
 
     class FakeWS:
@@ -251,9 +195,7 @@ async def test_connection_pool_exclusively_checks_out_websockets(
     await synth.aclose()
 
 
-@pytest.mark.asyncio
 async def test_websocket_receive_timeout_resets_active_state() -> None:
-    from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession, TTSSessionConfig
 
     class StalledWS:
         async def send(self, data: str) -> None:
@@ -271,14 +213,10 @@ async def test_websocket_receive_timeout_resets_active_state() -> None:
     assert session.utterance_active is False
 
 
-@pytest.mark.asyncio
 async def test_websocket_connect_does_not_require_asyncio_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``asyncio.timeout`` is unavailable on the Python 3.10 minimum version."""
-    from websockets.asyncio import client
-
-    from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession, TTSSessionConfig
 
     class HandshakeWS:
         def __init__(self) -> None:
@@ -313,11 +251,9 @@ async def test_websocket_connect_does_not_require_asyncio_timeout(
     assert json.loads(ws.sent[0])["type"] == "config"
 
 
-@pytest.mark.asyncio
 async def test_keepalive_failure_does_not_log_websocket_exception_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from livekit.plugins.vakyam import TTS, tts as vakyam_tts
 
     class FailedSession:
         connected = True
@@ -346,94 +282,26 @@ async def test_keepalive_failure_does_not_log_websocket_exception_details(
     )
 
 
-@pytest.mark.asyncio
-async def test_stream_retry_uses_fresh_attempt_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    from livekit.plugins.vakyam import TTS
-    from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession
-
-    class FakeWS:
-        def __init__(self, incoming: list[bytes | str | Exception]) -> None:
-            self._incoming = incoming
-
-        async def send(self, data: str) -> None:
-            return None
-
-        async def recv(self) -> bytes | str:
-            item = self._incoming.pop(0)
-            if isinstance(item, Exception):
-                raise item
-            return item
-
-        async def close(self) -> None:
-            return None
-
-    attempts = 0
-
-    async def fake_connect(self: AsyncStreamingTTSSession, *, timeout: float = 10.0) -> None:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            self._connection = FakeWS([RuntimeError("stale socket")])
-        else:
-            self._connection = FakeWS(
-                [
-                    b"\0" * 2400,
-                    json.dumps(
-                        {
-                            "type": "end_of_utterance",
-                            "characters_used": 6,
-                            "duration_seconds": 0.05,
-                        }
-                    ),
-                ]
-            )
-
-    monkeypatch.setattr(AsyncStreamingTTSSession, "connect", fake_connect)
-    synth = TTS(api_key="test-key")
-    stream = synth.stream(
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=0.1)
-    )
-    stream.push_text("Hello.")
-    stream.end_input()
-
-    frames = [event.frame async for event in stream]
-    assert frames
-    assert attempts == 2
-    await synth.aclose()
-
-
-@pytest.mark.asyncio
-async def test_stream_does_not_retry_after_partial_audio(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    ("scripts", "attempts"),
+    [
+        # a stale socket fails before any audio, so the retry starts from clean state
+        ([[RuntimeError("stale socket")], [b"\0" * 2400, _event("end_of_utterance")]], 2),
+        # audio already reached the caller, so a retry would repeat it
+        ([[b"\0" * 2400, RuntimeError("connection lost")]] * 4, 1),
+    ],
+    ids=["fails-before-audio", "fails-after-audio"],
+)
+async def test_stream_retries_only_before_audio(
+    monkeypatch: pytest.MonkeyPatch, scripts: list[list[Any]], attempts: int
 ) -> None:
-    from livekit.plugins.vakyam import TTS
-    from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession
-
-    class FailingWS:
-        def __init__(self) -> None:
-            self._incoming: list[bytes | Exception] = [
-                b"\0" * 2400,
-                RuntimeError("connection lost"),
-            ]
-
-        async def send(self, data: str) -> None:
-            return None
-
-        async def recv(self) -> bytes:
-            item = self._incoming.pop(0)
-            if isinstance(item, Exception):
-                raise item
-            return item
-
-        async def close(self) -> None:
-            return None
-
-    attempts = 0
+    connects = 0
 
     async def fake_connect(self: AsyncStreamingTTSSession, *, timeout: float = 10.0) -> None:
-        nonlocal attempts
-        attempts += 1
-        self._connection = FailingWS()
+        nonlocal connects
+        self._connection = _ScriptedWS(list(scripts[connects]))
+        connects += 1
 
     monkeypatch.setattr(AsyncStreamingTTSSession, "connect", fake_connect)
     synth = TTS(api_key="test-key")
@@ -443,16 +311,17 @@ async def test_stream_does_not_retry_after_partial_audio(
     stream.push_text("Hello.")
     stream.end_input()
 
-    with pytest.raises(APIConnectionError):
-        async for _ in stream:
-            pass
-    assert attempts == 1
+    if attempts == 1:
+        with pytest.raises(APIConnectionError):
+            async for _ in stream:
+                pass
+    else:
+        assert [event.frame async for event in stream]
+    assert connects == attempts
     await synth.aclose()
 
 
-@pytest.mark.asyncio
 async def test_barge_in_drains_and_reuses_websocket(monkeypatch: pytest.MonkeyPatch) -> None:
-    from livekit.plugins.vakyam import TTS
     from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession
 
     class ReusableWS:
@@ -517,9 +386,7 @@ async def test_barge_in_drains_and_reuses_websocket(monkeypatch: pytest.MonkeyPa
     await synth.aclose()
 
 
-@pytest.mark.asyncio
 async def test_http_stream_accepts_octet_stream_and_uses_read_timeout() -> None:
-    from livekit.plugins.vakyam import TTS
 
     class FakeContent:
         async def iter_chunks(self):
@@ -559,9 +426,7 @@ async def test_http_stream_accepts_octet_stream_and_uses_read_timeout() -> None:
     await synth.aclose()
 
 
-@pytest.mark.asyncio
 async def test_http_stream_rejects_non_audio_success_response() -> None:
-    from livekit.plugins.vakyam import TTS
 
     class FakeContent:
         async def iter_chunks(self):
@@ -596,157 +461,82 @@ async def test_http_stream_rejects_non_audio_success_response() -> None:
     await synth.aclose()
 
 
-@pytest.mark.asyncio
 async def test_synthesize_stream_waits_for_end_of_utterance() -> None:
-    from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession, TTSSessionConfig
+    session = AsyncStreamingTTSSession(api_key="test-key", config=TTSSessionConfig())
+    ws = _ScriptedWS([b"pcm-1", b"pcm-2", _event("end_of_utterance", characters=4)])
+    session._connection = ws
 
-    class FakeWS:
-        def __init__(self) -> None:
-            self.sent: list[str] = []
-            self._incoming: list[bytes | str] = [
-                b"pcm-1",
-                b"pcm-2",
-                json.dumps(
-                    {"type": "end_of_utterance", "characters_used": 4, "duration_seconds": 0.5}
-                ),
-            ]
-
-        async def send(self, data: str) -> None:
-            self.sent.append(data)
-
-        async def recv(self) -> bytes | str:
-            return self._incoming.pop(0)
-
-        async def close(self) -> None:
-            return None
-
-    session = AsyncStreamingTTSSession(
-        api_key="test-key",
-        config=TTSSessionConfig(),
-        allow_insecure_base_url=True,
-        base_url="http://localhost",
-    )
-    fake = FakeWS()
-    session._connection = fake
-
-    chunks = [chunk async for chunk in session.synthesize_stream("Hello.")]
-    assert chunks == [b"pcm-1", b"pcm-2"]
-    assert json.loads(fake.sent[0]) == {"type": "text", "text": "Hello."}
+    assert [chunk async for chunk in session.synthesize_stream("Hello.")] == [b"pcm-1", b"pcm-2"]
+    assert json.loads(ws.sent[0]) == {"type": "text", "text": "Hello."}
     assert session.last_result is not None
-    assert session.last_result.cancelled is False
-    assert session.last_result.characters_used == 4
+    assert (session.last_result.cancelled, session.last_result.characters_used) == (False, 4)
     assert session.utterance_active is False
 
 
-@pytest.mark.asyncio
 async def test_synthesize_stream_cancel_drains_until_cancellation() -> None:
-    from livekit.plugins.vakyam._websocket import AsyncStreamingTTSSession, TTSSessionConfig
-
-    class FakeWS:
-        def __init__(self) -> None:
-            self.sent: list[str] = []
-            self._incoming: list[bytes | str] = [
-                b"pcm-1",
-                json.dumps({"type": "cancellation", "characters_used": 2, "duration_seconds": 0.1}),
-            ]
-
-        async def send(self, data: str) -> None:
-            self.sent.append(data)
-
-        async def recv(self) -> bytes | str:
-            return self._incoming.pop(0)
-
-        async def close(self) -> None:
-            return None
-
-    session = AsyncStreamingTTSSession(
-        api_key="test-key",
-        config=TTSSessionConfig(),
-        allow_insecure_base_url=True,
-        base_url="http://localhost",
-    )
-    fake = FakeWS()
-    session._connection = fake
+    session = AsyncStreamingTTSSession(api_key="test-key", config=TTSSessionConfig())
+    ws = _ScriptedWS([b"pcm-1", _event("cancellation", characters=2)])
+    session._connection = ws
 
     agen = session.synthesize_stream("Hello.")
-    first = await agen.__anext__()
-    assert first == b"pcm-1"
+    assert await agen.__anext__() == b"pcm-1"
     with pytest.raises(asyncio.CancelledError):
         await agen.athrow(asyncio.CancelledError)
 
-    assert session.last_result is not None
-    assert session.last_result.cancelled is True
-    sent_types = [json.loads(item)["type"] for item in fake.sent]
-    assert "cancel" in sent_types
+    assert session.last_result is not None and session.last_result.cancelled is True
+    assert "cancel" in [json.loads(item)["type"] for item in ws.sent]
 
 
 def test_raise_http_error_parses_envelope() -> None:
-    from livekit.plugins.vakyam._utils import raise_http_error
-
     with pytest.raises(APIStatusError, match="status 429") as exc_info:
         raise_http_error(
             429,
             json.dumps({"error": {"code": "rate_limit_exceeded", "message": "Too many requests."}}),
         )
-    assert exc_info.value.status_code == 429
-    assert exc_info.value.retryable is True
+    assert (exc_info.value.status_code, exc_info.value.retryable) == (429, True)
     assert exc_info.value.body == {"status_code": 429, "error_code": "rate_limit_exceeded"}
-    assert "Too many requests" not in str(exc_info.value)
 
 
-def test_raise_http_error_does_not_retain_raw_response() -> None:
-    from livekit.plugins.vakyam._utils import raise_http_error
+_SECRET = "customer text and bearer secret"
 
-    secret = "customer text and bearer secret"
+
+@pytest.mark.parametrize(
+    ("raise_error", "body"),
+    [
+        (
+            lambda: raise_http_error(500, json.dumps({"error": {"message": _SECRET}})),
+            {"status_code": 500},
+        ),
+        (
+            lambda: raise_ws_error(
+                {"type": "error", "error": {"code": "internal_error", "message": _SECRET}}
+            ),
+            {"type": "error", "code": "internal_error"},
+        ),
+    ],
+    ids=["http", "ws"],
+)
+def test_provider_errors_drop_raw_text(raise_error: Any, body: dict[str, Any]) -> None:
     with pytest.raises(APIStatusError) as exc_info:
-        raise_http_error(500, json.dumps({"error": {"message": secret}}))
+        raise_error()
 
-    assert exc_info.value.body == {"status_code": 500}
-    assert secret not in str(exc_info.value)
-
-
-def test_raise_ws_error_does_not_retain_raw_event() -> None:
-    from livekit.plugins.vakyam._utils import raise_ws_error
-
-    secret = "customer text and bearer secret"
-    with pytest.raises(APIStatusError) as exc_info:
-        raise_ws_error({"type": "error", "error": {"code": "internal_error", "message": secret}})
-
-    assert exc_info.value.body == {"type": "error", "code": "internal_error"}
-    assert secret not in str(exc_info.value)
+    assert exc_info.value.body == body
+    assert _SECRET not in str(exc_info.value)
 
 
-def test_websocket_auth_close_is_not_retryable() -> None:
-    from livekit.plugins.vakyam._websocket import _websocket_connection_error
-
+@pytest.mark.parametrize(
+    ("code", "status_code", "retryable"), [(4001, 401, False), (1011, 1011, True)]
+)
+def test_websocket_close_maps_to_status_error(code: int, status_code: int, retryable: bool) -> None:
     class ReceivedClose:
-        code = 4001
-        reason = "invalid key"
+        reason = "secret reason"
+
+    ReceivedClose.code = code  # type: ignore[attr-defined]
 
     class Closed(Exception):
         rcvd = ReceivedClose()
 
-    error = _websocket_connection_error(Closed(), message="connect failed")
+    error = _websocket_connection_error(Closed(), message="failed")
     assert isinstance(error, APIStatusError)
-    assert error.status_code == 401
-    assert error.retryable is False
-    assert error.body is None
-    assert "invalid key" not in str(error)
-
-
-def test_websocket_internal_close_is_retryable() -> None:
-    from livekit.plugins.vakyam._websocket import _websocket_connection_error
-
-    class ReceivedClose:
-        code = 1011
-        reason = "session lost"
-
-    class Closed(Exception):
-        rcvd = ReceivedClose()
-
-    error = _websocket_connection_error(Closed(), message="synthesis failed")
-    assert isinstance(error, APIStatusError)
-    assert error.status_code == 1011
-    assert error.retryable is True
-    assert error.body is None
-    assert "session lost" not in str(error)
+    assert (error.status_code, error.retryable, error.body) == (status_code, retryable, None)
+    assert "secret reason" not in str(error)

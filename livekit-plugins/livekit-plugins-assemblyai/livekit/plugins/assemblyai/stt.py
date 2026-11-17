@@ -60,6 +60,7 @@ class STTOptions:
         "u3-pro",
         "universal-3-5-pro",
         "universal-3-6-pro",
+        "assemblyai-stt-3-7-realtime-agent",
     ] = "universal-3-6-pro"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
     language_codes: NotGivenOr[list[str]] = NOT_GIVEN
@@ -86,7 +87,13 @@ class STTOptions:
 # (prompt, agent_context, previous_context_n_turns, continuous_partials,
 # interruption_delay, voice_focus, voice_focus_threshold) and connect-time
 # defaults. Mirrors the server-side `SpeechModel.is_u3_pro`.
-_U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro")
+_U3_PRO_MODELS = (
+    "u3-rt-pro",
+    "u3-rt-pro-beta-1",
+    "universal-3-5-pro",
+    "universal-3-6-pro",
+    "assemblyai-stt-3-7-realtime-agent",
+)
 
 # Server-side cap on the number of steering codes, mirrored client-side so bad
 # input fails at construction/update time instead of as a websocket error.
@@ -152,6 +159,7 @@ class STT(stt.STT):
             "u3-pro",
             "universal-3-5-pro",
             "universal-3-6-pro",
+            "assemblyai-stt-3-7-realtime-agent",
         ] = "universal-3-6-pro",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         language_code: NotGivenOr[str] = NOT_GIVEN,
@@ -1122,7 +1130,14 @@ class SpeechStream(stt.SpeechStream):
                     self._session_id,
                 )
 
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=final_event.alternatives
+                    if words and words[-1].get("end", 0) > 0
+                    else [],
+                )
+            )
 
             if self._speech_duration > 0.0:
                 usage_event = stt.SpeechEvent(

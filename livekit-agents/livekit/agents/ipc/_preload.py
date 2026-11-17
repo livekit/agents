@@ -64,7 +64,7 @@ def _local_inference_models() -> bool:
 
     li.init_vad()
 
-    # the EOT weights cost ~244 MB: a process without a multiprocessing parent (the forkserver,
+    # the EOT weights cost ~450 MB: a process without a multiprocessing parent (the forkserver,
     # a thread executor's worker) shares them across jobs, a spawned job process would not
     if value is not None or multiprocessing.parent_process() is None:
         li.init_eot()
@@ -85,6 +85,15 @@ def _openai_resources() -> None:
     import openai.resources  # noqa: F401
 
 
+def _inference_exports() -> None:
+    # livekit.agents.inference resolves its realtime, duplex and avatar classes on first
+    # attribute access (PEP 562); e.g. DuplexModel alone imports ~730 modules (~150-300 ms)
+    from livekit.agents import inference
+
+    for name in inference.__all__:
+        getattr(inference, name)
+
+
 def _httpx_client() -> None:
     # the first AsyncClient in a process image pays ~40 ms (the SSL context from the CA bundle
     # among other lazy setup); later ones take a few milliseconds. The inference LLM, STT and
@@ -98,4 +107,5 @@ _step("av", _av)
 _step("the local inference models", _local_inference_models)
 _step("the livekit-rtc native library", _rtc_native_library)
 _step("the openai SDK resources", _openai_resources)
+_step("the livekit.agents.inference exports", _inference_exports)
 _step("the httpx client", _httpx_client)

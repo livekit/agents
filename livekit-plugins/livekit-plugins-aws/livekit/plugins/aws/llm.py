@@ -61,6 +61,7 @@ _MODELS_REJECTING_SAMPLING_PARAMS = (
 # this model.'). Matched the same way as the list above.
 _MODELS_REJECTING_FORCED_TOOL_CHOICE = (
     "claude-opus-5-5",
+    "claude-sonnet-5-5",
     "claude-fable-5-1",
 )
 
@@ -91,6 +92,7 @@ class _LLMOptions:
     additional_request_fields: NotGivenOr[dict[str, Any]]
     cache_system: bool
     cache_tools: bool
+    cache_messages: bool
 
 
 class LLM(llm.LLM):
@@ -108,6 +110,7 @@ class LLM(llm.LLM):
         additional_request_fields: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         cache_system: bool = False,
         cache_tools: bool = False,
+        cache_messages: bool = False,
         supports_sampling_params: NotGivenOr[bool] = NOT_GIVEN,
         session: AioSession | aioboto3.Session | None = None,
     ) -> None:
@@ -136,6 +139,11 @@ class LLM(llm.LLM):
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
             cache_system (bool, optional): Caches system messages to reduce token usage. Defaults to False.
             cache_tools (bool, optional): Caches tool definitions to reduce token usage. Defaults to False.
+            cache_messages (bool, optional): Caches the conversation so far by ending it with a cache
+                point (after the latest user message, tool call or tool result, before per-turn
+                instructions), so each turn reads earlier turns from the cache instead of processing
+                them again. Uses one of Bedrock's 4 cache points per request. Like cache_system, only
+                for models that support prompt caching. Defaults to False.
             supports_sampling_params (bool, optional): Explicit override for whether the model accepts
                 'temperature'/'top_p'. By default the plugin detects known-rejecting models from the
                 model ID, which cannot cover application inference-profile ARNs that hide the
@@ -171,6 +179,7 @@ class LLM(llm.LLM):
             additional_request_fields=additional_request_fields,
             cache_system=cache_system,
             cache_tools=cache_tools,
+            cache_messages=cache_messages,
         )
         self._supports_sampling_params = (
             supports_sampling_params
@@ -254,7 +263,9 @@ class LLM(llm.LLM):
             opts["toolConfig"] = tool_config
         else:
             chat_ctx = chat_ctx.copy(exclude_function_call=True)
-        messages, extra_data = chat_ctx.to_provider_format(format="aws")
+        messages, extra_data = chat_ctx.to_provider_format(
+            format="aws", cache_messages=self._opts.cache_messages
+        )
         opts["messages"] = messages
         if extra_data.system_messages:
             system_messages: list[dict[str, str | dict]] = [
