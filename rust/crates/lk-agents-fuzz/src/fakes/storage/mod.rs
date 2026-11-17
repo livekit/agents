@@ -67,6 +67,20 @@ pub struct FakeStore {
 }
 
 impl FakeStore {
+    /// The production bound view, over the same activation the voice store checkpoints.
+    pub fn session_sink(&self) -> Arc<dyn lk_agents_abi::text_session::SessionStateSink> {
+        use lk_agents_abi::storage::session::{PersistedSessionState as _, SessionBinding as _};
+        let view = lk_agents_runtime::storage::session_state::SessionState::new(None)
+            .expect("an empty conversation view is valid");
+        Arc::new(
+            lk_agents_runtime::storage::session_binding::SessionBinding::new(
+                self.voice.activation(),
+                view,
+            )
+            .expect("the call is the activation's only execution owner"),
+        )
+    }
+
     /// `VoiceStore::bound` over a fresh partition, as `Namespace::voice_store` builds it.
     pub async fn open(
         setup: StorageSetup,

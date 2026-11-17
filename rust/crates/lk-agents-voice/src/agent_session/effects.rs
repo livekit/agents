@@ -45,6 +45,11 @@ pub enum VoiceEffect {
     Answer(RequestId, Answer),
     Host(VoiceHostEvent),
     ChatContext(Arc<lk_agents_abi::ChatContext>),
+    ConversationHistory {
+        session_id: String,
+        root_agent: String,
+        history: Vec<lk_agents_abi::ChatItem>,
+    },
     StorageCheckpoint {
         checkpoint: u64,
         speech: SpeechId,

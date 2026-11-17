@@ -1,6 +1,7 @@
 //! Conversation coordination shared by execution modes; no I/O or host resources.
 
 pub mod effects;
+pub mod history;
 pub mod input;
 pub mod input_routing;
 mod machine;
@@ -9,7 +10,7 @@ mod resume;
 mod routing;
 
 pub use effects::SessionEffect;
-pub use resume::validate_resume;
+pub use resume::{validate_resume, validate_voice};
 
 use crate::agent_run::{self, AgentRun, CallId, Opening, OutputVerdict, RunInput};
 use crate::approval;

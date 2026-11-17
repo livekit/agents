@@ -57,7 +57,8 @@ A2A is a separate transport/durable-task boundary. Follow [`core::a2a`](../../ru
 and [`runtime::a2a`](../../rust/crates/lk-agents-runtime/src/a2a/mod.rs) only when investigating that door.
 
 Shared record-level decisions are in [`session::input`](../../rust/crates/lk-agents-core/src/session/input.rs)
-and [`session::remote`](../../rust/crates/lk-agents-core/src/session/remote.rs). They operate on the
+and [`session::remote`](../../rust/crates/lk-agents-core/src/session/remote.rs); voice history
+projection is in [`session::history`](../../rust/crates/lk-agents-core/src/session/history.rs). They operate on the
 same native snapshot without constructing an AgentRun or doing I/O. Execution owners supply
 lifetime, delivery and checkpoint ordering; component contracts define those responsibilities.
 

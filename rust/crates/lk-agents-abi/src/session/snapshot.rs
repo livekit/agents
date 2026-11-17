@@ -95,3 +95,35 @@ pub struct SessionSnapshot {
     #[host(default_factory = "dict")]
     pub remote_agents: BTreeMap<String, crate::delegation::remote::RemoteAgentState>,
 }
+
+impl SessionSnapshot {
+    /// An empty conversation with one root, before invocation or delivered dialogue.
+    pub fn new(session_id: String, execution_id: String, agent_name: String) -> Self {
+        let root = FrameId { value: format!("{session_id}/frame_0") };
+        let frame = SessionFrame {
+            id: root.clone(),
+            agent_name,
+            history: Vec::new(),
+            parent: None,
+            completed: false,
+            output: None,
+            error: None,
+            input_requests: BTreeMap::new(),
+            pending_calls: Vec::new(),
+            visible_dialogue: Vec::new(),
+            starting_history_ids: BTreeSet::new(),
+            options: FrameOptions::default(),
+        };
+        Self {
+            session_id,
+            execution_id,
+            root_frame_id: root.clone(),
+            active_frame_id: root.clone(),
+            ancestors: Vec::new(),
+            frames: BTreeMap::from([(root, frame)]),
+            next_id: 0,
+            chat_history: Vec::new(),
+            remote_agents: BTreeMap::new(),
+        }
+    }
+}

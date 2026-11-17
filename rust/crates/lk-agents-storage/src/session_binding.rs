@@ -53,36 +53,6 @@ impl HostBinding for SessionBinding {
             .map_err(|error| StorageError::Invalid(error.to_string()))?;
         self.store.stage_session(value)
     }
-    fn update_voice(&self, agent: String, history: Vec<ChatItem>) -> Result<(), StorageError> {
-        self.ensure_open()?;
-        self.store.stage_session(crate::session_state::voice_value(
-            agent,
-            history,
-            self.store.session_state().as_ref(),
-        )?)
-    }
-    fn validate_voice(&self, agent: String) -> Result<(), StorageError> {
-        self.ensure_open()?;
-        if let Some(state) = self.view._snapshot_data()?
-            && (state.active_frame_id != state.root_frame_id
-                || !state.ancestors.is_empty()
-                || state.frames.len() > 1
-                || state.frames.values().any(|agent| !agent.pending_calls.is_empty()))
-        {
-            return Err(StorageError::Invalid(
-                "saved local agent work must continue through TextSession or bound Agent.run"
-                    .into(),
-            ));
-        }
-        if let Some(saved) = self.view.root_agent()?.map(|agent| agent.agent_name)
-            && saved != agent
-        {
-            return Err(StorageError::Invalid(format!(
-                "saved voice agent {saved:?} does not match configured agent {agent:?}"
-            )));
-        }
-        Ok(())
-    }
     async fn flush(&self, history: Option<Vec<ChatItem>>) -> Result<(), StorageError> {
         self.ensure_open()?;
         let history = match history {
@@ -105,6 +75,17 @@ impl HostBinding for SessionBinding {
 }
 
 impl SessionStateSink for SessionBinding {
+    fn stage_voice(&self, state: SessionSnapshot) -> Result<(), StorageError> {
+        self.ensure_open()?;
+        let mut next = crate::session_state::snapshot_value(state)?;
+        if let Some(current) = self.store.session_state()
+            && let Some(pending) = current.get("pending_user_turns")
+        {
+            next["pending_user_turns"] = pending.clone();
+        }
+        self.store.stage_session(next)
+    }
+
     fn restore(&self) -> Result<Option<SessionSnapshot>, StorageError> {
         self.ensure_open()?;
         let state = self

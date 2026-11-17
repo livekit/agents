@@ -178,22 +178,26 @@ impl VoiceDriver {
                 }
             }
             Err(error) => {
-                self.session.storage.conversation.failed = true;
-                let error = crate::events::ErrorEvent::provider(
-                    lk_agents_abi::voice::events::ErrorSource::Storage,
-                    false,
-                    lk_agents_abi::errors::ProviderError::Local(error.into()),
-                    None,
-                );
-                self.begin_closing(
-                    now,
-                    crate::agent_session::commands::Close {
-                        reason: lk_agents_abi::voice::events::CloseReason::Error,
-                        drain: false,
-                        error: Some(error),
-                    },
-                );
+                self.conversation_state_failed(now, error);
             }
         }
+    }
+
+    pub(crate) fn conversation_state_failed(&mut self, now: Ts, error: StorageError) {
+        self.session.storage.conversation.failed = true;
+        let error = crate::events::ErrorEvent::provider(
+            lk_agents_abi::voice::events::ErrorSource::Storage,
+            false,
+            lk_agents_abi::errors::ProviderError::Local(error.into()),
+            None,
+        );
+        self.begin_closing(
+            now,
+            crate::agent_session::commands::Close {
+                reason: lk_agents_abi::voice::events::CloseReason::Error,
+                drain: false,
+                error: Some(error),
+            },
+        );
     }
 }

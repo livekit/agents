@@ -110,14 +110,6 @@ pub trait SessionBinding: Send + Sync + Sized + 'static {
     fn new(activation: Self::Activation, view: Self::View) -> Result<Self, StorageError>;
     #[host(call)]
     fn update(&self, state: String) -> Result<(), StorageError>;
-    #[host(call)]
-    fn update_voice(
-        &self,
-        agent: String,
-        history: Vec<crate::ChatItem>,
-    ) -> Result<(), StorageError>;
-    #[host(call)]
-    fn validate_voice(&self, agent: String) -> Result<(), StorageError>;
     #[host(await)]
     async fn flush(
         &self,
@@ -132,12 +124,6 @@ pub trait SessionBinding: Send + Sync + Sized + 'static {
 #[crate::host(facade(path = "livekit.agents.storage.context", name = "_SessionBinding", native = SessionBinding, extended, from_native))]
 pub trait SessionBindingFacade {
     fn update(&self, state: String) -> Result<(), StorageError>;
-    fn update_voice(
-        &self,
-        agent: String,
-        history: Vec<crate::ChatItem>,
-    ) -> Result<(), StorageError>;
-    fn validate_voice(&self, agent: String) -> Result<(), StorageError>;
     #[host(bind(history = "_history()"))]
     async fn flush(&self) -> Result<(), StorageError>;
     #[host(getter)]

@@ -858,6 +858,7 @@ a public Python export or an additional SDK constructor.
 | RemoteTaskState, internal data | Persisted data underlying the public RemoteTask view. | SDK Task observation, task-owned input state and cancellation intent; no serialized command capability. |
 | RemoteAgentView, RemoteContextView and RemoteTaskView, internal ABI traits | Generated bindings for the three public inspection types. | Native storage handles retain the enclosing SessionState's bound or detached owner. Getter results copy SDK values; grouping adds no duplicate histories or network calls. |
 | SessionCommands, SessionInputCommand, RemoteCommand and RemoteInput, internal ABI port/data | One serialized owner for input admission and remote observations. | Presentation receipts, response reservations, preparation, dispatch markers, responses and errors receive their checkpoint before acknowledgement. An accepted remote input observation returns its existing InputRequestRef; no new controller or stored command capability. |
+| ConversationHistory and ConversationStateFailed | Internal voice effect/input; no Python types. | Publish core-accepted history through the native binding before host callbacks; preserve pending recognition and refreshed remote state. The core closes voice on a refused state publication. |
 | SessionCommand and CommandPort | Extract the existing native runtime command queue into session/. | Shared bounded command admission and producer-owned receipts. Ending the receiver settles received, queued and capacity-waiting requests; a client retains no execution authority after owner loss. No Python export. |
 | RemoteRecovery, internal ABI decision | Reuses the core journal's recovery classification. | Carries an unsent original SDK request, a task to read, an accepted direct reply or uncertainty. Returned through the native owner; neither serialized nor exported as Python state classes. |
 | RemoteInvocation, internal runtime input | Groups the existing invocation arguments and services. | Production and DST use the same remote executor; only its endpoint client is injected. No new Python API or second controller. |
@@ -1174,6 +1175,9 @@ passes deterministic stock-peer transport and failure tests.
 - [x] Keep voice handoffs/VoiceTasks transient and preserve the durable root. Refuse unresolved
   text-local agent trees without changing them; release the voice binding without closing an
   application-supplied store. Cover subsequent text execution in memory and SQLite.
+- [x] Publish accepted voice history through native effects before host callbacks. Rebase from
+  the current binding, preserve pending recognition, and use the production binding in the
+  SQLite-backed voice DST. Remove Python-driven voice state updates and startup validation.
 - [ ] Connect question/exact-text presentation to pipeline/realtime delivery receipts.
 - [ ] Implement immediate update/say receipts, request-view notes and interruption handling.
   Awaited progress admission is now bounded and lossless for direct runs, TextSession and local

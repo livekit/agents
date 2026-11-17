@@ -29434,6 +29434,29 @@ pub mod voice_session {
                     (crate::py_objects::native::<dyn ::lk_agents_abi::storage::voice::VoiceStorage>(v.as_any()).and_then(|native| native.ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("VoiceSessionArgs.storage", ": expected a native voice storage manager"))))).map(Some)
                 }
             })?,
+            session_sink: crate::py_values::attr_with(
+                obj,
+                "VoiceSessionArgs",
+                "session_sink",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (crate::py_objects::native::<
+                            dyn ::lk_agents_abi::text_session::SessionStateSink,
+                        >(v.as_any())
+                        .and_then(|native| {
+                            native.ok_or_else(|| {
+                                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                    "VoiceSessionArgs.session_sink",
+                                    ": expected a native session binding"
+                                ))
+                            })
+                        }))
+                        .map(Some)
+                    }
+                },
+            )?,
             stt: crate::py_values::attr_with(obj, "VoiceSessionArgs", "stt", |v| {
                 if v.is_none() {
                     Ok(None)

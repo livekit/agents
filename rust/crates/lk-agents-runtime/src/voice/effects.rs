@@ -87,6 +87,7 @@ impl VoiceRuntime {
             match effect {
                 VoiceEffect::SessionView(_)
                 | VoiceEffect::ChatContext(_)
+                | VoiceEffect::ConversationHistory { .. }
                 | VoiceEffect::Outputs(_)
                 | VoiceEffect::Speech(..) => self.perform_voice_effect(effect),
                 effect => operations.push(effect),
@@ -214,6 +215,23 @@ impl VoiceRuntime {
             }
             E::ChatContext(snapshot) => {
                 self.publications.chat_ctx.set(snapshot);
+            }
+            E::ConversationHistory { session_id, root_agent, history } => {
+                if let Some(sink) = &self.session_sink {
+                    let result = (|| {
+                        // Rebase from the current binding, including metadata loaded under a
+                        // later turn's lease. A cached snapshot could overwrite that progress.
+                        let state = sink.restore()?;
+                        let state = lk_agents_core::session::history::voice(
+                            state, session_id, root_agent, history,
+                        )
+                        .map_err(|error| lk_agents_abi::storage::StorageError::Invalid(error.0))?;
+                        sink.stage_voice(state)
+                    })();
+                    if let Err(error) = result {
+                        let _ = self.reports.send(VoiceEvent::ConversationStateFailed(error));
+                    }
+                }
             }
             E::Outputs(outputs) => {
                 self.publications.output.set(outputs);

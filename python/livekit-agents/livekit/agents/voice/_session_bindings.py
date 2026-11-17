@@ -422,11 +422,6 @@ class SessionHost:
             session._store = store
             session._session_binding = store._bind_session(session._context)
             session._session_binding.voice_history = lambda: list(session.history.items)
-            try:
-                session._session_binding.validate_voice(agent.name)
-            except BaseException:
-                session._session_binding.close()
-                raise
         else:
             session._store = ContextStore(activation=storage.activation, scope_id=storage.scope_id)
 
@@ -451,6 +446,9 @@ class SessionHost:
             agent_host=frame.agent_host,
             # None: a stored call starts on its partition's history
             chat_ctx=chat_ctx.items if chat_ctx is not None else None,
+            session_sink=session._session_binding._native
+            if session._session_binding is not None
+            else None,
             stt=frame.stt if is_given(frame.stt) else None,
             vad=session.vad,
             llm=None if isinstance(model, llm.RealtimeModel) else model,

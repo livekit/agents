@@ -46,6 +46,7 @@ pub struct SessionCores {
     /// Where host events and taps go.
     pub peer: PeerHandle,
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
+    pub session_sink: Option<Arc<dyn lk_agents_abi::text_session::SessionStateSink>>,
     /// The end of the host-event stream: the runtime holds it, so its end ends the stream.
     pub(crate) events_end: lk_agents_net::signal::Producer<()>,
 }
@@ -192,6 +193,7 @@ pub struct DriverBuilder {
     /// What the session's ids (speeches, chat items) are drawn from. `None` draws one at start.
     pub id_seed: Option<u64>,
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
+    pub session_sink: Option<Arc<dyn lk_agents_abi::text_session::SessionStateSink>>,
     /// Where the driver's steps go: nowhere in production.
     pub journal: Journal,
     /// Where the session's spans and measurements go: the process tracer in production.
@@ -267,6 +269,7 @@ impl DriverBuilder {
             session_id: None,
             id_seed: None,
             storage: None,
+            session_sink: None,
             journal: Default::default(),
             trace: tracer.root(),
             tracer,
@@ -480,6 +483,7 @@ impl DriverBuilder {
             shared,
             peer: peer.clone(),
             storage: self.storage.take(),
+            session_sink: self.session_sink.take(),
             events_end,
         };
         Ok((

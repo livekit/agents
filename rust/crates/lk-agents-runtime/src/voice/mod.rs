@@ -60,6 +60,7 @@ pub struct VoiceRuntime {
     publications: session::shared::Publications,
     driver: VoiceDriver,
     storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
+    session_sink: Option<Arc<dyn lk_agents_abi::text_session::SessionStateSink>>,
     shared: Arc<SessionShared>,
     /// Where host events and taps go.
     peer: PeerHandle,
@@ -227,6 +228,7 @@ impl VoiceRuntime {
             shared,
             peer,
             storage,
+            session_sink,
             events_end,
         } = cores;
         let video_parts =
@@ -242,6 +244,7 @@ impl VoiceRuntime {
             publications,
             driver,
             storage,
+            session_sink,
             shared,
             peer,
             forwarder,

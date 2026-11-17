@@ -62,6 +62,8 @@ pub(crate) struct VoiceSessionState {
     pub(crate) config: DriverConfig,
     /// `_chat_ctx`: the one record of the session's items, each agent's view of them.
     pub(crate) chat_ctx: crate::agent::SessionChatCtx,
+    /// The configured root stays fixed while live speaking roles change.
+    pub(crate) root_agent: String,
     /// Snapshotted into every reply at creation.
     pub(crate) llm: Option<lk_agents_abi::resources::LlmRef>,
     pub(crate) tts: Option<lk_agents_abi::resources::TtsRef>,
@@ -171,6 +173,7 @@ impl VoiceSessionState {
             ids: IdMint { session: session_id, id_seed, next: next_id, user_segment: None },
             config,
             chat_ctx,
+            root_agent: agent,
             llm,
             tts,
             stt,

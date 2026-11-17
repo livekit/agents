@@ -302,6 +302,23 @@ impl Inner {
         if let Some(history) = ready.history() {
             args.chat_ctx = Some(history);
         }
+        if args.session_sink.is_none() {
+            use lk_agents_abi::storage::session::{
+                PersistedSessionState as _, SessionBinding as _,
+            };
+            let view = lk_agents_storage::session_state::SessionState::new(None)?;
+            args.session_sink =
+                Some(Arc::new(lk_agents_storage::session_binding::SessionBinding::new(
+                    storage.activation(),
+                    view,
+                )?));
+        }
+        let conversation =
+            args.session_sink.as_ref().map(|sink| sink.restore()).transpose()?.flatten();
+        if let Some(state) = &conversation {
+            lk_agents_core::session::validate_voice(state, &args.agent)
+                .map_err(|error| lk_agents_abi::storage::StorageError::Invalid(error.0))?;
+        }
         let initial_agent = args.agent_host.clone();
         let job_run = args.job_run.clone();
         let session = Arc::new(

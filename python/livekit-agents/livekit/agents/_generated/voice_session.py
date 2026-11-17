@@ -25,6 +25,7 @@ if TYPE_CHECKING:
         RoomAudioInput,
         RoomVideoInput,
         VoiceAgent,
+        _core_SessionBinding,
         _core_VoiceStore,
     )
     from livekit.agents._generated.expressive import ExpressiveOptions
@@ -149,6 +150,8 @@ class VoiceSessionArgs:
     agent_host: object | None = None
     chat_ctx: list[ChatItem] | None = None
     storage: _core_VoiceStore | None = None
+    session_sink: _core_SessionBinding | None = None
+    """The bound conversation view; execution resources never enter its snapshot."""
     stt: STT | None = None
     vad: VAD | None = None
     llm: LLM | None = None

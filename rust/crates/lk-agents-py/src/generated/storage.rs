@@ -1963,33 +1963,6 @@ impl CoreSessionBinding {
         Ok(())
     }
 
-    #[pyo3(signature = (agent, history))]
-    fn update_voice(
-        &self,
-        py: Python<'_>,
-        agent: ::std::string::String,
-        history: Bound<'_, PyAny>,
-    ) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        let history = history.try_iter().and_then(|items| {
-            items
-                .map(|item| {
-                    let item = item?;
-                    crate::generated::records::chat_items::chat_item_from_py(item.as_any())
-                })
-                .collect::<PyResult<Vec<_>>>()
-        })?;
-        py.detach(|| <CoreSessionBindingImpl as ::lk_agents_abi::storage::session::SessionBinding>::update_voice(&self.0, agent, history)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
-        Ok(())
-    }
-
-    #[pyo3(signature = (agent))]
-    fn validate_voice(&self, py: Python<'_>, agent: ::std::string::String) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        py.detach(|| <CoreSessionBindingImpl as ::lk_agents_abi::storage::session::SessionBinding>::validate_voice(&self.0, agent)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
-        Ok(())
-    }
-
     #[pyo3(signature = (history = None))]
     fn flush<'py>(
         &self,

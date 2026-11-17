@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use lk_agents_abi::storage::session::{PersistedSessionState, SessionKind};
-use lk_agents_abi::text_session::{FrameId, SessionFrame, SessionSnapshot};
+use lk_agents_abi::text_session::SessionSnapshot;
 use lk_agents_abi::{ChatItem, ChatMessage, Role};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -69,33 +69,13 @@ impl SessionState {
 
 fn initial_voice(agent: String, history: Vec<ChatItem>) -> SessionSnapshot {
     let session_id = crate::shortuuid("session_");
-    let root = FrameId { value: format!("{session_id}/frame_0") };
+    let mut state = SessionSnapshot::new(session_id.clone(), session_id, agent);
     let chat_history = dialogue(&history);
-    let frame = SessionFrame {
-        id: root.clone(),
-        agent_name: agent,
-        history,
-        parent: None,
-        completed: false,
-        output: None,
-        error: None,
-        input_requests: BTreeMap::new(),
-        pending_calls: Vec::new(),
-        visible_dialogue: chat_history.clone(),
-        starting_history_ids: Default::default(),
-        options: Default::default(),
-    };
-    SessionSnapshot {
-        remote_agents: BTreeMap::new(),
-        session_id: session_id.clone(),
-        execution_id: session_id,
-        root_frame_id: root.clone(),
-        active_frame_id: root.clone(),
-        ancestors: Vec::new(),
-        frames: BTreeMap::from([(root, frame)]),
-        next_id: 0,
-        chat_history,
-    }
+    let root = state.frames.get_mut(&state.root_frame_id).expect("new conversations have a root");
+    root.history = history;
+    root.visible_dialogue = chat_history.clone();
+    state.chat_history = chat_history;
+    state
 }
 
 fn dialogue(history: &[ChatItem]) -> Vec<ChatMessage> {

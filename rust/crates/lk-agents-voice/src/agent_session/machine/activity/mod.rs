@@ -524,6 +524,12 @@ impl VoiceDriver {
         self.record_effect(VoiceEffect::ChatContext(Arc::new(
             self.session.chat_ctx.agent_chat_ctx(),
         )));
+        let history = self.session.chat_ctx.history().cloned().collect();
+        self.record_effect(VoiceEffect::ConversationHistory {
+            session_id: self.session.ids.session.clone(),
+            root_agent: self.session.root_agent.clone(),
+            history,
+        });
     }
 
     /// `AgentHandoff`, then `AgentConfigUpdate` (skipped with neither instructions nor tools).

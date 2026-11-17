@@ -431,6 +431,8 @@ output from no accepted result yet. For a child, they describe the invocation wh
 returns through origin. For the reusable root, they describe its current/latest invocation;
 a completed root turn does not end the conversation. A new invocation resets them before work
 starts. These are framework-managed views, not fields applications mutate to signal completion.
+They describe durable local invocations. Transient voice roles, VoiceTasks and speech completion
+use their live results and delivery receipts rather than creating another durable invocation.
 
 A2A task status is separate: TaskUpdate.state and Task.status.state reuse the upstream SDK's
 TaskState, including interrupted and unspecified observations. There is no framework copy of

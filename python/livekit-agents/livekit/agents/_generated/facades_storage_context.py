@@ -10,9 +10,8 @@ from .. import _bindings, _core, storage
 from ..storage.session_state import SessionState
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Sequence
+    from collections.abc import AsyncIterator
 
-    from .chat_items import ChatItem
     from .storage_session import BoundContext, Context_T
 
 
@@ -75,12 +74,6 @@ class _SessionBinding:
 
     def update(self, state: str) -> None:
         self._native.update(state)
-
-    def update_voice(self, agent: str, history: Sequence[ChatItem]) -> None:
-        self._native.update_voice(agent, history)
-
-    def validate_voice(self, agent: str) -> None:
-        self._native.validate_voice(agent)
 
     async def flush(self) -> None:
         await self._native.flush(self._history())

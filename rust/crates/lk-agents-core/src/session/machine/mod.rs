@@ -41,34 +41,11 @@ impl Session {
                 }
                 state
             }
-            None => {
-                let root = FrameId { value: format!("{}/frame_0", input.session_id) };
-                let frame = SessionFrame {
-                    id: root.clone(),
-                    agent_name: config.root_agent.clone(),
-                    history: Vec::new(),
-                    parent: None,
-                    completed: false,
-                    output: None,
-                    error: None,
-                    input_requests: BTreeMap::new(),
-                    pending_calls: Vec::new(),
-                    visible_dialogue: Vec::new(),
-                    starting_history_ids: BTreeSet::new(),
-                    options: Default::default(),
-                };
-                SessionSnapshot {
-                    session_id: input.session_id,
-                    execution_id: input.task_id.unwrap_or(input.execution_id),
-                    root_frame_id: root.clone(),
-                    active_frame_id: root.clone(),
-                    ancestors: Vec::new(),
-                    frames: BTreeMap::from([(root, frame)]),
-                    next_id: 0,
-                    chat_history: Vec::new(),
-                    remote_agents: BTreeMap::new(),
-                }
-            }
+            None => SessionSnapshot::new(
+                input.session_id,
+                input.task_id.unwrap_or(input.execution_id),
+                config.root_agent.clone(),
+            ),
         };
         config.validate_state(&state)?;
         Ok(Self {

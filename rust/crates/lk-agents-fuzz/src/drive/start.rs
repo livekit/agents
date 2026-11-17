@@ -235,6 +235,7 @@ impl Run {
             hook_bound: setup.hook_bound_ms.map(|ms| ms as f64 / 1000.0),
             max_unrecoverable_errors: setup.max_unrecoverable_errors,
             storage: store.as_ref().map(|store| store.port.clone()),
+            session_sink: store.as_ref().map(|store| store.session_sink()),
             stt_context: (!setup.keyterms.is_empty() || setup.keyterm_detection.is_some()).then(
                 || SttContextConfig {
                     keyterms: Some(setup.keyterms.clone()),

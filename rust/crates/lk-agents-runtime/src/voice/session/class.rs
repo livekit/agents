@@ -182,6 +182,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         builder.output_nodes = OutputNodes { transcription: args.transcription_node };
         builder.chat_ctx = args.chat_ctx;
         builder.storage = args.storage;
+        builder.session_sink = args.session_sink;
         builder.hook_bound = args.hook_bound.map(Duration::from_secs_f64);
         builder.max_unrecoverable_errors = args.max_unrecoverable_errors;
         builder.conn = conn;

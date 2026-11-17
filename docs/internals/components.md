@@ -69,6 +69,12 @@ checkpoint related state before acknowledging a command or allowing dependent I/
 results carry their classification identity; a transcript revision invalidates the old verdict
 even when the human message retains its ID.
 
+`session::history` projects accepted voice history onto that same native conversation without
+persisting transient speaking roles. Voice publishes this view before host notifications; Python
+event callbacks do not update conversation state. The runtime reads the current binding before
+projection so a storage reload's newer remote state is preserved. Native startup validates the
+text-only local-agent boundary before opening voice execution.
+
 The runtime's `session::CommandPort` carries these commands through bounded admission to the
 execution owner. Each queued command owns its response producer; owner loss settles received,
 queued and capacity-waiting calls even if a client retains its sender. The port has no routing

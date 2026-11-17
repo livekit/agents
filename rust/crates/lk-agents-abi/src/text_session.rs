@@ -120,6 +120,9 @@ pub trait SessionStateSink: Send + Sync {
     /// Read the bound conversation after its execution resources acquire and reload storage.
     fn restore(&self) -> Result<Option<SessionSnapshot>, crate::storage::StorageError>;
 
+    /// Publish the live voice view without I/O or clearing unaccepted recognition progress.
+    fn stage_voice(&self, state: SessionSnapshot) -> Result<(), crate::storage::StorageError>;
+
     fn publish<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,

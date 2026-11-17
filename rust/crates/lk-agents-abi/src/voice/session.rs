@@ -311,6 +311,9 @@ pub struct VoiceSessionArgs {
     pub chat_ctx: Option<Vec<ChatItem>>,
     #[host(default = None)]
     pub storage: Option<Arc<dyn crate::storage::voice::VoiceStorage>>,
+    /// The bound conversation view; execution resources never enter its snapshot.
+    #[host(default = None)]
+    pub session_sink: Option<Arc<dyn crate::text_session::SessionStateSink>>,
     #[host(default = None)]
     pub stt: Option<Arc<dyn Stt>>,
     #[host(default = None)]

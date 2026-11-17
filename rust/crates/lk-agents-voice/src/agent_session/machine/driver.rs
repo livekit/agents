@@ -90,6 +90,7 @@ pub enum VoiceEvent {
             lk_agents_abi::storage::StorageError,
         >,
     },
+    ConversationStateFailed(lk_agents_abi::storage::StorageError),
     Realtime(crate::agent_session::machine::activity::realtime::RealtimeWake),
     Eot(
         lk_agents_abi::turn::detector::ReqId,
@@ -408,6 +409,9 @@ impl VoiceDriver {
             Some(VoiceEvent::StorageLost(speech)) => self.storage_lost(now, speech),
             Some(VoiceEvent::ConversationSaved { sequence, read, result }) => {
                 self.conversation_saved(now, sequence, read, result);
+            }
+            Some(VoiceEvent::ConversationStateFailed(error)) => {
+                self.conversation_state_failed(now, error);
             }
             Some(VoiceEvent::Realtime(ev)) => self.on_realtime(now, ev),
             Some(VoiceEvent::Eot(req, p, thresholds)) => {

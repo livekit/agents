@@ -50,6 +50,7 @@ fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
         | VoiceEffect::Answer(..)
         | VoiceEffect::Host(_)
         | VoiceEffect::ChatContext(_)
+        | VoiceEffect::ConversationHistory { .. }
         | VoiceEffect::SaveConversation(_)
         | VoiceEffect::StorageAbort(_)
         | VoiceEffect::Outputs(_)
