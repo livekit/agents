@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -12,6 +13,7 @@ from pydantic import BaseModel
 
 from livekit.agents import (
     Agent,
+    AgentServer,
     APIConnectOptions,
     Completed,
     DelegationOptions,
@@ -20,7 +22,7 @@ from livekit.agents import (
     VoiceSession,
     VoiceTask,
 )
-from livekit.agents.a2a import RemoteAgent
+from livekit.agents.a2a import A2ASessionContext, RemoteAgent
 from livekit.agents.llm import ChatContext, FunctionToolCall
 from livekit.agents.storage import ContextStore
 from tests.fakes import (
@@ -548,3 +550,20 @@ async def test_a_voice_task_keeps_its_answer_out_of_an_earlier_remote_question(p
         assert [request.state for request in task.input_requests.values()] == ["open"]
         assert len(peer.messages) == 1, "the callback answer also reached the unrelated remote task"
         assert len(routing.requests) == 1, "a VoiceTask's answer must stay with that collector"
+
+
+def test_a_job_process_delegates_to_endpoints_its_worker_named_after_the_import(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A spawned job process imports the app, and builds its server, before the worker's
+    environment reaches it."""
+    for name in ("LIVEKIT_URL", "LIVEKIT_WORKER_TOKEN", "LIVEKIT_AGENT_ENDPOINTS_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LIVEKIT_AGENT_THREADS_DIR", str(tmp_path))
+    server = AgentServer(agent_name="frontdesk")
+
+    @server.a2a_session(endpoint="backend", description="Looks things up.")
+    async def backend(ctx: A2ASessionContext) -> None: ...
+
+    monkeypatch.setenv("LIVEKIT_AGENT_ENDPOINTS_URL", "http://127.0.0.1:9/agents/frontdesk/_")
+    assert backend.delegation_url() == "http://127.0.0.1:9/agents/frontdesk/_/backend"
