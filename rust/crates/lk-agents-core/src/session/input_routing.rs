@@ -19,7 +19,9 @@ message clearly responds to them. A side question, explanation request or new to
 automatically an answer. If several destinations are plausible, return unclear=true and no \
 indices. An utterance may answer one request and introduce another topic. Do not decide \
 whether an answer satisfies business rules or approves an operation. Do not select a question \
-merely because it was the latest or the only question. Consider only the supplied candidates.";
+merely because it was the latest or the only question. A candidate may already have a held_response: \
+select it only when the latest message clearly corrects or replaces that response before sending. \
+A side question does not replace a held response. Consider only the supplied candidates.";
 
 pub fn tool() -> ToolSpec {
     ToolSpec {
@@ -60,6 +62,7 @@ pub fn prompt(
                 "index": index, "question": candidate.question,
                 "presentation": candidate.presentation.raw_text_content().unwrap_or_default(),
                 "interrupted": candidate.presentation.interrupted,
+                "held_response": candidate.response.as_ref().and_then(ChatMessage::raw_text_content),
             })
         })
         .collect();

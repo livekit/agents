@@ -13,6 +13,7 @@ fn candidates() -> Vec<InputCandidate> {
                 "Your first and last names?",
                 std::time::UNIX_EPOCH,
             ),
+            response: None,
         })
         .collect()
 }

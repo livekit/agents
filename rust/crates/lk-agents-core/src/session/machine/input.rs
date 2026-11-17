@@ -3,7 +3,7 @@ use crate::session::InputCandidate;
 use lk_agents_abi::session::{InputRequestRef, InputRequestState, SessionInputCommand};
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::{ChatMessage, Role};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 impl Session {
     /// Tool eligibility comes from the caller's configured destination, not the identity of the
@@ -122,15 +122,36 @@ impl Session {
             return;
         }
         let message = message.clone();
-        let allowed: BTreeSet<_> =
-            candidates.iter().map(|candidate| candidate.reference.clone()).collect();
+        let offered: BTreeMap<_, _> = candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.reference.clone(),
+                    candidate.response.as_ref().map(|held| held.id.clone()),
+                )
+            })
+            .collect();
         self.usage.add(&usage);
         let observation = match result {
             Some(Ok(super::InputRoute::Matched(requests)))
-                if requests.iter().all(|reference| allowed.contains(reference)) =>
+                if unique(&requests).is_ok()
+                    && requests.iter().all(|reference| offered.contains_key(reference)) =>
             {
-                let selected = self
-                    .input(SessionInputCommand::Respond { requests: requests.clone(), message_id });
+                let commands = requests
+                    .iter()
+                    .map(|reference| match &offered[reference] {
+                        Some(previous_message_id) => SessionInputCommand::Correct {
+                            request: reference.clone(),
+                            previous_message_id: previous_message_id.clone(),
+                            message_id: message_id.clone(),
+                        },
+                        None => SessionInputCommand::Respond {
+                            requests: vec![reference.clone()],
+                            message_id: message_id.clone(),
+                        },
+                    })
+                    .collect();
+                let selected = self.input_batch(commands);
                 match selected {
                     Ok(()) => format!(
                         "This human message responds to these presented input requests: {}. \
@@ -170,122 +191,127 @@ impl Session {
     /// Select every target against one snapshot, then commit them together. An invalid or stale
     /// member cannot reserve the rest of a grouped answer. Runtime checkpoints before replying.
     pub fn input(&mut self, command: SessionInputCommand) -> Result<(), StorageError> {
+        self.input_batch(vec![command])
+    }
+
+    fn input_batch(&mut self, commands: Vec<SessionInputCommand>) -> Result<(), StorageError> {
         if matches!(self.phase, Phase::Done) {
             return Err(invalid("the conversation owner has ended"));
         }
-        if (self.closing || self.persistence_failure.is_some())
-            && !matches!(command, SessionInputCommand::Presented { .. })
-        {
-            return Err(invalid("the conversation owner is closing"));
-        }
         let mut next = self.state.clone();
-        match command {
-            SessionInputCommand::Presented { requests, message_id } => {
-                canonical(&next.chat_history, &message_id, Role::Assistant)?;
-                unique(&requests)?;
-                for reference in requests {
-                    match target(&mut next, &reference)? {
-                        Target::Agent(input) => {
-                            input.presented_message_id = Some(message_id.clone())
-                        }
-                        Target::Remote(input) => {
-                            input.presented_message_id = Some(message_id.clone())
+        for command in commands {
+            if (self.closing || self.persistence_failure.is_some())
+                && !matches!(command, SessionInputCommand::Presented { .. })
+            {
+                return Err(invalid("the conversation owner is closing"));
+            }
+            match command {
+                SessionInputCommand::Presented { requests, message_id } => {
+                    canonical(&next.chat_history, &message_id, Role::Assistant)?;
+                    unique(&requests)?;
+                    for reference in requests {
+                        match target(&mut next, &reference)? {
+                            Target::Agent(input) => {
+                                input.presented_message_id = Some(message_id.clone())
+                            }
+                            Target::Remote(input) => {
+                                input.presented_message_id = Some(message_id.clone())
+                            }
                         }
                     }
                 }
-            }
-            SessionInputCommand::Respond { requests, message_id } => {
-                let response = canonical(&next.chat_history, &message_id, Role::User)?.clone();
-                if response.raw_text_content().unwrap_or_default().trim().is_empty() {
-                    return Err(invalid("an empty message cannot answer an input request"));
-                }
-                unique(&requests)?;
-                for reference in requests {
-                    match target(&mut next, &reference)? {
-                        Target::Agent(input) => {
-                            if input
-                                .response_message
-                                .as_ref()
-                                .is_some_and(|held| held.id == message_id)
-                            {
-                                continue;
+                SessionInputCommand::Respond { requests, message_id } => {
+                    let response = canonical(&next.chat_history, &message_id, Role::User)?.clone();
+                    if response.raw_text_content().unwrap_or_default().trim().is_empty() {
+                        return Err(invalid("an empty message cannot answer an input request"));
+                    }
+                    unique(&requests)?;
+                    for reference in requests {
+                        match target(&mut next, &reference)? {
+                            Target::Agent(input) => {
+                                if input
+                                    .response_message
+                                    .as_ref()
+                                    .is_some_and(|held| held.id == message_id)
+                                {
+                                    continue;
+                                }
+                                available(input.state, input.presented_message_id.as_deref())?;
+                                input.state = InputRequestState::Responding;
+                                input.response_message = Some(response.clone());
                             }
-                            available(input.state, input.presented_message_id.as_deref())?;
-                            input.state = InputRequestState::Responding;
-                            input.response_message = Some(response.clone());
-                        }
-                        Target::Remote(input) => {
-                            if input.human_response_id.as_deref() == Some(message_id.as_str()) {
-                                continue;
+                            Target::Remote(input) => {
+                                if input.human_response_id.as_deref() == Some(message_id.as_str()) {
+                                    continue;
+                                }
+                                available(input.state, input.presented_message_id.as_deref())?;
+                                input.state = InputRequestState::Responding;
+                                input.human_response_id = Some(message_id.clone());
                             }
-                            available(input.state, input.presented_message_id.as_deref())?;
-                            input.state = InputRequestState::Responding;
-                            input.human_response_id = Some(message_id.clone());
                         }
                     }
                 }
-            }
-            SessionInputCommand::Correct { request, previous_message_id, message_id } => {
-                let response = canonical(&next.chat_history, &message_id, Role::User)?.clone();
-                if response.raw_text_content().unwrap_or_default().trim().is_empty() {
-                    return Err(invalid("an empty message cannot replace an input response"));
-                }
-                // Once dispatch may have begun, preserve its exact message and reconcile it.
-                if let InputRequestRef::RemoteTask { remote_id, .. } = &request {
-                    let remote = next
-                        .remote_agents
-                        .get_mut(remote_id)
-                        .ok_or_else(|| invalid("unknown remote input owner"))?;
-                    let dispatched = remote.requests.values().any(|operation| {
-                        operation.input_request.as_ref() == Some(&request)
-                            && operation.dispatch_started
-                    });
-                    if dispatched {
-                        let held = match target(&mut next, &request)? {
-                            Target::Remote(input) => input.human_response_id.as_deref(),
-                            Target::Agent(_) => None,
-                        };
-                        if held != Some(message_id.as_str()) {
+                SessionInputCommand::Correct { request, previous_message_id, message_id } => {
+                    let response = canonical(&next.chat_history, &message_id, Role::User)?.clone();
+                    if response.raw_text_content().unwrap_or_default().trim().is_empty() {
+                        return Err(invalid("an empty message cannot replace an input response"));
+                    }
+                    let repeated = match target(&mut next, &request)? {
+                        Target::Agent(input) => input
+                            .response_message
+                            .as_ref()
+                            .is_some_and(|held| held.id == message_id),
+                        Target::Remote(input) => {
+                            input.human_response_id.as_deref() == Some(message_id.as_str())
+                        }
+                    };
+                    if repeated {
+                        continue;
+                    }
+                    // Once dispatch may have begun, preserve its exact message and reconcile it.
+                    if let InputRequestRef::RemoteTask { remote_id, .. } = &request {
+                        let remote = next
+                            .remote_agents
+                            .get_mut(remote_id)
+                            .ok_or_else(|| invalid("unknown remote input owner"))?;
+                        let dispatched = remote.requests.values().any(|operation| {
+                            operation.input_request.as_ref() == Some(&request)
+                                && operation.dispatch_started
+                        });
+                        if dispatched {
                             return Err(invalid("the earlier response may already have been sent"));
-                        }
-                    } else {
-                        for operation in remote.requests.values_mut() {
-                            if operation.input_request.as_ref() == Some(&request) {
-                                operation.ended = true;
+                        } else {
+                            for operation in remote.requests.values_mut() {
+                                if operation.input_request.as_ref() == Some(&request) {
+                                    operation.ended = true;
+                                }
                             }
                         }
                     }
-                }
-                match target(&mut next, &request)? {
-                    Target::Agent(input) => {
-                        if input.response_message.as_ref().is_some_and(|held| held.id == message_id)
-                        {
-                            return Ok(());
+                    match target(&mut next, &request)? {
+                        Target::Agent(input) => {
+                            if input.state != InputRequestState::Responding
+                                || input.response_message.as_ref().map(|held| held.id.as_str())
+                                    != Some(previous_message_id.as_str())
+                            {
+                                return Err(invalid(
+                                    "the selected local response changed or was consumed",
+                                ));
+                            }
+                            input.response_message = Some(response);
                         }
-                        if input.state != InputRequestState::Responding
-                            || input.response_message.as_ref().map(|held| held.id.as_str())
-                                != Some(previous_message_id.as_str())
-                        {
-                            return Err(invalid(
-                                "the selected local response changed or was consumed",
-                            ));
+                        Target::Remote(input) => {
+                            if input.state != InputRequestState::Responding
+                                || input.human_response_id.as_deref()
+                                    != Some(previous_message_id.as_str())
+                            {
+                                return Err(invalid(
+                                    "the selected remote response changed or was consumed",
+                                ));
+                            }
+                            input.human_response_id = Some(message_id);
+                            input.response_message_id = None;
                         }
-                        input.response_message = Some(response);
-                    }
-                    Target::Remote(input) => {
-                        if input.human_response_id.as_deref() == Some(message_id.as_str()) {
-                            return Ok(());
-                        }
-                        if input.state != InputRequestState::Responding
-                            || input.human_response_id.as_deref()
-                                != Some(previous_message_id.as_str())
-                        {
-                            return Err(invalid(
-                                "the selected remote response changed or was consumed",
-                            ));
-                        }
-                        input.human_response_id = Some(message_id);
-                        input.response_message_id = None;
                     }
                 }
             }
@@ -300,9 +326,19 @@ impl Session {
         let mut candidates = Vec::new();
         for (agent_id, agent) in &self.state.frames {
             for (request_id, input) in &agent.input_requests {
-                if input.state != InputRequestState::Open {
-                    continue;
-                }
+                let response = match input.state {
+                    InputRequestState::Open => None,
+                    InputRequestState::Responding => {
+                        let Some(response) = &input.response_message else { continue };
+                        let Ok(response) =
+                            canonical(&self.state.chat_history, &response.id, Role::User)
+                        else {
+                            continue;
+                        };
+                        Some(response.clone())
+                    }
+                    _ => continue,
+                };
                 let Some(presentation) =
                     presented(&self.state.chat_history, input.presented_message_id.as_deref())
                 else {
@@ -315,15 +351,39 @@ impl Session {
                     },
                     question: input.source_message.raw_text_content().unwrap_or_default(),
                     presentation: presentation.clone(),
+                    response,
                 });
             }
         }
         for (remote_id, remote) in &self.state.remote_agents {
             for (task_id, task) in &remote.tasks {
                 for (request_id, input) in &task.input_requests {
-                    if input.state != InputRequestState::Open {
-                        continue;
-                    }
+                    let reference = InputRequestRef::RemoteTask {
+                        remote_id: remote_id.clone(),
+                        request_id: request_id.clone(),
+                        task: lk_agents_abi::delegation::remote::RemoteTaskRef {
+                            task_id: task_id.clone(),
+                            context_id: task.task.context_id.clone(),
+                        },
+                    };
+                    let response = match input.state {
+                        InputRequestState::Open => None,
+                        InputRequestState::Responding => {
+                            if remote.requests.values().any(|operation| {
+                                operation.input_request.as_ref() == Some(&reference)
+                                    && operation.dispatch_started
+                            }) {
+                                continue;
+                            }
+                            let Some(id) = &input.human_response_id else { continue };
+                            let Ok(response) = canonical(&self.state.chat_history, id, Role::User)
+                            else {
+                                continue;
+                            };
+                            Some(response.clone())
+                        }
+                        _ => continue,
+                    };
                     let Some(presentation) =
                         presented(&self.state.chat_history, input.presented_message_id.as_deref())
                     else {
@@ -337,16 +397,10 @@ impl Session {
                         .unwrap_or_default()
                         .to_owned();
                     candidates.push(InputCandidate {
-                        reference: InputRequestRef::RemoteTask {
-                            remote_id: remote_id.clone(),
-                            request_id: request_id.clone(),
-                            task: lk_agents_abi::delegation::remote::RemoteTaskRef {
-                                task_id: task_id.clone(),
-                                context_id: task.task.context_id.clone(),
-                            },
-                        },
+                        reference,
                         question,
                         presentation: presentation.clone(),
+                        response,
                     });
                 }
             }

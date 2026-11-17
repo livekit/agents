@@ -856,7 +856,7 @@ a public Python export or an additional SDK constructor.
 | RemoteTaskCommands, conditional internal ABI port | Extend the existing binding/owner command path where possible. | Bound RemoteTask.cancel() reaches the authorized owner without putting a runtime dependency in storage or adding a public controller. |
 | RemoteTaskRef | Reuse/promote the current core A2A TaskRef shape. | Context/task addressing; keep internal unless a public control signature requires it. |
 | InputRequestRef | New shared reference, not a lifecycle owner. | Qualify a local or remote input occurrence; keep internal by default. |
-| InputCandidate | Ephemeral detector input resolved by the core. | The qualified reference, question and canonical assistant presentation; no private model history or authority to dispatch. |
+| InputCandidate | Ephemeral detector input resolved by the core. | The qualified reference, question, canonical assistant presentation and any held human response eligible for correction; no private model history or authority to dispatch. |
 | InputRoutingRequest | Ephemeral native request for the configured routing model. | Canonical human message, visible history and presented candidates; no persisted command or second history. |
 | InputRoute | Internal ABI detector verdict. | Match zero/one/several input references or request clarification; use existing LLM interfaces rather than a new public detector base class. |
 | PresentationEvent | Evolve existing voice Presentation/ExpertInboxEvent records. | Transient normalized notification with original correlation, grouping and exact-output information. |
@@ -1126,8 +1126,11 @@ passes deterministic stock-peer transport and failure tests.
   The native command path supports atomic grouped responses and held-response correction.
   It retires unsent older intents without editing their journal bodies. Preparation checks
   the current canonical response, covering correction after a transport read but before
-  preparation; a possibly dispatched response cannot be overwritten. Automatic/public
-  correction selection still needs the same owner integration as deferred dispatch.
+  preparation; a possibly dispatched response cannot be overwritten. Automatic text
+  classification includes held responses before dispatch. It validates the offered
+  response's identity before atomically applying new answers and corrections, so a late verdict
+  cannot replace a newer response or partly admit a group. Voice/public explicit selection
+  still needs the same shared owner integration.
 - [ ] Implement explicit references and the shared validation/reservation/dispatch path.
 - [ ] Implement eligibility, incarnations, passing, fairness and nested references.
 - [ ] Use source_message_id/response_message_id for remote input occurrences and canonical

@@ -227,17 +227,23 @@ async def test_a_remote_date_response_keeps_its_task_and_the_persons_exact_words
     assert len(routing.requests) == 2
 
 
+@pytest.mark.parametrize("correct_before_return", [False, True])
 async def test_a_response_held_during_a_local_child_can_be_sent_by_another_eligible_agent(
     peer: Peer,
+    correct_before_return: bool,
 ) -> None:
     peer.question = "Which date?"
     store = ContextStore()
     app = await store.load_context(App())
+    local_model = FakeLLM([tool_call("topic")])
+    if correct_before_return:
+        local_model.extend([tool_call("topic")])
+    local_model.extend([tool_call("continue_local"), "Policy explained."])
     local = Agent(
         name="policy",
         instructions="Explain the policy.",
         output_type=str,
-        llm=FakeLLM([tool_call("topic"), tool_call("continue_local"), "Policy explained."]),
+        llm=local_model,
     )
 
     @local.tool
@@ -277,7 +283,7 @@ async def test_a_response_held_during_a_local_child_can_be_sent_by_another_eligi
                 "Which date?",
                 tool_call("policy"),
                 tool_call("followup"),
-                "Confirmed for Friday.",
+                "Confirmed.",
             ]
         ),
     )
@@ -287,17 +293,27 @@ async def test_a_response_held_during_a_local_child_can_be_sent_by_another_eligi
             tool_call("route_input_response", candidates=[1], unclear=False),
         ]
     )
+    if correct_before_return:
+        routing.extend([tool_call("route_input_response", candidates=[2], unclear=False)])
     session = TextSession(agent=root, delegation=DelegationOptions(routing_model=routing))
     await session.run("Check coverage", context=store.bind(app))
     await session.run("Explain the hotel policy", context=store.bind(app))
     assert app.session.current_agent is not None
     assert app.session.current_agent.agent_name == "policy"
     result = await session.run("Friday", context=store.bind(app))
-    assert result.output == "Confirmed for Friday."
+    if correct_before_return:
+        assert result.status == "input_required" and len(peer.messages) == 1
+        result = await session.run("Actually Saturday", context=store.bind(app))
+    assert result.output == "Confirmed."
     assert len(peer.messages) == 2
     assert peer.messages[1]["taskId"] == "remote-task"
     assert peer.messages[1]["contextId"] == "remote-context"
-    assert peer.messages[1]["parts"][0] == {"text": "Friday"}
+    assert peer.messages[1]["parts"][0] == {
+        "text": "Actually Saturday" if correct_before_return else "Friday"
+    }
+    if correct_before_return:
+        prompt = json.loads(routing.requests[-1].items[-1].text_content)
+        assert prompt["candidates"][2]["held_response"] == "Friday"
 
 
 async def test_routed_approval_still_requires_a_validated_repeat() -> None:

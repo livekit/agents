@@ -166,7 +166,11 @@ fn grouped_answers_reserve_all_occurrences_or_none_and_repeat_idempotently() {
     let selected = driver.session.snapshot();
     answer(&mut driver.session, vec![name, flight], "Ada, next Friday");
     assert_eq!(driver.session.snapshot(), selected);
-    assert!(driver.session.input_candidates().is_empty());
+    let candidates = driver.session.input_candidates();
+    assert_eq!(candidates.len(), 2);
+    assert!(candidates.iter().all(|candidate| {
+        candidate.response.as_ref().is_some_and(|response| response.id == "answer")
+    }));
 }
 
 #[test]
@@ -238,9 +242,22 @@ fn a_correction_retires_unsent_intent_and_preserves_its_original_journal_body() 
     );
     let restored = serde_json::from_value(serde_json::to_value(snapshot).unwrap()).unwrap();
     let mut restored = Session::new(driver.config, input(Some(restored))).unwrap();
-    remote(&mut restored, send("corrected", "Actually Saturday", Some(reference)));
+    remote(&mut restored, send("corrected", "Actually Saturday", Some(reference.clone())));
     remote(&mut restored, RemoteInput::DispatchStarted { request_id: "corrected".into() });
     assert!(restored.snapshot().remote_agents["flights"].requests["corrected"].dispatch_started);
+    let dispatched = restored.snapshot();
+    restored
+        .input(SessionInputCommand::Correct {
+            request: reference,
+            previous_message_id: "answer".into(),
+            message_id: "correction".into(),
+        })
+        .unwrap();
+    assert_eq!(
+        restored.snapshot(),
+        dispatched,
+        "repeating admission cannot retire the unchanged send"
+    );
 }
 
 #[test]
@@ -251,6 +268,7 @@ fn a_response_cannot_be_corrected_after_dispatch_may_have_started() {
     answer(&mut driver.session, vec![reference.clone()], "Friday");
     remote(&mut driver.session, send("response", "Friday", Some(reference.clone())));
     remote(&mut driver.session, RemoteInput::DispatchStarted { request_id: "response".into() });
+    assert!(driver.session.input_candidates().is_empty());
     driver.session.record_dialogue(message("correction", Role::User, "Actually Saturday"));
     let before = driver.session.snapshot();
     assert!(
@@ -264,6 +282,75 @@ fn a_response_cannot_be_corrected_after_dispatch_may_have_started() {
             .is_err()
     );
     assert_eq!(driver.session.snapshot(), before);
+}
+
+#[test]
+fn a_stale_correction_verdict_cannot_overwrite_a_newer_response_or_partly_reserve_a_group() {
+    for dispatched in [false, true] {
+        let mut previous =
+            Driver::new(config(false, ChatHistory::Fresh, false), None, "Find flights");
+        let flight = question(&mut previous.session);
+        let name = local_question(&mut previous.session);
+        present(&mut previous, vec![flight.clone(), name.clone()]);
+        answer(&mut previous.session, vec![flight.clone()], "Friday");
+        let mut session =
+            Session::new(previous.config, input(Some(previous.session.snapshot()))).unwrap();
+        let effects = session.handle(
+            SessionEvent::Start(message("correction", Role::User, "Ada, actually Saturday")),
+            Ts::ZERO,
+        );
+        let request = effects
+            .iter()
+            .find_map(|effect| match effect {
+                SessionEffect::RouteInput(request) => Some(request),
+                _ => None,
+            })
+            .expect("a held response is offered for correction");
+        assert_eq!(
+            request
+                .candidates
+                .iter()
+                .find(|candidate| candidate.reference == flight)
+                .unwrap()
+                .response
+                .as_ref()
+                .unwrap()
+                .id,
+            "answer"
+        );
+        let expected = if dispatched {
+            remote(&mut session, send("response", "Friday", Some(flight.clone())));
+            remote(&mut session, RemoteInput::DispatchStarted { request_id: "response".into() });
+            "answer"
+        } else {
+            session.record_dialogue(message("newer", Role::User, "Actually Sunday"));
+            session
+                .input(SessionInputCommand::Correct {
+                    request: flight.clone(),
+                    previous_message_id: "answer".into(),
+                    message_id: "newer".into(),
+                })
+                .unwrap();
+            "newer"
+        };
+        session.handle(
+            SessionEvent::InputRouted {
+                message_id: "correction".into(),
+                result: Some(Ok(InputRoute::Matched(vec![name, flight.clone()]))),
+                usage: Default::default(),
+            },
+            Ts::ZERO,
+        );
+        let snapshot = session.snapshot();
+        assert_eq!(
+            snapshot.frames[&snapshot.root_frame_id].input_requests["name"].state,
+            InputRequestState::Open,
+            "a stale group cannot consume its otherwise valid member"
+        );
+        let request = &snapshot.remote_agents["flights"].tasks["flight"].input_requests
+            [flight.remote().unwrap().2];
+        assert_eq!(request.human_response_id.as_deref(), Some(expected));
+    }
 }
 
 #[test]

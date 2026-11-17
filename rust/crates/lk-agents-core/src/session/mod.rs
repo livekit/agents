@@ -53,6 +53,8 @@ pub struct InputCandidate {
     pub reference: lk_agents_abi::session::InputRequestRef,
     pub question: String,
     pub presentation: ChatMessage,
+    /// A held human response may be corrected only while its dispatch has not begun.
+    pub response: Option<ChatMessage>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

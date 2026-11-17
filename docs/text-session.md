@@ -127,6 +127,9 @@ The response belongs to the conversation's remote task. An eligible agent can se
 when that agent has a fresh private history. Until an eligible agent invokes the remote tool,
 the response stays held. A tool call cannot choose arbitrarily between several held responses
 or create a second outgoing operation for a response whose dispatch is already being tracked.
+While a response is held, the routing model can recognize a clear correction such as "Actually
+Saturday". The owner checks that the original response is still current before replacing it.
+Once dispatch may have started, it preserves the sent message and reconciles that operation.
 
 Text consumed from run_stream establishes delivery at that output boundary. Verbatim tool
 questions use the same stream and receipts as model text. Reading only a result without
