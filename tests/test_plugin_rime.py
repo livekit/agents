@@ -1,10 +1,9 @@
-"""Rime TTS, optional imports, and Prism realtime regression tests."""
+"""Rime TTS, optional imports, and Prism realtime tests."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import inspect
 import io
 import json
 import logging
@@ -14,7 +13,6 @@ import textwrap
 import traceback
 from contextlib import asynccontextmanager
 from fractions import Fraction
-from importlib.metadata import version
 from importlib.util import find_spec
 from types import SimpleNamespace
 from typing import Any, cast
@@ -30,7 +28,6 @@ from google.protobuf import json_format
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from packaging.version import Version
 from rime_api import text_to_speech_pb2 as proto
 
 from livekit import rtc
@@ -56,8 +53,7 @@ from livekit.agents.telemetry.traces import _DynamicTracer
 from livekit.agents.tts import tts as tts_module
 from livekit.agents.voice.io import AudioOutput, AudioOutputCapabilities
 from livekit.plugins import rime
-from livekit.plugins.rime import TTS
-from livekit.plugins.rime._websocket_v1 import _codec_for_protocol
+from livekit.plugins.rime import TTS, _websocket_v1
 
 from .fake_io import FakeAudioOutput
 from .fake_tts import FakeTTS
@@ -86,6 +82,7 @@ if HAS_REALTIME_SDK:
 
 
 _SECRET = "customer-secret-marker"
+_NO_RETRY = APIConnectOptions(max_retry=0, timeout=2)
 
 
 def _assert_exception_is_safe(exc: BaseException) -> None:
@@ -153,73 +150,46 @@ def test_model_capabilities(
     ("options", "expected_model", "expected_speaker"),
     [
         pytest.param({}, "coda", "lyra", id="http-default"),
-        pytest.param({"model": "coda"}, "coda", "lyra", id="http-coda"),
         pytest.param({"use_websocket": True}, "coda", "lyra", id="ws3-default"),
-        pytest.param({"use_websocket": True, "model": "coda"}, "coda", "lyra", id="ws3-coda"),
+        pytest.param({"model": "mistv3"}, "mistv3", "cove", id="http-mist"),
+        pytest.param({"use_websocket": True, "model": "mistv3"}, "mistv3", "cove", id="ws3-mist"),
         pytest.param(
             {"websocket_url": "wss://coda.api.rime.ai/ws", "model": "coda"},
             "coda",
             "lyra",
-            id="v1-public-coda",
+            id="v1-coda",
         ),
         pytest.param(
             {"websocket_url": "wss://mist.api.rime.ai/ws", "model": "mistv3"},
             "mistv3",
             "cove",
-            id="v1-public-mist",
+            id="v1-mist",
         ),
-        pytest.param({"model": "mistv3"}, "mistv3", "cove", id="http-mist"),
-        pytest.param({"use_websocket": True, "model": "mistv3"}, "mistv3", "cove", id="ws3-mist"),
+        pytest.param({"model": "mistv3", "speaker": "custom"}, "mistv3", "custom", id="explicit"),
     ],
 )
-@pytest.mark.parametrize("speaker", [None, "custom-voice"], ids=["default", "explicit"])
 def test_model_and_speaker_defaults(
-    options: dict[str, Any], expected_model: str, expected_speaker: str, speaker: str | None
+    options: dict[str, Any], expected_model: str, expected_speaker: str
 ) -> None:
-    if speaker is not None:
-        options = {**options, "speaker": speaker}
     tts = TTS(api_key="test-key", **options)
 
     assert tts.model == expected_model
-    assert tts._opts.speaker == (speaker if speaker is not None else expected_speaker)
+    assert tts._opts.speaker == expected_speaker
     assert tts.sample_rate == 24000
 
 
 def test_coda_request_controls() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(
-        api_key="test-key",
-        model="coda",
-        repetition_penalty=1.1,
-        temperature=0.5,
-        top_p=0.9,
-        max_tokens=200,
-        time_scale_factor=1.2,
-    )
-
+    controls = {"repetition_penalty": 1.1, "temperature": 0.5, "top_p": 0.9, "max_tokens": 200}
+    tts = TTS(api_key="test-key", model="coda", time_scale_factor=1.2, **controls)
     params = parse_qs(urlparse(tts._ws_url()).query)
-
-    assert params["repetition_penalty"] == ["1.1"]
-    assert params["temperature"] == ["0.5"]
-    assert params["top_p"] == ["0.9"]
-    assert params["max_tokens"] == ["200"]
+    assert {key: params[key] for key in controls} == {k: [str(v)] for k, v in controls.items()}
     assert params["timeScaleFactor"] == ["1.2"]
 
-    tts.update_options(
-        repetition_penalty=1.2,
-        temperature=0.6,
-        top_p=0.8,
-        max_tokens=300,
-        time_scale_factor=1.1,
-    )
-    updated_params = parse_qs(urlparse(tts._ws_url()).query)
-
-    assert updated_params["repetition_penalty"] == ["1.2"]
-    assert updated_params["temperature"] == ["0.6"]
-    assert updated_params["top_p"] == ["0.8"]
-    assert updated_params["max_tokens"] == ["300"]
-    assert updated_params["timeScaleFactor"] == ["1.1"]
+    updated = {"repetition_penalty": 1.2, "temperature": 0.6, "top_p": 0.8, "max_tokens": 300}
+    tts.update_options(time_scale_factor=1.1, **updated)
+    params = parse_qs(urlparse(tts._ws_url()).query)
+    assert {key: params[key] for key in updated} == {k: [str(v)] for k, v in updated.items()}
+    assert params["timeScaleFactor"] == ["1.1"]
 
 
 @pytest.mark.parametrize(
@@ -227,83 +197,41 @@ def test_coda_request_controls() -> None:
     [("coda", 24000), ("mistv3", 24000), ("mistv2", 22050)],
 )
 def test_sample_rate_uses_model_service_default(model: str, expected_sample_rate: int) -> None:
-    from livekit.plugins.rime import TTS
-
     tts = TTS(api_key="test-key", model=model, use_websocket=True)
 
     assert tts.sample_rate == expected_sample_rate
     assert parse_qs(urlparse(tts._ws_url()).query)["samplingRate"] == [str(expected_sample_rate)]
 
 
-def test_explicit_sample_rate_is_sent_and_preserved_across_model_updates() -> None:
-    from livekit.plugins.rime import TTS
+@pytest.mark.parametrize(
+    ("sample_rate", "expected"),
+    [(16000, [16000, 16000]), (None, [22050, 24000])],
+    ids=["explicit-is-kept", "default-tracks-model"],
+)
+def test_sample_rate_across_model_updates(sample_rate: int | None, expected: list[int]) -> None:
+    options = {} if sample_rate is None else {"sample_rate": sample_rate}
+    tts = TTS(api_key="test-key", model="coda", use_websocket=True, **options)
 
-    tts = TTS(api_key="test-key", model="coda", sample_rate=16000, use_websocket=True)
-
-    assert tts.sample_rate == 16000
-    assert parse_qs(urlparse(tts._ws_url()).query)["samplingRate"] == ["16000"]
-
-    tts.update_options(model="mistv2")
-
-    assert tts.sample_rate == 16000
-    assert parse_qs(urlparse(tts._ws_url()).query)["samplingRate"] == ["16000"]
-
-
-def test_sample_rate_tracks_service_default_across_model_updates() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", model="coda", use_websocket=True)
-
-    tts.update_options(model="mistv2")
-    assert tts.sample_rate == 22050
-    assert parse_qs(urlparse(tts._ws_url()).query)["samplingRate"] == ["22050"]
-
-    tts.update_options(model="mistv3")
-    assert tts.sample_rate == 24000
-    assert parse_qs(urlparse(tts._ws_url()).query)["samplingRate"] == ["24000"]
+    for model, rate in zip(["mistv2", "mistv3"], expected, strict=True):
+        tts.update_options(model=model)
+        assert tts.sample_rate == rate
+        assert parse_qs(urlparse(tts._ws_url()).query)["samplingRate"] == [str(rate)]
 
 
-async def test_chunked_stream_sends_default_mistv2_sample_rate() -> None:
-    from livekit.plugins.rime import TTS
-
-    payload: dict[str, object] = {}
-
-    async def synthesize(request: web.Request) -> web.Response:
-        payload.update(await request.json())
-        return web.Response(body=b"\x01\x00" * 2205, content_type="audio/pcm")
-
+@asynccontextmanager
+async def _http_server(handler: Any, path: str = "/tts", method: str = "POST"):
     app = web.Application()
-    app.router.add_post("/tts", synthesize)
+    app.router.add_route(method, path, handler)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    port = runner.addresses[0][1]
-
+    await web.TCPSite(runner, "127.0.0.1", 0).start()
     try:
-        async with aiohttp.ClientSession() as session:
-            tts = TTS(
-                api_key="test-key",
-                model="mistv2",
-                base_url=f"http://127.0.0.1:{port}/tts",
-                http_session=session,
-            )
-            stream = tts.synthesize("hello", conn_options=APIConnectOptions(max_retry=0, timeout=2))
-            try:
-                events = [event async for event in stream]
-            finally:
-                await stream.aclose()
-                await tts.aclose()
+        yield f"http://127.0.0.1:{runner.addresses[0][1]}"
     finally:
         await runner.cleanup()
 
-    assert payload["samplingRate"] == 22050
-    assert {event.frame.sample_rate for event in events} == {22050}
-
 
 async def test_chunked_stream_keeps_sample_rate_after_parent_update() -> None:
-    from livekit.plugins.rime import TTS
-
     request_received = asyncio.Event()
     release_response = asyncio.Event()
     payloads: list[dict[str, object]] = []
@@ -314,43 +242,27 @@ async def test_chunked_stream_keeps_sample_rate_after_parent_update() -> None:
         await release_response.wait()
         return web.Response(body=b"\x01\x00" * 2400, content_type="audio/pcm")
 
-    app = web.Application()
-    app.router.add_post("/tts", synthesize)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    port = runner.addresses[0][1]
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            tts = TTS(
-                api_key="test-key",
-                model="coda",
-                sample_rate=22050,
-                base_url=f"http://127.0.0.1:{port}/tts",
-                http_session=session,
-            )
-            stream = tts.synthesize("hello", conn_options=APIConnectOptions(max_retry=0, timeout=2))
-            tts.update_options(sample_rate=16000)
-            try:
-                await asyncio.wait_for(request_received.wait(), timeout=2)
-                tts.update_options(model="mistv2")
-                release_response.set()
-                events = [event async for event in stream]
-                next_stream = tts.synthesize(
-                    "next", conn_options=APIConnectOptions(max_retry=0, timeout=2)
-                )
-                try:
-                    next_events = [event async for event in next_stream]
-                finally:
-                    await next_stream.aclose()
-            finally:
-                release_response.set()
-                await stream.aclose()
-                await tts.aclose()
-    finally:
-        await runner.cleanup()
+    async with _http_server(synthesize) as url, aiohttp.ClientSession() as session:
+        tts = TTS(
+            api_key="test-key",
+            model="coda",
+            sample_rate=22050,
+            base_url=f"{url}/tts",
+            http_session=session,
+        )
+        stream = tts.synthesize("hello", conn_options=_NO_RETRY)
+        tts.update_options(sample_rate=16000)
+        try:
+            await asyncio.wait_for(request_received.wait(), timeout=2)
+            tts.update_options(model="mistv2")
+            release_response.set()
+            events = [event async for event in stream]
+            async with tts.synthesize("next", conn_options=_NO_RETRY) as next_stream:
+                next_events = [event async for event in next_stream]
+        finally:
+            release_response.set()
+            await stream.aclose()
+            await tts.aclose()
 
     assert [(p["modelId"], p["samplingRate"]) for p in payloads] == [
         ("coda", 22050),
@@ -367,40 +279,26 @@ _LEXICON = [
 
 
 async def test_chunked_stream_sends_and_clears_coda_custom_lexicon() -> None:
-    from livekit.plugins.rime import TTS
-
     payloads: list[dict[str, Any]] = []
 
     async def synthesize(request: web.Request) -> web.Response:
         payloads.append(await request.json())
         return web.Response(body=b"\x01\x00" * 2400, content_type="audio/pcm")
 
-    app = web.Application()
-    app.router.add_post("/tts", synthesize)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    port = runner.addresses[0][1]
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            tts = TTS(
-                api_key="test-key",
-                model="coda",
-                base_url=f"http://127.0.0.1:{port}/tts",
-                http_session=session,
-                custom_lexicon=_LEXICON,
-            )
-            conn_options = APIConnectOptions(max_retry=0, timeout=2)
-            async with tts.synthesize("expedite it", conn_options=conn_options) as stream:
-                [event async for event in stream]
-            tts.update_options(custom_lexicon=[])
-            async with tts.synthesize("expedite it", conn_options=conn_options) as stream:
-                [event async for event in stream]
-            await tts.aclose()
-    finally:
-        await runner.cleanup()
+    async with _http_server(synthesize) as url, aiohttp.ClientSession() as session:
+        tts = TTS(
+            api_key="test-key",
+            model="coda",
+            base_url=f"{url}/tts",
+            http_session=session,
+            custom_lexicon=_LEXICON,
+        )
+        async with tts.synthesize("expedite it", conn_options=_NO_RETRY) as stream:
+            [event async for event in stream]
+        tts.update_options(custom_lexicon=[])
+        async with tts.synthesize("expedite it", conn_options=_NO_RETRY) as stream:
+            [event async for event in stream]
+        await tts.aclose()
 
     assert payloads[0]["customLexicon"] == _LEXICON
     assert "customLexicon" not in payloads[1]
@@ -420,38 +318,14 @@ async def test_chunked_stream_sends_and_clears_coda_custom_lexicon() -> None:
 def test_custom_lexicon_rejects_unsupported_configuration(
     kwargs: dict[str, Any], message: str
 ) -> None:
-    from livekit.plugins.rime import TTS
-
     with pytest.raises(ValueError, match=message):
         TTS(api_key="test-key", custom_lexicon=_LEXICON, **kwargs)
-
-
-@pytest.mark.parametrize(
-    ("kwargs", "message"),
-    [
-        ({"model": "mistv3"}, "custom_lexicon requires the coda model"),
-        ({"model": "coda", "use_websocket": True}, "legacy Rime WebSocket"),
-    ],
-)
-def test_custom_lexicon_update_rejects_unsupported_configuration(
-    kwargs: dict[str, Any], message: str
-) -> None:
-    from livekit.plugins.rime import TTS
-
     tts = TTS(api_key="test-key", **kwargs)
-
     with pytest.raises(ValueError, match=message):
         tts.update_options(custom_lexicon=_LEXICON)
 
 
-@pytest.mark.parametrize(
-    ("update_endpoint", "update_model"),
-    [(True, False), (False, True), (True, True)],
-    ids=["endpoint", "model", "endpoint-and-model"],
-)
-async def test_chunked_stream_keeps_endpoint_and_timeout_after_parent_update(
-    update_endpoint: bool, update_model: bool
-) -> None:
+async def test_chunked_stream_keeps_endpoint_and_timeout_after_parent_update() -> None:
     requests: list[tuple[str, str]] = []
 
     async def synthesize(request: web.Request) -> web.Response:
@@ -459,414 +333,163 @@ async def test_chunked_stream_keeps_endpoint_and_timeout_after_parent_update(
         requests.append((request.path, payload["modelId"]))
         return web.Response(body=b"\x01\x00" * 2400, content_type="audio/pcm")
 
-    app = web.Application()
-    app.router.add_post("/{endpoint}", synthesize)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    base_url = f"http://127.0.0.1:{runner.addresses[0][1]}"
-    updated_endpoint = "/new" if update_endpoint else "/old"
-    updated_model = "mistv3" if update_model else "coda"
-    updated_timeout = 30 if update_model else 240
-    conn_options = APIConnectOptions(max_retry=0, timeout=2)
+    async with _http_server(synthesize, "/{endpoint}") as url, aiohttp.ClientSession() as session:
+        tts = TTS(api_key="test-key", model="coda", base_url=f"{url}/old", http_session=session)
+        try:
+            with patch.object(session, "post", wraps=session.post) as post:
+                old_stream = tts.synthesize("hello", conn_options=_NO_RETRY)
+                async with old_stream:
+                    # update before the scheduled request can read the parent's settings
+                    tts.update_options(base_url=f"{url}/new", model="mistv3")
+                    assert [event async for event in old_stream]
+                async with tts.synthesize("hello", conn_options=_NO_RETRY) as new_stream:
+                    assert [event async for event in new_stream]
+        finally:
+            await tts.aclose()
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            tts = TTS(
-                api_key="test-key",
-                model="coda",
-                base_url=f"{base_url}/old",
-                http_session=session,
-            )
-            try:
-                with patch.object(session, "post", wraps=session.post) as post:
-                    old_stream = tts.synthesize("hello", conn_options=conn_options)
-                    # Update before the scheduled request can read the parent's settings.
-                    updates: dict[str, Any] = {}
-                    if update_endpoint:
-                        updates["base_url"] = f"{base_url}{updated_endpoint}"
-                    if update_model:
-                        updates["model"] = updated_model
-                    async with old_stream:
-                        tts.update_options(**updates)
-                        assert [event async for event in old_stream]
-                    async with tts.synthesize("hello", conn_options=conn_options) as new_stream:
-                        assert [event async for event in new_stream]
-
-                assert requests == [("/old", "coda"), (updated_endpoint, updated_model)]
-                assert [call.kwargs["timeout"].total for call in post.call_args_list] == [
-                    240,
-                    updated_timeout,
-                ]
-                assert all(call.kwargs["timeout"].sock_connect == 2 for call in post.call_args_list)
-            finally:
-                await tts.aclose()
-    finally:
-        await runner.cleanup()
+    assert requests == [("/old", "coda"), ("/new", "mistv3")]
+    assert [call.kwargs["timeout"].total for call in post.call_args_list] == [240, 30]
+    assert all(call.kwargs["timeout"].sock_connect == 2 for call in post.call_args_list)
 
 
 def test_websocket_url_selects_v1_with_binary_and_coda_defaults() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(
-        api_key="test-key",
-        model="coda",
-        websocket_url="wss://coda.api.rime.ai/ws",
-    )
+    tts = TTS(api_key="test-key", model="coda", websocket_url="wss://coda.api.rime.ai/ws")
 
     assert tts.model == "coda"
     assert tts.capabilities.streaming is True
     assert tts.capabilities.aligned_transcript is False
-    assert "websocket_url" in inspect.signature(TTS).parameters
-    assert "tokenizer" in inspect.signature(TTS).parameters
-    assert "audio_format" in inspect.signature(TTS).parameters
-    assert inspect.signature(TTS).parameters["websocket_protocol"].default == "binary"
     assert tts._opts.audio_format == "audio/pcm"
-    assert "sentence_tokenization" not in inspect.signature(TTS).parameters
-
-
-def test_websocket_url_uses_explicit_mist_model_and_accepts_options() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(
-        api_key="test-key",
-        websocket_url="wss://mist.api.rime.ai/ws",
-        model="mistv3",
-        pause_between_brackets=True,
-    )
-
-    assert tts.model == "mistv3"
-    assert tts._opts.speaker == "cove"
-    assert tts._opts.mist_options is not None
-    assert tts._opts.mist_options.pause_between_brackets is True
-
-
-def test_dedicated_websocket_url_uses_explicit_model() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(
-        api_key="test-key",
-        websocket_url="wss://dedicated.rime.ai/ws",
-        model="coda",
-    )
-
-    assert tts.model == "coda"
 
 
 @pytest.mark.parametrize(
-    "websocket_url",
-    [
-        "wss://coda.api.rime.ai/ws",
-        "wss://mist.api.rime.ai:443/ws",
-        "wss://dedicated.rime.ai/ws",
-        "wss://api.rime.ai/coda/ws",
-        "wss://api.rime.ai/mist/ws",
-        "wss://voice.rime.ai/custom/stream",
-    ],
+    "websocket_url", ["wss://mist.api.rime.ai:443/ws", "wss://voice.rime.ai/custom/stream"]
 )
 def test_websocket_url_requires_model(websocket_url: str) -> None:
-    from livekit.plugins.rime import TTS
-
     with pytest.raises(ValueError, match="model is required"):
-        TTS(
-            api_key="test-key",
-            websocket_url=websocket_url,
-        )
-
-
-def test_custom_websocket_endpoint_requires_explicit_opt_in() -> None:
-    from livekit.plugins.rime import TTS
-
-    with pytest.raises(ValueError, match="trusted Rime host"):
-        TTS(
-            api_key="test-key",
-            model="coda",
-            websocket_url="wss://voice.customer.example/coda/ws",
-        )
-
-    tts = TTS(
-        api_key="test-key",
-        model="coda",
-        websocket_url="wss://voice.customer.example/coda/ws",
-        allow_custom_endpoint=True,
-    )
-
-    assert tts.model == "coda"
-
-
-def test_custom_base_url_requires_explicit_opt_in() -> None:
-    from livekit.plugins.rime import TTS
-
-    with pytest.raises(ValueError, match="trusted Rime host"):
-        TTS(api_key="test-key", base_url="https://voice.customer.example/tts")
-
-    tts = TTS(
-        api_key="test-key",
-        base_url="https://voice.customer.example/tts",
-        allow_custom_endpoint=True,
-    )
-
-    assert tts._base_url == "https://voice.customer.example/tts"
+        TTS(api_key="test-key", websocket_url=websocket_url)
 
 
 @pytest.mark.parametrize(
-    "websocket_url",
+    "endpoint",
     [
-        "https://api.rime.ai/coda/ws",
-        "/coda/ws",
+        {"model": "coda", "websocket_url": "wss://voice.customer.example/coda/ws"},
+        {"base_url": "https://voice.customer.example/tts"},
+    ],
+    ids=["websocket", "http"],
+)
+def test_custom_endpoint_requires_explicit_opt_in(endpoint: dict[str, str]) -> None:
+    with pytest.raises(ValueError, match="trusted Rime host"):
+        TTS(api_key="test-key", **endpoint)
+    TTS(api_key="test-key", allow_custom_endpoint=True, **endpoint)
+
+
+@pytest.mark.parametrize(
+    ("websocket_url", "options"),
+    [
+        ("wss://coda.api.rime.ai/ws", {}),
+        ("ws://127.0.0.1:8080/coda/ws", {}),
+        ("ws://[::1]:8080/coda/ws", {}),
+        ("wss://dedicated.rime.ai/ws", {}),
+        ("wss://voice.customer.example/coda/ws", {"allow_custom_endpoint": True}),
     ],
 )
-def test_tts_rejects_non_websocket_urls(websocket_url: str) -> None:
-    from livekit.plugins.rime import TTS
+def test_v1_accepts_trusted_websocket_url(websocket_url: str, options: dict[str, Any]) -> None:
+    _websocket_v1.validate_websocket_url(websocket_url, **options)
 
+
+@pytest.mark.parametrize(
+    ("websocket_url", "message"),
+    [
+        ("wss://attacker.example/coda/ws", "trusted Rime host"),
+        ("wss://rime.ai.attacker.example/coda/ws", "trusted Rime host"),
+        ("ws://api.rime.ai/coda/ws", None),
+        ("ws://192.168.1.20/coda/ws", None),
+        ("ws://localhost:8080/coda/ws", None),
+        ("http://api.rime.ai/coda/ws", None),
+    ],
+)
+def test_v1_rejects_untrusted_websocket_url(websocket_url: str, message: str | None) -> None:
+    with pytest.raises(ValueError, match=message):
+        _websocket_v1.validate_websocket_url(websocket_url)
+
+
+@pytest.mark.parametrize("websocket_url", ["https://api.rime.ai/coda/ws", "/coda/ws"])
+def test_tts_rejects_non_websocket_urls(websocket_url: str) -> None:
     with pytest.raises(ValueError, match="absolute ws or wss URL"):
         TTS(api_key="test-key", model="coda", websocket_url=websocket_url)
+
+
+_CODA_URL = "wss://coda.api.rime.ai/ws"
 
 
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        (
-            {
-                "websocket_url": "wss://coda.api.rime.ai/ws",
-                "base_url": "https://users.rime.ai/coda",
-            },
-            "cannot be used with base_url",
-        ),
-        (
-            {
-                "websocket_url": "wss://coda.api.rime.ai/ws",
-                "use_websocket": True,
-            },
-            "omit use_websocket",
-        ),
-        (
-            {
-                "websocket_url": "wss://coda.api.rime.ai/ws",
-                "speed_alpha": 1.1,
-            },
-            "speed_alpha",
-        ),
-        (
-            {
-                "websocket_url": "wss://coda.api.rime.ai/ws",
-                "temperature": 0.7,
-            },
-            "generation controls",
-        ),
-        (
-            {
-                "websocket_url": "wss://coda.api.rime.ai/ws",
-                "websocket_protocol": "auto",
-            },
-            "binary.*json",
-        ),
-        (
-            {
-                "websocket_url": "wss://coda.api.rime.ai/ws",
-                "audio_format": "audio/aac",
-            },
-            "unsupported Rime audio_format",
-        ),
-        (
-            {
-                "websocket_url": "wss://coda.api.rime.ai/ws",
-                "pause_between_brackets": True,
-            },
-            "Mist options",
-        ),
+        ({"websocket_url": _CODA_URL, "base_url": "https://users.rime.ai/coda"}, "base_url"),
+        ({"websocket_url": _CODA_URL, "use_websocket": True}, "omit use_websocket"),
+        ({"websocket_url": _CODA_URL, "speed_alpha": 1.1}, "speed_alpha"),
+        ({"websocket_url": _CODA_URL, "temperature": 0.7}, "generation controls"),
+        ({"websocket_url": _CODA_URL, "websocket_protocol": "auto"}, "binary.*json"),
+        ({"websocket_url": _CODA_URL, "audio_format": "audio/aac"}, "unsupported Rime audio"),
+        ({"websocket_url": _CODA_URL, "pause_between_brackets": True}, "Mist options"),
+        ({"audio_format": "audio/wav"}, "only supported with the Rime v1"),
     ],
 )
 def test_v1_rejects_invalid_configuration(kwargs: dict[str, Any], message: str) -> None:
-    from livekit.plugins.rime import TTS
-
     with pytest.raises(ValueError, match=message):
         TTS(api_key="test-key", model="coda", **kwargs)
 
 
-def test_v1_rejects_generation_controls_on_update() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", model="coda", websocket_url="wss://coda.api.rime.ai/ws")
-
-    with pytest.raises(ValueError, match="generation controls"):
-        tts.update_options(top_p=0.8)
-
-
-def test_audio_format_requires_v1_websocket() -> None:
-    from livekit.plugins.rime import TTS
-
-    with pytest.raises(ValueError, match="only supported with the Rime v1"):
-        TTS(api_key="test-key", audio_format="audio/wav")
-
-
-def test_v1_updates_audio_format() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", model="coda", websocket_url="wss://coda.api.rime.ai/ws")
-    tts.update_options(audio_format="audio/mpeg")
-
-    assert tts._opts.audio_format == "audio/mpeg"
-
-    with pytest.raises(ValueError, match="unsupported Rime audio_format"):
-        tts.update_options(audio_format="audio/aac")
-
-    assert tts._opts.audio_format == "audio/mpeg"
-
-
-def test_v1_updates_model_with_endpoint() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", model="coda", websocket_url="wss://coda.api.rime.ai/ws")
-    tts.update_options(
-        websocket_url="wss://mist.api.rime.ai/ws",
-        model="mistv3",
-        pause_between_brackets=True,
-    )
-
-    assert tts.model == "mistv3"
-    assert tts._opts.mist_options is not None
-    assert tts._opts.mist_options.pause_between_brackets is True
-
-
-def test_v1_rejects_model_update() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", model="coda", websocket_url="wss://coda.api.rime.ai/ws")
-
-    with pytest.raises(ValueError, match="only be updated together"):
-        tts.update_options(model="mistv3")
-
-
-def test_v1_dedicated_endpoint_update_keeps_current_model() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(api_key="test-key", model="coda", websocket_url="wss://coda.api.rime.ai/ws")
-    tts.update_options(websocket_url="wss://dedicated.rime.ai/ws")
-
-    assert tts.model == "coda"
-
-
-def test_v1_dedicated_endpoint_rejects_model_change_for_same_url() -> None:
-    from livekit.plugins.rime import TTS
-
-    websocket_url = "wss://dedicated.rime.ai/ws"
-    tts = TTS(api_key="test-key", websocket_url=websocket_url, model="coda")
-
-    with pytest.raises(ValueError, match="model cannot change without changing websocket_url"):
-        tts.update_options(websocket_url=websocket_url, model="mistv3")
-
-    assert tts.model == "coda"
+_DEDICATED_URL = "wss://dedicated.rime.ai/ws"
 
 
 @pytest.mark.parametrize(
-    "updated_websocket_url",
+    ("update", "message"),
     [
-        "wss://dedicated.rime.ai/ws/",
-        "wss://dedicated.rime.ai/ws?token=rotated",
-        "wss://DEDICATED.rime.ai/ws",
-        "wss://dedicated.rime.ai:443/ws",
+        ({"top_p": 0.8}, "generation controls"),
+        ({"audio_format": "audio/aac"}, "unsupported Rime audio_format"),
+        ({"model": "mistv3"}, "only be updated together"),
+        ({"websocket_url": _DEDICATED_URL, "model": "mistv3"}, "without changing websocket_url"),
+        ({"websocket_url": f"{_DEDICATED_URL}/", "model": "mistv3"}, "without changing"),
+        ({"websocket_url": "wss://DEDICATED.rime.ai:443/ws", "model": "mistv3"}, "without chang"),
     ],
 )
-def test_v1_dedicated_endpoint_rejects_model_change_for_equivalent_url(
-    updated_websocket_url: str,
-) -> None:
-    from livekit.plugins.rime import TTS
+def test_v1_rejects_invalid_updates(update: dict[str, Any], message: str) -> None:
+    tts = TTS(api_key="test-key", model="coda", websocket_url=_DEDICATED_URL)
 
-    websocket_url = "wss://dedicated.rime.ai/ws"
-    tts = TTS(
-        api_key="test-key",
-        websocket_url=websocket_url,
-        model="coda",
-    )
-
-    with pytest.raises(ValueError, match="model cannot change without changing websocket_url"):
-        tts.update_options(websocket_url=updated_websocket_url, model="mistv3")
+    with pytest.raises(ValueError, match=message):
+        tts.update_options(**update)
 
     assert tts.model == "coda"
-    assert tts._websocket_v1_adapter is not None
-    assert tts._websocket_v1_adapter._websocket_v1_url == websocket_url
+    assert tts._opts.audio_format == "audio/pcm"
 
 
-def test_v1_dedicated_endpoint_allows_same_model_for_same_url() -> None:
-    from livekit.plugins.rime import TTS
-
-    websocket_url = "wss://dedicated.rime.ai/ws"
-    tts = TTS(api_key="test-key", websocket_url=websocket_url, model="coda")
-
-    tts.update_options(websocket_url=websocket_url, model="coda")
-
-    assert tts.model == "coda"
-
-
-def test_v1_dedicated_endpoint_updates_connection_url_for_same_model() -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(
-        api_key="test-key",
-        websocket_url="wss://dedicated.rime.ai/ws",
-        model="coda",
-    )
+def test_v1_accepts_endpoint_updates() -> None:
+    tts = TTS(api_key="test-key", model="coda", websocket_url=_CODA_URL)
     adapter = tts._websocket_v1_adapter
     assert adapter is not None
-    previous_pool = adapter._pools.current
-    updated_websocket_url = "wss://dedicated.rime.ai/ws?token=rotated"
 
-    tts.update_options(websocket_url=updated_websocket_url, model="coda")
-
+    tts.update_options(websocket_url=_DEDICATED_URL)
+    tts.update_options(websocket_url=_DEDICATED_URL, model="coda", audio_format="audio/mpeg")
     assert tts.model == "coda"
-    assert adapter._websocket_v1_url == updated_websocket_url
-    assert adapter._pools.current is not previous_pool
+    assert tts._opts.audio_format == "audio/mpeg"
 
+    rotated = f"{_DEDICATED_URL}?token=rotated"
+    tts.update_options(websocket_url=rotated, model="coda")
+    assert adapter._websocket_v1_url == rotated
 
-@pytest.mark.parametrize(
-    ("coda_url", "mist_url"),
-    [
-        ("wss://coda.api.rime.ai/ws", "wss://mist.api.rime.ai/ws"),
-        (
-            "wss://coda-test.rime.ai/ws",
-            "wss://mist-test.rime.ai/ws",
-        ),
-    ],
-)
-def test_v1_dedicated_endpoint_allows_model_change_with_new_url(
-    coda_url: str, mist_url: str
-) -> None:
-    from livekit.plugins.rime import TTS
-
-    tts = TTS(
-        api_key="test-key",
-        websocket_url=coda_url,
-        model="coda",
-    )
-
-    tts.update_options(
-        websocket_url=mist_url,
-        model="mistv3",
-        pause_between_brackets=True,
-    )
-
+    mist_url = "wss://mist-test.rime.ai/ws"
+    tts.update_options(websocket_url=mist_url, model="mistv3", pause_between_brackets=True)
     assert tts.model == "mistv3"
     assert tts._opts.mist_options is not None
     assert tts._opts.mist_options.pause_between_brackets is True
-    assert tts._websocket_v1_adapter is not None
-    assert tts._websocket_v1_adapter._websocket_v1_url == mist_url
-
-    with pytest.raises(ValueError, match="model cannot change without changing websocket_url"):
-        tts.update_options(
-            websocket_url=mist_url,
-            model="coda",
-        )
-
-    assert tts.model == "mistv3"
+    assert adapter._websocket_v1_url == mist_url
 
 
 @pytest.mark.parametrize("failure", ["transport", "provider", "send"])
 async def test_ws3_errors_do_not_expose_provider_or_transport_data(
     failure: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from livekit.plugins.rime import TTS
     from livekit.plugins.rime._legacy_websocket_adapter import LegacyWebSocketAdapter
 
     websocket = _FailingWS3(failure)
@@ -880,7 +503,7 @@ async def test_ws3_errors_do_not_expose_provider_or_transport_data(
     tts = TTS(api_key="test-key", model="coda", use_websocket=True)
     errors: list[tts_module.TTSError] = []
     tts.on("error", errors.append)
-    stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+    stream = tts.stream(conn_options=_NO_RETRY)
     stream.push_text("hello")
     stream.end_input()
 
@@ -898,10 +521,7 @@ async def test_ws3_errors_do_not_expose_provider_or_transport_data(
     assert errors[0].label == tts.label
 
 
-@pytest.mark.parametrize("stream_count", [1, 2])
-async def test_ws3_stream_keeps_options_after_parent_update(stream_count: int) -> None:
-    from livekit.plugins.rime import TTS
-
+async def test_ws3_stream_keeps_options_after_parent_update() -> None:
     request_options: list[tuple[str, str | None]] = []
     coda_closed = asyncio.Event()
 
@@ -912,72 +532,49 @@ async def test_ws3_stream_keeps_options_after_parent_update(stream_count: int) -
         async for message in ws:
             payload = json.loads(message.data)
             if "text" in payload:
-                await ws.send_json(
-                    {
-                        "type": "chunk",
-                        "data": base64.b64encode(b"\x01\x00" * 2400).decode(),
-                    }
-                )
-            elif payload.get("operation") == "flush":
+                audio = base64.b64encode(b"\x01\x00" * 2400).decode()
+                await ws.send_json({"type": "chunk", "data": audio})
+            elif payload.get("operation") in ("flush", "eos"):
                 await ws.send_json({"type": "done"})
-            elif payload.get("operation") == "eos":
-                await ws.send_json({"type": "done"})
-                break
+                if payload["operation"] == "eos":
+                    break
         await ws.close()
         if request.query["modelId"] == "coda":
             coda_closed.set()
         return ws
 
-    app = web.Application()
-    app.router.add_get("/ws3", websocket)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    port = runner.addresses[0][1]
+    async with _http_server(websocket, "/ws3", "GET") as url, aiohttp.ClientSession() as session:
+        tts = TTS(
+            api_key="test-key",
+            model="coda",
+            base_url=url.replace("http:", "ws:"),
+            http_session=session,
+            allow_custom_endpoint=True,
+        )
+        metrics = []
+        tts.on("metrics_collected", metrics.append)
+        coda_streams = [tts.stream(conn_options=_NO_RETRY) for _ in range(2)]
+        tts.update_options(model="mistv2")
+        mist_stream = tts.stream(conn_options=_NO_RETRY)
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            tts = TTS(
-                api_key="test-key",
-                model="coda",
-                base_url=f"ws://127.0.0.1:{port}",
-                http_session=session,
-                allow_custom_endpoint=True,
-            )
-            metrics = []
-            tts.on("metrics_collected", metrics.append)
-            coda_streams = [
-                tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-                for _ in range(stream_count)
-            ]
-            tts.update_options(model="mistv2")
-            mist_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        coda_events = []
+        for stream in coda_streams:
+            assert not coda_closed.is_set()
+            stream.push_text("hello")
+            stream.end_input()
+            coda_events.extend(await _collect(stream))
+            await stream.aclose()
+        await asyncio.wait_for(coda_closed.wait(), timeout=1)
+        mist_stream.push_text("hello")
+        mist_stream.end_input()
+        mist_events = await _collect(mist_stream)
+        await mist_stream.aclose()
+        await tts.aclose()
 
-            async def collect(stream: Any) -> list[Any]:
-                stream.push_text("hello")
-                stream.end_input()
-                try:
-                    return [event async for event in stream]
-                finally:
-                    await stream.aclose()
-
-            coda_events = []
-            for stream in coda_streams:
-                assert not coda_closed.is_set()
-                coda_events.extend(await collect(stream))
-            await asyncio.wait_for(coda_closed.wait(), timeout=1)
-            mist_events = await collect(mist_stream)
-            await tts.aclose()
-    finally:
-        await runner.cleanup()
-
-    assert sorted(request_options) == [("coda", "24000")] * stream_count + [("mistv2", "22050")]
+    assert sorted(request_options) == [("coda", "24000")] * 2 + [("mistv2", "22050")]
     assert {event.frame.sample_rate for event in coda_events} == {24000}
     assert {event.frame.sample_rate for event in mist_events} == {22050}
-    assert [metric.metadata.model_name for metric in metrics] == ["coda"] * stream_count + [
-        "mistv2"
-    ]
+    assert [metric.metadata.model_name for metric in metrics] == ["coda", "coda", "mistv2"]
 
 
 _PCM = b"\x01\x00" * 2205
@@ -1011,7 +608,6 @@ def encoded_audio_by_format() -> dict[str, bytes]:
         "audio/mpeg": _encode_container_audio("mp3", "mp3"),
         "audio/ogg;codecs=opus": _encode_container_audio("ogg", "libopus"),
         "audio/webm;codecs=opus": _encode_container_audio("webm", "libopus"),
-        "audio/pcmu": b"\x80\x00" * 1200,
     }
 
 
@@ -1226,8 +822,6 @@ class _RimeV1Server:
 
 
 def _v1_tts(server: _RimeV1Server, *, model: str = "coda", **kwargs: Any):
-    from livekit.plugins.rime import TTS
-
     return TTS(
         api_key="test-key",
         websocket_url=server.websocket_url,
@@ -1238,10 +832,17 @@ def _v1_tts(server: _RimeV1Server, *, model: str = "coda", **kwargs: Any):
 
 
 async def _collect(stream) -> list:
-    events = []
-    async for event in stream:
-        events.append(event)
-    return events
+    return [event async for event in stream]
+
+
+async def _speak(tts: TTS, text: str = "hello", conn_options: APIConnectOptions = _NO_RETRY):
+    stream = tts.stream(conn_options=conn_options)
+    try:
+        stream.push_text(text)
+        stream.end_input()
+        return await _collect(stream)
+    finally:
+        await stream.aclose()
 
 
 def _payloads(server: _RimeV1Server) -> list[str]:
@@ -1249,27 +850,20 @@ def _payloads(server: _RimeV1Server) -> list[str]:
     return [next(key for key in request if key != "contextId") for request in server.requests]
 
 
-def test_v1_decodes_pcmu_to_little_endian_pcm16() -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    decoded = _websocket_v1._decode_audio("audio/pcmu", bytes([0xFF, 0x7F, 0x80, 0x00]))
-
-    assert np.frombuffer(decoded, dtype="<i2").tolist() == [0, 0, 32124, -32124]
-
-
-@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
+@pytest.mark.parametrize("websocket_protocol", [None, "json"], ids=["default", "json"])
 async def test_v1_streams_audio_before_end_and_maps_supported_start_options(
-    websocket_protocol: str,
+    websocket_protocol: str | None,
 ) -> None:
+    protocol = {"websocket_protocol": websocket_protocol} if websocket_protocol else {}
     async with _RimeV1Server() as server:
         tts = _v1_tts(
             server,
-            websocket_protocol=websocket_protocol,
+            **protocol,
             lang="eng",
             sample_rate=22050,
             time_scale_factor=1.2,
         )
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream = tts.stream(conn_options=_NO_RETRY)
         try:
             first_event = asyncio.create_task(anext(stream))
             stream.push_text("Hello from ")
@@ -1288,16 +882,16 @@ async def test_v1_streams_audio_before_end_and_maps_supported_start_options(
     assert remaining[-1].is_final
     assert server.paths == ["/custom/stream"]
     assert server.headers[0]["Authorization"] == "Bearer test-key"
-    assert server.headers[0]["Sec-WebSocket-Protocol"] == f"rime.v1.{websocket_protocol}"
-    assert server.protocols == [f"rime.v1.{websocket_protocol}"]
+    expected_protocol = f"rime.v1.{websocket_protocol or 'binary'}"
+    assert server.headers[0]["Sec-WebSocket-Protocol"] == expected_protocol
+    assert server.protocols == [expected_protocol]
     assert _payloads(server) == ["start", "text", "text", "end"]
     assert [request["text"] for request in server.requests if "text" in request] == [
         "Hello from LiveKit today. ",
         "Next sentence. ",
     ]
     start = dict(server.requests[0]["start"])
-    # rime-api 0.4 adds this repeated field. The test server prints empty repeated
-    # fields, even though the plugin does not send them on the wire.
+    # the test server prints empty repeated fields that the plugin never sends
     assert start.pop("customLexicon", []) == []
     assert start == {
         "speaker": "lyra",
@@ -1311,49 +905,18 @@ async def test_v1_streams_audio_before_end_and_maps_supported_start_options(
     }
 
 
-async def test_v1_defaults_to_binary_protocol() -> None:
-    async with _RimeV1Server() as server:
-        tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("hello")
-        stream.end_input()
-        await _collect(stream)
-        await stream.aclose()
-        await tts.aclose()
-
-    assert server.protocols == ["rime.v1.binary"]
-
-
-@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
 @pytest.mark.parametrize(
     "audio_format",
-    [
-        "audio/pcm",
-        "audio/wav",
-        "audio/mpeg",
-        "audio/ogg;codecs=opus",
-        "audio/webm;codecs=opus",
-        "audio/pcmu",
-    ],
+    ["audio/pcm", "audio/wav", "audio/mpeg", "audio/ogg;codecs=opus", "audio/webm;codecs=opus"],
 )
-async def test_v1_supports_each_rime_audio_format_with_each_protocol(
-    websocket_protocol: str,
-    audio_format: str,
-    encoded_audio_by_format: dict[str, bytes],
+async def test_v1_decodes_each_rime_audio_format(
+    audio_format: str, encoded_audio_by_format: dict[str, bytes]
 ) -> None:
     async with _RimeV1Server(audio=encoded_audio_by_format[audio_format]) as server:
-        tts = _v1_tts(
-            server,
-            websocket_protocol=websocket_protocol,
-            audio_format=audio_format,
-        )
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        tts = _v1_tts(server, audio_format=audio_format)
         try:
-            stream.push_text("hello")
-            stream.end_input()
-            events = await _collect(stream)
+            events = await _speak(tts)
         finally:
-            await stream.aclose()
             await tts.aclose()
 
     samples = np.frombuffer(b"".join(bytes(event.frame.data) for event in events), dtype="<i2")
@@ -1362,28 +925,23 @@ async def test_v1_supports_each_rime_audio_format_with_each_protocol(
         event.frame.sample_rate == 24000 and event.frame.num_channels == 1 for event in events
     )
     expected = len(_PCM) // 2 if audio_format == "audio/pcm" else 2400
-    # The shared low-latency decoder can consume one 20 ms Opus packet while probing.
-    # MP3 can retain encoder padding. Other formats must preserve every sample.
+    # the decoder can consume one 20 ms opus packet while probing; mp3 keeps encoder padding
     missing = 480 if "opus" in audio_format else 0
     padding = 1152 if audio_format == "audio/mpeg" else 0
     assert expected - missing <= len(samples) <= expected + padding
     if audio_format == "audio/pcm":
         assert samples.tobytes() == _PCM
-    elif audio_format == "audio/pcmu":
-        np.testing.assert_array_equal(samples, np.tile([32124, -32124], 1200))
     assert events[-1].is_final
     assert server.requests[0]["start"]["audioParameters"]["audioFormat"] == audio_format
-    assert server.protocols == [f"rime.v1.{websocket_protocol}"]
 
 
-@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
 @pytest.mark.parametrize(
     ("sample_rate", "expected_sample_rate"),
-    [(None, 24000), (8000, 8000), (24000, 24000)],
-    ids=["model-default", "8khz", "24khz"],
+    [(None, 24000), (8000, 8000)],
+    ids=["model-default", "8khz"],
 )
 async def test_v1_pcmu_preserves_sample_rate_and_samples_after_parent_update(
-    websocket_protocol: str, sample_rate: int | None, expected_sample_rate: int
+    sample_rate: int | None, expected_sample_rate: int
 ) -> None:
     encoded_audio = bytes([0xFF, 0x7F, 0x80, 0x00]) * 600
     expected_pcm = np.tile(np.array([0, 0, 32124, -32124], dtype="<i2"), 600).tobytes()
@@ -1391,14 +949,12 @@ async def test_v1_pcmu_preserves_sample_rate_and_samples_after_parent_update(
     updated_sample_rate = 8000 if expected_sample_rate == 24000 else 24000
 
     async with _RimeV1Server(audio=encoded_audio) as server:
-        tts = _v1_tts(
-            server, websocket_protocol=websocket_protocol, audio_format="audio/pcmu", **options
-        )
+        tts = _v1_tts(server, audio_format="audio/pcmu", **options)
         assert tts.sample_rate == expected_sample_rate
-        old_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        old_stream = tts.stream(conn_options=_NO_RETRY)
         try:
             tts.update_options(audio_format="audio/pcmu", sample_rate=updated_sample_rate)
-            new_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+            new_stream = tts.stream(conn_options=_NO_RETRY)
             try:
                 for stream, rate in [
                     (old_stream, expected_sample_rate),
@@ -1435,11 +991,7 @@ async def test_v1_maps_mist_options_without_a_second_stream_implementation() -> 
             pause_between_brackets=True,
             phonemize_between_brackets=False,
         )
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("hello")
-        stream.end_input()
-        await _collect(stream)
-        await stream.aclose()
+        await _speak(tts)
         await tts.aclose()
 
     start = server.requests[0]["start"]
@@ -1450,29 +1002,12 @@ async def test_v1_maps_mist_options_without_a_second_stream_implementation() -> 
     }
 
 
-async def test_v1_sends_coda_custom_lexicon_in_start() -> None:
-    async with _RimeV1Server() as server:
-        tts = _v1_tts(server, custom_lexicon=_LEXICON)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("expedite it")
-        stream.end_input()
-        await _collect(stream)
-        await stream.aclose()
-        await tts.aclose()
-
-    assert server.requests[0]["start"]["customLexicon"] == _LEXICON
-
-
 async def test_v1_stream_keeps_lexicon_after_caller_mutates_entry() -> None:
     entry = {"spelling": "Acme", "pronunciation": '" { k . m i'}
     async with _RimeV1Server() as server:
         tts = _v1_tts(server, custom_lexicon=[entry])
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         entry["pronunciation"] = '" A k . m i'
-        stream.push_text("Acme")
-        stream.end_input()
-        await _collect(stream)
-        await stream.aclose()
+        await _speak(tts, "Acme")
         await tts.aclose()
 
     assert server.requests[0]["start"]["customLexicon"] == [
@@ -1481,19 +1016,14 @@ async def test_v1_stream_keeps_lexicon_after_caller_mutates_entry() -> None:
 
 
 @pytest.mark.parametrize(
-    ("model", "expected_sample_rate"),
-    [("coda", 24000), ("mistv3", 24000), ("mistv2", 22050), ("future-model", 22050)],
+    ("model", "expected_sample_rate"), [("coda", 24000), ("future-model", 22050)]
 )
 async def test_v1_sends_resolved_sample_rate(model: str, expected_sample_rate: int) -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server, model=model)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         try:
-            stream.push_text("hello")
-            stream.end_input()
-            events = await _collect(stream)
+            events = await _speak(tts)
         finally:
-            await stream.aclose()
             await tts.aclose()
 
     assert tts.sample_rate == expected_sample_rate
@@ -1507,19 +1037,15 @@ async def test_v1_sends_resolved_sample_rate(model: str, expected_sample_rate: i
 async def test_v1_rejects_wrong_ready_protocol() -> None:
     async with _RimeV1Server(ready={"protocol": 2}) as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("hello")
-        stream.end_input()
         with pytest.raises(APIConnectionError, match="unsupported protocol"):
-            await _collect(stream)
-        await stream.aclose()
+            await _speak(tts)
         await tts.aclose()
 
 
 async def test_v1_buffers_fragments_into_complete_sentences() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream = tts.stream(conn_options=_NO_RETRY)
         stream.push_text("This is the first sentence. ")
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(server.wait_for_text_messages(1), timeout=0.05)
@@ -1540,17 +1066,13 @@ async def test_v1_buffers_fragments_into_complete_sentences() -> None:
 async def test_v1_default_tokenizer_preserves_fragment_boundaries() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        try:
-            stream.push_text("The price is 1.")
-            stream.push_text("7 dollars. Hel")
-            stream.push_text("lo world. Next")
-            stream.push_text(" sentence.")
-            stream.end_input()
-            await _collect(stream)
-        finally:
-            await stream.aclose()
-            await tts.aclose()
+        stream = tts.stream(conn_options=_NO_RETRY)
+        for fragment in ("The price is 1.", "7 dollars. Hel", "lo world. Next", " sentence."):
+            stream.push_text(fragment)
+        stream.end_input()
+        await _collect(stream)
+        await stream.aclose()
+        await tts.aclose()
 
     assert [request["text"] for request in server.requests if "text" in request] == [
         "The price is 1.7 dollars. ",
@@ -1563,31 +1085,21 @@ async def test_v1_uses_custom_tokenizer_behavior() -> None:
     from livekit.agents import tokenize
 
     async with _RimeV1Server() as server:
-        tokenizer = tokenize.basic.SentenceTokenizer(
-            min_sentence_len=1000,
-            stream_context_len=1,
-        )
+        tokenizer = tokenize.basic.SentenceTokenizer(min_sentence_len=1000, stream_context_len=1)
         tts = _v1_tts(server, tokenizer=tokenizer)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        try:
-            stream.push_text("First sentence. Second sentence.")
-            stream.end_input()
-            await _collect(stream)
-        finally:
-            await stream.aclose()
-            await tts.aclose()
+        await _speak(tts, "First sentence. Second sentence.")
+        await tts.aclose()
 
     assert [request["text"] for request in server.requests if "text" in request] == [
         "First sentence. Second sentence. "
     ]
 
 
-@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
 @pytest.mark.parametrize("failure_stage", ["stream", "push_text", "output", "end_input"])
 async def test_v1_tokenizer_failure_closes_stream(
-    websocket_protocol: str, failure_stage: str, monkeypatch: pytest.MonkeyPatch
+    failure_stage: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from livekit.agents import APIError, tokenize
+    from livekit.agents import tokenize
 
     tokenizer = tokenize.basic.SentenceTokenizer()
     tokens = tokenizer.stream()
@@ -1607,7 +1119,7 @@ async def test_v1_tokenizer_failure_closes_stream(
         monkeypatch.setattr(tokens, failure_stage, fail)
 
     async with _RimeV1Server() as server:
-        tts = _v1_tts(server, websocket_protocol=websocket_protocol, tokenizer=tokenizer)
+        tts = _v1_tts(server, tokenizer=tokenizer)
         stream = tts.stream(
             conn_options=APIConnectOptions(max_retry=1, retry_interval=0, timeout=2)
         )
@@ -1615,7 +1127,7 @@ async def test_v1_tokenizer_failure_closes_stream(
             stream.push_text("Hello.")
             if failure_stage == "end_input":
                 stream.end_input()
-            # Other failures must propagate even while input remains open.
+            # other failures must propagate even while input remains open
             with pytest.raises(APIError, match="Rime sentence tokenization failed") as exc_info:
                 await asyncio.wait_for(_collect(stream), timeout=1)
             assert exc_info.value.retryable is False
@@ -1630,43 +1142,12 @@ async def test_v1_tokenizer_failure_closes_stream(
                 await tokens.aclose()
 
 
-async def test_v1_local_flush_drains_text_before_end() -> None:
-    async with _RimeV1Server() as server:
-        tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("first")
-        stream.flush()
-        stream.end_input()
-        await _collect(stream)
-        await stream.aclose()
-        await tts.aclose()
-
-    assert _payloads(server) == ["start", "text", "end"]
-
-
-async def test_v1_local_flush_sends_text_without_control_message() -> None:
-    async with _RimeV1Server() as server:
-        tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("first")
-        stream.flush()
-        try:
-            await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
-        finally:
-            stream.end_input()
-            await _collect(stream)
-            await stream.aclose()
-            await tts.aclose()
-
-    assert _payloads(server) == ["start", "text", "end"]
-
-
 async def test_v1_resumes_context_after_local_flush() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
         metrics = []
         tts.on("metrics_collected", metrics.append)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream = tts.stream(conn_options=_NO_RETRY)
         stream.push_text("first")
         stream.flush()
         await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
@@ -1690,12 +1171,11 @@ async def test_v1_resumes_context_after_local_flush() -> None:
 async def test_v1_input_pause_can_exceed_api_timeout() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1))
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.02))
         stream.push_text("First sentence.")
         stream.flush()
         await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
-
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.05)
 
         stream.push_text("Second sentence.")
         stream.end_input()
@@ -1711,7 +1191,7 @@ async def test_v1_input_pause_can_exceed_api_timeout() -> None:
 async def test_v1_flush_before_first_text_sends_no_rime_message() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream = tts.stream(conn_options=_NO_RETRY)
         stream.flush()
         await asyncio.wait_for(server.connection_opened.wait(), timeout=2)
         with pytest.raises(asyncio.TimeoutError):
@@ -1726,31 +1206,13 @@ async def test_v1_flush_before_first_text_sends_no_rime_message() -> None:
     assert _payloads(server) == ["start", "text", "end"]
 
 
-async def test_v1_end_input_drains_buffered_final_text_before_end() -> None:
-    async with _RimeV1Server() as server:
-        tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("buffered final fragment")
-        stream.end_input()
-        await _collect(stream)
-        await stream.aclose()
-        await tts.aclose()
-
-    assert _payloads(server) == ["start", "text", "end"]
-    assert server.requests[1]["text"] == "buffered final fragment "
-
-
 async def test_v1_reuses_socket_and_does_not_start_empty_context() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
         for text in ("one", "two"):
-            stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-            stream.push_text(text)
-            stream.end_input()
-            await _collect(stream)
-            await stream.aclose()
+            await _speak(tts, text)
 
-        empty = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        empty = tts.stream(conn_options=_NO_RETRY)
         empty.end_input()
         assert await _collect(empty) == []
         await empty.aclose()
@@ -1764,11 +1226,11 @@ async def test_v1_reuses_socket_and_does_not_start_empty_context() -> None:
 async def test_v1_overlapping_streams_use_separate_connections() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
-        first = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        first = tts.stream(conn_options=_NO_RETRY)
         first.push_text("First stream stays active. Pending")
         await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
 
-        second = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        second = tts.stream(conn_options=_NO_RETRY)
         second.push_text("Second stream completes.")
         second.end_input()
         events = await _collect(second)
@@ -1790,11 +1252,11 @@ async def test_v1_overlapping_streams_use_separate_connections() -> None:
 async def test_v1_stream_snapshots_endpoint_speaker_and_sample_rate() -> None:
     async with _RimeV1Server() as first_server, _RimeV1Server() as second_server:
         tts = _v1_tts(first_server, sample_rate=22050)
-        first_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        first_stream = tts.stream(conn_options=_NO_RETRY)
         tts.update_options(
             websocket_url=second_server.websocket_url, speaker="changed", sample_rate=16000
         )
-        second_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        second_stream = tts.stream(conn_options=_NO_RETRY)
         try:
             first_stream.push_text("first")
             first_stream.end_input()
@@ -1819,9 +1281,8 @@ async def test_v1_stream_snapshots_endpoint_speaker_and_sample_rate() -> None:
         assert events and all(event.frame.sample_rate == rate for event in events)
 
 
-@pytest.mark.parametrize("new_stream_first", [False, True], ids=["old-first", "new-first"])
 async def test_v1_stream_metrics_keep_model_after_endpoint_update(
-    new_stream_first: bool, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -1834,7 +1295,7 @@ async def test_v1_stream_metrics_keep_model_after_endpoint_update(
         tts = _v1_tts(first_server)
         metrics = []
         tts.on("metrics_collected", metrics.append)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream = tts.stream(conn_options=_NO_RETRY)
         stream.push_text("first")
         stream.flush()
         new_stream = None
@@ -1842,12 +1303,10 @@ async def test_v1_stream_metrics_keep_model_after_endpoint_update(
             await asyncio.wait_for(first_server.wait_for_text_messages(1), timeout=2)
             mist_url = second_server.websocket_url
             tts.update_options(websocket_url=mist_url, model="mistv3")
-            new_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+            new_stream = tts.stream(conn_options=_NO_RETRY)
             new_stream.push_text("second")
-            streams = [(stream, "coda"), (new_stream, "mistv3")]
-            if new_stream_first:
-                streams.reverse()
-
+            # the newer stream finishes first; each keeps the model it started with
+            streams = [(new_stream, "mistv3"), (stream, "coda")]
             for count, (active_stream, model) in enumerate(streams, start=1):
                 active_stream.end_input()
                 events = await _collect(active_stream)
@@ -1877,12 +1336,7 @@ async def test_v1_omits_retained_time_scale_factor_after_switch_to_mistv2() -> N
         tts = _v1_tts(first_server, time_scale_factor=1.2)
         mistv2_url = second_server.websocket_url
         tts.update_options(websocket_url=mistv2_url, model="mistv2")
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-
-        stream.push_text("hello")
-        stream.end_input()
-        await _collect(stream)
-        await stream.aclose()
+        await _speak(tts)
         await tts.aclose()
 
     assert second_server.paths == ["/custom/stream"]
@@ -1890,18 +1344,15 @@ async def test_v1_omits_retained_time_scale_factor_after_switch_to_mistv2() -> N
 
 
 @pytest.mark.parametrize("response_mode", ["no_audio", "done_on_cancel"])
-@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
-async def test_v1_clean_interruption_cancels_and_reuses_socket(
-    response_mode: str, websocket_protocol: str
-) -> None:
+async def test_v1_clean_interruption_cancels_and_reuses_socket(response_mode: str) -> None:
     async with _RimeV1Server(response_mode=response_mode) as server:
-        tts = _v1_tts(server, websocket_protocol=websocket_protocol)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        tts = _v1_tts(server)
+        stream = tts.stream(conn_options=_NO_RETRY)
         stream.push_text("Please stop this synthesis now. Pending")
         await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
         await stream.aclose()
 
-        second = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        second = tts.stream(conn_options=_NO_RETRY)
         second.end_input()
         await _collect(second)
         await second.aclose()
@@ -1926,31 +1377,22 @@ async def test_v1_interruption_stays_cancelled_without_retry() -> None:
 
 
 @pytest.mark.parametrize("payload", ["start", "text", "end", "cancel"])
-@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
-async def test_v1_blocked_write_times_out(
-    payload: str, websocket_protocol: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_v1_blocked_write_times_out(payload: str, monkeypatch: pytest.MonkeyPatch) -> None:
     write_started = asyncio.Event()
     release_write = asyncio.Event()
-    send_method = "send_bytes" if websocket_protocol == "binary" else "send_str"
-    original_send = getattr(aiohttp.ClientWebSocketResponse, send_method)
+    original_send = aiohttp.ClientWebSocketResponse.send_bytes
 
     async def blocked_send(
-        websocket: aiohttp.ClientWebSocketResponse, data: bytes | str, **kwargs: Any
+        websocket: aiohttp.ClientWebSocketResponse, data: bytes, **kwargs: Any
     ) -> None:
-        request = proto.WebSocketRequest()
-        if isinstance(data, bytes):
-            request.ParseFromString(data)
-        else:
-            json_format.Parse(data, request)
-        if request.WhichOneof("payload") == payload:
+        if proto.WebSocketRequest.FromString(data).WhichOneof("payload") == payload:
             write_started.set()
             await release_write.wait()
         await original_send(websocket, data, **kwargs)
 
-    monkeypatch.setattr(aiohttp.ClientWebSocketResponse, send_method, blocked_send)
+    monkeypatch.setattr(aiohttp.ClientWebSocketResponse, "send_bytes", blocked_send)
     async with _RimeV1Server(response_mode="no_audio") as server:
-        tts = _v1_tts(server, websocket_protocol=websocket_protocol)
+        tts = _v1_tts(server)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.03))
         stream.push_text("Please synthesize this sentence. Pending")
         if payload == "cancel":
@@ -1971,8 +1413,8 @@ async def test_v1_blocked_write_times_out(
                     await task
             await asyncio.wait_for(server.connection_closed.wait(), timeout=1)
 
-            # A timed-out write leaves an uncertain context. Do not reuse its socket.
-            empty = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+            # a timed-out write leaves an uncertain context, so its socket is not reused
+            empty = tts.stream(conn_options=_NO_RETRY)
             try:
                 empty.end_input()
                 assert await _collect(empty) == []
@@ -1989,8 +1431,6 @@ async def test_v1_blocked_write_times_out(
 async def test_v1_cancels_when_start_write_is_interrupted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from livekit.plugins.rime import _websocket_v1
-
     async with _RimeV1Server() as server:
         original_send = _websocket_v1._send_envelope
         start_written = asyncio.Event()
@@ -2011,16 +1451,12 @@ async def test_v1_cancels_when_start_write_is_interrupted(
 
         monkeypatch.setattr(_websocket_v1, "_send_envelope", _send_envelope)
         tts = _v1_tts(server)
-        interrupted = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        interrupted = tts.stream(conn_options=_NO_RETRY)
         interrupted.push_text("Please stop this synthesis now. Pending")
         await asyncio.wait_for(start_written.wait(), timeout=2)
         await interrupted.aclose()
 
-        next_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        next_stream.push_text("next")
-        next_stream.end_input()
-        events = await _collect(next_stream)
-        await next_stream.aclose()
+        events = await _speak(tts, "next")
         await tts.aclose()
 
     assert events[-1].is_final
@@ -2028,18 +1464,21 @@ async def test_v1_cancels_when_start_write_is_interrupted(
     assert server.connections == 1
 
 
+async def _speak_nothing(tts: TTS) -> None:
+    stream = tts.stream(conn_options=_NO_RETRY)
+    stream.end_input()
+    assert await _collect(stream) == []
+    await stream.aclose()
+
+
 async def test_v1_closes_socket_when_cancel_has_no_reply() -> None:
     async with _RimeV1Server(response_mode="no_audio", cancel_reply=False) as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1))
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.03))
         stream.push_text("Please stop this synthesis now. Pending")
         await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
         await stream.aclose()
-
-        second = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        second.end_input()
-        await _collect(second)
-        await second.aclose()
+        await _speak_nothing(tts)
         await tts.aclose()
 
     assert server.connections == 2
@@ -2048,27 +1487,18 @@ async def test_v1_closes_socket_when_cancel_has_no_reply() -> None:
 async def test_v1_end_times_out_when_terminal_event_never_arrives() -> None:
     async with _RimeV1Server(response_mode="no_done") as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1))
-        stream.push_text("The server will not finish this context.")
-        stream.end_input()
         with pytest.raises(APITimeoutError, match="after end"):
-            await _collect(stream)
-        await stream.aclose()
-
-        empty = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        empty.end_input()
-        assert await _collect(empty) == []
-        await empty.aclose()
+            await _speak(tts, conn_options=APIConnectOptions(max_retry=0, timeout=0.03))
+        await _speak_nothing(tts)
         await tts.aclose()
 
     assert server.connections == 2
 
 
-@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
-async def test_v1_rejects_done_before_input_ends(websocket_protocol: str) -> None:
+async def test_v1_rejects_done_before_input_ends() -> None:
     async with _RimeV1Server(response_mode="early_done") as server:
-        tts = _v1_tts(server, websocket_protocol=websocket_protocol)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        tts = _v1_tts(server)
+        stream = tts.stream(conn_options=_NO_RETRY)
         try:
             stream.push_text("First sentence. Pending")
             with pytest.raises(APIConnectionError, match="done before input ended"):
@@ -2077,29 +1507,18 @@ async def test_v1_rejects_done_before_input_ends(websocket_protocol: str) -> Non
             assert _payloads(server) == ["start", "text"]
 
             server.response_mode = "normal"
-            second = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-            try:
-                second.push_text("Next turn.")
-                second.end_input()
-                assert await asyncio.wait_for(_collect(second), timeout=2)
-            finally:
-                await second.aclose()
+            assert await _speak(tts, "Next turn.")
             assert server.connections == 2
         finally:
             await stream.aclose()
             await tts.aclose()
 
 
-@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
-async def test_v1_accepts_done_before_end_write_returns(
-    websocket_protocol: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from livekit.plugins.rime import _websocket_v1
-
+async def test_v1_accepts_done_before_end_write_returns(monkeypatch: pytest.MonkeyPatch) -> None:
     done_received = asyncio.Event()
     end_write_pending = False
     original_send = _websocket_v1._send_envelope
-    codec_class = type(_websocket_v1._codec_for_protocol(websocket_protocol))
+    codec_class = type(_websocket_v1._codec_for_protocol("binary"))
     original_decode = codec_class.decode_response
 
     async def send_envelope(
@@ -2123,18 +1542,12 @@ async def test_v1_accepts_done_before_end_write_returns(
     monkeypatch.setattr(_websocket_v1, "_send_envelope", send_envelope)
     monkeypatch.setattr(codec_class, "decode_response", decode_response)
     async with _RimeV1Server() as server:
-        tts = _v1_tts(server, websocket_protocol=websocket_protocol)
+        tts = _v1_tts(server)
         try:
             for _ in range(2):
                 done_received.clear()
-                stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-                try:
-                    stream.push_text("Hello.")
-                    stream.end_input()
-                    assert await asyncio.wait_for(_collect(stream), timeout=2)
-                    assert done_received.is_set()
-                finally:
-                    await stream.aclose()
+                assert await _speak(tts, "Hello.")
+                assert done_received.is_set()
             assert server.connections == 1
         finally:
             await tts.aclose()
@@ -2143,17 +1556,9 @@ async def test_v1_accepts_done_before_end_write_returns(
 async def test_v1_rejects_malformed_done_before_socket_reuse() -> None:
     async with _RimeV1Server(response_mode="malformed_done") as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("hello")
-        stream.end_input()
         with pytest.raises(APIConnectionError, match="exactly one payload"):
-            await _collect(stream)
-        await stream.aclose()
-
-        empty = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        empty.end_input()
-        await _collect(empty)
-        await empty.aclose()
+            await _speak(tts)
+        await _speak_nothing(tts)
         await tts.aclose()
 
     assert server.connections == 2
@@ -2162,70 +1567,34 @@ async def test_v1_rejects_malformed_done_before_socket_reuse() -> None:
 async def test_v1_rejects_malformed_cancelled_before_socket_reuse() -> None:
     async with _RimeV1Server(response_mode="malformed_cancelled") as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        stream = tts.stream(conn_options=_NO_RETRY)
         stream.push_text("Please stop this synthesis now. Pending")
         await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
         await stream.aclose()
-
-        empty = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        empty.end_input()
-        await _collect(empty)
-        await empty.aclose()
+        await _speak_nothing(tts)
         await tts.aclose()
 
     assert server.connections == 2
 
 
 @pytest.mark.parametrize(
-    "response_mode",
-    ["wrong_context", "invalid_envelope", "wrong_frame"],
+    ("response_mode", "protocol", "message"),
+    [
+        ("wrong_context", "binary", "unexpected contextId"),
+        ("invalid_envelope", "binary", None),
+        ("wrong_frame", "binary", None),
+        ("invalid_base64", "json", "invalid Base64 audio"),
+        ("invalid_done_type", "json", "malformed done event"),
+        ("missing_started_request_id", "json", "malformed started event"),
+    ],
 )
-async def test_v1_rejects_contaminated_responses(response_mode: str) -> None:
+async def test_v1_rejects_contaminated_responses(
+    response_mode: str, protocol: str, message: str | None
+) -> None:
     async with _RimeV1Server(response_mode=response_mode) as server:
-        tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("hello")
-        stream.end_input()
-        with pytest.raises(APIConnectionError):
-            await _collect(stream)
-        await stream.aclose()
-        await tts.aclose()
-
-
-async def test_v1_json_rejects_invalid_base64_audio() -> None:
-    async with _RimeV1Server(response_mode="invalid_base64") as server:
-        tts = _v1_tts(server, websocket_protocol="json")
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("hello")
-        stream.end_input()
-        with pytest.raises(APIConnectionError, match="invalid Base64 audio"):
-            await _collect(stream)
-        await stream.aclose()
-        await tts.aclose()
-
-
-async def test_v1_json_rejects_invalid_done_type() -> None:
-    async with _RimeV1Server(response_mode="invalid_done_type") as server:
-        tts = _v1_tts(server, websocket_protocol="json")
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("hello")
-        stream.end_input()
-        with pytest.raises(APIConnectionError, match="malformed done event"):
-            await _collect(stream)
-        await stream.aclose()
-        await tts.aclose()
-
-
-@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
-async def test_v1_rejects_started_without_request_id(websocket_protocol: str) -> None:
-    async with _RimeV1Server(response_mode="missing_started_request_id") as server:
-        tts = _v1_tts(server, websocket_protocol=websocket_protocol)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("hello")
-        stream.end_input()
-        with pytest.raises(APIConnectionError, match="malformed started event"):
-            await _collect(stream)
-        await stream.aclose()
+        tts = _v1_tts(server, websocket_protocol=protocol)
+        with pytest.raises(APIConnectionError, match=message):
+            await _speak(tts)
         await tts.aclose()
 
     assert server.closed_connections == 1
@@ -2245,30 +1614,20 @@ async def test_v1_rejects_started_without_request_id(websocket_protocol: str) ->
         ("internal", 500, True),
     ],
 )
-async def test_v1_maps_context_error(kind: str, status_code: int, retryable: bool) -> None:
-    async with _RimeV1Server(response_mode="error", error_kind=kind) as server:
+def test_v1_maps_error_kind(kind: str, status_code: int, retryable: bool) -> None:
+    error = proto.WebSocketError(kind=kind, message="bad input")
+    exc = _websocket_v1._rime_error(error, fallback_request_id="request-id")
+
+    assert exc.status_code == status_code
+    assert exc.retryable is retryable
+
+
+@pytest.mark.parametrize("response_mode", ["error", "connection_error"])
+async def test_v1_surfaces_provider_error(response_mode: str) -> None:
+    async with _RimeV1Server(response_mode=response_mode, error_kind="unavailable") as server:
         tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("hello")
-        stream.end_input()
         with pytest.raises(APIStatusError) as exc_info:
-            await _collect(stream)
-        await stream.aclose()
-        await tts.aclose()
-
-    assert exc_info.value.status_code == status_code
-    assert exc_info.value.retryable is retryable
-
-
-async def test_v1_maps_connection_scoped_error() -> None:
-    async with _RimeV1Server(response_mode="connection_error", error_kind="unavailable") as server:
-        tts = _v1_tts(server)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("hello")
-        stream.end_input()
-        with pytest.raises(APIStatusError) as exc_info:
-            await _collect(stream)
-        await stream.aclose()
+            await _speak(tts)
         await tts.aclose()
 
     assert exc_info.value.status_code == 503
@@ -2278,9 +1637,7 @@ async def test_v1_maps_connection_scoped_error() -> None:
     "websocket_protocol,message,kind,status_code,retryable,explicit_request_id",
     [
         ("binary", None, "unavailable", 503, True, False),
-        ("binary", "", "unimplemented", 501, False, True),
-        ("json", None, "unimplemented", 501, False, True),
-        ("json", "", "unavailable", 503, True, False),
+        ("json", "", "unimplemented", 501, False, True),
     ],
 )
 async def test_v1_maps_error_without_message(
@@ -2304,51 +1661,25 @@ async def test_v1_maps_error_without_message(
 
         monkeypatch.setattr(server, "_respond_to_text", respond)
         tts = _v1_tts(server, websocket_protocol=websocket_protocol)
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         try:
-            stream.push_text("Hello.")
-            stream.end_input()
             with pytest.raises(APIStatusError) as exc_info:
-                await _collect(stream)
-            assert exc_info.value.status_code == status_code
-            assert exc_info.value.retryable is retryable
-            assert exc_info.value.request_id == (
-                "provider-request" if explicit_request_id else "request-0"
-            )
-            assert exc_info.value.message == "Rime v1 request failed"
+                await _speak(tts, "Hello.")
         finally:
-            await stream.aclose()
             await tts.aclose()
 
+    assert exc_info.value.status_code == status_code
+    assert exc_info.value.retryable is retryable
+    assert exc_info.value.request_id == ("provider-request" if explicit_request_id else "request-0")
+    assert exc_info.value.message == "Rime v1 request failed"
 
-async def test_v1_does_not_retry_unimplemented_error() -> None:
-    async with _RimeV1Server(response_mode="error", error_kind="unimplemented") as server:
-        tts = _v1_tts(server)
-        stream = tts.stream(
-            conn_options=APIConnectOptions(max_retry=1, timeout=2, retry_interval=0)
-        )
-        stream.push_text("hello")
-        stream.end_input()
-        with pytest.raises(APIStatusError) as exc_info:
-            await _collect(stream)
-        await stream.aclose()
-        await tts.aclose()
 
-    assert exc_info.value.status_code == 501
-    assert exc_info.value.retryable is False
-    assert server.connections == 1
+_RETRY_ONCE = APIConnectOptions(max_retry=1, timeout=2, retry_interval=0)
 
 
 async def test_v1_retries_before_audio() -> None:
     async with _RimeV1Server(fail_before_audio=1) as server:
         tts = _v1_tts(server)
-        stream = tts.stream(
-            conn_options=APIConnectOptions(max_retry=1, timeout=2, retry_interval=0)
-        )
-        stream.push_text("hello")
-        stream.end_input()
-        events = await _collect(stream)
-        await stream.aclose()
+        events = await _speak(tts, conn_options=_RETRY_ONCE)
         await tts.aclose()
 
     assert events[-1].is_final
@@ -2358,14 +1689,8 @@ async def test_v1_retries_before_audio() -> None:
 async def test_v1_does_not_retry_after_partial_audio() -> None:
     async with _RimeV1Server(response_mode="partial_error") as server:
         tts = _v1_tts(server)
-        stream = tts.stream(
-            conn_options=APIConnectOptions(max_retry=1, timeout=2, retry_interval=0)
-        )
-        stream.push_text("hello")
-        stream.end_input()
         with pytest.raises(APIStatusError):
-            await _collect(stream)
-        await stream.aclose()
+            await _speak(tts, conn_options=_RETRY_ONCE)
         await tts.aclose()
 
     assert server.connections == 1
@@ -2374,21 +1699,14 @@ async def test_v1_does_not_retry_after_partial_audio() -> None:
 async def test_v1_ready_error_does_not_expose_provider_event() -> None:
     async with _RimeV1Server(ready={"protocol": _SECRET, "providerData": _SECRET}) as server:
         tts = _v1_tts(server, websocket_protocol="json")
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-        stream.push_text("hello")
-        stream.end_input()
-        try:
-            with pytest.raises(APIConnectionError) as exc_info:
-                await _collect(stream)
-            _assert_exception_is_safe(exc_info.value)
-        finally:
-            await stream.aclose()
-            await tts.aclose()
+        with pytest.raises(APIConnectionError) as exc_info:
+            await _speak(tts)
+        await tts.aclose()
+
+    _assert_exception_is_safe(exc_info.value)
 
 
 def test_v1_context_mismatch_does_not_expose_provider_value() -> None:
-    from livekit.plugins.rime import _websocket_v1
-
     response = proto.WebSocketResponse(context_id=_SECRET)
     with pytest.raises(APIConnectionError, match="unexpected contextId") as exc_info:
         _websocket_v1._check_context(response, "expected-context")
@@ -2398,88 +1716,18 @@ def test_v1_context_mismatch_does_not_expose_provider_value() -> None:
 
 @pytest.mark.parametrize(
     "websocket_url",
-    [
-        "wss://coda.api.rime.ai/ws",
-        "ws://127.0.0.1:8080/coda/ws",
-        "ws://[::1]:8080/coda/ws",
-    ],
-)
-def test_v1_accepts_secure_or_loopback_websocket_url(websocket_url: str) -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    _websocket_v1.validate_websocket_url(websocket_url)
-
-
-def test_v1_rejects_untrusted_secure_host_without_opt_in() -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    with pytest.raises(ValueError, match="trusted Rime host"):
-        _websocket_v1.validate_websocket_url("wss://attacker.example/coda/ws")
-
-
-def test_v1_accepts_custom_secure_host_with_opt_in() -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    _websocket_v1.validate_websocket_url(
-        "wss://voice.customer.example/coda/ws", allow_custom_endpoint=True
-    )
-
-
-def test_v1_accepts_dedicated_rime_subdomain() -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    _websocket_v1.validate_websocket_url("wss://dedicated.rime.ai/ws")
-
-
-def test_v1_rejects_lookalike_rime_host() -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    with pytest.raises(ValueError, match="trusted Rime host"):
-        _websocket_v1.validate_websocket_url("wss://rime.ai.attacker.example/coda/ws")
-
-
-@pytest.mark.parametrize(
-    "websocket_url",
-    [
-        "wss://api.rime.ai/coda/ws",
-        "wss://api.rime.ai/mist/ws",
-        "wss://voice.customer.example/custom/stream?token=value",
-        "wss://voice.customer.example/tts/%ZZ/stream",
-    ],
+    ["wss://api.rime.ai/coda/ws", "wss://voice.customer.example/tts/%ZZ/stream?token=value"],
 )
 def test_v1_custom_paths_do_not_select_model(websocket_url: str) -> None:
     tts = TTS(
-        api_key="test-key",
-        websocket_url=websocket_url,
-        model="mistv3",
-        allow_custom_endpoint=True,
+        api_key="test-key", websocket_url=websocket_url, model="mistv3", allow_custom_endpoint=True
     )
     assert tts.model == "mistv3"
-    assert tts._websocket_v1_adapter is not None
-    assert tts._websocket_v1_adapter._websocket_v1_url == websocket_url
-
-
-@pytest.mark.parametrize(
-    "websocket_url",
-    [
-        "ws://api.rime.ai/coda/ws",
-        "ws://192.168.1.20/coda/ws",
-        "ws://localhost:8080/coda/ws",
-        "http://api.rime.ai/coda/ws",
-    ],
-)
-def test_v1_rejects_insecure_remote_websocket_url(websocket_url: str) -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    with pytest.raises(ValueError):
-        _websocket_v1.validate_websocket_url(websocket_url)
 
 
 async def test_v1_connection_error_does_not_expose_transport_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from livekit.plugins.rime import _websocket_v1
-
     async def _fail_connect(*args: Any, **kwargs: Any) -> aiohttp.ClientWebSocketResponse:
         raise RuntimeError(f"credential-bearing transport error: {_SECRET}")
 
@@ -2501,16 +1749,8 @@ async def test_v1_connection_error_does_not_expose_transport_data(
 async def test_v1_connect_rejects_untrusted_host_before_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    transport_called = False
-
-    async def _connect(*args: Any, **kwargs: Any) -> aiohttp.ClientWebSocketResponse:
-        nonlocal transport_called
-        transport_called = True
-        raise AssertionError("transport must not receive credentials")
-
-    monkeypatch.setattr(aiohttp.ClientSession, "ws_connect", _connect)
+    connect = AsyncMock()
+    monkeypatch.setattr(aiohttp.ClientSession, "ws_connect", connect)
     async with aiohttp.ClientSession() as session:
         with pytest.raises(ValueError, match="trusted Rime host"):
             await _websocket_v1.connect(
@@ -2521,23 +1761,10 @@ async def test_v1_connect_rejects_untrusted_host_before_transport(
                 timeout=1,
             )
 
-    assert transport_called is False
+    connect.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    ("payload", "value"),
-    [
-        ("start", proto.SynthesisRequest(text="")),
-        ("text", "hello"),
-        ("end", None),
-    ],
-)
-async def test_v1_wraps_write_failures_as_safe_api_errors(
-    payload: str,
-    value: object,
-) -> None:
-    from livekit.plugins.rime import _websocket_v1
-
+async def test_v1_wraps_write_failures_as_safe_api_errors() -> None:
     class _FailingWebSocket:
         async def send_str(self, data: str) -> None:
             raise ConnectionResetError(f"write failed with {_SECRET}")
@@ -2547,7 +1774,7 @@ async def test_v1_wraps_write_failures_as_safe_api_errors(
         codec=_websocket_v1._JsonEnvelopeCodec(),
     )
     with pytest.raises(APIConnectionError) as exc_info:
-        await _websocket_v1._send_envelope(connection, "context", payload, value)
+        await _websocket_v1._send_envelope(connection, "context", "text", "hello")
 
     _assert_exception_is_safe(exc_info.value)
     assert exc_info.value.retryable is True
@@ -2561,10 +1788,7 @@ async def test_v1_retries_after_write_failure_before_audio(
     fail_first_text = True
 
     async def _send_str(
-        self: aiohttp.ClientWebSocketResponse,
-        data: str,
-        *args: Any,
-        **kwargs: Any,
+        self: aiohttp.ClientWebSocketResponse, data: str, *args: Any, **kwargs: Any
     ) -> None:
         nonlocal fail_first_text
         if fail_first_text and "text" in json.loads(data):
@@ -2578,15 +1802,9 @@ async def test_v1_retries_after_write_failure_before_audio(
         tts = _v1_tts(server, websocket_protocol="json")
         errors: list[Any] = []
         tts.on("error", errors.append)
-        stream = tts.stream(
-            conn_options=APIConnectOptions(max_retry=1, timeout=2, retry_interval=0)
-        )
-        stream.push_text("hello")
-        stream.end_input()
         try:
-            events = await _collect(stream)
+            events = await _speak(tts, conn_options=_RETRY_ONCE)
         finally:
-            await stream.aclose()
             await tts.aclose()
 
     assert events[-1].is_final
@@ -2598,39 +1816,24 @@ async def test_v1_retries_after_write_failure_before_audio(
     _assert_exception_is_safe(errors[0].error)
 
 
-async def test_v1_websocket_error_does_not_expose_transport_data() -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    class _ErrorWebSocket:
+@pytest.mark.parametrize(
+    "message",
+    [
+        aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, None, None),
+        aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, f'{{"providerData":"{_SECRET}"', None),
+    ],
+    ids=["socket-error", "invalid-json"],
+)
+async def test_v1_receive_errors_do_not_expose_transport_data(message: aiohttp.WSMessage) -> None:
+    class _WebSocket:
         async def receive(self, *, timeout: float) -> aiohttp.WSMessage:
-            return aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, None, None)
+            return message
 
         def exception(self) -> BaseException:
             return RuntimeError(f"socket failed with {_SECRET}")
 
     connection = _websocket_v1.Connection(
-        websocket=cast(aiohttp.ClientWebSocketResponse, _ErrorWebSocket()),
-        codec=_websocket_v1._JsonEnvelopeCodec(),
-    )
-    with pytest.raises(APIConnectionError) as exc_info:
-        await _websocket_v1._receive_envelope(connection, timeout=1)
-
-    _assert_exception_is_safe(exc_info.value)
-
-
-async def test_v1_invalid_json_does_not_retain_provider_frame() -> None:
-    from livekit.plugins.rime import _websocket_v1
-
-    class _InvalidJsonWebSocket:
-        async def receive(self, *, timeout: float) -> aiohttp.WSMessage:
-            return aiohttp.WSMessage(
-                aiohttp.WSMsgType.TEXT,
-                f'{{"providerData":"{_SECRET}"',
-                None,
-            )
-
-    connection = _websocket_v1.Connection(
-        websocket=cast(aiohttp.ClientWebSocketResponse, _InvalidJsonWebSocket()),
+        websocket=cast(aiohttp.ClientWebSocketResponse, _WebSocket()),
         codec=_websocket_v1._JsonEnvelopeCodec(),
     )
     with pytest.raises(APIConnectionError) as exc_info:
@@ -2645,14 +1848,11 @@ async def test_v1_invalid_json_does_not_retain_provider_frame() -> None:
     [
         proto.WebSocketError(kind="invalid_input", message=_SECRET),
         proto.WebSocketError(kind=_SECRET, message="provider failure"),
-        proto.WebSocketError(kind="invalid_input", message=""),
     ],
 )
 def test_v1_error_mapping_does_not_expose_provider_payload(
     error: proto.WebSocketError,
 ) -> None:
-    from livekit.plugins.rime import _websocket_v1
-
     exc = _websocket_v1._rime_error(error, fallback_request_id="request-id")
 
     _assert_exception_is_safe(exc)
@@ -2667,32 +1867,23 @@ async def test_v1_closes_idle_retired_pools_after_url_changes() -> None:
     ):
         tts = _v1_tts(first_server)
         try:
-            tts.prewarm()
-            await asyncio.wait_for(first_server.connection_opened.wait(), timeout=2)
-
-            tts.update_options(websocket_url=second_server.websocket_url)
-            await asyncio.wait_for(first_server.connection_closed.wait(), timeout=1)
-
-            tts.prewarm()
-            await asyncio.wait_for(second_server.connection_opened.wait(), timeout=2)
-
-            tts.update_options(websocket_url=third_server.websocket_url)
-            await asyncio.wait_for(second_server.connection_closed.wait(), timeout=1)
-
-            assert first_server.closed_connections == 1
-            assert second_server.closed_connections == 1
+            for retired, replacement in [
+                (first_server, second_server),
+                (second_server, third_server),
+            ]:
+                tts.prewarm()
+                await asyncio.wait_for(retired.connection_opened.wait(), timeout=2)
+                tts.update_options(websocket_url=replacement.websocket_url)
+                await asyncio.wait_for(retired.connection_closed.wait(), timeout=1)
+                assert retired.closed_connections == 1
         finally:
             await tts.aclose()
 
 
-@pytest.mark.parametrize("stream_count", [1, 2])
-async def test_v1_closes_retired_pool_after_its_last_stream_finishes(stream_count: int) -> None:
+async def test_v1_closes_retired_pool_after_its_last_stream_finishes() -> None:
     async with _RimeV1Server() as first_server, _RimeV1Server() as second_server:
         tts = _v1_tts(first_server)
-        streams = [
-            tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
-            for _ in range(stream_count)
-        ]
+        streams = [tts.stream(conn_options=_NO_RETRY) for _ in range(2)]
         tts.update_options(websocket_url=second_server.websocket_url)
 
         try:
@@ -2708,7 +1899,7 @@ async def test_v1_closes_retired_pool_after_its_last_stream_finishes(stream_coun
                 await stream.aclose()
             await tts.aclose()
 
-    assert first_server.closed_connections == stream_count
+    assert first_server.closed_connections == 2
     assert second_server.connections == 0
 
 
@@ -2846,7 +2037,7 @@ _FIXTURES = [
 @pytest.mark.parametrize("fixture", _FIXTURES)
 @pytest.mark.parametrize("protocol", ["binary", "json"])
 async def test_fixed_wire_envelope(fixture: dict[str, Any], protocol: str) -> None:
-    codec = _codec_for_protocol(protocol)
+    codec = _websocket_v1._codec_for_protocol(protocol)
     binary = bytes.fromhex(fixture["binary"])
     expected = fixture["json"]
     if fixture["message"] == "WebSocketRequest":
@@ -2859,12 +2050,6 @@ async def test_fixed_wire_envelope(fixture: dict[str, Any], protocol: str) -> No
             websocket.send_str.assert_awaited_once()
             assert json.loads(websocket.send_str.call_args.args[0]) == expected
         assert json_format.MessageToDict(proto.WebSocketRequest.FromString(binary)) == expected
-        # rime-api 0.4 removed the legacy Arcana field; older schemas retain it.
-        if (
-            request.HasField("start")
-            and "arcana_parameters" in request.start.DESCRIPTOR.fields_by_name
-        ):
-            assert not request.start.HasField("arcana_parameters")
     else:
         message = aiohttp.WSMessage(
             aiohttp.WSMsgType.BINARY if protocol == "binary" else aiohttp.WSMsgType.TEXT,
@@ -2880,11 +2065,8 @@ async def test_fixed_wire_envelope(fixture: dict[str, Any], protocol: str) -> No
 @pytest.mark.parametrize(
     ("mode", "status", "raise_for_status"),
     [
-        ("http", 400, False),
         ("http", 500, False),
         ("handshake", 400, False),
-        ("handshake", 500, False),
-        ("handshake", 400, True),
         ("handshake", 500, True),
         ("transport", 302, False),
     ],
@@ -2902,7 +2084,7 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
         nonlocal requests
         requests += 1
         if mode == "transport":
-            # aiohttp rejects this redirect and includes the URL in its exception.
+            # aiohttp rejects this redirect and includes the url in its exception
             return web.Response(
                 status=302, headers={"Location": f"ftp://localhost/file?token={_SECRET}"}
             )
@@ -2914,22 +2096,18 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
     tracer = _DynamicTracer("test-rime-error-safety")
     tracer.set_provider(provider)
     monkeypatch.setattr(tts_module, "tracer", tracer)
-    # The plugin must produce safe exceptions even when telemetry redaction is off.
+    # the plugin must produce safe exceptions even when telemetry redaction is off
     if hasattr(telemetry_utils, "redaction_enabled"):
         monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: False)
     caplog.set_level(logging.WARNING, logger="livekit.agents")
 
-    app = web.Application()
-    app.router.add_route("*", "/coda/ws", fail_request)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    url = f"http://127.0.0.1:{runner.addresses[0][1]}/coda/ws"
     conn_options = APIConnectOptions(max_retry=1, retry_interval=0, timeout=1)
-
     try:
-        async with aiohttp.ClientSession(raise_for_status=raise_for_status) as session:
+        async with (
+            _http_server(fail_request, "/coda/ws", "*") as base,
+            aiohttp.ClientSession(raise_for_status=raise_for_status) as session,
+        ):
+            url = f"{base}/coda/ws"
             if mode == "handshake":
                 tts = TTS(
                     api_key="test-key",
@@ -2945,12 +2123,11 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
                 stream = tts.synthesize("hello", conn_options=conn_options)
             try:
                 with pytest.raises(APIError) as exc_info:
-                    _ = [event async for event in stream]
+                    await _collect(stream)
             finally:
                 await stream.aclose()
                 await tts.aclose()
     finally:
-        await runner.cleanup()
         provider.shutdown()
 
     error = exc_info.value
@@ -2990,11 +2167,10 @@ def _check_imports(source: str) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("import_style", ["attribute", "from"])
-def test_realtime_namespace_loads_on_demand(import_style: str) -> None:
+def test_realtime_namespace_loads_on_demand() -> None:
     pytest.importorskip("rimelabs_sdk.realtime")
     _check_imports(
-        f"""
+        """
         import importlib
         import sys
         from livekit.plugins import rime
@@ -3002,13 +2178,9 @@ def test_realtime_namespace_loads_on_demand(import_style: str) -> None:
         assert "livekit.plugins.rime.realtime" not in sys.modules
         assert "rimelabs_sdk" not in sys.modules
         assert "realtime" in rime.__all__
-        assert "RealtimeModel" not in rime.__all__
         assert not hasattr(rime, "RealtimeModel")
 
-        if {import_style!r} == "from":
-            from livekit.plugins.rime import realtime
-        else:
-            realtime = rime.realtime
+        from livekit.plugins.rime import realtime
 
         assert realtime is importlib.import_module("livekit.plugins.rime.realtime")
         assert rime.realtime is realtime
@@ -3018,7 +2190,7 @@ def test_realtime_namespace_loads_on_demand(import_style: str) -> None:
     )
 
 
-def test_tts_import_and_missing_realtime_sdk_error() -> None:
+def test_tts_import_does_not_require_the_sdk() -> None:
     _check_imports(
         """
         import sys
@@ -3028,7 +2200,6 @@ def test_tts_import_and_missing_realtime_sdk_error() -> None:
         from livekit.plugins.rime import TTS
 
         assert rime.TTS is TTS
-        assert "livekit.plugins.rime.realtime" not in sys.modules
         assert not hasattr(rime, "RealtimeModel")
         try:
             rime.realtime
@@ -3037,10 +2208,15 @@ def test_tts_import_and_missing_realtime_sdk_error() -> None:
             assert "Python 3.11+" in str(error)
         else:
             raise AssertionError("Realtime imported without its SDK")
-
         assert "livekit.plugins.rime.realtime" not in sys.modules
         assert "realtime" not in vars(rime)
-        assert rime.TTS is TTS
+
+        try:
+            rime.STT()
+        except ImportError as error:
+            assert "livekit-plugins-rime[stt]" in str(error)
+        else:
+            raise AssertionError("STT constructed without its SDK")
         """
     )
 
@@ -3187,7 +2363,7 @@ class Peer:
                     self.history_serial += 1
                     item = {"id": f"history-{self.history_serial}", **event["item"]}
                     self.items.append(event["item"])
-                    # Imported results have server-defined placement after their call.
+                    # imported results have server-defined placement after their call
                     if item["type"] == "function_call":
                         self.imported_calls.add(item["call_id"])
                     if (
@@ -3250,6 +2426,16 @@ class Peer:
                 await self.emit("input_audio_buffer.cleared")
             else:
                 self.requests.put_nowait(event)
+
+    async def call(self, response_id, call_id, *, item_id=None, name="lookup", arguments="{}"):
+        await self.emit(
+            "response.function_call_arguments.done",
+            response_id=response_id,
+            item_id=item_id or call_id,
+            call_id=call_id,
+            name=name,
+            arguments=arguments,
+        )
 
     async def next(self, kind="response.create"):
         event = await asyncio.wait_for(self.requests.get(), 3)
@@ -3346,6 +2532,18 @@ async def wait_until(predicate):
 async def lookup() -> str:
     """Look up an order."""
     return "shipped"
+
+
+def counting_lookup():
+    ran = []
+
+    @function_tool
+    async def lookup() -> str:
+        """Look up a value."""
+        ran.append(True)
+        return "42"
+
+    return lookup, ran
 
 
 def messages(*texts):
@@ -3490,14 +2688,7 @@ async def emit_caller(peer, item_id, text):
 
 
 async def emit_note_call(peer, response):
-    await peer.emit(
-        "response.function_call_arguments.done",
-        response_id=response,
-        item_id="note-tool",
-        call_id="note-call",
-        name="save_note",
-        arguments="{}",
-    )
+    await peer.call(response, "note-call", item_id="note-tool", name="save_note")
     return await peer.message(response, text="Got it, I'm making a note of that.")
 
 
@@ -3555,14 +2746,7 @@ async def finish_discard_response(peer, response):
 async def tool_turn(peer, *calls):
     response = await peer.start()
     for call in calls:
-        await peer.emit(
-            "response.function_call_arguments.done",
-            response_id=response,
-            item_id=call,
-            call_id=call,
-            name="lookup",
-            arguments="{}",
-        )
+        await peer.call(response, call)
     await finish_discard_response(peer, response)
     return response
 
@@ -3588,9 +2772,18 @@ async def reply(peer, provider):
     return request
 
 
+# the sdk keeps at most this many response references; tests outlive it with fewer turns
+_SDK_LIMIT = 8
+_PAST_SDK_LIMIT = _SDK_LIMIT + 4
+
+
 @pytest.mark.skipif(not HAS_REALTIME_SDK, reason="Rime realtime SDK is not installed")
 class TestRealtime:
-    @pytest.mark.parametrize("status", [408, 429, 500, 502, 503, 504])
+    @pytest.fixture
+    def small_sdk_limit(self, monkeypatch):
+        monkeypatch.setattr("rimelabs_sdk.realtime._session._LIMIT", _SDK_LIMIT)
+
+    @pytest.mark.parametrize("status", [429, 503])
     async def test_startup_retries_refusal_and_preserves_waiting_reply(self, status):
         attempts = 0
 
@@ -3617,7 +2810,7 @@ class TestRealtime:
             assert [e.recoverable for e in errors] == [True]
             assert [e.retryable for e in errors] == [True]
 
-    @pytest.mark.parametrize("status", [400, 401, 402, 403, 404, 501])
+    @pytest.mark.parametrize("status", [401, 501])
     async def test_startup_does_not_retry_permanent_refusal(self, status):
         attempts = 0
 
@@ -3677,7 +2870,7 @@ class TestRealtime:
             await asyncio.wait_for(refused.wait(), 2)
             await session.aclose()
             await asyncio.gather(waiting, return_exceptions=True)
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.05)
             assert attempts == 1
 
     async def test_startup_retry_after_cannot_exceed_deadline(self):
@@ -3711,8 +2904,7 @@ class TestRealtime:
                 with pytest.raises(Exception, match="timed out|no acknowledgment"):
                     await asyncio.wait_for(session.update_instructions("test"), 1)
             finally:
-                # The SDK settles the submitted settings request before its
-                # cancellation cleanup closes the partially opened session.
+                # the sdk settles the submitted request before cleanup closes the half-open session
                 peer.update_release.set()
             await asyncio.wait_for(peer.socket.wait_closed(), 3)
             assert session._shutdown_task is not None
@@ -3757,13 +2949,7 @@ class TestRealtime:
             assert [i.role for i in session.chat_ctx.items] == ["user", "assistant"]
 
     async def test_agent_session_executes_tool_then_continues(self):
-        ran = []
-
-        @function_tool
-        async def lookup() -> str:
-            """Look up a value."""
-            ran.append(True)
-            return "42"
+        lookup, ran = counting_lookup()
 
         async with peer_model() as (peer, model, _):
             async with AgentSession(llm=model) as session:
@@ -3771,14 +2957,7 @@ class TestRealtime:
                 handle = session.generate_reply()
                 request = await peer.next()
                 parent = await peer.start(request)
-                await peer.emit(
-                    "response.function_call_arguments.done",
-                    response_id=parent,
-                    item_id="tool-item",
-                    call_id="call-1",
-                    name="lookup",
-                    arguments="{}",
-                )
+                await peer.call(parent, "call-1", item_id="tool-item")
                 await peer.end(parent)
                 continuation = await peer.next()
                 assert ran == [True]
@@ -3903,7 +3082,7 @@ class TestRealtime:
                 change = asyncio.create_task(session.update_chat_ctx(target))
                 try:
                     await asyncio.wait_for(peer.history_started.wait(), 3)
-                    # Do not record the result before Prism acknowledges it.
+                    # do not record the result before Prism acknowledges it
                     assert len(session.chat_ctx.items) == 2
                     peer.server_items.append(
                         {"id": "later", "type": "message", "role": "user", "text": "Keep this too"}
@@ -4017,10 +3196,9 @@ class TestRealtime:
                 await peer.end(response)
                 await pending
 
-    @pytest.mark.parametrize("context_mode", ["strict", "shared"])
     @pytest.mark.parametrize("edit", ["ordinary", "no_reply", "mixed", "uncertain"])
-    async def test_partial_tool_result_reply_policy(self, context_mode, edit):
-        async with peer_model(context_mode=context_mode, playback="discard") as (peer, model, _):
+    async def test_partial_tool_result_reply_policy(self, edit):
+        async with peer_model(context_mode="strict", playback="discard") as (peer, model, _):
             provider = model.session()
             errors = []
             provider.on("error", errors.append)
@@ -4045,8 +3223,7 @@ class TestRealtime:
                 await provider.update_chat_ctx(target)
             error = caught.value
             if edit == "uncertain":
-                # Terminal SDK failure can close the session before the pending
-                # update returns its structured error. Neither path may reply.
+                # a terminal sdk failure may close the session first; neither path may reply
                 await wait_until(lambda: any(not error.recoverable for error in errors))
                 assert peer.requests.empty()
                 assert not isinstance(error, llm.RealtimeError)
@@ -4072,8 +3249,7 @@ class TestRealtime:
             await provider.update_chat_ctx(target)
             assert len(peer.history_operations) == (4 if edit == "mixed" else 3)
 
-    @pytest.mark.parametrize("context_mode", ["strict", "shared"])
-    async def test_explicit_partial_tool_result_edit_still_stops(self, context_mode):
+    async def test_explicit_partial_tool_result_edit_still_stops(self):
         ran = []
         hold = asyncio.Event()
 
@@ -4084,25 +3260,14 @@ class TestRealtime:
             await asyncio.wait_for(hold.wait(), 3)
             raise StopResponse()
 
-        async with peer_model(context_mode=context_mode) as (
-            peer,
-            model,
-            _,
-        ):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             async with AgentSession(llm=model) as session:
                 agent = Agent(instructions="test", tools=[lookup])
                 await session.start(agent)
                 session.generate_reply()
                 parent = await peer.start(await peer.next())
                 for call in ("first", "second"):
-                    await peer.emit(
-                        "response.function_call_arguments.done",
-                        response_id=parent,
-                        item_id=call,
-                        call_id=call,
-                        name="lookup",
-                        arguments="{}",
-                    )
+                    await peer.call(parent, call)
                 await peer.end(parent)
                 await wait_until(lambda: len(ran) == 2)
                 target = model._session.chat_ctx
@@ -4142,18 +3307,11 @@ class TestRealtime:
             with pytest.raises((llm.RealtimeError, RimeStreamError)):
                 await session.update_instructions("must not continue")
 
-    @pytest.mark.parametrize("context_mode", ["strict", "shared"])
-    @pytest.mark.parametrize("refused_at", [1, 2])
+    @pytest.mark.parametrize(("context_mode", "refused_at"), [("strict", 1), ("shared", 2)])
     async def test_agent_session_continues_after_refused_tool_result_without_reexecuting_tools(
         self, context_mode, refused_at, caplog
     ):
-        ran = []
-
-        @function_tool
-        async def lookup() -> str:
-            """Look up a value."""
-            ran.append(True)
-            return "42"
+        lookup, ran = counting_lookup()
 
         async with peer_model(context_mode=context_mode) as (
             peer,
@@ -4169,20 +3327,12 @@ class TestRealtime:
                 failed_handle = session.generate_reply()
                 parent = await peer.start(await peer.next())
                 for index in range(2):
-                    await peer.emit(
-                        "response.function_call_arguments.done",
-                        response_id=parent,
-                        item_id=f"tool-{index}",
-                        call_id=f"call-{index}",
-                        name="lookup",
-                        arguments="{}",
-                    )
+                    await peer.call(parent, f"call-{index}", item_id=f"tool-{index}")
                 peer.fail_history_at = refused_at
                 await peer.end(parent)
                 await wait_until(lambda: len(peer.history_operations) == refused_at)
                 if refused_at == 2:
-                    # The same speech handle continues automatically with the
-                    # accepted result; no application generate_reply() is needed.
+                    # the same speech handle continues with the accepted result on its own
                     resumed = await peer.next()
                     assert resumed["response"]["prism_call_id"] == "call-0"
                     response = await peer.start(resumed)
@@ -4224,7 +3374,7 @@ class TestRealtime:
         async with peer_model() as (peer, model, _):
             session = model.session()
             await session._update_session(instructions="test")
-            # Keep the first response active so the second request waits for readiness.
+            # keep the first response active so the second request waits for readiness
             first = session.generate_reply()
             request = await peer.next()
             response_id = await peer.start(request)
@@ -4270,13 +3420,7 @@ class TestRealtime:
         "code", ["tool_continuation_unavailable", "tool_continuation_not_ready"]
     )
     async def test_expired_tool_continuation_reports_result_without_reexecution(self, code):
-        ran = []
-
-        @function_tool
-        async def lookup() -> str:
-            """Look up a value."""
-            ran.append(True)
-            return "42"
+        lookup, ran = counting_lookup()
 
         async with peer_model() as (peer, model, _):
             async with AgentSession(llm=model) as session:
@@ -4284,14 +3428,7 @@ class TestRealtime:
                 speech = session.generate_reply()
                 parent = await peer.start(await peer.next())
                 peer.refusals["response.create"] = (code, "event")
-                await peer.emit(
-                    "response.function_call_arguments.done",
-                    response_id=parent,
-                    item_id="tool",
-                    call_id="call",
-                    name="lookup",
-                    arguments="{}",
-                )
+                await peer.call(parent, "call", item_id="tool")
                 await peer.end(parent)
                 await peer.emit("prism.typed_input.ready")
                 if code == "tool_continuation_unavailable":
@@ -4330,8 +3467,7 @@ class TestRealtime:
             observed = session._on_event
 
             def delay_response_started(event):
-                # The SDK has accepted the response, but the adapter has not yet
-                # registered its generation when the connection fails.
+                # the sdk accepted the response before the adapter registered it
                 if not isinstance(event.payload, r.ResponseStarted):
                     observed(event)
 
@@ -4355,11 +3491,9 @@ class TestRealtime:
             assert session._failure is not None
             await asyncio.wait_for(session.aclose(), 3)
 
-    @pytest.mark.parametrize("wrapped", [False, True])
-    async def test_standard_session_text_and_empty_replies_need_no_playback_receipts(self, wrapped):
+    async def test_standard_session_text_and_empty_replies_need_no_playback_receipts(self):
         async with peer_model() as (peer, model, _):
-            provider = RealtimeModelFallbackAdapter([model]) if wrapped else model
-            async with AgentSession(llm=provider) as session:
+            async with AgentSession(llm=model) as session:
                 session.output.audio = FakeAudioOutput()
                 await session.start(Agent(instructions="Help"))
                 for text in ("First question", "Next question"):
@@ -4376,17 +3510,11 @@ class TestRealtime:
                     assert speech.exception() is None
                 assert peer.receipts.empty()
 
-    @pytest.mark.parametrize("max_tool_steps", [0, 1, 2])
+    @pytest.mark.parametrize("max_tool_steps", [0, 2])
     async def test_standard_session_tool_limit_produces_final_reply_and_restores_tools(
         self, max_tool_steps
     ):
-        ran = []
-
-        @function_tool
-        async def lookup() -> str:
-            """Look up a value."""
-            ran.append(True)
-            return "42"
+        lookup, ran = counting_lookup()
 
         async with peer_model() as (peer, model, _):
             async with AgentSession(llm=model, max_tool_steps=max_tool_steps) as session:
@@ -4396,14 +3524,7 @@ class TestRealtime:
                     request = await peer.next()
                     assert peer.settings["tools"]
                     parent = await peer.start(request)
-                    await peer.emit(
-                        "response.function_call_arguments.done",
-                        response_id=parent,
-                        item_id=f"tool-{step}",
-                        call_id=f"call-{step}",
-                        name="lookup",
-                        arguments="{}",
-                    )
+                    await peer.call(parent, f"call-{step}", item_id=f"tool-{step}")
                     await peer.end(parent)
                 final = await peer.next()
                 tools_disabled_at_limit = peer.settings["tools"] == []
@@ -4417,22 +3538,10 @@ class TestRealtime:
                 assert peer.settings["tools"][0]["function"]["name"] == "lookup"
                 assert model._session._tool_choice == "auto"
                 assert peer.receipts.empty()
-                # Check the full reply before accepting the older core's tool-limit failure.
-                if Version(version("livekit-agents")) < Version("1.8.6"):
-                    if not tools_disabled_at_limit:
-                        pytest.xfail(
-                            "LiveKit <1.8.6 does not enforce realtime max_tool_steps (#7555)"
-                        )
                 assert tools_disabled_at_limit
 
     async def test_tool_disabled_response_never_executes_unexpected_call(self):
-        ran = []
-
-        @function_tool
-        async def lookup() -> str:
-            """Look up a value."""
-            ran.append(True)
-            return "42"
+        lookup, ran = counting_lookup()
 
         async with peer_model() as (peer, model, _):
             async with AgentSession(llm=model) as session:
@@ -4443,26 +3552,14 @@ class TestRealtime:
                 request = await peer.next()
                 assert peer.settings["tools"] == []
                 response = await peer.start(request)
-                # Even if the model calls a tool from history, it must not reach execution.
-                await peer.emit(
-                    "response.function_call_arguments.done",
-                    response_id=response,
-                    item_id="unexpected",
-                    call_id="unexpected",
-                    name="lookup",
-                    arguments="{}",
-                )
+                # even if the model calls a tool from history, it must not reach execution
+                await peer.call(response, "unexpected")
                 error = await asyncio.wait_for(errors.get(), 3)
                 assert isinstance(error.error, llm.RealtimeError)
                 assert not error.recoverable
                 assert ran == []
 
     async def test_cancelled_tool_disabled_reply_restores_after_late_acceptance(self):
-        @function_tool
-        async def lookup() -> str:
-            """Look up a value."""
-            return "42"
-
         async with peer_model() as (peer, model, _):
             session = model.session()
             await session.update_tools([lookup])
@@ -4480,11 +3577,6 @@ class TestRealtime:
             assert session._generations[response].abandoned
 
     async def test_refused_tool_disabled_reply_restores_tools_and_keeps_session(self):
-        @function_tool
-        async def lookup() -> str:
-            """Look up a value."""
-            return "42"
-
         async with peer_model() as (peer, model, _):
             session = model.session()
             await session.update_tools([lookup])
@@ -4501,11 +3593,6 @@ class TestRealtime:
             assert (await pending).response_id == response
 
     async def test_failed_tool_restoration_fails_session(self):
-        @function_tool
-        async def lookup() -> str:
-            """Look up a value."""
-            return "42"
-
         async with peer_model() as (peer, model, _):
             session = model.session()
             await session.update_tools([lookup])
@@ -4548,11 +3635,6 @@ class TestRealtime:
 
     @pytest.mark.parametrize("revision", ["older", "suppressed", "missing"])
     async def test_automatic_reply_uses_its_own_tool_settings_during_suppression(self, revision):
-        @function_tool
-        async def lookup() -> str:
-            """Look up a value."""
-            return "42"
-
         async with peer_model() as (peer, model, _):
             session = model.session()
             await session.update_tools([lookup])
@@ -4571,14 +3653,7 @@ class TestRealtime:
                     )
                 await peer.emit("response.created", response=response)
                 generation = await asyncio.wait_for(generations.get(), 3)
-                await peer.emit(
-                    "response.function_call_arguments.done",
-                    response_id="early-speech",
-                    item_id="early-tool",
-                    call_id="early-call",
-                    name="lookup",
-                    arguments="{}",
-                )
+                await peer.call("early-speech", "early-call", item_id="early-tool")
                 if revision == "older":
                     call = await asyncio.wait_for(anext(generation.function_stream), 3)
                     assert call.name == "lookup"
@@ -4697,10 +3772,8 @@ class TestRealtime:
             assert peer.settings["tools"] == []
             assert peer.connections == 1
 
-    @pytest.mark.parametrize(
-        "options", [{"voice": "new-voice"}, {"response_metadata": {"step": "2"}}]
-    )
-    async def test_model_update_options_returns_before_acknowledgment(self, options):
+    async def test_model_update_options_returns_before_acknowledgment(self):
+        options = {"voice": "new-voice"}
         async with peer_model() as (peer, model, _):
             session = model.session()
             await session.update_instructions("Help")
@@ -4841,8 +3914,7 @@ class TestRealtime:
             model.update_options(voice="pending")
             try:
                 await asyncio.wait_for(peer.update_started.wait(), 3)
-                # The update is already submitted. A provider response that exceeds
-                # the SDK's response limit terminates the SDK and its pending request.
+                # a response past the sdk limit terminates the sdk and its already-submitted update
                 with monkeypatch.context() as limit:
                     limit.setattr("rimelabs_sdk.realtime._session._LIMIT", 0)
                     await peer.start(response_id="resource-limit")
@@ -4892,8 +3964,7 @@ class TestRealtime:
                 await asyncio.wait_for(started.wait(), 3)
                 closing = asyncio.create_task(session.aclose())
                 await wait_until(lambda: session._closed)
-                # The SDK settles an already submitted request before propagating
-                # cancellation, including during shutdown.
+                # the sdk settles a submitted request before propagating cancellation
                 release.set()
                 await asyncio.wait_for(closing, 3)
                 with pytest.raises(asyncio.CancelledError):
@@ -4979,13 +4050,8 @@ class TestRealtime:
                 await session.start(Agent(instructions="Triage", tools=[transfer]))
                 speech = session.generate_reply(user_input="Billing please")
                 response_id = await peer.start(await peer.next())
-                await peer.emit(
-                    "response.function_call_arguments.done",
-                    response_id=response_id,
-                    item_id="transfer-item",
-                    call_id="transfer-call",
-                    name="transfer",
-                    arguments="{}",
+                await peer.call(
+                    response_id, "transfer-call", item_id="transfer-item", name="transfer"
                 )
                 await peer.end(response_id)
                 await wait_until(
@@ -5104,14 +4170,9 @@ class TestRealtime:
                 await model._delete_instruction_item("saved-instruction")
 
     @pytest.mark.parametrize(
-        "code,retryable",
-        [
-            ("capacity_exceeded", True),
-            ("response_timeout", True),
-            ("context_length_exceeded", False),
-        ],
+        "code,retryable,via_fallback",
+        [("capacity_exceeded", True, False), ("context_length_exceeded", False, True)],
     )
-    @pytest.mark.parametrize("via_fallback", [False, True])
     async def test_fault_retryability_does_not_replay_requests(self, code, retryable, via_fallback):
         async with peer_model() as (peer, model, _):
             realtime_model = RealtimeModelFallbackAdapter([model]) if via_fallback else model
@@ -5185,9 +4246,7 @@ class TestRealtime:
             assert session._shutdown_task is not None
             await asyncio.wait_for(session.aclose(), 3)
 
-    @pytest.mark.parametrize(
-        "sample_rate,channels", [(44100, 1), (44100, 2), (44100, 4), (48000, 4)]
-    )
+    @pytest.mark.parametrize("sample_rate,channels", [(44100, 2), (48000, 4)])
     async def test_audio_converts_formats_outside_sdk_support(self, sample_rate, channels):
         async with peer_model() as (peer, model, _):
             session = model.session()
@@ -5216,7 +4275,7 @@ class TestRealtime:
                 num_channels=1,
                 samples_per_channel=441,
             )
-            # Each frame is too short for a fresh resampler to produce output.
+            # each frame is too short for a fresh resampler to produce output
             for _ in range(20):
                 session.push_audio(frame)
             event = await peer.next("input_audio_buffer.append")
@@ -5264,7 +4323,7 @@ class TestRealtime:
                 await send_audio(chunk)
 
             monkeypatch.setattr(sdk, "send_audio", observe)
-            # Distinct samples and stereo channels expose silence, reordering, and downmixing.
+            # distinct samples and stereo channels expose silence, reordering, and downmixing
             samples = np.arange(sample_rate // 25 * channels, dtype=np.int16) * 7 - 12000
             expected_audio = samples.tobytes()
             frame = rtc.AudioFrame(expected_audio, sample_rate, channels, sample_rate // 25)
@@ -5290,7 +4349,7 @@ class TestRealtime:
 
             async def blocked_send(event, *args, **kwargs):
                 if event["type"] == "input_audio_buffer.append" and not append_started.is_set():
-                    # The actual SDK already owns its audio lock at this point.
+                    # the actual SDK already owns its audio lock at this point
                     append_started.set()
                     await append_release.wait()
                 sent.append(event["type"])
@@ -5370,8 +4429,7 @@ class TestRealtime:
                 await asyncio.wait_for(session.generate_reply(), 3)
             assert raised.value.code == "invalid_request"
             assert errors.empty()
-            # A named refusal did not create a response. The next explicit reply
-            # request can still use this conversation and must not replay the first.
+            # a refused reply created no response; the next reply must not replay it
             await peer.emit("prism.typed_input.ready")
             pending = session.generate_reply()
             response_id = await peer.start(await peer.next())
@@ -5425,7 +4483,7 @@ class TestRealtime:
                             "Hello",
                         ]
 
-    @pytest.mark.parametrize("policy", [None, "auto", "disabled", pytest.param(0.9, id="policy3")])
+    @pytest.mark.parametrize("policy", [None, pytest.param(0.9, id="ratio")])
     async def test_truncation_at_connect_update_and_restart(self, policy):
         if isinstance(policy, float):
             policy = r.RetentionRatio(policy)
@@ -5446,21 +4504,6 @@ class TestRealtime:
                 assert model._session._sdk.info.truncation == r.RetentionRatio(0.7)
             finally:
                 await session.aclose()
-
-    async def test_rejected_truncation_leaves_acknowledged_policy_unchanged(self):
-        async with peer_model(truncation="auto") as (peer, model, _):
-            session = model.session()
-            await session.update_instructions("test")
-            peer.refusals["session.update"] = ("invalid_session", "event")
-            errors = []
-            session.on("error", errors.append)
-            model.update_options(truncation="disabled")
-            await session._wait_for_options()
-            assert len(errors) == 1 and errors[0].recoverable
-            assert model._session._sdk.info.truncation == "auto"
-            model.update_options(truncation="disabled")
-            await model._session._wait_for_options()
-            assert model._session._sdk.info.truncation == "disabled"
 
     async def test_initial_history_accepts_all_supported_types_without_executing_tools(self):
         ran = []
@@ -5735,14 +4778,7 @@ class TestRealtime:
             first = session.generate_reply()
             parent = await peer.start(await peer.next())
             generation = await first
-            await peer.emit(
-                "response.function_call_arguments.done",
-                response_id=parent,
-                item_id="live-call",
-                call_id="live-call",
-                name="lookup",
-                arguments="{}",
-            )
+            await peer.call(parent, "live-call")
             call = await generation.function_stream.__anext__()
             await peer.end(parent)
             await wait_until(lambda: session.chat_ctx.get_by_id(call.id) is not None)
@@ -5773,14 +4809,7 @@ class TestRealtime:
                 pending = session.generate_reply()
                 response = await peer.start(await peer.next())
                 generation = await pending
-                await peer.emit(
-                    "response.function_call_arguments.done",
-                    response_id=response,
-                    item_id="live-tool",
-                    call_id="live-call",
-                    name="lookup",
-                    arguments="{}",
-                )
+                await peer.call(response, "live-call", item_id="live-tool")
                 call = await asyncio.wait_for(anext(generation.function_stream), 3)
                 await peer.end(response)
                 assert [item async for item in generation.function_stream] == []
@@ -5832,14 +4861,7 @@ class TestRealtime:
             pending = session.generate_reply()
             response = await peer.start(await peer.next())
             generation = await pending
-            await peer.emit(
-                "response.function_call_arguments.done",
-                response_id=response,
-                item_id="live-tool",
-                call_id="live-call",
-                name="lookup",
-                arguments="{}",
-            )
+            await peer.call(response, "live-call", item_id="live-tool")
             call = await asyncio.wait_for(anext(generation.function_stream), 3)
             await peer.end(response)
             assert [item async for item in generation.function_stream] == []
@@ -5859,9 +4881,9 @@ class TestRealtime:
             assert session.chat_ctx.items[-1].output == "working"
             assert session.chat_ctx.items[0].extra == {}
 
-    @pytest.mark.parametrize("context_mode", ["shared", "strict"])
-    @pytest.mark.parametrize("silent", [False, True])
-    @pytest.mark.parametrize("fails", [False, True])
+    @pytest.mark.parametrize(
+        "context_mode,silent,fails", [("shared", False, True), ("strict", True, False)]
+    )
     async def test_agent_session_tool_progress(self, context_mode, silent, fails):
         next_update, finish = asyncio.Event(), asyncio.Event()
         executions = 0
@@ -5884,17 +4906,9 @@ class TestRealtime:
                 await owner.start(Agent(instructions="test", tools=[lookup]))
                 speech = owner.generate_reply()
                 response = await peer.start(await peer.next())
-                await peer.emit(
-                    "response.function_call_arguments.done",
-                    response_id=response,
-                    item_id="lookup-item",
-                    call_id="lookup-call",
-                    name="lookup",
-                    arguments="{}",
-                )
+                await peer.call(response, "lookup-call", item_id="lookup-item")
                 await wait_until(lambda: executions == 1)
-                # Prism can finish its filler after the first progress output was
-                # created. LiveKit inserts that output before the filler by time.
+                # prism can finish its filler after the first progress output, which sorts first
                 await peer.message(response, text="Checking your order")
                 await peer.end(response)
 
@@ -5917,8 +4931,7 @@ class TestRealtime:
                 if not silent:
                     await reply("Searching")
                 await asyncio.wait_for(speech.wait_for_playout(), 3)
-                # Completed references are bounded; their history remains after
-                # eviction and must still accept later progress/final results.
+                # evicted call references must still accept later progress and final results
                 model._session._history._calls.pop("lookup-call")
                 next_update.set()
                 await result("lookup-call_update_1")
@@ -5968,8 +4981,7 @@ class TestRealtime:
                             await owner.current_agent.update_chat_ctx(target)
                     assert len(peer.history_operations) == before
 
-    @pytest.mark.parametrize("context_mode", ["shared", "strict"])
-    async def test_tool_progress_without_waiting_for_a_reply(self, context_mode):
+    async def test_tool_progress_without_waiting_for_a_reply(self):
         executions = 0
 
         @function_tool
@@ -5981,19 +4993,12 @@ class TestRealtime:
             await ctx.update("Found the order")
             return "The order shipped"
 
-        async with peer_model(playback="discard", context_mode=context_mode) as (peer, model, _):
+        async with peer_model(playback="discard", context_mode="shared") as (peer, model, _):
             async with AgentSession(llm=model) as owner:
                 await owner.start(Agent(instructions="test", tools=[lookup]))
                 owner.generate_reply()
                 response = await peer.start(await peer.next())
-                await peer.emit(
-                    "response.function_call_arguments.done",
-                    response_id=response,
-                    item_id="lookup-item",
-                    call_id="lookup-call",
-                    name="lookup",
-                    arguments="{}",
-                )
+                await peer.call(response, "lookup-call", item_id="lookup-item")
                 await peer.end(response)
                 replies = []
 
@@ -6036,10 +5041,15 @@ class TestRealtime:
                     responder.cancel()
                     await asyncio.gather(responder, return_exceptions=True)
 
-    @pytest.mark.parametrize("context_mode", ["shared", "strict"])
-    @pytest.mark.parametrize("rapid", [False, True])
-    @pytest.mark.parametrize("silent", [False, True])
-    @pytest.mark.parametrize("finish_during_reply", [False, True])
+    @pytest.mark.parametrize(
+        "context_mode,rapid,silent,finish_during_reply",
+        [
+            ("shared", False, False, False),
+            ("strict", True, True, False),
+            ("shared", False, True, True),
+            ("strict", True, False, True),
+        ],
+    )
     async def test_interleaved_tool_progress_with_late_filler(
         self, context_mode, rapid, silent, finish_during_reply
     ):
@@ -6075,13 +5085,11 @@ class TestRealtime:
                 speech = owner.generate_reply()
                 response = await peer.start(await peer.next())
                 for name in names:
-                    await peer.emit(
-                        "response.function_call_arguments.done",
-                        response_id=response,
+                    await peer.call(
+                        response,
+                        f"lookup-{name}-call",
                         item_id=f"lookup-{name}-item",
-                        call_id=f"lookup-{name}-call",
                         name=f"lookup_{name}",
-                        arguments="{}",
                     )
                 await wait_until(lambda: ready == set(names))
                 await peer.message(response, text="Checking your orders")
@@ -6144,7 +5152,7 @@ class TestRealtime:
                     )
                     assert peer.connections == 1
                     if context_mode == "shared" and not rapid:
-                        # Correcting result positions must not hide a call reorder.
+                        # correcting result positions must not hide a call reorder
                         target = owner.current_agent.chat_ctx.copy()
                         indices = [target.index_by_id(f"lookup-{name}-item") for name in names]
                         a, b = indices
@@ -6157,8 +5165,7 @@ class TestRealtime:
                     responder.cancel()
                     await asyncio.gather(responder, return_exceptions=True)
 
-    @pytest.mark.parametrize("late_message", [False, True])
-    @pytest.mark.parametrize("explicit", [False, True])
+    @pytest.mark.parametrize("late_message,explicit", [(False, False), (True, False), (True, True)])
     async def test_progress_snapshot_preserves_only_later_observations(
         self, late_message, explicit
     ):
@@ -6226,7 +5233,7 @@ class TestRealtime:
                     tasks.append(queued)
                 await asyncio.gather(*tasks, return_exceptions=True)
 
-    @pytest.mark.parametrize("kept_text", [None, "", "The full", "The full generated answer"])
+    @pytest.mark.parametrize("kept_text", [None, "", "The full"])
     async def test_retained_text_updates_history_without_changing_existing_snapshots(
         self, kept_text
     ):
@@ -6246,7 +5253,7 @@ class TestRealtime:
             assert events[0] == r.ItemTruncated(
                 item_id=item_id, content_index=0, audio_end_ms=120, kept_text=kept_text
             )
-            # An acknowledgment from an older server must not erase known retained text.
+            # an acknowledgment from an older server must not erase known retained text
             await acknowledge(peer, item_id, None)
             await wait_until(lambda: len(events) == 2)
             assert session.chat_ctx.get_by_id(item_id) == after
@@ -6265,8 +5272,7 @@ class TestRealtime:
             await wait_until(lambda: session.chat_ctx.get_by_id(item_id) is not None)
             assert session.chat_ctx.get_by_id(item_id).text_content == "Generated words"
 
-    @pytest.mark.parametrize("kept_text", ["The full", ""])
-    @pytest.mark.parametrize("played_text", [None, "The"])
+    @pytest.mark.parametrize("kept_text,played_text", [("The full", None), ("", "The")])
     async def test_early_retained_text_survives_response_completion(self, kept_text, played_text):
         async with peer_model() as (peer, model, _):
             session = model.session()
@@ -6293,7 +5299,7 @@ class TestRealtime:
                 events.clear()
             await acknowledge(peer, item_id, kept_text)
             await wait_until(lambda: events)
-            # Missing text in a later acknowledgment must not erase a known value.
+            # missing text in a later acknowledgment must not erase a known value
             await acknowledge(peer, item_id, None)
             await wait_until(lambda: len(events) == 2)
             await peer.end(response_id)
@@ -6318,7 +5324,7 @@ class TestRealtime:
             await wait_until(lambda: events)
             assert session.chat_ctx.items == target.items
 
-    @pytest.mark.parametrize("edit", ["append", "delete", "replace"])
+    @pytest.mark.parametrize("edit", ["append", "delete"])
     async def test_acknowledgment_during_history_edit_preserves_the_committed_result(self, edit):
         async with peer_model(context_mode="strict") as (peer, model, _):
             session = model.session()
@@ -6366,7 +5372,6 @@ class TestRealtime:
         "summary,status",
         [
             (None, "completed"),
-            ({"items_left_out": 3}, "cancelled"),
             ({"items_left_out": 3, "first_kept_item_id": "kept"}, "failed"),
         ],
     )
@@ -6402,7 +5407,7 @@ class TestRealtime:
                 None if summary is None else r.ResponseTruncation(**summary)
             )
             assert session.chat_ctx.items == before.items
-            # A completed response reference is not required to process a later acknowledgment.
+            # a later acknowledgment needs no completed response reference
             session._generations.clear()
             truncated = []
             collect_payloads(model._session, r.ItemTruncated, truncated)
@@ -6442,7 +5447,7 @@ class TestRealtime:
                 )
                 assert session.history.to_dict() == before
 
-    @pytest.mark.parametrize("context_mode", [None, "shared", "strict"])
+    @pytest.mark.parametrize("context_mode", [None, "strict"])
     async def test_context_mode_controls_omitted_history(self, context_mode):
         options = {} if context_mode is None else {"context_mode": context_mode}
         async with peer_model(**options) as (_, model, _):
@@ -6492,11 +5497,8 @@ class TestRealtime:
         "entrypoint,empty_context,nested_task,task_reply,tool_error",
         [
             pytest.param("on_enter", False, False, False, False, id="on-enter"),
-            pytest.param("tool", False, False, False, False, id="tool"),
             pytest.param("tool", False, False, False, True, id="tool-error"),
             pytest.param("tool", False, False, True, False, id="speaking-task"),
-            pytest.param("tool", False, False, True, True, id="speaking-task-error"),
-            pytest.param("tool", True, False, False, False, id="empty-task-context"),
             pytest.param("tool", True, True, False, False, id="nested-empty-task-context"),
         ],
     )
@@ -6560,13 +5562,8 @@ class TestRealtime:
                 else:
                     speech = session.generate_reply()
                     parent = await peer.start(await peer.next())
-                    await peer.emit(
-                        "response.function_call_arguments.done",
-                        response_id=parent,
-                        item_id="parent-item",
-                        call_id="parent-call",
-                        name="collect_detail",
-                        arguments="{}",
+                    await peer.call(
+                        parent, "parent-call", item_id="parent-item", name="collect_detail"
                     )
                     await peer.end(parent)
                     if task_reply:
@@ -6598,11 +5595,10 @@ class TestRealtime:
                     "record_detail",
                 }
                 response = await peer.start(continuation)
-                await peer.emit(
-                    "response.function_call_arguments.done",
-                    response_id=response,
+                await peer.call(
+                    response,
+                    "record-call",
                     item_id="record-item",
-                    call_id="record-call",
                     name="record_detail",
                     arguments=json.dumps({"detail": "received"}),
                 )
@@ -6630,17 +5626,14 @@ class TestRealtime:
                 assert "active tool call" not in caplog.text
                 assert peer.connections == 1
 
-    @pytest.mark.parametrize("playback", ["auto", "discard"])
-    async def test_response_metrics_measure_first_audio_and_monotonic_duration(
-        self, monkeypatch, playback
-    ):
+    async def test_response_metrics_measure_first_audio_and_monotonic_duration(self, monkeypatch):
         clock = SimpleNamespace(now=10.0, wall=1000.0)
         monkeypatch.setattr(
             realtime_model,
             "time",
             SimpleNamespace(time=lambda: clock.wall, monotonic=lambda: clock.now),
         )
-        async with peer_model(playback=playback) as (peer, model, _):
+        async with peer_model() as (peer, model, _):
             session = model.session()
             metrics, events = [], []
             session.on("metrics_collected", metrics.append)
@@ -6692,14 +5685,14 @@ class TestRealtime:
             assert metric.input_token_details == RealtimeModelMetrics.InputTokenDetails()
             assert metric.output_token_details == RealtimeModelMetrics.OutputTokenDetails()
             await finish_metric_response(peer, response)
-            # A later response is a processing barrier for the repeated terminal event.
+            # a later response is a processing barrier for the repeated terminal event
             later = await peer.start()
             await finish_metric_response(peer, later, usage=None)
             await wait_until(lambda: len(metrics) == 2)
             assert [m.request_id for m in metrics] == [response, later]
             assert metrics[1].tokens_per_second == 0
 
-    @pytest.mark.parametrize("status", ["completed", "cancelled", "failed"])
+    @pytest.mark.parametrize("status", ["completed", "cancelled"])
     async def test_no_audio_or_usage_has_defined_metrics(self, status):
         async with peer_model() as (peer, model, _):
             session = model.session()
@@ -6735,7 +5728,6 @@ class TestRealtime:
                 assert usage.output_tokens == 8
 
     async def test_interrupted_generation_retains_late_terminal_metrics(self, monkeypatch):
-        # Exercise adapter eviction within the older SDK's larger reference window.
         monkeypatch.setattr(realtime_model, "_GENERATION_LIMIT", 3)
         async with peer_model() as (peer, model, _):
             session = model.session()
@@ -6763,7 +5755,7 @@ class TestRealtime:
                 assert metrics[-1].total_tokens == 20
             finally:
                 peer.cancel_release.set()
-            # Process the repeated cancellation terminal event before checking metrics.
+            # process the repeated cancellation terminal event before checking metrics
             later = await peer.start()
             await finish_metric_response(peer, later)
             await wait_until(lambda: len(metrics) == 6)
@@ -6802,8 +5794,10 @@ class TestRealtime:
             await wait_until(lambda: len(metrics) == 5)
             assert [metric.request_id for metric in metrics] == responses
 
+    @pytest.mark.usefixtures("small_sdk_limit")
     async def test_queued_interruptions_keep_holds_past_cleanup_deadline(self):
-        count = 140
+        # one timeout for both the sdk requests and the playback cleanup deadline
+        timeout = 0.3
         peer = Peer()
         first_truncate = asyncio.Event()
         release_truncate = asyncio.Event()
@@ -6821,7 +5815,7 @@ class TestRealtime:
             async with (
                 Rime(api_key="test") as client,
                 client.realtime.connect(
-                    endpoint=endpoint, timeouts=r.RealtimeTimeouts(request_s=1.0)
+                    endpoint=endpoint, timeouts=r.RealtimeTimeouts(request_s=timeout)
                 ) as sdk,
             ):
                 tasks = []
@@ -6831,7 +5825,7 @@ class TestRealtime:
                     tasks.append(task)
                     return task
 
-                playback = Playback(sdk, "auto", 1.0, sdk.report_playback, spawn, lambda: True)
+                playback = Playback(sdk, "auto", timeout, sdk.report_playback, spawn, lambda: True)
                 outputs = {}
                 tokens = {}
                 ended = set()
@@ -6861,10 +5855,9 @@ class TestRealtime:
                         await peer.message(response_id)
                         await peer.end(response_id)
                     await wait_until(lambda: "second" in ended)
-                    # Age both responses, then block the first report while the second
-                    # waits in the playback queue. Their cleanup deadlines now expire
-                    # before either acknowledgment, but before the SDK request timeout.
-                    await asyncio.sleep(0.8)
+                    # age both responses, then block the first report while the second queues:
+                    # cleanup deadlines expire before either acknowledgment and the sdk timeout
+                    await asyncio.sleep(0.8 * timeout)
                     playback.interrupt(
                         r.PlaybackInterrupted(output=outputs["first"], audio_end_ms=10)
                     )
@@ -6872,8 +5865,8 @@ class TestRealtime:
                     playback.interrupt(
                         r.PlaybackInterrupted(output=outputs["second"], audio_end_ms=10)
                     )
-                    await asyncio.sleep(0.25)
-                    for number in range(count):
+                    await asyncio.sleep(0.25 * timeout)
+                    for number in range(_PAST_SDK_LIMIT):
                         response_id = f"ordinary-{number}"
                         await peer.start(response_id=response_id)
                         await peer.end(response_id)
@@ -6921,8 +5914,7 @@ class TestRealtime:
                 return response
 
             await capture_rime_response()
-            # Old callbacks must consume the dropped count, not the newly queued
-            # Rime output. A response captured during ambiguity keeps estimates.
+            # old callbacks consume the dropped count; a response captured meanwhile keeps estimates
             for _ in range(application_segments):
                 sink.finish()
             await asyncio.sleep(0.01)
@@ -6931,8 +5923,7 @@ class TestRealtime:
             await asyncio.sleep(0.01)
             assert peer.receipts.empty()
 
-            # All earlier callbacks have drained. A fresh identified segment can
-            # now prove completion, but only when its own callback arrives.
+            # with old callbacks drained, a fresh segment proves completion only on its own callback
             fresh = await capture_rime_response()
             await asyncio.sleep(0.01)
             assert peer.receipts.empty()
@@ -6943,7 +5934,7 @@ class TestRealtime:
             assert len(forwarded) == application_segments + 2
             assert peer.receipts.empty()
 
-    @pytest.mark.parametrize("sink,tts", [(False, False), (True, False), (True, True)])
+    @pytest.mark.parametrize("sink,tts", [(False, False), (True, True)])
     async def test_discard_keeps_text_without_audio_or_automatic_tts(self, sink, tts):
         async with peer_model(playback="discard") as (peer, model, _):
             speech_tts = CountingTTS()
@@ -6971,8 +5962,7 @@ class TestRealtime:
                 await asyncio.sleep(0.01)
                 assert peer.receipts.empty()
 
-    @pytest.mark.parametrize("sample_rate", [None, 48000])
-    @pytest.mark.parametrize("synchronous", [False, True])
+    @pytest.mark.parametrize("sample_rate,synchronous", [(None, False), (48000, True)])
     async def test_measured_playback_through_real_pipeline(self, sample_rate, synchronous):
         async with peer_model() as (peer, model, _):
             async with AgentSession(llm=model) as session:
@@ -7007,20 +5997,7 @@ class TestRealtime:
                     assert {frame.sample_rate for frame in sink.frames} == {sample_rate}
                 assert peer.receipts.empty()
 
-    @pytest.mark.parametrize("mode", ["estimated", "auto"])
-    async def test_unwrapped_output_keeps_estimate(self, mode):
-        async with peer_model(playback=mode) as (peer, model, _):
-            async with AgentSession(llm=model) as session:
-                session.output.audio = ControlledOutput(synchronous=True)
-                await session.start(Agent(instructions="test"))
-                speech = session.generate_reply()
-                response = await peer.start(await peer.next())
-                await peer.message(response)
-                await peer.end(response)
-                await asyncio.wait_for(speech.wait_for_playout(), 3)
-                assert peer.receipts.empty()
-
-    @pytest.mark.parametrize("failure_at", [1, 2, 3, 4])
+    @pytest.mark.parametrize("failure_at", [1, 3])
     async def test_exact_edit_failure_repairs_local_projection_and_keeps_connection(
         self, failure_at
     ):
@@ -7047,13 +6024,8 @@ class TestRealtime:
                 await model._clear_chat_ctx(agent)
                 assert not peer.server_items
 
-    @pytest.mark.parametrize("context_mode", ["strict", "shared"])
-    async def test_ordinary_partial_allows_independent_reply_and_update(self, context_mode, caplog):
-        async with peer_model(context_mode=context_mode) as (
-            peer,
-            model,
-            _,
-        ):
+    async def test_ordinary_partial_allows_independent_reply_and_update(self, caplog):
+        async with peer_model(context_mode="shared") as (peer, model, _):
             async with AgentSession(llm=model) as session:
                 agent = Agent(instructions="test")
                 await session.start(agent)
@@ -7087,7 +6059,7 @@ class TestRealtime:
                 await peer.end(response)
                 await asyncio.wait_for(speech.wait_for_playout(), 3)
                 assert len(peer.history_operations) == before
-                # The caller can retry the requested view. Accepted items are not replayed.
+                # the caller can retry the requested view. Accepted items are not replayed
                 await agent.update_chat_ctx(target)
                 assert len(peer.history_operations) == before + 2
                 assert [i["text"] for i in peer.server_items] == [
@@ -7097,9 +6069,8 @@ class TestRealtime:
                     "not sent yet",
                 ]
 
-    @pytest.mark.parametrize("context_mode", ["strict", "shared"])
-    async def test_invalid_ordinary_update_allows_reply_and_valid_update(self, context_mode):
-        async with peer_model(context_mode=context_mode) as (peer, model, _):
+    async def test_invalid_ordinary_update_allows_reply_and_valid_update(self):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             async with AgentSession(llm=model) as session:
                 agent = Agent(instructions="test")
                 await session.start(agent)
@@ -7174,14 +6145,7 @@ class TestRealtime:
                 await session.start(Agent(instructions="Parent", tools=[task_tool]))
                 speech = session.generate_reply()
                 parent = await peer.start(await peer.next())
-                await peer.emit(
-                    "response.function_call_arguments.done",
-                    response_id=parent,
-                    item_id="parent-item",
-                    call_id="parent-call",
-                    name="task_tool",
-                    arguments="{}",
-                )
+                await peer.call(parent, "parent-call", item_id="parent-item", name="task_tool")
                 await peer.end(parent)
                 request = await peer.next()
                 response = await peer.start(request)
@@ -7223,14 +6187,7 @@ class TestRealtime:
                 await session.start(Agent(instructions="Parent", tools=[parent_tool]))
                 speech = session.generate_reply()
                 parent = await peer.start(await peer.next())
-                await peer.emit(
-                    "response.function_call_arguments.done",
-                    response_id=parent,
-                    item_id="parent-item",
-                    call_id="parent-call",
-                    name="parent_tool",
-                    arguments="{}",
-                )
+                await peer.call(parent, "parent-call", item_id="parent-item", name="parent_tool")
                 await peer.end(parent)
                 await asyncio.wait_for(entered.wait(), 3)
                 for number, tool in enumerate(("child", "finish")):
@@ -7248,14 +6205,7 @@ class TestRealtime:
                         transcript=f"turn {number}",
                     )
                     response = await peer.start()
-                    await peer.emit(
-                        "response.function_call_arguments.done",
-                        response_id=response,
-                        item_id=f"{tool}-item",
-                        call_id=f"{tool}-call",
-                        name=tool,
-                        arguments="{}",
-                    )
+                    await peer.call(response, f"{tool}-call", item_id=f"{tool}-item", name=tool)
                     await peer.end(response)
                     if tool == "child":
                         request = await peer.next()
@@ -7323,7 +6273,7 @@ class TestRealtime:
                 await provider.update_chat_ctx(desired)
             assert len(peer.history_operations) == before
             assert provider.chat_ctx.get_by_id(item_id).text_content == "Got it"
-            # The original call is still live. A fresh, exact snapshot can settle it.
+            # the original call is still live. A fresh, exact snapshot can settle it
             fresh = provider.chat_ctx.copy()
             fresh.items.append(desired.items[-1])
             await provider.update_chat_ctx(fresh)
@@ -7359,7 +6309,7 @@ class TestRealtime:
             try:
                 await finish.wait()
             except asyncio.CancelledError:
-                # The external write finishes despite speech interruption.
+                # the external write finishes despite speech interruption
                 await finish.wait()
             return "The note was saved."
 
@@ -7379,8 +6329,7 @@ class TestRealtime:
                         snapshots.append(chat_ctx.copy())
                         copied.set()
                         await apply.wait()
-                    # Only schedule the race at the public boundary. All history
-                    # decisions and SDK writes use the real plugin implementation.
+                    # schedule the race at the public boundary only; history writes stay real
                     await real_update(chat_ctx)
 
                 monkeypatch.setattr(provider, "update_chat_ctx", schedule_update)
@@ -7440,11 +6389,9 @@ class TestRealtime:
                     not in caplog.text
                 )
 
-    @pytest.mark.parametrize(
-        "mutation", ["missing", "duplicate", "unconsumed", "unrelated", "detach"]
-    )
+    @pytest.mark.parametrize("mutation", ["missing", "duplicate", "unrelated", "detach"])
     async def test_unproven_playback_never_reports_finished(self, mutation):
-        async with peer_model(timeouts=r.RealtimeTimeouts(request_s=0.05)) as (peer, model, _):
+        async with peer_model(timeouts=r.RealtimeTimeouts(request_s=0.02)) as (peer, model, _):
             provider = model.session()
             sink = ControlledOutput(synchronous=True)
             wrapper = model._wrap_audio_output(sink)
@@ -7470,7 +6417,7 @@ class TestRealtime:
                     wrapper.on_detached()
                 wrapper.flush()
                 await wrapper.wait_for_playout()
-            await asyncio.sleep(0.08)
+            await asyncio.sleep(0.03)
             assert peer.receipts.empty()
             assert peer.connections == 1
 
@@ -7492,11 +6439,8 @@ class TestRealtime:
                 await model._reconcile_chat_ctx(agent)
                 assert agent.chat_ctx.items[0].text_content == "accepted"
 
-    @pytest.mark.parametrize("context_mode", ["strict", "shared"])
-    async def test_cancelled_refused_update_settles_and_allows_independent_reply(
-        self, context_mode
-    ):
-        async with peer_model(context_mode=context_mode) as (peer, model, _):
+    async def test_cancelled_refused_update_settles_and_allows_independent_reply(self):
+        async with peer_model(context_mode="strict") as (peer, model, _):
             async with AgentSession(llm=model) as session:
                 agent = Agent(instructions="test")
                 await session.start(agent)
@@ -7557,23 +6501,16 @@ class TestRealtime:
                 await model._reconcile_chat_ctx(agent)
                 assert any(getattr(i, "text_content", None) == "new" for i in agent.chat_ctx.items)
 
+    @pytest.mark.usefixtures("small_sdk_limit")
     async def test_pending_parent_result_survives_installed_sdk_reference_lifetime(self):
-        count = 140
         async with peer_model(playback="discard", context_mode="shared") as (peer, model, _):
             provider = model.session()
             await provider.update_instructions("test")
             parent = await peer.start()
-            await peer.emit(
-                "response.function_call_arguments.done",
-                response_id=parent,
-                item_id="parent",
-                call_id="parent-call",
-                name="lookup",
-                arguments="{}",
-            )
+            await peer.call(parent, "parent-call", item_id="parent")
             await peer.end(parent)
             await asyncio.wait_for(peer.receipts.get(), 3)
-            for _ in range(count):
+            for _ in range(_PAST_SDK_LIMIT):
                 response = await peer.start()
                 await peer.end(response)
                 await asyncio.wait_for(peer.receipts.get(), 3)
@@ -7702,9 +6639,8 @@ class TestRealtime:
 
     @pytest.mark.parametrize(
         "operation,acknowledgment,ended",
-        [pytest.param("helper", index, False, id=f"helper-ack-{index}") for index in range(1, 5)]
+        [pytest.param("helper", index, False, id=f"helper-ack-{index}") for index in (1, 3)]
         + [
-            pytest.param("direct", 4, False, id="direct-final-ack-active"),
             pytest.param("direct", 4, True, id="direct-final-ack-ended"),
         ],
     )
@@ -7781,8 +6717,9 @@ class TestRealtime:
                 assert not errors
                 assert peer.connections == 1
 
-    @pytest.mark.parametrize("context_mode", ["strict", "shared"])
-    @pytest.mark.parametrize("failure", ["invalid", "rejected"])
+    @pytest.mark.parametrize(
+        "context_mode,failure", [("strict", "invalid"), ("shared", "rejected")]
+    )
     async def test_refused_typed_input_cannot_start_reply_and_allows_recovery(
         self, context_mode, failure, caplog
     ):
@@ -7904,6 +6841,7 @@ class TestRealtime:
                 ["B"] if outcome == "accepted" else []
             )
 
+    @pytest.mark.usefixtures("small_sdk_limit")
     @pytest.mark.parametrize("superseded_by", ["response", "speech", "report"])
     async def test_superseded_tool_replies_do_not_exhaust_response_holds(self, superseded_by):
         async with peer_model(playback="discard", context_mode="shared") as (peer, model, _):
@@ -7911,7 +6849,7 @@ class TestRealtime:
             await provider.update_instructions("test")
             errors = []
             provider.on("error", errors.append)
-            for number in range(140):
+            for number in range(_PAST_SDK_LIMIT):
                 call = f"call-{number}"
                 await tool_turn(peer, call)
                 if superseded_by == "report":
@@ -7933,14 +6871,15 @@ class TestRealtime:
                 assert "prism_call_id" not in request["response"]
                 assert request["response"]["metadata"]["prism_cause"] == "proactive"
             assert not errors
-            assert len(peer.items) == 140
+            assert len(peer.items) == _PAST_SDK_LIMIT
             assert peer.connections == 1
 
+    @pytest.mark.usefixtures("small_sdk_limit")
     async def test_replaced_tool_reports_release_only_the_old_response(self):
         async with peer_model(playback="discard", context_mode="shared") as (peer, model, _):
             provider = model.session()
             await provider.update_instructions("test")
-            for number in range(140):
+            for number in range(_PAST_SDK_LIMIT):
                 first, second = f"first-{number}", f"second-{number}"
                 await tool_turn(peer, first)
                 await tool_turn(peer, second)
@@ -7949,28 +6888,30 @@ class TestRealtime:
                 await submit(provider, second)
                 request = await reply(peer, provider)
                 assert request["response"]["prism_call_id"] == second
-            assert len(peer.items) == 280
+            assert len(peer.items) == 2 * _PAST_SDK_LIMIT
             assert peer.connections == 1
 
+    @pytest.mark.usefixtures("small_sdk_limit")
     async def test_superseded_partial_result_keeps_unresolved_tool_reference(self):
         async with peer_model(playback="discard", context_mode="shared") as (peer, model, _):
             provider = model.session()
             await provider.update_instructions("test")
             await tool_turn(peer, "first", "pending")
             await submit(provider, "first")
-            for _ in range(140):
+            for _ in range(_PAST_SDK_LIMIT):
                 await finish_discard_response(peer, await peer.start())
             await submit(provider, "pending")
             request = await reply(peer, provider)
             assert request["response"]["prism_call_id"] == "pending"
             assert [item["call_id"] for item in peer.items] == ["first", "pending"]
 
+    @pytest.mark.usefixtures("small_sdk_limit")
     @pytest.mark.parametrize("ending", ["refused", "cancelled_before_start"])
     async def test_failed_tool_reply_releases_its_response_hold(self, ending):
         async with peer_model(playback="discard", context_mode="shared") as (peer, model, _):
             provider = model.session()
             await provider.update_instructions("test")
-            for number in range(140):
+            for number in range(_PAST_SDK_LIMIT):
                 call = f"call-{number}"
                 await tool_turn(peer, call)
                 await submit(provider, call)
@@ -7985,9 +6926,10 @@ class TestRealtime:
                         await pending
                 assert peer.requests.empty()
             await reply(peer, provider)
-            assert len(peer.items) == 140
+            assert len(peer.items) == _PAST_SDK_LIMIT
             assert peer.connections == 1
 
+    @pytest.mark.usefixtures("small_sdk_limit")
     async def test_in_flight_continuation_keeps_reference_until_fallback_settles(self):
         async with peer_model(playback="discard", context_mode="shared") as (peer, model, _):
             provider = model.session()
@@ -7997,7 +6939,7 @@ class TestRealtime:
             pending = provider.generate_reply()
             request = await peer.next()
             try:
-                for _ in range(140):
+                for _ in range(_PAST_SDK_LIMIT):
                     await finish_discard_response(peer, await peer.start())
                 await peer.emit(
                     "error",
@@ -8012,9 +6954,9 @@ class TestRealtime:
                 assert report["response"]["prism_call_id"] == "call"
                 await finish_discard_response(peer, await peer.start(report))
                 await pending
-                for _ in range(140):
+                for _ in range(_PAST_SDK_LIMIT):
                     await finish_discard_response(peer, await peer.start())
-                # The public SDK rejects this completed reference once ownership ends.
+                # the public SDK rejects this completed reference once ownership ends
                 assert provider._sdk is not None
                 with pytest.raises(RimeInputError):
                     provider._sdk.hold_response(

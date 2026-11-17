@@ -30,6 +30,21 @@ from livekit.agents.llm._realtime.openai import _DiscardedGeneration, _MessageGe
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("kwargs", [{}, {"provider": None}, {"provider": "azure"}])
+def test_provider_pinning_warns_only_when_explicitly_passed(
+    kwargs: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        RealtimeModel("openai/gpt-realtime", api_key="key", api_secret="secret", **kwargs)
+
+    if kwargs:
+        assert len(caplog.messages) == 1
+        assert "provider is deprecated and will be removed on March 1, 2027" in caplog.text
+        assert "Omit this argument" in caplog.text
+    else:
+        assert not caplog.messages
+
+
 def test_plugin_import_is_canonical_class() -> None:
     from livekit.plugins.openai.realtime import InferenceRealtimeModel
     from livekit.plugins.openai.realtime.inference_realtime_model import (
@@ -456,6 +471,19 @@ def test_xai_explicit_turn_detection_is_preserved() -> None:
     assert model._opts.turn_detection == turn_detection
     assert model.capabilities.turn_detection is False
     assert model.capabilities.can_disable_turn_detection is False
+
+
+def test_google_models_keep_server_turn_detection() -> None:
+    model = RealtimeModel("google/gemini-3.8-live", api_key="key", api_secret="secret")
+
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.can_disable_turn_detection is False
+
+
+def test_openai_models_can_hand_turn_detection_to_the_client() -> None:
+    model = RealtimeModel("openai/gpt-realtime", api_key="key", api_secret="secret")
+
+    assert model.capabilities.can_disable_turn_detection is True
 
 
 def _transcript(session: RealtimeSession, item_id: str, text: str, *, status: str | None) -> None:

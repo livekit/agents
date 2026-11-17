@@ -86,6 +86,10 @@ def _perf() -> float:
     return loop.monotonic_read() if loop is not None else _REAL_PERF()
 
 
+def _now_ns() -> int:
+    return int(_now() * 1e9)
+
+
 # Maps a captured real clock to its virtual replacement. A model field built with
 # `Field(default_factory=time.time)` captures the bare `time.time` at import; patching the
 # `time` module later cannot reach that captured reference, so :func:`_patch_model_factories`
@@ -315,6 +319,10 @@ class _VirtualTimeLoop(asyncio.SelectorEventLoop):
         self._tie_seq += 1
         return super().call_at(when + self._tie_seq * _TIE_BREAK, callback, *args, **kwargs)
 
+    async def shutdown_default_executor(self, *args: Any) -> None:
+        # executor threads run in real time, so the join timeout must not jump with the clock
+        await super().shutdown_default_executor()
+
 
 class _VirtualTimePolicy(asyncio.DefaultEventLoopPolicy):
     def new_event_loop(self) -> asyncio.AbstractEventLoop:
@@ -343,7 +351,8 @@ def _virtual_wall_clock(request: pytest.FixtureRequest) -> Iterator[None]:
     - inline `time.time()` / `time.perf_counter()` -- redirected by patching the `time`
       module (these re-read the attribute at call time, so a scoped patch reaches them);
     - `default_factory=time.time` captured on event/chat-context models at import -- redirected
-      by :func:`_patched_model_clocks`, since a module patch cannot reach a captured reference.
+      by :func:`_patched_model_clocks`, since a module patch cannot reach a captured reference;
+      OpenTelemetry's span clock, a `time_ns` captured at import, is patched where it lives.
 
     Both resolve the loop at call time, so reads inside the loop see virtual time while any stray
     read from outside it (no running loop) falls back to a stable constant. Scoped to the test.
@@ -352,9 +361,13 @@ def _virtual_wall_clock(request: pytest.FixtureRequest) -> Iterator[None]:
         yield
         return
 
+    from opentelemetry.sdk import trace as otel_sdk_trace
+
     with (
         mock.patch.object(time, "time", _now),
+        mock.patch.object(time, "time_ns", _now_ns),
         mock.patch.object(time, "perf_counter", _perf),
+        mock.patch.object(otel_sdk_trace, "time_ns", _now_ns),
         _patched_model_clocks(),
     ):
         yield
