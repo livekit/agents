@@ -490,7 +490,6 @@ impl VoiceDriver {
                 self.update_models(stt, vad, llm, tts)
             }
             ActivityCommand::UpdateChatCtx(items) => {
-                let count = items.len();
                 // Publish the resulting record as a whole: replacing a model view can remove
                 // its private items while retaining other agents' and accepted history items.
                 let agent = self.activity.agent.clone();
@@ -505,7 +504,11 @@ impl VoiceDriver {
                         lk_agents_abi::UpdateChatCtx { chat_ctx: ctx },
                     ));
                 }
-                self.record_trace(GenerationStep::ChatCtxUpdated { items: count });
+                if self.journalled {
+                    self.record_trace(GenerationStep::ChatCtxUpdated {
+                        items: self.session.chat_ctx.agent_chat_ctx().items,
+                    });
+                }
             }
         }
     }

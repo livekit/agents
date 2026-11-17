@@ -332,7 +332,8 @@ pub enum GenerationStep {
         request: u64,
     },
     ChatCtxUpdated {
-        items: usize,
+        /// Accepted private context revisions, independently of human history membership.
+        items: Vec<lk_agents_abi::ChatItem>,
     },
     TtsRequested {
         speech: SpeechId,

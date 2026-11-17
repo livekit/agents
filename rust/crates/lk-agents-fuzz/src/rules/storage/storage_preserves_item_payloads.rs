@@ -4,7 +4,7 @@ use lk_agents_abi::llm::chat_context::protocol::encode_chat_item;
 use lk_agents_abi::{ChatItem, ChatMessage, Role};
 use lk_agents_voice::agent::{Source, Visibility};
 use lk_agents_voice::events::SessionEvent;
-use lk_agents_voice::trace::{CoreStep, Step};
+use lk_agents_voice::trace::{CoreStep, GenerationStep, Step};
 
 use crate::{
     authored::Authored,
@@ -20,8 +20,8 @@ impl Rule for StoragePreservesItemPayloads {
     const CONTRACT: Contract = Contract {
         id: "storage_preserves_item_payloads",
         guarantee: "A successfully settled conversation preserves accepted item payloads through its save request, including interrupted assistant prefixes and flags. Reloads replace the expected database view; later unsaved revisions are not treated as durable.",
-        examples: &[a_foreign_write_does_not_save_unacknowledged_local_edits, an_unrelated_foreign_append_keeps_a_new_local_revision, a_late_host_callback_keeps_the_snapshot_causal_order, a_later_accepted_revision_can_already_be_saved, a_queued_snapshot_does_not_include_later_input, a_delayed_reload_cannot_undo_foreign_compaction, a_reload_does_not_accept_private_model_context, cut_saved, unsaved_revision, foreign_reload, unseen_foreign_item_kept],
-        counterexamples: &[a_foreign_write_still_protects_its_own_addition, an_older_unsaved_local_edit_cannot_replace_a_foreign_edit, an_unrelated_foreign_append_cannot_excuse_losing_a_local_revision, a_late_host_callback_does_not_excuse_the_old_payload, a_queued_snapshot_still_protects_its_captured_input, a_delayed_reload_cannot_hide_a_lost_foreign_summary, generated_tail_saved, interruption_flag_lost, accepted_item_lost, unseen_foreign_item_lost],
+        examples: &[an_explicit_private_edit_revises_a_stored_item, a_later_foreign_edit_supersedes_an_earlier_private_edit, a_foreign_write_does_not_save_unacknowledged_local_edits, an_unrelated_foreign_append_keeps_a_new_local_revision, a_late_host_callback_keeps_the_snapshot_causal_order, a_later_accepted_revision_can_already_be_saved, a_queued_snapshot_does_not_include_later_input, a_delayed_reload_cannot_undo_foreign_compaction, a_reload_does_not_accept_private_model_context, cut_saved, unsaved_revision, foreign_reload, unseen_foreign_item_kept],
+        counterexamples: &[an_explicit_private_edit_cannot_be_lost, a_private_edit_cannot_replace_a_later_foreign_edit, a_foreign_write_still_protects_its_own_addition, an_older_unsaved_local_edit_cannot_replace_a_foreign_edit, an_unrelated_foreign_append_cannot_excuse_losing_a_local_revision, a_late_host_callback_does_not_excuse_the_old_payload, a_queued_snapshot_still_protects_its_captured_input, a_delayed_reload_cannot_hide_a_lost_foreign_summary, generated_tail_saved, interruption_flag_lost, accepted_item_lost, unseen_foreign_item_lost],
         probe: None,
     };
 
@@ -29,9 +29,19 @@ impl Rule for StoragePreservesItemPayloads {
         let host = r.host_view();
         let through = durable_through(r);
         let events = history_events(r);
-        // Reloads also carry private model-context items, which were never accepted into
-        // conversation history. Only public acceptance or an observed foreign commit makes
-        // an identity part of this durability contract.
+        let context_edits: Vec<_> = r
+            .internal_view()
+            .steps()
+            .iter()
+            .filter_map(|(at, step)| match step {
+                Step::Generation(GenerationStep::ChatCtxUpdated { items }) => Some((*at, items)),
+                _ => None,
+            })
+            .flat_map(|(at, items)| items.iter().map(move |item| (at, item)))
+            .collect();
+        // A reload alone does not establish acceptance. Public acceptance or an observed
+        // foreign commit brings an identity into this durability contract; subsequent
+        // explicit private-context edits can revise it without creating human dialogue.
         let mut accepted_ids = std::collections::BTreeSet::new();
         for (_, event) in events.iter().copied() {
             if let SessionEvent::ConversationItemAdded { item, visibility, .. } = event
@@ -99,7 +109,24 @@ impl Rule for StoragePreservesItemPayloads {
                 _ => {}
             }
         }
+        // An explicit private-context edit can revise a previously stored identity without
+        // publishing it as human dialogue. Read the native acceptance, never write arguments;
+        // a later observed foreign/public revision still wins by causal order.
+        for (at, item) in context_edits.iter().copied() {
+            if through.is_some_and(|through| at <= through)
+                && let Some((accepted, held)) = expected.get_mut(item.id())
+                && at > *accepted
+            {
+                *accepted = at;
+                *held = item;
+            }
+        }
         let mut later = BTreeMap::<_, Vec<_>>::new();
+        for (at, item) in context_edits {
+            if through.is_none_or(|through| at > through) {
+                later.entry(item.id()).or_default().push((at, item));
+            }
+        }
         for (at, event) in events.iter().copied() {
             if through.is_none_or(|through| at > through)
                 && let SessionEvent::ConversationItemAdded { item, visibility, .. } = event
@@ -434,4 +461,38 @@ fn a_late_host_callback_keeps_the_snapshot_causal_order() -> Recording {
 
 fn a_late_host_callback_does_not_excuse_the_old_payload() -> Recording {
     delayed_history_callback().storage(StorageStep::Saved { items: vec![message("old", false)] }).done()
+}
+
+fn edited_private_context() -> Authored {
+    Authored::new()
+        .storage(StorageStep::ForeignCommitted { before: Vec::new(), items: vec![message("stored", false)] })
+        .journal(Step::Generation(GenerationStep::ChatCtxUpdated { items: vec![message("private edit", false)] }))
+        // Replacing the public history does not expose the private edit as human dialogue.
+        .session(SessionEvent::HistoryReloaded { items: Vec::new() })
+}
+
+fn an_explicit_private_edit_revises_a_stored_item() -> Recording {
+    settled(edited_private_context())
+        .storage(StorageStep::Saved { items: vec![message("private edit", false)] }).done()
+}
+
+fn an_explicit_private_edit_cannot_be_lost() -> Recording {
+    settled(edited_private_context())
+        .storage(StorageStep::Saved { items: vec![message("stored", false)] }).done()
+}
+
+fn later_foreign_edit() -> Authored {
+    edited_private_context().storage(StorageStep::ForeignCommitted {
+        before: vec![message("stored", false)], items: vec![message("later foreign edit", false)],
+    })
+}
+
+fn a_later_foreign_edit_supersedes_an_earlier_private_edit() -> Recording {
+    settled(later_foreign_edit())
+        .storage(StorageStep::Saved { items: vec![message("later foreign edit", false)] }).done()
+}
+
+fn a_private_edit_cannot_replace_a_later_foreign_edit() -> Recording {
+    settled(later_foreign_edit())
+        .storage(StorageStep::Saved { items: vec![message("private edit", false)] }).done()
 }
