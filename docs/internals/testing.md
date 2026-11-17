@@ -169,6 +169,14 @@ faults. Authored remote-recovery stories run the real outgoing A2A client and se
 over an HTTP socket port fake, and reload the stored task/input/request state with a fresh
 owner. The fake service can accept a request and lose its response; it does not implement
 client retries or routing. Worker, evaluation and MCP transports also have component suites.
+
+Authored input-routing stories use `RunFakes.script()` to fix the frontend, the separate routing
+model and tool outputs. They consume the production text stream, acknowledge the text actually
+consumed, then reconstruct the owner from SQLite for the next human message. Assertions cover
+the input occurrence, visible dialogue and lease release together. Name each story for the
+person's journey or failure it catches; keep model decisions explicit rather than relying on
+a real model's wording. See the [routing recovery story](../../rust/crates/lk-agents-fuzz/src/text/input_routing_tests.rs).
+
 Boundary adapters
 at fake ports are outside the simulation.
 They are verified by conformance tests through the real adapters with
@@ -290,11 +298,6 @@ MCP_TEST_PYTHON="$PWD/.venv/bin/python" cargo test --manifest-path rust/Cargo.to
 
 # Python contracts linked against the freshly compiled native module.
 uv run --no-sync cargo test --manifest-path rust/Cargo.toml -p lk-agents-py --features ffmpeg
-
-# Same execution vectors through direct, TextSession and VoiceSession, in a fresh process.
-PYTEST_ADDOPTS="$PWD/tests/test_shared_execution.py --unit -k test_shared_execution" \
-  uv run --no-sync cargo test --manifest-path rust/Cargo.toml \
-  -p lk-agents-py --features ffmpeg --test py_bindings
 
 # Voice/room composition regressions with fake SDK/provider ports.
 cargo test --manifest-path rust/Cargo.toml --locked -p lk-agents-fuzz --test regressions

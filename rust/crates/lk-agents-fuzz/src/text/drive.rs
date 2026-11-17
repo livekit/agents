@@ -33,10 +33,35 @@ use lk_agents_runtime::storage::StorageError;
 
 const PARTITION_KEY: &str = "front-desk";
 #[cfg(test)]
+#[path = "input_routing_tests.rs"]
+mod input_routing_tests;
+#[cfg(test)]
 #[path = "remote_tests.rs"]
 mod remote_tests;
 /// How long a client waits on its turn before giving up on it.
 const TURN_DEADLINE_MS: u64 = 600_000;
+
+#[cfg(test)]
+fn environment(clock: Arc<dyn Clock>, forced: Vec<(Callback, Fault)>) -> Arc<Env> {
+    let tracer = lk_agents_telemetry::Tracer::disabled(clock.clone());
+    let process = ProcessEnv {
+        runtime: || Ok(tokio::runtime::Handle::current()),
+        spawner: || Ok(Arc::new(lk_agents_runtime::net::task::TokioSpawner::current())),
+        clock: clock.clone(),
+        http: || Err(ProcessError::Start("the DST has no sockets".into())),
+        tracer: tracer.clone(),
+        tasks: Arc::default(),
+    };
+    Arc::new(Env {
+        clock,
+        refs: Arc::new(NoRefs),
+        tracer,
+        process,
+        scenario: Scenario { forced, ..Scenario::direct(23) },
+        calm: Default::default(),
+        recording: Mutex::default(),
+    })
+}
 
 /// One seeded situation: what runs, how the clients behave, and which faults may strike.
 #[derive(Clone, Debug)]

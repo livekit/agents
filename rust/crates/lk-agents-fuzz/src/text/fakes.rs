@@ -56,6 +56,12 @@ pub struct RunFakes {
     cancelled: watch::Sender<BTreeSet<u64>>,
     /// The A2A handler's turn, whose checkpoint the run's checkpoint answers.
     port: Option<Arc<dyn HandlerPort>>,
+    script: Mutex<Option<Script>>,
+}
+
+struct Script {
+    replies: VecDeque<ChoiceDelta>,
+    tools: VecDeque<ToolOutcome>,
 }
 
 impl RunFakes {
@@ -73,7 +79,14 @@ impl RunFakes {
             calls,
             cancelled: watch::Sender::new(BTreeSet::new()),
             port,
+            script: Mutex::new(None),
         })
+    }
+
+    /// Readable stories fix model and tool outputs; the seeded fault boundary stays the same.
+    #[cfg(test)]
+    pub(super) fn script(&self, replies: Vec<ChoiceDelta>, tools: Vec<ToolOutcome>) {
+        *self.script.lock() = Some(Script { replies: replies.into(), tools: tools.into() });
     }
 
     fn fault(&self, callback: Callback) -> Fault {
@@ -217,7 +230,14 @@ impl AgentCallbacks for FakeHost {
             verbatim: false,
             more: None,
         };
-        let value = async move { Ok(completion(found)) };
+        let found = match self.0.script.lock().as_mut() {
+            Some(script) => script
+                .tools
+                .pop_front()
+                .ok_or_else(|| HostError::new("the scripted tool has no outcome left")),
+            None => Ok(found),
+        };
+        let value = async move { found.map(completion) };
         let cancelled = Ok(completion(ToolOutcome::Cancelled));
         Box::pin(self.0.answer(Callback::RunTool, inv.operation, value, cancelled))
     }
@@ -271,14 +291,20 @@ impl Llm for FakeLlm {
                 })
                 .collect();
             let content = tool_calls.is_empty().then(|| "Your booking is at 9:00.".to_owned());
+            let delta = match fakes.script.lock().as_mut() {
+                Some(script) => script.replies.pop_front().ok_or_else(|| {
+                    lk_agents_abi::errors::ApiError::protocol(
+                        "the scripted model has no reply left",
+                        "",
+                    )
+                })?,
+                None => {
+                    ChoiceDelta { role: Some(Role::Assistant), content, tool_calls, extra: None }
+                }
+            };
             let chunk = LlmChunk {
                 id: format!("chunk_{request}"),
-                delta: Some(ChoiceDelta {
-                    role: Some(Role::Assistant),
-                    content,
-                    tool_calls,
-                    extra: None,
-                }),
+                delta: Some(delta),
                 usage: None,
                 flush: false,
                 node_text: false,

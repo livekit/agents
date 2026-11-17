@@ -364,26 +364,7 @@ fn message(id: &str, text: &str, task: bool) -> a2a::Message {
 }
 
 fn environment(clock: Arc<dyn Clock>) -> Arc<Env> {
-    let scenario =
-        Scenario { forced: vec![(Callback::LlmOpen, Fault::Hang)], ..Scenario::direct(23) };
-    let tracer = lk_agents_telemetry::Tracer::disabled(clock.clone());
-    let process = ProcessEnv {
-        runtime: || Ok(tokio::runtime::Handle::current()),
-        spawner: || Ok(Arc::new(lk_agents_runtime::net::task::TokioSpawner::current())),
-        clock: clock.clone(),
-        http: || Err(ProcessError::Start("the DST has no sockets".into())),
-        tracer: tracer.clone(),
-        tasks: Arc::default(),
-    };
-    Arc::new(Env {
-        clock,
-        refs: Arc::new(NoRefs),
-        tracer,
-        process,
-        scenario,
-        calm: Default::default(),
-        recording: Mutex::default(),
-    })
+    super::environment(clock, vec![(Callback::LlmOpen, Fault::Hang)])
 }
 
 async fn owner(

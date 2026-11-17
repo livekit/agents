@@ -907,15 +907,17 @@ designed, or conceal an additional domain concept as a mechanical helper.
 
 The product direction and local/remote layout are aligned. The general E2E foundation,
 bound-state continuation, generated remote inspection and native communication journal are
-implemented. Automatic input routing, task controls, live scheduling and complete voice
-delegation remain implementation work. Several public signatures and native lifetime
+implemented. Automatic text input routing uses the separate configured model and shared native
+admission path, including held responses, corrections and a SQLite reconstruction story.
+Voice input routing, task controls, live scheduling and complete voice delegation remain
+implementation work. Several public signatures and native lifetime
 contracts above remain open.
 Do not treat the architecture agreement as approval of every provisional type name.
 
 | Before this slice | Resolve |
 | --- | --- |
 | Shared native state/codegen/storage | Review this inventory; finalize agent/remote identity and initialization, options/view visibility, one snapshot encoding, bound-history editing and retention of referenced content. Prove the generated protocol/view representation. |
-| Input routing | Finalize configuration spelling for the agreed separate routing model, explicit reference spelling/occurrence validation and custom-card schema collisions. |
+| Input routing | Connect the same owner-level delegation configuration to voice; finalize explicit reference spelling/occurrence validation and custom-card schema collisions. |
 | Live/exact delivery | Finalize update/say receipt return and interruption/close outcomes, protected-step behavior and RemoteTask.cancel() error/control-activation lifetime. |
 | Cross-channel release | Finalize no-taskId inbound continuation versus merged task behavior and UI commands without an active owner. |
 
@@ -1103,6 +1105,10 @@ passes deterministic stock-peer transport and failure tests.
   Native text admission validates its offered candidate indices; invalid/unclear/failed
   classification leaves requests open for clarification. The model's task and stream cleanup
   are owned and cancelable, and its consumption is included in the turn's usage.
+  A scripted DST story runs the production text executor and routing provider across three
+  fresh SQLite activations: ask, handle a side question, then accept the response despite a
+  lost checkpoint acknowledgement. It checks the original input occurrence, exact visible
+  dialogue and lease release together; the fakes choose model/tool outputs rather than routing.
 - [ ] Recognize responses to previously presented requests at input admission, including when
   the current agent lacks the matching remote tool. Persist held responses, revalidate before
   dispatch and deduplicate against later tool calls using the same shared reservation path.
