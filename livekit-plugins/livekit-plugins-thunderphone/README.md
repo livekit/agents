@@ -2,7 +2,7 @@
 
 Run a [ThunderPhone](https://thunderphone.com) voice agent as the realtime
 (speech-to-speech) model of a LiveKit Agents session. ThunderPhone handles
-speech recognition, the language model, the voice, turn-taking, 47 languages
+speech recognition, the language model, the voice, turn-taking, 62 languages
 and tools; LiveKit handles the room, the transport and the telephony.
 
 See the docs at https://docs.livekit.io/agents/models/realtime/thunderphone/ for
