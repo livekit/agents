@@ -346,6 +346,38 @@ async fn a_read_refused_unapplied_is_sent_again() {
     pooled.conn.aclose().await;
 }
 
+/// Catches: a write answered `retry` sent again with less than the server's request timeout left
+/// before its caller's deadline, whose answer the deadline could cut: an unknown outcome, and a
+/// wait past the deadline. Too short for another whole attempt, it reaches its caller as the
+/// refusal, sent once, before the deadline.
+#[tokio::test]
+async fn a_retry_with_no_room_for_another_attempt_reaches_the_caller_unapplied() {
+    use std::sync::atomic::AtomicBool as Once;
+    static REFUSED: Once = Once::new(false);
+    fn refused_then_unanswered(
+        m: &connection::wire::ClientMessage,
+    ) -> Vec<connection::wire::ServerMessage> {
+        match is_batch(m) {
+            true if !REFUSED.swap(true, Ordering::SeqCst) => {
+                vec![connection::tests::error(ErrorCode::RETRY, "log full")]
+            }
+            true => Vec::new(),
+            false => connection::tests::script(m),
+        }
+    }
+    let (pooled, seen) = pooled(refused_then_unanswered).await;
+    let clock = pooled.pool.clock.clone();
+    let deadline = clock.now().saturating_add(Duration::from_secs(2));
+    let write = crate::deadline::within(deadline, async {
+        let resend = Resend::new(clock.clone(), &Cx::NONE, StorageWrite::Context);
+        resend.send(|| pooled.batch(vec![Statement::raw("UPDATE t SET n = 1")])).await
+    });
+    let write = lk_agents_abi::before(&*clock, Some(deadline), write).await;
+    assert!(matches!(write, Ok(Err(StorageError::Unavailable(_)))), "{write:?}");
+    assert_eq!(frames(&seen, is_batch), 1, "no resend the deadline could cut");
+    pooled.conn.aclose().await;
+}
+
 /// Catches: a read batch answered `internal` or a code this build does not know read as
 /// retryable, and a write so answered sent again. The read fails final, the write `Uncertain`;
 /// neither goes out twice.
