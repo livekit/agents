@@ -1201,8 +1201,6 @@ class SpeechStream(stt.SpeechStream):
         self._client_request_id = request_id
         self._server_request_id = None
         try:
-            # a retry after an error starts here too, with the base class's clock restarted
-            self._carry_audio_into_next_connection()
             # update_options() ends a connection to reopen it with the new options;
             # the input channel carries on into the next connection
             while await self._run_connection():
@@ -1369,33 +1367,26 @@ class SpeechStream(stt.SpeechStream):
         """Close an open utterance on the old connection before it is replaced.
 
         Only the old connection can transcribe speech it has started on, so its buffered
-        audio and a flush go there, and the turn ends with END_OF_SPEECH either way. With no
+        audio and a flush go there, and the turn ends with END_OF_SPEECH either way. That
+        includes an utterance whose END_SPEECH arrived but whose final hasn't yet. With no
         utterance open, unsent audio carries into the new connection instead.
         """
-        if not self._speaking:
+        if not self._speaking and not self._pending_eos:
             return
-
-        import base64
 
         import numpy as np
 
+        # the old connection's final is what ends this turn, not the fallback timer
+        fallback_task = self._cancel_eos_fallback()
+        if fallback_task is not None:
+            await utils.aio.cancel_and_wait(fallback_task)
         if self._audio_task is not None:
             await utils.aio.cancel_and_wait(self._audio_task)
         try:
             if self._audio_buffer:
                 tail = np.array(self._audio_buffer, dtype=np.int16).tobytes()
                 self._audio_buffer.clear()
-                await ws.send_str(
-                    json.dumps(
-                        {
-                            "audio": {
-                                "data": base64.b64encode(tail).decode("utf-8"),
-                                "encoding": self._audio_encoding,
-                                "sample_rate": self._opts.sample_rate,
-                            }
-                        }
-                    )
-                )
+                await self._send_pcm(ws, tail)
             # a transcript from earlier in the utterance doesn't cover the flushed audio
             self._utterance_resolved.clear()
             await ws.send_str(json.dumps({"type": "flush"}))
@@ -1432,6 +1423,23 @@ class SpeechStream(stt.SpeechStream):
         self._end_speech_sample = None
         self._release_at_end_speech = False
 
+    async def _send_pcm(self, ws: aiohttp.ClientWebSocketResponse, pcm: bytes) -> None:
+        """Send 16-bit PCM samples in Sarvam's audio message and keep them for replay."""
+        import base64
+
+        await ws.send_str(
+            json.dumps(
+                {
+                    "audio": {
+                        "data": base64.b64encode(pcm).decode("utf-8"),
+                        "encoding": self._audio_encoding,
+                        "sample_rate": self._opts.sample_rate,
+                    }
+                }
+            )
+        )
+        self._remember_sent_audio(pcm)
+
     def _remember_sent_audio(self, pcm: bytes) -> None:
         """Count sent PCM and keep the latest of it for replay after a reconnect."""
         self._sent_samples += len(pcm) // 2
@@ -1443,7 +1451,6 @@ class SpeechStream(stt.SpeechStream):
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Process audio frames and send them in chunks."""
-        import base64
 
         import numpy as np
 
@@ -1460,21 +1467,9 @@ class SpeechStream(stt.SpeechStream):
         async def send_full_chunks() -> None:
             nonlocal chunks_sent
             while len(audio_buffer) >= chunk_size:
-                # Convert to Int16Array
                 chunk_bytes = np.array(audio_buffer[:chunk_size], dtype=np.int16).tobytes()
-
-                # Send audio in the required format
-                audio_message = {
-                    "audio": {
-                        "data": base64.b64encode(chunk_bytes).decode("utf-8"),
-                        "encoding": self._audio_encoding,
-                        "sample_rate": self._opts.sample_rate,
-                    }
-                }
-
-                await ws.send_str(json.dumps(audio_message))
+                await self._send_pcm(ws, chunk_bytes)
                 chunks_sent += 1
-                self._remember_sent_audio(chunk_bytes)
 
                 # Remove sent data from buffer
                 del audio_buffer[:chunk_size]
@@ -1511,19 +1506,7 @@ class SpeechStream(stt.SpeechStream):
 
                 elif isinstance(frame, self._FlushSentinel):
                     if audio_buffer:
-                        tail = np.array(audio_buffer, dtype=np.int16).tobytes()
-                        await ws.send_str(
-                            json.dumps(
-                                {
-                                    "audio": {
-                                        "data": base64.b64encode(tail).decode("utf-8"),
-                                        "encoding": self._audio_encoding,
-                                        "sample_rate": self._opts.sample_rate,
-                                    }
-                                }
-                            )
-                        )
-                        self._remember_sent_audio(tail)
+                        await self._send_pcm(ws, np.array(audio_buffer, dtype=np.int16).tobytes())
                         audio_buffer.clear()
                     if self._opts.flush_signal:
                         await ws.send_str(json.dumps({"type": "flush"}))
@@ -1746,6 +1729,8 @@ class SpeechStream(stt.SpeechStream):
 
         if not transcript_text:
             self._logger.debug("Received empty transcript", extra=self._build_log_context())
+            # a flush that turns up nothing (noise that tripped VAD) still settles the turn
+            self._utterance_resolved.set()
             return
 
         try:
