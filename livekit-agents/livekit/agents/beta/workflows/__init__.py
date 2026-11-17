@@ -5,7 +5,7 @@ from .dtmf_inputs import GetDtmfResult, GetDtmfTask
 from .email_address import GetEmailResult, GetEmailTask
 from .name import GetNameResult, GetNameTask
 from .phone_number import GetPhoneNumberResult, GetPhoneNumberTask
-from .task_group import TaskCompletedEvent, TaskGroup, TaskGroupResult
+from .task_group import TaskCompletedEvent, TaskGroup, TaskGroupProgress, TaskGroupResult
 from .utils import WorkflowInstructions
 from .warm_transfer import TwilioConnectorWarmTransferTask, WarmTransferResult, WarmTransferTask
 
@@ -27,6 +27,7 @@ __all__ = [
     "GetPhoneNumberResult",
     "TaskCompletedEvent",
     "TaskGroup",
+    "TaskGroupProgress",
     "TaskGroupResult",
     "WarmTransferTask",
     "TwilioConnectorWarmTransferTask",

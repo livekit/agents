@@ -32,6 +32,33 @@ class TaskGroupResult:
 
 
 @dataclass
+class TaskGroupProgress:
+    """Where a TaskGroup stands, so a new TaskGroup can start from the same point.
+
+    Read it from `TaskGroup.progress` and pass it to `TaskGroup(progress=...)`, for example
+    when every inbound message of a text conversation is handled in a new session.
+
+    Attributes:
+        pending (list[str]): IDs of the tasks still to run, the current task first.
+        results (dict[str, Any]): The result of each completed task, by ID.
+        visited (list[str]): IDs of the tasks entered so far. The out_of_scope tool can
+            regress to these.
+    """
+
+    pending: list[str]
+    results: dict[str, Any]
+    visited: list[str]
+
+
+def _copy_progress(progress: TaskGroupProgress) -> TaskGroupProgress:
+    return TaskGroupProgress(
+        pending=list(progress.pending),
+        results=dict(progress.results),
+        visited=list(progress.visited),
+    )
+
+
+@dataclass
 class TaskCompletedEvent:
     agent_task: AgentTask
     task_id: str
@@ -52,6 +79,8 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         on_task_completed: Callable[[TaskCompletedEvent], Coroutine[None, None, None]]
         | None = None,
+        progress: TaskGroupProgress | None = None,
+        current_task: AgentTask | None = None,
     ):
         """TaskGroup orchestrates a sequence of multiple AgentTasks. It also allows for users to regress to previous tasks if requested.
 
@@ -59,7 +88,12 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             summarize_chat_ctx (bool): Whether or not to summarize the interactions within the TaskGroup into one message and merge the context. Defaults to True.
             return_exceptions (bool): Whether or not to directly propagate an error. When set to True, the exception is added to the results dictionary and the sequence continues. Defaults to False.
             on_task_completed (Callable[]): A callable that executes upon each task completion. The callback takes in a single argument of a TaskCompletedEvent.
+            progress (TaskGroupProgress | None): Saved progress to start from, as read from `TaskGroup.progress`, e.g. in an earlier session. The group runs `progress.pending` in order, keeps `progress.results` as the results of the tasks already completed, and lets the out_of_scope tool regress to `progress.visited`. Every ID must belong to a task added with `add()`, otherwise the group fails with a ValueError when it starts. Defaults to None: start from the first task.
+            current_task (AgentTask | None): With `progress`, the task to run for `progress.pending[0]` instead of calling its factory. It keeps the chat context it was built with (e.g. its own conversation from the earlier session) rather than receiving a copy of the group's, and it can be built knowing that it is resuming. Later tasks and regressions use the factories. Defaults to None.
         """
+        if current_task is not None and (progress is None or not progress.pending):
+            raise ValueError("current_task needs a progress with a pending task to run it for")
+
         super().__init__(
             instructions="*empty*", chat_ctx=chat_ctx, llm=NOT_GIVEN
         )  # the LLM is set as NOT_GIVEN to allow session reusage if supported
@@ -69,6 +103,14 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         self._visited_tasks = set[str]()
         self._registered_factories: OrderedDict[str, _FactoryInfo] = OrderedDict()
         self._task_completed_callback = on_task_completed
+
+        self._initial_progress = _copy_progress(progress) if progress is not None else None
+        self._resumed_task = current_task
+        self._started = False
+        self._task_stack: list[str] = []
+        self._task_results: dict[str, Any] = {}
+        self._current_task: AgentTask | None = None
+        self._current_task_id: str | None = None
 
     def add(
         self,
@@ -89,51 +131,102 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         )
         return self
 
+    @property
+    def progress(self) -> TaskGroupProgress:
+        """A snapshot of the group's progress, to start a new TaskGroup from later.
+
+        `pending` lists the running task first. Before the group starts, this is the
+        progress it will start from. The results are the tasks' own objects, not copies;
+        storing them (e.g. as JSON) is up to the caller.
+        """
+        if not self._started:
+            if self._initial_progress is not None:
+                return _copy_progress(self._initial_progress)
+            return TaskGroupProgress(
+                pending=list(self._registered_factories), results={}, visited=[]
+            )
+
+        pending = list(self._task_stack)
+        if self._current_task_id is not None:
+            pending.insert(0, self._current_task_id)
+        return TaskGroupProgress(
+            pending=pending,
+            results=dict(self._task_results),
+            # registration order, so the snapshot doesn't depend on set ordering
+            visited=[
+                task_id for task_id in self._registered_factories if task_id in self._visited_tasks
+            ],
+        )
+
+    @property
+    def current_task(self) -> AgentTask | None:
+        """The task that is running, or the last one that ran. None before the group starts."""
+        return self._current_task
+
     async def on_enter(self) -> None:
-        task_stack = list(self._registered_factories.keys())
-        task_results: dict[str, Any] = {}
+        progress = self._initial_progress
+        if progress is not None:
+            named = dict.fromkeys([*progress.pending, *progress.results, *progress.visited])
+            unknown = [task_id for task_id in named if task_id not in self._registered_factories]
+            if unknown:
+                self.complete(ValueError(f"progress names unregistered task ids: {unknown}"))
+                return
+            self._task_stack = list(progress.pending)
+            self._task_results = dict(progress.results)
+            self._visited_tasks = set(progress.visited)
+        else:
+            self._task_stack = list(self._registered_factories.keys())
+            self._task_results = {}
+        self._started = True
+        resumed_task = self._resumed_task
 
-        while len(task_stack) > 0:
-            task_id = task_stack.pop(0)
+        while len(self._task_stack) > 0:
+            task_id = self._task_stack.pop(0)
             factory_info = self._registered_factories[task_id]
+            self._current_task_id = task_id
 
-            self._current_task = factory_info.task_factory()
-
-            shared_chat_ctx = self.chat_ctx.copy()
-            await self._current_task.update_chat_ctx(shared_chat_ctx)
+            if resumed_task is not None:
+                # keep the context it was built with: it continues its own conversation
+                task, resumed_task = resumed_task, None
+            else:
+                task = factory_info.task_factory()
+                shared_chat_ctx = self.chat_ctx.copy()
+                await task.update_chat_ctx(shared_chat_ctx)
+            self._current_task = task
 
             if out_of_scope_tool := self._build_out_of_scope_tool(active_task_id=task_id):
-                current_tools = self._current_task.tools
+                current_tools = task.tools
                 current_tools.append(out_of_scope_tool)
-                await self._current_task.update_tools(current_tools)
+                await task.update_tools(current_tools)
 
             try:
                 self._visited_tasks.add(task_id)
-                res = await self._current_task
+                res = await task
 
                 # AgentTask handoff merges omit function calls. Re-merge the completed
                 # task context so task-group summarization can incorporate tool results.
                 self._chat_ctx.merge(
-                    self._current_task.chat_ctx.copy(),
+                    task.chat_ctx.copy(),
                     exclude_instructions=True,
                 )
 
-                task_results[task_id] = res
+                self._task_results[task_id] = res
+                self._current_task_id = None
 
                 if self._task_completed_callback is not None:
                     await self._task_completed_callback(
-                        TaskCompletedEvent(
-                            agent_task=self._current_task, task_id=task_id, result=res
-                        )
+                        TaskCompletedEvent(agent_task=task, task_id=task_id, result=res)
                     )
             except _OutOfScopeError as e:
-                task_stack.insert(0, task_id)
+                self._current_task_id = None
+                self._task_stack.insert(0, task_id)
                 for task_id in reversed(e.target_task_ids):
-                    task_stack.insert(0, task_id)
+                    self._task_stack.insert(0, task_id)
                 continue
             except Exception as e:
                 if self._return_exceptions:
-                    task_results[task_id] = e
+                    self._task_results[task_id] = e
+                    self._current_task_id = None
                     continue
                 else:
                     self.complete(e)
@@ -161,7 +254,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                 self.complete(e)
                 return
 
-        self.complete(TaskGroupResult(task_results=task_results))
+        self.complete(TaskGroupResult(task_results=dict(self._task_results)))
 
     def _build_out_of_scope_tool(self, *, active_task_id: str) -> FunctionTool | None:
         # Only allow to regress to already visited tasks
@@ -196,7 +289,7 @@ class TaskGroup(AgentTask[TaskGroupResult]):
                 if task_id not in self._registered_factories or task_id not in self._visited_tasks:
                     raise ToolError(f"unable to regress, invalid task id {task_id}")
 
-            if not self._current_task.done():
+            if self._current_task is not None and not self._current_task.done():
                 self._current_task.complete(_OutOfScopeError(target_task_ids=task_ids))
 
         return out_of_scope
