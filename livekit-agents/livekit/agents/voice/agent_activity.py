@@ -4456,14 +4456,10 @@ class AgentActivity(RecognitionHooks):
                 # the push is best-effort (the items were sent; only the ack timed out),
                 # so still generate the reply rather than dropping the whole turn
                 logger.warning(
-                    "failed to update the chat context before generating the reply",
-                    extra={"error_type": type(e).__name__},
+                    "failed to update the chat context before generating the reply", exc_info=e
                 )
             except Exception as e:
-                logger.error(
-                    "failed to update the chat context before generating the reply",
-                    extra={"error_type": type(e).__name__},
-                )
+                logger.exception("failed to update the chat context before generating the reply")
                 speech_handle._mark_done(error=e)
                 return
             self._agent._chat_ctx._upsert_item(msg)
@@ -4519,7 +4515,7 @@ class AgentActivity(RecognitionHooks):
                 logger.error(
                     "failed to generate a reply%s",
                     " after tool execution" if tool_reply else "",
-                    extra={"error_type": type(e).__name__},
+                    exc_info=e,
                 )
                 speech_handle._mark_done(error=e)
                 self._session._update_agent_state("listening")
@@ -5047,7 +5043,7 @@ class AgentActivity(RecognitionHooks):
                 except llm.RealtimeError as e:
                     logger.warning(
                         "failed to sync the tool results of an interrupted generation",
-                        extra={"error_type": type(e).__name__},
+                        exc_info=e,
                     )
             if timeout_cancel is not None:
                 raise timeout_cancel
@@ -5167,7 +5163,7 @@ class AgentActivity(RecognitionHooks):
                 except llm.RealtimeError as e:
                     logger.warning(
                         "failed to update chat context before generating the function calls results",  # noqa: E501
-                        extra={"error_type": type(e).__name__},
+                        exc_info=e,
                     )
                     if auto_reply_fut is not None and not auto_reply_fut.done():
                         if self._pending_auto_tool_reply_fut is auto_reply_fut:

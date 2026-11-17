@@ -1617,6 +1617,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     ) -> SpeechHandle:
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
+        if self._amd is not None:
+            # AMD would hold the speech and play it after detection
+            raise RuntimeError("say() is not supported while AMD is running")
 
         run_state = self._global_run_state
         activity = self._next_activity if self._activity.scheduling_paused else self._activity
@@ -1678,6 +1681,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """  # noqa: E501
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
+        if self._amd is not None:
+            # AMD would hold the reply and play it after detection
+            raise RuntimeError("generate_reply() is not supported while AMD is running")
 
         user_message = (
             llm.ChatMessage(role="user", content=[user_input])

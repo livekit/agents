@@ -24,6 +24,7 @@ from livekit.agents import (
     Agent,
     AgentFalseInterruptionEvent,
     AgentSession,
+    AgentTask,
     AMDCompletedEvent,
     AMDPredictionEvent,
     APIConnectionError,
@@ -1165,7 +1166,7 @@ async def test_cancel_pending_speech_includes_preemptive_and_queued_speech() -> 
         )
         assert activity._preemptive_generation is not None
         preemptive = activity._preemptive_generation.speech_handle
-        queued = session.say("Please call me back.")
+        queued = activity.say("Please call me back.")
 
         activity._cancel_pending_speeches()
 
@@ -2078,6 +2079,64 @@ async def test_agent_handoff_is_rejected_until_amd_finishes(handoff: str) -> Non
         session.update_agent(replacement)
         await asyncio.wait_for(entered.wait(), 2)
         assert session.current_agent is replacement
+
+
+@pytest.mark.asyncio
+async def test_amd_cannot_enter_while_an_agent_task_runs() -> None:
+    task_entered = asyncio.Event()
+    results: list[str] = []
+
+    class Task(AgentTask[str]):
+        def __init__(self) -> None:
+            super().__init__(instructions="Collect a value.")
+
+        async def on_enter(self) -> None:
+            task_entered.set()
+
+    class Parent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="Test")
+            self.task = Task()
+
+        async def on_enter(self) -> None:
+            results.append(await self.task)
+
+    parent = Parent()
+    async with AgentSession(llm=FakeLLM()) as session:
+        await session.start(parent)
+        await asyncio.wait_for(task_entered.wait(), 2)
+        detector = AMD(session, llm=None, stt=None)
+        # AMD would reject the task's return to its caller and strand the session
+        with pytest.raises(RuntimeError, match="finish the AgentTask before entering AMD"):
+            await detector.__aenter__()
+        assert session.amd is None
+        assert detector.lifecycle is AMDLifecycle.INITIALIZED
+
+        parent.task.complete("done")
+        await eventually(lambda: session.current_agent is parent)
+        assert results == ["done"]
+        async with detector:
+            assert session.amd is detector
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", ["say", "generate_reply"])
+async def test_direct_replies_are_rejected_while_amd_runs(call: str) -> None:
+    async with running(idle_timeout=0.05) as (detector, session, _, _):
+        created: list[SpeechCreatedEvent] = []
+        session.on("speech_created", created.append)
+        # a held reply would keep the idle timer off and play after AMD completes
+        with pytest.raises(RuntimeError, match=rf"{call}\(\) is not supported while AMD"):
+            if call == "say":
+                session.say("Hello there.")
+            else:
+                session.generate_reply(instructions="Greet the caller.")
+        assert not created
+        result = await asyncio.wait_for(detector.execute(), 2)
+        assert result.reason == "idle_timeout"
+
+        handle = session.say("Hello there.") if call == "say" else session.generate_reply()
+        await asyncio.wait_for(handle, 2)
 
 
 @pytest.mark.asyncio
@@ -4204,7 +4263,9 @@ async def test_model_selection_is_independent_for_each_model(
     finally:
         await session.aclose()
     # the startup log names each model's source, so users know which quotas AMD uses
-    [record] = [r for r in caplog.records if r.getMessage().startswith("amd models")]
+    [record] = [r for r in caplog.records if r.getMessage().startswith("amd initialized with")]
+    # a non-default source names the message
+    assert record.getMessage() == "amd initialized with session models"
     if inherited == "llm":
         assert (record.llm, record.llm_source) == ("unknown/unknown", "session")
         assert record.stt_source == "default"

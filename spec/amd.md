@@ -68,7 +68,7 @@ stage. Requests carry both, because `wait` and `uncertain` do not change the sta
 | `events.py` | Public enums and event models |
 
 The stage machine in `_fsm.py` has no side effects. It accepts any category and
-returns the next stage, its effects, and whether the prediction corrects the stage.
+returns the next stage and its effects.
 `AMD` runs the effects.
 
 ## 4. Public API
@@ -184,7 +184,9 @@ model (section 11.2).
 
 Entry checks these conditions in order. A failed check raises the error shown.
 
-1. The session has started, and no agent handoff is in progress (`RuntimeError`).
+1. The session has started, no agent handoff is in progress, and the current Agent
+   is not an `AgentTask` (`RuntimeError`). AMD would reject the task's return to its
+   caller.
 2. If the Agent uses a realtime model, the model has client-side turn detection,
    per-response tool choice, and client-controlled tool replies. Session STT or AMD
    STT exists (`ValueError`).
@@ -243,7 +245,10 @@ does not make the SIP provider send early media.
   `update_agent()` and inline `AgentTask` switches raise `RuntimeError`. If the
   current Agent changes anyway, the next committed turn's `should_reply` hook
   completes AMD with `agent_changed` (section 10.1).
-- AMD does not support direct `session.say()` and `session.generate_reply()` calls.
+- `session.say()` and `session.generate_reply()` raise `RuntimeError` while AMD runs.
+  AMD would hold the speech, which keeps the idle timer off, and play it after AMD
+  completes. If a realtime model fails over while AMD runs, the fallback adapter does
+  not regenerate the interrupted reply.
 
 ## 6. Transcripts
 

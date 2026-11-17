@@ -979,7 +979,8 @@ async def test_xai_tts_redacts_api_key_from_handshake_error() -> None:
     _assert_redacted(exc_info.value)
 
 
-# realtime failures log only the error type, never the provider's text
+# realtime failures attach the provider's error as exc_info and keep it out of the log body:
+# redaction drops exception details from exported logs but cannot redact a body
 
 _PRIVATE_REALTIME_ERROR = "private provider response with credentials"
 
@@ -987,7 +988,7 @@ _PRIVATE_REALTIME_ERROR = "private provider response with credentials"
 @pytest.mark.virtual_time
 @pytest.mark.no_concurrent
 @pytest.mark.parametrize("context_error", [None, llm.RealtimeError, RuntimeError])
-async def test_realtime_reply_failure_logs_only_error_type(
+async def test_realtime_reply_failure_logs_the_error_outside_the_body(
     caplog: pytest.LogCaptureFixture, context_error: type[Exception] | None
 ) -> None:
     model = FakeRealtimeModel()
@@ -1012,15 +1013,14 @@ async def test_realtime_reply_failure_logs_only_error_type(
     records = [record for record in caplog.records if "failed to" in record.getMessage()]
     assert len(records) == (2 if context_error is llm.RealtimeError else 1)
     for record in records:
-        assert record.error_type == type(error).__name__
-        assert record.exc_info is None
-        assert _PRIVATE_REALTIME_ERROR not in str(record.__dict__)
+        assert record.exc_info is not None and record.exc_info[1] is error
+        assert _PRIVATE_REALTIME_ERROR not in record.getMessage()
 
 
 @pytest.mark.virtual_time
 @pytest.mark.no_concurrent
 @pytest.mark.parametrize("interrupted", [False, True])
-async def test_realtime_tool_sync_failure_logs_only_error_type(
+async def test_realtime_tool_sync_failure_logs_the_error_outside_the_body(
     caplog: pytest.LogCaptureFixture, interrupted: bool
 ) -> None:
     class ToolAgent(Agent):
@@ -1046,6 +1046,6 @@ async def test_realtime_tool_sync_failure_logs_only_error_type(
         if interrupted
         else "failed to update chat context before generating the function calls results"
     )
-    assert records[0].error_type == "RealtimeError"
-    assert records[0].exc_info is None
-    assert _PRIVATE_REALTIME_ERROR not in str(records[0].__dict__)
+    exc_info = records[0].exc_info
+    assert exc_info is not None and isinstance(exc_info[1], llm.RealtimeError)
+    assert str(exc_info[1]) == _PRIVATE_REALTIME_ERROR

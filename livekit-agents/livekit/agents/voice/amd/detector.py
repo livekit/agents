@@ -19,6 +19,7 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import EventEmitter, aio, is_given
 from ...utils.misc import is_cloud
 from ...utils.participant import wait_for_participant_attribute, wait_for_track_publication
+from ..agent import AgentTask
 from . import _fsm, _inference
 from ._chat_context import AMDChatContext, AMDRequest, Turn, update_transcript
 from ._stt import AMDTranscriber, LateAMDFinal
@@ -180,8 +181,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             available; otherwise use the current Agent's LLM. Pass None to
             always use the current Agent's LLM, for example to keep AMD within
             the quota of the session's models. A string selects a LiveKit
-            Inference model. AMD logs the selected models when it starts. A DecisionModel that supports choice decisions
-            classifies, but AMD then skips menu extraction. Calls use
+            Inference model. AMD logs the selected models when it starts.
+            A DecisionModel that supports choice decisions classifies, but AMD
+            then skips menu extraction. Calls use
             ``session.conn_options.llm_conn_options``. Supplied models stay
             open when AMD completes.
         stt: Optional streaming STT model for AMD. When omitted, use
@@ -369,6 +371,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             raise RuntimeError("start AgentSession before entering AMD")
         if activity._new_turns_blocked or self._session._next_activity is not None:
             raise RuntimeError("wait for the agent handoff to finish before entering AMD")
+        if isinstance(activity.agent, AgentTask):
+            # the task's return to its caller is a handoff, which AMD rejects
+            raise RuntimeError("finish the AgentTask before entering AMD")
         if isinstance(activity.llm, llm.RealtimeModel):
             if activity._rt_turn_detection_enabled:
                 raise ValueError("amd requires client-side turn detection with realtime models")
@@ -425,8 +430,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
 
         llm_source, stt_source = self._model_sources
         # AMD defaults use their own model quotas, apart from the session's models
+        source = next((s for s in self._model_sources if s != "default"), "default")
         logger.info(
-            "amd models selected; pass llm= or stt= to AMD to override",
+            f"amd initialized with {source} models",
             extra={
                 "llm": f"{model.provider}/{model.model}",
                 "llm_source": llm_source,
