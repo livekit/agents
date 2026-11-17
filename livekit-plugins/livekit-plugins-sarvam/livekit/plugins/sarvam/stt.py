@@ -274,6 +274,7 @@ class SarvamSTTOptions:
         base_url: API endpoint URL (auto-determined from model if not provided)
         streaming_url: WebSocket streaming URL (auto-determined from model if not provided)
         prompt: Optional prompt for STT translate (saaras models only)
+        with_timestamps: Whether REST recognition requests timestamps
     """
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
@@ -283,6 +284,7 @@ class SarvamSTTOptions:
     base_url: str | None = None
     streaming_url: str | None = None
     prompt: str | None = None  # Optional prompt for STT translate (saaras models only)
+    with_timestamps: bool = False
     high_vad_sensitivity: bool | None = None
     sample_rate: int = 16000
     flush_signal: bool | None = None
@@ -343,8 +345,7 @@ def _extract_confidence(
     """
     value = payload.get("language_probability")
     # bool is a subclass of int — exclude explicitly so that an accidental
-    # JSON `false` doesn't silently become ``confidence=0.0``. Same pattern
-    # as livekit-plugins-slng/.../stt.py.
+    # JSON `false` doesn't silently become ``confidence=0.0``.
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     if value is not None:
@@ -467,6 +468,8 @@ class STT(stt.STT):
         base_url: API endpoint URL
         http_session: Optional aiohttp session to use
         prompt: Optional prompt for STT translate (saaras models only)
+        with_timestamps: Request timestamps from the REST endpoint, so
+            non-streaming transcripts carry the speech's real start and end times
     """
 
     def __init__(
@@ -479,6 +482,7 @@ class STT(stt.STT):
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         prompt: str | None = None,
+        with_timestamps: bool = False,
         high_vad_sensitivity: bool | None = None,
         sample_rate: int = 16000,
         flush_signal: bool | None = None,
@@ -517,6 +521,7 @@ class STT(stt.STT):
             mode=mode,
             base_url=base_url,
             prompt=prompt,
+            with_timestamps=with_timestamps,
             high_vad_sensitivity=high_vad_sensitivity,
             sample_rate=sample_rate,
             flush_signal=flush_signal,
@@ -649,6 +654,8 @@ class STT(stt.STT):
             form_data.add_field("model", str(opts_model))
         if _model_supports_mode(opts_model):
             form_data.add_field("mode", str(opts_mode))
+        if self._opts.with_timestamps:
+            form_data.add_field("with_timestamps", "true")
 
         if not self._api_key:
             raise ValueError("API key cannot be None")
@@ -836,6 +843,7 @@ class STT(stt.STT):
             model=opts_model,
             mode=opts_mode,
             prompt=final_prompt,
+            with_timestamps=self._opts.with_timestamps,
             high_vad_sensitivity=opts_high_vad,
             sample_rate=opts_sample_rate,
             flush_signal=opts_flush_signal,

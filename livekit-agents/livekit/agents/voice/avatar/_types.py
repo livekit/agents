@@ -4,6 +4,7 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Coroutine
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 
 from livekit import rtc
@@ -19,8 +20,15 @@ if TYPE_CHECKING:
     from ..agent_session import AgentSession
 
 
+@dataclass
 class AudioSegmentEnd:
-    pass
+    """End of an audio segment.
+
+    interrupted records clear_buffer discard only, not transport truncation
+    or a missing stream trailer.
+    """
+
+    interrupted: bool = False
 
 
 class AudioReceiver(ABC, rtc.EventEmitter[Literal["clear_buffer"]]):

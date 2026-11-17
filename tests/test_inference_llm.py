@@ -33,6 +33,23 @@ _SECRET = "f" * 32
 _GATEWAY = "http://gateway.test/v1"
 
 
+@pytest.mark.parametrize("kwargs", [{}, {"provider": None}, {"provider": "azure"}])
+async def test_provider_pinning_warns_only_when_explicitly_passed(
+    kwargs: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        model = _llm(**kwargs)
+    try:
+        if kwargs:
+            assert len(caplog.messages) == 1
+            assert "provider is deprecated and will be removed on March 1, 2027" in caplog.text
+            assert "Omit this argument" in caplog.text
+        else:
+            assert not caplog.messages
+    finally:
+        await model.aclose()
+
+
 def _sse(payload: dict) -> bytes:
     return f"data: {json.dumps(payload)}\n\n".encode()
 
