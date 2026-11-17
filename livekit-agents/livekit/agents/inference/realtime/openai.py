@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from dataclasses import dataclass
@@ -284,9 +285,13 @@ class RealtimeSession(_RealtimeSession):
         if self._handoff_id is None:
             return
         handoff_id, self._handoff_id = self._handoff_id, None
-        await ws_conn.send_str(
-            json.dumps({"type": "session.handoff.complete", "handoff_id": handoff_id})
-        )
+        with contextlib.suppress(aiohttp.ClientError, ConnectionError, asyncio.TimeoutError):
+            await asyncio.wait_for(
+                ws_conn.send_str(
+                    json.dumps({"type": "session.handoff.complete", "handoff_id": handoff_id})
+                ),
+                timeout=self._opts.conn_options.timeout,
+            )
 
     def _create_ws_url_and_headers(self) -> tuple[str, dict[str, str]]:
         opts = self._inference_model._inference_opts

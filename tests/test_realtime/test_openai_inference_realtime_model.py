@@ -926,6 +926,37 @@ async def test_handoff_preserves_a_transcript_that_arrives_after_the_reply(model
 
 @pytest.mark.virtual_time
 @pytest.mark.parametrize(
+    "error", [aiohttp.ClientConnectionError, ConnectionResetError, asyncio.TimeoutError]
+)
+async def test_handoff_reconnects_when_acknowledgement_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    error: type[Exception],
+) -> None:
+    gateway = _Gateway()
+    session = _gateway_session(gateway)
+    errors: list[Any] = []
+    session.on("error", errors.append)
+    try:
+        await _until(lambda: gateway.sockets and gateway.sockets[0].sent)
+        old = gateway.sockets[0]
+        send_str = old.send_str
+
+        async def fail_ack(data: str) -> None:
+            if json.loads(data)["type"] == "session.handoff.complete":
+                raise error("gateway disconnected")
+            await send_str(data)
+
+        monkeypatch.setattr(old, "send_str", fail_ack)
+        old.reply("session.handoff.request", handoff_id="h1")
+        await _until(lambda: len(gateway.sockets) == 2 and gateway.sockets[1].sent)
+        assert old.closed
+        assert errors == []
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
     "terminal", ["conversation.item.input_audio_transcription.failed", "conversation.item.deleted"]
 )
 async def test_handoff_does_not_wait_for_failed_or_deleted_transcriptions(terminal: str) -> None:
