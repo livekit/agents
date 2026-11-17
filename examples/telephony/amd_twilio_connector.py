@@ -86,10 +86,10 @@ async def end_twilio_call(call_sid: str) -> None:
     try:
         # a ringing call is canceled; an answered one is completed
         await twilio_request(path, {"Status": "canceled"})
-    except RuntimeError:
+    except Exception:
         try:
             await twilio_request(path, {"Status": "completed"})
-        except RuntimeError:
+        except Exception:
             logger.warning("failed to end the Twilio call")
 
 
@@ -127,9 +127,11 @@ async def entrypoint(ctx: JobContext) -> None:
     async def hangup() -> None:
         # deleting the room ends the media stream; ending the call also stops a call
         # that is still ringing
-        if call_sid is not None:
-            await end_twilio_call(call_sid)
-        await ctx.delete_room()
+        try:
+            if call_sid is not None:
+                await end_twilio_call(call_sid)
+        finally:
+            await ctx.delete_room()
 
     ctx.add_shutdown_callback(hangup)
 

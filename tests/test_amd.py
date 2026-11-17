@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any, Literal
 from unittest.mock import AsyncMock, MagicMock, Mock, PropertyMock
 
+import aiohttp
 import httpx2 as httpx
 import openai
 import pytest
@@ -7003,6 +7004,16 @@ async def test_twilio_connector_call_enters_amd_after_the_answer(
     twilio.reset_mock()
     await hangup()
     twilio.assert_awaited_once_with("/Calls/CA123.json", {"Status": "canceled"})
+    ctx.delete_room.assert_awaited_once_with()
+
+    # a failed Twilio request, such as a connection error, still deletes the room
+    twilio.side_effect = aiohttp.ClientConnectionError()
+    ctx.delete_room.reset_mock()
+    await hangup()
+    assert [call.args[1] for call in twilio.await_args_list[-2:]] == [
+        {"Status": "canceled"},
+        {"Status": "completed"},
+    ]
     ctx.delete_room.assert_awaited_once_with()
 
 
