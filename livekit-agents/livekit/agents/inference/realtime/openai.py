@@ -256,9 +256,12 @@ class RealtimeSession(_RealtimeSession):
             self._speech_stopped_at = None
         elif kind == "session.handoff.request" and self._handoff_task is None:
             self._handoff_id = str(event.get("handoff_id", ""))
-            self._handoff_task = asyncio.create_task(
-                self._handoff_when_quiet(), name="RealtimeSession._handoff_when_quiet"
-            )
+            self._schedule_handoff()
+
+    def _schedule_handoff(self) -> None:
+        self._handoff_task = asyncio.create_task(
+            self._handoff_when_quiet(), name="RealtimeSession._handoff_when_quiet"
+        )
 
     def _handoff_quiet(self) -> bool:
         done = getattr(self._current_generation, "_done_fut", None)
@@ -281,17 +284,24 @@ class RealtimeSession(_RealtimeSession):
             self._handoff_task.cancel()
         self._handoff_task = None
 
-    async def _before_recycle(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
-        if self._handoff_id is None:
-            return
-        handoff_id, self._handoff_id = self._handoff_id, None
-        with contextlib.suppress(aiohttp.ClientError, ConnectionError, asyncio.TimeoutError):
-            await asyncio.wait_for(
-                ws_conn.send_str(
-                    json.dumps({"type": "session.handoff.complete", "handoff_id": handoff_id})
-                ),
-                timeout=self._opts.conn_options.timeout,
-            )
+    async def _before_recycle(self, ws_conn: aiohttp.ClientWebSocketResponse) -> bool:
+        if self._handoff_quiet():
+            if self._handoff_id is None:
+                return True
+            handoff_id, self._handoff_id = self._handoff_id, None
+            with contextlib.suppress(aiohttp.ClientError, ConnectionError, asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    ws_conn.send_str(
+                        json.dumps({"type": "session.handoff.complete", "handoff_id": handoff_id})
+                    ),
+                    timeout=self._opts.conn_options.timeout,
+                )
+            # The reader can receive another turn while the acknowledgement is in flight.
+            if self._handoff_quiet():
+                return True
+        if not self._closing:
+            self._schedule_handoff()
+        return False
 
     def _create_ws_url_and_headers(self) -> tuple[str, dict[str, str]]:
         opts = self._inference_model._inference_opts

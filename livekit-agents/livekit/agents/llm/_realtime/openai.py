@@ -1308,35 +1308,41 @@ class RealtimeSession(
             )
             tasks.append(wait_reconnect_task)
         self._recycle_requested.clear()
-        recycle_task = asyncio.create_task(self._recycle_requested.wait(), name="_recycle_task")
-        tasks.append(recycle_task)
+        recycle_task: asyncio.Task[bool] | None = None
         try:
-            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            while True:
+                recycle_task = asyncio.create_task(
+                    self._recycle_requested.wait(), name="_recycle_task"
+                )
+                done, _ = await asyncio.wait(
+                    [*tasks, recycle_task], return_when=asyncio.FIRST_COMPLETED
+                )
 
-            # propagate exceptions from completed tasks
-            for task in done:
-                if task not in (wait_reconnect_task, recycle_task):
-                    task.result()
+                for task in done:
+                    if task not in (wait_reconnect_task, recycle_task):
+                        task.result()
+                if done.intersection(tasks):
+                    if wait_reconnect_task in done and isinstance(
+                        self._current_generation, _ResponseGeneration
+                    ):
+                        await self._current_generation._done_fut
+                        closing = True
+                    break
 
-            if (
-                wait_reconnect_task
-                and wait_reconnect_task in done
-                and isinstance(self._current_generation, _ResponseGeneration)
-            ):
-                # wait for the current generation to complete before reconnecting
-                await self._current_generation._done_fut
-                closing = True
-
-            if recycle_task in done:
-                closing = True
-                await self._before_recycle(ws_conn)
-
+                self._recycle_requested.clear()
+                if await self._before_recycle(ws_conn):
+                    closing = True
+                    break
         finally:
+            # Cancel the reader before yielding after the final quiet check.
+            if recycle_task is not None:
+                tasks.append(recycle_task)
             await utils.aio.cancel_and_wait(*tasks)
             await ws_conn.close()
 
-    async def _before_recycle(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
-        """Runs on the old connection after a requested recycle, before it closes."""
+    async def _before_recycle(self, ws_conn: aiohttp.ClientWebSocketResponse) -> bool:
+        """Return whether to close the old connection or wait for another request to recycle."""
+        return True
 
     def _wrap_session_update(
         self, event_id: str, session: RealtimeSessionCreateRequest

@@ -1036,3 +1036,77 @@ async def test_xai_handoff_settles_a_deleted_transcription_with_an_empty_item_id
         if deletion is not None:
             await utils.aio.gracefully_cancel(deletion)
         await session.aclose()
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("speech_started", [False, True])
+async def test_handoff_preserves_input_arriving_during_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch, speech_started: bool
+) -> None:
+    gateway = _Gateway()
+    session = _gateway_session(gateway)
+    ack_started = asyncio.Event()
+    release_ack = asyncio.Event()
+    reconnected = asyncio.Event()
+    session.on("session_reconnected", lambda _: reconnected.set())
+    try:
+        await _until(lambda: gateway.sockets and gateway.sockets[0].sent)
+        old = gateway.sockets[0]
+        send_str = old.send_str
+
+        async def block_ack(data: str) -> None:
+            if json.loads(data)["type"] == "session.handoff.complete":
+                ack_started.set()
+                await release_ack.wait()
+            await send_str(data)
+
+        monkeypatch.setattr(old, "send_str", block_ack)
+        old.reply("session.handoff.request", handoff_id="h1")
+        await asyncio.wait_for(ack_started.wait(), timeout=1.0)
+
+        if speech_started:
+            old.reply("input_audio_buffer.speech_started", item_id="user_1", audio_start_ms=0)
+            await _until(lambda: session._user_speaking)
+        else:
+            old.reply("input_audio_buffer.committed", item_id="user_1", previous_item_id=None)
+            await _until(lambda: "user_1" in session._pending_input_transcriptions)
+        release_ack.set()
+        await _until(lambda: "session.handoff.complete" in old.types())
+        await asyncio.sleep(0.1)
+        assert not old.closed
+
+        old.reply(
+            "conversation.item.added",
+            previous_item_id=None,
+            item={
+                "id": "user_1",
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_audio", "transcript": None}],
+            },
+        )
+        if speech_started:
+            old.reply("input_audio_buffer.speech_stopped", item_id="user_1", audio_end_ms=500)
+            old.reply("response.created", response={"id": "r1", "metadata": None})
+            old.reply("response.done", response={"id": "r1", "status": "completed", "usage": None})
+            await asyncio.sleep(0.1)
+            assert not old.closed
+        old.reply(
+            "conversation.item.input_audio_transcription.completed",
+            event_id="final_1",
+            item_id="user_1",
+            content_index=0,
+            transcript="Keep this turn.",
+        )
+        await asyncio.wait_for(reconnected.wait(), timeout=1.0)
+        assert old.closed
+        assert old.types().count("session.handoff.complete") == 1
+        replay = [
+            e["item"] for e in gateway.sockets[1].sent if e["type"] == "conversation.item.create"
+        ]
+        assert [item["content"] for item in replay if item["role"] == "user"] == [
+            [{"type": "input_text", "text": "Keep this turn."}]
+        ]
+    finally:
+        release_ack.set()
+        await session.aclose()
