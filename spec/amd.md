@@ -90,7 +90,7 @@ async with detector:
 | `session` | required | A started `AgentSession`. |
 | `llm` | auto | Classifier model, and menu model when it is an LLM. See the model rules below. |
 | `stt` | auto | AMD's own streaming STT. See the model rules below. |
-| `participant_identity` | not given | The participant to listen to (section 5.1). |
+| `participant_identity` | not given | The participant to listen to (section 5.1). When not given, the participant that room I/O links. |
 | `wait_until_answered` | `True` | Discard SIP audio until `sip.callStatus` is `active` (section 5.2). |
 | `screening_instructions` | built in | Reply instructions in `machine-screening`. `None` makes it a customer-handled stage (section 9.5). |
 | `voicemail_instructions` | built in | Instructions for the voicemail message. `None` makes `machine-vm` a customer-handled stage (section 9.5). |
@@ -211,8 +211,10 @@ raises.
 
 Without room I/O, AMD starts listening at once. With room I/O:
 
-1. AMD waits up to 5 s for a subscribed audio track from the participant. If no
-   track arrives, AMD completes with `participant_missing`. If the room disconnected,
+1. AMD waits up to 5 s for a subscribed audio track from the participant. Without
+   `participant_identity`, the participant is the one that room I/O links, so another
+   audio publisher in the room cannot control AMD. If no track arrives, AMD completes
+   with `participant_missing`. If the room disconnected,
    the reason is `participant_disconnected`.
 2. If `wait_until_answered` is `True` and the publisher is a SIP participant, AMD
    waits for `sip.callStatus` to be `active`. This wait has no timeout. If the

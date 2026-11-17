@@ -194,6 +194,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             classifier sees both transcripts of each turn. A string selects a
             LiveKit Inference model.
         participant_identity: Select the participant before placing an outbound call.
+            When omitted, AMD listens to the participant that room I/O links.
         wait_until_answered: Discard pre-answer audio from AMD and AgentSession
             when True. When False, listen to subscribed SIP early media.
         screening_instructions: Instructions for each screening turn. None
@@ -518,17 +519,24 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             if not self._session._room_io:
                 _start_listening()
                 return
-            room = self._session._room_io.room
-            publication = await asyncio.wait_for(
-                wait_for_track_publication(
+            linked_io = self._session._room_io
+            room = linked_io.room
+
+            async def _wait_for_audio() -> rtc.RemoteTrackPublication:
+                if is_given(self._participant_identity):
+                    identity = self._participant_identity
+                else:
+                    # the participant AgentSession hears, not any other audio publisher
+                    identity = (await linked_io._wait_for_linked_participant()).identity
+                return await wait_for_track_publication(
                     room=room,
-                    identity=self._participant_identity
-                    if is_given(self._participant_identity)
-                    else None,
+                    identity=identity,
                     kind=rtc.TrackKind.KIND_AUDIO,
                     wait_for_subscription=True,
-                ),
-                timeout=_TRACK_PUBLICATION_TIMEOUT,
+                )
+
+            publication = await asyncio.wait_for(
+                _wait_for_audio(), timeout=_TRACK_PUBLICATION_TIMEOUT
             )
             publisher = next(
                 (

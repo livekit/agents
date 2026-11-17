@@ -2669,6 +2669,66 @@ async def test_sip_answer_gating_and_early_media(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("linked", [True, False])
+async def test_without_an_identity_amd_listens_to_the_linked_participant(
+    monkeypatch: pytest.MonkeyPatch, linked: bool
+) -> None:
+    from livekit.agents.voice.amd import detector as module
+
+    room = utils.EventEmitter()
+    room.isconnected = lambda: True
+    callee = SimpleNamespace(
+        identity="callee",
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        attributes={"sip.callStatus": "active"},
+        track_publications={"callee-track": SimpleNamespace(sid="callee-track")},
+    )
+    # another audio publisher joins first; AgentSession does not hear it
+    other = SimpleNamespace(
+        identity="other",
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+        track_publications={"other-track": SimpleNamespace(sid="other-track")},
+    )
+    room.remote_participants = {"other": other, "callee": callee}
+    link: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+    room_io = SimpleNamespace(
+        room=room,
+        set_participant=Mock(),
+        _wait_for_linked_participant=lambda: asyncio.shield(link),
+    )
+    identities: list[str | None] = []
+
+    async def wait_for_track(**kwargs: Any) -> Any:
+        identities.append(kwargs["identity"])
+        return callee.track_publications["callee-track"]
+
+    monkeypatch.setattr(module, "wait_for_track_publication", wait_for_track)
+    session = AgentSession(llm=FakeLLM(), turn_handling={"turn_detection": "manual"})
+    await session.start(Agent(instructions="Hello"))
+    session._room_io = room_io
+    try:
+        async with AMD(session, llm=None, stt=None) as detector:
+            if linked:
+                link.set_result(callee)
+                await eventually(lambda: detector.lifecycle is AMDLifecycle.ACTIVE)
+                assert identities == ["callee"]
+                room.emit("participant_disconnected", other)
+                assert detector.lifecycle is AMDLifecycle.ACTIVE
+                room.emit("participant_disconnected", callee)
+                assert (await detector.execute()).reason is AMDReason.PARTICIPANT_DISCONNECTED
+            else:
+                result = await asyncio.wait_for(detector.execute(), 6)
+                assert result.reason is AMDReason.PARTICIPANT_MISSING
+                assert not identities
+                # the timeout must not cancel RoomIO's own link
+                assert not link.done()
+            room_io.set_participant.assert_not_called()
+    finally:
+        session._room_io = None
+        await session.aclose()
+
+
+@pytest.mark.asyncio
 async def test_session_close_completes_amd_and_releases_resources() -> None:
     async with running() as (detector, session, classifier, _):
         await session.aclose()
