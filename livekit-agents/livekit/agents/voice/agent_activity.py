@@ -1174,9 +1174,7 @@ class AgentActivity(RecognitionHooks):
                         "input_audio_transcription_completed",
                         self._on_input_audio_transcription_completed,
                     )
-                    self._rt_session.off(
-                        "metrics_collected", self._on_realtime_metrics_collected
-                    )
+                    self._rt_session.off("metrics_collected", self._on_realtime_metrics_collected)
                     self._rt_session.off("remote_item_added", self._on_remote_item_added)
                     self._rt_session.off("error", self._on_error)
                     self._rt_session.off("delegation_created", self._on_delegation_created)
@@ -1675,9 +1673,7 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             await self._rt_session.aclose()
             # after aclose, so a model that reports its final usage while closing is still counted
-            self._rt_session.off(
-                "metrics_collected", self._on_realtime_metrics_collected
-            )
+            self._rt_session.off("metrics_collected", self._on_realtime_metrics_collected)
 
         if self._realtime_spans is not None:
             self._realtime_spans.clear()
@@ -2275,9 +2271,7 @@ class AgentActivity(RecognitionHooks):
         if isinstance(ev, LLMMetrics):
             # a realtime model's own text model (GPT-Live's backend) runs no LLMStream, which
             # is what opens an llm_request span
-            with tracer.start_span(
-                "llm_request", context=self._session._root_span_context
-            ) as span:
+            with tracer.start_span("llm_request", context=self._session._root_span_context) as span:
                 trace_utils.record_llm_metrics(span, ev)
         elif isinstance(ev, RealtimeModelMetrics) and isinstance(
             self.llm, llm.DuplexRealtimeAdapter
