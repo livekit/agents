@@ -1,3 +1,17 @@
+# Copyright 2026 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Nabrah STT over /api/ext/stt/ws with recognition_model=nabrah_stt_conv_v1.
 
 The model runs speech recognition and turn detection together and decides end of turn per 80 ms frame (smart EOT).
@@ -31,6 +45,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
+
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -136,15 +151,15 @@ class STTConv(stt.STT):
             or DEFAULT_URL,
             api_key=api_key,
             preflight_threshold=preflight_threshold,
-            stream_settings=dict(
-                eot_threshold=eot_threshold,
-                eot_debounce=eot_debounce,
-                min_speech_ms=min_speech_ms,
-                bc_threshold=bc_threshold,
-                bc_debounce=bc_debounce,
-                bc_refractory_ms=bc_refractory_ms,
-                no_text_reset_s=no_text_reset_s,
-            ),
+            stream_settings={
+                "eot_threshold": eot_threshold,
+                "eot_debounce": eot_debounce,
+                "min_speech_ms": min_speech_ms,
+                "bc_threshold": bc_threshold,
+                "bc_debounce": bc_debounce,
+                "bc_refractory_ms": bc_refractory_ms,
+                "no_text_reset_s": no_text_reset_s,
+            },
         )
         self._session = http_session
 

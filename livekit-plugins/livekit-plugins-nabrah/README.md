@@ -1,5 +1,19 @@
 # Nabrah STT for LiveKit Agents
 
+Support for [Nabrah](https://nabrah.ai/) Speech-to-Text in LiveKit Agents, tuned for
+Arabic conversation.
+
+## Installation
+
+```bash
+pip install livekit-plugins-nabrah
+```
+
+You'll need an API key from Nabrah, set as the `NABRAH_API_KEY` environment variable
+or passed as `api_key`.
+
+## Usage
+
 Use `nabrah.STT(recognition_model=...)` for all three backend models. It selects
 one of two implementations internally:
 
@@ -9,7 +23,8 @@ nabrah.STT(recognition_model="eot_nabrah", api_key="YOUR_KEY")
 nabrah.STT(recognition_model="nabrah_stt_conv", api_key="YOUR_KEY")
 ```
 
-The original default remains `eot_nabrah`. Each model takes
+The default is `nabrah_stt_conv`; pass `recognition_model="eot_nabrah"` or
+`"nabrah_stt_v1"` for the legacy models. Each model takes
 its implementation's own options. `STTConv` fixes transcript metadata to `ar-SA`;
 the original `STT` retains its production language handling, defaulting to
 `ar-SA`. Neither implementation sends a language option to the backend.
@@ -138,7 +153,7 @@ Options of the legacy `STT`:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `recognition_model` | `"eot_nabrah"` | `"eot_nabrah"` or `"nabrah_stt_v1"`. |
+| `recognition_model` | — | `"eot_nabrah"` or `"nabrah_stt_v1"`; must be passed to `nabrah.STT`, which defaults to `nabrah_stt_conv`. |
 | `api_key` | `NABRAH_API_KEY` | API key. |
 | `language` | `"ar-SA"` | Language tag on returned transcripts; not sent to the backend. |
 | `priority_words` | `None` (none) | Words the recognizer should favour. |
@@ -146,6 +161,37 @@ Options of the legacy `STT`:
 | `end_of_turn_confirm_delay_seconds` | `0.4` | Wait this long after turn punctuation before ending the turn; `None` ends it at once. |
 | `end_of_turn_idle_timeout_seconds` | `3.0` | End the turn when text exists but no new text arrived for this many seconds; `None` disables. |
 
+### Word boosting (legacy models)
+
+`priority_words` biases recognition toward terms the model gets wrong. `0.5` is the
+recommended strength; higher values make boosted terms appear where they were not said.
+Multi-word phrases are boosted as a unit.
+
+For more than a handful of terms, keep them in a `boosting.json` next to your agent:
+
+```json
+{
+  "boost_threshold": 0.5,
+  "words": ["مستشفى الملك فيصل التخصصي", "رقم الهوية الوطنية"]
+}
+```
+
+```python
+import json
+import pathlib
+
+boosting = json.loads(
+    pathlib.Path(__file__).with_name("boosting.json").read_text(encoding="utf-8")
+)
+
+recognizer = nabrah.STT(
+    recognition_model="eot_nabrah",
+    priority_words=boosting["words"],
+    priority_words_strength=boosting["boost_threshold"],
+)
+```
+
+Read the file with `encoding="utf-8"`, or Arabic terms fail to load on platforms with a
+different default encoding.
+
 Both classes read `NABRAH_API_KEY` when `api_key` is omitted.
-
-
