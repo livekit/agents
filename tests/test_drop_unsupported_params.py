@@ -130,6 +130,16 @@ _GPT6_SAMPLING = {
             {"temperature": 0.2, "top_p": 0.9, "reasoning_effort": "low"},
             {"reasoning_effort": "low"},
         ),
+        (
+            "openai/gpt-6.1-terra",
+            {**_GPT6_SAMPLING, "reasoning_effort": "none"},
+            {**_GPT6_SAMPLING, "reasoning_effort": "none"},
+        ),
+        (
+            "openai/gpt-6.1-terra",
+            {"temperature": 0.2, "reasoning_effort": "low"},
+            {"reasoning_effort": "low"},
+        ),
         # gpt-6.1-sol has no "none" rung: the gateway coerces it to "low" and the request reasons
         (
             "openai/gpt-6.1-sol",
