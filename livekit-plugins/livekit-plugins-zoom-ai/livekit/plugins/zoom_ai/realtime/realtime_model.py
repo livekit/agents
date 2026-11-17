@@ -91,6 +91,9 @@ ZoomToolChoice = Literal["auto", "none", "required"]
 # its event-name Literal.
 SERVER_EVENT: Any = "zoom_server_event_received"
 
+# how long a sent reply request may wait for its response.created
+_REPLY_TIMEOUT = 10.0
+
 _HISTORY_HEADER = (
     "The conversation so far, before this session started. Continue it; don't repeat it:"
 )
@@ -275,6 +278,8 @@ class RealtimeSession(_engine.RealtimeSession):
         self._zoom_queue: deque[str] = deque()
         self._zoom_inflight: deque[str] = deque()
         self._zoom_active_response: str | None = None
+        # response-created timeouts of the requests in flight, started when each is sent
+        self._zoom_reply_timers: dict[str, asyncio.TimerHandle] = {}
         # the active response is already being cancelled, by us or by Zoom's barge-in
         self._zoom_active_cancelled = False
         self._zoom_sent_outputs: set[str] = set()
@@ -373,9 +378,24 @@ class RealtimeSession(_engine.RealtimeSession):
             )
         # tool_choice and tools per reply aren't supported either (per_response_tool_choice
         # is False); response.create goes out without a response object.
-        return super().generate_reply(
-            instructions=instructions, tool_choice=tool_choice, tools=tools
-        )
+        #
+        # Not the engine's generate_reply: its timeout starts right away, but a request here
+        # can wait locally behind an active response for as long as that response lasts. The
+        # timeout starts when _zoom_pump_replies sends the request instead.
+        event_id = utils.shortuuid("response_create_")
+        fut = asyncio.Future[llm.GenerationCreatedEvent]()
+        self._response_created_futures[event_id] = fut
+
+        def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            self._zoom_stop_reply_timer(event_id)
+            self._response_created_futures.pop(event_id, None)
+            if f.cancelled():
+                # skipped if still queued; its response is cancelled when it arrives if sent
+                self._discarded_event_ids.add(event_id)
+
+        fut.add_done_callback(_on_fut_done)
+        self.send_event({"type": "response.create", "event_id": event_id})
+        return fut
 
     def interrupt(self) -> None:
         if self._zoom_active_response:
@@ -653,10 +673,29 @@ class RealtimeSession(_engine.RealtimeSession):
             if event_id not in self._response_created_futures:
                 continue
             self._zoom_inflight.append(event_id)
+            self._zoom_start_reply_timer(event_id)
             _engine.RealtimeSession.send_event(
                 self, {"type": "response.create", "event_id": event_id}
             )
             return
+
+    def _zoom_start_reply_timer(self, event_id: str) -> None:
+        def _on_timeout() -> None:
+            self._zoom_reply_timers.pop(event_id, None)
+            fut = self._response_created_futures.pop(event_id, None)
+            if fut and not fut.done():
+                # discard the response if Zoom still creates it after the timeout
+                self._discarded_event_ids.add(event_id)
+                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
+
+        self._zoom_stop_reply_timer(event_id)
+        self._zoom_reply_timers[event_id] = asyncio.get_running_loop().call_later(
+            _REPLY_TIMEOUT, _on_timeout
+        )
+
+    def _zoom_stop_reply_timer(self, event_id: str) -> None:
+        if handle := self._zoom_reply_timers.pop(event_id, None):
+            handle.cancel()
 
     # ------------------------------------------------------------------ connection
 
@@ -848,6 +887,8 @@ class RealtimeSession(_engine.RealtimeSession):
                     # cancelled meanwhile, and nothing was created for it
                     self._discarded_event_ids.discard(event_id)
                 else:
+                    # waiting locally again: the timeout restarts when it is resent
+                    self._zoom_stop_reply_timer(event_id)
                     self._zoom_queue.appendleft(event_id)
             else:
                 logger.debug("reply request answered by the already active response")
@@ -860,7 +901,21 @@ class RealtimeSession(_engine.RealtimeSession):
                 body=error,
                 retryable=False,
             )
+        # A reply request refused for another reason gets no response.created. The engine
+        # fails its future by the error's event_id; it has to leave the in-flight queue too,
+        # or no later request would be sent.
+        rejected_id = (
+            error.get("event_id") if isinstance(error, dict) else getattr(error, "event_id", None)
+        )
+        rejected = False
+        if isinstance(rejected_id, str) and rejected_id in self._zoom_inflight:
+            rejected = True
+            self._zoom_inflight.remove(rejected_id)
+            self._zoom_stop_reply_timer(rejected_id)
+            self._discarded_event_ids.discard(rejected_id)  # nothing will be created for it
         super()._handle_error(event)
+        if rejected:
+            self._zoom_pump_replies()
 
     def _zoom_warn_once(self, key: str, message: str) -> None:
         if key not in self._zoom_warned:

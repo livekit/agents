@@ -24,7 +24,7 @@ from livekit import rtc
 from livekit.agents import APIConnectOptions, APIStatusError, llm
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.plugins import zoom_ai
-from livekit.plugins.zoom_ai.realtime import RealtimeSession
+from livekit.plugins.zoom_ai.realtime import RealtimeSession, realtime_model
 
 # The fake server and HTTP session are fixtures bound to a single task.
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
@@ -767,6 +767,78 @@ async def test_server_response_racing_the_request_answers_it(
     await asyncio.sleep(0.05)
     assert len(conn.of_type("response.create")) == 1
     assert not errors
+    await session.aclose()
+
+
+async def test_rejected_reply_request_does_not_block_the_next(
+    server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
+) -> None:
+    fake, url = server
+    session = await start(make_model(url, http))
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    conn = await fake.conn()
+    first = session.generate_reply()
+    await wait_for(lambda: conn.of_type("response.create"))
+    rejected_id = conn.of_type("response.create")[0]["event_id"]
+    await conn.emit(
+        "error",
+        error={
+            "type": "invalid_request_error",
+            "message": "Invalid request",
+            "event_id": rejected_id,
+        },
+    )
+    with pytest.raises(llm.RealtimeError):
+        await asyncio.wait_for(first, 2)
+    assert len(errors) == 1 and errors[0].recoverable
+
+    second = session.generate_reply()
+    await wait_for(lambda: len(conn.of_type("response.create")) == 2)
+    await reply(conn, response_id="resp_2")
+    gen = await asyncio.wait_for(second, 2)
+    assert gen.response_id == "resp_2"
+    await session.aclose()
+
+
+async def test_queued_reply_times_out_only_after_it_is_sent(
+    server: tuple[FakeVoiceAgent, str],
+    http: aiohttp.ClientSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(realtime_model, "_REPLY_TIMEOUT", 0.05)
+    fake, url = server
+    session = await start(make_model(url, http))
+    conn = await fake.conn()
+    await conn.emit("response.created", response={"id": "resp_auto"})
+    await wait_for(lambda: session._zoom_active_response == "resp_auto")
+
+    fut = session.generate_reply()
+    # the server's own response outlasts the reply timeout
+    await asyncio.sleep(0.1)
+    assert not fut.done() and not conn.of_type("response.create")
+
+    await conn.emit("response.done", response={"id": "resp_auto", "status": "completed"})
+    await wait_for(lambda: conn.of_type("response.create"))
+    await reply(conn, response_id="resp_2")
+    gen = await asyncio.wait_for(fut, 2)
+    assert gen.response_id == "resp_2"
+    await session.aclose()
+
+
+async def test_sent_reply_request_still_times_out(
+    server: tuple[FakeVoiceAgent, str],
+    http: aiohttp.ClientSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(realtime_model, "_REPLY_TIMEOUT", 0.05)
+    fake, url = server
+    session = await start(make_model(url, http))
+    conn = await fake.conn()
+    fut = session.generate_reply()
+    await wait_for(lambda: conn.of_type("response.create"))
+    with pytest.raises(llm.RealtimeError, match="timed out"):
+        await asyncio.wait_for(fut, 2)
     await session.aclose()
 
 
