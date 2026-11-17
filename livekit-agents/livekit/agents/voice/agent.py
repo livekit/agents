@@ -387,6 +387,9 @@ class Agent:
 
         You can override this node with your own implementation for more flexibility (e.g.,
         custom pre-processing of audio, additional buffering, or alternative STT strategies).
+        Timestamps in the yielded ``SpeechData`` are relative to the first audio frame the
+        node consumes, unless the node sets ``start_time_offset`` on its stream; the default
+        implementation sets it so they are relative to the session start.
 
         If your override buffers audio passed to Agent.default.stt_node, framework
         flushing can occur before that audio reaches STT. Set
@@ -532,10 +535,17 @@ class Agent:
             try:
                 conn_options = activity.session.conn_options.stt_conn_options
                 async with wrapped_stt.stream(conn_options=conn_options) as stream:
-                    _audio_input_started_at: float = (
-                        activity._audio_recognition._input_started_at
+                    # Timestamps are offset onto the session timeline: a new pipeline counts
+                    # from the recording or session start, a recreated stream continues the
+                    # pipeline's timeline. The pipeline anchors them on the same instant.
+                    pipeline = (
+                        activity._audio_recognition._stt_pipeline
                         if activity._audio_recognition is not None
-                        and activity._audio_recognition._input_started_at is not None
+                        else None
+                    )
+                    _audio_input_started_at: float = (
+                        pipeline.input_started_at
+                        if pipeline is not None and pipeline.input_started_at is not None
                         else (
                             activity.session._recorder_io.recording_started_at
                             if activity.session._recorder_io
@@ -546,6 +556,8 @@ class Agent:
                         )
                     )
                     stream.start_time_offset = time.time() - _audio_input_started_at
+                    if pipeline is not None:
+                        pipeline.input_started_at = _audio_input_started_at
 
                     pipeline = _STTPipelineContextVar.get(None)
                     if pipeline:
@@ -925,6 +937,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self._preserve_function_call_history = preserve_function_call_history
 
         self._old_agent: Agent | None = None
+        self.__awaiter: tuple[SpeechHandle | None, asyncio.Task[Any]] | None = None
 
     def done(self) -> bool:
         return self.__fut.done()
@@ -950,7 +963,16 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         from .agent_activity import _SpeechHandleContextVar
 
         speech_handle = _SpeechHandleContextVar.get(None)
-        if speech_handle:
+        # an error raised into an awaiter that is still running inside its own speech is the
+        # awaiter's to handle, so it isn't also that speech's run output
+        awaiter = self.__awaiter
+        raised_into_awaiter = (
+            isinstance(result, Exception)
+            and awaiter is not None
+            and speech_handle is awaiter[0]
+            and not awaiter[1].done()
+        )
+        if speech_handle and not raised_into_awaiter:
             speech_handle._maybe_run_final_output = result
 
         activity = self._activity
@@ -992,6 +1014,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         old_agent = old_activity.agent
         session = old_activity.session
         self._old_agent = old_agent
+        self.__awaiter = (speech_handle, current_task)
 
         def _handle_task_done(_: asyncio.Task[Any]) -> None:
             if self.__fut.done():

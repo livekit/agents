@@ -1,0 +1,64 @@
+name: Deploy Homepage Examples
+
+on:
+  # Manual runs deploy from the branch picked in the Actions "Use workflow
+  # from" selector — no input needed.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy ${{ matrix.example }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - example: card-auth
+            agent_id: CA_VQbKpqrwX4dm
+          - example: frontdesk
+            agent_id: CA_nvPHLZuA2nNn
+          - example: restaurant-ordering
+            agent_id: CA_dfEVnhCfFTCY
+          - example: vehicle-service
+            agent_id: CA_CTSsG7YwPurk
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install LiveKit CLI
+        run: |
+          curl -sSL https://get.livekit.io/cli | bash
+          lk --version
+
+      - name: Add LiveKit Cloud project
+        env:
+          LIVEKIT_URL: ${{ secrets.LIVEKIT_EXAMPLES_URL }}
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_EXAMPLES_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_EXAMPLES_API_SECRET }}
+        run: |
+          lk project add examples \
+            --url "$LIVEKIT_URL" \
+            --api-key "$LIVEKIT_API_KEY" \
+            --api-secret "$LIVEKIT_API_SECRET" \
+            --default
+
+      # Unlike the playground examples, these are standalone projects with their
+      # own uv.lock, built with `uv sync --locked` against released livekit-agents,
+      # so there's no pinning to the deployed ref.
+      - name: Write livekit.toml
+        working-directory: examples/homepage/${{ matrix.example }}
+        env:
+          LIVEKIT_URL: ${{ secrets.LIVEKIT_EXAMPLES_URL }}
+          AGENT_ID: ${{ matrix.agent_id }}
+        run: |
+          # The project subdomain is the first label of the project URL
+          # (wss://<subdomain>.livekit.cloud).
+          host="${LIVEKIT_URL#*://}"
+          printf '[project]\n  subdomain = "%s"\n\n[agent]\n  id = "%s"\n' \
+            "${host%%.*}" "$AGENT_ID" > livekit.toml
+
+      - name: Deploy ${{ matrix.example }}
+        working-directory: examples/homepage/${{ matrix.example }}
+        run: lk agent deploy .

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass
@@ -59,8 +60,18 @@ class SessionOptions:
         show_ai_avatar_disclosure: Anam's default is not to render an AI avatar
             disclosure watermark. Set to ``True`` to have Anam disclose that the
             video contains an AI avatar via a watermark.
+        region: Engine region that serves the session's audio and video (e.g.
+            ``"eu"`` or ``"us"``). Omit to let Anam route the session. Region
+            selection must be enabled for the Anam organization; otherwise Anam
+            rejects the request with an HTTP 403. See
+            https://anam.ai/docs/personas/session/regions
+        region_policy: ``"preferred"`` (Anam's default) lets Anam fail over to
+            another region; ``"strict"`` never does, and the session fails when
+            ``region`` is unavailable.
     """
 
     video_width: int | None = None
     video_height: int | None = None
     show_ai_avatar_disclosure: bool | None = None
+    region: Literal["eu", "us"] | None = None
+    region_policy: Literal["preferred", "strict"] | None = None
