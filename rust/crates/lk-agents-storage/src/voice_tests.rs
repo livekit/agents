@@ -12,6 +12,45 @@ use serde_json::json;
 use std::time::Duration;
 
 #[tokio::test]
+async fn a_voice_turn_reloads_remote_state_written_by_a_text_turn_between_speeches() {
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let store = VoiceStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        None,
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
+    let initial = store.acquire(1, VoiceHistory::default()).await.unwrap();
+    let initial = store.checkpoint(1, 1, "desk".into(), initial).await.unwrap();
+    let local = store.finish(Some(1), 1, initial).await.unwrap();
+
+    let thread = fixture.thread().await;
+    let holder = crate::Holder::new("text");
+    let mut text =
+        thread.partition("desk").open(crate::RunOptions::new("text", ""), &holder).await.unwrap();
+    let mut updated = text.state().cloned().unwrap();
+    let mut remote =
+        lk_agents_abi::delegation::remote::RemoteAgentState::new("https://booking.test".into());
+    remote.default_context_id = Some("continued-trip".into());
+    updated["state"]["remote_agents"]["booking"] = serde_json::to_value(remote).unwrap();
+    text.set_state(updated);
+    text.commit(crate::CommitOptions::default()).await.unwrap();
+
+    store.acquire(2, local).await.unwrap();
+    let resumed = store.activation().session_state().unwrap();
+    assert_eq!(
+        resumed["state"]["remote_agents"]["booking"]["default_context_id"],
+        json!("continued-trip"),
+        "the prior voice activation must not overwrite the text turn's remote state",
+    );
+    store.aclose().await.unwrap();
+    fixture.cleanup(&[&thread]).await;
+}
+
+#[tokio::test]
 async fn a_model_view_omitting_a_handoff_keeps_its_order_across_timestamp_ties() {
     let fixture = Backend::Sqlite.fixture(None).await;
     let store = VoiceStore::bound(

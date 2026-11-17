@@ -177,6 +177,9 @@ or restore app.session. Use store binding for every conversation continuation.
 It never binds and never aliases app.session. Bound state can lead stored state until a
 checkpoint completes. `await ctx.store.flush()` waits for accepted conversation checkpoints;
 it does not commit ordinary application saves staged for the managed turn.
+A checkpoint acknowledges the snapshot it wrote; input arriving while the write waits remains
+unsaved until its own checkpoint. Each new voice lease reloads the latest remote communication
+state, including work saved by an intervening text turn.
 
 SessionState.snapshot() returns a detached inspection view. It is not an execution input:
 Agent.run, TextSession and VoiceSession continue the selected conversation through store.bind().

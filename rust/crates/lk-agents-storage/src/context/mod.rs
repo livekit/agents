@@ -170,8 +170,9 @@ impl ContextActivation {
         self.writes.values().cloned().collect()
     }
 
-    pub fn acknowledge_session(&mut self) {
-        self.committed_routing = self.routing_state.clone();
+    /// A receipt covers its submitted snapshot, never changes staged while that write waited.
+    pub fn acknowledge_session(&mut self, saved: Option<Value>) {
+        self.committed_routing = saved;
     }
 
     pub fn acknowledge(&mut self) {

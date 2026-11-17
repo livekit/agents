@@ -368,7 +368,10 @@ impl VoiceStore {
                 }
                 state.reconcile(stored, local)
             };
-            let session = self.activation.session_state();
+            // A new lease reads the latest framework state, including remote work committed
+            // by another frontend. Only a partition without saved state needs the locally
+            // initialized conversation; the voice ledger carries uncommitted speech history.
+            let session = run.state().cloned().or_else(|| self.activation.session_state());
             self.activation.begin_managed(
                 run.context_scopes().to_vec(),
                 run.state().cloned(),
@@ -626,8 +629,8 @@ impl VoiceStore {
             .await?;
         state.wrote(&rows)?;
         state.version = state.active.as_ref().expect("checkpoint kept its run").run.version();
-        self.activation.stage_session(routing)?;
-        self.activation.acknowledge_session_state();
+        self.activation.stage_session(routing.clone())?;
+        self.activation.acknowledge_session_state(routing);
         Ok(state.snapshot(rendered))
     }
 

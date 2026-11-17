@@ -9,6 +9,93 @@ fn field(name: &str, value: Value) -> ContextField {
     ContextField { name: name.into(), schema: json!({"type": "string"}), value }
 }
 
+/// The database committed the checkpoint, but its caller has not received the acknowledgement.
+struct CheckpointGate {
+    store: ContextStore,
+    committed: parking_lot::Mutex<Option<lk_agents_net::signal::Producer<Option<()>>>>,
+    release: lk_agents_net::signal::Cell<Option<()>>,
+}
+
+impl lk_agents_abi::a2a::turn::HandlerPort for CheckpointGate {
+    fn checkpoint(&self) -> lk_agents_abi::BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+    fn progress(&self, _: String) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+    fn token(&self, _: String) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+    fn save_session(
+        &self,
+        state: Value,
+        history: Vec<lk_agents_abi::ChatItem>,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), StorageError>> {
+        Box::pin(async move {
+            let committed = self.committed.lock().take().expect("the story checkpoints once");
+            self.store.checkpoint_owned_session(state, history).await?;
+            committed.resolve(());
+            self.release
+                .wait()
+                .await
+                .map_err(|_| StorageError::Cancelled("the checkpoint observer ended".into()))
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_checkpoint_acknowledges_only_the_state_it_wrote_before_new_input_arrived() {
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let store = ContextStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
+    store.begin_session().await.unwrap();
+    let first = crate::session_state::voice_value("desk".into(), vec![], None).unwrap();
+    store.stage_session(first.clone()).unwrap();
+    let (committed, stored) = lk_agents_net::signal::once();
+    let (release, released) = lk_agents_net::signal::once();
+    let _attachment = store
+        .attach_session_sink(std::sync::Arc::new(CheckpointGate {
+            store: store.clone(),
+            committed: parking_lot::Mutex::new(Some(committed)),
+            release: released,
+        }))
+        .unwrap();
+    let (done, result) = lk_agents_net::signal::once();
+    let writing = store.clone();
+    let background = fixture.storage.background();
+    let _flush =
+        background.tasks.scoped(&*background.spawner, "conversation checkpoint", async move {
+            done.resolve(writing.flush_session(vec![]).await);
+        });
+    stored.wait().await.unwrap();
+    let human = lk_agents_abi::ChatMessage::text(
+        "late-input",
+        lk_agents_abi::Role::User,
+        "Friday",
+        std::time::UNIX_EPOCH,
+    );
+    let newer =
+        crate::session_state::voice_value("desk".into(), vec![human.into()], Some(&first)).unwrap();
+    store.stage_session(newer.clone()).unwrap();
+    release.resolve(());
+    result.wait().await.unwrap().unwrap();
+    assert_eq!(store.session_state(), Some(newer), "the live view keeps the later input");
+
+    // Ending the execution keeps its durable checkpoint, rather than claiming the later input
+    // was included in the already completed write.
+    store.finish_session(false).await.unwrap();
+    assert_eq!(store.session_state(), Some(first.clone()));
+    assert_eq!(store.load_session().await.unwrap(), Some(first));
+    store.close();
+    fixture.cleanup(&[]).await;
+}
+
 #[tokio::test]
 async fn standalone_session_owns_a_run_and_settles_only_explicit_app_saves() {
     let fixture = Backend::Sqlite.fixture(None).await;

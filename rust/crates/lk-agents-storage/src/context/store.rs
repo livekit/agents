@@ -220,8 +220,8 @@ impl ContextStore {
         Ok(Some(agent.chat_ctx))
     }
 
-    pub(crate) fn acknowledge_session_state(&self) {
-        self.activation.lock().acknowledge_session();
+    pub(crate) fn acknowledge_session_state(&self, state: Value) {
+        self.activation.lock().acknowledge_session(Some(state));
     }
 
     pub(crate) fn matches_partition(&self, thread_id: &str, partition_key: &str) -> bool {
@@ -421,7 +421,7 @@ impl HostContextActivation for ContextStore {
                 }
             }
         } else if self.database.is_none() && session.is_some() {
-            self.activation.lock().acknowledge_session();
+            self.activation.lock().acknowledge_session(session);
         }
         Ok(values)
     }
@@ -486,11 +486,11 @@ impl HostContextActivation for ContextStore {
         let Some(state) = state else { return Ok(()) };
         let sink = self.session_sink.lock().clone();
         if let Some(sink) = sink {
-            sink.save_session(state, history).await?;
+            sink.save_session(state.clone(), history).await?;
         } else if self.database.is_some() {
-            self.checkpoint_owned_session(state, history).await?;
+            self.checkpoint_owned_session(state.clone(), history).await?;
         }
-        self.activation.lock().acknowledge_session();
+        self.activation.lock().acknowledge_session(Some(state));
         Ok(())
     }
 
@@ -503,7 +503,8 @@ impl HostContextActivation for ContextStore {
             .transpose()?;
         activation.stage_session(state)?;
         if self.database.is_none() {
-            activation.acknowledge_session();
+            let saved = activation.session_state();
+            activation.acknowledge_session(saved);
         }
         drop(activation);
         if let Some((view, checked)) = view.zip(checked) {
