@@ -26,8 +26,11 @@ if TYPE_CHECKING:
 class RunningApp:
     """An ordinary SDK application process; restarting preserves its environment and data."""
 
-    def __init__(self, module: str, directory: Path, env: dict[str, str], voice: bool) -> None:
+    def __init__(
+        self, module: str, directory: Path, env: dict[str, str], voice: bool, python: str
+    ) -> None:
         self.module, self.directory, self.env, self.voice = module, directory, env, voice
+        self.python = python
         self.agent_name = env["LIVEKIT_AGENT_NAME"]
         self.url = ""
         self.child: Child | None = None
@@ -43,7 +46,7 @@ class RunningApp:
         self._attempt += 1
         marker = self.directory / f"ready-{self._attempt}.json"
         self._process = child_process(
-            sys.executable,
+            self.python,
             "-m",
             "tests.e2e.framework.runner",
             self.module,
@@ -84,7 +87,12 @@ class E2E:
         self._apps = 0
 
     async def start_app(
-        self, module: str, *, env: Mapping[str, str] | None = None, voice: bool = False
+        self,
+        module: str,
+        *,
+        env: Mapping[str, str] | None = None,
+        voice: bool = False,
+        python: str = sys.executable,
     ) -> RunningApp:
         self._apps += 1
         directory = self.directory / f"app-{self._apps}"
@@ -108,7 +116,7 @@ class E2E:
         if voice:
             child_env["LIVEKIT_URL"] = self._sfu()
         child_env.update(env or {})
-        app = RunningApp(module, directory, child_env, voice)
+        app = RunningApp(module, directory, child_env, voice, python)
         self._resources.push_async_callback(app.stop)
         await app.start()
         return app

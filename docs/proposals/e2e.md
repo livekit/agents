@@ -20,7 +20,7 @@ A single e2e fixture owns shared infrastructure and cleanup. The proposed starti
 
 | API | Responsibility |
 | --- | --- |
-| e2e.start_app(module, env=...) | Launch an importable application in a separate process and await readiness. |
+| e2e.start_app(module, env=..., python=...) | Launch an importable application and await readiness. The default uses the test interpreter; a vendor peer can select its own pinned dependency environment. |
 | app.endpoint(name) | Return that running application's actual endpoint address. |
 | app.stop(), app.kill(), app.restart() | Explicit process lifecycle controls; restart constructs a fresh owner using retained configuration/storage. |
 | e2e.voice_client(app) | Join/dispatch through the real room path and own a voice caller. |

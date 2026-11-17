@@ -1096,8 +1096,9 @@ passes deterministic stock-peer transport and failure tests.
 
 - [x] Run a real HTTP/SSE stock A2A SDK server in another process without LiveKit dependencies,
   custom metadata, shared storage or required extension negotiation.
-- [ ] Run ADK's real A2A server in an isolated environment with a deterministic model stub.
-  Define failure for unsupported vendor-private input protocols; decide adapters separately.
+- [x] Run ADK's real A2A server in an isolated environment with a deterministic model stub.
+  The ordinary frontend reaches its agent and executes a tool through the same RemoteAgent path.
+- [ ] Define failure for unsupported vendor-private input protocols; decide adapters separately.
 - [ ] Author ordinary SDK applications under tests/e2e/apps/ and exercise them through the
   E2E framework below. Cover frontend -> flights/hotels -> payments, overlapping requests,
   interrupted receipts and idempotent application booking/payment operations.

@@ -1,0 +1,4 @@
+# Isolated third-party peer; these packages do not enter the SDK's environment.
+google-adk[a2a]==2.14.1
+a2a-sdk[http-server]==1.3.0
+uvicorn==0.54.0

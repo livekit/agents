@@ -36,6 +36,9 @@ An external ASGI application exports `create_app(url)`; the runner supplies its 
 and serves it in a process that imports no LiveKit SDK. `apps/stock_a2a.py` uses the upstream
 A2A SDK's executor, task store and HTTP/SSE routes. `test_stock_a2a.py` delegates to it through
 an ordinary RemoteAgent tool and resumes its input-required task after frontend restart.
+`apps/adk_peer.py` uses ADK's ordinary agent, tool and
+[A2A server API](https://adk.dev/a2a/quickstart-exposing/) with scripted inference. Pass
+`python=` to `start_app()` when the peer needs its own dependency environment.
 The shared `framework/media.py` also supplies the v1 compatibility speech fixtures.
 See the [framework design](../../docs/proposals/e2e.md) for provider and acceptance policies.
 
@@ -45,6 +48,7 @@ See the [framework design](../../docs/proposals/e2e.md) for provider and accepta
 | --- | --- | --- |
 | `test_framework.py` | Conversation restart, received speech and interruption during actual audio playback | Scripted models and tone speech; real app processes, SQLite and isolated SFU |
 | `test_stock_a2a.py` | Remote Message replies and input-required continuation after frontend restart | A stock A2A SDK server in a separate process; ordinary frontend, scripted model, real HTTP/SSE and SQLite |
+| `test_adk.py` | The same RemoteAgent frontend runs an ADK agent and its tool | Pinned ADK and A2A SDK in a separate environment/process; scripted inference, real server and HTTP transport |
 | `test_worker.py` | Job processes: IPC launch, health kill, wire faults, stress; a real worker's crashed, leaking, slow-initializing and orphaned jobs and their logs; a process that dies holding a storage turn; worker processes serving their text doors | Hermetic: real OS processes, local SQLite (AgentDB case skips without a project) |
 | `test_cli.py` | The CLI launcher: module launch, failure exits, one shutdown budget across drain and cleanup, signals while a real job process runs | Hermetic: real OS processes and signals |
 | `test_preload.py` | Application preloads before readiness, spawn and forkserver, copy-on-write, unsafe preloads refused | Hermetic; forkserver cases run on Linux only |
@@ -77,6 +81,15 @@ uv run --no-sync pytest tests/e2e/test_text.py --e2e -k text_session_storage
 ```
 
 ## Prerequisites
+
+- ADK interoperability: install its pinned dependencies in an isolated environment and select
+  that interpreter. CI prepares it automatically; locally:
+
+  ```sh
+  uv venv --python .venv/bin/python /tmp/agents-adk-peer
+  uv pip install --python /tmp/agents-adk-peer/bin/python -r tests/e2e/adk.requirements.txt
+  ADK_E2E_PYTHON=/tmp/agents-adk-peer/bin/python uv run --no-sync pytest tests/e2e/test_adk.py --e2e
+  ```
 
 - Live journeys: `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` naming a project with
   AgentDB. A missing variable fails the selected test instead of skipping it. Against a local
