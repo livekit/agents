@@ -161,8 +161,9 @@ approvals and history selection use [the tool API](tools.md#configuring-an-agent
 saved decision refers to the parent's invocation and validated arguments. With approval
 required, the child has not started when the session asks permission.
 
-A bound subsequent turn resolves that approval. Approval starts the recorded child; rejection
-fills the parent's call with a rejection. Changed arguments require another decision.
+A recognized response is delivered to the parent that owns the read-back. If another local
+child is current, the response stays held until the parent resumes. The body still requires
+a validated repeat of the same call; changing its arguments requires another read-back.
 Starting a specialist and authorizing a business operation are separate: a booking specialist
 can collect preferences before its reservation tool asks permission for the actual booking.
 See [tool approval](tools.md#approval).

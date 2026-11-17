@@ -361,8 +361,9 @@ A tool declared with `needs_approval=True`, on `@agent.tool` or
 `@function_tool`, does not run when the model calls it. The call asks the
 person instead, as a verbatim `InputRequired`:
 `Please confirm: Cancel the patient's appointment on a date (date='Monday'). Yes or no?`,
-the first sentence of the docstring and the arguments. The person's answer
-is that call's output, and the model reads it as on any turn.
+the first sentence of the docstring and the arguments. The person's recognized response is
+delivered to the agent that owns the read-back, while the original waiting outcome stays
+recorded on the call.
 
 Approval is held by the framework. The tool's schema has no parameter for
 it, and the body runs only for a repeat of the same call, with the same
@@ -370,9 +371,9 @@ arguments, made after the person answered its read-back. A first call, a
 call with other arguments, or a second repeat asks again. The calls carry
 `lk.approval` (`asked`, `granted`) in `FunctionCall.extra`, with
 `lk.approval_identity`, the canonical form of the validated arguments the call
-was decided on; the next call reads them from the history. The model reads an answered read-back's output
-as `not run yet: the person answered '...'`, with how to run it; the history
-stores the person's words. A raw-schema tool cannot require approval.
+was decided on; the next call reads them from the history. The model receives a private
+framework observation with the person's response and how to proceed; answer correlation does
+not itself approve or invoke the operation. A raw-schema tool cannot require approval.
 
 `needs_approval=` also takes a read-back function. It takes the tool's
 own parameters, the context and a method's `self` included, and returns the

@@ -13,12 +13,14 @@ pub enum DelegationCheckpoint {
 
 impl AgentRun {
     /// Starts a fresh invocation from a history whose pending calls have already been answered.
-    /// Unlike `Start`, this appends no synthetic user message and answers no human-input tools.
+    /// This appends no synthetic user message and infers no human answer from history. Origins
+    /// already admitted by the conversation owner still authorize a validated approval repeat.
     pub fn continue_from_history(&mut self, now: Ts) -> Vec<AgentRunEffect> {
         if !matches!(self.phase, Phase::Idle) {
             return Vec::new();
         }
         self.history = std::mem::take(&mut self.input.history);
+        self.approval_answers = self.input_answers.take().unwrap_or_default();
         self.first_new = self.history.len();
         let mut effects = Vec::new();
         self.next_step(now, &mut effects);

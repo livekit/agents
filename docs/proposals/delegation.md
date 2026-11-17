@@ -1126,6 +1126,8 @@ passes deterministic stock-peer transport and failure tests.
   Binding stories also prove that a side question or another child call cannot discard a
   waiting agent approval. A phrasing failure saves the tool's source request but does not
   make that unheard question a detector candidate; a later validated repeat still owns approval.
+  A response to a parent's approval can be held during a child and consumed on parent
+  continuation, without a synthetic human turn or a second approval grant.
 - [ ] Allow corrections to held responses before dispatch begins; invalidate stale detector
   decisions by reservation revision. After dispatch may have begun, preserve the original
   message/operation and reconcile it; a correction is a separate continuation, not an overwrite.

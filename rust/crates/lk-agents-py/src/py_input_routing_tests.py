@@ -17,6 +17,7 @@ from livekit.agents import (
     persisted,
 )
 from livekit.agents.a2a import RemoteAgent
+from livekit.agents.llm import ChatContext, FunctionToolCall
 from livekit.agents.storage import ContextStore
 from tests.fakes import FakeLLM, Hang, tool_call, until
 from tests.host.a2a_peer import Peer
@@ -287,14 +288,20 @@ async def test_a_response_held_during_a_local_child_can_be_sent_by_another_eligi
             ]
         ),
     )
-    routing = FakeLLM(
-        [
-            tool_call("route_input_response", candidates=[], unclear=False),
-            tool_call("route_input_response", candidates=[1], unclear=False),
-        ]
-    )
-    if correct_before_return:
-        routing.extend([tool_call("route_input_response", candidates=[2], unclear=False)])
+
+    def route(history: ChatContext) -> FunctionToolCall:
+        prompt = json.loads(history.items[-1].text_content)
+        selected = []
+        if prompt["latest_message"] in {"Friday", "Actually Saturday"}:
+            selected = [
+                candidate["index"]
+                for candidate in prompt["candidates"]
+                if candidate["question"] == "Which date?"
+            ]
+            assert len(selected) == 1
+        return tool_call("route_input_response", candidates=selected, unclear=False)
+
+    routing = FakeLLM(route)
     session = TextSession(agent=root, delegation=DelegationOptions(routing_model=routing))
     await session.run("Check coverage", context=store.bind(app))
     await session.run("Explain the hotel policy", context=store.bind(app))
@@ -313,7 +320,12 @@ async def test_a_response_held_during_a_local_child_can_be_sent_by_another_eligi
     }
     if correct_before_return:
         prompt = json.loads(routing.requests[-1].items[-1].text_content)
-        assert prompt["candidates"][2]["held_response"] == "Friday"
+        date = next(
+            candidate
+            for candidate in prompt["candidates"]
+            if candidate["question"] == "Which date?"
+        )
+        assert date["held_response"] == "Friday"
 
 
 async def test_routed_approval_still_requires_a_validated_repeat() -> None:
@@ -396,3 +408,58 @@ async def test_unanswered_agent_approval_survives_a_side_question(ask_another_ag
     assert result.output == "Booked." and len(child_model.requests) == 1
     current = app.session.current_agent
     assert current is not None and current.calls == {}
+
+
+async def test_a_parent_approval_response_is_applied_when_its_local_child_returns() -> None:
+    store = ContextStore()
+    app = await store.load_context(App())
+    booking_model = FakeLLM(["reserved"])
+    booking = Agent(name="booking", instructions="Book.", output_type=str, llm=booking_model)
+    details = Agent(
+        name="details",
+        instructions="Explain.",
+        output_type=str,
+        llm=FakeLLM([tool_call("policy"), "Policy explained."]),
+    )
+
+    @details.tool
+    async def policy() -> InputRequired:
+        """Ask which policy the person wants explained."""
+        return InputRequired("Which policy?", verbatim=True)
+
+    root = Agent(
+        name="desk",
+        instructions="Help.",
+        tools=[booking.as_tool(needs_approval=True), details.as_tool()],
+        llm=FakeLLM([tool_call("booking"), tool_call("details"), tool_call("booking"), "Booked."]),
+    )
+
+    approval_question: str | None = None
+
+    def route(history: ChatContext) -> FunctionToolCall:
+        prompt = json.loads(history.items[-1].text_content)
+        selected = []
+        if prompt["latest_message"] == "Yes, start the booking":
+            selected = [
+                candidate["index"]
+                for candidate in prompt["candidates"]
+                if candidate["question"] == approval_question
+            ]
+            assert len(selected) == 1
+        return tool_call("route_input_response", candidates=selected, unclear=False)
+
+    routing = FakeLLM(route)
+    session = TextSession(agent=root, delegation=DelegationOptions(routing_model=routing))
+    first = await session.run("Book", context=store.bind(app))
+    assert first.status == "input_required"
+    approval_question = first.question
+    await session.run("Explain the hotel policy", context=store.bind(app))
+    assert app.session.current_agent is not None
+    assert app.session.current_agent.agent_name == "details" and booking_model.requests == []
+    result = await session.run("Yes, start the booking", context=store.bind(app))
+    assert result.status == "completed" and result.output == "Booked."
+    assert len(booking_model.requests) == 1, (
+        "the resumed parent can grant its validated repeat once"
+    )
+    assert app.session.current_agent is not None
+    assert app.session.current_agent.agent_name == "desk" and app.session.current_agent.calls == {}
