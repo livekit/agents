@@ -961,19 +961,39 @@ class _AgentTextOutput(TextOutput):
         # Set when the audio output revises the playback position, so a word
         # waiting on the old estimate is reconsidered against the new one.
         self._revised = asyncio.Event()
-        audio_output.on("playback_started", self._playback.on_started)
-        audio_output.on("playback_progressed", self._on_playback_progressed)
-        audio_output.on("playback_finished", self._on_playback_finished)
+        self._attached = True
+        # A reply keeps the output it started with, so the rest of one cut off by
+        # a detach still arrives here, and its playback can no longer be followed.
+        self._skipping_reply = False
+        self._listen_to_playback()
+
+    def _listen_to_playback(self) -> None:
+        # The emitter keys listeners by callback, so registering twice is a no-op.
+        self._audio_output.on("playback_started", self._playback.on_started)
+        self._audio_output.on("playback_progressed", self._on_playback_progressed)
+        self._audio_output.on("playback_finished", self._on_playback_finished)
+
+    def on_attached(self) -> None:
+        # Toggling transcription detaches and reattaches this output.
+        self._attached = True
+        self._listen_to_playback()
+        super().on_attached()
 
     def on_detached(self) -> None:
         self._audio_output.off("playback_started", self._playback.on_started)
         self._audio_output.off("playback_progressed", self._on_playback_progressed)
         self._audio_output.off("playback_finished", self._on_playback_finished)
+        self._attached = False
+        self._skipping_reply = self._segment_open and not self._text_complete
         self._end_segment()
         super().on_detached()
 
     async def capture_text(self, text: str) -> None:
-        if self._stt._params.enable_echo_cancellation:
+        if (
+            self._stt._params.enable_echo_cancellation
+            and self._attached
+            and not self._skipping_reply
+        ):
             if self._text_complete:
                 # The last reply's playback never finished, so nothing says how
                 # much of it was heard.
@@ -988,6 +1008,7 @@ class _AgentTextOutput(TextOutput):
             await self.next_in_chain.capture_text(text)
 
     def flush(self) -> None:
+        self._skipping_reply = False
         if self._segment_open:
             self._text_complete = True
         if self.next_in_chain:

@@ -1318,6 +1318,52 @@ def _sent(stream) -> list[dict[str, Any]]:
     ]
 
 
+async def test_agent_text_follows_playback_again_after_it_is_reattached() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+
+    # What set_transcription_enabled(False) and then True does.
+    output.on_detached()
+    output.on_attached()
+    for event in ("playback_started", "playback_progressed", "playback_finished"):
+        assert len(audio_output._events.get(event, {})) == 1, event
+    await output.capture_text(TimedString("Hello.", start_time=0.0, end_time=0.4))
+    output.flush()
+    _played_out(output, position=0.4)
+
+    assert _sent(stream) == [
+        {"type": "agent_text", "text": "Hello.", "end_of_segment": False},
+        {"type": "agent_text", "text": "", "end_of_segment": True},
+    ]
+
+
+async def test_agent_text_skips_the_rest_of_a_reply_cut_off_by_a_detach() -> None:
+    from livekit.agents.voice.io import PlaybackStartedEvent
+
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+    audio_output.emit("playback_started", PlaybackStartedEvent(created_at=time.time()))
+    await output.capture_text(TimedString("One ", start_time=0.0, end_time=0.3))
+
+    # The reply keeps the output it started with, so its rest still arrives here,
+    # before and after the output is reattached.
+    output.on_detached()
+    await output.capture_text(TimedString("two ", start_time=1.0, end_time=1.3))
+    output.on_attached()
+    await output.capture_text(TimedString("three ", start_time=2.0, end_time=2.3))
+    output.flush()
+    _played_out(output, position=2.3)
+    await output.capture_text(TimedString("Next.", start_time=0.0, end_time=0.3))
+    output.flush()
+    _played_out(output, position=0.3)
+
+    assert _sent(stream) == [
+        {"type": "agent_text", "text": "One ", "end_of_segment": False},
+        {"type": "agent_text", "text": "", "end_of_segment": True},
+        {"type": "agent_text", "text": "Next.", "end_of_segment": False},
+        {"type": "agent_text", "text": "", "end_of_segment": True},
+    ]
+    output.on_detached()
+
+
 async def test_agent_text_is_held_until_the_lead_before_it_is_heard() -> None:
     output, stream, audio_output = _agent_text_output(lead_ms=700)
 
