@@ -303,39 +303,21 @@ fn remote_cancellation_and_failure_settle_truthfully_and_verbatim_is_split_once(
 }
 
 #[test]
-fn progress_eof_never_becomes_an_answer_and_local_cancel_keeps_uncertain_effects() {
-    let mut remote = interaction("cancel");
+fn an_ended_observation_does_not_cancel_work_or_turn_progress_into_an_answer() {
+    let mut remote = interaction("observation-ended");
     begin(&mut remote, true);
     let mut progress = update(TaskState::Working, "context", "task", "Checking");
     progress.progress = true;
     assert_eq!(remote.update(&progress).unwrap(), DelegationUpdate::Progress("Checking".into()));
     assert_eq!(remote.ended(), Err(DelegationError::MissingOutcome));
-    let effect = remote.cancel().unwrap();
-    assert_eq!(effect.task, TaskRef { id: "task".into(), context_id: "context".into() });
-    assert_eq!(effect.reason, TaskReason::CallerCanceled);
-    assert_eq!(remote.cancel(), None);
-    let late =
-        remote.update(&update(TaskState::Completed, "context", "task", "late answer")).unwrap();
-    assert_eq!(late, DelegationUpdate::Cancelled);
-    remote.cancellation_settled();
-    assert_eq!(remote.snapshot().phase, InteractionPhase::Uncertain);
-    assert_eq!(remote.ended(), Err(DelegationError::MissingOutcome));
-}
-
-#[test]
-fn cancel_before_ack_still_emits_cancellation_once_the_remote_task_is_known() {
-    let mut remote = interaction("cancel-before-ack");
-    begin(&mut remote, true);
-    assert_eq!(remote.cancel(), None);
-    assert_eq!(
-        remote.update(&update(TaskState::Submitted, "late-context", "late-task", "")).unwrap(),
-        DelegationUpdate::Cancelled
-    );
-    let effect =
-        remote.cancel().expect("the accepted remote task still owes cancellation delivery");
-    assert_eq!(effect.task, TaskRef { id: "late-task".into(), context_id: "late-context".into() });
-    assert_eq!(effect.reason, TaskReason::CallerCanceled);
-    assert_eq!(remote.cancel(), None);
+    let saved = remote.snapshot();
+    let mut restored = RemoteInteraction::restore(saved.clone(), &saved.id).unwrap();
+    assert_eq!(restored.snapshot().phase, InteractionPhase::Running);
+    assert!(matches!(
+        restored.update(&update(TaskState::Completed, "context", "task", "late answer")).unwrap(),
+        DelegationUpdate::Completed(ToolOutcome::Value { text, .. }) if text == "late answer"
+    ));
+    assert!(restored.ended().is_ok());
 }
 
 #[test]

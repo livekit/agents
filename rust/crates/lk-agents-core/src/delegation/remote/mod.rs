@@ -5,7 +5,6 @@ pub mod retained;
 use a2a::{Message, Part, Role, TaskState};
 use lk_agents_abi::a2a::metadata::KIND_KEY;
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
-use lk_agents_abi::storage::thread::TaskReason;
 use serde::{Deserialize, Serialize};
 
 use crate::a2a::caller_history::CallerHistory;
@@ -46,7 +45,7 @@ pub enum DelegationError {
     NotWaiting,
     #[error("the remote update belongs to another task or context")]
     WrongTask,
-    #[error("the delegation already settled or cancellation was requested")]
+    #[error("the local interaction is already running or settled")]
     Settled,
     #[error("the remote task ended without a result")]
     MissingOutcome,
@@ -68,13 +67,11 @@ pub struct InteractionId {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Local observation lifetime. Remote task status and cancellation belong to task state.
 pub enum InteractionPhase {
     Ready,
     Running,
     InputRequired,
-    CancelRequested,
-    /// Cancellation delivery is not evidence that business effects were rolled back.
-    Uncertain,
     Settled,
 }
 
@@ -88,14 +85,6 @@ pub struct InteractionState {
     pub phase: InteractionPhase,
     pub request_id: Option<String>,
     pub question_sequence: u64,
-    pub cancellation_sent: bool,
-}
-
-/// A request to cancel, executed by runtime even after the local caller stops waiting.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CancelTask {
-    pub task: TaskRef,
-    pub reason: TaskReason,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -137,7 +126,6 @@ impl RemoteInteraction {
                 phase: InteractionPhase::Ready,
                 request_id: None,
                 question_sequence: 0,
-                cancellation_sent: false,
             },
         })
     }
@@ -178,13 +166,7 @@ impl RemoteInteraction {
         history: Option<&CallerHistory>,
         default_context: Option<&str>,
     ) -> Result<Message, DelegationError> {
-        if matches!(
-            self.state.phase,
-            InteractionPhase::Settled
-                | InteractionPhase::CancelRequested
-                | InteractionPhase::Uncertain
-                | InteractionPhase::Running
-        ) {
+        if matches!(self.state.phase, InteractionPhase::Settled | InteractionPhase::Running) {
             return Err(DelegationError::Settled);
         }
         if message_id.is_empty() || default_context == Some("") {
@@ -249,14 +231,6 @@ impl RemoteInteraction {
             return Err(DelegationError::Settled);
         }
         self.identify(update)?;
-        // Late remote success cannot turn local cancellation into a successful parent result.
-        if matches!(
-            self.state.phase,
-            InteractionPhase::CancelRequested | InteractionPhase::Uncertain
-        ) {
-            self.state.phase = InteractionPhase::Uncertain;
-            return Ok(DelegationUpdate::Cancelled);
-        }
         let exact = update.metadata.get("livekit/verbatim").and_then(|v| v.as_str());
         let outcome = match update.state {
             TaskState::Unspecified | TaskState::Submitted | TaskState::Working => {
@@ -337,28 +311,6 @@ impl RemoteInteraction {
             self.state.pending_task_id = Some(update.task_id.clone());
         }
         Ok(())
-    }
-
-    /// The effect is emitted once. Cancellation acknowledgment never manufactures completion.
-    pub fn cancel(&mut self) -> Option<CancelTask> {
-        if self.state.phase == InteractionPhase::Settled || self.state.cancellation_sent {
-            return None;
-        }
-        self.state.phase = InteractionPhase::CancelRequested;
-        let effect = CancelTask {
-            task: TaskRef {
-                id: self.state.pending_task_id.clone()?,
-                context_id: self.state.context_id.clone()?,
-            },
-            reason: TaskReason::CallerCanceled,
-        };
-        self.state.cancellation_sent = true;
-        Some(effect)
-    }
-
-    /// Cleanup delivery may be uncertain, including a caller canceled before the first ack.
-    pub fn cancellation_settled(&mut self) {
-        self.state.phase = InteractionPhase::Uncertain;
     }
 
     pub fn ended(&self) -> Result<(), DelegationError> {
