@@ -43,14 +43,15 @@ output and cancellation state are subordinate to that invocation, not independen
 ### Request-scoped text conversation
 
 1. [`TextSession.run_stream`](../../python/livekit-agents/livekit/agents/text_session.py) constructs
-   `_core.TextSessionRunner` from the configured agents and explicitly supplied state.
+   `_core.TextSessionRunner` from the configured agents and optional store binding.
 2. [`runtime::text_session`](../../rust/crates/lk-agents-runtime/src/text_session/mod.rs) drives
-   [`core::text_session::TextSession`](../../rust/crates/lk-agents-core/src/text_session/machine/mod.rs).
-3. `TextSession` owns backend frames, child routing and history transfer. It constructs an
+   [`core::session::Session`](../../rust/crates/lk-agents-core/src/session/machine/mod.rs).
+3. `Session` owns private agent contexts, local-call routing and history transfer. It constructs an
    `AgentRun` with `Opening::Message` for each invocation; invocation effects are carried by
-   [`TextSessionEffect::Run`](../../rust/crates/lk-agents-core/src/text_session/effects.rs).
-4. The runtime uses the same `agent_run::Execution` for those effects. A store-bound invocation checkpoints accepted state; snapshot-only execution leaves
-   saving explicit. TextSession does not own a live voice session.
+   [`SessionEffect::Run`](../../rust/crates/lk-agents-core/src/session/effects.rs).
+4. The runtime uses the same `agent_run::Execution` for those effects. A store-bound invocation
+   checkpoints accepted state; unbound execution starts fresh without saving it.
+   TextSession does not own a live voice session.
 
 A2A is a separate transport/durable-task boundary. Follow [`core::a2a`](../../rust/crates/lk-agents-core/src/a2a/mod.rs)
 and [`runtime::a2a`](../../rust/crates/lk-agents-runtime/src/a2a/mod.rs) only when investigating that door.
@@ -155,7 +156,7 @@ The current core/voice source locations are:
 | AgentRun correlation IDs | `core::agent_run` domain entry; transitions remain under `agent_run::machine` |
 | Chat history plans and their host adapter | `core::llm::history` |
 | Provider image projections | `core::llm::provider_format` domain entry |
-| TextSession fresh/fork selection and delivered-dialogue transfer | Private helpers beside `core::text_session::machine::TextSession` |
+| Local-call fresh/fork selection and delivered-dialogue transfer | Private helpers beside `core::session::Session` |
 | Expressive markup host API and XML rendering | `core::markup`; steering vocabulary filtering and prompt construction share `markup::instructions` |
 | Voice driver initialization and recognition dispatch | `voice::agent_session::machine::driver` |
 | User-turn recognition state and STT/VAD/detector transitions | `voice::audio_recognition::machine`; configuration, commit guards and diagnostic records remain at the domain entry |

@@ -1,156 +1,12 @@
-use super::effects::TextSessionEffect;
-use super::routing;
-use crate::agent_run::{self, AgentRun, CallId, Opening, OutputVerdict, RunInput};
-use crate::approval;
-use crate::usage::Ledger;
-use lk_agents_abi::Role;
-use lk_agents_abi::agent::ArgumentIdentity;
-use lk_agents_abi::agent::run::{
-    Output, RunError, RunOutcome, RunResult, StreamEvent, ValidationId,
-};
-use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::usage::Usage;
-use lk_agents_abi::{ChatItem, ChatMessage, FunctionCall, Ts, WallAnchor};
-use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use super::*;
 
 mod continuation;
 #[cfg(test)]
 #[path = "machine_tests.rs"]
 mod tests;
 
-pub use lk_agents_abi::text_session::{
-    ChildCallStatus, FrameId, ParentCall, PendingChildCall, SessionFrame, SessionSnapshot,
-    TextSessionError, TextSessionTurn,
-};
-pub use routing::{ChatHistory, LocalAgentTool, RoutingError, SessionAgent, TextSessionConfig};
-
-// Only a settled turn exposes a new state snapshot.
-
-/// Runtime inputs: identities and saved state; no services nor an instruction to load/save them.
-pub struct TextSessionInput {
-    pub session_id: String,
-    /// The random value this request's runs mint their chat items under: drawn afresh
-    /// per request, so nothing about it is saved.
-    pub id_seed: u64,
-    pub execution_id: String,
-    pub task_id: Option<String>,
-    pub state: Option<SessionSnapshot>,
-    pub wall: WallAnchor,
-    pub cleanup_timeout: Duration,
-    pub delegated: bool,
-}
-
-/// Every event belonging to an invocation carries its identity. Late receipts cannot mutate
-/// a new invocation of the same frame, nor a new request reconstructed from the returned state.
-pub enum TextSessionEvent {
-    PersistenceFailed(lk_agents_abi::storage::StorageError),
-    Start(ChatMessage),
-    Run {
-        invocation_id: String,
-        event: agent_run::AgentRunEvent,
-    },
-    /// The host's accepted value serialized *after* validation/replacement. The runtime also
-    /// retains the original typed host value for the public result.
-    OutputValidated {
-        invocation_id: String,
-        validation: ValidationId,
-        verdict: OutputVerdict,
-        output: Option<Value>,
-    },
-    DialogueDelivered {
-        invocation_id: String,
-        message: ChatMessage,
-    },
-    /// All delivery receipts and invocation cleanup have been reported. A non-presenting
-    /// consumer acknowledges immediately; opening a stream does not imply delivery. `delivered`:
-    /// the text of each of the invocation's dialogue messages that reached the person, by id.
-    InvocationReleased {
-        invocation_id: String,
-        delivered: BTreeMap<String, String>,
-    },
-    /// Return from a direct execution of the active frame, preserving its original parent call.
-    /// As with AgentRun, the result must already have passed the agent's output validators.
-    Reconcile {
-        frame_id: FrameId,
-        result: RunResult,
-        output: Option<Value>,
-    },
-    Cancel,
-    Wake,
-}
-
-struct PreparedChild {
-    function_call: FunctionCall,
-    arguments: Value,
-    identity: String,
-}
-
-enum Child {
-    Preparing(FunctionCall),
-    Prepared(PreparedChild),
-    Executing(PreparedChild),
-}
-
-enum InvocationRelease {
-    Settled(Box<RunResult>, Option<Value>, Vec<PendingChildCall>),
-    Parked,
-}
-
-struct Invocation {
-    id: String,
-    frame_id: FrameId,
-    run: AgentRun,
-    children: BTreeMap<CallId, Child>,
-    outputs: BTreeMap<ValidationId, Value>,
-}
-
-enum Phase {
-    NotStarted,
-    Running(Invocation),
-    Releasing(Invocation, InvocationRelease),
-    Done,
-}
-
-impl Phase {
-    fn invocation(&self) -> Option<&Invocation> {
-        match self {
-            Self::Running(invocation) | Self::Releasing(invocation, _) => Some(invocation),
-            Self::NotStarted | Self::Done => None,
-        }
-    }
-
-    fn invocation_mut(&mut self) -> Option<&mut Invocation> {
-        match self {
-            Self::Running(invocation) | Self::Releasing(invocation, _) => Some(invocation),
-            Self::NotStarted | Self::Done => None,
-        }
-    }
-}
-
-pub struct TextSession {
-    failure_input_requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
-    config: TextSessionConfig,
-    state: SessionSnapshot,
-    id_seed: u64,
-    wall: WallAnchor,
-    cleanup_timeout: Duration,
-    delegated: bool,
-    checkpoints: bool,
-    persistence_failure: Option<lk_agents_abi::storage::StorageError>,
-    closing: bool,
-    recording: bool,
-    checkpoint_due: Option<Ts>,
-    checkpoint_bytes: usize,
-    phase: Phase,
-    /// The turn's ended invocations: the live one is added to it when read.
-    usage: Ledger,
-    sequence: u64,
-}
-
-impl TextSession {
-    pub fn new(config: TextSessionConfig, input: TextSessionInput) -> Result<Self, RoutingError> {
+impl Session {
+    pub fn new(config: SessionConfig, input: SessionInput) -> Result<Self, RoutingError> {
         config.validate()?;
         let state = match input.state {
             Some(mut state) => {
@@ -299,20 +155,20 @@ impl TextSession {
         }
     }
 
-    pub fn handle(&mut self, event: TextSessionEvent, now: Ts) -> Vec<TextSessionEffect> {
+    pub fn handle(&mut self, event: SessionEvent, now: Ts) -> Vec<SessionEffect> {
         let mut effects = Vec::new();
-        if matches!(event, TextSessionEvent::Cancel) {
+        if matches!(event, SessionEvent::Cancel) {
             self.closing = true;
         }
         // A late host receipt still transfers ownership of its prepared-arguments resource.
         // Invocation identity suffices for runtime cleanup, even after this request settled.
-        if let TextSessionEvent::Run {
+        if let SessionEvent::Run {
             invocation_id,
             event: agent_run::AgentRunEvent::ToolPrepared { prepared, .. },
         } = &event
             && !self.is_current(invocation_id)
         {
-            effects.push(TextSessionEffect::Run {
+            effects.push(SessionEffect::Run {
                 invocation_id: invocation_id.clone(),
                 effect: agent_run::AgentRunEffect::ToolArgumentsRelease { prepared: *prepared },
             });
@@ -322,11 +178,11 @@ impl TextSession {
             return effects;
         }
         match event {
-            TextSessionEvent::PersistenceFailed(error) => {
+            SessionEvent::PersistenceFailed(error) => {
                 self.persistence_failure = Some(error);
-                return self.handle(TextSessionEvent::Cancel, now);
+                return self.handle(SessionEvent::Cancel, now);
             }
-            TextSessionEvent::Start(message) if matches!(self.phase, Phase::NotStarted) => {
+            SessionEvent::Start(message) if matches!(self.phase, Phase::NotStarted) => {
                 self.record_dialogue(message.clone());
                 let frame = self.active_frame_mut();
                 // An answered read-back is now ordinary history. AgentRun alone decides whether
@@ -334,10 +190,10 @@ impl TextSession {
                 frame.pending_calls.retain(|p| p.status != ChildCallStatus::Approval);
                 self.invoke(Some(message), now, &mut effects);
             }
-            TextSessionEvent::Run { invocation_id, event } if self.is_current(&invocation_id) => {
+            SessionEvent::Run { invocation_id, event } if self.is_current(&invocation_id) => {
                 self.run_event(event, now, &mut effects);
             }
-            TextSessionEvent::OutputValidated { invocation_id, validation, verdict, output }
+            SessionEvent::OutputValidated { invocation_id, validation, verdict, output }
                 if self.is_current(&invocation_id) =>
             {
                 if matches!(verdict, OutputVerdict::Accepted { .. })
@@ -352,12 +208,12 @@ impl TextSession {
                     &mut effects,
                 );
             }
-            TextSessionEvent::DialogueDelivered { invocation_id, message }
+            SessionEvent::DialogueDelivered { invocation_id, message }
                 if self.is_current(&invocation_id) =>
             {
                 self.record_dialogue(message);
             }
-            TextSessionEvent::InvocationReleased { invocation_id, delivered } if matches!(&self.phase, Phase::Releasing(invocation, _) if invocation.id == invocation_id) =>
+            SessionEvent::InvocationReleased { invocation_id, delivered } if matches!(&self.phase, Phase::Releasing(invocation, _) if invocation.id == invocation_id) =>
             {
                 self.receipts(&delivered);
                 let phase = std::mem::replace(&mut self.phase, Phase::Done);
@@ -372,14 +228,14 @@ impl TextSession {
                     }
                 }
             }
-            TextSessionEvent::Reconcile { frame_id, result, output }
+            SessionEvent::Reconcile { frame_id, result, output }
                 if matches!(self.phase, Phase::NotStarted)
                     && frame_id == self.state.active_frame_id =>
             {
                 self.usage.add(&result.usage);
                 self.settled(result, output, Vec::new(), now, &mut effects);
             }
-            TextSessionEvent::Cancel => {
+            SessionEvent::Cancel => {
                 if matches!(self.phase, Phase::Releasing(..)) {
                     self.end_invocation();
                     self.finish(Err(TextSessionError::Run(RunError::Cancelled)), &mut effects);
@@ -389,16 +245,14 @@ impl TextSession {
                     self.finish(Err(TextSessionError::Run(RunError::Cancelled)), &mut effects);
                 }
             }
-            TextSessionEvent::Wake => {
-                self.run_event(agent_run::AgentRunEvent::Wake, now, &mut effects)
-            }
+            SessionEvent::Wake => self.run_event(agent_run::AgentRunEvent::Wake, now, &mut effects),
             _ => {}
         }
         for effect in &effects {
             if !self.recording {
                 break;
             }
-            if let TextSessionEffect::Emit {
+            if let SessionEffect::Emit {
                 event: lk_agents_abi::agent::run::StreamEvent::TextDelta { delta, .. },
                 ..
             } = effect
@@ -412,7 +266,7 @@ impl TextSession {
             self.checkpoint_bytes >= 64 * 1024 || self.checkpoint_due.is_some_and(|due| due <= now);
         let failed = effects
             .iter()
-            .any(|effect| matches!(effect, TextSessionEffect::Finished { result: Err(_), .. }));
+            .any(|effect| matches!(effect, SessionEffect::Finished { result: Err(_), .. }));
         if failed {
             self.checkpoint_due = None;
             self.checkpoint_bytes = 0;
@@ -423,11 +277,11 @@ impl TextSession {
                 || effects.iter().any(|effect| {
                     matches!(
                         effect,
-                        TextSessionEffect::InvocationStarted { .. }
-                            | TextSessionEffect::InvocationParked { .. }
-                            | TextSessionEffect::InvocationSettled { .. }
-                            | TextSessionEffect::Finished { result: Ok(_), .. }
-                            | TextSessionEffect::Run {
+                        SessionEffect::InvocationStarted { .. }
+                            | SessionEffect::InvocationParked { .. }
+                            | SessionEffect::InvocationSettled { .. }
+                            | SessionEffect::Finished { result: Ok(_), .. }
+                            | SessionEffect::Run {
                                 effect: agent_run::AgentRunEffect::ToolExecute { .. }
                                     | agent_run::AgentRunEffect::HostCheckpoint { .. },
                                 ..
@@ -443,7 +297,7 @@ impl TextSession {
                 state.frames.get_mut(&invocation.frame_id).expect("invoked frame exists").history =
                     invocation.run.progress_history();
             }
-            effects.insert(0, TextSessionEffect::Checkpoint(Box::new(state)));
+            effects.insert(0, SessionEffect::Checkpoint(Box::new(state)));
         }
         effects
     }
@@ -457,12 +311,7 @@ impl TextSession {
         self.state.frames.get_mut(&self.state.active_frame_id).expect("the active frame exists")
     }
 
-    fn invoke(
-        &mut self,
-        message: Option<ChatMessage>,
-        now: Ts,
-        effects: &mut Vec<TextSessionEffect>,
-    ) {
+    fn invoke(&mut self, message: Option<ChatMessage>, now: Ts, effects: &mut Vec<SessionEffect>) {
         let invocation_id = self.mint("invocation");
         let frame = self.active_frame_mut();
         frame.completed = false;
@@ -512,7 +361,7 @@ impl TextSession {
                 return;
             }
         };
-        effects.push(TextSessionEffect::InvocationStarted {
+        effects.push(SessionEffect::InvocationStarted {
             frame_id: frame.id.clone(),
             agent_name: frame.agent_name.clone(),
             invocation_id: invocation_id.clone(),
@@ -538,7 +387,7 @@ impl TextSession {
         &mut self,
         mut event: agent_run::AgentRunEvent,
         now: Ts,
-        effects: &mut Vec<TextSessionEffect>,
+        effects: &mut Vec<SessionEffect>,
     ) {
         let Some(invocation) = self.phase.invocation_mut() else {
             return;
@@ -552,10 +401,8 @@ impl TextSession {
                 Err(failure) => {
                     let effect =
                         agent_run::AgentRunEffect::ToolArgumentsRelease { prepared: *prepared };
-                    effects.push(TextSessionEffect::Run {
-                        invocation_id: invocation.id.clone(),
-                        effect,
-                    });
+                    effects
+                        .push(SessionEffect::Run { invocation_id: invocation.id.clone(), effect });
                     event = agent_run::AgentRunEvent::ToolPrepareFailed { call: *call, failure };
                 }
             }
@@ -568,7 +415,7 @@ impl TextSession {
         &mut self,
         run_effects: Vec<agent_run::AgentRunEffect>,
         now: Ts,
-        effects: &mut Vec<TextSessionEffect>,
+        effects: &mut Vec<SessionEffect>,
     ) {
         for effect in run_effects {
             let Some(invocation) = self.phase.invocation() else {
@@ -582,7 +429,7 @@ impl TextSession {
                 }
                 agent_run::AgentRunEffect::ToolPrepare { call, ref function_call, .. } => {
                     self.prepare_child(call, function_call);
-                    effects.push(TextSessionEffect::Run { invocation_id, effect });
+                    effects.push(SessionEffect::Run { invocation_id, effect });
                 }
                 agent_run::AgentRunEffect::ToolExecute {
                     call, prepared, function_call, ..
@@ -602,7 +449,7 @@ impl TextSession {
                         input_requirements,
                         effects,
                     ),
-                other => effects.push(TextSessionEffect::Run { invocation_id, effect: other }),
+                other => effects.push(SessionEffect::Run { invocation_id, effect: other }),
             }
         }
         self.park(now, effects);
@@ -613,11 +460,11 @@ impl TextSession {
         frame_id: FrameId,
         invocation_id: String,
         event: StreamEvent,
-        effects: &mut Vec<TextSessionEffect>,
+        effects: &mut Vec<SessionEffect>,
     ) {
         self.sequence += 1;
         let agent_name = self.state.frames[&frame_id].agent_name.clone();
-        effects.push(TextSessionEffect::Emit {
+        effects.push(SessionEffect::Emit {
             sequence: self.sequence,
             frame_id,
             invocation_id,
@@ -644,7 +491,7 @@ impl TextSession {
         function_call: FunctionCall,
         invocation_id: String,
         prepared: ResourceId,
-        effects: &mut Vec<TextSessionEffect>,
+        effects: &mut Vec<SessionEffect>,
     ) {
         let Some(invocation) = self.phase.invocation_mut() else { return };
         let Some(child) = invocation.children.remove(&call) else { return };
@@ -659,13 +506,13 @@ impl TextSession {
             }
         };
         invocation.children.insert(call, child);
-        effects.push(TextSessionEffect::Run {
+        effects.push(SessionEffect::Run {
             invocation_id,
             effect: agent_run::AgentRunEffect::ToolArgumentsRelease { prepared },
         });
     }
 
-    fn cancel_child(&mut self, call: CallId, now: Ts, effects: &mut Vec<TextSessionEffect>) {
+    fn cancel_child(&mut self, call: CallId, now: Ts, effects: &mut Vec<SessionEffect>) {
         let Some(invocation) = self.phase.invocation_mut() else { return };
         let Some(Child::Executing(child)) = invocation.children.remove(&call) else { return };
         invocation.children.insert(call, Child::Prepared(child));
@@ -685,7 +532,7 @@ impl TextSession {
         invocation_id: String,
         result: Result<RunResult, RunError>,
         input_requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
-        effects: &mut Vec<TextSessionEffect>,
+        effects: &mut Vec<SessionEffect>,
     ) {
         let result = match result {
             Ok(result) => result,
@@ -698,7 +545,7 @@ impl TextSession {
         let (Phase::Running(invocation) | Phase::Releasing(invocation, _)) = phase else { return };
         let output = validated_output(&invocation, &result.outcome);
         let approvals = self.approvals(&invocation, &result);
-        effects.push(TextSessionEffect::InvocationSettled {
+        effects.push(SessionEffect::InvocationSettled {
             frame_id,
             invocation_id,
             result: result.clone(),
@@ -761,7 +608,7 @@ impl TextSession {
             .collect()
     }
 
-    fn park(&mut self, now: Ts, effects: &mut Vec<TextSessionEffect>) {
+    fn park(&mut self, now: Ts, effects: &mut Vec<SessionEffect>) {
         let Phase::Running(invocation) = &mut self.phase else {
             return;
         };
@@ -824,7 +671,7 @@ impl TextSession {
             self.state.frames.get_mut(&invocation.frame_id).expect("the invoked frame exists");
         frame.history = history;
         frame.pending_calls = pending;
-        effects.push(TextSessionEffect::InvocationParked {
+        effects.push(SessionEffect::InvocationParked {
             frame_id: invocation.frame_id.clone(),
             invocation_id: invocation.id.clone(),
         });
@@ -897,7 +744,7 @@ impl TextSession {
     fn finish(
         &mut self,
         result: Result<TextSessionTurn, TextSessionError>,
-        effects: &mut Vec<TextSessionEffect>,
+        effects: &mut Vec<SessionEffect>,
     ) {
         let mut result = match self.persistence_failure.take() {
             Some(error) => Err(TextSessionError::Storage(error)),
@@ -920,7 +767,7 @@ impl TextSession {
             frame.output = None;
             frame.error = Some(error.to_string());
             if self.checkpoints && !matches!(error, TextSessionError::Storage(_)) {
-                effects.push(TextSessionEffect::Checkpoint(Box::new(self.state.clone())));
+                effects.push(SessionEffect::Checkpoint(Box::new(self.state.clone())));
             }
         }
         self.end_invocation();
@@ -928,7 +775,7 @@ impl TextSession {
         if let Ok(turn) = &mut result {
             turn.result.usage = self.usage.snapshot();
         }
-        effects.push(TextSessionEffect::Finished {
+        effects.push(SessionEffect::Finished {
             invocation_id,
             result,
             input_requirements: std::mem::take(&mut self.failure_input_requirements),

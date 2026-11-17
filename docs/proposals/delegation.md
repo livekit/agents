@@ -841,7 +841,7 @@ a public Python export or an additional SDK constructor.
 | Type/interface | New or reused | Responsibility |
 | --- | --- | --- |
 | SessionSnapshot, working name | Use one private conversation snapshot for every execution mode. | Persistent shared conversation data; separate from the public native view's resource handle. |
-| Session, SessionInput, SessionEvent, SessionEffect, working names | Extract/evolve existing TextSession coordination and event/effect types. | Shared decisions and typed effects; AgentRun remains the invocation loop. |
+| Session, SessionConfig, SessionInput, SessionEvent, SessionEffect | Extracted existing TextSession coordination into core/session/. | Conversation records live at the domain entry, transitions in machine/ and typed effects in effects.rs. AgentRun remains the invocation loop. |
 | SessionDriver, working name | Extract/evolve runtime text-session Driver. | One bound owner executing effects; voice retains its own floor/media driver. |
 | AgentStateId, working name | Rename/reuse FrameId. | Native agent-context identity; Python can continue seeing a string. |
 | ClientRequestId and InputOccurrenceId, proposed native-only wrappers | New typed identities if needed at the serialization/transition boundary. | Prevent mixing a client operation ID with a task's input occurrence; no new Python ID classes. |

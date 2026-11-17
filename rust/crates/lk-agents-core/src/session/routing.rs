@@ -18,13 +18,13 @@ pub struct SessionAgent {
 }
 
 #[derive(Debug, Clone)]
-pub struct TextSessionConfig {
+pub struct SessionConfig {
     pub root_agent: String,
     pub agents: BTreeMap<String, SessionAgent>,
     pub max_depth: usize,
 }
 
-impl TextSessionConfig {
+impl SessionConfig {
     pub fn new(root_agent: String, agents: BTreeMap<String, SessionAgent>) -> Self {
         Self { root_agent, agents, max_depth: 8 }
     }

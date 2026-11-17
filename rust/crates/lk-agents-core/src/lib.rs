@@ -16,7 +16,6 @@ pub mod metrics;
 pub mod request;
 pub mod session;
 pub mod telemetry;
-pub mod text_session;
 pub mod tokenize;
 pub mod tool_calls;
 pub mod tool_outcome;

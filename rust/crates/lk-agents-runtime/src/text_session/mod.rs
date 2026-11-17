@@ -15,9 +15,7 @@ use lk_agents_abi::text_session::{
 use lk_agents_abi::usage::Usage;
 use lk_agents_abi::{Clock, HostRef, Spawner, WallAnchor};
 use lk_agents_core::agent_run;
-use lk_agents_core::text_session::{
-    TextSession, TextSessionConfig, TextSessionEffect, TextSessionEvent, TextSessionInput,
-};
+use lk_agents_core::session::{Session, SessionConfig, SessionEffect, SessionEvent, SessionInput};
 use lk_agents_net::signal;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -39,7 +37,7 @@ pub(super) struct RemoteCommand {
 }
 
 enum DriverEvent {
-    Core(Option<Box<TextSessionEvent>>),
+    Core(Option<Box<SessionEvent>>),
     Remote(Box<RemoteCommand>),
 }
 
@@ -53,7 +51,7 @@ struct InvocationStart {
 }
 
 pub(super) struct Driver {
-    session: TextSession,
+    session: Session,
     /// Republished whenever the turn's usage moved.
     usage: signal::Producer<Usage>,
     published: (u64, u64),
@@ -86,18 +84,18 @@ impl Driver {
     ) {
         let mut cancel_seen = false;
         let mut effects: VecDeque<_> =
-            self.session.handle(TextSessionEvent::Start(message), self.clock.now()).into();
+            self.session.handle(SessionEvent::Start(message), self.clock.now()).into();
         loop {
             // Before the effects: the last ones may end the stream the host reads usage beside.
             self.publish_usage();
             while let Some(effect) = effects.pop_front() {
-                if let TextSessionEffect::Checkpoint(state) = effect {
+                if let SessionEffect::Checkpoint(state) = effect {
                     if let Some(sink) = &self.request.session_sink
                         && let Err(error) = sink.publish(&self.cx, *state).await
                     {
                         effects = self
                             .session
-                            .handle(TextSessionEvent::PersistenceFailed(error), self.clock.now())
+                            .handle(SessionEvent::PersistenceFailed(error), self.clock.now())
                             .into();
                     }
                 } else {
@@ -118,10 +116,10 @@ impl Driver {
             let wake = self.session.wake_at();
             let ready = tokio::select! {
                 biased;
-                () = crate::agent_run::wait(&*clock, wake) => DriverEvent::Core(Some(Box::new(TextSessionEvent::Wake))),
+                () = crate::agent_run::wait(&*clock, wake) => DriverEvent::Core(Some(Box::new(SessionEvent::Wake))),
                 () = cancelled.cancelled(), if !cancel_seen => {
                     cancel_seen = true;
-                    DriverEvent::Core(Some(Box::new(TextSessionEvent::Cancel)))
+                    DriverEvent::Core(Some(Box::new(SessionEvent::Cancel)))
                 }
                 Some(release) = releases.recv() => {
                     self.releases.push_back(release);
@@ -148,7 +146,7 @@ impl Driver {
         }
     }
 
-    async fn remote(&mut self, command: RemoteCommand, effects: &mut VecDeque<TextSessionEffect>) {
+    async fn remote(&mut self, command: RemoteCommand, effects: &mut VecDeque<SessionEffect>) {
         let mut result = self.session.remote(command.command);
         // A valid observation can be journaled even when its projection is refused. Persist
         // the evidence before returning either acknowledgement or refusal to the client.
@@ -157,7 +155,7 @@ impl Driver {
         {
             effects.extend(
                 self.session
-                    .handle(TextSessionEvent::PersistenceFailed(error.clone()), self.clock.now()),
+                    .handle(SessionEvent::PersistenceFailed(error.clone()), self.clock.now()),
             );
             result = Err(error);
         }
@@ -173,7 +171,7 @@ impl Driver {
     }
 
     /// The next release's effects; a release whose invocation still has work in flight waits.
-    fn take_release(&mut self) -> Option<Vec<TextSessionEffect>> {
+    fn take_release(&mut self) -> Option<Vec<SessionEffect>> {
         let release = self.releases.pop_front()?;
         if self.work.get(&release.invocation_id).is_some_and(|w| !w.idle()) {
             self.releases.push_front(release);
@@ -188,28 +186,28 @@ impl Driver {
         invocation_id: String,
         operation: u64,
         message: String,
-    ) -> Option<TextSessionEvent> {
+    ) -> Option<SessionEvent> {
         let event = self.work.get(&invocation_id)?.progress(operation, message)?;
-        Some(TextSessionEvent::Run { invocation_id, event })
+        Some(SessionEvent::Run { invocation_id, event })
     }
 
     /// An invocation's report as the session's event; a validated output keeps its value.
-    fn report_event(&mut self, invocation_id: String, report: Report) -> Option<TextSessionEvent> {
+    fn report_event(&mut self, invocation_id: String, report: Report) -> Option<SessionEvent> {
         let (event, output) = self.work.get_mut(&invocation_id)?.report(report);
         Some(match event {
             agent_run::AgentRunEvent::OutputValidated { validation, verdict } => {
-                TextSessionEvent::OutputValidated { invocation_id, validation, verdict, output }
+                SessionEvent::OutputValidated { invocation_id, validation, verdict, output }
             }
-            event => TextSessionEvent::Run { invocation_id, event },
+            event => SessionEvent::Run { invocation_id, event },
         })
     }
 
-    async fn execute(&mut self, effect: TextSessionEffect) {
+    async fn execute(&mut self, effect: SessionEffect) {
         match effect {
-            TextSessionEffect::Checkpoint(_) => {
+            SessionEffect::Checkpoint(_) => {
                 unreachable!("checkpoints execute before dependent effects")
             }
-            TextSessionEffect::InvocationStarted {
+            SessionEffect::InvocationStarted {
                 frame_id,
                 agent_name,
                 invocation_id,
@@ -222,14 +220,14 @@ impl Driver {
                 execution_id,
                 history,
             }),
-            TextSessionEffect::Run { invocation_id, effect } => {
+            SessionEffect::Run { invocation_id, effect } => {
                 if let Some(work) = self.work.get_mut(&invocation_id)
                     && let Some(RunUpdate::IncompleteCleanup(pending)) = work.execute(effect).await
                 {
                     self.updates.send(TextSessionUpdate::IncompleteCleanup(pending)).await;
                 }
             }
-            TextSessionEffect::Emit { sequence, frame_id, agent_name, invocation_id, event } => {
+            SessionEffect::Emit { sequence, frame_id, agent_name, invocation_id, event } => {
                 self.updates
                     .send(TextSessionUpdate::Stream {
                         sequence,
@@ -240,7 +238,7 @@ impl Driver {
                     })
                     .await;
             }
-            TextSessionEffect::InvocationSettled { invocation_id, result, .. } => {
+            SessionEffect::InvocationSettled { invocation_id, result, .. } => {
                 let output = match result.outcome {
                     RunOutcome::Completed { output: Output::Validated(id) } => Some(id),
                     _ => None,
@@ -248,12 +246,12 @@ impl Driver {
                 self.pending.insert(invocation_id.clone(), output);
                 self.updates.send(TextSessionUpdate::InvocationSettled(invocation_id)).await;
             }
-            TextSessionEffect::InvocationParked { invocation_id, .. } => {
+            SessionEffect::InvocationParked { invocation_id, .. } => {
                 self.pending.insert(invocation_id.clone(), None);
                 self.updates.send(TextSessionUpdate::Parked(invocation_id)).await;
             }
-            TextSessionEffect::RoutingRefused { .. } => {} // The core records the typed refusal in the original call.
-            TextSessionEffect::Finished { invocation_id, result, input_requirements } => {
+            SessionEffect::RoutingRefused { .. } => {} // The core records the typed refusal in the original call.
+            SessionEffect::Finished { invocation_id, result, input_requirements } => {
                 self.finish(invocation_id, result, input_requirements).await
             }
         }
@@ -330,7 +328,7 @@ impl Driver {
         self.work.get_mut(invocation_id?)?.failure.take()
     }
 
-    fn release(&mut self, release: Release) -> Vec<TextSessionEffect> {
+    fn release(&mut self, release: Release) -> Vec<SessionEffect> {
         let Some(output) = self.pending.remove(&release.invocation_id) else {
             return Vec::new();
         };
@@ -338,7 +336,7 @@ impl Driver {
             self.work.get_mut(&release.invocation_id).and_then(|w| w.outputs.remove(&id))
         });
         self.session.handle(
-            TextSessionEvent::InvocationReleased {
+            SessionEvent::InvocationReleased {
                 invocation_id: release.invocation_id,
                 delivered: release.delivered,
             },

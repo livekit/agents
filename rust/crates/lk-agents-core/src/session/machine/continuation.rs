@@ -1,5 +1,5 @@
 use super::{
-    ChildCallStatus, PendingChildCall, RoutingError, SessionFrame, TextSession, TextSessionEffect,
+    ChildCallStatus, PendingChildCall, RoutingError, Session, SessionEffect, SessionFrame,
     TextSessionError, TextSessionTurn, transfer,
 };
 use lk_agents_abi::agent::run::{RunOutcome, RunResult};
@@ -8,8 +8,8 @@ use serde_json::Value;
 
 // A parent is invoked only after every child call in its checkpoint has a result.
 
-impl TextSession {
-    pub(super) fn next_child(&mut self, now: Ts, effects: &mut Vec<TextSessionEffect>) {
+impl Session {
+    pub(super) fn next_child(&mut self, now: Ts, effects: &mut Vec<SessionEffect>) {
         loop {
             let parent_id = self.state.active_frame_id.clone();
             let pending = self.state.frames[&parent_id].pending_calls.first().cloned();
@@ -27,7 +27,7 @@ impl TextSession {
                 return;
             }
             if let Err(error) = self.admit_child(&pending) {
-                effects.push(TextSessionEffect::RoutingRefused {
+                effects.push(SessionEffect::RoutingRefused {
                     frame_id: parent_id.clone(),
                     call_id: pending.parent.call_id.clone(),
                     error: error.clone(),
@@ -105,7 +105,7 @@ impl TextSession {
         output: Option<Value>,
         approvals: Vec<PendingChildCall>,
         now: Ts,
-        effects: &mut Vec<TextSessionEffect>,
+        effects: &mut Vec<SessionEffect>,
     ) {
         let active_id = self.state.active_frame_id.clone();
         let stamp = self.stamp(now);
@@ -216,7 +216,7 @@ impl TextSession {
         text: String,
         is_error: bool,
         now: Ts,
-        effects: &mut Vec<TextSessionEffect>,
+        effects: &mut Vec<SessionEffect>,
     ) -> Result<(), RoutingError> {
         let stamp = self.stamp(now);
         let parent =
@@ -258,7 +258,7 @@ impl TextSession {
         parent.history.push(ChatItem::FunctionCallOutput(output));
         parent.pending_calls.retain(|p| p.parent != pending.parent);
         self.sequence += 1;
-        effects.push(TextSessionEffect::Emit {
+        effects.push(SessionEffect::Emit {
             sequence: self.sequence,
             frame_id: parent.id.clone(),
             agent_name: parent.agent_name.clone(),

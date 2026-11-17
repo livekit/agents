@@ -5,7 +5,7 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
 use lk_agents_abi::text_session::{TextSessionDelivery, TextSessionRunner};
 use lk_agents_abi::{ChatItem, Closed, StreamOutput, Ts};
-use lk_agents_core::text_session::SessionAgent;
+use lk_agents_core::session::SessionAgent;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
 use parking_lot::Mutex;
@@ -42,7 +42,7 @@ impl lk_agents_abi::delegation::remote::RemoteCommands for Runner {
 }
 
 pub struct Runner {
-    config: TextSessionConfig,
+    config: SessionConfig,
     /// Handed to the one request: its host callbacks reach the host's run, which holds this
     /// runner, so they live only as long as that request.
     agents: Mutex<Option<BTreeMap<String, TextSessionAgent>>>,
@@ -72,7 +72,7 @@ impl TextSessionRunner for Runner {
                 agent
             })
             .collect();
-        let config = TextSessionConfig::from_agents(
+        let config = SessionConfig::from_agents(
             root_agent,
             agents.iter().map(|agent| SessionAgent {
                 definition: agent.definition.clone(),
@@ -169,7 +169,7 @@ impl TextSessionRunner for Runner {
 
 fn start(
     spawner: Arc<dyn Spawner>,
-    config: TextSessionConfig,
+    config: SessionConfig,
     agents: BTreeMap<String, TextSessionAgent>,
     request: TextSessionRequest,
     clock: Arc<dyn Clock>,
@@ -185,9 +185,9 @@ fn start(
         .transpose()
         .map_err(|error| Invalid(error.to_string()))?
         .flatten();
-    let mut session = TextSession::new(
+    let mut session = Session::new(
         config,
-        TextSessionInput {
+        SessionInput {
             session_id: state
                 .as_ref()
                 .map_or_else(|| request.session_id.clone(), |state| state.session_id.clone()),
