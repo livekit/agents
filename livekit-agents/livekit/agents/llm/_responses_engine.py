@@ -458,18 +458,16 @@ class ResponsesLLMStream(llm.LLMStream):
         if isinstance(event, ResponseTextDeltaEvent):
             chunk = self._handle_response_output_text_delta(event)
         if isinstance(event, ResponseCompletedEvent):
+            chunk = self._handle_response_completed(event)
             if self._held_commentary:
-                # no final answer text came, so the commentary is the reply
-                self._event_ch.send_nowait(
-                    llm.ChatChunk(
-                        id=self._response_id,
-                        delta=llm.ChoiceDelta(
-                            content="".join(self._held_commentary), role="assistant"
-                        ),
-                    )
+                # no final answer text came, so the commentary is the reply; it is returned
+                # with the usage so the caller sees text was sent and never retries it
+                chunk = llm.ChatChunk(
+                    id=self._response_id,
+                    delta=llm.ChoiceDelta(content="".join(self._held_commentary), role="assistant"),
+                    usage=chunk.usage if chunk else None,
                 )
                 self._held_commentary = []
-            chunk = self._handle_response_completed(event)
         if isinstance(event, ResponseFailedEvent):
             self._handle_response_failed(event)
         if isinstance(event, ResponseIncompleteEvent):

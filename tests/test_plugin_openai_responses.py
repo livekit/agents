@@ -952,3 +952,35 @@ async def test_chained_request_after_commentary_and_final_answer() -> None:
     await llm_model.aclose()
 
     assert ws.payloads[1]["previous_response_id"] == "resp_1"
+
+
+async def test_released_commentary_is_not_retried() -> None:
+    """A failure after released commentary does not request the reply again."""
+
+    class _FailAfterReplayWS(_ReplayResponsesWS):
+        def generate_response(self, payload: dict, **kwargs: object):  # noqa: ANN202
+            frames = super().generate_response(payload, **kwargs)  # type: ignore[arg-type]
+
+            async def _replay():  # noqa: ANN202
+                async for frame in frames:
+                    yield frame
+                raise aiohttp.ClientConnectionError("reset")
+
+            return _replay()
+
+    items = [_phase_message("c", "commentary", _SAME), _phase_message("f", "final_answer", "")]
+    ws = _FailAfterReplayWS(_stream_frames(items))
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    llm_model._ws = ws  # type: ignore[assignment]
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Hi")
+
+    with pytest.raises(APIConnectionError):
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=2, retry_interval=0)
+        ) as stream:
+            async for _ in stream:
+                pass
+    await llm_model.aclose()
+
+    assert ws.attempts == 1
