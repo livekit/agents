@@ -93,21 +93,11 @@ impl Session {
         Option<lk_agents_abi::delegation::remote::InputRequestRef>,
         lk_agents_abi::storage::StorageError,
     > {
-        use lk_agents_abi::storage::StorageError;
-        if matches!(self.phase, Phase::Done) {
-            return Err(StorageError::Invalid("the conversation owner has ended".into()));
-        }
-        if (self.closing || self.persistence_failure.is_some())
-            && matches!(
-                command.input,
-                lk_agents_abi::delegation::remote::RemoteInput::Prepare { .. }
-                    | lk_agents_abi::delegation::remote::RemoteInput::DispatchStarted { .. }
-            )
-        {
-            return Err(StorageError::Invalid(
-                "the conversation owner is closing; no new remote dispatch is admitted".into(),
-            ));
-        }
+        crate::session::remote::admit(
+            &command.input,
+            self.closing || self.persistence_failure.is_some(),
+            matches!(self.phase, Phase::Done),
+        )?;
         crate::session::remote::apply(&mut self.state, command)
     }
 

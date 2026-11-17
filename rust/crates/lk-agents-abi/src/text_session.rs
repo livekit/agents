@@ -122,6 +122,11 @@ pub trait SessionStateSink: Send + Sync {
 
     /// Publish the live voice view without I/O or clearing unaccepted recognition progress.
     fn stage_voice(&self, state: SessionSnapshot) -> Result<(), crate::storage::StorageError>;
+    /// Flush already staged voice state without replacing newer accepted speech history.
+    fn flush_voice<'a>(
+        &'a self,
+        cx: &'a crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'a, Result<(), crate::storage::StorageError>>;
 
     fn publish<'a>(
         &'a self,

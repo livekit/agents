@@ -232,6 +232,13 @@ pub struct Faults {
     probes_until: parking_lot::Mutex<Option<Ts>>,
     unreachable_for: parking_lot::Mutex<Option<Duration>>,
     unreachable_until: parking_lot::Mutex<Option<Ts>>,
+    receipt_gate: parking_lot::Mutex<Option<WriteGate>>,
+}
+
+struct WriteGate {
+    sql: &'static str,
+    committed: lk_agents_net::signal::Producer<Option<()>>,
+    release: lk_agents_net::signal::Cell<Option<()>>,
 }
 
 impl Default for Faults {
@@ -244,6 +251,7 @@ impl Default for Faults {
             probes_until: Default::default(),
             unreachable_for: Default::default(),
             unreachable_until: Default::default(),
+            receipt_gate: Default::default(),
         }
     }
 }
@@ -262,6 +270,18 @@ impl Faulty {
 }
 
 impl Faults {
+    /// Apply the next matching write, then hold its acknowledgement until the story releases it.
+    pub fn hold_next_receipt(
+        &self,
+        sql: &'static str,
+    ) -> (lk_agents_net::signal::Cell<Option<()>>, lk_agents_net::signal::Producer<Option<()>>)
+    {
+        let (committed, observed) = lk_agents_net::signal::once();
+        let (release, released) = lk_agents_net::signal::once();
+        *self.receipt_gate.lock() = Some(WriteGate { sql, committed, release: released });
+        (observed, release)
+    }
+
     /// `inner` under these faults, armed for every connection sharing them.
     pub fn over(self: &Arc<Self>, inner: Box<dyn ThreadDbConnection>) -> Faulty {
         Faulty { inner, faults: self.clone() }
@@ -320,6 +340,10 @@ impl ThreadDbConnection for Faulty {
 
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         self.reachable()?;
+        let gate = self
+            .receipt_gate
+            .lock()
+            .take_if(|gate| statements.iter().any(|statement| statement.sql().contains(gate.sql)));
         let has = |kind| statements.iter().any(|s| s.kind() == Some(kind));
         let is_commit = has(StatementKind::Commit);
         // only a commit carrying staged writes can outgrow the database's frame: a run closed
@@ -351,7 +375,7 @@ impl ThreadDbConnection for Faulty {
         {
             *self.unreachable_until.lock() = Some(self.after(d));
         }
-        match fault {
+        let result = match fault {
             None => self.inner.batch(statements).await,
             Some(WriteFault::LoseAckBefore) => {
                 Err(StorageError::Uncertain(Unacknowledged::sent("lost before")))
@@ -374,6 +398,17 @@ impl ThreadDbConnection for Faulty {
             Some(WriteFault::EvictIdle) => {
                 Err(StorageError::Unavailable("agentdb retry: evicted while idle".into()))
             }
+        };
+        if let Some(gate) = gate {
+            let written = result?;
+            gate.committed.resolve(());
+            gate.release
+                .wait()
+                .await
+                .map_err(|_| StorageError::Cancelled("the write receipt observer ended".into()))?;
+            Ok(written)
+        } else {
+            result
         }
     }
 

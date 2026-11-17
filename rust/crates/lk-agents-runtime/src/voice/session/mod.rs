@@ -1,6 +1,7 @@
 mod builder;
 pub(super) mod calls;
 mod class;
+mod conversation;
 pub mod delivered;
 mod host_drain;
 mod options;
@@ -160,6 +161,7 @@ struct Ready {
 struct Running {
     remote: Option<Arc<dyn SessionHosting>>,
     api: Tx,
+    conversation: crate::session::CommandPort,
     /// `session.keyterms`, as the driver last pushed them.
     keyterms: lk_agents_net::signal::Cell<Option<Vec<String>>>,
     /// `Agent.chat_ctx`: the driving agent's view, as the driver last published it.
@@ -346,6 +348,7 @@ impl VoiceSession {
             };
             let SessionHandle {
                 api,
+                conversation,
                 events,
                 keyterms,
                 chat_ctx,
@@ -392,6 +395,7 @@ impl VoiceSession {
             );
             admission.install(Running {
                 api,
+                conversation,
                 keyterms,
                 chat_ctx,
                 peer,

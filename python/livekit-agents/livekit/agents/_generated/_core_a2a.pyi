@@ -13,7 +13,7 @@ from a2a.types.a2a_pb2 import StreamResponse
 from livekit.agents.a2a import _Delegation
 from livekit.agents.storage.session import _TurnHost
 
-from .._core import ServerConfig, Storage, TextSessionRunner, Thread
+from .._core import ServerConfig, Storage, TextSessionRunner, Thread, VoiceSession
 from .a2a_auth import AgentThreadGrant, AuthOperation, Principal
 from .a2a_card import EndpointDescriptor
 from .a2a_client import AgentCard, Message, MessageInput, MessageMetadata, TaskUpdate
@@ -171,7 +171,7 @@ class _core_RemoteInteraction:
         thread_id: str | None,
         conn_options: APIConnectOptions | None,
         live: bool,
-        owner: TextSessionRunner | None = None,
+        owner: TextSessionRunner | VoiceSession | None = None,
         origin: ToolCallRef | None = None,
     ) -> RemoteEvent:
         """Run the delegation on the endpoint: connect with `token`, send the call's message

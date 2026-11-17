@@ -75,6 +75,13 @@ impl HostBinding for SessionBinding {
 }
 
 impl SessionStateSink for SessionBinding {
+    fn flush_voice<'a>(
+        &'a self,
+        _cx: &'a lk_agents_abi::telemetry::Cx,
+    ) -> BoxFuture<'a, Result<(), StorageError>> {
+        Box::pin(async move { self.flush(None).await })
+    }
+
     fn stage_voice(&self, state: SessionSnapshot) -> Result<(), StorageError> {
         self.ensure_open()?;
         let mut next = crate::session_state::snapshot_value(state)?;

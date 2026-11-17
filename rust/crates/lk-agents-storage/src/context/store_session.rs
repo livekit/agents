@@ -68,8 +68,9 @@ impl ContextStore {
         let mut owned = self.owned_session.lock().await;
         let Some(mut active) = owned.take() else { return Ok(()) };
         let operation = self.lock_managed().await;
+        let saved_session = self.session_state();
         let result = if success {
-            if let Some(state) = self.session_state() {
+            if let Some(state) = saved_session.clone() {
                 active.run.set_state(state);
             }
             active.run.stage_scopes(self.writes());
@@ -78,7 +79,7 @@ impl ContextStore {
         } else {
             active.run.abandon(RunOutcome::Canceled, AbandonReason::RunDropped.as_str()).await
         };
-        self.end_managed(success && result.is_ok(), operation);
+        self.end_managed(success && result.is_ok(), saved_session, operation);
         active.thread.close().await;
         result
     }

@@ -859,7 +859,8 @@ a public Python export or an additional SDK constructor.
 | RemoteAgentView, RemoteContextView and RemoteTaskView, internal ABI traits | Generated bindings for the three public inspection types. | Native storage handles retain the enclosing SessionState's bound or detached owner. Getter results copy SDK values; grouping adds no duplicate histories or network calls. |
 | SessionCommands, SessionInputCommand, RemoteCommand and RemoteInput, internal ABI port/data | One serialized owner for input admission and remote observations. | Presentation receipts, response reservations, preparation, dispatch markers, responses and errors receive their checkpoint before acknowledgement. An accepted remote input observation returns its existing InputRequestRef; no new controller or stored command capability. |
 | ConversationHistory and ConversationStateFailed | Internal voice effect/input; no Python types. | Publish core-accepted history through the native binding before host callbacks; preserve pending recognition and refreshed remote state. The core closes voice on a refused state publication. |
-| SessionCommand and CommandPort | Extract the existing native runtime command queue into session/. | Shared bounded command admission and producer-owned receipts. Ending the receiver settles received, queued and capacity-waiting requests; a client retains no execution authority after owner loss. No Python export. |
+| SessionCommand and CommandPort | Shared native runtime command queue in session/. | Text and voice use bounded command admission and producer-owned receipts. Voice checkpoints run on owned tasks alongside audio and interruption events. Ending the receiver settles received, queued and capacity-waiting requests; a client retains no execution authority after owner loss. No Python export. |
+| voice::conversation::Checkpoint, private runtime record | Owned voice command write. | Retains its ScopedTask and completion signal while media/events continue; carries no second conversation snapshot or Python API. |
 | RemoteRecovery, internal ABI decision | Reuses the core journal's recovery classification. | Carries an unsent original SDK request, a task to read, an accepted direct reply or uncertainty. Returned through the native owner; neither serialized nor exported as Python state classes. |
 | RemoteInvocation, internal runtime input | Groups the existing invocation arguments and services. | Production and DST use the same remote executor; only its endpoint client is injected. No new Python API or second controller. |
 | RemoteTaskCommands, conditional internal ABI port | Extend the existing binding/owner command path where possible. | Bound RemoteTask.cancel() reaches the authorized owner without putting a runtime dependency in storage or adding a public controller. |
@@ -1178,6 +1179,10 @@ passes deterministic stock-peer transport and failure tests.
 - [x] Publish accepted voice history through native effects before host callbacks. Rebase from
   the current binding, preserve pending recognition, and use the production binding in the
   SQLite-backed voice DST. Remove Python-driven voice state updates and startup validation.
+- [x] Share the bounded native conversation command port with text. Stage transitions before
+  checkpointing on owned tasks, keep the voice loop serving media/events, and stop queued
+  callers when the owner ends. Gate real SQLite receipts to prove that delayed writes preserve
+  newer live input and remote metadata; acknowledge the actual written snapshot.
 - [ ] Connect question/exact-text presentation to pipeline/realtime delivery receipts.
 - [ ] Implement immediate update/say receipts, request-view notes and interruption handling.
   Awaited progress admission is now bounded and lossless for direct runs, TextSession and local

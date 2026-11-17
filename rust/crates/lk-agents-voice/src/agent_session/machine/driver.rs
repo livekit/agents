@@ -233,6 +233,27 @@ impl VoiceDriver {
         self.stopped
     }
 
+    /// Durable commands have the voice owner's lifetime; no saved voice-local agent stack.
+    pub fn admit_conversation(&self) -> Result<(), lk_agents_abi::storage::StorageError> {
+        if self.stopped() {
+            return Err(lk_agents_abi::storage::StorageError::Invalid(
+                "the conversation owner has ended".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn admit_remote(
+        &self,
+        input: &lk_agents_abi::delegation::remote::RemoteInput,
+    ) -> Result<(), lk_agents_abi::storage::StorageError> {
+        lk_agents_core::session::remote::admit(
+            input,
+            self.session.closing.is_some(),
+            self.stopped(),
+        )
+    }
+
     /// What the core decided outside a step (the opening, the loop's end), for the queue owner to
     /// perform.
     pub fn take_outbox(&mut self) -> Vec<crate::agent_session::effects::VoiceEffect> {

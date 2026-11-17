@@ -2,6 +2,7 @@ pub mod amd;
 mod audio;
 pub mod background_audio;
 pub mod console;
+mod conversation;
 pub mod default_nodes;
 mod effects;
 pub mod events;
@@ -61,6 +62,8 @@ pub struct VoiceRuntime {
     driver: VoiceDriver,
     storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     session_sink: Option<Arc<dyn lk_agents_abi::text_session::SessionStateSink>>,
+    conversation: tokio::sync::mpsc::Receiver<crate::session::SessionCommand>,
+    conversation_write: Option<conversation::Checkpoint>,
     shared: Arc<SessionShared>,
     /// Where host events and taps go.
     peer: PeerHandle,
@@ -229,6 +232,7 @@ impl VoiceRuntime {
             peer,
             storage,
             session_sink,
+            conversation,
             events_end,
         } = cores;
         let video_parts =
@@ -245,6 +249,8 @@ impl VoiceRuntime {
             driver,
             storage,
             session_sink,
+            conversation,
+            conversation_write: None,
             shared,
             peer,
             forwarder,
@@ -335,6 +341,15 @@ impl VoiceRuntime {
                     None => break,
                 },
                 Some(frame) = self.frames.recv() => self.on_frame(frame, time.read()),
+                result = conversation::checkpointed(&self.conversation_write) => {
+                    self.conversation_write.take();
+                    if let Err(error) = result {
+                        self.handle(VoiceEvent::ConversationStateFailed(error).into(), time.read());
+                    }
+                },
+                Some(command) = self.conversation.recv(), if self.conversation_write.is_none() => {
+                    self.conversation_command(command);
+                },
             }
         }
     }
@@ -343,6 +358,10 @@ impl VoiceRuntime {
     /// session's tasks, which end at `Closing`, are drained. Returns the names of those still
     /// running at the cleanup bound, which are cancelled.
     pub async fn close(&mut self) -> Vec<String> {
+        self.conversation.close();
+        while let Ok(command) = self.conversation.try_recv() {
+            drop(command);
+        }
         let mut undelivered = self.close_queue();
         // `try_recv` may miss a sender between reserving admission and publishing its value.
         // Once closed, recv reaches None only after those accepted sends have settled.

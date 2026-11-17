@@ -30,15 +30,16 @@ impl lk_agents_abi::a2a::turn::HandlerPort for CheckpointGate {
         &self,
         state: Value,
         history: Vec<lk_agents_abi::ChatItem>,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(), StorageError>> {
+    ) -> lk_agents_abi::BoxFuture<'_, Result<Value, StorageError>> {
         Box::pin(async move {
             let committed = self.committed.lock().take().expect("the story checkpoints once");
-            self.store.checkpoint_owned_session(state, history).await?;
+            self.store.checkpoint_owned_session(state.clone(), history).await?;
             committed.resolve(());
             self.release
                 .wait()
                 .await
-                .map_err(|_| StorageError::Cancelled("the checkpoint observer ended".into()))
+                .map_err(|_| StorageError::Cancelled("the checkpoint observer ended".into()))?;
+            Ok(state)
         })
     }
 }

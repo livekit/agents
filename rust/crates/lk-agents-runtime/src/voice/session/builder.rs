@@ -47,6 +47,7 @@ pub struct SessionCores {
     pub peer: PeerHandle,
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     pub session_sink: Option<Arc<dyn lk_agents_abi::text_session::SessionStateSink>>,
+    pub(crate) conversation: tokio::sync::mpsc::Receiver<crate::session::SessionCommand>,
     /// The end of the host-event stream: the runtime holds it, so its end ends the stream.
     pub(crate) events_end: lk_agents_net::signal::Producer<()>,
 }
@@ -469,6 +470,7 @@ impl DriverBuilder {
             session: session_cx,
         };
 
+        let (conversation, commands) = crate::session::CommandPort::channel(32);
         let cores = SessionCores {
             publications,
             driver,
@@ -484,12 +486,14 @@ impl DriverBuilder {
             peer: peer.clone(),
             storage: self.storage.take(),
             session_sink: self.session_sink.take(),
+            conversation: commands,
             events_end,
         };
         Ok((
             cores,
             SessionHandle {
                 api: queue,
+                conversation,
                 events: ev_rx,
                 keyterms: keyterms_pushed,
                 chat_ctx,

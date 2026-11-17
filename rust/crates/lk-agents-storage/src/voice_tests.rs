@@ -12,6 +12,108 @@ use serde_json::json;
 use std::time::Duration;
 
 #[tokio::test]
+async fn a_delayed_voice_checkpoint_receipt_preserves_later_live_input() {
+    use crate::Storage as _;
+    use crate::testing::{Faults, TempDir, Wrapped, tasks};
+    use std::sync::Arc;
+
+    let dir = TempDir::new("voice_checkpoint_receipt_");
+    let storage = crate::backends::sqlite::SqliteStorage::open(
+        &dir.0,
+        crate::thread::LeaseTiming::default(),
+        tasks(),
+    )
+    .await
+    .unwrap();
+    let faults = Arc::<Faults>::default();
+    let shared = faults.clone();
+    let wrap = move |conn: crate::backends::sqlite::FileConnection| {
+        Arc::new(shared.over(Box::new(conn))) as Arc<dyn crate::ThreadDbConnection>
+    };
+    let storage = Arc::new(Wrapped { storage: Arc::new(storage), wrap });
+    let thread_id = storage.create_thread(Default::default()).await.unwrap().thread_id;
+    let store = Arc::new(
+        VoiceStore::bound(storage.clone(), thread_id, "desk".into(), None, Cx::NONE).await.unwrap(),
+    );
+    let initial = store.acquire(1, VoiceHistory::default()).await.unwrap();
+    store.checkpoint(1, 1, "desk".into(), initial).await.unwrap();
+    let activation = store.activation();
+    let _attachment = activation.attach_session_sink(store.session_sink()).unwrap();
+    let before = activation.session_state().unwrap();
+    let (committed, release) = faults.hold_next_receipt("UPDATE partitions SET state =");
+    let (done, receipt) = lk_agents_net::signal::once();
+    let writing = activation.clone();
+    let background = storage.background();
+    let _flush = background.tasks.scoped(&*background.spawner, "voice flush", async move {
+        done.resolve(writing.flush_session(vec![]).await);
+    });
+    committed.wait().await.unwrap();
+    let later = ChatItem::Message(ChatMessage::text(
+        "later-input",
+        Role::User,
+        "Actually, Saturday.",
+        std::time::UNIX_EPOCH,
+    ));
+    let live =
+        crate::session_state::voice_value("desk".into(), vec![later], Some(&before)).unwrap();
+    activation.stage_session(live.clone()).unwrap();
+    release.resolve(());
+    receipt.wait().await.unwrap().unwrap();
+    assert_eq!(activation.session_state(), Some(live), "a receipt cannot roll back later input");
+    let saved = activation.load_session().await.unwrap().unwrap();
+    assert_eq!(saved["state"]["chat_history"], json!([]), "later input was not in this write");
+    store.aclose().await.unwrap();
+    assert_eq!(activation.session_state(), Some(saved), "only the checkpoint was durable");
+}
+
+#[tokio::test]
+async fn a_queued_voice_flush_keeps_remote_state_admitted_before_it_gets_the_write_owner() {
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let store = std::sync::Arc::new(
+        VoiceStore::bound(
+            fixture.storage.clone(),
+            fixture.thread_id.clone(),
+            "desk".into(),
+            None,
+            Cx::NONE,
+        )
+        .await
+        .unwrap(),
+    );
+    let initial = store.acquire(1, VoiceHistory::default()).await.unwrap();
+    store.checkpoint(1, 1, "desk".into(), initial).await.unwrap();
+    let activation = store.activation();
+    let _attachment = activation.attach_session_sink(store.session_sink()).unwrap();
+    let owner = store.state.lock().await;
+    let mut flush = std::pin::pin!(activation.flush_session(vec![]));
+    assert!(
+        std::future::Future::poll(
+            flush.as_mut(),
+            &mut std::task::Context::from_waker(std::task::Waker::noop()),
+        )
+        .is_pending(),
+        "the flush waits for the existing write owner",
+    );
+    let mut admitted = activation.session_state().unwrap();
+    let mut remote =
+        lk_agents_abi::delegation::remote::RemoteAgentState::new("https://booking.test".into());
+    remote.default_context_id = Some("new-trip".into());
+    admitted["state"]["remote_agents"]["booking"] = serde_json::to_value(remote).unwrap();
+    activation.stage_session(admitted).unwrap();
+    drop(owner);
+    flush.await.unwrap();
+    let saved = activation.load_session().await.unwrap().unwrap();
+    assert_eq!(
+        saved["state"]["remote_agents"]["booking"]["default_context_id"],
+        json!("new-trip"),
+        "waiting for an earlier write must not restore the caller's older metadata",
+    );
+    store.aclose().await.unwrap();
+    assert_eq!(activation.session_state(), Some(saved));
+    fixture.cleanup(&[]).await;
+}
+
+#[tokio::test]
 async fn a_voice_turn_reloads_remote_state_written_by_a_text_turn_between_speeches() {
     let fixture = Backend::Sqlite.fixture(None).await;
     let store = VoiceStore::bound(

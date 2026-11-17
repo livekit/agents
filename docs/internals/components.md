@@ -79,6 +79,11 @@ The runtime's `session::CommandPort` carries these commands through bounded admi
 execution owner. Each queued command owns its response producer; owner loss settles received,
 queued and capacity-waiting calls even if a client retains its sender. The port has no routing
 policy, saved authority or Python-facing constructor.
+Voice consumes this same command port alongside its media/event queue. It stages each accepted
+transition in the native binding and waits for its checkpoint on an owned task; audio and
+interruption events keep running. The next command waits for that receipt. Storage publishes
+the snapshot actually written, preserving input admitted while the write waited and refusing
+to acknowledge an older caller over a later transport receipt.
 
 These entrypoints use one shared Rust implementation of agent execution:
 request planning, model/tool step decisions, argument preparation, approval,

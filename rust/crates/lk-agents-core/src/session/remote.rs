@@ -8,6 +8,25 @@ use lk_agents_abi::delegation::remote::{
 use lk_agents_abi::session::{InputRequestRef, ToolCallRef};
 use lk_agents_abi::storage::StorageError;
 
+/// Ending a frontend stops new transport operations, while receipts already in flight settle.
+pub fn admit(
+    input: &lk_agents_abi::delegation::remote::RemoteInput,
+    closing: bool,
+    ended: bool,
+) -> Result<(), StorageError> {
+    use lk_agents_abi::delegation::remote::RemoteInput;
+    if ended {
+        return Err(StorageError::Invalid("the conversation owner has ended".into()));
+    }
+    if closing && matches!(input, RemoteInput::Prepare { .. } | RemoteInput::DispatchStarted { .. })
+    {
+        return Err(StorageError::Invalid(
+            "the conversation owner is closing; no new remote dispatch is admitted".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn apply(
     snapshot: &mut SessionSnapshot,
     command: RemoteCommand,

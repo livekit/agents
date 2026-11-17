@@ -170,7 +170,9 @@ class _RemoteTool(Toolset):
                 shared,
                 agent._conn_options,
                 ctx._session is not None,
-                ctx._run.runner
+                ctx._session._running
+                if ctx._session is not None
+                else ctx._run.runner
                 if ctx._run is not None and isinstance(ctx._run.runner, _core.TextSessionRunner)
                 else None,
                 ToolCallRef(agent_id=ctx._run.frame_id.value, call_id=ctx.function_call.call_id)

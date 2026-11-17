@@ -535,6 +535,7 @@ impl VoiceStore {
             active.run.stage_statements(self.activation.statements());
             Ok(())
         });
+        let saved_session = active.run.state().cloned();
         let result = match prepared {
             Ok(()) => {
                 active.run.commit(CommitOptions::default()).await.map(|committed| committed.version)
@@ -574,7 +575,7 @@ impl VoiceStore {
         }
         self.released();
         active.thread.close().await;
-        self.activation.end_managed(result.is_ok(), fields);
+        self.activation.end_managed(result.is_ok(), saved_session, fields);
         if let Ok(version) = result {
             state.wrote(&committed)?;
             state.version = version;
@@ -612,11 +613,12 @@ impl VoiceStore {
             .expect("the caller holds the active run")
             .pending_user_turns
             .retain(|pending| !history.iter().any(|item| item.id() == pending.id));
+        let expected = self.activation.session_state();
         let routing = crate::session_state::voice_progress_value(
             agent,
             history.clone(),
             &state.active.as_ref().expect("the caller holds the active run").pending_user_turns,
-            self.activation.session_state().as_ref(),
+            expected.as_ref(),
         )?;
         let rows: Vec<StoredItem> =
             history.iter().filter(|item| conversational(item)).map(encode_chat_item).collect();
@@ -629,8 +631,7 @@ impl VoiceStore {
             .await?;
         state.wrote(&rows)?;
         state.version = state.active.as_ref().expect("checkpoint kept its run").run.version();
-        self.activation.stage_session(routing.clone())?;
-        self.activation.acknowledge_session_state(routing);
+        self.activation.checkpointed_session(expected, routing)?;
         Ok(state.snapshot(rendered))
     }
 
@@ -647,7 +648,7 @@ impl VoiceStore {
             active.run.abandon(RunOutcome::Failed, AbandonReason::VoiceGeneration.as_str()).await;
         self.released();
         active.thread.close().await;
-        self.activation.end_managed(false, fields);
+        self.activation.end_managed(false, None, fields);
         result
     }
 
@@ -831,7 +832,7 @@ impl HostVoiceStore for VoiceStore {
                 active.run.abandon(RunOutcome::Canceled, AbandonReason::VoiceClose.as_str()).await;
             self.released();
             active.thread.close().await;
-            self.activation.end_managed(false, fields);
+            self.activation.end_managed(false, None, fields);
         } else {
             self.released();
         }
@@ -873,13 +874,19 @@ impl lk_agents_abi::a2a::turn::HandlerPort for VoiceSessionSink {
         &self,
         mut routing: serde_json::Value,
         history: Vec<ChatItem>,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(), StorageError>> {
+    ) -> lk_agents_abi::BoxFuture<'_, Result<serde_json::Value, StorageError>> {
         Box::pin(async move {
             let store = self
                 .0
                 .upgrade()
                 .ok_or_else(|| StorageError::Invalid("the voice session has ended".into()))?;
             let mut state = store.state.lock().await;
+            // Admission may have advanced while this flush waited for the write owner.
+            // Persist the latest framework metadata, never an older caller's copy.
+            if let Some(current) = store.activation.session_state() {
+                routing = current;
+            }
+            let expected = Some(routing.clone());
             let active = state
                 .active
                 .as_mut()
@@ -909,8 +916,8 @@ impl lk_agents_abi::a2a::turn::HandlerPort for VoiceSessionSink {
             active.run.checkpoint_session(routing.clone(), rows.clone()).await?;
             state.wrote(&rows)?;
             state.version = state.active.as_ref().expect("the voice run is active").run.version();
-            store.activation.stage_session(routing)?;
-            Ok(())
+            store.activation.checkpointed_session(expected, routing.clone())?;
+            Ok(routing)
         })
     }
 }

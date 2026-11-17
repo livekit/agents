@@ -6,16 +6,62 @@ import pytest
 from a2a.types import a2a_pb2 as pb
 from google.protobuf.json_format import MessageToDict
 
-from livekit.agents import Agent, SessionState, TextSession, persisted
+from livekit.agents import Agent, SessionState, TextSession, VoiceSession, persisted
 from livekit.agents.a2a import AgentClient, RemoteAgent
+from livekit.agents.llm import ChatContext, FunctionToolCall
 from livekit.agents.storage import ContextStore
 from livekit.agents.storage.session_state import RemoteAgentState, RemoteContextState, RemoteTask
-from tests.fakes import FakeLLM, tool_call
+from tests.fakes import FakeLLM, tool_call, until
 from tests.host.a2a_peer import Peer
 
 pytest_plugins = ["tests.host.a2a_peer"]
 
 pytestmark = pytest.mark.unit
+
+
+async def test_voice_checkpoints_remote_sdk_observations_before_presenting_the_result(
+    peer: Peer,
+) -> None:
+    @dataclass
+    class App:
+        session: SessionState = persisted(default_factory=SessionState)
+
+    def frontend(history: ChatContext) -> str | FunctionToolCall:
+        if any(
+            item.type == "function_call_output" and "Confirmed" in item.output
+            for item in history.items
+        ):
+            return "Coverage confirmed."
+        if any(item.type == "function_call" for item in history.items):
+            return "I'm checking."
+        return tool_call("coverage_expert", request="Check coverage.")
+
+    store = ContextStore()
+    app = await store.load_context(App())
+    remote = RemoteAgent(peer.url, name="coverage_expert", description="Check coverage.")
+    agent = Agent(
+        name="desk", instructions="Help.", tools=[remote.as_tool()], llm=FakeLLM(frontend)
+    )
+    async with VoiceSession(context=store.bind(app), vad=None) as voice:
+        await voice.start(agent)
+        await voice.generate_reply(user_input="Check coverage.")
+        await until(
+            lambda: any(
+                item.type == "message" and item.text_content == "Coverage confirmed."
+                for item in voice.history.items
+            ),
+            "the remote result was not presented",
+        )
+        observed = app.session.remote_agents[peer.url]
+        assert observed.tasks["remote-task"].task.status.state == pb.TASK_STATE_COMPLETED
+        assert isinstance(observed.events[0].payload, pb.SendMessageRequest)
+        assert all(isinstance(event.payload, pb.StreamResponse) for event in observed.events[1:])
+        assert len(observed.events) == 5, "the native owner retains every observed event"
+        assert peer.messages[0]["messageId"] in observed.messages
+    saved = await store.load_session()
+    assert saved.remote_agents[peer.url].tasks["remote-task"].task.artifacts[0].parts[0].text == (
+        "Confirmed"
+    )
 
 
 async def test_raw_a2a_observations_retain_artifacts_as_sdk_events(peer: Peer) -> None:

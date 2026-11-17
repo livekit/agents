@@ -521,7 +521,7 @@ pub enum DrainRefused {
 
 /// The public `VoiceSession`: assembled at construction, started at `start()`,
 /// closed at `aclose()`; every other method is one command to its loop.
-#[crate::host(class(name = "VoiceSession"))]
+#[crate::host(class(name = "VoiceSession", native = crate::session::SessionCommands))]
 pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]

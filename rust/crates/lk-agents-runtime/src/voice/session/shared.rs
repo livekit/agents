@@ -290,6 +290,7 @@ impl std::fmt::Debug for PeerHandle {
 
 pub struct SessionHandle {
     pub api: Tx,
+    pub(crate) conversation: crate::session::CommandPort,
     /// Every event, in the order the driver emitted it.
     pub(crate) events: HostEvents,
     /// The last keyterm list pushed to the recogniser; `None` before any push.

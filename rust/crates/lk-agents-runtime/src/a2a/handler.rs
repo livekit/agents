@@ -44,13 +44,16 @@ impl HandlerPort for HandlerTurn {
         &self,
         state: serde_json::Value,
         history: Vec<lk_agents_abi::ChatItem>,
-    ) -> BoxFuture<'_, Result<(), lk_agents_abi::storage::StorageError>> {
+    ) -> BoxFuture<'_, Result<serde_json::Value, lk_agents_abi::storage::StorageError>> {
         Box::pin(async move {
             let (reply, received) = oneshot::channel();
-            self.reports.send(Report::Session(SessionWrite { state, history, reply })).await;
+            self.reports
+                .send(Report::Session(SessionWrite { state: state.clone(), history, reply }))
+                .await;
             received.await.map_err(|_| {
                 lk_agents_abi::storage::StorageError::Invalid("the turn has ended".into())
-            })?
+            })??;
+            Ok(state)
         })
     }
     fn progress(&self, text: String) -> BoxFuture<'_, ()> {
@@ -76,7 +79,7 @@ impl lk_agents_abi::a2a::turn::HandlerTurn for HandlerTurn {
         state: serde_json::Value,
         history: Vec<lk_agents_abi::ChatItem>,
     ) -> Result<(), lk_agents_abi::storage::StorageError> {
-        HandlerPort::save_session(self, state, history).await
+        HandlerPort::save_session(self, state, history).await.map(drop)
     }
     async fn progress(&self, text: String) {
         HandlerPort::progress(self, text).await

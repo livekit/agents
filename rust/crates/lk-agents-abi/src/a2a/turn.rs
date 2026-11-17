@@ -95,7 +95,7 @@ pub trait HandlerPort: std::any::Any + Send + Sync {
         &self,
         _state: Value,
         _history: Vec<ChatItem>,
-    ) -> crate::BoxFuture<'_, Result<(), StorageError>> {
+    ) -> crate::BoxFuture<'_, Result<Value, StorageError>> {
         Box::pin(async {
             Err(StorageError::Invalid("this handler does not support session checkpoints".into()))
         })

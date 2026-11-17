@@ -48,6 +48,11 @@ pub struct ContextStore {
     pub(crate) session_view: Arc<Mutex<Option<crate::session_state::SessionState>>>,
     owned_session: Arc<tokio::sync::Mutex<Option<session::OwnedSession>>>,
     session_sink: Arc<Mutex<Option<SessionSink>>>,
+    /// Serializes caller flushes; the owning transport serializes its actual database writes.
+    session_flush: Arc<tokio::sync::Mutex<()>>,
+    /// A transport receipt advances this before releasing its write owner. An older caller
+    /// returning from that transport must not acknowledge over a later checkpoint or reload.
+    session_receipts: Arc<AtomicU64>,
     activation: Arc<Mutex<Activation>>,
     database: Option<Database>,
     operation: Arc<tokio::sync::Mutex<()>>,
@@ -220,8 +225,27 @@ impl ContextStore {
         Ok(Some(agent.chat_ctx))
     }
 
-    pub(crate) fn acknowledge_session_state(&self, state: Value) {
-        self.activation.lock().acknowledge_session(Some(state));
+    /// Publish the snapshot actually written without rolling back state admitted during I/O.
+    pub(crate) fn checkpointed_session(
+        &self,
+        expected: Option<Value>,
+        saved: Value,
+    ) -> Result<(), StorageError> {
+        let view = self.session_view.lock().clone();
+        let checked = view
+            .as_ref()
+            .map(|_| crate::session_state::SessionState::from_value(saved.clone()))
+            .transpose()?;
+        let mut activation = self.activation.lock();
+        if activation.session_state() == expected {
+            activation.stage_session(saved.clone())?;
+            if let Some((view, checked)) = view.zip(checked) {
+                view.assign(&checked);
+            }
+        }
+        activation.acknowledge_session(Some(saved));
+        self.session_receipts.fetch_add(1, Ordering::AcqRel);
+        Ok(())
     }
 
     pub(crate) fn matches_partition(&self, thread_id: &str, partition_key: &str) -> bool {
@@ -235,6 +259,8 @@ impl ContextStore {
             session_view: Arc::default(),
             owned_session: Arc::default(),
             session_sink: Arc::default(),
+            session_flush: Arc::default(),
+            session_receipts: Arc::default(),
             activation: Arc::new(Mutex::new(activation)),
             database,
             operation: Arc::new(tokio::sync::Mutex::new(())),
@@ -313,7 +339,11 @@ impl ContextStore {
         routing: Option<Value>,
         _operation: &tokio::sync::OwnedMutexGuard<()>,
     ) -> Result<(), StorageError> {
-        self.activation.lock().rebase(scopes, routing)?;
+        {
+            let mut activation = self.activation.lock();
+            activation.rebase(scopes, routing)?;
+            self.session_receipts.fetch_add(1, Ordering::AcqRel);
+        }
         self.clear_statements();
         self.turn.fetch_add(1, Ordering::AcqRel);
         self.managed.store(true, Ordering::Release);
@@ -323,14 +353,17 @@ impl ContextStore {
     pub(crate) fn end_managed(
         &self,
         committed: bool,
+        saved_session: Option<Value>,
         _operation: tokio::sync::OwnedMutexGuard<()>,
     ) {
         let mut activation = self.activation.lock();
         if committed {
             activation.acknowledge();
+            activation.acknowledge_session(saved_session);
         } else {
             activation.abandon();
         }
+        self.session_receipts.fetch_add(1, Ordering::AcqRel);
         self.clear_statements();
         self.turn.fetch_add(1, Ordering::AcqRel);
         self.managed.store(false, Ordering::Release);
@@ -478,19 +511,27 @@ impl HostContextActivation for ContextStore {
         &self,
         history: Vec<lk_agents_abi::ChatItem>,
     ) -> Result<(), StorageError> {
-        let state = {
+        let _flush = self.session_flush.lock().await;
+        let (state, receipt) = {
             let activation = self.activation.lock();
             activation.ensure_open()?;
-            activation.session_state()
+            (activation.session_state(), self.session_receipts.load(Ordering::Acquire))
         };
         let Some(state) = state else { return Ok(()) };
         let sink = self.session_sink.lock().clone();
-        if let Some(sink) = sink {
-            sink.save_session(state.clone(), history).await?;
+        let saved = if let Some(sink) = sink {
+            sink.save_session(state, history).await?
         } else if self.database.is_some() {
             self.checkpoint_owned_session(state.clone(), history).await?;
+            state
+        } else {
+            state
+        };
+        let mut activation = self.activation.lock();
+        if self.session_receipts.load(Ordering::Acquire) == receipt {
+            activation.acknowledge_session(Some(saved));
+            self.session_receipts.fetch_add(1, Ordering::AcqRel);
         }
-        self.activation.lock().acknowledge_session(Some(state));
         Ok(())
     }
 
@@ -506,7 +547,6 @@ impl HostContextActivation for ContextStore {
             let saved = activation.session_state();
             activation.acknowledge_session(saved);
         }
-        drop(activation);
         if let Some((view, checked)) = view.zip(checked) {
             view.assign(&checked);
         }

@@ -4187,6 +4187,20 @@ impl VoiceSession {
     }
 }
 
+// Wherever the host passes a `::lk_agents_abi::session::SessionCommands`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::session::SessionCommands>(),
+        read: |obj| match obj.cast::<VoiceSession>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::session::SessionCommands> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/session_effects.rs.
 type SessionStartImpl =
     <crate::generated::implementations::Selected as super::Implementations>::SessionStart;
