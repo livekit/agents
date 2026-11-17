@@ -93,6 +93,10 @@ class _FakeClient:
             raise asyncio.TimeoutError("Timeout waiting for TTS response")
         elif mode == "disconnect":
             raise ConnectionError("socket closed")
+        elif mode == "hang":
+            await asyncio.sleep(10)
+        elif mode == "invalid":
+            raise ValueError("text must be a non-empty string")
 
 
 @pytest.fixture(autouse=True)
@@ -328,3 +332,66 @@ async def test_prewarm_connects_and_resolves_the_voice(fake_client: Any):
     await t.aclose()
     assert len(fake_client.instances) == 1
     assert client.voice_lists == 1
+
+
+# --- review follow-ups ---
+
+
+@pytest.mark.virtual_time
+async def test_a_reconnect_after_a_dropped_socket_is_bounded_by_the_timeout(fake_client: Any):
+    from livekit.plugins.humain import TTS
+
+    t = TTS(api_key="k")
+    await t.synthesize("أهلا", conn_options=_OPTS).collect()
+    fake_client.mode = "connect-hangs"  # the socket dropped and reconnecting hangs
+    with pytest.raises(APITimeoutError):
+        await t.synthesize(
+            "أهلا", conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+        ).collect()
+    assert fake_client.instances[0].closed
+    fake_client.mode = "audio"
+    await t.synthesize("أهلا", conn_options=_OPTS).collect()  # a fresh client takes over
+    await t.aclose()
+    assert len(fake_client.instances) == 2
+
+
+async def test_aclose_stops_an_in_flight_synthesize(fake_client: Any):
+    from livekit.plugins.humain import TTS
+
+    fake_client.mode = "hang"
+    t = TTS(api_key="k")
+    stream = t.synthesize("أهلا", conn_options=APIConnectOptions(max_retry=3, timeout=30.0))
+    task = asyncio.create_task(stream.collect())
+    for _ in range(20):
+        if fake_client.instances and fake_client.instances[0].requests:
+            break
+        await asyncio.sleep(0)
+    await t.aclose()
+    await asyncio.gather(task, return_exceptions=True)
+    assert task.done()
+    assert len(fake_client.instances) == 1  # no reconnect after shutdown
+    assert fake_client.instances[0].closed
+
+
+async def test_empty_text_makes_no_request(fake_client: Any):
+    from livekit.plugins.humain import TTS
+
+    t = TTS(api_key="k")
+    events = [ev async for ev in t.synthesize("   ", conn_options=_OPTS)]
+    await t.aclose()
+    assert events == []
+    assert fake_client.instances == []
+
+
+async def test_a_request_the_sdk_rejects_keeps_the_connection(fake_client: Any):
+    from livekit.plugins.humain import TTS
+
+    t = TTS(api_key="k")
+    await t.synthesize("أهلا", conn_options=_OPTS).collect()
+    fake_client.mode = "invalid"
+    with pytest.raises(APIStatusError) as exc:
+        await t.synthesize("أهلا", conn_options=_OPTS).collect()
+    assert exc.value.status_code == 400
+    assert exc.value.retryable is False
+    assert not fake_client.instances[0].closed  # concurrent requests are unaffected
+    await t.aclose()

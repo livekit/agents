@@ -107,7 +107,7 @@ class TTS(tts.TTS):
         self._client: TTSClient | None = None
         self._client_lock = asyncio.Lock()
         self._voice_ids: dict[str, str] = {}
-        self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._streams = weakref.WeakSet[ChunkedStream | SynthesizeStream]()
         self._prewarm_task: asyncio.Task[None] | None = None
 
     @property
@@ -137,7 +137,16 @@ class TTS(tts.TTS):
         """Return the shared client, connecting it if needed, and whether it was reused."""
         async with self._client_lock:
             if self._client is not None:
-                return self._client, True
+                cached = self._client
+                try:
+                    # A no-op while connected. After a dropped socket, the SDK would
+                    # otherwise reconnect inside the request, before its timeout applies.
+                    await asyncio.wait_for(cached.connect(), timeout)
+                except BaseException:
+                    self._client = None
+                    await asyncio.shield(cached.close())
+                    raise
+                return cached, True
             client = TTSClient(api_url=self._api_url, api_key=self._api_key)
             try:
                 await asyncio.wait_for(client.connect(), timeout)
@@ -200,7 +209,9 @@ class TTS(tts.TTS):
         Returns:
             A ``ChunkedStream`` that yields ``SynthesizedAudio`` events.
         """
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        stream = ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -254,6 +265,9 @@ async def _synthesize_one(
                 output_emitter.push(chunk.audio)
     except asyncio.TimeoutError:
         raise
+    except ValueError:
+        # The SDK validates the request locally (e.g. empty text); the connection is fine.
+        raise APIStatusError("HUMAIN Voice rejected the request", status_code=400) from None
     except Exception:
         err = errors[-1] if errors else None
         code = getattr(err, "code", None) or ""
@@ -285,6 +299,9 @@ class ChunkedStream(tts.ChunkedStream):
             num_channels=1,
             mime_type="audio/pcm",
         )
+        if not self._input_text.strip():
+            output_emitter.flush()  # nothing to say: no request
+            return
         try:
             self._acquire_time, self._connection_reused = await _synthesize_one(
                 self._tts, self._opts, self._input_text, output_emitter, self._conn_options.timeout
