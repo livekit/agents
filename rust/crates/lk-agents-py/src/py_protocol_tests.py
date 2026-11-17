@@ -40,6 +40,54 @@ async def test_raw_a2a_observations_retain_artifacts_as_sdk_events(peer: Peer) -
         await client.aclose()
 
 
+async def test_authentication_state_uses_the_sdk_enum_and_keeps_the_remote_task_paused(
+    peer: Peer,
+) -> None:
+    peer.auth_required = True
+    client = AgentClient(peer.url)
+    try:
+        reply = await client.send("check")
+        updates = [update async for update in reply]
+        assert [update.state for update in updates] == [
+            pb.TASK_STATE_SUBMITTED,
+            pb.TASK_STATE_WORKING,
+            pb.TASK_STATE_AUTH_REQUIRED,
+        ]
+        assert updates[-1].text == "Sign in to continue."
+        assert not updates[-1].progress
+    finally:
+        await client.aclose()
+    assert not peer.cancelled
+
+
+async def test_a_remote_tool_reports_authentication_without_inventing_a_task_failure(
+    peer: Peer,
+) -> None:
+    @dataclass
+    class App:
+        session: SessionState = persisted(default_factory=SessionState)
+
+    peer.auth_required = True
+    store = ContextStore()
+    app = await store.load_context(App())
+    agent = Agent(
+        name="desk",
+        instructions="Help.",
+        tools=[
+            RemoteAgent(peer.url, name="coverage_expert", description="Check coverage.").as_tool()
+        ],
+        llm=FakeLLM([tool_call("coverage_expert", request="Check"), "Please sign in to continue."]),
+    )
+    result = await agent.run("Check", context=store.bind(app))
+    assert result.output == "Please sign in to continue."
+    output = next(item for item in result.new_messages() if item.type == "function_call_output")
+    assert output.is_error and output.output == "Sign in to continue."
+    task = app.session.remote_agents[peer.url].tasks["remote-task"]
+    assert task.task.status.state == pb.TASK_STATE_AUTH_REQUIRED
+    assert not task.input_requests, "authentication is not automatically a question for the person"
+    assert not task.cancel_requested and not peer.cancelled
+
+
 async def test_bound_remote_work_journals_protocol_before_returning_the_tool_result(
     peer: Peer,
 ) -> None:

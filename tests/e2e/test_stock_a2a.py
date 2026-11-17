@@ -1,5 +1,7 @@
 """Delegation to the stock SDK over real HTTP/SSE, without LiveKit extension negotiation."""
 
+from a2a.types import a2a_pb2 as pb
+
 from livekit.agents.a2a import TaskUpdate, TextPart
 
 from .framework.app import E2E
@@ -20,7 +22,7 @@ async def test_a_remote_tool_accepts_a_stock_message_only_reply(e2e: E2E) -> Non
     async with e2e.text_client(desk) as client:
         reply = await client.send("hello")
         updates = [update async for update in reply]
-    assert updates[-1].state == "completed"
+    assert updates[-1].state == pb.TASK_STATE_COMPLETED
     assert text(updates[-1]) == "Hello from the stock A2A peer."
 
 
@@ -31,7 +33,7 @@ async def test_a_stock_input_required_task_resumes_after_frontend_restart(e2e: E
         reply = await client.send("book a flight")
         updates = [update async for update in reply]
         thread = reply.thread_id
-    assert updates[-1].state == "input-required"
+    assert updates[-1].state == pb.TASK_STATE_INPUT_REQUIRED
     assert "Which day?" in updates[-1].text
     assert [update.text for update in updates if update.progress] == ["Checking available dates."]
     assert all("draft answer" not in update.text for update in updates)
@@ -40,5 +42,5 @@ async def test_a_stock_input_required_task_resumes_after_frontend_restart(e2e: E
     async with e2e.text_client(desk) as client:
         reply = await client.send("Friday", thread_id=thread)
         updates = [update async for update in reply]
-    assert updates[-1].state == "completed"
+    assert updates[-1].state == pb.TASK_STATE_COMPLETED
     assert " ".join(text(updates[-1]).split()) == "Booked for Friday."

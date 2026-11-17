@@ -125,7 +125,8 @@ pub struct Artifact {
 #[derive(Debug, Clone, PartialEq)]
 #[crate::host(record(module = "a2a_client", path = "livekit.agents.a2a", emit, extract))]
 pub struct TaskUpdate {
-    pub state: crate::storage::TaskState,
+    /// Upstream protocol state, including authentication interruption and unspecified status.
+    pub state: crate::a2a::protocol::TaskState,
     pub text: String,
     /// The working message or update explicitly requests progress presentation.
     #[host(default = false)]

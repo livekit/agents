@@ -11,6 +11,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from a2a.types import a2a_pb2 as pb
 from pydantic import BaseModel
 
 from livekit.agents import Agent, llm
@@ -84,9 +85,9 @@ async def test_frontdesk_books_only_after_the_email_and_the_read_back_are_confir
     done = await ask("yes")
 
     assert (asked_email.state, read_back.state, done.state) == (
-        "input-required",
-        "input-required",
-        "completed",
+        pb.TASK_STATE_INPUT_REQUIRED,
+        pb.TASK_STATE_INPUT_REQUIRED,
+        pb.TASK_STATE_COMPLETED,
     )
     assert "Please confirm" in read_back.text
     assert booked_before_yes == []
@@ -117,7 +118,7 @@ async def test_frontdesk_reads_back_the_saved_email_for_the_next_booking(
 
     read_back = await ask("Book another.")
 
-    assert read_back.state == "input-required"
+    assert read_back.state == pb.TASK_STATE_INPUT_REQUIRED
     assert "patient@example.com" in read_back.text
 
 
@@ -150,9 +151,9 @@ async def test_hotel_shows_and_cancels_a_booking_only_once_verified_and_confirme
     status_before_yes = booking.status
     await ask("yes")
 
-    assert unverified.state == "input-required"
+    assert unverified.state == pb.TASK_STATE_INPUT_REQUIRED
     assert "HTL-AB12" in shown and "confirmed" in shown
-    assert read_back.state == "input-required" and "cancel HTL-AB12" in read_back.text
+    assert read_back.state == pb.TASK_STATE_INPUT_REQUIRED and "cancel HTL-AB12" in read_back.text
     assert status_before_yes == "confirmed"
     assert booking.status == "cancelled"
 
@@ -334,9 +335,9 @@ async def test_a_missing_booking_reference_is_asked_and_the_claim_continues(
     done = await ask("SKY5C1")
 
     assert (asked.state, someone_elses.state, done.state) == (
-        "input-required",
-        "input-required",
-        "completed",
+        pb.TASK_STATE_INPUT_REQUIRED,
+        pb.TASK_STATE_INPUT_REQUIRED,
+        pb.TASK_STATE_COMPLETED,
     )
     assert "booking reference" in question and "booking reference" in asked_again
     assert [(p.booking_ref, p.eur) for p in airline.skyline.payments] == [("SKY5C1", 400)]

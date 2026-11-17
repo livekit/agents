@@ -24,6 +24,7 @@ class Peer:
         self.url = ""
         self.hold = False
         self.fail: str | None = None
+        self.auth_required = False
         self.direct_reply: Json | None = None
         self.messages: list[Json] = []
         """Each message a ``SendStreamingMessage`` carried."""
@@ -106,7 +107,9 @@ class Peer:
             await writer.drain()
             await self._release.wait()
             return
-        if self.fail is not None:
+        if self.auth_required:
+            events.append(_status(task, "AUTH_REQUIRED", "Sign in to continue."))
+        elif self.fail is not None:
             events.append(_status(task, "FAILED", self.fail))
         else:
             answer = {"artifactId": "answer", "parts": [{"text": "Confirmed"}]}

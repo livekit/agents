@@ -532,7 +532,7 @@ impl Reply {
                     Pulled::Cancelled => return Ok(Pulled::Cancelled),
                 }
                 // Reclaim in this poll before yielding again; an artifact-only event does not
-                // hand a legacy pull's consumer position to a second caller.
+                // hand a normalized pull's consumer position to a second caller.
                 let next = self.source.try_pull().expect("the completed pull released its claim");
                 pulled = next.await?;
             }
@@ -736,23 +736,7 @@ impl<'a> ReplyReader<'a> {
         if let Some(observer) = &updates.observer {
             observer.response(self.request, response.clone()).await?;
         }
-        let update = if task_response {
-            // A unary task lookup is a protocol snapshot, including unfamiliar-to-legacy
-            // statuses. Its raw consumer does not need the legacy TaskUpdate projection.
-            match &response {
-                a2a::StreamResponse::Task(task)
-                    if matches!(
-                        task.status.state,
-                        a2a::TaskState::AuthRequired | a2a::TaskState::Unspecified
-                    ) =>
-                {
-                    None
-                }
-                _ => self.state.accept(response.clone())?,
-            }
-        } else {
-            self.state.accept(response.clone())?
-        };
+        let update = self.state.accept(response.clone())?;
         Ok(ReplyEvent { response, update })
     }
 }

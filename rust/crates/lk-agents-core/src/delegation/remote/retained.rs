@@ -78,7 +78,7 @@ pub fn call_extra(
 pub fn update_from_host(
     update: lk_agents_abi::a2a::client::TaskUpdate,
 ) -> Result<crate::a2a::client::TaskUpdate, DelegationError> {
-    use lk_agents_abi::storage::TaskState;
+    use lk_agents_abi::a2a_protocol::TaskState;
     let state = update.state;
     let follow_task = match update.metadata.get("livekit/mergedInto") {
         None => None,
@@ -105,7 +105,7 @@ pub fn update_from_host(
 mod tests {
     use super::*;
     use crate::a2a::client::TaskUpdate;
-    use lk_agents_abi::storage::TaskState;
+    use lk_agents_abi::a2a_protocol::TaskState;
     use std::time::UNIX_EPOCH;
 
     fn identity(conversation: &str) -> InteractionId {

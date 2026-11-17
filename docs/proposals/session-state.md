@@ -44,7 +44,7 @@ grouped progress and interruption behavior; the
 - Omit the ambiguous top-level SessionState.chat_ctx accessor.
 - Omit AgentState.answer_tool; continue input through a selected question's recorded target.
 - Keep completed, output and error as ordinary fields on AgentState; add no local status enum or
-  Python state-variant classes. Remote task status reuses TaskUpdate.state and shared TaskState.
+  Python state-variant classes. Remote task status reuses the upstream SDK TaskState.
 - Keep application data in the application's context, alongside its SessionState field.
 - Reuse SessionState for delegation recovery instead of adding public DelegationState.
 - Use store.bind as the single continuation path across VoiceSession, TextSession and Agent.run.
@@ -429,9 +429,9 @@ returns through origin. For the reusable root, they describe its current/latest 
 a completed root turn does not end the conversation. A new invocation resets them before work
 starts. These are framework-managed views, not fields applications mutate to signal completion.
 
-A2A task status is separate and reuses TaskUpdate.state's shared TaskState type. Do not redefine
-its submitted/working/input-required/completed/failed/canceled/rejected values as a new local
-enum. The AgentCallState admission states describe different decisions, not an A2A status copy.
+A2A task status is separate: TaskUpdate.state and Task.status.state reuse the upstream SDK's
+TaskState, including interrupted and unspecified observations. There is no framework copy of
+its enum values. The AgentCallState admission states describe different decisions.
 
 Current TextSession already saves the accepted child output as a FunctionCallOutput in the
 parent's history, using origin's call ID, before marking the retained child completed. It
@@ -547,12 +547,12 @@ is absent, and inspecting these views performs no network I/O.
 ### Reusing protocol types
 
 Reuse existing protocol Message, Task, request, response and StreamResponse types. Their
-lossless generated Python exposure and persistence encoding remain implementation work;
+lossless generated Python exposure and persistence encoding use the SDK codecs;
 A2AMessage below means the A2A Message shape, not a second model of its fields. The current
 host Message adapter must preserve the required protocol fields when used for these views.
 The aliases below only shorten the schema sketch; they introduce no new protocol objects.
-Align existing TaskState bindings with the complete supported protocol state set, including
-auth-required/unspecified where supported, rather than losing states during conversion.
+TaskUpdate.state uses the SDK TaskState in both Rust and generated Python, including
+auth-required/unspecified observations, rather than converting through the storage task enum.
 
 Source method identities from the pinned SDK's `a2a::jsonrpc::methods` constants, such as
 `CANCEL_TASK`. Store the operation/method on the durable internal request record; journal

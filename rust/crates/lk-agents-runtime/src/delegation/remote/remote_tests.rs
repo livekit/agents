@@ -1,7 +1,7 @@
 use super::*;
 use lk_agents_abi::a2a::metadata::PARTITION_CHAIN_KEY;
 use lk_agents_abi::a2a::remote::DelegationPartition;
-use lk_agents_abi::storage::TaskState;
+use lk_agents_abi::a2a_protocol::TaskState;
 use serde_json::json;
 
 #[test]

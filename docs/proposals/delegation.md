@@ -1033,6 +1033,9 @@ than another simulation framework. Stock-peer HTTP and AgentDB conformance remai
 - [ ] Build public read-only messages/tasks/contexts/events views with consistent checkpoints,
   optional-history handling, observed-state semantics and bounded retention. Preserve the
   supported protocol's complete task-state set when aligning existing TaskState bindings.
+  TaskUpdate.state now reuses the SDK TaskState, including auth-required and unspecified.
+  Authentication interrupts observation; the remote task remains paused while the local tool
+  reports that it cannot continue. It does not manufacture a human input request or task failure.
 - [ ] Normalize status, flagged progress, exact text, input requests, artifacts and outcomes
   for presentation without overwriting the original protocol observations.
   Flagged working progress is implemented through `TaskUpdate.progress`; unflagged status

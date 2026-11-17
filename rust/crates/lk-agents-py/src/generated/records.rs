@@ -1109,7 +1109,7 @@ pub mod a2a_client {
         }
         Ok(::lk_agents_abi::a2a::client::TaskUpdate {
             state: crate::py_values::attr_with(obj, "TaskUpdate", "state", |v| {
-                crate::generated::records::storage_class::task_state_from_py(v)
+                crate::py_protocol::a2a_state_from_py(v)
             })?,
             text: crate::py_values::attr_with(obj, "TaskUpdate", "text", |v| {
                 v.extract::<::std::string::String>()
@@ -1164,10 +1164,7 @@ pub mod a2a_client {
             artifacts,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item(
-            "state",
-            crate::generated::records::storage_class::task_state_to_py(py, state)?,
-        )?;
+        kwargs.set_item("state", crate::py_protocol::a2a_state_to_py(py, state)?)?;
         kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
         kwargs.set_item("progress", ::pyo3::IntoPyObjectExt::into_bound_py_any(progress, py)?)?;
         kwargs.set_item("task_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(task_id, py)?)?;

@@ -2,10 +2,9 @@ use lk_agents_abi::a2a_protocol as a2a;
 pub mod journal;
 pub mod retained;
 
-use a2a::{Message, Part, Role};
+use a2a::{Message, Part, Role, TaskState};
 use lk_agents_abi::a2a::metadata::KIND_KEY;
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
-use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::TaskReason;
 use serde::{Deserialize, Serialize};
 
@@ -260,8 +259,9 @@ impl RemoteInteraction {
         }
         let exact = update.metadata.get("livekit/verbatim").and_then(|v| v.as_str());
         let outcome = match update.state {
-            TaskState::Submitted | TaskState::Working => {
-                if update.text.is_empty() || !update.progress {
+            TaskState::Unspecified | TaskState::Submitted | TaskState::Working => {
+                if update.state != TaskState::Working || update.text.is_empty() || !update.progress
+                {
                     DelegationUpdate::Pending
                 } else {
                     DelegationUpdate::Progress(update.text.clone())
@@ -309,6 +309,16 @@ impl RemoteInteraction {
             TaskState::Canceled => {
                 self.state.phase = InteractionPhase::Settled;
                 DelegationUpdate::Cancelled
+            }
+            TaskState::AuthRequired => {
+                // Authentication is an interrupted remote task, not a human input request.
+                // Report the tool's inability to continue without changing that task state.
+                self.state.phase = InteractionPhase::Settled;
+                DelegationUpdate::Failed(ToolOutcome::ToolError(if update.text.is_empty() {
+                    "the remote task requires additional authentication".into()
+                } else {
+                    update.text.clone()
+                }))
             }
         };
         Ok(outcome)

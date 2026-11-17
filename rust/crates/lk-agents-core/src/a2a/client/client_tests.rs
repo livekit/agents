@@ -198,6 +198,27 @@ fn progress_and_partial_artifacts_cannot_become_a_success_at_eof_or_remote_failu
 }
 
 #[test]
+fn authentication_interrupts_observation_without_completing_the_remote_task() {
+    let mut reply = ReplyState::default();
+    let unspecified =
+        reply.accept(task("task", "context", "TASK_STATE_UNSPECIFIED")).unwrap().unwrap();
+    assert_eq!(unspecified.state, TaskState::Unspecified);
+    assert!(!unspecified.is_settled());
+    assert_eq!(reply.finish(), Err(ClientError::incomplete()));
+
+    let auth = reply
+        .accept(status("TASK_STATE_AUTH_REQUIRED", Some("Sign in to continue.")))
+        .unwrap()
+        .unwrap();
+    assert_eq!(auth.state, TaskState::AuthRequired);
+    assert_eq!(auth.text, "Sign in to continue.");
+    assert!(auth.is_settled(), "this observation can end while authentication is required");
+    assert!(!auth.state.is_terminal(), "authentication does not complete the remote task");
+    assert!(!auth.progress);
+    assert!(reply.finish().is_ok());
+}
+
+#[test]
 fn a_working_message_progress_flag_is_not_hidden_by_its_update_metadata() {
     let key = "https://livekit.io/a2a/ext/agents/v1/progress";
     for (outer, inner, expected) in [

@@ -2,6 +2,8 @@
 
 import asyncio
 
+from a2a.types import a2a_pb2 as pb
+
 from livekit.agents.a2a import TextPart
 
 from .framework.app import E2E
@@ -21,7 +23,7 @@ async def test_a_bound_conversation_survives_an_application_restart(e2e: E2E) ->
     async with e2e.text_client(app) as client:
         reply = await client.send("recall", thread_id=thread)
         updates = [update async for update in reply]
-    assert updates[-1].state == "completed"
+    assert updates[-1].state == pb.TASK_STATE_COMPLETED
     assert (
         "".join(
             part.text

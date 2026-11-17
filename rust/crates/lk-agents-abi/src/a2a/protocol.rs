@@ -14,6 +14,14 @@ pub type Task = crate::a2a_protocol::Task;
 #[crate::host(codec(
     extract,
     emit,
+    host = "a2a.types.a2a_pb2.TaskState",
+    py = "py_protocol::a2a_state"
+))]
+pub type TaskState = crate::a2a_protocol::TaskState;
+
+#[crate::host(codec(
+    extract,
+    emit,
     host = "a2a.types.a2a_pb2.StreamResponse",
     py = "py_protocol::a2a_stream_response"
 ))]

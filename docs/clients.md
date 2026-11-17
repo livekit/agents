@@ -139,15 +139,16 @@ from node admission and worker authorization. Browser integration is shown
 ## A client for an endpoint
 
 ```python
+from a2a.types import a2a_pb2 as pb
 from livekit.agents.a2a import AgentClient
 
 client = AgentClient(endpoint_url, token=token)
 reply = await client.send("Where is my order?", thread_id=thread_id)
 print(reply.task_id, reply.thread_id)              # known once the server acknowledged the task
 async for update in reply:                          # progress, then the answer
-    print(update.state, update.text)
+    print(pb.TaskState.Name(update.state), update.text)
 await client.send(answer, thread_id=thread_id, task_id=waiting_task_id)   # answer a waiting task
-await client.cancel(task_id, thread_id=thread_id, reason="the user closed the chat")
+await client.cancel(task_id, thread_id=thread_id, reason="the person requested cancellation")
 await client.aclose()
 ```
 
@@ -185,12 +186,24 @@ the card; with no thread to share, a project credential reads it. Off the
 project's origin it sends no token.
 `chat_ctx` goes as a `chat_ctx` part only to a card that lists the LiveKit
 extension ([conversation data](protocol/a2a.md#conversation-data-part)). Each update is a
-`TaskUpdate`: `state`, `text`, `task_id`, `context_id`, `metadata` with the
-full URI keys; `livekit/<name>` in these docs is shorthand only. A `working`
-update with text is progress, and the terminal update carries the whole answer.
+`TaskUpdate`: `state`, `text`, `progress`, `task_id`, `context_id`, `metadata` and `artifacts`.
+Its `state` is the upstream SDK's protobuf `TaskState`, the same type as `Task.status.state`.
+Compare it with constants such as `pb.TASK_STATE_COMPLETED` or `pb.TASK_STATE_INPUT_REQUIRED`.
+Authentication interruption is preserved as `pb.TASK_STATE_AUTH_REQUIRED`; it does not mean
+the remote task failed or completed. An unspecified observation does not imply an outcome.
+The client follows the [A2A task lifecycle](https://a2a-protocol.org/v1.0.0/specification/).
+
+Working text is observable status. `progress=True` means its message or enclosing update
+explicitly offers conversational progress; unflagged text does not request an announcement.
+The completed update carries the assembled answer. Known LiveKit metadata is projected to
+`livekit/<name>` keys in this update; application keys are preserved. Protocol messages and
+journal payloads retain the full URI keys described in the [wire contract](protocol/a2a.md).
 `artifacts` contains typed `Artifact` records (`artifact_id`, `name`,
 `description`, `parts`, `metadata`). `offers_extension` is whether the
 card lists the LiveKit extension, a capability hint that grants nothing.
+
+Closing a reply or client ends local observation. Remote business work continues; sending
+`cancel()` is an explicit task operation, independent of closing the frontend.
 
 Construct message parts with `TextPart(text=...)`, `DataPart(data=...)` or
 `FilePart(url=..., filename=..., media_type=...)` from `livekit.agents.a2a`.

@@ -6,14 +6,13 @@ pub use tool::{delegation_tool, tool_definition};
 
 use a2a::{
     AgentCard, Artifact, CancelTaskRequest, JsonRpcId, JsonRpcRequest, JsonRpcResponse, Message,
-    Part, PartContent, SendMessageRequest, StreamResponse, SubscribeToTaskRequest,
+    Part, PartContent, SendMessageRequest, StreamResponse, SubscribeToTaskRequest, TaskState,
 };
 use lk_agents_abi::a2a::metadata::{EXTENSION_URI, MERGED_INTO_KEY, PROGRESS_KEY, REASON_KEY};
-use lk_agents_abi::storage::TaskState;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::a2a::rpc::{TaskRef, task_state};
+use crate::a2a::rpc::TaskRef;
 
 // Neither a connection nor an outstanding task lives on a reusable remote-tool definition.
 
@@ -460,7 +459,8 @@ impl ReplyEvent {
 
 impl TaskUpdate {
     pub fn is_settled(&self) -> bool {
-        self.state.is_terminal() || self.state == TaskState::InputRequired
+        self.state.is_terminal()
+            || matches!(self.state, TaskState::InputRequired | TaskState::AuthRequired)
     }
 }
 
@@ -636,9 +636,7 @@ impl ReplyState {
         status: a2a::TaskStatus,
         mut metadata: Map<String, Value>,
     ) -> Result<Option<TaskUpdate>, ClientError> {
-        let state = task_state(&status.state).ok_or_else(|| {
-            ClientError::invalid_response("the peer reported an unsupported task state")
-        })?;
+        let state = status.state;
         let progress = state == TaskState::Working
             && (metadata.get(PROGRESS_KEY).and_then(Value::as_bool) == Some(true)
                 || status
@@ -671,7 +669,8 @@ impl ReplyState {
                 ));
             }
         };
-        self.settled = state.is_terminal() || state == TaskState::InputRequired;
+        self.settled = state.is_terminal()
+            || matches!(state, TaskState::InputRequired | TaskState::AuthRequired);
         let text = if follow_task.is_some() {
             String::new()
         } else if state == TaskState::Completed && !self.artifacts.is_empty() {
@@ -693,7 +692,7 @@ impl ReplyState {
 }
 
 /// Decode the protocol value independently of presentation normalization. Native observers
-/// retain this value even when a legacy consumer cannot present its task status or content.
+/// retain this value independently of how a consumer presents its structured content.
 pub fn decode_response(
     body: &[u8],
     id: &JsonRpcId,

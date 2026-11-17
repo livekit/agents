@@ -66,18 +66,20 @@ fn new_work_reuses_the_saved_remote_context_without_inheriting_a_task_or_thread_
 
 #[test]
 fn only_explicitly_flagged_working_updates_request_an_announcement() {
-    for flag in [false, true] {
-        let mut remote = interaction("progress");
-        begin(&mut remote, false);
-        let mut status = update(TaskState::Working, "context", "task", "Checking.");
-        status.progress = flag;
-        let outcome = remote.update(&status).unwrap();
-        if flag {
-            assert_eq!(outcome, DelegationUpdate::Progress("Checking.".into()));
-        } else {
-            assert_eq!(outcome, DelegationUpdate::Pending);
+    for state in [TaskState::Unspecified, TaskState::Submitted, TaskState::Working] {
+        for flag in [false, true] {
+            let mut remote = interaction("progress");
+            begin(&mut remote, false);
+            let mut status = update(state.clone(), "context", "task", "Checking.");
+            status.progress = flag;
+            let outcome = remote.update(&status).unwrap();
+            if flag && state == TaskState::Working {
+                assert_eq!(outcome, DelegationUpdate::Progress("Checking.".into()));
+            } else {
+                assert_eq!(outcome, DelegationUpdate::Pending);
+            }
+            assert_eq!(remote.ended(), Err(DelegationError::MissingOutcome));
         }
-        assert_eq!(remote.ended(), Err(DelegationError::MissingOutcome));
     }
 }
 
@@ -264,7 +266,7 @@ fn remote_cancellation_and_failure_settle_truthfully_and_verbatim_is_split_once(
         let mut remote = interaction("failure");
         begin(&mut remote, true);
         let outcome =
-            remote.update(&update(state, "context", "task", "remote explanation")).unwrap();
+            remote.update(&update(state.clone(), "context", "task", "remote explanation")).unwrap();
         match state {
             TaskState::Canceled => assert_eq!(outcome, DelegationUpdate::Cancelled),
             _ => assert_eq!(

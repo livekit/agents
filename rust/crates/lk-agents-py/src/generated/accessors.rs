@@ -438,6 +438,9 @@ impl A2AProtocol {
     pub fn task<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
         obj.as_any().getattr("Task")
     }
+    pub fn task_state<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("TaskState")
+    }
     pub fn stream_response<'py>(
         obj: &Bound<'py, impl pyo3::PyTypeInfo>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -477,6 +480,25 @@ impl A2AProtocol {
         obj: &Bound<'py, impl pyo3::PyTypeInfo>,
     ) -> PyResult<Bound<'py, PyAny>> {
         obj.as_any().getattr("ListTasksResponse")
+    }
+}
+
+/// Python interface: `google.protobuf.internal.enum_type_wrapper.EnumTypeWrapper`.
+pub use crate::py_protocol::interfaces::A2AStateEnum;
+impl A2AStateEnum {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
+            pyo3::sync::PyOnceLock::new();
+        Ok(CLASS
+            .import(py, "google.protobuf.internal.enum_type_wrapper", "EnumTypeWrapper")?
+            .as_any()
+            .clone())
+    }
+    pub fn name<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("Name")
+    }
+    pub fn value<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("Value")
     }
 }
 

@@ -464,7 +464,7 @@ async fn reconcile_cancellation(cancel_reply: CancelReply) {
     assert!(remote.tasks["booking"].cancel_requested);
     match cancel_reply {
         CancelReply::Confirmed => {
-            assert_eq!(result.unwrap().state, lk_agents_abi::storage::TaskState::Canceled);
+            assert_eq!(result.unwrap().state, a2a::TaskState::Canceled);
             assert_eq!(remote.tasks["booking"].task.status.state, a2a::TaskState::Canceled);
         }
         CancelReply::Refused => {

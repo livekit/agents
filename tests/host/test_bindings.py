@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+from a2a.types import a2a_pb2 as pb
 from aiohttp import web
 
 from livekit import rtc
@@ -202,7 +203,7 @@ async def test_an_a2a_message_reaches_the_peer_with_its_parts_and_metadata(peer:
     updates = [update async for update in reply]
     await client.aclose()
 
-    assert updates[-1].state == "completed"
+    assert updates[-1].state == pb.TASK_STATE_COMPLETED
     [sent] = peer.messages
     assert sent["messageId"] == "stable-id"
     assert sent["metadata"] == {URI + "/channel": "portal", "trace": "abc"}

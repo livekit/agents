@@ -3,6 +3,7 @@
 import os
 
 import pytest
+from a2a.types import a2a_pb2 as pb
 
 from livekit.agents.a2a import TextPart
 
@@ -18,7 +19,7 @@ async def test_a_remote_tool_runs_an_adk_agent_and_its_tool(e2e: E2E) -> None:
     async with e2e.text_client(desk) as client:
         reply = await client.send("Check flights to Rome.")
         updates = [update async for update in reply]
-    assert updates[-1].state == "completed"
+    assert updates[-1].state == pb.TASK_STATE_COMPLETED
     text = "".join(
         part.text
         for artifact in updates[-1].artifacts

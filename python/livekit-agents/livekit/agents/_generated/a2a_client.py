@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
-    from .storage_class import TaskState
+    from a2a.types.a2a_pb2 import TaskState
 
 
 @dataclass(kw_only=True, slots=True)
@@ -91,6 +91,7 @@ class Artifact:
 @dataclass(kw_only=True, slots=True)
 class TaskUpdate:
     state: TaskState
+    """Upstream protocol state, including authentication interruption and unspecified status."""
     text: str
     progress: bool = False
     """The working message or update explicitly requests progress presentation."""

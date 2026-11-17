@@ -18,6 +18,7 @@ pub mod interfaces {
         attrs(
             message(name = "Message"),
             task(name = "Task"),
+            task_state(name = "TaskState"),
             stream_response(name = "StreamResponse"),
             send_request(name = "SendMessageRequest"),
             send_response(name = "SendMessageResponse"),
@@ -29,6 +30,12 @@ pub mod interfaces {
         )
     ))]
     pub struct A2AProtocol;
+
+    #[lk_agents_host_derive::host(interface(
+        host = "google.protobuf.internal.enum_type_wrapper.EnumTypeWrapper",
+        attrs(name(name = "Name"), value(name = "Value"))
+    ))]
+    pub struct A2AStateEnum;
 }
 
 fn from_py<T: DeserializeOwned>(obj: &Bound<'_, PyAny>, class: &Bound<'_, PyAny>) -> PyResult<T> {
@@ -85,6 +92,32 @@ codec!(
 );
 codec!(a2a_list_request_from_py, a2a_list_request_to_py, ListTasksRequest, list_request);
 codec!(a2a_list_response_from_py, a2a_list_response_to_py, ListTasksResponse, list_response);
+
+pub fn a2a_state_from_py(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<lk_agents_abi::a2a::protocol::TaskState> {
+    let value = crate::py_values::number_from_py::<i32>(obj, "A2A TaskState")?;
+    let module = access::A2AProtocol::import(obj.py())?;
+    let states = access::A2AProtocol::task_state(&module)?;
+    let name = crate::py_calls::call(&access::A2AStateEnum::name(&states)?, (value,), None)?;
+    serde_json::from_value(serde_json::Value::String(name.extract()?))
+        .map_err(|error| PyValueError::new_err(format!("A2A TaskState: {error}")))
+}
+
+pub fn a2a_state_to_py(
+    py: Python<'_>,
+    state: lk_agents_abi::a2a::protocol::TaskState,
+) -> PyResult<Bound<'_, PyAny>> {
+    // SDK names bridge the Rust enum and Python protobuf numbers; neither mapping is copied.
+    let name = serde_json::to_value(state)
+        .map_err(|error| PyValueError::new_err(format!("A2A TaskState: {error}")))?;
+    let serde_json::Value::String(name) = name else {
+        return Err(PyValueError::new_err("the SDK TaskState is not an enum name"));
+    };
+    let module = access::A2AProtocol::import(py)?;
+    let states = access::A2AProtocol::task_state(&module)?;
+    crate::py_calls::call(&access::A2AStateEnum::value(&states)?, (name,), None)
+}
 
 pub fn a2a_rpc_error_from_py(
     obj: &Bound<'_, PyAny>,
