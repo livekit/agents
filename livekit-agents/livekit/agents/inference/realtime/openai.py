@@ -28,6 +28,7 @@ from livekit.agents import llm
 from livekit.agents.inference._utils import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
+    _resolve_provider,
     create_access_token,
     get_default_inference_url,
     get_inference_headers,
@@ -76,7 +77,7 @@ class RealtimeModel(_RealtimeModel):
         self,
         model: RealtimeModels | str,
         *,
-        provider: str | None = None,
+        provider: NotGivenOr[str | None] = NOT_GIVEN,
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
@@ -159,7 +160,7 @@ class RealtimeModel(_RealtimeModel):
             # keeps its own turn detection, as the google plugin does.
             self._capabilities.can_disable_turn_detection = False
         self._inference_opts = _InferenceOptions(
-            provider=provider,
+            provider=_resolve_provider(provider=provider),
             api_key=resolved_api_key,
             api_secret=resolved_api_secret,
             is_xai=is_xai,
