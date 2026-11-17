@@ -8,7 +8,11 @@ use lk_agents_abi::storage::voice::VoiceStore as _;
 use lk_agents_abi::storage::voice::{VoiceStorageCommand, VoiceStorageEvent};
 use lk_agents_abi::{ChatItem, storage::StorageError};
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_storage::{context::store::ContextStore, storage::Namespace, voice::VoiceStore};
+use lk_agents_storage::{
+    context::store::{ContextStore, SessionSinkGuard},
+    storage::Namespace,
+    voice::VoiceStore,
+};
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{StorageRequest, VoiceEvent};
 use std::sync::Arc;
@@ -32,6 +36,9 @@ pub(super) struct Opened {
     partition_key: Option<Partition>,
     scope_id: String,
     activation: ContextStore,
+    /// Only the in-memory activation created by this owner is closed here.
+    owns_activation: bool,
+    session_sink: parking_lot::Mutex<Option<SessionSinkGuard>>,
     history: Option<Vec<ChatItem>>,
 }
 
@@ -89,6 +96,8 @@ impl SessionStorage {
             return Ok(Opened {
                 partition_key: None,
                 scope_id,
+                owns_activation: activation.is_none(),
+                session_sink: parking_lot::Mutex::new(None),
                 activation: activation
                     .map(Ok)
                     .unwrap_or_else(|| ContextStore::new(Vec::new(), None, false))?,
@@ -105,10 +114,12 @@ impl SessionStorage {
             )
             .await?;
         let store = Arc::new(store);
-        store.activation().set_session_sink(store.session_sink())?;
+        let session_sink = store.activation().attach_session_sink(store.session_sink())?;
         Ok(Opened {
             scope_id,
             activation: store.activation(),
+            owns_activation: false,
+            session_sink: parking_lot::Mutex::new(Some(session_sink)),
             history: store.initial_history(),
             partition_key: Some(Partition {
                 namespace: Arc::clone(namespace),
@@ -198,7 +209,11 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
         {
             log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice store could not close: {error}");
         }
-        opened.activation.close();
+        let session_sink = opened.session_sink.lock().take();
+        drop(session_sink);
+        if opened.owns_activation {
+            opened.activation.close();
+        }
     }
 }
 

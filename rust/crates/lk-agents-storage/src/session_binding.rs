@@ -63,7 +63,18 @@ impl HostBinding for SessionBinding {
     }
     fn validate_voice(&self, agent: String) -> Result<(), StorageError> {
         self.ensure_open()?;
-        if let Some(saved) = self.view.current_agent()?.map(|agent| agent.agent_name)
+        if let Some(state) = self.view._snapshot_data()?
+            && (state.active_frame_id != state.root_frame_id
+                || !state.ancestors.is_empty()
+                || state.frames.len() > 1
+                || state.frames.values().any(|agent| !agent.pending_calls.is_empty()))
+        {
+            return Err(StorageError::Invalid(
+                "saved local agent work must continue through TextSession or bound Agent.run"
+                    .into(),
+            ));
+        }
+        if let Some(saved) = self.view.root_agent()?.map(|agent| agent.agent_name)
             && saved != agent
         {
             return Err(StorageError::Invalid(format!(

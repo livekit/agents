@@ -32,6 +32,8 @@ pub struct VoiceStore {
     /// nothing to wait for.
     holder: Holder,
     activation: ContextStore,
+    /// An application-supplied activation outlives this call.
+    owns_activation: bool,
     initial: Option<Vec<ChatItem>>,
     state: tokio::sync::Mutex<State>,
     lease: Mutex<Option<Lease>>,
@@ -245,6 +247,7 @@ impl VoiceStore {
         // Only rows actually read from storage establish a database baseline. Supplied
         // history is a local view, never proof that unseen rows were deleted or edited.
         let known = items.clone();
+        let owns_activation = activation.is_none();
         let activation = match activation {
             Some(activation) => activation,
             None => {
@@ -262,6 +265,7 @@ impl VoiceStore {
             partition_key,
             holder: Holder::new("voice"),
             activation,
+            owns_activation,
             initial: explicit_history.is_none().then_some(items),
             state: tokio::sync::Mutex::new(State {
                 known,
@@ -828,12 +832,16 @@ impl HostVoiceStore for VoiceStore {
         } else {
             self.released();
         }
-        self.activation.close();
+        if self.owns_activation {
+            self.activation.close();
+        }
         drop(state);
         let clock = &*self.background.clock;
         self.tasks.wait_empty(clock, None).await;
-        let (voice, context) =
-            tokio::join!(self.holder.wait_released(clock), self.activation.wait_released());
+        let context = async {
+            if self.owns_activation { self.activation.wait_released().await } else { true }
+        };
+        let (voice, context) = tokio::join!(self.holder.wait_released(clock), context);
         if !(voice && context) {
             log::warn!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.as_str(); "the voice store closed with a lease release in flight");
         }

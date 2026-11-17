@@ -183,6 +183,10 @@ Agent.run, TextSession and VoiceSession continue the selected conversation throu
 TextSession returns RunResult directly, like Agent.run; there is no result/state envelope or
 state= continuation argument. Runtime services, Python stacks and media connections are not
 serialized. Storage uses one shared conversation encoding.
+Durable local Agent-as-tool continuations run in text. Voice handoffs and VoiceTasks remain
+transient; starting voice with unresolved text-local agent work is refused without resetting it.
+Closing voice releases its binding while preserving an application-supplied ContextStore for
+subsequent execution.
 See [TextSession](text-session.md#running-a-conversation) and
 [voice persistence](voice-session.md#the-calls-thread).
 

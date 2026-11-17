@@ -519,7 +519,7 @@ class SessionHost:
             await self.io.aclose()
         if session._session_binding is not None:
             session._session_binding.close()
-        if session._store is not None:
+        if session._store is not None and session._bound_context is None:
             session._store._close()
         audio_in = session._audio_input_options
         if audio_in is not None and isinstance(audio_in.noise_cancellation, rtc.FrameProcessor):

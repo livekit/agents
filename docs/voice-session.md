@@ -653,7 +653,14 @@ await session.start(agent, room=ctx.room)
 The binding guide defines live session views, detached snapshots and durability
 barriers. This section describes voice checkpoint timing and recovery.
 
-A bound session restores committed history at startup unless an explicit `chat_ctx` is supplied.
+A bound session restores committed history at startup. An explicit `chat_ctx` cannot be
+combined with a binding.
+
+Voice handoffs and VoiceTasks stay transient. They preserve the durable root agent and shared
+human history without creating a saved local agent tree. A conversation with unresolved local
+Agent-as-tool work must continue through TextSession or bound Agent.run first; voice startup
+refuses it without changing the saved continuation. See [text delegation](text-session.md).
+
 Each voice turn takes the partition lease, checkpoints accepted conversation progress, commits
 explicitly saved application fields on success, and releases ownership after settlement.
 A text request using the same partition waits for that ownership. Before a later voice turn,
@@ -665,8 +672,9 @@ before an assistant reply exists. Unaccepted words remain pending input, separat
 conversation history. Accepting the turn keeps its item ID and clears that pending input,
 including when no reply is requested. Recovery reconciles pending words under the partition
 lease without inserting the same item twice. Bound TextSession execution uses the same storage
-run and checkpoint primitives at its own conversation boundaries; plain text context/state
-remains manually saved.
+run and checkpoint primitives at its own conversation boundaries. Closing voice releases its
+binding and checkpoint channel while leaving an application-supplied ContextStore usable for
+the following text turn or call. Application context still requires explicit saves.
 
 When the person interrupts a reply while its tools run, the conversation is freed at once, as on
 a call without a thread: the reply's speech is done and the next turn is answered. Only
@@ -695,7 +703,7 @@ except StorageError:
     ...  # end this call or explicitly create a new session
 ```
 
-Voice snapshots recover configured agent identity and conversation references. They do not
+Voice snapshots recover the configured durable root and conversation references. They do not
 restore the in-process expert-event queue or resume audio streams, Python coroutines or live
 VoiceTask parent stacks. A stored agent unavailable in the new configuration is an error.
 

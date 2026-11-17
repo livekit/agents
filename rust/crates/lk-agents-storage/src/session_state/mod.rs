@@ -141,7 +141,8 @@ pub(crate) fn voice_value(
         .frames
         .get_mut(&state.active_frame_id)
         .ok_or_else(|| invalid("session state has no current agent"))?;
-    frame.agent_name = agent;
+    // Live handoffs and VoiceTasks change the speaking role, never the durable local graph.
+    // The configured root is established only when the conversation is first created.
     frame.history = history.clone();
     let delivered = dialogue(&history);
     frame.visible_dialogue = delivered.clone();

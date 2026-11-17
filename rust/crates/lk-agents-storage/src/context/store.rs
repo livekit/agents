@@ -21,11 +21,33 @@ use lk_agents_abi::storage::thread::AbandonReason;
 #[path = "store_session.rs"]
 mod session;
 
+type SessionSink = Arc<dyn lk_agents_abi::a2a::turn::HandlerPort>;
+
+/// Detaches only this execution's sink, including when startup is canceled.
+pub struct SessionSinkGuard {
+    slot: Arc<Mutex<Option<SessionSink>>>,
+    sink: SessionSink,
+}
+
+impl Drop for SessionSinkGuard {
+    fn drop(&mut self) {
+        let removed = {
+            let mut slot = self.slot.lock();
+            if slot.as_ref().is_some_and(|sink| Arc::ptr_eq(sink, &self.sink)) {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        drop(removed);
+    }
+}
+
 #[derive(Clone)]
 pub struct ContextStore {
     pub(crate) session_view: Arc<Mutex<Option<crate::session_state::SessionState>>>,
     owned_session: Arc<tokio::sync::Mutex<Option<session::OwnedSession>>>,
-    session_sink: Arc<Mutex<Option<Arc<dyn lk_agents_abi::a2a::turn::HandlerPort>>>>,
+    session_sink: Arc<Mutex<Option<SessionSink>>>,
     activation: Arc<Mutex<Activation>>,
     database: Option<Database>,
     operation: Arc<tokio::sync::Mutex<()>>,
@@ -174,6 +196,19 @@ impl Database {
 }
 
 impl ContextStore {
+    /// Lend an activation to one execution owner without closing it when that owner ends.
+    pub fn attach_session_sink(&self, sink: SessionSink) -> Result<SessionSinkGuard, StorageError> {
+        self.activation.lock().ensure_open()?;
+        let mut slot = self.session_sink.lock();
+        if slot.is_some() {
+            return Err(StorageError::Invalid(
+                "this context already has an active execution sink".into(),
+            ));
+        }
+        *slot = Some(Arc::clone(&sink));
+        Ok(SessionSinkGuard { slot: Arc::clone(&self.session_sink), sink })
+    }
+
     /// A binding supplies the current agent's saved model context, independently of the
     /// partition's delivered history. A plain thread association does not select this state.
     pub fn bound_history(&self) -> Result<Option<Vec<lk_agents_abi::ChatItem>>, StorageError> {
@@ -434,7 +469,8 @@ impl HostContextActivation for ContextStore {
         sink: Arc<dyn lk_agents_abi::a2a::turn::HandlerPort>,
     ) -> Result<(), StorageError> {
         self.activation.lock().ensure_open()?;
-        *self.session_sink.lock() = Some(sink);
+        let previous = self.session_sink.lock().replace(sink);
+        drop(previous);
         Ok(())
     }
 

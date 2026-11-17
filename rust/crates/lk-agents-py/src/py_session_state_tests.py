@@ -1,20 +1,25 @@
 """Generated state views expose conversation ownership without leaking private routing fields."""
 
+import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
 from livekit.agents import (
     Agent,
+    Completed,
     DelegationOptions,
     InputRequired,
+    RunContext,
     SessionState,
     TextSession,
     VoiceSession,
+    VoiceTask,
     persisted,
 )
 from livekit.agents.llm import ChatContext
-from livekit.agents.storage import ContextStore
+from livekit.agents.storage import ContextStore, SQLiteStorage, Thread
 from tests.fakes import FakeLLM, tool_call, until
 
 pytestmark = pytest.mark.unit
@@ -160,3 +165,138 @@ async def test_a_failed_bound_run_retains_its_diagnostic_without_a_successful_ou
     assert current is not None and current.error is not None
     assert "model unavailable" in current.error
     assert not current.completed and current.output is None
+
+
+@pytest.mark.parametrize("start_with_child", [False, True])
+async def test_voice_refuses_saved_local_agent_work_without_changing_it(
+    start_with_child: bool,
+) -> None:
+    store = ContextStore()
+    app = await store.load_context(App())
+    child = Agent(
+        name="booking",
+        instructions="Book.",
+        output_type=str,
+        llm=FakeLLM([tool_call("date"), "reserved"]),
+    )
+
+    @child.tool
+    async def date() -> InputRequired:
+        """Ask for the date."""
+        return InputRequired("Which date?", verbatim=True)
+
+    root = Agent(
+        name="desk",
+        instructions="Help.",
+        tools=[child.as_tool()],
+        llm=FakeLLM([tool_call("booking"), "Done."]),
+    )
+    await TextSession(agent=root).run("Book", context=store.bind(app))
+    before = app.session._to_json()
+    async with VoiceSession(context=store.bind(app), vad=None) as voice:
+        with pytest.raises(ValueError, match="local agent.*TextSession"):
+            await voice.start(child if start_with_child else root)
+    assert app.session._to_json() == before, "voice startup cannot reset a saved text continuation"
+
+
+@pytest.mark.parametrize("persist", [False, True])
+async def test_voice_close_preserves_the_applications_context_store_for_a_text_turn(
+    tmp_path: Path, persist: bool
+) -> None:
+    storage = SQLiteStorage(directory=tmp_path) if persist else None
+    thread = None
+    if storage is not None:
+        thread_id = (await storage.threads.create_thread()).thread_id
+        thread = Thread(storage, thread_id, partition_key="desk")
+        activation = await storage.threads._core_context_store(thread_id, "desk")
+        store = ContextStore(activation=activation, scope_id="root:desk", thread=thread)
+    else:
+        store = ContextStore()
+    try:
+        app = await store.load_context(App())
+        model = FakeLLM(["Hello.", "Back on text."])
+        agent = Agent(name="desk", instructions="Help.", llm=model)
+        async with VoiceSession(context=store.bind(app), thread=thread, vad=None) as voice:
+            await voice.start(agent)
+            await voice.generate_reply(user_input="Hi")
+        result = await agent.run("Continue", context=store.bind(app))
+        assert result.output == "Back on text."
+        assert any(item.text_content == "Hello." for item in app.session.chat_history.items)
+        if storage is not None:
+            saved = await store.load_session()
+            assert [item.text_content for item in saved.chat_history.items] == [
+                "Hi",
+                "Hello.",
+                "Continue",
+                "Back on text.",
+            ]
+    finally:
+        store._close()
+        if storage is not None:
+            await storage.aclose()
+
+
+async def test_a_voice_handoff_does_not_replace_the_durable_root_agent() -> None:
+    store = ContextStore()
+    app = await store.load_context(App())
+    root_model = FakeLLM(["Back on text."])
+    root = Agent(name="desk", instructions="Help.", llm=root_model)
+    temporary = Agent(
+        name="temporary", instructions="Help temporarily.", llm=FakeLLM(["Temporary reply."])
+    )
+    entered = asyncio.Event()
+
+    @temporary.on_enter
+    async def active(session: VoiceSession[App]) -> None:
+        entered.set()
+
+    async with VoiceSession(context=store.bind(app), vad=None) as voice:
+        await voice.start(root)
+        voice.update_agent(temporary)
+        await until(entered.is_set, "the temporary voice role did not enter")
+        await voice.generate_reply(user_input="Hello")
+        assert app.session.root_agent is not None
+        assert app.session.root_agent.agent_name == "desk", (
+            "a live role is not a saved local delegation"
+        )
+    result = await root.run("Continue", context=store.bind(app))
+    assert result.output == "Back on text."
+    assert any(
+        item.type == "message" and item.text_content == "Temporary reply."
+        for item in root_model.requests[-1].items
+    )
+
+
+async def test_a_voice_task_does_not_replace_the_durable_root_agent() -> None:
+    store = ContextStore()
+    app = await store.load_context(App())
+    root = Agent(
+        name="desk", instructions="Help.", llm=FakeLLM([tool_call("collect"), "Found it."])
+    )
+    collector = Agent(
+        name="collector",
+        instructions="Collect.",
+        output_type=str,
+        llm=FakeLLM([tool_call("finish")]),
+    )
+    roots_during_task: list[str] = []
+
+    @collector.tool
+    async def finish() -> Completed[str]:
+        """Return the collected reference."""
+        assert app.session.root_agent is not None
+        roots_during_task.append(app.session.root_agent.agent_name)
+        return Completed("ref-7")
+
+    @root.tool
+    async def collect(ctx: RunContext[App]) -> str:
+        """Collect a reference during the live conversation."""
+        return await VoiceTask(agent=collector).run()
+
+    async with VoiceSession(context=store.bind(app), vad=None) as voice:
+        await voice.start(root)
+        await voice.generate_reply(user_input="Find the reference")
+        assert app.session.root_agent is not None
+        assert app.session.root_agent.agent_name == "desk"
+        assert app.session.root_agent.calls == {} and len(app.session.agents) == 1
+    assert roots_during_task == ["desk"]

@@ -98,6 +98,12 @@ durable correlation, cancellation, third-party A2A and the developer-facing cont
 the rewrite's typed results, explicit application persistence and approval checks. It does not
 recover Python call stacks or guarantee exactly-once external business operations.
 
+Local Agent-as-tool persistence is text-only. Voice handoffs and VoiceTasks remain transient;
+they preserve the durable root and human history. Starting voice with unresolved text-local
+agent work refuses the transition without modifying it; no root-graph restoration API is
+introduced. VoiceSession.current_agent exposes the live role. A separate public overlay on
+SessionState is not part of this design.
+
 ## Concepts
 
 | Term | Meaning in this design |
@@ -842,6 +848,7 @@ a public Python export or an additional SDK constructor.
 | Type/interface | New or reused | Responsibility |
 | --- | --- | --- |
 | SessionSnapshot, working name | Use one private conversation snapshot for every execution mode. | Persistent shared conversation data; separate from the public native view's resource handle. |
+| SessionSinkGuard | Private native lifetime holder; no Python export. | Detaches a voice execution's temporary checkpoint sink on close or abandoned startup, preserving an application-supplied ContextStore. |
 | Session, SessionConfig, SessionInput, SessionEvent, SessionEffect | Extracted existing TextSession coordination into core/session/. | Conversation records live at the domain entry, transitions in machine/ and typed effects in effects.rs. AgentRun remains the invocation loop. |
 | SessionDriver, working name | Extract/evolve runtime text-session Driver. | One bound owner executing effects; voice retains its own floor/media driver. |
 | AgentStateId, working name | Rename/reuse FrameId. | Native agent-context identity; Python can continue seeing a string. |
@@ -991,13 +998,6 @@ Routine private type layout and generator work do not require another public pri
   yes; detached snapshots stay read-only, and restoring state does not restore authority.
 - The bounded protected-business-step API is deferred with the existing interruption-policy
   TODO; no implicit protected section is introduced by this work.
-- For a text-to-voice transition while a local child is current, confirm that VoiceSession.start
-  receives the configured root graph and restores the saved child from it. Supplying only the
-  child cannot reconstruct missing parent behavior; it must not discard the saved parent call.
-- During a VoiceTask, should `SessionState.current_agent` show the task's live agent or the
-  durable parent? The recommendation is the live agent for inspection, with restart restoring
-  the parent because the task's Python await is transient. Delivered dialogue remains in
-  `chat_history` either way.
 
 ## Implementation checklist
 
@@ -1170,6 +1170,9 @@ passes deterministic stock-peer transport and failure tests.
 
 ### 5. Voice and shared text/voice
 
+- [x] Keep voice handoffs/VoiceTasks transient and preserve the durable root. Refuse unresolved
+  text-local agent trees without changing them; release the voice binding without closing an
+  application-supplied store. Cover subsequent text execution in memory and SQLite.
 - [ ] Connect question/exact-text presentation to pipeline/realtime delivery receipts.
 - [ ] Implement immediate update/say receipts, request-view notes and interruption handling.
   Awaited progress admission is now bounded and lossless for direct runs, TextSession and local
@@ -1187,7 +1190,8 @@ passes deterministic stock-peer transport and failure tests.
 - [ ] Route same-partition text into a call, preserving task/outcome and answered-by-voice attribution.
 - [ ] Cover agent/tool replacement, VoiceTasks, close, reconnect and independent room bindings.
 
-**Exit:** equivalent lifecycle semantics on text, pipeline voice and realtime voice.
+**Exit:** shared remote lifecycle semantics on text, pipeline voice and realtime voice, with
+durable local agent continuations restricted to text and live voice roles remaining transient.
 
 ### 6. E2E applications and third-party acceptance
 

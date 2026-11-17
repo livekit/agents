@@ -184,6 +184,8 @@ A message without taskId follows the endpoint's [task-answering contract](protoc
 Ending a frontend does not itself cancel remote business work.
 
 VoiceSession owns the call's speech, interruption and presentation. It does not require a
-TextSession. VoiceTask is a bounded interaction inside an active voice session, with a parent
-await retained in memory; it does not provide durable backend continuation. See
+TextSession. Durable local Agent-as-tool continuations belong to text; finish unresolved local
+work before starting voice on the same conversation. Voice handoffs and VoiceTasks are live
+interactions that preserve the durable root and human history. A VoiceTask's parent await stays
+in memory; it does not provide durable backend continuation. See
 [voice interactions](voice-tasks.md#voicetask) and [frontend events](voice-session.md#conversation-owned-inbox).

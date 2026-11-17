@@ -8,9 +8,10 @@ checklist tracks the native encoding and validation work still required.
 ## Expected experience
 
 A person can start a request by voice and return by text through a supported transition.
-Binding the same saved conversation retains its delivered dialogue, current local agent and
-remote task/input references. Changing the delivery mode does not itself start the work again
-or create another conversation.
+Binding the same saved conversation retains its delivered dialogue and remote task/input
+references. Durable local Agent-as-tool execution belongs to TextSession and bound Agent.run;
+voice handoffs and VoiceTasks remain live interactions. Changing delivery mode does not itself
+start remote work again or create another conversation.
 
 Applications should be able to rely on these outcomes:
 
@@ -36,6 +37,8 @@ grouped progress and interruption behavior; the
 
 - Share conversation history across execution modes, with a private ChatContext per frame.
 - The top-level agent runs in the root frame. Agents called as tools create child frames.
+- Persist local child continuations only for text. Voice role changes preserve the durable
+  root and human history without saving a resumable local child tree.
 - Expose current_agent and root_agent as views scoped to the selected session.
 - Store agent states in one internal map; root_agent and current_agent are properties that
   resolve saved IDs into that map, not separate state copies.
@@ -1009,19 +1012,20 @@ Separate partitions do not share a SessionState merely because they belong to th
 A supported voice-to-text transition must:
 
 1. Settle or explicitly account for local work and checkpoint accepted progress.
-2. Restore the same root, agent relationships, histories and remote context/task references.
+2. Restore the durable root, histories and remote context/task references.
 3. Reconcile pending input, answer submissions and remote task state.
 4. Continue without importing private child histories or replaying uncertain speech.
 
-Closing the voice frontend does not cancel remote business tasks. Conversely, a saved local
-frame is not a serialized coroutine. Recovery invokes configured agents from recorded state;
-it cannot resurrect an in-memory VoiceTask await or model connection.
+Closing the voice frontend does not cancel remote business tasks. Voice handoffs and VoiceTasks
+are transient: they do not replace the durable root agent or become saved local children.
+VoiceSession.current_agent identifies the live speaking role. The durable local-agent map is
+continued by TextSession or bound Agent.run; it cannot resurrect a VoiceTask await or connection.
 
-Shared state also does not mean all delivery modes expose the same continuation mechanisms.
-VoiceTask remains a bounded live interaction with its existing runtime lifetime. Agent.run
-binding support requires the API addition discussed in the delegation proposal. A restored
-child may continue only where its contract supports reconstruction;
-unsupported transitions must be explicit rather than silently resetting to the root.
+A conversation with unresolved local Agent-as-tool work must continue in text before voice can
+start. Voice startup refuses that saved graph without changing it, whether supplied with the
+root or child agent. It does not require a root graph or try to restore a text child on the call.
+Closing a voice session releases its execution binding and temporary checkpoint sink; an
+application-supplied ContextStore remains usable for the following text turn or call.
 
 ## Design and implementation checklist
 
