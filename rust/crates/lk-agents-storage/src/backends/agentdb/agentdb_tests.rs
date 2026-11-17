@@ -121,42 +121,37 @@ async fn closes_after_reading() -> String {
     url
 }
 
-/// A socket closed between a request's frame and its answer leaves every write uncertain,
-/// whether the client redials (`Disconnected`) or has given up (`Closed`), on every statement
-/// kind; a read changed nothing and is only retryable.
+/// A socket closed between a request's frame and its answer leaves every write uncertain, on
+/// every statement kind; a read changed nothing and is only retryable.
 #[tokio::test]
 async fn a_socket_closed_after_a_write_was_sent_leaves_it_uncertain() {
-    for redial in [true, false] {
-        let url = closes_after_reading().await;
-        let dial = || {
-            let mut opts = connection::Options::new(url.clone(), "DB_1");
-            opts.reconnect.disable = !redial;
-            opts.reconnect.min_backoff = Duration::from_millis(10);
-            let minter = TokenMinter::new("devkey", "secret").unwrap();
-            let background = crate::testing::background();
-            Conn::dial(opts, minter, background.spawner, background.clock)
-        };
-        let conn = dial().await.unwrap();
-        let exec = conn.exec(&Statement::raw("UPDATE t SET n = 1"), conn.deadline()).await;
-        let exec = StorageError::from(exec.unwrap_err());
-        assert!(matches!(exec, StorageError::Uncertain(_)), "redial {redial}: {exec:?}");
-        let pooled = Pooled {
-            conn: dial().await.unwrap(),
-            schema: SchemaCell::default(),
-            pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()))),
-            closed: AtomicBool::new(false),
-        };
-        let batch = pooled.batch(vec![Statement::raw("UPDATE t SET n = 2")]).await;
-        assert!(matches!(batch, Err(StorageError::Uncertain(_))), "redial {redial}: {batch:?}");
-        // a read is sent again on every redial until its deadline, then only retryable
-        let clock = lk_agents_net::clock::RealClock::new();
-        let deadline = clock.now().saturating_add(Duration::from_millis(300));
-        let read =
-            crate::deadline::within(deadline, pooled.query(Statement::raw("SELECT n FROM t")));
-        let read = read.await;
-        assert!(matches!(read, Err(StorageError::Unavailable(_))), "redial {redial}: {read:?}");
-        pooled.conn.aclose().await;
-    }
+    let url = closes_after_reading().await;
+    let dial = || {
+        let mut opts = connection::Options::new(url.clone(), "DB_1");
+        opts.reconnect.min_backoff = Duration::from_millis(10);
+        let minter = TokenMinter::new("devkey", "secret").unwrap();
+        let background = crate::testing::background();
+        Conn::dial(opts, minter, background.spawner, background.clock)
+    };
+    let conn = dial().await.unwrap();
+    let exec = conn.exec(&Statement::raw("UPDATE t SET n = 1"), conn.deadline()).await;
+    let exec = StorageError::from(exec.unwrap_err());
+    assert!(matches!(exec, StorageError::Uncertain(_)), "{exec:?}");
+    let pooled = Pooled {
+        conn: dial().await.unwrap(),
+        schema: SchemaCell::default(),
+        pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()))),
+        closed: AtomicBool::new(false),
+    };
+    let batch = pooled.batch(vec![Statement::raw("UPDATE t SET n = 2")]).await;
+    assert!(matches!(batch, Err(StorageError::Uncertain(_))), "{batch:?}");
+    // a read is sent again on every redial until its deadline, then only retryable
+    let clock = lk_agents_net::clock::RealClock::new();
+    let deadline = clock.now().saturating_add(Duration::from_millis(300));
+    let read = crate::deadline::within(deadline, pooled.query(Statement::raw("SELECT n FROM t")));
+    let read = read.await;
+    assert!(matches!(read, Err(StorageError::Unavailable(_))), "{read:?}");
+    pooled.conn.aclose().await;
 }
 
 #[tokio::test]

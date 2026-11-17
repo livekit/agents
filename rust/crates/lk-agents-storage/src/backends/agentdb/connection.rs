@@ -142,22 +142,17 @@ type Writer = mpsc::UnboundedSender<Outgoing>;
 /// The read deadline past a missed pong, when the server names no ping timeout.
 const DEFAULT_PING_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Reconnection, on by default: a node draining or an idle database evicted severs the socket.
-/// Redials back off while requests wait; none waiting, nothing redials.
+/// Reconnection: a node draining or an idle database evicted severs the socket, the ordinary
+/// path rather than an error. Redials back off while requests wait; none waiting, nothing redials.
 #[derive(Debug, Clone)]
 pub struct Reconnect {
-    pub disable: bool,
     pub min_backoff: Duration,
     pub max_backoff: Duration,
 }
 
 impl Default for Reconnect {
     fn default() -> Self {
-        Self {
-            disable: false,
-            min_backoff: Duration::from_millis(100),
-            max_backoff: Duration::from_secs(5),
-        }
+        Self { min_backoff: Duration::from_millis(100), max_backoff: Duration::from_secs(5) }
     }
 }
 
@@ -381,9 +376,8 @@ impl Supervisor {
                 return;
             }
             self.ready.set(false);
-            let (disable, generation) = (conn.0.opts.reconnect.disable, socket.generation);
+            let generation = socket.generation;
             let cause = match end {
-                End::Retiring if disable => return conn.unguarded().finish(socket).await,
                 End::Retiring => {
                     let retiring = conn.unguarded().finish(socket);
                     let spawner = &*conn.0.spawner;
@@ -406,9 +400,6 @@ impl Supervisor {
                 None => true,
                 Some(cause) => {
                     conn.ended(generation, Some(&cause));
-                    if disable {
-                        return;
-                    }
                     cause.notice() == Some(ErrorCode::WRONG_SHARD_SERVER)
                 }
             };
