@@ -143,30 +143,6 @@ class TavusAPI:
         response_data = await self._post("pals", payload)
         return response_data["pal_id"]  # type: ignore
 
-    async def create_persona(
-        self,
-        name: NotGivenOr[str] = NOT_GIVEN,
-        *,
-        extra_payload: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> str:
-        # Deprecated: use create_pal(). Kept on the legacy /v2/personas endpoint.
-        logger.warning("`create_persona` is deprecated, use `create_pal` instead")
-        name = name or utils.shortuuid("lk_persona_")
-
-        payload = {
-            "persona_name": name,
-            "pipeline_mode": "echo",
-            "layers": {
-                "transport": {"transport_type": "livekit"},
-            },
-        }
-
-        if utils.is_given(extra_payload):
-            payload.update(extra_payload)
-
-        response_data = await self._post("personas", payload)
-        return response_data["persona_id"]  # type: ignore
-
     async def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         """
         Make a POST request to the Tavus API with retry logic.
