@@ -61,6 +61,7 @@ members = [
     "livekit-plugins-gradium",
     "livekit-plugins-groq",
     "livekit-plugins-hamming",
+    "livekit-plugins-humain",
     "livekit-plugins-hume",
     "livekit-plugins-inworld",
     "livekit-plugins-kalpa",
@@ -1657,6 +1658,22 @@ wheels = [
 ]
 
 [[package]]
+name = "humain-voice"
+version = "0.18.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "anyio" },
+    { name = "loguru" },
+    { name = "pydantic" },
+    { name = "python-socketio", extra = ["client"] },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/18/7a/b5a33985af1df25c1bcab75805a83456ebe76d7fef5cda570cfe75f1b7e6/humain_voice-0.18.1.tar.gz", hash = "sha256:0073c0f3d585b908d648ed7ba825e9caff868cf22a692dd49dedddc8dc38639a", size = 61138, upload-time = "2026-10-29T14:16:03.499Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fa/b1/322a39077797a6b41baf763bb8fbff47a9f7b6dd3f9830bb30a5c0d44537/humain_voice-0.18.1-py3-none-any.whl", hash = "sha256:880588ede0be7c74a640a139ea9d9e63c3be7fed8a66db933be058e22dc32bb4", size = 86496, upload-time = "2026-10-29T14:16:02.168Z" },
+]
+
+[[package]]
 name = "idna"
 version = "3.18"
 source = { registry = "https://pypi.org/simple" }
@@ -2252,6 +2269,9 @@ groq = [
 hamming = [
     { name = "livekit-plugins-hamming" },
 ]
+humain = [
+    { name = "livekit-plugins-humain" },
+]
 hume = [
     { name = "livekit-plugins-hume" },
 ]
@@ -2457,6 +2477,7 @@ requires-dist = [
     { name = "livekit-plugins-gradium", marker = "extra == 'gradium'", editable = "livekit-plugins/livekit-plugins-gradium" },
     { name = "livekit-plugins-groq", marker = "extra == 'groq'", editable = "livekit-plugins/livekit-plugins-groq" },
     { name = "livekit-plugins-hamming", marker = "extra == 'hamming'", editable = "livekit-plugins/livekit-plugins-hamming" },
+    { name = "livekit-plugins-humain", marker = "extra == 'humain'", editable = "livekit-plugins/livekit-plugins-humain" },
     { name = "livekit-plugins-hume", marker = "extra == 'hume'", editable = "livekit-plugins/livekit-plugins-hume" },
     { name = "livekit-plugins-inworld", marker = "extra == 'inworld'", editable = "livekit-plugins/livekit-plugins-inworld" },
     { name = "livekit-plugins-kalpa", marker = "extra == 'kalpa'", editable = "livekit-plugins/livekit-plugins-kalpa" },
@@ -2530,7 +2551,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "humain", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
 
 [[package]]
 name = "livekit-api"
@@ -3299,6 +3320,20 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+]
+
+[[package]]
+name = "livekit-plugins-humain"
+source = { editable = "livekit-plugins/livekit-plugins-humain" }
+dependencies = [
+    { name = "humain-voice" },
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "humain-voice", specifier = ">=0.18.1" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
@@ -5655,6 +5690,10 @@ wheels = [
 asyncio-client = [
     { name = "aiohttp" },
 ]
+client = [
+    { name = "requests" },
+    { name = "websocket-client" },
+]
 
 [[package]]
 name = "pywin32"
@@ -7111,6 +7150,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/51/cf/3b10b268b4b7f0fc26e9debb5eef1998b515887840f444cd3ec80c688755/watchfiles-1.2.0-cp314-cp314t-manylinux_2_31_riscv64.whl", hash = "sha256:4c887eba18b7945ac73067a8b4a66f21cd46c2539b2bc68588f7be6c7eb6d26b", size = 463494, upload-time = "2026-05-18T04:31:33.826Z" },
     { url = "https://files.pythonhosted.org/packages/3d/3e/a4302545cd589262a0dc7d140e86f7688eba3f9c72776c27f7e23b8864c4/watchfiles-1.2.0-cp314-cp314t-musllinux_1_1_aarch64.whl", hash = "sha256:3416ff151bb6b5a8d8d11664974fbef4d9305b9b2957839ab5a270468fd8df30", size = 629383, upload-time = "2026-05-18T04:31:15.596Z" },
     { url = "https://files.pythonhosted.org/packages/db/99/d5649df0a9a410d45b7c882304d0b790903ac9b6e8f2cfd12114e0c6b9f2/watchfiles-1.2.0-cp314-cp314t-musllinux_1_1_x86_64.whl", hash = "sha256:0e831a271c035d89789cffc386b6aa1375f39f1cd25eb7ca0997e4970d152fc5", size = 656093, upload-time = "2026-05-18T04:31:58.707Z" },
+]
+
+[[package]]
+name = "websocket-client"
+version = "1.9.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/cb/a5abcc2891249f393827c650c6296660ce40374ac22d99ab9aea41f9d2a2/websocket_client-1.9.2.tar.gz", hash = "sha256:0fcb57545848be86992e128218fd96dd87a6769ffdb1a968dff79632b85604d0", size = 84110, upload-time = "2026-08-31T14:08:40.964Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d5/d2/cc4dc1271e464942db7ee278baae2daa99ee77cb2af744025c04da585a3e/websocket_client-1.9.2-py3-none-any.whl", hash = "sha256:e1a673830a9c7bfa47b1cd3d5e4178f4c9651d80a4eab02c9c23a1c3ec6250ce", size = 95786, upload-time = "2026-08-31T14:08:39.899Z" },
 ]
 
 [[package]]

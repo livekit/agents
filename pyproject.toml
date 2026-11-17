@@ -41,6 +41,7 @@ livekit-plugins-gnani = { workspace = true }
 livekit-plugins-google = { workspace = true }
 livekit-plugins-groq = { workspace = true }
 livekit-plugins-hamming = { workspace = true }
+livekit-plugins-humain = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
 livekit-plugins-krisp = { workspace = true }
@@ -225,6 +226,10 @@ follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
 module = "boto3"
+follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+module = "humain_voice.*"
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
