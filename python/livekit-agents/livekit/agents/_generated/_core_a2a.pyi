@@ -8,10 +8,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Self
 
+from a2a.types.a2a_pb2 import StreamResponse
+
 from livekit.agents.a2a import _Delegation
 from livekit.agents.storage.session import _TurnHost
 
-from .._core import ServerConfig, Storage, Thread
+from .._core import ServerConfig, Storage, TextSessionRunner, Thread
 from .a2a_auth import AgentThreadGrant, AuthOperation, Principal
 from .a2a_card import EndpointDescriptor
 from .a2a_client import AgentCard, Message, MessageInput, MessageMetadata, TaskUpdate
@@ -19,6 +21,7 @@ from .a2a_door import DoorConfig
 from .a2a_remote import DelegationPartition, RemoteEvent
 from .chat_items import ChatItem
 from .connect import APIConnectOptions
+from .session import ToolCallRef
 from .storage_class import ThreadInfo
 from .storage_handler import HandlerOutcome, HandlerRun
 from .storage_options import Policy, TurnOptions
@@ -83,6 +86,8 @@ class Reply:
     def thread_id(self) -> str: ...
     def __aiter__(self) -> Self: ...
     async def __anext__(self) -> TaskUpdate: ...
+    async def _core_next_event(self) -> StreamResponse | None:
+        """The unnormalized SDK response for native state inspection and protocol conformance."""
     async def aclose(self) -> None: ...
 
 class AgentClient:
@@ -167,6 +172,8 @@ class _core_RemoteInteraction:
         thread_id: str | None,
         conn_options: APIConnectOptions | None,
         live: bool,
+        owner: TextSessionRunner | None = None,
+        origin: ToolCallRef | None = None,
     ) -> RemoteEvent:
         """Run the delegation on the endpoint: connect with `token`, send the call's message
         (`thread_id` shares the caller's thread under `token`'s grant), then follow its updates:
@@ -176,8 +183,8 @@ class _core_RemoteInteraction:
         its reply are closed before it returns.
         """
     def cancelled(self) -> None:
-        """The tool call was cancelled: the interaction records it and a running delegation stops,
-        closing its reply (which cancels the remote task) and client; `settled()` waits for that.
+        """Stop the local tool wait and close its observation resources. Remote business work is
+        unchanged; `settled()` waits for local cleanup, not remote task cancellation.
         """
     async def settled(self) -> None:
         """After `cancelled()`: the running delegation's cleanup, bounded by the teardown limit."""

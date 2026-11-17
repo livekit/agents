@@ -49,6 +49,7 @@ fn input_required_answers_keep_the_original_partition_ancestry() {
     let RemoteEvent::InputRequired { request_id, .. } = event else {
         panic!("expected input request")
     };
+    remote.cancelled().unwrap();
     let answer = remote.inner.answer(&request_id, "Theo".into()).unwrap();
     assert_eq!(answer.metadata.unwrap().application.unwrap()[PARTITION_CHAIN_KEY], expected);
 }

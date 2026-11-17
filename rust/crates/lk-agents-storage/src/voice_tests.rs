@@ -4,7 +4,7 @@ use crate::testing::Backend;
 use crate::voice::VoiceStore;
 use lk_agents_abi::storage::context::{ContextActivation as _, ContextField};
 use lk_agents_abi::storage::voice::{
-    VoiceStorage as _, VoiceStorageCommand, VoiceStorageEvent, VoiceStore as _,
+    VoiceHistory, VoiceStorage as _, VoiceStorageCommand, VoiceStorageEvent, VoiceStore as _,
 };
 use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::{ChatItem, ChatMessage, Role};
@@ -31,10 +31,10 @@ async fn a_model_view_omitting_a_handoff_keeps_its_order_across_timestamp_ties()
     });
     let user =
         ChatItem::Message(ChatMessage::text("user", Role::User, "hello", std::time::UNIX_EPOCH));
-    store.acquire(1, vec![handoff.clone(), user.clone()]).await.unwrap();
-    store.finish(Some(1), 1, vec![handoff, user.clone()]).await.unwrap();
-    let merged = store.acquire(2, vec![user]).await.unwrap();
-    assert_eq!(merged.iter().map(ChatItem::id).collect::<Vec<_>>(), ["handoff", "user"]);
+    store.acquire(1, VoiceHistory::new(vec![handoff.clone(), user.clone()])).await.unwrap();
+    store.finish(Some(1), 1, VoiceHistory::new(vec![handoff, user.clone()])).await.unwrap();
+    let merged = store.acquire(2, VoiceHistory::new(vec![user])).await.unwrap();
+    assert_eq!(merged.items.iter().map(ChatItem::id).collect::<Vec<_>>(), ["handoff", "user"]);
     store.aclose().await.unwrap();
     fixture.cleanup(&[]).await;
 }
@@ -65,14 +65,54 @@ async fn a_final_save_without_a_completed_acquire_still_persists_its_items() {
     store
         .clone()
         .dispatch(
-            VoiceStorageCommand::Settle { speech: 1, sequence: 1, history: vec![item.clone()] },
+            VoiceStorageCommand::Settle {
+                speech: 1,
+                sequence: 1,
+                history: VoiceHistory::new(vec![item.clone()]),
+            },
             sink,
         )
         .unwrap();
-    assert!(matches!(events.recv().await, Some(VoiceStorageEvent::Settled { result: Ok(()), .. })));
+    assert!(matches!(events.recv().await, Some(VoiceStorageEvent::Settled { result: Ok(_), .. })));
     let thread = fixture.thread().await;
     let rows = thread.partition("desk").history().await.unwrap();
     assert_eq!(rows.len(), 1);
+    assert_eq!(
+        lk_agents_abi::llm::chat_context::protocol::decode_chat_item(rows[0].payload.clone())
+            .unwrap(),
+        item
+    );
+    store.aclose().await.unwrap();
+    fixture.cleanup(&[&thread]).await;
+}
+
+#[tokio::test]
+async fn a_late_save_reopens_ownership_instead_of_acknowledging_an_absent_run() {
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let store = VoiceStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        None,
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
+    store.acquire(1, VoiceHistory::default()).await.unwrap();
+    let item = ChatItem::Message(ChatMessage::text(
+        "user",
+        Role::User,
+        "trailing words",
+        std::time::UNIX_EPOCH,
+    ));
+    let pending = store.begin(None, VoiceHistory::new(vec![item.clone()])).await.unwrap();
+    // Another speech releases the shared run between the conversation's acquire and save.
+    store.finish(Some(1), 2, VoiceHistory::default()).await.unwrap();
+    store.finish(None, 3, pending).await.unwrap();
+
+    let thread = fixture.thread().await;
+    let rows = thread.partition("desk").history().await.unwrap();
+    assert_eq!(rows.len(), 1, "a successful save receipt protects the pending item");
     assert_eq!(
         lk_agents_abi::llm::chat_context::protocol::decode_chat_item(rows[0].payload.clone())
             .unwrap(),
@@ -125,19 +165,22 @@ async fn a_first_acquire_preserves_rows_absent_from_supplied_history() {
         .await
         .unwrap(),
     );
-    let merged = store.acquire(1, vec![local.clone()]).await.unwrap();
-    assert_eq!(merged.iter().map(ChatItem::id).collect::<Vec<_>>(), ["foreign", "local"]);
+    let merged = store.acquire(1, VoiceHistory::new(vec![local.clone()])).await.unwrap();
+    assert_eq!(merged.items.iter().map(ChatItem::id).collect::<Vec<_>>(), ["foreign", "local"]);
     // A second speech may start before the first acquire's history reaches the core.
     // Its local snapshot and a progress write still cannot erase that unread foreign row.
-    let overlapping = store.acquire(2, vec![local.clone()]).await.unwrap();
-    assert_eq!(overlapping.iter().map(ChatItem::id).collect::<Vec<_>>(), ["foreign", "local"]);
-    store.checkpoint(2, 1, "desk".into(), vec![local]).await.unwrap();
+    let overlapping = store.acquire(2, VoiceHistory::new(vec![local.clone()])).await.unwrap();
+    assert_eq!(
+        overlapping.items.iter().map(ChatItem::id).collect::<Vec<_>>(),
+        ["foreign", "local"]
+    );
+    store.checkpoint(2, 1, "desk".into(), VoiceHistory::new(vec![local])).await.unwrap();
     let (sink, mut events) = Events::new();
     store
         .clone()
         .dispatch(VoiceStorageCommand::Settle { speech: 1, sequence: 3, history: merged }, sink)
         .unwrap();
-    assert!(matches!(events.recv().await, Some(VoiceStorageEvent::Settled { result: Ok(()), .. })));
+    assert!(matches!(events.recv().await, Some(VoiceStorageEvent::Settled { result: Ok(_), .. })));
     let saved = thread
         .partition("desk")
         .history()
@@ -170,8 +213,8 @@ async fn settling_one_overlapping_speech_persists_its_interrupted_item() {
         .await
         .unwrap(),
     );
-    store.acquire(1, vec![]).await.unwrap();
-    store.acquire(2, vec![]).await.unwrap();
+    store.acquire(1, VoiceHistory::default()).await.unwrap();
+    store.acquire(2, VoiceHistory::default()).await.unwrap();
     let mut heard =
         ChatMessage::text("reply", Role::Assistant, "heard prefix", std::time::UNIX_EPOCH);
     heard.interrupted = true;
@@ -180,13 +223,17 @@ async fn settling_one_overlapping_speech_persists_its_interrupted_item() {
     store
         .clone()
         .dispatch(
-            VoiceStorageCommand::Settle { speech: 1, sequence: 3, history: vec![heard.clone()] },
+            VoiceStorageCommand::Settle {
+                speech: 1,
+                sequence: 3,
+                history: VoiceHistory::new(vec![heard.clone()]),
+            },
             sink,
         )
         .unwrap();
     assert!(matches!(
         events.recv().await,
-        Some(VoiceStorageEvent::Settled { speech: 1, result: Ok(()), .. })
+        Some(VoiceStorageEvent::Settled { speech: 1, result: Ok(_), .. })
     ));
     let saved = thread
         .partition("desk")
@@ -222,7 +269,7 @@ async fn recognition_progress_is_durable_before_a_speech_and_recovered_once() {
         .conversation(VoiceConversationProgress {
             sequence: 1,
             agent: "desk".into(),
-            history: vec![],
+            history: VoiceHistory::default(),
             pending_user_turns: vec![input.clone()],
             boundary: VoiceConversationBoundary::Progress,
         })
@@ -232,14 +279,29 @@ async fn recognition_progress_is_durable_before_a_speech_and_recovered_once() {
         thread.partition("desk").history().await.unwrap().is_empty(),
         "a pending input is not accepted history"
     );
-    let state = thread.partition("desk").info().await.unwrap().unwrap().state.unwrap();
+    let loaded = ContextStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
+    let state = loaded.session_state().unwrap();
     assert_eq!(
         crate::session_state::pending_voice_inputs(&state).unwrap().as_slice(),
         std::slice::from_ref(&input)
     );
     store
         .activation()
-        .stage_session(crate::session_state::voice_value("desk".into(), vec![]).unwrap())
+        .stage_session(
+            crate::session_state::voice_value(
+                "desk".into(),
+                vec![],
+                store.activation().session_state().as_ref(),
+            )
+            .unwrap(),
+        )
         .unwrap();
     assert_eq!(
         crate::session_state::pending_voice_inputs(&store.activation().session_state().unwrap())
@@ -260,16 +322,24 @@ async fn recognition_progress_is_durable_before_a_speech_and_recovered_once() {
         .await
         .unwrap(),
     );
-    let recovered = resumed.acquire(2, vec![]).await.unwrap();
-    assert_eq!(recovered, [ChatItem::Message(input)]);
+    let recovered = resumed.acquire(2, VoiceHistory::default()).await.unwrap();
+    assert_eq!(recovered.items, [ChatItem::Message(input)]);
     let (sink, mut events) = Events::new();
     resumed
         .clone()
         .dispatch(VoiceStorageCommand::Settle { speech: 2, sequence: 2, history: recovered }, sink)
         .unwrap();
-    assert!(matches!(events.recv().await, Some(VoiceStorageEvent::Settled { result: Ok(()), .. })));
+    assert!(matches!(events.recv().await, Some(VoiceStorageEvent::Settled { result: Ok(_), .. })));
     resumed.aclose().await.unwrap();
-    let state = thread.partition("desk").info().await.unwrap().unwrap().state.unwrap();
+    let loaded = ContextStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
+    let state = loaded.session_state().unwrap();
     assert!(crate::session_state::pending_voice_inputs(&state).unwrap().is_empty());
     assert_eq!(thread.partition("desk").history().await.unwrap().len(), 1);
     fixture.cleanup(&[&thread]).await;
@@ -294,7 +364,7 @@ async fn restarting_voice_refuses_to_replay_a_tool_with_an_unknown_outcome() {
         group_id: None,
     });
     run.checkpoint_session(
-        json!({"version":1,"kind":"voice","agent":"desk","history_ids":["tool"]}),
+        crate::session_state::voice_value("desk".into(), vec![call.clone()], None).unwrap(),
         vec![lk_agents_abi::llm::chat_context::protocol::encode_chat_item(&call)],
     )
     .await
@@ -328,17 +398,17 @@ async fn a_host_flush_preserves_the_confirmed_partial_prefix() {
         .await
         .unwrap(),
     );
-    store.acquire(1, vec![]).await.unwrap();
+    store.acquire(1, VoiceHistory::default()).await.unwrap();
     let partial = ChatItem::Message(ChatMessage::text(
         "reply",
         Role::Assistant,
         "heard prefix",
         std::time::UNIX_EPOCH,
     ));
-    store.checkpoint(1, 1, "desk".into(), vec![partial]).await.unwrap();
+    store.checkpoint(1, 1, "desk".into(), VoiceHistory::new(vec![partial])).await.unwrap();
     store
         .session_sink()
-        .save_session(json!({"version":1,"kind":"voice","agent":"desk","history_ids":[]}), vec![])
+        .save_session(store.activation().session_state().unwrap(), vec![])
         .await
         .unwrap();
     store.aclose().await.unwrap();
@@ -361,14 +431,14 @@ async fn voice_checkpoints_and_terminal_saves_never_regress_out_of_order() {
     )
     .await
     .unwrap();
-    store.acquire(1, vec![]).await.unwrap();
+    store.acquire(1, VoiceHistory::default()).await.unwrap();
     let history = |text| {
-        vec![ChatItem::Message(ChatMessage::text(
+        VoiceHistory::new(vec![ChatItem::Message(ChatMessage::text(
             "reply",
             Role::Assistant,
             text,
             std::time::UNIX_EPOCH,
-        ))]
+        ))])
     };
     store.checkpoint(1, 2, "desk".into(), history("latest")).await.unwrap();
     store.checkpoint(1, 1, "desk".into(), history("stale")).await.unwrap();
@@ -401,12 +471,12 @@ async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() 
     store
         .acquire(
             1,
-            vec![ChatItem::Message(ChatMessage::text(
+            VoiceHistory::new(vec![ChatItem::Message(ChatMessage::text(
                 "u",
                 Role::User,
                 "save",
                 std::time::UNIX_EPOCH,
-            ))],
+            ))]),
         )
         .await
         .unwrap();
@@ -431,10 +501,13 @@ async fn observed_voice_lease_loss_refuses_new_work_and_discards_staged_saves() 
     let lost = tokio::time::timeout(Duration::from_secs(1), events.recv()).await.unwrap();
     assert!(matches!(lost, Some(VoiceStorageEvent::LeaseLost { speech: 1 })));
     assert!(store.lease_lost());
-    assert!(matches!(store.acquire(2, Vec::new()).await, Err(StorageError::LeaseLost(_))));
+    assert!(matches!(
+        store.acquire(2, VoiceHistory::default()).await,
+        Err(StorageError::LeaseLost(_))
+    ));
     std::sync::Arc::clone(&store).dispatch(VoiceStorageCommand::Abort { speech: 1 }, sink).unwrap();
     let abandoned = events.recv().await;
-    assert!(matches!(abandoned, Some(VoiceStorageEvent::Abandoned { speech: 1, result: Ok(()) })));
+    assert!(matches!(abandoned, Some(VoiceStorageEvent::Abandoned { speech: 1, result: Ok(_) })));
     let thread = fixture.thread().await;
     assert!(thread.partition("desk").history().await.unwrap().is_empty());
     let restored = ContextStore::bound(
@@ -474,12 +547,14 @@ async fn a_turn_reenters_the_lease_a_canceled_turn_left_behind() {
         .await
         .unwrap(),
     );
-    store.acquire(1, Vec::new()).await.unwrap();
+    store.acquire(1, VoiceHistory::default()).await.unwrap();
     let (sink, mut events) = Events::new();
     std::sync::Arc::clone(&store).dispatch(VoiceStorageCommand::Abort { speech: 1 }, sink).unwrap();
     assert!(matches!(events.recv().await, Some(VoiceStorageEvent::Abandoned { .. })));
     fixture.orphan_lease("desk", store.holder.as_str()).await;
-    let next = tokio::time::timeout(Duration::from_secs(2), store.acquire(2, Vec::new())).await;
+    let next =
+        tokio::time::timeout(Duration::from_secs(2), store.acquire(2, VoiceHistory::default()))
+            .await;
     assert!(matches!(next, Ok(Ok(_))), "the next turn waited for its own orphaned lease");
     store.aclose().await.unwrap();
     fixture.cleanup(&[]).await;
@@ -534,7 +609,7 @@ async fn a_turns_partition_metrics_record_under_the_calls_job() {
     )
     .await
     .unwrap();
-    store.acquire(1, Vec::new()).await.unwrap();
+    store.acquire(1, VoiceHistory::default()).await.unwrap();
     let measured = sink.0.lock().clone();
     assert!(measured.contains(&("lk.agents.partition.acquire_wait", Some(job))), "{measured:?}");
 }
@@ -563,15 +638,23 @@ async fn a_turns_edit_survives_another_writers_commit() {
         .unwrap(),
     );
     let asked = vec![said("q", Role::Assistant, "which day?"), said("a", Role::User, "hello")];
-    store.acquire(1, asked.clone()).await.unwrap();
+    store.acquire(1, VoiceHistory::new(asked.clone())).await.unwrap();
     let (sink, mut events) = Events::new();
     std::sync::Arc::clone(&store)
-        .dispatch(VoiceStorageCommand::Settle { speech: 1, sequence: 3, history: asked }, sink)
+        .dispatch(
+            VoiceStorageCommand::Settle {
+                speech: 1,
+                sequence: 3,
+                history: VoiceHistory::new(asked),
+            },
+            sink,
+        )
         .unwrap();
-    assert!(matches!(
-        events.recv().await,
-        Some(VoiceStorageEvent::Settled { speech: 1, result: Ok(()), .. })
-    ));
+    let Some(VoiceStorageEvent::Settled { speech: 1, result: Ok(mut local), .. }) =
+        events.recv().await
+    else {
+        panic!("the first turn committed and returned its observed baseline")
+    };
     // A text turn appends an exchange and rewrites `a`.
     let thread = fixture.thread().await;
     let mut run = thread
@@ -593,10 +676,11 @@ async fn a_turns_edit_survives_another_writers_commit() {
         })
         .collect();
     run.commit(CommitOptions::default()).await.unwrap();
-    let local = vec![said("q", Role::Assistant, "Monday"), said("a", Role::User, "hello")];
+    local.items = vec![said("q", Role::Assistant, "Monday"), said("a", Role::User, "hello")];
     let merged = store.acquire(2, local).await.unwrap();
     let text = |id: &str| {
         merged
+            .items
             .iter()
             .find(|item| item.id() == id)
             .and_then(|item| item.as_message())
@@ -607,6 +691,118 @@ async fn a_turns_edit_survives_another_writers_commit() {
     assert!(text("t").is_some(), "{merged:?}");
     store.aclose().await.unwrap();
     fixture.cleanup(&[&thread]).await;
+}
+
+#[tokio::test]
+async fn a_late_snapshot_keeps_its_own_baseline_after_another_turn_reads_a_foreign_edit() {
+    use crate::thread::run::ItemRow;
+    use crate::{CommitOptions, Holder, RunOptions};
+    use lk_agents_abi::llm::chat_context::protocol::encode_chat_item;
+
+    let said = |text| {
+        ChatItem::Message(ChatMessage::text("reply", Role::Assistant, text, std::time::UNIX_EPOCH))
+    };
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let store = VoiceStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        None,
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
+    let first = store.acquire(1, VoiceHistory::new(vec![said("Original.")])).await.unwrap();
+    let stale = store.finish(Some(1), 1, first).await.unwrap();
+
+    let thread = fixture.thread().await;
+    let mut text = thread
+        .partition("desk")
+        .open(RunOptions::new("text", ""), &Holder::new("text"))
+        .await
+        .unwrap();
+    *text.history_mut() = vec![ItemRow {
+        id: "reply".into(),
+        message_id: None,
+        payload: encode_chat_item(&said("Edited by text.")),
+    }];
+    text.commit(CommitOptions::default()).await.unwrap();
+
+    let mut current = store.acquire(2, stale.clone()).await.unwrap();
+    let late = store.acquire(3, stale).await.unwrap();
+    assert_eq!(
+        late.items,
+        [said("Edited by text.")],
+        "a newer read cannot relabel an old snapshot as a local edit"
+    );
+
+    current.items = vec![said("A new voice answer.")];
+    let saved = store.checkpoint(2, 2, "desk".into(), current).await.unwrap();
+    assert_eq!(
+        saved.items,
+        [said("A new voice answer.")],
+        "an edit made against the current baseline still applies"
+    );
+    store.aclose().await.unwrap();
+    fixture.cleanup(&[&thread]).await;
+}
+
+#[tokio::test]
+async fn a_newer_snapshot_can_replace_our_own_checkpoint_while_its_receipt_is_in_flight() {
+    let item = |text| {
+        ChatItem::Message(ChatMessage::text("reply", Role::Assistant, text, std::time::UNIX_EPOCH))
+    };
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let store = VoiceStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        None,
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
+    let first = store.acquire(1, VoiceHistory::new(vec![item("Hello")])).await.unwrap();
+    // Both snapshots were captured before either checkpoint's receipt reached the core.
+    let mut final_words = first.clone();
+    final_words.items = vec![item("Hello, how can I help?")];
+    store.checkpoint(1, 1, "desk".into(), first).await.unwrap();
+    let final_saved = store.checkpoint(1, 2, "desk".into(), final_words).await.unwrap();
+    assert_eq!(final_saved.items, [item("Hello, how can I help?")]);
+    store.aclose().await.unwrap();
+    fixture.cleanup(&[]).await;
+}
+
+#[tokio::test]
+async fn an_in_flight_receipt_does_not_turn_our_previous_write_into_a_foreign_edit() {
+    let item = |text| {
+        ChatItem::Message(ChatMessage::text("input", Role::User, text, std::time::UNIX_EPOCH))
+    };
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let store = VoiceStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        None,
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
+    let before = store.acquire(1, VoiceHistory::new(Vec::new())).await.unwrap();
+    let mut draft = before.clone();
+    draft.items = vec![item("")];
+    // Both snapshots are prepared before the first write's receipt reaches the session.
+    let mut final_input = before.clone();
+    final_input.items = vec![item("Please check my order.")];
+    store.finish(Some(1), 1, draft).await.unwrap();
+    let saved = store.finish(Some(2), 2, final_input).await.unwrap();
+    assert_eq!(saved.items, [item("Please check my order.")]);
+    let mut stale = before;
+    stale.items = vec![item("")];
+    let saved = store.finish(Some(3), 1, stale).await.unwrap();
+    assert_eq!(saved.items, [item("Please check my order.")], "older submissions stay stale");
+    store.aclose().await.unwrap();
+    fixture.cleanup(&[]).await;
 }
 
 /// agent-db evicting the database idle refuses the turn's commit in flight unapplied (`retry`)
@@ -641,11 +837,18 @@ async fn a_commit_refused_by_an_idle_eviction_is_sent_again_and_the_call_goes_on
         "hello",
         std::time::UNIX_EPOCH,
     ))];
-    store.acquire(1, said.clone()).await.unwrap();
+    store.acquire(1, VoiceHistory::new(said.clone())).await.unwrap();
     faults.fail_next_commit(WriteFault::EvictIdle);
     let (sink, mut events) = Events::new();
     Arc::clone(&store)
-        .dispatch(VoiceStorageCommand::Settle { speech: 1, sequence: 3, history: said }, sink)
+        .dispatch(
+            VoiceStorageCommand::Settle {
+                speech: 1,
+                sequence: 3,
+                history: VoiceHistory::new(said),
+            },
+            sink,
+        )
         .unwrap();
     match events.recv().await {
         Some(VoiceStorageEvent::Settled { speech: 1, result, .. }) => {

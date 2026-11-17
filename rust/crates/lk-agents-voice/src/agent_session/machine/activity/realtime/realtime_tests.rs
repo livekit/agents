@@ -4,6 +4,35 @@ use crate::agent_session::tests::realtime_driver;
 use crate::generation::GenEvent;
 use lk_agents_abi::voice::events::AgentState;
 
+#[test]
+fn a_final_transcript_republishes_a_restored_placeholder_under_the_same_id() {
+    use crate::agent_session::effects::VoiceEffect;
+    let mut driver = crate::agent_session::tests::driver();
+    driver.commit_item(
+        ChatMessage::text("input", Role::User, "", std::time::UNIX_EPOCH).into(),
+        Source::HostCtx,
+        Visibility::Both,
+    );
+    driver.settle_step();
+    driver.take_outbox();
+    driver.upsert_user_transcript(
+        rt::InputTranscription {
+            item_id: "input".into(),
+            transcript: "Can you hear me?".into(),
+            is_final: true,
+            ..Default::default()
+        },
+        None,
+    );
+    let effects = driver.settle_step();
+    assert!(effects.iter().any(|effect| matches!(effect,
+        VoiceEffect::Emit(SessionEvent::ConversationItemAdded { item, .. })
+            if item.id() == "input"
+                && item.as_message().and_then(ChatMessage::raw_text_content).as_deref()
+                    == Some("Can you hear me?"))));
+    assert_eq!(driver.session.chat_ctx.history().filter(|item| item.id() == "input").count(), 1);
+}
+
 /// When a realtime model never sends the reply its tools asked for, the agent listens again.
 /// https://github.com/livekit/agents/pull/5725 https://github.com/livekit/agents/issues/1155
 #[test]

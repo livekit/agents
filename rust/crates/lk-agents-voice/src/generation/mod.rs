@@ -570,7 +570,7 @@ pub struct ReplyContext {
     pub preemptive_tts: bool,
     /// Built by `plan_request`, the only planner.
     pub request: crate::generation::Request,
-    /// The first request is re-planned once the speech playing at creation is on the record.
+    /// Replan after storage reload or once an interrupted predecessor is on the record.
     pub replan: Option<Replan>,
     pub source: ReplySource,
     /// Fixed before the first frame; the anchor for `e2e_latency`.
@@ -642,11 +642,12 @@ pub struct Providers {
     pub output_nodes: crate::agent_session::OutputNodes,
 }
 
-/// Built once `after` is on the record, so the interrupted item precedes it. Only `ChatRequested`
-/// waits.
+/// Rebuild the model request after storage reload and any interrupted predecessor. Only the
+/// model request waits; admission and the floor stay with the session.
 #[derive(Debug, Clone)]
 pub struct Replan {
-    pub after: SpeechId,
+    /// Wait for this predecessor's accepted history, when one is being interrupted.
+    pub after: Option<SpeechId>,
     pub spec: PlanSpec,
 }
 
@@ -665,12 +666,12 @@ pub struct PlanSpec {
     pub expressive: Option<Box<ExpressiveLayers>>,
 }
 
-/// A reply's first request, planned against the core's accepted record and instructions once
-/// `after` is on that record: finished, or its tools committed.
+/// A reply's first request, planned against the reconciled record and current instructions.
 #[derive(Debug)]
 pub struct ReplyPlan {
     pub speech: SpeechId,
-    pub after: SpeechId,
+    /// No predecessor is needed for a storage-only reload.
+    pub after: Option<SpeechId>,
     pub spec: PlanSpec,
     pub tool_choice: Option<lk_agents_abi::ToolChoice>,
 }

@@ -24,11 +24,75 @@ fn invalid(message: impl Into<String>) -> StorageError {
     StorageError::Invalid(message.into())
 }
 
-fn frames(state: &mut Value) -> Option<&mut serde_json::Map<String, Value>> {
-    if state.get("kind")?.as_str()? != "text" {
+enum SessionContent<'a> {
+    Sequence(&'a mut Value),
+    Value(&'a mut Value),
+}
+
+fn content(state: &mut Value) -> Option<Vec<SessionContent<'_>>> {
+    if state.get("kind")?.as_str()? != "conversation" {
         return None;
     }
-    state.get_mut("state")?.get_mut("frames")?.as_object_mut()
+    let mut content = Vec::new();
+    let envelope = state.as_object_mut()?;
+    for (field, value) in envelope {
+        if field == "pending_user_turns" {
+            content.push(SessionContent::Sequence(value));
+            continue;
+        }
+        if field != "state" {
+            continue;
+        }
+        let data = value.as_object_mut()?;
+        for (field, value) in data {
+            match field.as_str() {
+                "chat_history" => content.push(SessionContent::Sequence(value)),
+                "frames" => {
+                    for frame in value.as_object_mut()?.values_mut() {
+                        for (field, value) in frame.as_object_mut()? {
+                            if matches!(field.as_str(), "history" | "visible_dialogue") {
+                                content.push(SessionContent::Sequence(value));
+                            } else if field == "input_requests" {
+                                for input in value.as_object_mut()?.values_mut() {
+                                    for (field, value) in input.as_object_mut()? {
+                                        if matches!(
+                                            field.as_str(),
+                                            "source_message" | "response_message"
+                                        ) && !value.is_null()
+                                        {
+                                            content.push(SessionContent::Value(value));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                "remote_agents" => {
+                    for remote in value.as_object_mut()?.values_mut() {
+                        for (field, value) in remote.as_object_mut()? {
+                            match field.as_str() {
+                                "events" => content.push(SessionContent::Sequence(value)),
+                                "messages" => {
+                                    for message in value.as_object_mut()?.values_mut() {
+                                        content.push(SessionContent::Value(message));
+                                    }
+                                }
+                                "tasks" => {
+                                    for task in value.as_object_mut()?.values_mut() {
+                                        content.push(SessionContent::Value(task.get_mut("task")?));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Some(content)
 }
 
 impl SessionItems {
@@ -61,32 +125,31 @@ impl SessionItems {
         operation: &str,
     ) -> Result<(Value, Vec<SessionItemWrite>), StorageError> {
         let mut packed = state.clone();
-        let Some(frames) = frames(&mut packed) else { return Ok((packed, Vec::new())) };
+        let Some(content) = content(&mut packed) else { return Ok((packed, Vec::new())) };
         let mut writes = Vec::new();
         let mut referenced = BTreeMap::new();
-        for frame in frames.values_mut() {
-            for field in ["history", "visible_dialogue"] {
-                let values = frame
-                    .get(field)
-                    .and_then(Value::as_array)
-                    .ok_or_else(|| invalid(format!("session frame has no {field}")))?;
-                let mut references = Vec::with_capacity(values.len());
-                for value in values {
-                    references.push(Value::String(self.reference(
-                        value,
-                        operation,
-                        &mut writes,
-                        &mut referenced,
-                    )?));
+        for value in content {
+            let history = match value {
+                SessionContent::Value(value) => {
+                    let key = self.reference(value, operation, &mut writes, &mut referenced)?;
+                    *value = Value::String(key);
+                    continue;
                 }
-                let key = self.reference(
-                    &Value::Array(references),
+                SessionContent::Sequence(value) => value,
+            };
+            let values = history.as_array().ok_or_else(|| invalid("invalid session history"))?;
+            let mut references = Vec::with_capacity(values.len());
+            for value in values {
+                references.push(Value::String(self.reference(
+                    value,
                     operation,
                     &mut writes,
                     &mut referenced,
-                )?;
-                frame[field] = Value::String(key);
+                )?));
             }
+            let key =
+                self.reference(&Value::Array(references), operation, &mut writes, &mut referenced)?;
+            *history = Value::String(key);
         }
         self.values = referenced;
         packed
@@ -139,32 +202,36 @@ pub(crate) async fn hydrate(
     if state.get("storage_version") != Some(&Value::from(1)) {
         return Err(invalid("unsupported stored session version"));
     }
-    let snapshot_frames =
-        frames(&mut state).ok_or_else(|| invalid("invalid stored session frames"))?;
+    let content = content(&mut state).ok_or_else(|| invalid("invalid stored session content"))?;
     let mut keys = BTreeSet::new();
-    for frame in snapshot_frames.values() {
-        for field in ["history", "visible_dialogue"] {
-            keys.insert(
-                frame
-                    .get(field)
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| invalid("invalid session history reference"))?
-                    .to_owned(),
-            );
-        }
+    for value in &content {
+        let (SessionContent::Sequence(history) | SessionContent::Value(history)) = value;
+        keys.insert(
+            history
+                .as_str()
+                .ok_or_else(|| invalid("invalid session history reference"))?
+                .to_owned(),
+        );
     }
     let lists = read_values(conn, partition_key, &keys).await?;
     let mut item_keys = BTreeSet::new();
     let mut cache = SessionItems::default();
-    for key in &keys {
-        let list = lists
+    for value in &content {
+        let (SessionContent::Sequence(value) | SessionContent::Value(value)) = value;
+        let key = value.as_str().ok_or_else(|| invalid("invalid session content reference"))?;
+        let stored = lists
             .get(key)
-            .ok_or_else(|| invalid("session checkpoint references missing history"))?;
-        item_keys.extend(reference_list(list)?);
+            .ok_or_else(|| invalid("session checkpoint references missing content"))?;
         cache.values.insert(
-            serde_json::to_string(list).map_err(|error| invalid(error.to_string()))?,
-            key.clone(),
+            serde_json::to_string(stored).map_err(|error| invalid(error.to_string()))?,
+            key.to_owned(),
         );
+    }
+    for value in &content {
+        if let SessionContent::Sequence(value) = value {
+            let key = value.as_str().ok_or_else(|| invalid("invalid session list reference"))?;
+            item_keys.extend(reference_list(&lists[key])?);
+        }
     }
     let values = read_values(conn, partition_key, &item_keys).await?;
     for (key, value) in &values {
@@ -173,26 +240,30 @@ pub(crate) async fn hydrate(
             key.clone(),
         );
     }
-    for frame in snapshot_frames.values_mut() {
-        for field in ["history", "visible_dialogue"] {
-            let key = frame
-                .get(field)
-                .and_then(Value::as_str)
-                .ok_or_else(|| invalid("invalid session history reference"))?;
-            let list = lists
-                .get(key)
-                .ok_or_else(|| invalid("session checkpoint references missing history"))?;
-            let items = reference_list(list)?
-                .iter()
-                .map(|key| {
-                    values
-                        .get(key)
-                        .cloned()
-                        .ok_or_else(|| invalid("session checkpoint references missing item"))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            frame[field] = Value::Array(items);
-        }
+    for value in content {
+        let history = match value {
+            SessionContent::Value(value) => {
+                let key =
+                    value.as_str().ok_or_else(|| invalid("invalid session content reference"))?;
+                *value = lists[key].clone();
+                continue;
+            }
+            SessionContent::Sequence(value) => value,
+        };
+        let key = history.as_str().ok_or_else(|| invalid("invalid session history reference"))?;
+        let list = lists
+            .get(key)
+            .ok_or_else(|| invalid("session checkpoint references missing history"))?;
+        let items = reference_list(list)?
+            .iter()
+            .map(|key| {
+                values
+                    .get(key)
+                    .cloned()
+                    .ok_or_else(|| invalid("session checkpoint references missing item"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        *history = Value::Array(items);
     }
     state
         .as_object_mut()
@@ -205,11 +276,14 @@ pub(crate) async fn hydrate(
 /// rather than counted a second time against the application's context-state limit.
 pub(crate) fn routing_budget(state: &Value) -> Value {
     let mut routing = state.clone();
-    if let Some(frames) = frames(&mut routing) {
-        for frame in frames.values_mut() {
-            for field in ["history", "visible_dialogue"] {
-                if let Some(values) = frame.get_mut(field).and_then(Value::as_array_mut) {
-                    values.clear();
+    if let Some(content) = content(&mut routing) {
+        for value in content {
+            match value {
+                SessionContent::Value(value) => *value = Value::Null,
+                SessionContent::Sequence(value) => {
+                    if let Some(values) = value.as_array_mut() {
+                        values.clear();
+                    }
                 }
             }
         }

@@ -18,7 +18,6 @@ from .text_session import (
     TextSessionAgent,
     TextSessionDelivery,
     TextSessionRequest,
-    TextSessionState,
     TextSessionUpdate,
 )
 from .tool_report import ToolOutcome
@@ -89,6 +88,3 @@ class _core_LocalInteraction:
         """What the child consumed across its invocations, the running one included."""
     def progress(self, invocation_id: str, operation: int, message: str) -> None:
         """`ctx.update(message)` from a tool body of the child's invocation `invocation_id`."""
-
-def _core_persist_text_session_state(record: TextSessionState) -> str: ...
-def _core_restore_text_session_state(data: str) -> TextSessionState: ...

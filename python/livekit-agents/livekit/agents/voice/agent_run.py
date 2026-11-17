@@ -42,8 +42,8 @@ from .._generated.agent_run import (
     ValidatedOutputRetry,
 )
 from .._generated.run_result import Output_T
+from .._generated.session_snapshot import FrameId
 from .._generated.storage_constants import DEFAULT_PARTITION_KEY
-from .._generated.text_session import FrameId
 from .._generated.tool_report import (
     ToolCompletion,
     ToolOutcomeCancelled,

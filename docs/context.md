@@ -65,7 +65,7 @@ persistence from whether an arbitrary object happens to serialize.
 | `draft` | Yes, under `draft` | Decode and validate RoomDraft before user code |
 | `customer` | No | Application supplies/loads it for each activation |
 | `hotel` | No | Application supplies a live service for each activation |
-| Session frames, active agent, private histories | Through a binding or an explicitly saved snapshot | See [session persistence](persistence.md#session-state-and-explicit-binding) |
+| Current agent, private histories, local and remote work | Through a conversation binding | See [session persistence](persistence.md#session-state-and-explicit-binding) |
 | A2A transport history and task records | Separately, by the runtime | Load the thread records |
 
 The application constructs runtime context as usual:
@@ -114,17 +114,17 @@ customer service/database; conversation preferences do not silently update
 it. A child's final Booking result lets the parent update its own
 preferences.last_booking_code explicitly. State is not merged on child exit.
 
-Session state is separate from application data. TextSession owns
-[frames and routing](text-session.md#frames-and-history-isolation);
+Session state is separate from application data. TextSession coordinates
+[agent contexts and routing](text-session.md#shared-state-and-private-histories);
 [persistence](persistence.md#session-state-and-explicit-binding) defines how that
-state is bound or saved. Every frame reads the context supplied to the turn.
+state is bound or saved. Every local agent reads the context supplied to the turn.
 History, preferences, draft, and customer profile are not interchangeable
 forms of memory.
 
 A child can start with fresh or forked history. On completion, the parent can
 receive its typed result alone or the result plus visible dialogue. These
 history choices do not share or merge application context fields; context
-scopes retain their explicit ownership. See the [history policies](text-session.md#history-passed-to-the-child).
+scopes retain their explicit ownership. See the [history policies](text-session.md#local-agents-as-tools).
 
 ## How many drafts? Scope and cardinality
 

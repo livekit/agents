@@ -170,8 +170,9 @@ async fn reject_certificate(cert: CertificateDer<'static>, key: &[u8]) {
                 assert!(client.get(url).send().await.is_err());
             }
             "storage" => {
+                let env = ProcessEnv::current_runtime();
                 let storage = Namespace::new(
-                    &ProcessEnv::current_runtime(),
+                    &env,
                     None,
                     Some(url),
                     Some("key".into()),
@@ -181,7 +182,17 @@ async fn reject_certificate(cert: CertificateDer<'static>, key: &[u8]) {
                     None,
                 )
                 .unwrap();
-                assert!(storage.list_threads("scope".into(), None, None).await.is_err());
+                // This checks certificate rejection, not the storage retry budget. Bound the
+                // read's own deadline so three invalid certificates fit the probe's lifetime.
+                let deadline = env.clock.now().saturating_add(Duration::from_secs(1));
+                assert!(
+                    lk_agents_storage::deadline::within(
+                        deadline,
+                        storage.list_threads("scope".into(), None, None)
+                    )
+                    .await
+                    .is_err()
+                );
                 storage.aclose().await;
             }
             _ => assert!(

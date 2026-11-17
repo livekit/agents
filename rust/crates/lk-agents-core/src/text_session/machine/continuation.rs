@@ -42,8 +42,8 @@ impl TextSession {
             }
             let parent = &self.state.frames[&parent_id];
             let tool = &self.config.agents[&parent.agent_name].agent_tools[&pending.tool_name];
-            let history = crate::agent_tool::opening(&parent.history, tool.chat_history);
-            let merge_chat_history = tool.merge_chat_history;
+            let history = crate::delegation::local::opening(&parent.history, tool.chat_history);
+            let merge_chat_ctx = tool.merge_chat_ctx;
             let frame_id = super::FrameId { value: self.mint("frame") };
             let task_id = self.mint("task");
             let mut starting_history_ids = history
@@ -51,20 +51,25 @@ impl TextSession {
                 .map(|i| i.id().to_owned())
                 .collect::<std::collections::BTreeSet<_>>();
             starting_history_ids.insert(task_id.clone());
-            let task =
-                crate::agent_tool::task(task_id, &pending.validated_arguments, self.stamp(now));
+            let task = crate::delegation::local::task(
+                task_id,
+                &pending.validated_arguments,
+                self.stamp(now),
+            );
             let frame = SessionFrame {
                 id: frame_id.clone(),
                 agent_name: pending.agent_name.clone(),
                 history,
                 parent: Some(pending.parent.clone()),
                 completed: false,
+                output: None,
+                error: None,
+                input_requests: Default::default(),
                 pending_calls: Vec::new(),
                 answer_tool: None,
                 visible_dialogue: Vec::new(),
                 starting_history_ids,
-                transferred_message_ids: Default::default(),
-                merge_chat_history,
+                options: lk_agents_abi::text_session::FrameOptions { merge_chat_ctx },
             };
             self.state
                 .frames
@@ -103,9 +108,44 @@ impl TextSession {
         effects: &mut Vec<TextSessionEffect>,
     ) {
         let active_id = self.state.active_frame_id.clone();
+        let stamp = self.stamp(now);
         let frame = self.active_frame_mut();
         frame.history = result.all_messages.clone();
         frame.pending_calls = approvals;
+        frame.completed = matches!(result.outcome, RunOutcome::Completed { .. });
+        frame.output = output.clone().or_else(|| match &result.outcome {
+            RunOutcome::Completed { output: lk_agents_abi::agent::run::Output::Text(text) } => {
+                Some(Value::String(text.clone()))
+            }
+            _ => None,
+        });
+        frame.error = None;
+        for requirement in &result.input_requirements {
+            let id = format!("{}/input/{}", requirement.invocation_id, requirement.call.call_id);
+            frame.input_requests.entry(id.clone()).or_insert_with(|| {
+                lk_agents_abi::session::AgentInputRequest {
+                    state: lk_agents_abi::session::InputRequestState::Open,
+                    source_message: lk_agents_abi::ChatMessage::text(
+                        id,
+                        lk_agents_abi::Role::Assistant,
+                        &requirement.question,
+                        stamp,
+                    ),
+                    response_message: None,
+                    origin: Some(lk_agents_abi::session::ToolCallRef {
+                        agent_id: active_id.value.clone(),
+                        call_id: requirement.call.call_id.clone(),
+                    }),
+                }
+            });
+        }
+        if frame.completed {
+            for request in frame.input_requests.values_mut() {
+                if matches!(request.state, lk_agents_abi::session::InputRequestState::Open) {
+                    request.state = lk_agents_abi::session::InputRequestState::Closed;
+                }
+            }
+        }
         frame.answer_tool = match &result.outcome {
             RunOutcome::InputRequired(ask) => ask.answer_tool.clone(),
             _ => None,
@@ -163,7 +203,8 @@ impl TextSession {
         let parent =
             self.state.frames.get_mut(&parent_call.frame_id).expect("the parent frame exists");
         transfer(&mut child, parent);
-        self.state.frames.insert(active_id, child);
+        // The result and any selected dialogue are now in the parent. Retaining every
+        // completed child would grow a long-lived conversation without bound.
         self.state.active_frame_id = parent_call.frame_id;
         self.state.ancestors.pop();
         self.next_child(now, effects);

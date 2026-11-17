@@ -1,7 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use livekit_token::TokenVerifier;
-use lk_agents_core::a2a::delegation::VerifiedAuthority;
+use lk_agents_core::delegation::remote::VerifiedAuthority;
 
 // A card is never an authorization source.
 

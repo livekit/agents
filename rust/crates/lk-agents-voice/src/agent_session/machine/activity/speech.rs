@@ -510,18 +510,11 @@ impl VoiceDriver {
             },
         };
 
-        let replan = match (after, &spec.source) {
-            (Some(after), ReplySource::Llm) => {
+        let replan = match &spec.source {
+            ReplySource::Llm if after.is_some() || self.session.storage.enabled => {
                 Some(crate::generation::Replan { after, spec: plan })
             }
-            (
-                Some(_),
-                ReplySource::Text(_)
-                | ReplySource::TextStream
-                | ReplySource::Audio { .. }
-                | ReplySource::Realtime,
-            )
-            | (None, _) => None,
+            _ => None,
         };
 
         let completion = if self.activity.voice_tasks.running() {
@@ -587,7 +580,7 @@ impl VoiceDriver {
                 turn.scheduled(now);
             }
             let history = if self.session.storage.enabled {
-                SpeechHistory::VoicePartition
+                SpeechHistory::VoicePartition { history: self.checkpoint_history() }
             } else {
                 SpeechHistory::InMemory
             };
@@ -809,7 +802,8 @@ impl VoiceDriver {
                     .speech_scheduler
                     .speech(plan.speech)
                     .is_none_or(|s| s.interrupted() || s.done());
-            let committed = self.activity.reply_predecessor_settled(plan.after);
+            let committed =
+                plan.after.is_none_or(|after| self.activity.reply_predecessor_settled(after));
             if !cancelled && !committed {
                 waiting.push_back((call, plan));
                 continue;

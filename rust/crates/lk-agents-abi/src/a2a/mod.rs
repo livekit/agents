@@ -6,4 +6,5 @@ pub mod metadata;
 pub mod remote;
 
 pub mod options;
+pub mod protocol;
 pub mod turn;

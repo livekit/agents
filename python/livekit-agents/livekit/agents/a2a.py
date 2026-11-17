@@ -25,6 +25,7 @@ from .job import _server_credentials
 from .llm.tool_context import InputRequired, RawFunctionTool, Tool, Toolset, function_tool
 from .storage import DEFAULT_PARTITION_KEY, Storage, Thread
 from .storage.session import A2ASessionContext, _Handler, _TurnHost
+from .storage.session_state import ToolCallRef
 from .types import APIConnectOptions
 from .voice.events import RunContext
 
@@ -170,9 +171,15 @@ class _RemoteTool(Toolset):
                 shared,
                 agent._conn_options,
                 ctx._session is not None,
+                ctx._run.runner
+                if ctx._run is not None and isinstance(ctx._run.runner, _core.TextSessionRunner)
+                else None,
+                ToolCallRef(agent_id=ctx._run.frame_id.value, call_id=ctx.function_call.call_id)
+                if ctx._run is not None and ctx._run.frame_id is not None
+                else None,
             )
         except asyncio.CancelledError:
-            # stop in this turn, then wait for the remote task's cancellation and client close
+            # Stop local observation and join its cleanup; remote business work continues.
             interaction.cancelled()
             ctx.function_call.extra.update(_json_object(interaction.extra))
             await interaction.settled()

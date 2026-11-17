@@ -131,3 +131,75 @@ fn a_turn_saves_nothing_before_its_partition_is_taken() {
     driver.storage_answered(Ts::ZERO, other, StorageRequest::Acquire, Ok(()));
     checkpoint_of(&driver.take_outbox());
 }
+
+#[test]
+fn acquiring_storage_uses_the_conversation_record_instead_of_a_private_prompt() {
+    use crate::agent::{Source, Visibility};
+    use crate::agent_session::effects::SpeechHistory;
+    use crate::agent_session::machine::activity::speech::SpeechSpec;
+    use crate::generation::ReplySource;
+    use lk_agents_abi::ChatContext;
+
+    let mut driver = driver();
+    driver.session.storage.enabled = true;
+    let agent = driver.activity.agent_name().to_owned();
+    let message = |id, text| ChatMessage::text(id, Role::Assistant, text, std::time::UNIX_EPOCH);
+    let _ = driver.session.chat_ctx.commit(
+        message("delivered", "Hello.").into(),
+        Source::HostCtx,
+        Visibility::Both,
+        &agent,
+    );
+    let expected = driver.checkpoint_history().items;
+    let mut spec = SpeechSpec::new(SpeechKind::GenerateReply, ReplySource::Llm, true);
+    spec.chat_ctx = Some(ChatContext::new(vec![message("private", "Model reminder.").into()]));
+    driver.start_speech(Ts::ZERO, spec);
+    let effects = driver.take_outbox();
+    let (context, history) = effects
+        .iter()
+        .find_map(|effect| match effect {
+            VoiceEffect::StartSpeech { context, history, .. } => Some((context, history)),
+            _ => None,
+        })
+        .expect("the reply starts");
+    let SpeechHistory::VoicePartition { history } = history else {
+        panic!("the bound reply acquires its partition")
+    };
+    assert_eq!(history.items, expected);
+    assert!(context.request.chat_ctx.items.iter().any(|item| item.id() == "private"));
+    assert!(context.replan.is_some(), "storage reload precedes the model's request");
+}
+
+#[test]
+fn an_older_receipt_cannot_replace_the_conversation_or_its_read_baseline() {
+    use crate::agent::{Source, Visibility};
+
+    let mut driver = driver();
+    let agent = driver.activity.agent_name().to_owned();
+    let message = |text| {
+        ChatItem::Message(ChatMessage::text("text", Role::Assistant, text, std::time::UNIX_EPOCH))
+    };
+    let original = message("Original.");
+    let current = message("Edited by text.");
+    let _ =
+        driver.session.chat_ctx.commit(original.clone(), Source::HostCtx, Visibility::Both, &agent);
+    driver.storage_reloaded(
+        vec![original.clone()],
+        VoiceHistory {
+            items: vec![current.clone()],
+            stored: vec![current.clone()],
+            revision: (1, 2),
+        },
+    );
+    driver.take_outbox();
+    let expected = driver.checkpoint_history().items;
+    assert!(expected.contains(&current), "the newer receipt was accepted");
+    driver.storage_reloaded(
+        vec![current.clone()],
+        VoiceHistory { items: vec![original.clone()], stored: vec![original], revision: (1, 1) },
+    );
+    assert_eq!(driver.checkpoint_history().items, expected);
+    assert_eq!(driver.checkpoint_history().stored, [current]);
+    assert_eq!(driver.checkpoint_history().revision, (1, 2));
+    assert!(driver.take_outbox().is_empty(), "an old receipt publishes no replacement history");
+}

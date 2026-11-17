@@ -4,9 +4,9 @@
 pub mod a2a;
 pub mod agent;
 pub mod agent_run;
-pub mod agent_tool;
 pub mod approval;
 pub mod assertions;
+pub mod delegation;
 pub mod effects;
 pub mod lexer;
 pub mod llm;
@@ -14,6 +14,7 @@ pub mod markup;
 pub mod mcp;
 pub mod metrics;
 pub mod request;
+pub mod session;
 pub mod telemetry;
 pub mod text_session;
 pub mod tokenize;

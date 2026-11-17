@@ -2,6 +2,31 @@ use crate::decl::tests::{read, refuse};
 use crate::decl::*;
 
 #[test]
+fn native_view_maps_wrap_each_value_as_its_declared_class() {
+    let declarations = read(
+        r#"
+        #[crate::host(class(name = "Task"))]
+        pub trait Task {
+            #[host(getter)] fn id(&self) -> String;
+        }
+        #[crate::host(class(name = "Conversation"))]
+        pub trait Conversation {
+            #[host(class(name = "Task"))]
+            type Task: Task;
+            #[host(getter)]
+            fn tasks(&self) -> std::collections::BTreeMap<String, Self::Task>;
+        }
+    "#,
+    )
+    .unwrap();
+    let outputs = crate::adapter::emit(&declarations).expect("a map of native views emits");
+    let code = &outputs.iter().find(|out| out.path == "llm.rs").unwrap().text;
+    assert!(code.contains("PyDict::new(py)"), "{code}");
+    assert!(code.contains("super::llm::Task(::std::sync::Arc::new(value))"), "{code}");
+    assert!(!code.contains("serde_json"), "a native view does not cross through JSON: {code}");
+}
+
+#[test]
 fn async_module_functions_own_arguments_and_await_the_implementation() {
     let declarations = read(r#"
         #[crate::host(functions)]

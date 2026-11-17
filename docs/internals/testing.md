@@ -1,6 +1,6 @@
 # Internal testing
 
-Component tests, real boundary tests and deterministic voice/room simulation.
+Component tests, real boundary tests and deterministic voice/text/room simulation.
 
 [Contributor index](README.md) · [Execution paths](architecture.md#execution-paths)
 
@@ -59,6 +59,13 @@ next to its actions; share fixtures rather than copying orchestration. Avoid
 both monolithic runners and many single-use forwarding modules. Each module
 must have a responsibility that a reader can name.
 
+The [E2E authoring guide](../../tests/e2e/README.md) describes the shared app/client fixtures.
+The [framework design](../proposals/e2e.md) owns provider modes and acceptance policies.
+Correctness E2E scripts all inference involved, including routing/classifier
+models, while running real applications and transports. Real-model conversation evaluation
+assesses routing quality and naturalness separately; it is not a prerequisite for a
+deterministic framework regression to pass.
+
 `tests/smoke/` checks the assembled Python/native API with scripted providers, local
 protocol peers and real job processes; `uv run pytest tests/smoke` runs it. Scripted
 providers live in `tests/fakes.py`.
@@ -95,10 +102,12 @@ real time and fails with a message naming what never happened:
 
 ## Deterministic simulation testing
 
-The DST is scoped to voice sessions and room I/O over fake provider and RTC ports.
-Standalone A2A and TextSession execution belongs to component and conformance tests.
+The DST covers voice sessions and room I/O over fake provider/RTC ports. Its separate text
+driver runs the real AgentRun driver, TextSession and A2A turns over production SQLite with
+controlled model/host callbacks and database faults. Real socket behavior and third-party
+wire compatibility remain component/conformance and E2E responsibilities.
 
-The harness owns every core input, executor task and fake whose ordering can
+The voice harness owns every core input, executor task and fake whose ordering can
 affect behavior. The DST runs the runtime's real executors (voice session, room
 I/O, avatar transport, their drains and legs) over faked SDK and provider ports,
 never copies of them: fakes sit only at those ports, and boundary adapters such
@@ -154,9 +163,13 @@ checked at the real boundary.
 Cores receive events and time and retain no spawner or executor. The
 simulation covers voice decisions, the shared agent execution used by voice,
 media processing and the runtime's voice/room executors with realistic fakes.
-Provider, host, voice storage and SDK room ports are fakes. Standalone A2A,
-TextSession, worker, storage backends, evaluation judges, delegation transports
-and MCP transports are tested in their owning components. Boundary adapters
+Provider, host, voice storage and SDK room ports are fakes. The text simulation runs the
+production AgentRun, TextSession and A2A turn drivers over SQLite with injected connection
+faults. Authored remote-recovery stories run the real outgoing A2A client and session owner
+over an HTTP socket port fake, and reload the stored task/input/request state with a fresh
+owner. The fake service can accept a request and lose its response; it does not implement
+client retries or routing. Worker, evaluation and MCP transports also have component suites.
+Boundary adapters
 at fake ports are outside the simulation.
 They are verified by conformance tests through the real adapters with
 cancellation injected at every await point, stress tests (stalled consumers,

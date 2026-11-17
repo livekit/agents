@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use crate::a2a_client::{AgentClient, CleanupObservation, Reply};
+use crate::a2a_client::{AgentClient, Reply};
 use crate::clock::RealClock;
 use crate::env::ProcessEnv;
 use crate::source::Pulled;
@@ -406,7 +406,6 @@ async fn agent_client_peer_matrix_preserves_task_continuation_artifacts_and_vers
     client.connect().await.unwrap();
     client.connect().await.unwrap();
     client.aclose().await;
-    assert!(client.cleanup_observations().is_empty());
 
     let cancel_only = self::client(&peer, &clock);
     for id in ["running-one", "running-two"] {
@@ -464,8 +463,7 @@ async fn agent_client_peer_matrix_preserves_task_continuation_artifacts_and_vers
 }
 
 #[tokio::test]
-async fn closing_or_dropping_an_acknowledged_reply_cancels_the_exact_task_without_manufacturing_success()
- {
+async fn closing_or_dropping_a_reply_leaves_remote_business_work_running() {
     let peer = Peer::start(Scenario::Waiting).await;
     let clock = Arc::new(RealClock::new());
     for explicit_close in [true, false] {
@@ -480,7 +478,6 @@ async fn closing_or_dropping_an_acknowledged_reply_cancels_the_exact_task_withou
         }
         drop(reply);
         client.aclose().await;
-        assert!(client.cleanup_observations().is_empty());
     }
     let requests = peer.finish().await;
     let cancellations: Vec<_> = requests
@@ -488,13 +485,7 @@ async fn closing_or_dropping_an_acknowledged_reply_cancels_the_exact_task_withou
         .filter_map(|r| r.rpc.as_ref())
         .filter(|r| r.method == "CancelTask")
         .collect();
-    assert_eq!(cancellations.len(), 2, "one cancellation for each reply");
-    for cancellation in cancellations {
-        let params = cancellation.params.as_ref().unwrap();
-        assert_eq!(params["id"], "remote-task");
-        assert_eq!(params["contextId"], "remote-context");
-        assert_eq!(params["metadata"][REASON_KEY], "caller-canceled");
-    }
+    assert!(cancellations.is_empty(), "closing an observation is not task cancellation");
     for request in requests {
         assert_eq!(request.headers.get("a2a-version").map(String::as_str), Some("1.0"));
     }
@@ -524,19 +515,13 @@ async fn a_truncated_remote_stream_reports_failure_after_progress_and_never_a_fi
     .unwrap();
     assert!(progress);
     client.aclose().await;
-    assert!(client.cleanup_observations().is_empty());
     let requests = peer.finish().await;
     let cancellations: Vec<_> = requests
         .iter()
         .filter_map(|r| r.rpc.as_ref())
         .filter(|r| r.method == "CancelTask")
         .collect();
-    assert_eq!(
-        cancellations.len(),
-        1,
-        "transport failure still owes cleanup of the known remote task"
-    );
-    assert_eq!(cancellations[0].params.as_ref().unwrap()["contextId"], "remote-context");
+    assert!(cancellations.is_empty(), "a failed stream must not cancel remote work");
 }
 
 #[tokio::test]
@@ -574,7 +559,7 @@ fn an_unusable_process_runtime_is_a_final_error_not_a_retryable_connection_failu
 }
 
 #[tokio::test]
-async fn cancel_before_ack_drains_the_original_request_then_cancels_without_resending() {
+async fn closing_before_ack_does_not_resend_or_cancel_the_unknown_remote_task() {
     let peer = Peer::start(Scenario::DelayedAck).await;
     let clock = Arc::new(RealClock::new());
     let client = Arc::new(client(&peer, &clock));
@@ -591,7 +576,6 @@ async fn cancel_before_ack_drains_the_original_request_then_cancels_without_rese
     assert!(matches!(sending.await, Err(error) if error.is_cancelled()));
     peer.ack_gate.release.notify_one();
     client.aclose().await;
-    assert!(client.cleanup_observations().is_empty());
     let requests = peer.finish().await;
     let rpcs: Vec<_> = requests.iter().filter_map(|r| r.rpc.as_ref()).collect();
     assert_eq!(
@@ -600,76 +584,40 @@ async fn cancel_before_ack_drains_the_original_request_then_cancels_without_rese
         "cancellation must never resend the business request to discover its task"
     );
     let cancellations: Vec<_> = rpcs.into_iter().filter(|r| r.method == "CancelTask").collect();
-    assert_eq!(cancellations.len(), 1);
-    let params = cancellations[0].params.as_ref().unwrap();
-    assert_eq!(params["id"], "remote-task");
-    assert_eq!(params["contextId"], "remote-context");
-    assert_eq!(params["metadata"][REASON_KEY], "caller-canceled");
+    assert!(cancellations.is_empty());
 }
 
-/// A send whose acknowledgment was lost is resolved by sending the same message again: the
-/// peer answers with the task the first send created, which is cancelled, so no remote task is
-/// left running with nobody listening.
+/// A stock peer may have committed a business effect before the connection failed. Its
+/// messageId is not an execution-idempotency guarantee, so neither cleanup nor retries resend.
 #[tokio::test]
-async fn a_request_lost_before_ack_is_resent_unchanged_to_cancel_its_task() {
-    let peer = Peer::start(Scenario::RetryOnce).await;
-    let clock = Arc::new(RealClock::new());
-    let client = AgentClient::new(
-        &env(clock.clone()),
-        peer.url.clone(),
-        Some("test-token".into()),
-        ApiConnectOptions { max_retry: 0, ..Default::default() },
-    )
-    .unwrap();
-    let result = tokio::time::timeout(
-        LIMIT,
-        client.send(message("accepted-with-lost-ack", "Work once"), None, None, None, &Cx::NONE),
-    )
-    .await
-    .unwrap();
-    assert!(result.is_err());
-    client.aclose().await;
-    assert!(client.cleanup_observations().is_empty(), "{:?}", client.cleanup_observations());
-    let requests = peer.finish().await;
-    let rpcs: Vec<_> = requests.iter().filter_map(|r| r.rpc.as_ref()).collect();
-    let methods: Vec<_> = rpcs.iter().map(|r| r.method.as_str()).collect();
-    assert_eq!(methods, ["SendStreamingMessage", "SendStreamingMessage", "CancelTask"]);
-    assert_eq!(rpcs[0], rpcs[1], "the resend is the first send, messageId included");
-    assert_eq!(rpcs[2].params.as_ref().unwrap()["id"], "remote-task");
-}
-
-/// A send whose resend cannot learn its task either is observed, never guessed.
-#[tokio::test]
-async fn a_request_whose_resend_is_lost_too_is_reported_unacknowledged() {
-    let peer = Peer::start(Scenario::ResetBeforeAck).await;
-    let clock = Arc::new(RealClock::new());
-    let client = AgentClient::new(
-        &env(clock.clone()),
-        peer.url.clone(),
-        Some("test-token".into()),
-        ApiConnectOptions { max_retry: 0, ..Default::default() },
-    )
-    .unwrap();
-    let result = tokio::time::timeout(
-        LIMIT,
-        client.send(message("accepted-with-lost-ack", "Work once"), None, None, None, &Cx::NONE),
-    )
-    .await
-    .unwrap();
-    assert!(result.is_err());
-    client.aclose().await;
-    assert!(matches!(
-        client.cleanup_observations().as_slice(),
-        [CleanupObservation::UnacknowledgedRequest { .. }]
-    ));
-    let requests = peer.finish().await;
-    let methods: Vec<_> =
-        requests.iter().filter_map(|r| r.rpc.as_ref()).map(|r| r.method.as_str()).collect();
-    assert_eq!(methods, ["SendStreamingMessage", "SendStreamingMessage"]);
+async fn a_lost_acknowledgement_does_not_repeat_a_potentially_accepted_request() {
+    for scenario in [Scenario::RetryOnce, Scenario::ResetBeforeAck] {
+        let peer = Peer::start(scenario).await;
+        let clock = Arc::new(RealClock::new());
+        let client = client(&peer, &clock);
+        let result = tokio::time::timeout(
+            LIMIT,
+            client.send(
+                message("accepted-with-lost-ack", "Work once"),
+                None,
+                None,
+                None,
+                &Cx::NONE,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(result.is_err(), "the remote outcome remains unknown");
+        client.aclose().await;
+        let requests = peer.finish().await;
+        let methods: Vec<_> =
+            requests.iter().filter_map(|r| r.rpc.as_ref()).map(|r| r.method.as_str()).collect();
+        assert_eq!(methods, ["SendStreamingMessage"]);
+    }
 }
 
 #[tokio::test]
-async fn an_unconsumed_input_question_is_canceled_even_after_the_remote_stream_ends() {
+async fn an_unconsumed_input_question_remains_answerable_after_the_observer_closes() {
     let peer = Peer::start(Scenario::FastQuestion).await;
     let clock = Arc::new(RealClock::new());
     let client = client(&peer, &clock);
@@ -688,18 +636,13 @@ async fn an_unconsumed_input_question_is_canceled_even_after_the_remote_stream_e
     tokio::time::timeout(LIMIT, peer.ack_gate.finished.notified()).await.unwrap();
     drop(reply);
     client.aclose().await;
-    assert!(client.cleanup_observations().is_empty());
     let requests = peer.finish().await;
     let cancellations: Vec<_> = requests
         .iter()
         .filter_map(|r| r.rpc.as_ref())
         .filter(|r| r.method == "CancelTask")
         .collect();
-    assert_eq!(cancellations.len(), 1);
-    let params = cancellations[0].params.as_ref().unwrap();
-    assert_eq!(params["id"], "remote-task");
-    assert_eq!(params["contextId"], "remote-context");
-    assert_eq!(params["metadata"][REASON_KEY], "caller-canceled");
+    assert!(cancellations.is_empty());
 }
 
 #[tokio::test]
@@ -736,7 +679,6 @@ async fn client_close_owns_a_stalled_cancel_request_until_its_original_ack_is_dr
         Ok(update) => assert_eq!(update.state, TaskState::Canceled),
         Err(error) => assert!(matches!(error, ClientError::Protocol(_))),
     }
-    assert!(client.cleanup_observations().is_empty());
     let requests = peer.finish().await;
     let rpcs: Vec<_> = requests.iter().filter_map(|r| r.rpc.as_ref()).collect();
     assert_eq!(
@@ -791,11 +733,6 @@ async fn client_close_waits_for_the_original_cancel_settlement_past_the_old_clea
         Err(error) => assert!(matches!(error, ClientError::Protocol(_))),
     }
     client.aclose().await;
-    assert!(!client.cleanup_observations().iter().any(|o| matches!(
-        o,
-        CleanupObservation::CancelUncertain { .. }
-            | CleanupObservation::UnacknowledgedRequest { .. }
-    )));
     let requests = peer.finish().await;
     let methods: Vec<_> =
         requests.iter().filter_map(|r| r.rpc.as_ref()).map(|r| r.method.as_str()).collect();
@@ -886,27 +823,6 @@ async fn stalled_acknowledged_stream_retains_read_timeout_through_the_reply_sour
         1,
         "progress already delivered cannot be replayed"
     );
-}
-
-#[tokio::test]
-async fn retry_before_ack_preserves_the_business_message_and_rpc_identity() {
-    let peer = Peer::start(Scenario::RetryOnce).await;
-    let clock = Arc::new(RealClock::new());
-    let client = client(&peer, &clock);
-    let reply = client
-        .send(message("stable-across-retry", "Work once"), None, None, None, &Cx::NONE)
-        .await
-        .unwrap();
-    assert_eq!(updates(&reply).await.last().unwrap().state, TaskState::InputRequired);
-    client.aclose().await;
-    let requests = peer.finish().await;
-    let sends: Vec<_> = requests
-        .iter()
-        .filter_map(|r| r.rpc.as_ref())
-        .filter(|r| r.method == "SendStreamingMessage")
-        .collect();
-    assert_eq!(sends.len(), 2);
-    assert_eq!(sends[0], sends[1], "retry preserves the prepared request, including messageId");
 }
 
 #[tokio::test]

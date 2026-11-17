@@ -1,18 +1,24 @@
 //! Live recognition durability, independent of agent speech ownership.
 //!
 //! Pending user turns remain separate from accepted conversation. One checkpoint is in flight;
-//! new observations replace its queued successor. Database work and reconciliation stay in the
+//! new observations request a fresh snapshot after its receipt. Reconciliation stays in the
 //! shared storage crate. Every result (including task death) returns through the session queue.
 
 use std::collections::BTreeMap;
 
 use lk_agents_abi::storage::StorageError;
-use lk_agents_abi::storage::voice::{VoiceConversationBoundary, VoiceConversationProgress};
+use lk_agents_abi::storage::voice::{
+    VoiceConversationBoundary, VoiceConversationProgress, VoiceHistory,
+};
 use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, Role, Ts};
 
 use crate::agent_session::VoiceDriver;
 use crate::agent_session::effects::VoiceEffect;
 use crate::audio_recognition::TurnId;
+
+#[cfg(test)]
+#[path = "progress_tests.rs"]
+mod tests;
 
 #[derive(Default)]
 pub(super) struct ConversationSaves {
@@ -29,11 +35,6 @@ struct Version {
     pending: Vec<ChatMessage>,
 }
 
-struct Queued {
-    progress: VoiceConversationProgress,
-    edits: u64,
-}
-
 #[derive(Default)]
 enum SaveState {
     #[default]
@@ -41,7 +42,7 @@ enum SaveState {
     InFlight {
         sequence: u64,
         edits: u64,
-        queued: Option<Box<Queued>>,
+        queued: bool,
     },
 }
 
@@ -118,6 +119,12 @@ impl VoiceDriver {
             self.session.storage.conversation.last = Some(version);
             return;
         }
+        if let SaveState::InFlight { queued, .. } = &mut self.session.storage.conversation.state {
+            // The running write may discover another writer's edit. Snapshot only once its
+            // receipt has been reconciled, instead of later dispatching an obsolete full copy.
+            *queued = true;
+            return;
+        }
         let sequence = self.session.storage.next_sequence();
         let boundary = if version.pending.is_empty() {
             VoiceConversationBoundary::UserTurnCompleted
@@ -127,22 +134,16 @@ impl VoiceDriver {
         let progress = VoiceConversationProgress {
             sequence,
             agent: self.activity.agent_name().to_owned(),
-            history: self.session.chat_ctx.items().cloned().collect(),
+            history: self.session.storage.capture(self.session.chat_ctx.items().cloned().collect()),
             pending_user_turns: version.pending.clone(),
             boundary,
         };
         let edits = self.session.chat_ctx.saving();
         self.session.storage.conversation.last = Some(version);
-        match &mut self.session.storage.conversation.state {
-            SaveState::Idle => {
-                self.session.storage.conversation.state =
-                    SaveState::InFlight { sequence, edits, queued: None };
-                self.record_effect(VoiceEffect::SaveConversation(Box::new(progress)));
-            }
-            SaveState::InFlight { queued, .. } => {
-                *queued = Some(Box::new(Queued { progress, edits }))
-            }
-        }
+        self.record_trace(crate::trace::CoreStep::ConversationCheckpointPrepared { sequence });
+        self.session.storage.conversation.state =
+            SaveState::InFlight { sequence, edits, queued: false };
+        self.record_effect(VoiceEffect::SaveConversation(Box::new(progress)));
     }
 
     pub(crate) fn conversation_save_pending(&self) -> bool {
@@ -157,7 +158,7 @@ impl VoiceDriver {
         now: Ts,
         sequence: u64,
         read: Vec<ChatItem>,
-        result: Result<Vec<ChatItem>, StorageError>,
+        result: Result<VoiceHistory, StorageError>,
     ) {
         if !matches!(self.session.storage.conversation.state, SaveState::InFlight { sequence: held, .. } if held == sequence)
         {
@@ -172,12 +173,8 @@ impl VoiceDriver {
             Ok(history) => {
                 self.session.chat_ctx.saved(edits);
                 self.storage_reloaded(read, history);
-                if let Some(queued) = queued {
-                    let Queued { progress, edits } = *queued;
-                    let sequence = progress.sequence;
-                    self.session.storage.conversation.state =
-                        SaveState::InFlight { sequence, edits, queued: None };
-                    self.record_effect(VoiceEffect::SaveConversation(Box::new(progress)));
+                if queued {
+                    self.checkpoint_conversation();
                 }
             }
             Err(error) => {

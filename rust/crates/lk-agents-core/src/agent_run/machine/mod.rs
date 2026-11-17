@@ -333,6 +333,12 @@ impl AgentRun {
         history
     }
 
+    /// This invocation's accepted and in-flight items. Supplied model context may contain
+    /// private reminders or rewritten history; it is not a new conversation revision.
+    pub fn progress_new_items(&self) -> Vec<ChatItem> {
+        self.progress_history().into_iter().skip(self.first_new).collect()
+    }
+
     pub fn new(agent: AgentDefinition, mut input: RunInput) -> Result<AgentRun, AgentError> {
         agent::validate(&agent)?;
         if let Opening::Message(message) = &mut input.opening {
@@ -507,7 +513,7 @@ impl AgentRun {
                 if let Some(a) = self.phase.acting() {
                     a.calls.update_extra(call, extra);
                     if let Some(item) = a.calls.item(call) {
-                        crate::agent_tool::supersede(&mut self.history, item);
+                        crate::delegation::local::supersede(&mut self.history, item);
                     }
                 }
             }

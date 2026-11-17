@@ -21,6 +21,7 @@ from livekit.agents import _core
 from livekit.agents.storage import SQLiteStorage, Storage
 
 from .drivers import A2ACaller, Workers
+from .framework.app import E2E
 from .processes import close_owned_executor
 from .resources import (
     REQUEST_SECONDS,
@@ -41,6 +42,15 @@ from .storages import LOCAL_LEASE_TTL, agentstore_configured, project_storage
 from .v1_clients import compat_worker  # noqa: F401  (fixture for the client compat modules)
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture
+async def e2e(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterator[E2E]:
+    framework = E2E(tmp_path, lambda: str(request.getfixturevalue("sfu")))
+    try:
+        yield framework
+    finally:
+        await framework.aclose()
 
 
 @pytest.fixture

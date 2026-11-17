@@ -26,6 +26,7 @@ from livekit.agents import (
     stt,
 )
 from livekit.plugins.azure import stt as azure_stt, tts as azure_tts
+from tests.fakes import until
 from tests.plugins.conftest import Connection, Frame, WsPeer
 
 # Speech service wire
@@ -167,6 +168,7 @@ async def test_recognizer_uses_the_requested_languages(
     kwargs = {"language": override} if override else {}
     async with provider.stream(conn_options=OPTIONS, **kwargs) as stream:
         first = await ws_peer.connected()
+        await until(lambda: sent(first, "speech.context"), "the initial language configuration")
         provider.update_options(language="it-IT")
         updated = await ws_peer.connected(2)
         stream.push_frame(frame(100, 16000))

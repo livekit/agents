@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use lk_agents_abi::agent::AgentDefinition;
 use lk_agents_abi::resources::LlmRef;
 
-use super::{ChildCallStatus, TextSessionState};
+use super::{ChildCallStatus, SessionSnapshot};
 
 pub use lk_agents_abi::text_session::{ChatHistory, LocalAgentTool, RoutingError};
 
@@ -75,8 +75,12 @@ impl TextSessionConfig {
         Ok(())
     }
 
-    pub(super) fn validate_state(&self, state: &TextSessionState) -> Result<(), RoutingError> {
+    pub(super) fn validate_state(&self, state: &SessionSnapshot) -> Result<(), RoutingError> {
         let invalid = |reason: &str| RoutingError::InvalidState(reason.into());
+        for remote in state.remote_agents.values() {
+            crate::delegation::remote::journal::validate(remote)
+                .map_err(|error| invalid(&error.to_string()))?;
+        }
         if state.session_id.is_empty() || state.execution_id.is_empty() {
             return Err(invalid("missing session or execution identity"));
         }

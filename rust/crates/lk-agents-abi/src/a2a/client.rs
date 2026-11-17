@@ -167,6 +167,11 @@ pub trait Reply: Send + Sync + Sized + 'static {
     fn thread_id(&self) -> String;
     #[host(next)]
     async fn next(&self) -> Result<Option<TaskUpdate>, AgentClientError>;
+    /// The unnormalized SDK response for native state inspection and protocol conformance.
+    #[host(await)]
+    async fn _core_next_event(
+        &self,
+    ) -> Result<Option<super::protocol::StreamResponse>, AgentClientError>;
     #[host(await)]
     async fn aclose(&self);
 }

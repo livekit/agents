@@ -529,6 +529,14 @@ fn struct_emits(
 
 fn set(f: &Field, value: &str, indent: &str) -> Result<String, String> {
     let mut emitted = emit(&f.ty, value)?;
+    if let Some(class) = &f.conversion.emit_class {
+        let (module, name) = class
+            .rsplit_once('.')
+            .ok_or_else(|| format!("{}: emit_class needs a qualified class", f.rust_name))?;
+        emitted = format!(
+            "{{ static CLASS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> = ::pyo3::sync::PyOnceLock::new(); crate::py_calls::call(CLASS.import(py, {module:?}, {name:?})?.as_any(), ({emitted},), None)? }}"
+        );
+    }
     if let Some((module, name)) = &f.conversion.resolve {
         let hook: String = name.split('.').map(|attr| format!(".getattr({attr:?})?")).collect();
         emitted =

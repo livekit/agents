@@ -76,6 +76,8 @@ pub struct Request {
     pub body: Vec<u8>,
     pub id: Option<JsonRpcId>,
     pub streaming: bool,
+    /// Safe to repeat without repeating remote work; message and cancel requests are not.
+    pub replay_safe: bool,
     /// Expected task identity after resolving explicit, message and implicit routing.
     pub task: Option<TaskRef>,
     /// A routed thread remains authoritative even when the peer creates a new task.
@@ -148,6 +150,7 @@ impl Client {
             body: Vec::new(),
             id: None,
             streaming: false,
+            replay_safe: true,
             task: None,
             context_id: None,
             task_response: false,
@@ -248,6 +251,18 @@ impl Client {
         )
     }
 
+    pub fn get_task(&self, task: &TaskRef, id: JsonRpcId) -> Result<Request, ClientError> {
+        check_task(task)?;
+        self.rpc(
+            a2a::methods::GET_TASK,
+            a2a::GetTaskRequest { id: task.id.clone(), history_length: None, tenant: None },
+            id,
+            false,
+            Some(task.clone()),
+            Some(task.context_id.clone()),
+        )
+    }
+
     pub fn subscribe(
         &self,
         task: &TaskRef,
@@ -271,9 +286,13 @@ impl Client {
 
     /// Only an acknowledged task or message updates the connection's implicit routing.
     pub fn acknowledge(&mut self, update: &TaskUpdate) -> Result<(), ClientError> {
+        self.acknowledge_context(&update.context_id)
+    }
+
+    pub fn acknowledge_context(&mut self, context_id: &str) -> Result<(), ClientError> {
         self.ensure_open()?;
-        if !update.context_id.is_empty() {
-            self.last_context = Some(update.context_id.clone());
+        if !context_id.is_empty() {
+            self.last_context = Some(context_id.to_owned());
         }
         Ok(())
     }
@@ -361,9 +380,10 @@ impl Client {
             body,
             id: Some(id),
             streaming,
+            replay_safe: matches!(method, a2a::methods::SUBSCRIBE_TO_TASK | a2a::methods::GET_TASK),
             task,
             context_id,
-            task_response: method == a2a::methods::CANCEL_TASK,
+            task_response: matches!(method, a2a::methods::CANCEL_TASK | a2a::methods::GET_TASK),
         })
     }
 }
@@ -410,6 +430,33 @@ pub struct TaskUpdate {
     pub follow_task: Option<TaskRef>,
 }
 
+/// One validated SDK response, retained beside its presentation projection. Artifact events
+/// and direct message replies keep their protocol identity even when presentation has none.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplyEvent {
+    pub response: StreamResponse,
+    pub update: Option<TaskUpdate>,
+}
+
+impl ReplyEvent {
+    pub fn route(&self) -> TaskRef {
+        let (id, context_id) = match &self.response {
+            StreamResponse::Task(task) => (task.id.clone(), task.context_id.clone()),
+            StreamResponse::Message(message) => (
+                message.task_id.clone().unwrap_or_default(),
+                message.context_id.clone().unwrap_or_default(),
+            ),
+            StreamResponse::StatusUpdate(event) => {
+                (event.task_id.clone(), event.context_id.clone())
+            }
+            StreamResponse::ArtifactUpdate(event) => {
+                (event.task_id.clone(), event.context_id.clone())
+            }
+        };
+        TaskRef { id, context_id }
+    }
+}
+
 impl TaskUpdate {
     pub fn is_settled(&self) -> bool {
         self.state.is_terminal() || self.state == TaskState::InputRequired
@@ -454,8 +501,20 @@ impl ReplyState {
         body: &[u8],
         id: &JsonRpcId,
     ) -> Result<Option<TaskUpdate>, ClientError> {
-        let result = response_result(body, id)?;
-        self.accept(serde_json::from_value(result).map_err(ClientError::invalid_response)?)
+        self.decode_event(body, id, false).map(|event| event.update)
+    }
+
+    /// Protocol observations reach the owner before it decides what to present or persist.
+    /// `task_response` names unary SDK methods whose result is a Task without a union wrapper.
+    pub fn decode_event(
+        &mut self,
+        body: &[u8],
+        id: &JsonRpcId,
+        task_response: bool,
+    ) -> Result<ReplyEvent, ClientError> {
+        let response = decode_response(body, id, task_response)?;
+        let update = self.accept(response.clone())?;
+        Ok(ReplyEvent { response, update })
     }
 
     /// `CancelTask` and `GetTask` return a task directly, rather than a streaming wrapper.
@@ -621,8 +680,25 @@ impl ReplyState {
     }
 }
 
+/// Decode the protocol value independently of presentation normalization. Native observers
+/// retain this value even when a legacy consumer cannot present its task status or content.
+pub fn decode_response(
+    body: &[u8],
+    id: &JsonRpcId,
+    task_response: bool,
+) -> Result<StreamResponse, ClientError> {
+    let result = response_result(body, id)?;
+    if task_response {
+        Ok(StreamResponse::Task(
+            serde_json::from_value(result).map_err(ClientError::invalid_response)?,
+        ))
+    } else {
+        serde_json::from_value(result).map_err(ClientError::invalid_response)
+    }
+}
+
 /// An appended chunk adds its parts and replaces only the descriptive fields it carries.
-fn append_artifact(into: &mut Artifact, update: Artifact) {
+pub(crate) fn append_artifact(into: &mut Artifact, update: Artifact) {
     into.parts.extend(update.parts);
     if update.name.is_some() {
         into.name = update.name;
@@ -632,6 +708,9 @@ fn append_artifact(into: &mut Artifact, update: Artifact) {
     }
     if update.metadata.is_some() {
         into.metadata = update.metadata;
+    }
+    if update.extensions.is_some() {
+        into.extensions = update.extensions;
     }
 }
 

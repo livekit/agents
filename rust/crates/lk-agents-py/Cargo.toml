@@ -28,6 +28,7 @@ lk-agents-runtime = { path = "../lk-agents-runtime", features = [
 
 indexmap.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 tokio-util = "0.7"
 pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }

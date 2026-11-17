@@ -102,25 +102,43 @@ mod stored_turn_keeps_the_history {
     use lk_agents_core::markup::ChatMessageExt;
     use lk_agents_fuzz::drive::{Run, Setup, StorageSetup, simulate};
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, Role, UserText};
+    use lk_agents_fuzz::record::Kind;
     use lk_agents_voice::events::SessionEvent;
 
-    fn reply(chat: u32, said: &str) -> [Input; 9] {
-        [
-            Input::GenerateReply {
-                user_input: Some(UserText("hello?".into())),
-                instructions: None,
-                allow: None,
-            },
-            // The turn takes the partition before its model request opens.
-            Input::Advance { ms: Millis(100) },
+    async fn ready(run: &mut Run, kind: Kind, count: usize) {
+        for _ in 0..1_000 {
+            if run.record.resources(kind).count() >= count {
+                return;
+            }
+            run.apply(&Input::Advance { ms: Millis(1) }).await;
+        }
+        panic!("the reply did not open {kind:?} #{count}: {:?}", run.record.host_view().events());
+    }
+
+    async fn reply(run: &mut Run, chat: u32, said: &str) {
+        run.apply(&Input::GenerateReply {
+            user_input: Some(UserText("hello?".into())),
+            instructions: None,
+            allow: None,
+        })
+        .await;
+        // The turn takes its partition before its model request and its flushed audio exist.
+        ready(run, Kind::Chat, chat as usize + 1).await;
+        for input in [
             Input::LlmText { chat: Ref::new(chat), text: AgentText(said.into()) },
             Input::LlmEnd { chat: Ref::new(chat) },
-            Input::Advance { ms: Millis(20) },
+        ] {
+            run.apply(&input).await;
+        }
+        ready(run, Kind::Segment, chat as usize + 1).await;
+        for input in [
             Input::PlayoutStarted { segment: Ref::new(chat) },
             Input::PlayoutProgressed { segment: Ref::new(chat), ms: Millis(5_000) },
             Input::PlayoutFinished { segment: Ref::new(chat) },
             Input::Advance { ms: Millis(1_000) },
-        ]
+        ] {
+            run.apply(&input).await;
+        }
     }
 
     // Catches: the session's history replaced by the active agent's own view of the partition, dropping
@@ -135,16 +153,11 @@ mod stored_turn_keeps_the_history {
             items: vec![Role::Assistant],
             text: AgentText("The office is closed on Monday.".into()),
         };
-        let inputs: Vec<Input> = reply(0, "Hi, how can I help?")
-            .into_iter()
-            .chain([dropped])
-            .chain(reply(1, "Sure."))
-            .collect();
         let run = simulate(async {
             let mut run = Run::start(&setup, 0, Default::default()).await;
-            for input in &inputs {
-                run.apply(input).await;
-            }
+            reply(&mut run, 0, "Hi, how can I help?").await;
+            run.apply(&dropped).await;
+            reply(&mut run, 1, "Sure.").await;
             run
         });
         // The history as the host holds it: told item by item, replaced whole by a reload.

@@ -277,10 +277,10 @@ impl Partition {
                 (None, false, None, items, Tasks::new(self.clone()), picked_up, Vec::new())
             }
         };
-        let (state, session_items) =
-            crate::session_snapshot::hydrate(&*self.thread.conn, &self.name, state).await?;
-        Ok(Run {
-            session_items,
+        // The acquired run owns cleanup before loading referenced snapshot content can wait.
+        // A canceled read must end its journal row as well as release its lease.
+        let mut run = Run {
+            session_items: Default::default(),
             partition_key: self.clone(),
             lease,
             access: opts.access,
@@ -303,7 +303,14 @@ impl Partition {
             outcome: RunOutcome::Completed,
             reason: None,
             finished: false,
-        })
+        };
+        let (state, session_items) =
+            crate::session_snapshot::hydrate(&*self.thread.conn, &self.name, run.state.take())
+                .await?;
+        run.loaded_state = state.clone();
+        run.state = state;
+        run.session_items = session_items;
+        Ok(run)
     }
 
     /// The acquire, polled with backoff while another holder has the partition, as `when_held` says.

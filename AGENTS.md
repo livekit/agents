@@ -123,11 +123,10 @@ specification; implementation cleanup must follow the agreed contracts.
   `output`, while `status="input_required"` exposes `question`. Tools can request input
   with `InputRequired(...)`; framework outcomes remain separate from `output_type`.
 - **TextSession**: request-scoped text conversation orchestration, reconstructed from
-  shared agent configuration and explicitly supplied saved state or a store binding.
-  Each child requires `output_type`; accepted final output fills the parent tool call.
-  Returns `result: RunResult` and a detached `state: SessionState`. `context=store.bind(app)`
-  opts into Rust-owned incremental persistence; plain context execution reads snapshots without
-  binding or saving them. See `docs/text-session.md`.
+  shared agent configuration and a store binding. Each child requires `output_type`;
+  accepted final output fills the parent tool call. Returns `RunResult` directly.
+  `context=store.bind(app)` continues the shared conversation with Rust-owned incremental
+  persistence; plain context execution starts a fresh conversation. See `docs/text-session.md`.
 - **VoiceTask[Output]**: fast-brain/frontend live interactions in an active voice session.
   `.run()` resolves the session from invocation-local runtime context; callers do not
   pass it explicitly. Calling outside a live interaction fails before execution.

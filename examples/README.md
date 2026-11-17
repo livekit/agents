@@ -38,9 +38,9 @@ One thread can contain these independent persistence partitions:
 | `backend` A2A endpoint | `"backend"` | Backend text history, pending approvals and business fields |
 
 The framework's `DEFAULT_PARTITION_KEY` constant is `"default"`; the examples leave it
-implicit on the phone entrypoint. Voice and text have separate frontend partitions because
-their saved session states cannot resume each other. Both delegate to the backend partition
-within the same thread. Reusing a thread therefore also reuses its backend business context.
+implicit on the phone entrypoint. The examples keep phone and text conversations in separate frontend partitions. An application
+can share a partition and binding to continue the same conversation across text and voice.
+Both frontends delegate to the backend partition within the same thread. Reusing a thread therefore also reuses its backend business context.
 A2A `contextId` selects the thread; a call joins one through its dispatch's `thread_id`.
 A new thread starts independent conversations.
 
@@ -52,15 +52,16 @@ restores those fields and explicitly binds execution:
 app = AppContext(services=cal)
 await ctx.store.load_context(app)
 binding = ctx.store.bind(app)
-turn = await TextSession(agent=backend).run(ctx.message, context=binding)
+result = await TextSession(agent=backend).run(ctx.message, context=binding)
 await ctx.store.save_context(app)
-return turn.result
+return result
 ```
 
 Binding keeps the same `app.session` object current and incrementally checkpoints accepted
 conversation changes, including input-required and approval waits. Business fields still
 require `save_context`. Runtime services such as `cal` are supplied by the application and
-are not serialized. `turn.state` and `await ctx.store.load_session()` are detached snapshots.
+are not serialized. `app.session.snapshot()` and `await ctx.store.load_session()` return
+detached views for inspection.
 
 The frontends have no application fields: both `VoiceSession` and `TextSession` use
 `context=ctx.store.bind()` so the store restores and checkpoints their internal state.

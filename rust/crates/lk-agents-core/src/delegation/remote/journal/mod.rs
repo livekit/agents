@@ -1,0 +1,236 @@
+//! Communication observations and dispatch intent are committed by the conversation owner.
+
+use lk_agents_abi::delegation::remote::*;
+use lk_agents_abi::session::InputRequestState;
+
+mod projection;
+mod validation;
+pub use validation::validate;
+#[cfg(test)]
+#[path = "journal_tests.rs"]
+mod tests;
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("invalid remote communication state: {0}")]
+pub struct RemoteError(String);
+
+/// Apply one serialized input. Observed response content remains journaled even if its
+/// projection is refused; malformed or conflicting content never overwrites accepted state.
+pub fn apply(state: &mut RemoteAgentState, input: RemoteInput) -> Result<(), RemoteError> {
+    match input {
+        RemoteInput::Prepare { request_id, request, streaming, origin, input_request } => {
+            if request_id.is_empty() {
+                return Err(invalid("request identity is empty"));
+            }
+            if let Some(existing) = state.requests.get(&request_id) {
+                let original = state.events.get(existing.request_event as usize);
+                let same_body = original.is_some_and(|entry| {
+                    matches!(
+                        &entry.payload,A2AJournalPayload::Request(body) if body == &request
+                    )
+                });
+                if same_body
+                    && existing.method == request.method(streaming)
+                    && !existing.dispatch_started
+                    && !existing.ended
+                    && (input_request.is_none() || input_request == existing.input_request)
+                    && (origin.is_none() || origin == existing.origin)
+                {
+                    // A router can reserve a response before handing its immutable body to
+                    // the client. Preparation confirms that body; it does not append it twice.
+                    return Ok(());
+                }
+                return Err(invalid("request identity is already prepared or may have been sent"));
+            }
+            let mut next = state.clone();
+            let method = request.method(streaming).to_owned();
+            let task = request_task(&next, &request)?;
+            if let A2ARequest::Send(send) = &request {
+                projection::message(&mut next.messages, send.message.clone())?;
+            }
+            if let Some(reference) = &input_request {
+                let A2ARequest::Send(send) = &request else {
+                    return Err(invalid("only a send can respond to input"));
+                };
+                if task.as_ref() != Some(&reference.task) {
+                    return Err(invalid("the response does not address the selected task"));
+                }
+                let input = next
+                    .tasks
+                    .get_mut(&reference.task.task_id)
+                    .and_then(|task| task.input_requests.get_mut(&reference.occurrence_id))
+                    .ok_or_else(|| invalid("the input occurrence is unknown"))?;
+                if input.state != InputRequestState::Open {
+                    return Err(invalid("the input occurrence already has a response"));
+                }
+                input.state = InputRequestState::Responding;
+                input.response_message_id = Some(send.message.message_id.clone());
+            }
+            if let A2ARequest::Cancel(cancel) = &request {
+                let observed =
+                    next.tasks.get_mut(&cancel.id).ok_or_else(|| invalid("unknown task"))?;
+                observed.cancel_requested = true;
+            }
+            let request_event = append(
+                &mut next,
+                &request_id,
+                A2AJournalKind::RequestRecorded,
+                A2AJournalPayload::Request(request),
+            );
+            next.requests.insert(
+                request_id,
+                RemoteRequestState {
+                    method,
+                    request_event,
+                    dispatch_started: false,
+                    ended: false,
+                    task,
+                    origin,
+                    input_request,
+                },
+            );
+            *state = next;
+        }
+        RemoteInput::DispatchStarted { request_id } => {
+            let request = request_mut(state, &request_id)?;
+            if request.ended || request.dispatch_started {
+                return Err(invalid("this request may already have been sent; reconcile it"));
+            }
+            request.dispatch_started = true;
+        }
+        RemoteInput::Response { request_id, response } => {
+            let request = request_mut(state, &request_id)?.clone();
+            if !request.dispatch_started || request.ended {
+                return Err(invalid("response without an active dispatched request"));
+            }
+            // Preserve the original successful SDK value before interpreting its contents.
+            append(
+                state,
+                &request_id,
+                A2AJournalKind::ResponseReceived,
+                A2AJournalPayload::Response(response.clone()),
+            );
+            let mut next = state.clone();
+            let task = projection::response(&mut next, &request, *response)?;
+            if let Some(task) = task {
+                next.requests.get_mut(&request_id).expect("request was validated").task =
+                    Some(task);
+            }
+            if let Some(reference) = request.input_request {
+                let input = next
+                    .tasks
+                    .get_mut(&reference.task.task_id)
+                    .and_then(|task| task.input_requests.get_mut(&reference.occurrence_id))
+                    .ok_or_else(|| invalid("the reserved input occurrence is missing"))?;
+                input.state = InputRequestState::Responded;
+            }
+            *state = next;
+        }
+        RemoteInput::Error { request_id, error } => {
+            let request = request_mut(state, &request_id)?;
+            if request.ended {
+                return Err(invalid("the request already ended"));
+            }
+            request.ended = true;
+            append(
+                state,
+                &request_id,
+                A2AJournalKind::RequestError,
+                A2AJournalPayload::Error(error),
+            );
+        }
+        RemoteInput::Ended { request_id } => {
+            request_mut(state, &request_id)?.ended = true;
+        }
+    }
+    Ok(())
+}
+
+/// Recovery never replays a send merely to discover the task it may have created.
+pub fn recovery(state: &RemoteAgentState, request_id: &str) -> Result<Recovery, RemoteError> {
+    let request = state.requests.get(request_id).ok_or_else(|| invalid("unknown request"))?;
+    if !request.dispatch_started {
+        return Ok(Recovery::Dispatch);
+    }
+    if let Some(task) = &request.task {
+        return Ok(Recovery::GetTask(task.clone()));
+    }
+    // A received message-only reply is already proof of the exchange, even without a task.
+    if state.events.iter().any(|event| {
+        event.request_id == request_id && event.kind == A2AJournalKind::ResponseReceived
+    }) {
+        Ok(Recovery::Observed)
+    } else {
+        Ok(Recovery::Uncertain)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Recovery {
+    Dispatch,
+    GetTask(RemoteTaskRef),
+    Observed,
+    Uncertain,
+}
+
+fn request_task(
+    state: &RemoteAgentState,
+    request: &A2ARequest,
+) -> Result<Option<RemoteTaskRef>, RemoteError> {
+    let id = match request {
+        A2ARequest::Send(send) => {
+            let Some(id) = &send.message.task_id else { return Ok(None) };
+            if id.is_empty() {
+                return Err(invalid("task ID is empty"));
+            }
+            let context_id = send
+                .message
+                .context_id
+                .clone()
+                .ok_or_else(|| invalid("a task response needs its context"))?;
+            if let Some(task) = state.tasks.get(id)
+                && task.task.context_id != context_id
+            {
+                return Err(conflict(id));
+            }
+            return Ok(Some(RemoteTaskRef { context_id, task_id: id.clone() }));
+        }
+        A2ARequest::Get(request) => &request.id,
+        A2ARequest::Cancel(request) => &request.id,
+        A2ARequest::Subscribe(request) => &request.id,
+        A2ARequest::List(_) => return Ok(None),
+    };
+    if id.is_empty() {
+        return Err(invalid("task ID is empty"));
+    }
+    Ok(state.tasks.get(id).map(|task| RemoteTaskRef {
+        task_id: id.clone(),
+        context_id: task.task.context_id.clone(),
+    }))
+}
+
+fn append(
+    state: &mut RemoteAgentState,
+    request_id: &str,
+    kind: A2AJournalKind,
+    payload: A2AJournalPayload,
+) -> u64 {
+    let sequence = state.events.last().map_or(0, |event| event.sequence + 1);
+    state.events.push(A2AJournalEntry { sequence, request_id: request_id.into(), kind, payload });
+    sequence
+}
+
+fn request_mut<'a>(
+    state: &'a mut RemoteAgentState,
+    id: &str,
+) -> Result<&'a mut RemoteRequestState, RemoteError> {
+    state.requests.get_mut(id).ok_or_else(|| invalid("unknown request"))
+}
+
+fn invalid(message: &str) -> RemoteError {
+    RemoteError(message.into())
+}
+
+fn conflict(id: &str) -> RemoteError {
+    invalid(&format!("conflicting remote identity: {id}"))
+}

@@ -30,7 +30,7 @@ accounts for its own work.
 | --- | --- | --- |
 | `result.usage` | One direct agent invocation | When its result is returned |
 | `stream.usage` | The operation owned by the stream | From context entry, throughout execution, and after context exit |
-| `turn.result.usage` | One `TextSession.run()` turn, across its local agent frames | When the turn's result is returned |
+| `result.usage` | One `TextSession.run()` turn, across its local agent frames | When the turn's result is returned |
 | `session.usage` | One `VoiceSession`, across agent changes and voice tasks | Before start, while running, and after shutdown |
 | `ctx.usage` | The owning invocation, text-session turn, or voice session | During a tool or callback |
 
@@ -241,7 +241,7 @@ direct invocation a tool body awaits has its own usage. Calling a remote backend
 does not make its tokens part of the frontend model's usage.
 
 A `TextSession` turn owns the local invocations it coordinates, so
-`turn.result.usage` includes work across those frames exactly once. Its history
+`result.usage` includes work across those frames exactly once. Its history
 accessors retain their frame-specific contract. The next reconstructed turn starts
 a new accounting scope; saved routing state does not carry old consumption into
 the new result.
@@ -320,9 +320,5 @@ normalized contributions. Telemetry can export a selected breakdown, but names,
 units, and inclusion rules must agree. Per-request spans describe their own work;
 an inclusive session total is not another independent billable contribution.
 
-## Record compatibility
-
-Legacy persisted records are decoded at the storage boundary. Compatibility
-decoding does not add old field names or types to newly returned records.
 Provider SDK names stay in their adapters; normalized records and exported
 measurements use the [public usage fields](#public-records).

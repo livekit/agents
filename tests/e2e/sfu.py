@@ -126,14 +126,6 @@ async def connected(
         await asyncio.wait_for(room.disconnect(), 5)
 
 
-def write_marker(path: Path, value: object) -> None:
-    """Writes ``value`` as JSON at ``path`` in one rename, so ``read_marker`` never sees a
-    partial file."""
-    partial = path.with_name(f".{path.name}.partial")
-    partial.write_text(json.dumps(value))
-    partial.rename(path)
-
-
 async def read_marker(path: Path) -> object:
     async with asyncio.timeout(15):
         while not path.exists():

@@ -317,12 +317,12 @@ impl VoiceDriver {
         self.reply_effects(speech, fx);
     }
 
-    /// Each reply run's progress, a run outliving its cut speech's included.
-    pub(crate) fn checkpoint_reply_history(
+    /// New items from each reply, including a run outliving its cut speech.
+    pub(crate) fn checkpoint_reply_items(
         &self,
     ) -> impl Iterator<Item = (SpeechId, Vec<ChatItem>)> + '_ {
         (self.activity.tools.replies.iter())
-            .map(|(speech, reply)| (*speech, reply.run.progress_history()))
+            .map(|(speech, reply)| (*speech, reply.run.progress_new_items()))
     }
 
     fn reply_effects(&mut self, speech: SpeechId, fx: Vec<AgentRunEffect>) {

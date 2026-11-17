@@ -37,7 +37,8 @@ const CANCELLED_STATUS: i64 = 499;
 /// turns it into a retry decision.
 #[crate::host(record(module = "types", path = "livekit.agents.types", emit, extract))]
 #[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     /// The credentials were refused (401, 403): a new attempt fails the same way.
     Auth,

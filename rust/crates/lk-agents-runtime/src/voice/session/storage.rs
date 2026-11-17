@@ -69,21 +69,32 @@ impl SessionStorage {
     /// memory on the history it was given.
     async fn load(&self, cx: &telemetry::Cx) -> Result<Opened, StorageError> {
         let scope_id = format!("root:{}", self.partition_key);
+        let activation = self.supplied_activation.lock().clone();
+        if activation.is_some() && self.initial_history.is_some() {
+            return Err(StorageError::Invalid(
+                "explicit history cannot be combined with a bound context".into(),
+            ));
+        }
+        let history = match &activation {
+            Some(activation) => activation.bound_history()?,
+            None => self.initial_history.clone(),
+        };
+        if activation.is_some()
+            && let Some(history) = &history
+        {
+            lk_agents_core::session::validate_resume(history)
+                .map_err(|error| StorageError::Invalid(error.to_string()))?;
+        }
         let (Some(namespace), Some(thread_id)) = (&self.namespace, &self.thread_id) else {
             return Ok(Opened {
                 partition_key: None,
                 scope_id,
-                activation: self
-                    .supplied_activation
-                    .lock()
-                    .clone()
+                activation: activation
                     .map(Ok)
                     .unwrap_or_else(|| ContextStore::new(Vec::new(), None, false))?,
-                history: self.initial_history.clone(),
+                history,
             });
         };
-        let history = self.initial_history.clone();
-        let activation = self.supplied_activation.lock().clone();
         let store = namespace
             .voice_store(
                 thread_id.clone(),
@@ -197,18 +208,24 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
 pub(in crate::voice) struct StorageReporter {
     tx: Tx,
     owed: Option<(SpeechId, StorageRequest)>,
+    read: Vec<ChatItem>,
     answered: AtomicBool,
 }
 
 impl StorageReporter {
     /// Watches the partition's loss: no answer is owed.
     pub(in crate::voice) fn observer(tx: Tx) -> Self {
-        Self { tx, owed: None, answered: AtomicBool::new(false) }
+        Self { tx, owed: None, read: Vec::new(), answered: AtomicBool::new(false) }
     }
 
     /// Owes the answer to `speech`'s `request`.
-    pub(in crate::voice) fn answering(tx: Tx, speech: SpeechId, request: StorageRequest) -> Self {
-        Self { tx, owed: Some((speech, request)), answered: AtomicBool::new(false) }
+    pub(in crate::voice) fn answering(
+        tx: Tx,
+        speech: SpeechId,
+        request: StorageRequest,
+        read: Vec<ChatItem>,
+    ) -> Self {
+        Self { tx, owed: Some((speech, request)), read, answered: AtomicBool::new(false) }
     }
 
     fn answer(
@@ -250,6 +267,11 @@ impl StreamInput<VoiceStorageEvent> for StorageReporter {
                 if lease_lost {
                     let _ = self.tx.send(VoiceEvent::StorageLost(SpeechId(speech)));
                 }
+                let result = result.map(|history| {
+                    let _ = self
+                        .tx
+                        .send(VoiceEvent::StorageReloaded { read: self.read.clone(), history });
+                });
                 self.answer(speech, StorageRequest::Commit, result)
             }
             VoiceStorageEvent::Abandoned { speech, result } => {
@@ -274,11 +296,14 @@ impl VoiceRuntime {
     pub(in crate::voice) fn storage_command(&self, command: VoiceStorageCommand) {
         let tx = self.reports.clone();
         let reporter = Arc::new(match &command {
-            VoiceStorageCommand::Settle { speech, .. } => {
-                StorageReporter::answering(tx, SpeechId(*speech), StorageRequest::Commit)
-            }
+            VoiceStorageCommand::Settle { speech, history, .. } => StorageReporter::answering(
+                tx,
+                SpeechId(*speech),
+                StorageRequest::Commit,
+                history.items.clone(),
+            ),
             VoiceStorageCommand::Abort { speech } => {
-                StorageReporter::answering(tx, SpeechId(*speech), StorageRequest::Abort)
+                StorageReporter::answering(tx, SpeechId(*speech), StorageRequest::Abort, Vec::new())
             }
             VoiceStorageCommand::ObserveLoss { .. } => StorageReporter::observer(tx),
         });
@@ -303,7 +328,7 @@ struct ConversationReceipt {
 }
 
 impl ConversationReceipt {
-    fn settle(mut self, result: Result<Vec<ChatItem>, StorageError>) {
+    fn settle(mut self, result: Result<lk_agents_abi::storage::voice::VoiceHistory, StorageError>) {
         let read = self.read.take().expect("the receipt is owed once");
         let _ =
             self.tx.send(VoiceEvent::ConversationSaved { sequence: self.sequence, read, result });
@@ -332,7 +357,7 @@ impl VoiceRuntime {
         let receipt = ConversationReceipt {
             tx: self.reports.clone(),
             sequence: progress.sequence,
-            read: Some(progress.history.clone()),
+            read: Some(progress.history.items.clone()),
         };
         let storage = self.storage.clone();
         self.spawn("voice conversation progress", async move {

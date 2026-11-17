@@ -51,18 +51,10 @@ const REGISTRY_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS threads (
 
 const REGISTRY_SCOPE_INDEX: &str = "CREATE INDEX IF NOT EXISTS threads_scope_activity ON threads (scope, last_active DESC, thread_id DESC)";
 
-// Version 0 used milliseconds for creation/activity, seconds for TTL/expiry. The version
-// update and conversion are one transaction, including when several processes open at once.
-const REGISTRY_MIGRATION: &str = "CREATE TABLE IF NOT EXISTS registry_schema (
+// One current registry format; unreleased layouts are not migrated.
+const REGISTRY_METADATA: &str = "CREATE TABLE IF NOT EXISTS registry_schema (
   version INTEGER NOT NULL
 )";
-
-statement! {
-    MigrateRegistryToMillis {} => r#"
-UPDATE threads SET idle_ttl = idle_ttl * 1000, expires_at = expires_at * 1000
-WHERE NOT EXISTS (SELECT 1 FROM registry_schema)
-"#
-}
 
 statement! {
     SetRegistryVersion {} => r#"
@@ -181,8 +173,7 @@ impl SqliteStorage {
             .batch(vec![
                 Statement::ddl(REGISTRY_SCHEMA),
                 Statement::ddl(REGISTRY_SCOPE_INDEX),
-                Statement::ddl(REGISTRY_MIGRATION),
-                MigrateRegistryToMillis {}.bind(),
+                Statement::ddl(REGISTRY_METADATA),
                 SetRegistryVersion {}.bind(),
             ])
             .await?;
@@ -432,43 +423,6 @@ mod tests {
         assert!(statement.get_status(rusqlite::StatementStatus::VmStep) < 500);
     }
 
-    #[tokio::test]
-    async fn registry_migration_is_versioned_and_preserves_millisecond_timestamps() {
-        let directory = std::env::temp_dir().join(shortuuid("registry_migration_"));
-        std::fs::create_dir_all(&directory).unwrap();
-        {
-            let conn = rusqlite::Connection::open(directory.join("registry.sqlite")).unwrap();
-            conn.execute(REGISTRY_SCHEMA, []).unwrap();
-            conn.execute(
-                "INSERT INTO threads VALUES ('AT_legacy', 'scope', '{}', 42123, 44123, 2, 46)",
-                [],
-            )
-            .unwrap();
-        }
-        for _ in 0..2 {
-            let workers = crate::testing::threads();
-            let storage = SqliteStorage::open(&directory, LeaseTiming::default(), workers);
-            let storage = storage.await.unwrap();
-            let rows = storage
-                .registry
-                .query(SelectRegistryThread { thread_id: "AT_legacy" }.bind())
-                .await
-                .unwrap();
-            let (record, expires) = thread_record(&rows[0]).unwrap();
-            assert_eq!(
-                record.created_at,
-                Some(pbjson_types::Timestamp { seconds: 42, nanos: 123_000_000 })
-            );
-            assert_eq!(
-                record.last_active,
-                Some(pbjson_types::Timestamp { seconds: 44, nanos: 123_000_000 })
-            );
-            assert_eq!(expires, 46000);
-            assert_eq!(record.idle_ttl.unwrap().seconds, 2);
-            storage.close().await;
-        }
-        std::fs::remove_dir_all(directory).unwrap();
-    }
     /// Each registry read returns the columns `thread_record` reads, in its order.
     #[test]
     fn registry_reads_return_thread_record_columns() {

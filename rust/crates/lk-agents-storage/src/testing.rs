@@ -165,6 +165,37 @@ pub async fn lessee(conn: &dyn ThreadDbConnection, partition_key: &str) -> Optio
     }
 }
 
+/// Read conversation rows and immutable snapshot content through an existing observer.
+/// Fault injection on the executing owner must not corrupt the test's database inspection.
+pub async fn conversation(
+    conn: &dyn ThreadDbConnection,
+    partition_key: &str,
+) -> Result<(Vec<lk_agents_abi::ChatItem>, Option<serde_json::Value>), StorageError> {
+    use crate::sql::Table;
+    use crate::thread::schema::{ItemRow, PartitionRow, SelectItems, SelectPartition};
+
+    let items = conn
+        .query(SelectItems { partition_key }.bind())
+        .await?
+        .into_iter()
+        .map(|row| {
+            let item = ItemRow::from_row(&row)?;
+            lk_agents_abi::llm::chat_context::protocol::decode_chat_item(item.payload)
+                .map_err(StorageError::from)
+        })
+        .collect::<Result<Vec<_>, StorageError>>()?;
+    let state = conn
+        .query(SelectPartition { partition_key }.bind())
+        .await?
+        .into_iter()
+        .next()
+        .map(|row| PartitionRow::from_row(&row))
+        .transpose()?
+        .and_then(|partition| partition.state);
+    let state = crate::session_snapshot::hydrate(conn, partition_key, state).await?.0;
+    Ok((items, state))
+}
+
 /// How the next write fails: its acknowledgment lost before or after it applied, applied with
 /// no answer ever, or refused outright, by a disk I/O error or as too large.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

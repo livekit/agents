@@ -127,6 +127,25 @@ fn a_bound_argument_comes_from_self_and_each_row_is_mapped_into_the_host_type() 
     assert!(text.contains("from ..llm import ChatContext\n"));
 }
 
+#[test]
+fn a_wrapped_getter_reads_the_value_without_calling_it() {
+    let source = r#"
+        #[crate::host(class(name = "_core_State"))]
+        pub trait State: Sized {
+            #[host(getter)] fn history(&self) -> Vec<String>;
+        }
+        #[crate::host(facade(path = "livekit.agents.storage", native = State))]
+        pub trait View {
+            #[host(getter, returns = "..llm.chat_context._ReadOnlyChatContext",
+                   annotation(ret = "..llm.ChatContext"))]
+            fn history(&self) -> Vec<String>;
+        }
+    "#;
+    let python = emit(source).unwrap();
+    assert!(python.contains("@property\n    def history(self) -> ChatContext:"));
+    assert!(python.contains("return _ReadOnlyChatContext(self._native.history)"));
+}
+
 // Catches: a facade given its native object building another, or its parameters not kept.
 #[test]
 fn a_facade_from_its_native_object_keeps_it_and_its_parameters() {

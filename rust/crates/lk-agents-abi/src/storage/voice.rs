@@ -5,13 +5,32 @@ use std::sync::Arc;
 
 use crate::{ChatItem, storage::StorageError};
 
+/// One immutable conversation snapshot and the database values it was read against.
+/// A later snapshot's observations cannot turn this snapshot's old values into local edits.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct VoiceHistory {
+    /// Core-selected conversation items, never a rendered model prompt.
+    pub items: Vec<ChatItem>,
+    /// Ordered database values observed by this snapshot, before any local edits.
+    pub stored: Vec<ChatItem>,
+    /// Partition fence and local receipt order; older observations cannot rebase newer ones.
+    pub revision: (i64, u64),
+}
+
+impl VoiceHistory {
+    /// New local content with no claim about previously stored values.
+    pub fn new(items: Vec<ChatItem>) -> Self {
+        Self { items, ..Self::default() }
+    }
+}
+
 /// Live conversation progress before an agent speech necessarily exists. Pending user input
 /// is durable recognition evidence, kept separate from accepted model-visible history.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VoiceConversationProgress {
     pub sequence: u64,
     pub agent: String,
-    pub history: Vec<ChatItem>,
+    pub history: VoiceHistory,
     pub pending_user_turns: Vec<crate::ChatMessage>,
     pub boundary: VoiceConversationBoundary,
 }
@@ -29,7 +48,7 @@ pub enum VoiceStorageCommand {
     Settle {
         speech: u64,
         sequence: u64,
-        history: Vec<ChatItem>,
+        history: VoiceHistory,
     },
     Abort {
         speech: u64,
@@ -40,7 +59,7 @@ pub enum VoiceStorageCommand {
 }
 
 pub enum VoiceStorageEvent {
-    Settled { speech: u64, result: Result<(), StorageError>, lease_lost: bool },
+    Settled { speech: u64, result: Result<VoiceHistory, StorageError>, lease_lost: bool },
     Abandoned { speech: u64, result: Result<(), StorageError> },
     LeaseLost { speech: u64 },
 }
@@ -50,13 +69,13 @@ pub enum VoiceStorageEvent {
 pub trait VoiceStorage: Send + Sync {
     /// Checkpoints live recognition, or settles an accepted user turn with no reply. Returns
     /// history reconciled under partition ownership, without exposing pending input as final.
-    fn conversation(&self, progress: VoiceConversationProgress) -> StorageWork<'_, Vec<ChatItem>>;
+    fn conversation(&self, progress: VoiceConversationProgress) -> StorageWork<'_, VoiceHistory>;
     fn dispatch(
         self: Arc<Self>,
         command: VoiceStorageCommand,
         events: Arc<dyn StreamInput<VoiceStorageEvent>>,
     ) -> Result<(), StorageError>;
-    fn acquire(&self, speech: u64, local: Vec<ChatItem>) -> StorageWork<'_, Vec<ChatItem>>;
+    fn acquire(&self, speech: u64, local: VoiceHistory) -> StorageWork<'_, VoiceHistory>;
     fn lease_lost(&self) -> bool;
     /// `speech`'s turn saves the conversation so far, numbered `sequence`.
     fn checkpoint(
@@ -64,8 +83,8 @@ pub trait VoiceStorage: Send + Sync {
         speech: u64,
         sequence: u64,
         agent: String,
-        history: Vec<ChatItem>,
-    ) -> StorageWork<'_, ()>;
+        history: VoiceHistory,
+    ) -> StorageWork<'_, VoiceHistory>;
 }
 
 /// The stable context store and initial snapshot belonging to one live call's partition.

@@ -19,6 +19,7 @@ import pytest
 from livekit.agents import Agent, RunCompleted, RunResult, TextSession, VoiceSession, _core
 from livekit.agents.llm import ChatItem, RawFunctionTool, Toolset
 from livekit.agents.llm.mcp import MCPServerHTTP, MCPServerStdio, MCPToolOptions, MCPToolset
+from livekit.agents.storage import ContextStore
 from livekit.agents.voice.events import ToolCallUpdated, ToolExecutionUpdatedEvent
 from tests.fakes import (
     FakeAudioOutput,
@@ -63,11 +64,10 @@ class Output:
 
 async def text(agent: Agent[Any, Any], *messages: str, context: Any = None) -> Reply:
     """Each message a ``TextSession`` turn, continuing the last one's state."""
-    state = None
+    store = ContextStore()
     for message in messages:
-        turn = await TextSession(agent=agent).run(message, state=state, context=context)
-        state = turn.state
-    return _reply(turn.result)
+        result = await TextSession(agent=agent).run(message, context=store.bind(context))
+    return _reply(result)
 
 
 async def voice(agent: Agent[Any, Any], *messages: str, context: Any = None) -> Reply:

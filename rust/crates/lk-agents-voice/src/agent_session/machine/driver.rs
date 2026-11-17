@@ -71,7 +71,7 @@ pub enum VoiceEvent {
     /// The partition storage gave back for a speech, and the request items it was read with.
     StorageReloaded {
         read: Vec<lk_agents_abi::ChatItem>,
-        history: Vec<lk_agents_abi::ChatItem>,
+        history: lk_agents_abi::storage::voice::VoiceHistory,
     },
     /// A request a speech's turn made of the store was answered: success or failure, or the
     /// death of the task that carried it. Each request is answered exactly once.
@@ -85,7 +85,10 @@ pub enum VoiceEvent {
     ConversationSaved {
         sequence: u64,
         read: Vec<lk_agents_abi::ChatItem>,
-        result: Result<Vec<lk_agents_abi::ChatItem>, lk_agents_abi::storage::StorageError>,
+        result: Result<
+            lk_agents_abi::storage::voice::VoiceHistory,
+            lk_agents_abi::storage::StorageError,
+        >,
     },
     Realtime(crate::agent_session::machine::activity::realtime::RealtimeWake),
     Eot(

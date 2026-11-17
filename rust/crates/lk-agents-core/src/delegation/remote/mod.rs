@@ -1,4 +1,5 @@
 use lk_agents_abi::a2a_protocol as a2a;
+pub mod journal;
 pub mod retained;
 
 use a2a::{Message, Part, Role};

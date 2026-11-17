@@ -28,11 +28,12 @@ impl Rule for ApprovalRunsOnTheAnswer {
     const CONTRACT: Contract = Contract {
         id: "approval_runs_on_the_answer",
         guarantee: "A tool that requires approval runs on the repeat of a call whose read-back the person answered, before they speak again, once per answer, and asks its read-back otherwise.",
-        examples: &[asked_then_granted, answered_then_moved_on_asks_again],
+        examples: &[asked_then_granted, answered_then_moved_on_asks_again, a_restored_call_spends_its_grant],
         counterexamples: &[
             asked_again_after_the_answer,
             granted_unasked,
             granted_to_an_earlier_step,
+            granted_twice_for_one_answer,
         ],
         probe: None,
     };
@@ -50,6 +51,8 @@ impl Rule for ApprovalRunsOnTheAnswer {
         // Each approval call as committed, where its body started, and every output announcement.
         let mut calls: Vec<(usize, FunctionCall)> = Vec::new();
         let mut started: BTreeMap<String, usize> = BTreeMap::new();
+        let mut announced: BTreeMap<String, FunctionCall> = BTreeMap::new();
+        let mut admitted: BTreeMap<String, usize> = BTreeMap::new();
         // Each call's step, and where each step started its first call.
         let mut step_of: BTreeMap<String, (u64, u32)> = BTreeMap::new();
         let mut step_open: BTreeMap<(u64, u32), usize> = BTreeMap::new();
@@ -79,6 +82,10 @@ impl Rule for ApprovalRunsOnTheAnswer {
                     call,
                 })) => {
                     started.entry(call.call_id.clone()).or_insert(n);
+                    announced.insert(call.call_id.clone(), call.clone());
+                }
+                Step::Tool(ToolStep::CallAdmitted { call_id, .. }) => {
+                    admitted.insert(call_id.clone(), n);
                 }
                 Step::Tool(ToolStep::CallStarted { call_id, .. }) => {
                     started.entry(call_id.clone()).or_insert(n);
@@ -146,16 +153,23 @@ impl Rule for ApprovalRunsOnTheAnswer {
             // Another repeat whose body started after the answer, before this one, may have spent
             // it; a cut repeat's grant is not on the record, so it counts too.
             let spent = answer.is_some_and(|a| {
-                calls.iter().any(|(_, c)| {
+                let committed = calls.iter().any(|(_, c)| {
                     same(c)
                         && c.call_id != readback.call_id
                         && started.get(&c.call_id).is_some_and(|s| a < *s && *s < start)
                         && mark(c).as_deref() != Some("asked")
+                });
+                // A progress reload can publish the call before its final tool record. The
+                // body admission still proves it spent its grant, even without an added event.
+                committed || admitted.iter().any(|(id, n)| {
+                    a < *n && *n < start && announced.get(id).is_some_and(|c| {
+                        c.name == call.name && same(c) && c.call_id != readback.call_id
+                    })
                 })
             });
             let owed = answer.is_some() && !spent;
             let holds = match m.as_str() {
-                "granted" => answer.is_some(),
+                "granted" => owed,
                 _ => !owed,
             };
             check.expect_with(Subject::Session, holds, || {
@@ -240,6 +254,31 @@ fn asked_again_after_the_answer() -> Recording {
         .journal(output("c1", "yes"))
         .journal(started("c2"))
         .journal(call("c2", "asked", 2))
+        .done()
+}
+
+/// A restored call's body ran, although no new ConversationItemAdded announced its grant.
+fn a_restored_call_spends_its_grant() -> Recording {
+    asked()
+        .journal(output("c1", "yes"))
+        .journal(started("c2"))
+        .journal(Step::Tool(ToolStep::CallAdmitted {
+            speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId(1),
+            call_id: "c2".into(),
+        }))
+        .journal(started("c3"))
+        .journal(call("c3", "asked", 3))
+        .done()
+}
+
+/// A successful repeat consumed the answer; another grant would run the action twice.
+fn granted_twice_for_one_answer() -> Recording {
+    asked()
+        .journal(output("c1", "yes"))
+        .journal(started("c2"))
+        .journal(call("c2", "granted", 2))
+        .journal(started("c3"))
+        .journal(call("c3", "granted", 3))
         .done()
 }
 

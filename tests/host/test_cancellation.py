@@ -25,6 +25,7 @@ from livekit.agents import (
 )
 from livekit.agents.a2a import RemoteAgent
 from livekit.agents.llm import ChatContext, Toolset
+from livekit.agents.storage import ContextStore
 from livekit.agents.types import FlushSentinel
 from livekit.agents.utils import aio
 from livekit.agents.voice.run_result import StreamEvent
@@ -219,8 +220,8 @@ async def test_cancelling_a_parent_run_closes_its_childs_model_stream() -> None:
     assert hang.ended.is_set()
 
 
-async def test_cancelling_a_delegating_run_cancels_the_remote_task(peer: Peer) -> None:
-    """Cancelling a run whose tool waits on a remote A2A agent sends that agent `CancelTask`."""
+async def test_cancelling_a_delegating_run_preserves_the_remote_task(peer: Peer) -> None:
+    """Settled local observation leaves business work running until explicitly canceled."""
     peer.hold = True
     remote = RemoteAgent(
         peer.url,
@@ -248,8 +249,8 @@ async def test_cancelling_a_delegating_run_cancels_the_remote_task(peer: Peer) -
 
     with pytest.raises(asyncio.CancelledError):
         await run
-    await until(lambda: peer.cancelled, "the remote task was never cancelled")
-    assert peer.cancelled == ["remote-task"]
+    assert peer.cancelled == []
+    assert len(peer.messages) == 1
 
 
 async def test_cancelling_a_toolset_setup_waits_for_its_cleanup() -> None:
@@ -318,15 +319,16 @@ async def test_a_failed_turn_leaves_the_saved_state_usable() -> None:
     continues the conversation from it."""
     model = FakeLLM(["Ready.", APIError("scripted failure", kind="invalid_request"), "Again."])
     agent = Agent(name="desk", instructions="Help.", llm=model)
-    first = await TextSession(agent=agent).run("Hi")
+    store = ContextStore()
+    await TextSession(agent=agent).run("Hi", context=store.bind())
 
     with pytest.raises(APIError):
-        await TextSession(agent=agent).run("Fail", state=first.state)
-    retried = await TextSession(agent=agent).run("Retry", state=first.state)
+        await TextSession(agent=agent).run("Fail", context=store.bind())
+    retried = await TextSession(agent=agent).run("Retry", context=store.bind())
 
-    assert retried.result.status == "completed" and retried.result.output == "Again."
+    assert retried.status == "completed" and retried.output == "Again."
     said = [item.text_content for item in model.requests[-1].items if item.type == "message"]
-    assert said[-3:] == ["Hi", "Ready.", "Retry"]
+    assert said[-4:] == ["Hi", "Ready.", "Fail", "Retry"]
 
 
 async def test_the_callers_span_is_restored_after_a_cancelled_run() -> None:

@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::storage::voice::VoiceHistory;
 use lk_agents_abi::{ChatItem, Ts};
 use lk_agents_core::agent_run::AgentRunEffect;
 
@@ -103,6 +104,8 @@ impl TurnEnd {
 #[derive(Default)]
 pub(crate) struct StorageTurns {
     pub enabled: bool,
+    stored: Vec<ChatItem>,
+    revision: (i64, u64),
     next_checkpoint: u64,
     next_turn: u64,
     /// Each started speech's turn until its save is answered, numbered in the order the speeches
@@ -117,6 +120,10 @@ pub(crate) struct StorageTurns {
 impl StorageTurns {
     pub(super) fn new(enabled: bool) -> Self {
         Self { enabled, ..Default::default() }
+    }
+
+    fn capture(&self, items: Vec<ChatItem>) -> VoiceHistory {
+        VoiceHistory { items, stored: self.stored.clone(), revision: self.revision }
     }
 
     fn turn_of(&self, speech: SpeechId) -> Option<u64> {
@@ -217,14 +224,14 @@ impl VoiceDriver {
 
     /// The conversation as the session will hold it with what the turns have in flight: the
     /// words heard so far and the replies' tool records, each where a commit puts it.
-    fn checkpoint_history(&self) -> Vec<ChatItem> {
+    pub(crate) fn checkpoint_history(&self) -> VoiceHistory {
         let storage = &self.session.storage;
         let progress = (storage.progress.iter())
             .map(|(n, m)| (ChatItem::Message(m.clone()), storage.turns.get(n).map(|t| t.speech)));
         // Speech text comes from the delivery ledger: AgentRun may already hold generated text
         // that has not been heard; only tool records may lead delivery.
         let replies: Vec<(SpeechId, Vec<ChatItem>)> = self
-            .checkpoint_reply_history()
+            .checkpoint_reply_items()
             .map(|(speech, items)| {
                 (speech, items.into_iter().filter(|i| i.as_message().is_none()).collect())
             })
@@ -234,12 +241,16 @@ impl VoiceDriver {
                 .filter(|item| !matches!(item, ChatItem::FunctionCallOutput(_)))
                 .map(|item| (item.clone(), Some(*speech)))
         });
-        let mut history = self.session.chat_ctx.projected(progress.chain(calls));
-        let outputs = replies.into_iter().flat_map(|(_, items)| items);
-        for output in outputs.filter(|item| matches!(item, ChatItem::FunctionCallOutput(_))) {
-            lk_agents_abi::llm::chat_context::ordering::commit_by_instant(&mut history, output);
-        }
-        history
+        let outputs = replies.iter().flat_map(|(speech, items)| {
+            items
+                .iter()
+                .filter(|item| matches!(item, ChatItem::FunctionCallOutput(_)))
+                .map(|item| (item.clone(), Some(*speech)))
+        });
+        // Already committed records retain their canonical revisions. Raw execution results
+        // only project items the conversation has not accepted yet.
+        let history = self.session.chat_ctx.projected(progress.chain(calls).chain(outputs));
+        storage.capture(history)
     }
 
     /// The store answered one of a turn's requests. A failure ends the turn, and its speech with
@@ -359,7 +370,10 @@ impl VoiceDriver {
             match asked {
                 Some(TurnSave::Commit) => {
                     let sequence = self.session.storage.next_sequence();
-                    let history = self.session.chat_ctx.items().cloned().collect();
+                    let history = self
+                        .session
+                        .storage
+                        .capture(self.session.chat_ctx.items().cloned().collect());
                     self.record_effect(VoiceEffect::StorageCommit { speech, sequence, history });
                 }
                 Some(TurnSave::Abort) => self.record_effect(VoiceEffect::StorageAbort(speech)),
@@ -407,8 +421,14 @@ impl VoiceDriver {
         self.turn_ends(now, speech, TurnEnd::Abort { error });
     }
 
-    pub(crate) fn storage_reloaded(&mut self, read: Vec<ChatItem>, history: Vec<ChatItem>) {
-        if !self.session.chat_ctx.reload_transport(&read, history, self.activity.agent_name()) {
+    pub(crate) fn storage_reloaded(&mut self, read: Vec<ChatItem>, history: VoiceHistory) {
+        if history.revision < self.session.storage.revision {
+            return;
+        }
+        self.session.storage.revision = history.revision;
+        self.session.storage.stored = history.stored;
+        if !self.session.chat_ctx.reload_transport(&read, history.items, self.activity.agent_name())
+        {
             return;
         }
         self.publish_event(SessionEvent::HistoryReloaded {

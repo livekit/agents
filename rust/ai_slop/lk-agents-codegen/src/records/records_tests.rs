@@ -1,6 +1,20 @@
 use crate::decl::tests::read;
 
 #[test]
+fn an_emitted_dataclass_field_wraps_its_native_value_in_the_declared_host_class() {
+    let source = r#"
+        #[host(record(module = "state", dataclass, frozen, emit))]
+        pub struct State {
+            #[host(emit_class = "app.History", annotation = "app.History")]
+            pub history: Vec<String>,
+        }
+    "#;
+    let rust = crate::records::conversions(&read(source).unwrap()).unwrap().text;
+    assert!(rust.contains("CLASS.import(py, \"app\", \"History\")"));
+    assert!(rust.contains("crate::py_calls::call(CLASS.import"));
+}
+
+#[test]
 fn transparent_provider_members_distinguish_native_capabilities_from_host_classes() {
     let decls = read(
         r#"

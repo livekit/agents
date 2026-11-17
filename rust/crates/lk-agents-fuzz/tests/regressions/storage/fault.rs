@@ -1,4 +1,3 @@
-use lk_agents_abi::storage::StorageError;
 use lk_agents_fuzz::{
     drive::{ConnSetup, Outcome, Run, Setup, StorageSetup, finish, simulate},
     input::{AgentText, Input, Millis, Ref},
@@ -65,7 +64,7 @@ fn reply(seed: u64, end: Reply) -> Recording {
 #[test]
 fn bound_storage_faults_close_the_call_and_successful_receipts_finish_the_speech() {
     // Storage's own abandon logs its failures and answers Ok: only acquires and commits fail.
-    let mut unavailable = [false; 2];
+    let mut failed = [false; 2];
     let mut slow = false;
     for seed in 0..1024 {
         for end in [Reply::Complete, Reply::Fail] {
@@ -82,8 +81,10 @@ fn bound_storage_faults_close_the_call_and_successful_receipts_finish_the_speech
                     StorageOperation::Abandon => 2,
                     StorageOperation::ObserveLoss | StorageOperation::Checkpoint => continue,
                 };
-                if matches!(result, Err(StorageError::Unavailable(_))) && index < 2 {
-                    unavailable[index] = true;
+                // Resend can turn an I/O refusal into lease loss before the final receipt.
+                // Cover failed acquires and commits independent of that intermediate kind.
+                if result.is_err() && index < 2 {
+                    failed[index] = true;
                 }
                 if *operation == StorageOperation::Acquire {
                     if result.is_err() {
@@ -105,11 +106,16 @@ fn bound_storage_faults_close_the_call_and_successful_receipts_finish_the_speech
                     slow |= at.at_ms - requested.at_ms >= 250;
                     // A commit resent through an outage may outlast the lease: its loss closes the
                     // call before the failure is answered.
-                    let closed = recording.internal_view().error_close_requested_after(requested);
+                    // A lease-loss observation can already have requested close before the
+                    // pending speech reports its failed settle; it does not request it twice.
+                    let acquired = host.storage().iter().find_map(|(at,step)| {
+                        matches!(step,StorageStep::Requested {speech:id,operation:StorageOperation::Acquire} if id==speech).then_some(*at)
+                    }).unwrap();
+                    let closed = recording.internal_view().error_close_requested_after(acquired);
                     if *operation == StorageOperation::Settle && result.is_err() {
                         assert!(
                             closed,
-                            "seed {seed}: a failed durable commit did not close the call"
+                            "seed {seed}: a failed durable commit did not close the call: {result:?}"
                         );
                     }
                     assert!(
@@ -129,11 +135,11 @@ fn bound_storage_faults_close_the_call_and_successful_receipts_finish_the_speech
                 "seed {seed}: {failures:?}"
             );
         }
-        if unavailable.iter().all(|seen| *seen) && slow {
+        if failed.iter().all(|seen| *seen) && slow {
             return;
         }
     }
-    panic!("seed window missed storage outcomes: unavailable={unavailable:?}, slow={slow}");
+    panic!("seed window missed storage outcomes: failed={failed:?}, slow={slow}");
 }
 
 // Catches: a barge-in while the turn's lease take had applied but was unanswered: the
@@ -315,18 +321,15 @@ fn an_interruption_after_the_turn_is_reported_waits_for_its_receipt() {
 }
 
 // Catches (seed 1284): an interrupted reply whose turn waited on its checkpoint, the
-// checkpoint's answer lost and the database then unreachable, ended by the interruption watchdog,
+// checkpoint's receipt withheld after its write, ended by the interruption watchdog,
 // read as a reply stuck on a wait the interrupt should cut: the recording never showed the
 // checkpoint, the turn's own wait on its partition.
 #[test]
 fn an_interrupted_turn_waits_on_its_checkpoint() {
     use lk_agents_fuzz::input::{ToolAnswer, ToolArgs};
     let recording = simulate(async {
-        let storage = StorageSetup {
-            lost_answers: Some((395, 10)),
-            outage: Some((405, 20_000)),
-            ..StorageSetup::default()
-        };
+        let storage =
+            StorageSetup { checkpoint_answer_ms: Some((1, 20_000)), ..StorageSetup::default() };
         let setup = Setup {
             tts: false,
             tools: vec!["lookup".into()],

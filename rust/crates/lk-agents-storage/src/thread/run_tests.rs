@@ -800,6 +800,16 @@ async fn session_checkpoints_keep_ownership_and_do_not_commit_application_saves(
         expected_revision: 0,
         scope,
     }]);
+    run.tasks().write("remote-response", TaskState::Working, TaskPatch::default()).await.unwrap();
+    run.events().append(JournalEvent::ToolExecutionUpdated(
+        lk_agents_abi::storage::journal::ToolExecution {
+            phase: lk_agents_abi::storage::journal::ToolPhase::Update,
+            call_id: Some("remote-call".into()),
+            name: Some("booking".into()),
+            is_error: None,
+            text: Some("Checking availability".into()),
+        },
+    ));
     let item = message("partial", ChatRole::Assistant, "delivered").payload;
     run.checkpoint_session(json!({"step": 1}), vec![item.clone()]).await.unwrap();
     assert_eq!(thread.partition(PARTITION_KEY).history().await.unwrap().len(), 1);
@@ -808,6 +818,10 @@ async fn session_checkpoints_keep_ownership_and_do_not_commit_application_saves(
         Some(json!({"step": 1}))
     );
     assert!(thread.context_scopes(PARTITION_KEY).await.unwrap().is_empty());
+    assert_eq!(
+        thread.partition(PARTITION_KEY).task("remote-response").await.unwrap().unwrap().status,
+        TaskState::Working
+    );
     assert!(!run.closed() && run.lease().unwrap().check().is_ok());
     assert!(thread.journal(0, 100).await.unwrap().iter().all(|event| event.r#type != "run_ended"));
     let other = thread
@@ -824,6 +838,70 @@ async fn session_checkpoints_keep_ownership_and_do_not_commit_application_saves(
     run.checkpoint_session(json!({"step": 2}), vec![item]).await.unwrap();
     assert_eq!(thread.partition(PARTITION_KEY).history().await.unwrap().len(), 1);
     run.commit(CommitOptions::default()).await.unwrap();
+    assert_eq!(
+        thread
+            .journal(0, 100)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|event| event.r#type == "tool_execution_updated")
+            .count(),
+        1,
+        "checkpointed communication is not published again by a later checkpoint or final commit"
+    );
     assert_eq!(thread.context_scopes(PARTITION_KEY).await.unwrap()[0].fields["count"], json!(42));
     thread.close().await;
+}
+
+#[tokio::test]
+async fn a_checkpoint_with_a_lost_ack_recovers_state_and_task_and_journal_together() {
+    use crate::testing::WriteFault;
+
+    for fault in [WriteFault::LoseAckAfter, WriteFault::LoseAckBefore] {
+        let fixture = Backend::Sqlite.fixture(None).await;
+        let (thread, faults) = fixture.faulty_thread().await;
+        let partition = thread.partition(PARTITION_KEY);
+        let mut run = partition
+            .open(RunOptions::new("response", ""), &crate::Holder::new("owner"))
+            .await
+            .unwrap();
+        run.tasks()
+            .write("remote-task", TaskState::InputRequired, TaskPatch::default())
+            .await
+            .unwrap();
+        run.events().append(JournalEvent::Error { error: "observation lost".into() });
+        faults.fail_next_commit(fault);
+        let outcome = run.checkpoint_session(json!({"remote": "input_required"}), vec![]).await;
+        let task = partition.task("remote-task").await.unwrap();
+        let state = partition.info().await.unwrap().unwrap().state;
+        let events = thread.journal(0, 100).await.unwrap();
+        let errors = events.iter().filter(|event| event.r#type == "error").count();
+        match fault {
+            WriteFault::LoseAckAfter => {
+                outcome.unwrap();
+                assert_eq!(task.unwrap().status, TaskState::InputRequired);
+                assert_eq!(state, Some(json!({"remote": "input_required"})));
+                assert_eq!(errors, 1);
+                run.commit(CommitOptions::default()).await.unwrap();
+                assert_eq!(
+                    thread
+                        .journal(0, 100)
+                        .await
+                        .unwrap()
+                        .iter()
+                        .filter(|event| event.r#type == "error")
+                        .count(),
+                    1
+                );
+            }
+            WriteFault::LoseAckBefore => {
+                assert!(matches!(outcome, Err(StorageError::Uncertain(_))));
+                assert!(task.is_none() && state.is_none());
+                assert_eq!(errors, 0, "a checkpoint never persists only half its framework state");
+            }
+            _ => unreachable!("only the two acknowledgement-loss faults are used"),
+        }
+        drop(run);
+        fixture.cleanup(&[&thread]).await;
+    }
 }

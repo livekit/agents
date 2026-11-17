@@ -41,7 +41,7 @@ continue the same history when their thread and partition key match. A remote
 expert selects a separate key when it needs independent conversation state.
 `AgentHandler` only groups entry points; it has no persistence identity.
 A partition is not allocated for every local agent invocation.
-`TextSessionState` keeps its own agent frames, private histories, and pending
+`SessionState` keeps its own agent frames, private histories, and pending
 calls; those frames do not each create a partition.
 
 The journal is the framework's append-only event record, separate from editable

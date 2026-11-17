@@ -32,6 +32,9 @@ use lk_agents_runtime::net::env::{ProcessEnv, ProcessError};
 use lk_agents_runtime::storage::StorageError;
 
 const PARTITION_KEY: &str = "front-desk";
+#[cfg(test)]
+#[path = "remote_tests.rs"]
+mod remote_tests;
 /// How long a client waits on its turn before giving up on it.
 const TURN_DEADLINE_MS: u64 = 600_000;
 
@@ -322,7 +325,6 @@ impl Env {
             execution_id: format!("exec_{id}"),
             task_id: None,
             message: ChatItem::Message(self.message(&format!("m_{id}"))),
-            state: None,
             delegated: false,
             conn_options: Default::default(),
         };

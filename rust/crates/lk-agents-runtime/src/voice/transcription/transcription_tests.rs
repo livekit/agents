@@ -67,6 +67,42 @@ struct Chain {
 /// A transcript sink below the synchroniser that refuses every word, counting the refusals.
 struct RefusingText(watch::Sender<usize>);
 
+#[derive(Default)]
+struct RecordedText(parking_lot::Mutex<Vec<String>>);
+
+impl TranscriptionOutput for RecordedText {
+    fn label(&self) -> &str {
+        "recorded text"
+    }
+    fn capture_text<'a>(
+        &'a self,
+        _: &lk_agents_abi::telemetry::Cx,
+        text: &'a str,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            self.0.lock().push(text.into());
+            Ok(())
+        })
+    }
+    fn flush(&self) {
+        self.0.lock().push("<flush>".into());
+    }
+}
+
+/// A detached audio leg switches to unpaced text while the preceding paced output is queued.
+/// Both paths must reach the physical sink in the order the synchronizer released them.
+#[tokio::test]
+async fn unpaced_text_cannot_overtake_queued_paced_text_and_its_flush() {
+    let recorded = Arc::new(RecordedText::default());
+    let c = Chain::with_text(Some(recorded.clone()));
+    c.text("First.").await;
+    c.sync.audio_output().flush();
+    c.sync.audio_output().on_detached();
+    c.text("Second.").await;
+    c.sync.aclose().await;
+    assert_eq!(*recorded.0.lock(), ["First.", "<flush>", "Second.", "<flush>"]);
+}
+
 impl TranscriptionOutput for RefusingText {
     fn label(&self) -> &str {
         "refusing text"

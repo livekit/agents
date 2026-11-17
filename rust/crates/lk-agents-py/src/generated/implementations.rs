@@ -5,12 +5,12 @@ impl super::Implementations for Selected {
     type Credentials = ::lk_agents_runtime::net::a2a_auth::Credentials;
     type AuthPermissions = ::lk_agents_runtime::net::a2a_auth::Credentials;
     type EndpointCard = ::lk_agents_runtime::cores::CardBuilder;
-    type MessageContent = ::lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
+    type MessageContent = ::lk_agents_runtime::delegation::remote::RemoteInteraction;
     type Reply = ::lk_agents_runtime::net::a2a_client::Reply;
     type AgentClient = ::lk_agents_runtime::net::a2a_client::AgentClient;
     type A2ADoor = ::lk_agents_runtime::a2a::door::Door;
-    type RemoteInteraction = ::lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
-    type RemoteConfiguration = ::lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
+    type RemoteInteraction = ::lk_agents_runtime::delegation::remote::RemoteInteraction;
+    type RemoteConfiguration = ::lk_agents_runtime::delegation::remote::RemoteInteraction;
     type HandlerTurn = ::lk_agents_runtime::a2a::handler::HandlerTurn;
     type Turn = ::lk_agents_runtime::a2a::Turn;
     type HandlerOutcomes = ::lk_agents_runtime::cores::HandlerOutcomes;
@@ -72,6 +72,9 @@ impl super::Implementations for Selected {
     type LlmMetricState = ::lk_agents_runtime::cores::LlmMetricState;
     type TtsMetricState = ::lk_agents_runtime::cores::TtsMetricState;
     type SessionRecorder = ::lk_agents_runtime::recording::SessionRecorder;
+    type RemoteAgentView = ::lk_agents_runtime::storage::session_state::remote::RemoteAgent;
+    type RemoteContextView = ::lk_agents_runtime::storage::session_state::remote::RemoteContext;
+    type RemoteTaskView = ::lk_agents_runtime::storage::session_state::remote::RemoteTask;
     type Storage = ::lk_agents_runtime::storage::storage::Namespace;
     type ContextActivation = ::lk_agents_runtime::storage::context::store::ContextStore;
     type AppTransaction = ::lk_agents_runtime::storage::context::transaction::Transaction;
@@ -92,7 +95,7 @@ impl super::Implementations for Selected {
     type SessionReportFunctions = ::lk_agents_runtime::net::export::session_report::ReportFiles;
     type Tagger = ::lk_agents_runtime::net::export::session_report::tagger::Tagger;
     type TextSessionRunner = ::lk_agents_runtime::text_session::Runner;
-    type LocalInteraction = ::lk_agents_runtime::agent_tool::LocalInteraction;
+    type LocalInteraction = ::lk_agents_runtime::delegation::local::LocalInteraction;
     type TokenizeFunctions = ::lk_agents_runtime::cores::SpeechTokenizer;
     type SpeechSentenceTokenizer = ::lk_agents_runtime::cores::SpeechSentenceTokenizer;
     type SpeechSentenceStream = ::lk_agents_runtime::cores::SentenceStream;

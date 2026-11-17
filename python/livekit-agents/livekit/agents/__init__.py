@@ -62,7 +62,7 @@ from .llm.tool_context import (
 from .plugin import Plugin
 from .storage.context import load_context, persisted, save_context
 from .storage.session_state import BoundContext, SessionState
-from .text_session import TextSession, TextSessionRoutingError, TextSessionState, TextSessionTurn
+from .text_session import TextSession, TextSessionRoutingError
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -150,8 +150,6 @@ __all__ = [
     "RoomIO",
     "RoomBinding",
     "TextSession",
-    "TextSessionState",
-    "TextSessionTurn",
     "TextSessionRoutingError",
     "persisted",
     "BoundContext",

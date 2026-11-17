@@ -140,11 +140,16 @@ fn normalized(word: &str) -> String {
 impl AlignedTranscript {
     /// The pieces from the cursor on: silent chunks whole, spoken chunks word by word, a word
     /// split across chunks joined.
-    fn pending(&self, said: &Visible) -> Vec<Pending> {
+    fn pending(&self, said: &Visible, stamped_word: Option<&str>) -> Vec<Pending> {
         let mut out: Vec<Pending> = Vec::new();
         for slice in self.slices(said) {
             match out.last_mut() {
-                Some(last) if last.continued_by(&slice) => {
+                Some(last)
+                    if last.continued_by(&slice)
+                        && !(stamped_word.is_some()
+                            && last.word.as_deref() == stamped_word
+                            && last.text().ends_with(['.', '!', '?'])) =>
+                {
                     last.chunks.extend(slice.chunks);
                     last.word = match (last.word.take(), slice.word) {
                         (None, None) => None,
@@ -210,7 +215,13 @@ impl AlignedTranscript {
         stamp: &TranscriptChunk,
         said: &Visible,
     ) -> Vec<AlignedTranscriptEffect> {
-        let pending = self.pending(said);
+        let said_words: Vec<String> =
+            stamp.text.split_whitespace().map(normalized).filter(|w| !w.is_empty()).collect();
+        let reach = said_words.len().saturating_sub(1);
+        let last = said_words.last().map_or_else(|| normalized(&stamp.text), Clone::clone);
+        // Sentence chunks need not contain a blank between them. An exact provider word
+        // ending at that punctuation keeps its own boundary and timing.
+        let pending = self.pending(said, (said_words.len() == 1).then_some(last.as_str()));
         let words: Vec<usize> =
             pending.iter().enumerate().filter(|(_, p)| p.word.is_some()).map(|(i, _)| i).collect();
         // a word the reply has not finished writing (its text ends mid-word) takes only a stamp
@@ -218,10 +229,6 @@ impl AlignedTranscript {
         let unfinished = |i: usize| {
             i + 1 == pending.len() && pending[i].text().ends_with(|c: char| !c.is_whitespace())
         };
-        let said_words: Vec<String> =
-            stamp.text.split_whitespace().map(normalized).filter(|w| !w.is_empty()).collect();
-        let reach = said_words.len().saturating_sub(1);
-        let last = said_words.last().map_or_else(|| normalized(&stamp.text), Clone::clone);
         // the match nearest to where the stamp's last word falls
         let found = (words.iter().enumerate())
             .take(LOOKAHEAD + reach)
@@ -300,7 +307,7 @@ impl AlignedTranscript {
         }
         let mut effects = Vec::new();
         if self.stamped {
-            let mut pending = self.pending(said).into_iter().peekable();
+            let mut pending = self.pending(said, None).into_iter().peekable();
             // silent text after the last word shown is the voice's too: it shows with that word
             while let Some(start_time) = self.last_start
                 && let Some(piece) = pending.next_if(|p| p.word.is_none())

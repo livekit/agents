@@ -10,11 +10,11 @@ use lk_agents_abi::voice::events::Leg;
 use std::sync::Arc;
 
 /// Where a starting speech's history lives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SpeechHistory {
-    /// The speech takes the voice partition: the store reloads the history before the model reads it
-    /// and watches the lease.
-    VoicePartition,
+    /// The speech takes the partition using conversation items, never its private model prompt.
+    /// The core replans from the reconciled record before the model reads it.
+    VoicePartition { history: lk_agents_abi::storage::voice::VoiceHistory },
     /// The session's history in memory, with no store.
     InMemory,
 }
@@ -49,14 +49,14 @@ pub enum VoiceEffect {
         checkpoint: u64,
         speech: SpeechId,
         agent: String,
-        history: Vec<lk_agents_abi::ChatItem>,
+        history: lk_agents_abi::storage::voice::VoiceHistory,
     },
     StorageAbort(SpeechId),
     StorageCommit {
         speech: SpeechId,
         /// Shares the checkpoint sequence: a late older snapshot cannot replace this one.
         sequence: u64,
-        history: Vec<lk_agents_abi::ChatItem>,
+        history: lk_agents_abi::storage::voice::VoiceHistory,
     },
     /// Recognition checkpoints and accepted conversation without a corresponding speech.
     SaveConversation(Box<lk_agents_abi::storage::voice::VoiceConversationProgress>),

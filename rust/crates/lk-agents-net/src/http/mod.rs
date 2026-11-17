@@ -1,4 +1,5 @@
 pub mod exchange;
+pub mod port;
 
 /// The HTTP vocabulary of [`GatewayHttp`]'s callers.
 pub use reqwest::{Method, StatusCode, header::HeaderMap};

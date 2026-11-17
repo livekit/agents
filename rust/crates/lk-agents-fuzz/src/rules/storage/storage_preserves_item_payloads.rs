@@ -4,6 +4,7 @@ use lk_agents_abi::llm::chat_context::protocol::encode_chat_item;
 use lk_agents_abi::{ChatItem, ChatMessage, Role};
 use lk_agents_voice::agent::{Source, Visibility};
 use lk_agents_voice::events::SessionEvent;
+use lk_agents_voice::trace::{CoreStep, Step};
 
 use crate::{
     authored::Authored,
@@ -19,20 +20,20 @@ impl Rule for StoragePreservesItemPayloads {
     const CONTRACT: Contract = Contract {
         id: "storage_preserves_item_payloads",
         guarantee: "A successfully settled conversation preserves accepted item payloads through its save request, including interrupted assistant prefixes and flags. Reloads replace the expected database view; later unsaved revisions are not treated as durable.",
-        examples: &[a_delayed_reload_cannot_undo_foreign_compaction, a_reload_does_not_accept_private_model_context, cut_saved, unsaved_revision, foreign_reload, unseen_foreign_item_kept],
-        counterexamples: &[a_delayed_reload_cannot_hide_a_lost_foreign_summary, generated_tail_saved, interruption_flag_lost, accepted_item_lost, unseen_foreign_item_lost],
+        examples: &[a_foreign_write_does_not_save_unacknowledged_local_edits, an_unrelated_foreign_append_keeps_a_new_local_revision, a_late_host_callback_keeps_the_snapshot_causal_order, a_later_accepted_revision_can_already_be_saved, a_queued_snapshot_does_not_include_later_input, a_delayed_reload_cannot_undo_foreign_compaction, a_reload_does_not_accept_private_model_context, cut_saved, unsaved_revision, foreign_reload, unseen_foreign_item_kept],
+        counterexamples: &[a_foreign_write_still_protects_its_own_addition, an_older_unsaved_local_edit_cannot_replace_a_foreign_edit, an_unrelated_foreign_append_cannot_excuse_losing_a_local_revision, a_late_host_callback_does_not_excuse_the_old_payload, a_queued_snapshot_still_protects_its_captured_input, a_delayed_reload_cannot_hide_a_lost_foreign_summary, generated_tail_saved, interruption_flag_lost, accepted_item_lost, unseen_foreign_item_lost],
         probe: None,
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
         let host = r.host_view();
         let through = durable_through(r);
-        let Some(through) = through else { return };
+        let events = history_events(r);
         // Reloads also carry private model-context items, which were never accepted into
         // conversation history. Only public acceptance or an observed foreign commit makes
         // an identity part of this durability contract.
         let mut accepted_ids = std::collections::BTreeSet::new();
-        for (_, event) in host.events() {
+        for (_, event) in events.iter().copied() {
             if let SessionEvent::ConversationItemAdded { item, visibility, .. } = event
                 && visibility.history()
             {
@@ -40,7 +41,7 @@ impl Rule for StoragePreservesItemPayloads {
             }
         }
         for (_, step) in host.storage() {
-            if let StorageStep::ForeignCommitted { items } = step {
+            if let StorageStep::ForeignCommitted { items, .. } = step {
                 accepted_ids.extend(items.iter().map(ChatItem::id));
             }
         }
@@ -48,29 +49,36 @@ impl Rule for StoragePreservesItemPayloads {
         let mut retired = std::collections::BTreeSet::new();
         let mut foreign_current = std::collections::BTreeSet::new();
         let mut changes = BTreeMap::new();
-        for (at, event) in host.events() {
+        for (at, event) in events.iter().copied() {
             changes.insert(at, Ok(event));
         }
         for (at, step) in host.storage() {
-            if let StorageStep::ForeignCommitted { items } = step {
-                changes.insert(*at, Err(items));
+            if let StorageStep::ForeignCommitted { before, items } = step {
+                changes.insert(*at, Err((before, items)));
             }
         }
         for (at, change) in changes {
-            if at > through {
-                break;
-            }
-            if let Err(items) = change {
-                // A foreign compaction is authoritative. A delayed reload of an older read
-                // cannot accept its removed rows again; only a new local item revision can.
+            if let Err((before, items)) = change {
+                // Observe that writer's actual edits. Its unchanged stored rows do not replace
+                // newer local revisions that have not reached storage yet; omissions only
+                // retire rows that writer had actually read.
                 let incoming: std::collections::BTreeSet<_> = items.iter().map(ChatItem::id).collect();
-                retired.extend(expected.keys().copied().filter(|id| !incoming.contains(id)));
-                retired.retain(|id| !incoming.contains(id));
-                foreign_current = incoming;
-                expected.clear();
+                let previous: BTreeMap<_, _> = before.iter().map(|item| (item.id(), item)).collect();
+                let removed: std::collections::BTreeSet<_> = previous.keys().copied().filter(|id| !incoming.contains(id)).collect();
+                retired.extend(removed.iter().copied());
+                expected.retain(|id, _| !removed.contains(id));
+                foreign_current.retain(|id| incoming.contains(id));
                 for item in items {
+                    if previous.get(item.id()).is_some_and(|before| payload(before) == payload(item)) {
+                        continue;
+                    }
+                    retired.remove(item.id());
+                    foreign_current.insert(item.id());
                     expected.insert(item.id(), (at, item));
                 }
+                continue;
+            }
+            if !through.is_some_and(|through| at <= through) {
                 continue;
             }
             let event = change.expect("foreign changes were handled");
@@ -91,30 +99,75 @@ impl Rule for StoragePreservesItemPayloads {
                 _ => {}
             }
         }
+        let mut later = BTreeMap::<_, Vec<_>>::new();
+        for (at, event) in events.iter().copied() {
+            if through.is_none_or(|through| at > through)
+                && let SessionEvent::ConversationItemAdded { item, visibility, .. } = event
+                && visibility.history()
+            {
+                later.entry(item.id()).or_default().push((at, item.as_ref()));
+            }
+        }
         for (_, step) in host.storage() {
             let StorageStep::Saved { items } = step else { continue };
             for (id, (accepted, item)) in &expected {
-                if *accepted > through || !durable(item) {
+                if !durable(item) {
                     continue;
                 }
                 let saved = items.iter().find(|saved| saved.id() == *id);
-                check.expect_with(Subject::Session, saved.is_some_and(|saved| {
-                        payload(saved) == payload(item)
-                }), || format!("item {id} was accepted before its save but read back as {saved:?}; expected {item:?}"));
+                let preserved = saved.is_some_and(|saved| {
+                    payload(saved) == payload(item)
+                        || later.get(id).is_some_and(|versions| {
+                            versions.iter().any(|(at, later)| *at > *accepted && payload(saved) == payload(later))
+                        })
+                });
+                check.expect_with(Subject::Session, preserved, || {
+                    format!("item {id} was accepted before its save but read back as {saved:?}; expected {item:?}")
+                });
             }
         }
     }
 }
 
+/// History revisions are selected before their host callbacks run. Compare captured snapshots
+/// with that causal order, even when the callback arrives after the snapshot's preparation.
+pub(super) fn history_events(r: &Recording) -> Vec<(Observed, &SessionEvent)> {
+    let events: Vec<_> = r
+        .internal_view()
+        .steps()
+        .iter()
+        .filter_map(|(at, step)| match step {
+            Step::Emitted(event) => Some((*at, event)),
+            _ => None,
+        })
+        .collect();
+    if events.is_empty() { r.host_view().events() } else { events }
+}
+
 pub(super) fn durable_through(r: &Recording) -> Option<Observed> {
     let host = r.host_view();
+    let prepared: BTreeMap<_, _> = r
+        .internal_view()
+        .steps()
+        .iter()
+        .filter_map(|(at, step)| match step {
+            Step::Core(CoreStep::ConversationCheckpointPrepared { sequence }) => {
+                Some((*sequence, *at))
+            }
+            _ => None,
+        })
+        .collect();
+    let mut submitted = BTreeMap::new();
     let mut pending = BTreeMap::new();
     let mut conversations = BTreeMap::new();
     let mut through = None::<Observed>;
     for (at, step) in host.storage() {
         match step {
             StorageStep::ConversationRequested { progress } => {
-                conversations.insert(progress.sequence, *at);
+                // A queued snapshot was captured before its I/O task starts. Its receipt
+                // cannot make input accepted in that intervening time durable.
+                let captured = prepared.get(&progress.sequence).copied().unwrap_or(*at);
+                conversations.insert(progress.sequence, captured);
             }
             StorageStep::ConversationAnswered { sequence, result } => {
                 if let Some(requested) = conversations.remove(sequence)
@@ -123,11 +176,12 @@ pub(super) fn durable_through(r: &Recording) -> Option<Observed> {
                     through = Some(through.map_or(requested, |held| held.max(requested)));
                 }
             }
-            StorageStep::ForeignCommitted { .. } => {
-                through = Some(through.map_or(*at, |held| held.max(*at)));
+            StorageStep::HistorySubmitted { speech, sequence, .. } => {
+                submitted.insert(*speech, prepared.get(sequence).copied().unwrap_or(*at));
             }
             StorageStep::Requested { speech, operation } if matches!(operation, StorageOperation::Settle | StorageOperation::Checkpoint) => {
-                pending.insert((*speech, *operation), *at);
+                let captured = submitted.get(speech).copied().unwrap_or(*at);
+                pending.insert((*speech, *operation), captured);
             }
             StorageStep::Answered { speech, operation, result, .. } if matches!(operation, StorageOperation::Settle | StorageOperation::Checkpoint) => {
                 if let Some(requested) = pending.remove(&(*speech, *operation))
@@ -193,6 +247,15 @@ fn unsaved_revision() -> Recording {
         .done()
 }
 
+/// A later write can apply without a final receipt, for example when its answer is lost.
+/// It may advance an item to another accepted revision; it cannot introduce generated text.
+fn a_later_accepted_revision_can_already_be_saved() -> Recording {
+    settled(Authored::new().session(accepted(message("heard", true))))
+        .session(accepted(message("later", true)))
+        .storage(StorageStep::Saved { items: vec![message("later", true)] })
+        .done()
+}
+
 fn foreign_reload() -> Recording {
     settled(Authored::new().session(accepted(message("heard", true)))
         .session(SessionEvent::HistoryReloaded { items: vec![message("foreign edit", false)] }))
@@ -216,7 +279,7 @@ fn accepted_item_lost() -> Recording {
 
 fn foreign_and_local() -> Authored {
     Authored::new()
-        .storage(StorageStep::ForeignCommitted { items: vec![message("foreign", false)] })
+        .storage(StorageStep::ForeignCommitted { before: vec![], items: vec![message("foreign", false)] })
         .session(accepted(ChatItem::Message(ChatMessage::text("local", Role::User, "voice", std::time::UNIX_EPOCH))))
 }
 
@@ -245,8 +308,8 @@ fn summary(id: &str) -> ChatItem {
 
 fn delayed_compaction() -> Authored {
     settled(Authored::new()
-        .storage(StorageStep::ForeignCommitted { items: vec![summary("old")] })
-        .storage(StorageStep::ForeignCommitted { items: vec![summary("new")] })
+        .storage(StorageStep::ForeignCommitted { before: vec![], items: vec![summary("old")] })
+        .storage(StorageStep::ForeignCommitted { before: vec![summary("old")], items: vec![summary("new")] })
         .session(SessionEvent::HistoryReloaded { items: vec![summary("old")] }))
 }
 
@@ -256,4 +319,119 @@ fn a_delayed_reload_cannot_undo_foreign_compaction() -> Recording {
 
 fn a_delayed_reload_cannot_hide_a_lost_foreign_summary() -> Recording {
     delayed_compaction().storage(StorageStep::Saved { items: vec![] }).done()
+}
+
+fn foreign_append_with_a_local_edit() -> Authored {
+    Authored::new()
+        .session(accepted(message("new local words", false)))
+        .storage(StorageStep::ForeignCommitted {
+            before: vec![message("old stored words", false)],
+            items: vec![message("old stored words", false), summary("foreign")],
+        })
+}
+
+/// Appending an unrelated text message never rewrites this owner's unsaved new voice words.
+fn an_unrelated_foreign_append_keeps_a_new_local_revision() -> Recording {
+    settled(foreign_append_with_a_local_edit())
+        .storage(StorageStep::Saved { items: vec![message("new local words", false), summary("foreign")] })
+        .done()
+}
+
+fn an_unrelated_foreign_append_cannot_excuse_losing_a_local_revision() -> Recording {
+    settled(foreign_append_with_a_local_edit())
+        .storage(StorageStep::Saved { items: vec![message("old stored words", false), summary("foreign")] })
+        .done()
+}
+
+fn foreign_append_after_a_local_receipt() -> Authored {
+    settled(Authored::new().session(accepted(message("saved", false))))
+        .session(accepted(message("not saved yet", false)))
+        .storage(StorageStep::ForeignCommitted {
+            before: vec![message("saved", false)],
+            items: vec![message("saved", false), summary("foreign")],
+        })
+}
+
+/// A foreign append acknowledges its own rows, not another owner's newer unsaved words.
+fn a_foreign_write_does_not_save_unacknowledged_local_edits() -> Recording {
+    foreign_append_after_a_local_receipt()
+        .storage(StorageStep::Saved { items: vec![message("saved", false), summary("foreign")] })
+        .done()
+}
+
+fn a_foreign_write_still_protects_its_own_addition() -> Recording {
+    foreign_append_after_a_local_receipt()
+        .storage(StorageStep::Saved { items: vec![message("saved", false)] })
+        .done()
+}
+
+fn an_older_unsaved_local_edit_cannot_replace_a_foreign_edit() -> Recording {
+    settled(Authored::new().session(accepted(message("saved", false))))
+        .session(accepted(message("older unsaved local edit", false)))
+        .storage(StorageStep::ForeignCommitted {
+            before: vec![message("saved", false)],
+            items: vec![message("actual foreign edit", false)],
+        })
+        .storage(StorageStep::Saved { items: vec![message("older unsaved local edit", false)] })
+        .done()
+}
+
+/// The owner captures one revision, accepts another input, then its queued I/O task starts.
+/// Only the captured revision is protected by that task's successful receipt.
+fn queued_snapshot() -> Authored {
+    let captured = message("captured", false);
+    let later = ChatItem::Message(ChatMessage::text(
+        "later", Role::User, "later input", std::time::UNIX_EPOCH,
+    ));
+    Authored::new()
+        .session(accepted(captured.clone()))
+        .journal(Step::Core(CoreStep::ConversationCheckpointPrepared { sequence: 7 }))
+        .session(accepted(later))
+        .storage(StorageStep::ConversationRequested {
+            progress: lk_agents_abi::storage::voice::VoiceConversationProgress {
+                sequence: 7,
+                agent: "desk".into(),
+                history: lk_agents_abi::storage::voice::VoiceHistory::new(vec![captured]),
+                pending_user_turns: Vec::new(),
+                boundary: lk_agents_abi::storage::voice::VoiceConversationBoundary::UserTurnCompleted,
+            },
+        })
+        .storage(StorageStep::ConversationAnswered { sequence: 7, result: Ok(()) })
+}
+
+fn a_queued_snapshot_does_not_include_later_input() -> Recording {
+    queued_snapshot().storage(StorageStep::Saved { items: vec![message("captured", false)] }).done()
+}
+
+fn a_queued_snapshot_still_protects_its_captured_input() -> Recording {
+    queued_snapshot().storage(StorageStep::Saved { items: vec![] }).done()
+}
+
+fn delayed_history_callback() -> Authored {
+    let before = message("old", false);
+    let update = SessionEvent::HistoryReloaded { items: vec![message("edited", false)] };
+    Authored::new()
+        .journal(Step::Emitted(accepted(before.clone())))
+        .session(accepted(before))
+        .journal(Step::Emitted(update.clone()))
+        .journal(Step::Core(CoreStep::ConversationCheckpointPrepared { sequence: 4 }))
+        .session(update)
+        .storage(StorageStep::ConversationRequested {
+            progress: lk_agents_abi::storage::voice::VoiceConversationProgress {
+                sequence: 4,
+                agent: "desk".into(),
+                history: lk_agents_abi::storage::voice::VoiceHistory::new(vec![message("edited", false)]),
+                pending_user_turns: Vec::new(),
+                boundary: lk_agents_abi::storage::voice::VoiceConversationBoundary::UserTurnCompleted,
+            },
+        })
+        .storage(StorageStep::ConversationAnswered { sequence: 4, result: Ok(()) })
+}
+
+fn a_late_host_callback_keeps_the_snapshot_causal_order() -> Recording {
+    delayed_history_callback().storage(StorageStep::Saved { items: vec![message("edited", false)] }).done()
+}
+
+fn a_late_host_callback_does_not_excuse_the_old_payload() -> Recording {
+    delayed_history_callback().storage(StorageStep::Saved { items: vec![message("old", false)] }).done()
 }

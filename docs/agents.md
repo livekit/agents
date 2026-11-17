@@ -145,7 +145,9 @@ the application's final-result contract. See the
 
 `input_requirements` preserves all tool-originated requests in model-call order, including
 requests produced alongside another terminal outcome. Each entry has `invocation_id`, `call.name`,
-`call.call_id`, `call.answer_tool`, `question`, and `verbatim`. The singular `question` is the
+`call.call_id`, `question`, and `verbatim`. The call identifies the asking tool;
+it is not an instruction to invoke that tool with the next human message.
+The singular `question` is the
 first request. Additional requests remain
 waiting; this metadata does not queue their presentation, choose their priority, or answer
 them automatically. A conversation coordinator must retain their identities when deciding
@@ -168,9 +170,8 @@ other session frames. User-visible dialogue is a separate view.
 
 Every outcome branch retains the same history and usage access. Streaming
 delivers incremental text and events; the settled result uses this contract.
-`TextSession.run()` returns an envelope containing this result as
-`turn.result` and routing state as `turn.state`. Frame selection, parent
-tool-call correlation, and context scopes belong to the session.
+`TextSession.run()` returns this same RunResult. Agent selection, parent tool-call
+correlation and private histories belong to the bound SessionState.
 
 `run()` operates on the supplied history and context; tools may mutate that
 context and perform external effects. The shared Agent definition keeps no
@@ -602,10 +603,8 @@ choose which event fields their external clients may see.
 `result.question`. There is no open stream or suspended backend coroutine
 waiting for the person's later answer.
 
-Retain history and state according to the selected
-[persistence mode](persistence.md#session-state-and-explicit-binding): bound
-sessions checkpoint their state, while detached callers save it explicitly.
-Application fields always require explicit saves. The next input starts another
+Continue through a [store binding](persistence.md#session-state-and-explicit-binding), which
+checkpoints shared session state. Application fields require explicit saves. The next input starts another
 invocation with that data. Streaming uses the shared [approval gate](tools.md#approval).
 A question already streamed is finalized as the same question, not delivered
 again merely because the caller reads `result.question`.
@@ -639,24 +638,14 @@ its Python await.
 ### Text session streaming
 
 ```python
-conversation = Conversation()
-await ctx.store.load_context(conversation)
-await ctx.store.load_context(app)
-
-async with session.run_stream(
-    ctx.message,
-    state=conversation.session_state,
-    context=app,
-) as stream:
+app = await ctx.store.load_context(App(services=services))
+async with session.run_stream(ctx.message, context=ctx.store.bind(app)) as stream:
     async for event in stream.stream_events():
         await handle_backend_event(event)
+    result = await stream.result()
 
-    turn = await stream.result()
-
-conversation.session_state = turn.state
-await ctx.store.save_context(app)
-await ctx.store.save_context(conversation)
-return turn.result
+await ctx.store.save_context(app)  # Only application fields require an explicit save.
+return result
 ```
 
 `session.run_stream` accepts the same arguments as `session.run`. It continues
@@ -666,9 +655,9 @@ work performed before the final result or input-required outcome. Child event
 identities remain separate; emitting them does not grant access to other
 context scopes or merge their private histories.
 
-The returned state is the retained position for the next request. An error or
-cancellation does not provide a successful replacement state. Retry from the
-last explicitly saved state and reconcile external effects as needed.
+The binding keeps `app.session` current for the next request. After an error or cancellation,
+resume from the last durable checkpoint and reconcile external effects as needed. Inspection
+snapshots remain detached from subsequent execution.
 
 ### Managed endpoints and persistence
 

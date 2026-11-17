@@ -34,7 +34,7 @@ result.expect.no_more_events()
 ```
 
 `result.expect` is on every [`RunResult`](agents.md#running-a-turn), from
-`agent.run()` and from a `TextSession` turn's `turn.result`. Its events are this
+`agent.run()` and from a `TextSession` result. Its events are this
 invocation's assistant messages, tool calls and tool outputs, in order: the
 items of `result.new_messages()` without the incoming message. Plain list
 assertions over `result.new_messages()` work as well. `agent` and its model are

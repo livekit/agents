@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use lk_agents_abi::storage::context::ContextActivation as _;
 use lk_agents_abi::storage::session::{PersistedSessionState as _, SessionBinding as HostBinding};
-use lk_agents_abi::text_session::{SessionStateSink, TextSessionState};
+use lk_agents_abi::text_session::{SessionSnapshot, SessionStateSink};
 use lk_agents_abi::{BoxFuture, ChatItem};
 
 use crate::StorageError;
@@ -53,18 +53,17 @@ impl HostBinding for SessionBinding {
             .map_err(|error| StorageError::Invalid(error.to_string()))?;
         self.store.stage_session(value)
     }
-    fn update_voice(&self, agent: String, history_ids: Vec<String>) -> Result<(), StorageError> {
+    fn update_voice(&self, agent: String, history: Vec<ChatItem>) -> Result<(), StorageError> {
         self.ensure_open()?;
-        self.store.stage_session(crate::session_state::voice_value(agent, history_ids)?)
+        self.store.stage_session(crate::session_state::voice_value(
+            agent,
+            history,
+            self.store.session_state().as_ref(),
+        )?)
     }
     fn validate_voice(&self, agent: String) -> Result<(), StorageError> {
         self.ensure_open()?;
-        if self.view.kind() == lk_agents_abi::storage::session::SessionKind::Text {
-            return Err(StorageError::Invalid(
-                "a text snapshot cannot resume a voice session".into(),
-            ));
-        }
-        if let Some(saved) = self.view.active_agent()
+        if let Some(saved) = self.view.current_agent()?.map(|agent| agent.agent_name)
             && saved != agent
         {
             return Err(StorageError::Invalid(format!(
@@ -95,14 +94,26 @@ impl HostBinding for SessionBinding {
 }
 
 impl SessionStateSink for SessionBinding {
+    fn restore(&self) -> Result<Option<SessionSnapshot>, StorageError> {
+        self.ensure_open()?;
+        let state = self
+            .store
+            .session_state()
+            .unwrap_or_else(|| serde_json::json!({"version": 1, "kind": "empty"}));
+        let checked = SessionState::from_value(state)?;
+        let snapshot = checked._snapshot_data()?;
+        self.view.assign(&checked);
+        Ok(snapshot)
+    }
+
     fn publish<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
-        state: TextSessionState,
+        state: SessionSnapshot,
     ) -> BoxFuture<'a, Result<(), StorageError>> {
         Box::pin(async move {
             self.ensure_open()?;
-            self.store.stage_session(crate::session_state::text_value(state)?)?;
+            self.store.stage_session(crate::session_state::snapshot_value(state)?)?;
             self.flush(None).await
         })
     }

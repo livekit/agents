@@ -200,12 +200,12 @@ class Conversation:
     visits: int = persisted(default=0)
 
 
-@pytest.mark.parametrize("persistence", ["manual", "bound", "unsaved"])
+@pytest.mark.parametrize("persistence", ["bound", "unsaved"])
 async def test_text_session_storage_survives_a_request_on_another_server(
     two_servers: TwoServers,
     stock_clients: StockClients,
     thread_storages: tuple[Storage, Storage],
-    persistence: Literal["manual", "bound", "unsaved"],
+    persistence: Literal["bound", "unsaved"],
 ) -> None:
     """Real HTTP/SQLite or AgentDB: fresh request contexts restore only explicitly saved or
     bound conversations. Binding alone never saves ordinary application field mutations."""
@@ -228,10 +228,10 @@ async def test_text_session_storage_survives_a_request_on_another_server(
             messages = (
                 [
                     item.text_content
-                    for item in app.session.frames[app.session.root_frame_id].history
+                    for item in app.session.chat_history.items
                     if item.type == "message"
                 ]
-                if app.session.kind == "text"
+                if app.session.current_agent is not None
                 else []
             )
             return json.dumps({"messages": messages, "visits": app.visits})
@@ -241,11 +241,8 @@ async def test_text_session_storage_survives_a_request_on_another_server(
         turn = await TextSession(agent=agent).run(
             ctx.message, context=ctx.store.bind(app) if persistence == "bound" else app
         )
-        if persistence == "manual":
-            app.session = turn.state
-            await ctx.store.save_context(app)
-        assert turn.result.status == "completed"
-        return turn.result.output
+        assert turn.status == "completed"
+        return turn.output
 
     async def request(
         http: httpx.AsyncClient, client: Client, text: str, context_id: str = ""
@@ -263,7 +260,7 @@ async def test_text_session_storage_survives_a_request_on_another_server(
         assert first.status.state == COMPLETED, first
         assert answer(first) == "noted"
         saved = persistence != "unsaved"
-        visits = 1 if persistence == "manual" else 0
+        visits = 0
         before = json.loads(answer(await request(http_b, b, "inspect", first.context_id)))
         assert before == {"messages": ["I am Alice", "noted"] if saved else [], "visits": visits}
 
@@ -272,7 +269,7 @@ async def test_text_session_storage_survives_a_request_on_another_server(
         after = json.loads(answer(await request(http_a, a, "inspect", first.context_id)))
         assert after == {
             "messages": ["I am Alice", "noted", "recall", "I am Alice"] if saved else [],
-            "visits": 2 if persistence == "manual" else 0,
+            "visits": 0,
         }
     finally:
         await finish_cleanup(thread_storages[0].threads.delete_thread(opened.context_id))

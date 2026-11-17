@@ -24,6 +24,7 @@ class Peer:
         self.url = ""
         self.hold = False
         self.fail: str | None = None
+        self.direct_reply: Json | None = None
         self.messages: list[Json] = []
         """Each message a ``SendStreamingMessage`` carried."""
         self.cancelled: list[str] = []
@@ -83,6 +84,11 @@ class Peer:
         message = params["message"]
         self.messages.append(message)
         self.received.set()
+        if self.direct_reply is not None:
+            await self._respond(
+                writer, "application/json", _envelope(rpc, {"message": self.direct_reply})
+            )
+            return
         context = message.get("contextId", "remote-context")
         task = {"id": "remote-task", "contextId": context}
         events: list[Json] = [

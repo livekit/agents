@@ -23,7 +23,8 @@ from livekit.protocol import agent, models
 from tests.fakes import FakeLLM, FakeSTT, FakeTTS, FakeVAD, until
 
 from .processes import job_runner, running_job
-from .sfu import DATA_KEY, connected, read_marker, room_token, tone, write_marker
+from .ready import write_marker
+from .sfu import DATA_KEY, connected, read_marker, room_token, tone
 from .test_audio_processors import listening_session, loudness
 from .v1_clients import publish_microphone, send_preconnect_buffer
 

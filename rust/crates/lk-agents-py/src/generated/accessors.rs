@@ -412,6 +412,74 @@ impl CoreModule {
     }
 }
 
+/// Python interface: `google.protobuf.json_format`.
+pub use crate::py_protocol::interfaces::ProtobufJson;
+impl ProtobufJson {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyModule>> {
+        py.import("google.protobuf.json_format")
+    }
+    pub fn to_json<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("MessageToJson")
+    }
+    pub fn parse<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("Parse")
+    }
+}
+
+/// Python interface: `a2a.types.a2a_pb2`.
+pub use crate::py_protocol::interfaces::A2AProtocol;
+impl A2AProtocol {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyModule>> {
+        py.import("a2a.types.a2a_pb2")
+    }
+    pub fn message<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("Message")
+    }
+    pub fn task<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("Task")
+    }
+    pub fn stream_response<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("StreamResponse")
+    }
+    pub fn send_request<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("SendMessageRequest")
+    }
+    pub fn send_response<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("SendMessageResponse")
+    }
+    pub fn get_request<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("GetTaskRequest")
+    }
+    pub fn cancel_request<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("CancelTaskRequest")
+    }
+    pub fn subscribe_request<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("SubscribeToTaskRequest")
+    }
+    pub fn list_request<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("ListTasksRequest")
+    }
+    pub fn list_response<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("ListTasksResponse")
+    }
+}
+
 /// Python interface: `collections.abc.AsyncIterable`.
 pub use crate::py_streams::interfaces::AsyncIterable;
 impl AsyncIterable {

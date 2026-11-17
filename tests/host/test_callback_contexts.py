@@ -240,16 +240,16 @@ async def test_a_manual_save_persists_the_assigned_session_snapshot() -> None:
     app = await store.load_context(BoundApp())
     model = FakeLLM(["First.", "Second."])
     session = TextSession(agent=Agent(name="desk", instructions="Help.", llm=model))
-    first = await session.run("hello", context=app)
-    assert (await store.load_session()).kind == "empty"
-    app.session = first.state
+    await session.run("hello", context=store.bind(app))
+    snapshot = app.session.snapshot()
+    app.session = snapshot
     app.count = 1
     await store.save_context(app)
 
     restored = await store.load_context(BoundApp())
     assert restored.count == 1
-    assert restored.session.session_id == first.state.session_id
-    await session.run("again", context=restored)
+    assert restored.session.session_id == snapshot.session_id
+    await session.run("again", context=store.bind(restored))
     assert [item.text_content for item in model.requests[1].items if item.type == "message"][
         -3:
     ] == [
@@ -279,7 +279,8 @@ async def test_a_bound_run_updates_the_applications_own_session_state() -> None:
 
     assert app.count == 1
     assert app.session is session_state
-    assert session_state.active_agent == "desk"
+    assert session_state.current_agent is not None
+    assert session_state.current_agent.agent_name == "desk"
     assert snapshot.kind == "empty"
 
 
@@ -296,8 +297,9 @@ async def test_a_bound_run_that_fails_to_set_up_leaves_the_store_bindable() -> N
     agent = Agent(name="desk", instructions="Help.", llm=FakeLLM(["Hello."]))
     turn = await TextSession(agent=agent).run("start", context=store.bind(app))
 
-    assert turn.result.status == "completed"
-    assert app.session.active_agent == "desk"
+    assert turn.status == "completed"
+    assert app.session.current_agent is not None
+    assert app.session.current_agent.agent_name == "desk"
 
 
 async def test_a_bound_store_continues_one_conversation_across_runs() -> None:
@@ -308,10 +310,11 @@ async def test_a_bound_store_continues_one_conversation_across_runs() -> None:
     model = FakeLLM(["First.", "Second."])
     session = TextSession(agent=Agent(name="desk", instructions="Help.", llm=model))
 
-    first = await session.run("hello", context=store.bind(app))
-    second = await session.run("again", context=store.bind(app))
+    await session.run("hello", context=store.bind(app))
+    identity = app.session.session_id
+    await session.run("again", context=store.bind(app))
 
-    assert second.state.session_id == first.state.session_id
+    assert app.session.session_id == identity
     said = [item.text_content for item in model.requests[1].items if item.type == "message"]
     assert said[-3:] == ["hello", "First.", "again"]
 
@@ -328,7 +331,7 @@ async def test_a_plain_context_starts_a_new_conversation_each_run() -> None:
     first = await session.run("same", context=app)
     second = await session.run("same", context=app)
 
-    assert first.state.session_id != second.state.session_id
+    assert first.output == "One." and second.output == "Two."
     assert app.session.kind == "empty"
     assert (await store.load_session()).kind == "empty"
 
@@ -345,10 +348,11 @@ async def test_a_binding_without_a_session_field_continues_the_conversation(
     )
     binding = store.bind() if application is None else store.bind(application)
 
-    first = await session.run("one", context=binding)
-    second = await session.run("two", context=binding)
+    await session.run("one", context=binding)
+    identity = (await store.load_session()).session_id
+    await session.run("two", context=binding)
 
-    assert first.state.session_id == second.state.session_id
+    assert (await store.load_session()).session_id == identity
 
 
 async def test_binding_a_context_that_was_never_loaded_fails_before_the_run() -> None:
@@ -395,8 +399,12 @@ async def test_a_snapshot_taken_while_a_tool_runs_is_not_resumed() -> None:
         await entered.wait()
         unknown = await store.load_session()
 
+    fresh = ContextStore()
+    restored = await fresh.load_context(BoundApp())
+    restored.session = unknown
+    await fresh.save_context(restored)
     with pytest.raises(ValueError, match="reconcile"):
-        await TextSession(agent=agent).run("continue", state=unknown)
+        await TextSession(agent=agent).run("continue", context=fresh.bind(restored))
 
 
 async def test_a_failed_turn_saves_none_of_the_context_its_tools_saved(
@@ -423,7 +431,7 @@ async def test_a_failed_turn_saves_none_of_the_context_its_tools_saved(
         if len(loaded) > 1:
             return "loaded"
         turn = await TextSession(agent=agent).run(ctx.message, context=ctx.store.bind(app))
-        return turn.result
+        return turn
 
     async with a2a_door(handler) as door:
         failed = await door.post("/v1", json=message_send("count", "m1"))
@@ -502,11 +510,12 @@ async def test_a_resumed_session_gives_callbacks_the_new_requests_context() -> N
     )
     first_app, second_app = ServiceApp(), ServiceApp()
 
-    first = await TextSession(agent=parent).run("Book a room", context=first_app)
-    second = await TextSession(agent=parent).run("Friday", state=first.state, context=second_app)
+    store = ContextStore()
+    first = await TextSession(agent=parent).run("Book a room", context=store.bind(first_app))
+    second = await TextSession(agent=parent).run("Friday", context=store.bind(second_app))
 
-    assert first.result.status == "input_required"
-    assert second.result.status == "completed" and second.result.output == "Booked."
+    assert first.status == "input_required"
+    assert second.status == "completed" and second.output == "Booked."
     assert first_app.seen == [first_app.service]
     assert second_app.seen == [second_app.service]
 

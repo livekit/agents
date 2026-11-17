@@ -265,6 +265,10 @@ pub struct StorageSetup {
     pub lost_answers: Option<(u64, u64)>,
     /// Every lease take answers this long after it applied: a slow acknowledgment.
     pub take_answer_ms: Option<u64>,
+    /// A selected checkpoint's receipt is held after its real write: `(sequence, delay_ms)`.
+    pub checkpoint_answer_ms: Option<(u64, u64)>,
+    /// Immutable session-content reads answer this long after the query applied.
+    pub session_read_answer_ms: Option<u64>,
 }
 
 /// The pre-connect buffer wait the room's legs run with: shorter than the half second of frames
@@ -805,6 +809,11 @@ impl Run {
     /// An acquire's lease take applied with its answer still owed (`FakeStore::take_unanswered`).
     pub fn lease_take_unanswered(&self) -> bool {
         self.store.as_ref().is_some_and(fakes::FakeStore::take_unanswered)
+    }
+
+    /// A snapshot-content query has applied, with its answer still owed.
+    pub fn session_read_unanswered(&self) -> bool {
+        self.store.as_ref().is_some_and(fakes::FakeStore::read_unanswered)
     }
 
     /// The text streams the agent has sent into the room, in the order it opened them.

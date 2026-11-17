@@ -115,7 +115,7 @@ The tool works wherever its parent runs:
 
 | Parent | The child | A question the child asks |
 | --- | --- | --- |
-| `TextSession` | a frame of the session, with its own history, persisted in the returned state | the turn ends on it; the next request resumes the child frame. See [text-session execution](text-session.md#calling-an-agent-as-a-tool) |
+| `TextSession` or bound `agent.run()` | a local agent context with private history, retained through the binding | the turn ends on it; the next bound request resumes that child. See [text-session execution](text-session.md#local-agents-as-tools) |
 | `agent.run()` | a delegate of the call, run in process | ends the call as `InputRequired`, passed up as asked; the turn ends `input_required`. The child's own history is kept on the call's `extra`, and the tool's next call in the supplied history resumes it |
 | `VoiceSession` | a delegate of the call, run in process, as a remote expert is: the request is announced and the conversation goes on while it works | put to the person, verbatim when the child asked verbatim; their reply resumes the same child, and the call settles when the child does |
 
@@ -184,7 +184,7 @@ as `AgentClient`. A failed call is a tool error the parent model can answer arou
 not end the session.
 The remote service owns its history, application data, approval behavior,
 and completion contract. Local agent-tool options such as `chat_history`,
-`merge_chat_history`, and `needs_approval` do not configure the remote tool.
+`merge_chat_ctx`, and `needs_approval` do not configure the remote tool.
 
 In the frontend, `VoiceSession` coordinates the interaction while the adapter
 handles the A2A protocol. Expert events enter the calling frontend conversation's in-process
@@ -239,7 +239,7 @@ See [A2A](protocol/a2a.md) for the wire protocol and authentication rules.
 | `parameters` | Dataclass or Pydantic model defining the parent's tool arguments |
 | `needs_approval` | Requires human approval before starting the requested child invocation |
 | `chat_history` | `"fresh"` starts from the tool input; `"fork"` also copies the parent history |
-| `merge_chat_history` | In a `TextSession`, `True` returns the child's visible dialogue alongside its typed result; `False` returns only the result. Elsewhere the child has no dialogue of its own to return |
+| `merge_chat_ctx` | In a `TextSession`, `True` returns the child's visible dialogue alongside its typed result; `False` returns only the result. Elsewhere the child has no dialogue of its own to return |
 
 The framework validates the parent-provided arguments against `parameters`
 before starting the child. These arguments become the child's task input.
@@ -248,7 +248,7 @@ parent's application context; for a different one, write a tool that calls
 `child.run(..., context=...)` itself.
 
 History selection and merging are independent. For example,
-`chat_history="fork", merge_chat_history=False` lets a specialist use the
+`chat_history="fork", merge_chat_ctx=False` lets a specialist use the
 parent conversation while returning only its accepted result.
 
 ## What a tool returns
@@ -284,6 +284,8 @@ async def request_photo(ctx: RunContext[LossContext]) -> InputRequired:
 The tool finishes with its question recorded as its outcome. The invocation
 returns a result with `status="input_required"` and `question`. Save the
 updated history and context, then deliver `result.question`.
+The input API is `InputRequired(question, verbatim=False)`; it does not accept
+a tool to invoke with the person's next message.
 
 ### Wording and verbatim
 
@@ -301,9 +303,13 @@ that was exact; the door puts it on the task as `livekit/verbatim`, and the
 delegate delivers that part as written and hands the rest to its model.
 A read-back from `needs_approval` is verbatim.
 
-The person's next message is appended to the saved history. A new invocation
-reads that history and context. The model interprets the answer and chooses
-its next tool or question. The tool that requested input has already finished.
+Human input is matched to a specific presented request before being reserved
+as its response. A side question or new topic can be handled while the
+request remains open. A matched local response continues the owning agent
+context; its next invocation reads the response and chooses its next tool or
+question. A matched remote response continues its recorded A2A task/context.
+The asking tool has already finished; the framework does not resume its
+Python coroutine or automatically call it again by name.
 
 A conversation tool that returns `Failed(error)` or `Rejected(reason)`
 records the text as an error output and the model replies to it.
@@ -329,7 +335,7 @@ later call, even with identical arguments, asks again. The model cannot grant
 approval through a tool argument.
 
 For an agent tool, the session retains the pending invocation in its state.
-See [approval persistence](text-session.md#approval-before-starting-a-child)
+See [approval persistence](text-session.md#approval)
 for bound execution and manually saved snapshots.
 
 
@@ -501,12 +507,10 @@ reply reads the templates of its latest result's tool.
 
 A tool whose result is a question for the person returns
 `InputRequired(question)`: the agent facing the person asks it in its own
-words, or exactly as written with `verbatim=True`, and the person's next
-message is written as the call's output for the model to go on with. With `tool=`, the answer is not the model's to interpret: it is handed to
-that tool as its first string parameter, on a call and in text, with no model
-turn in between, and the model goes on from that tool's output. The delegate's
-tool does this for an expert's `input-required`
-([multi-agent composition](agents.md#working-with-other-agents)).
+words, or exactly as written with `verbatim=True`. Responses follow the
+correlation and continuation rules in [human input](#human-input). Remote
+input keeps its task/context identity; see
+[multi-agent composition](agents.md#working-with-other-agents).
 
 ## Prebuilt tools
 

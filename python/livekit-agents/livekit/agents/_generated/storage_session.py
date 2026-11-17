@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 Context_T = TypeVar("Context_T")
 
 
-SessionKind: TypeAlias = Literal["empty", "text", "voice"]
+SessionKind: TypeAlias = Literal["empty", "conversation"]
 
 
 @dataclass(frozen=True)

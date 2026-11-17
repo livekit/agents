@@ -50,7 +50,7 @@ impl Rule for StorageSavesTheConversationInOrder {
 fn conversation(r: &Recording) -> Vec<ChatItem> {
     let mut held: Vec<ChatItem> = Vec::new();
     let through = super::storage_preserves_item_payloads::durable_through(r);
-    for (at, event) in r.host_view().events() {
+    for (at, event) in super::storage_preserves_item_payloads::history_events(r) {
         if through.is_some_and(|through| at > through) { break; }
         if let SessionEvent::HistoryReloaded { items } = event {
             // The host replaces its ledger on a reload, including calls restored from a

@@ -20,9 +20,9 @@ if TYPE_CHECKING:
     from .chat_items import ChatItem, FunctionCall
     from .connect import APIConnectOptions
     from .run_result import RunResult
+    from .session_snapshot import FrameId
     from .storage_turn import PendingCall
     from .telemetry import SpanContext
-    from .text_session import FrameId
     from .tool_context import DuplicateMode, DuplicateScope
     from .tool_options import ToolSpec
     from .tool_report import Approval

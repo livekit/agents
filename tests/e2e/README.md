@@ -13,10 +13,38 @@ Each test states its prerequisites, actions, expected outcomes and bounds
 service calls or authoritative state, delivery through what the caller observed; never through
 logs or model text. There are no retries; every action is bounded.
 
+The `e2e` fixture runs ordinary application modules from `apps/` and owns their processes,
+text clients and RTC callers. Correctness apps use scripted models and deterministic speech;
+application logic, native execution, storage and transports remain real. Restart preserves
+the app's data directory and creates a fresh process.
+
+```python
+async def test_a_spoken_reply(e2e):
+    app = await e2e.start_app("tests.e2e.apps.voice_conversation", voice=True)
+    async with e2e.voice_client(app) as caller:
+        await caller.say("what time is it")
+        reply = await caller.hear()
+        assert reply.text == "it is noon"
+        assert reply.audio_seconds > 0
+```
+
+Use `e2e.text_client(app)` for an owned public AgentClient, `app.restart()` for a graceful
+restart and `app.kill()` followed by `app.start()` for a crash. Apps export their ordinary
+AgentServer as `server`. A text app serves local HTTP without registration; a voice app joins
+the isolated SFU. Keep those apps separate when the local SFU has no HTTP-door registration.
+An external ASGI application exports `create_app(url)`; the runner supplies its bound base URL
+and serves it in a process that imports no LiveKit SDK. `apps/stock_a2a.py` uses the upstream
+A2A SDK's executor, task store and HTTP/SSE routes. `test_stock_a2a.py` delegates to it through
+an ordinary RemoteAgent tool and resumes its input-required task after frontend restart.
+The shared `framework/media.py` also supplies the v1 compatibility speech fixtures.
+See the [framework design](../../docs/proposals/e2e.md) for provider and acceptance policies.
+
 ## Files
 
 | File | Journey | Live or scripted |
 | --- | --- | --- |
+| `test_framework.py` | Conversation restart, received speech and interruption during actual audio playback | Scripted models and tone speech; real app processes, SQLite and isolated SFU |
+| `test_stock_a2a.py` | Remote Message replies and input-required continuation after frontend restart | A stock A2A SDK server in a separate process; ordinary frontend, scripted model, real HTTP/SSE and SQLite |
 | `test_worker.py` | Job processes: IPC launch, health kill, wire faults, stress; a real worker's crashed, leaking, slow-initializing and orphaned jobs and their logs; a process that dies holding a storage turn; worker processes serving their text doors | Hermetic: real OS processes, local SQLite (AgentDB case skips without a project) |
 | `test_cli.py` | The CLI launcher: module launch, failure exits, one shutdown budget across drain and cleanup, signals while a real job process runs | Hermetic: real OS processes and signals |
 | `test_preload.py` | Application preloads before readiness, spawn and forkserver, copy-on-write, unsafe preloads refused | Hermetic; forkserver cases run on Linux only |
@@ -40,9 +68,9 @@ are scripted; agent execution, tools, approval, leases, persistence and transpor
 production implementation.
 
 The lean text storage journey runs against two loopback servers sharing SQLite, and against
-AgentDB when configured. It checks manual snapshot assignment plus `save_context`, automatic
-`bind()` checkpoints, and an unsaved control, reading persisted state through fresh requests
-on the other server:
+AgentDB when configured. It checks `bind()` checkpoints and an unsaved control, reading
+persisted conversation state through fresh requests on the other server. Application fields
+still require `save_context`:
 
 ```sh
 uv run --no-sync pytest tests/e2e/test_text.py --e2e -k text_session_storage
@@ -63,7 +91,8 @@ uv run --no-sync pytest tests/e2e/test_text.py --e2e -k text_session_storage
 - `conftest.py`: fixtures owning worker processes, threads, storages and job runners. Cleanup runs on failure and cancellation and reaps every child.
 - `resources.py`: process, in-process server and recording-service ownership, and the bounds.
 - `drivers.py`: A2A actions and wire observations; no verdicts.
-- `sfu.py`: the isolated SFU fixture and the room helpers (tokens, connections, tones, markers).
+- `sfu.py`: the isolated SFU fixture and the room helpers (tokens, connections and tones).
+- `ready.py`: atomic process-readiness and receiver-observation files.
 - `v1_clients.py`: the agent the v1 client compatibility journeys dispatch (tone STT and TTS),
   and the client moves they repeat, each as the v1 client does it on the wire.
 - `processes.py`: process-tree evidence captured before cleanup, and the job-runner builders.

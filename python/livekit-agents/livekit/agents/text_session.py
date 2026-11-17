@@ -2,27 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import json
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any, Generic
 
 from . import _core, llm, utils
 from ._generated import public_text_session as _public, text_session as records
 from ._generated.public_text_session import *  # noqa: F403
 from ._generated.run_result import Output_T
-from .storage.context import _session_field
-from .storage.session_state import BoundContext, SessionState
+from .storage.session_state import BoundContext
 from .types import DEFAULT_API_CONNECT_OPTIONS
 from .voice import Agent, AgentRetries, _BindingContextVar, _LocalAgentTool
 from .voice.agent_run import RunHooks, _TextRun, door_hooks, run_resources, settled_result
 from .voice.events import Context_T
 from .voice.run_result import RunResult, RunStream, _Started
-
-
-@dataclass(frozen=True, kw_only=True)
-class TextSessionTurn(Generic[Output_T]):
-    result: RunResult[Output_T]
-    state: SessionState
 
 
 class TextSession(Generic[Context_T, Output_T]):
@@ -39,16 +31,13 @@ class TextSession(Generic[Context_T, Output_T]):
         self,
         message: str | llm.ChatMessage,
         *,
-        state: TextSessionState | SessionState | None = None,
         context: Context_T | BoundContext[Context_T] | None = None,
         retries: int | AgentRetries | None = None,
-    ) -> TextSessionTurn[Output_T]:
+    ) -> RunResult[Output_T]:
         """One turn of the conversation. ``retries`` overrides every agent's retry budgets
         for this turn (``AgentRetries``); an int sets both."""
         hooks = door_hooks()
-        async with self.run_stream(
-            message, state=state, context=context, retries=retries
-        ) as stream:
+        async with self.run_stream(message, context=context, retries=retries) as stream:
             async for text in stream.stream_text(delta=True):
                 if hooks is not None and hooks.on_token is not None:
                     await hooks.on_token(text)
@@ -58,19 +47,15 @@ class TextSession(Generic[Context_T, Output_T]):
         self,
         message: str | llm.ChatMessage,
         *,
-        state: TextSessionState | SessionState | None = None,
         context: Context_T | BoundContext[Context_T] | None = None,
         retries: int | AgentRetries | None = None,
-    ) -> RunStream[TextSessionTurn[Output_T]]:
-        async def start(stream: _core._core_RunStream) -> _Started[TextSessionTurn[Output_T]]:
+    ) -> RunStream[RunResult[Output_T]]:
+        async def start(stream: _core._core_RunStream) -> _Started[RunResult[Output_T]]:
 
             hooks = door_hooks()
             binding = None
             app = context.context if isinstance(context, BoundContext) else context
-            selected = state
             if isinstance(context, BoundContext):
-                if state is not None:
-                    raise ValueError("explicit state cannot be combined with a bound context")
                 if (
                     hooks is not None
                     and hooks.store is not None
@@ -78,23 +63,13 @@ class TextSession(Generic[Context_T, Output_T]):
                 ):
                     raise ValueError("the context belongs to a different execution store")
                 binding = context.store._bind_session(app)
-                selected = binding.state
                 hooks = (
                     replace(hooks, store=context.store)
                     if hooks is not None
                     else RunHooks(store=context.store)
                 )
-            elif app is not None:
-                field = _session_field(app)
-                if field is not None:
-                    if state is not None:
-                        raise ValueError("explicit state conflicts with the context session field")
-                    selected = getattr(app, field)
             resources: _core._core_RunResources | None = None
             try:
-                restored = (
-                    selected._text_state() if isinstance(selected, SessionState) else selected
-                )
                 if isinstance(message, str):
                     incoming = llm.ChatMessage(role="user", content=[message])
                 else:
@@ -115,16 +90,6 @@ class TextSession(Generic[Context_T, Output_T]):
                 if binding is not None:
                     resources.retain_binding(binding)
                 await resources.open()
-                if binding is not None:
-                    current = binding.store._activation.session_state
-                    binding.state._update(
-                        (
-                            SessionState()
-                            if current is None
-                            else SessionState._from_json(json.dumps(current))
-                        )._to_json()
-                    )
-                    restored = binding.state._text_state()
                 bindings = []
                 shared_thread = None
                 shared_store = None
@@ -163,13 +128,10 @@ class TextSession(Generic[Context_T, Output_T]):
                 runner.run_stream(
                     records.TextSessionRequest(
                         session_sink=binding._native if binding is not None else None,
-                        session_id=restored.session_id
-                        if restored is not None
-                        else utils.shortuuid("session_"),
+                        session_id=utils.shortuuid("session_"),
                         execution_id=utils.shortuuid("execution_"),
                         task_id=hooks.task_id if hooks is not None else None,
                         message=incoming,
-                        state=restored,
                         delegated=hooks.delegated if hooks is not None else False,
                         conn_options=DEFAULT_API_CONNECT_OPTIONS,
                     ),
@@ -177,13 +139,12 @@ class TextSession(Generic[Context_T, Output_T]):
                     resources,
                 )
 
-                def settle(finished: records.TextSessionFinished) -> TextSessionTurn[Output_T]:
+                def settle(finished: records.TextSessionFinished) -> RunResult[Output_T]:
                     frame = finished.state.frames[finished.state.active_frame_id]
                     result = settled_result(finished.run, runs[frame.agent_name].hooks)
                     if hooks is not None and hooks.on_result is not None:
                         hooks.on_result(result)
-                    snapshot = SessionState._from_text(finished.state)
-                    return TextSessionTurn(result=result, state=snapshot)
+                    return result
 
                 return _Started(settle=settle)
 
@@ -216,6 +177,5 @@ def _agents(root: Agent[Any, Any]) -> list[Agent[Any, Any]]:
 
 __all__ = [
     "TextSession",
-    "TextSessionTurn",
 ]
 __all__ += _public.__all__

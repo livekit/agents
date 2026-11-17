@@ -284,3 +284,32 @@ fn a_segment_cut_short_ends_on_a_whole_word() {
     let failed: Vec<_> = failures.iter().filter(|f| f.contract == rule).collect();
     assert!(failed.is_empty(), "{failed:?}");
 }
+
+/// The model streams adjoining sentences while the voice buffers input. A date at the end of
+/// one chunk and the first word of the next must each follow the voice's own stamp.
+#[test]
+fn adjoining_sentence_chunks_follow_their_own_voice_stamps() {
+    let run = simulate(async {
+        let setup = Setup { tts_alignment: TtsAlignment::Words, ..Setup::default() };
+        let mut run = Run::start(&setup, 0, Default::default()).await;
+        for input in [
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(20) },
+            Input::LlmText { chat: Ref::new(0), text: AgentText("Payment".into()) },
+            Input::Advance { ms: Millis(20) },
+            Input::TtsHold { tts: Ref::new(0) },
+            Input::LlmText { chat: Ref::new(0), text: AgentText(" is due on 03/14.".into()) },
+            Input::LlmText { chat: Ref::new(0), text: AgentText("Before we continue.".into()) },
+            Input::LlmEnd { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(20) },
+            Input::TtsRelease { tts: Ref::new(0) },
+        ] {
+            run.apply(&input).await;
+        }
+        crate::playout::apply_with_playout(&mut run, &Input::Advance { ms: Millis(10_000) }).await;
+        run
+    });
+    let (failures, expectations) = check_all(&run.record);
+    assert!(expectations.get("aligned_transcript_follows_tts").is_some_and(|count| *count > 0));
+    assert!(failures.is_empty(), "{failures:#?}");
+}

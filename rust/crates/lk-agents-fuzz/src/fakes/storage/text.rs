@@ -21,7 +21,7 @@ use lk_agents_runtime::storage::{Storage, Thread, ThreadDbConnection};
 /// One thread's database for a run.
 pub struct Store {
     storage: Arc<SqliteStorage>,
-    backend: Arc<dyn Storage>,
+    pub(crate) backend: Arc<dyn Storage>,
     pub thread_id: String,
     /// A connection of the observer's own, never faulted.
     observer: FileConnection,

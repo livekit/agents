@@ -3,15 +3,19 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .. import _bindings, _core
+from ..llm.chat_context import _ReadOnlyChatContext
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping
 
+    from ..llm import ChatContext
+    from ..storage.session_state import RemoteAgentState as HostRemoteAgentState
+    from .session import AgentState
+    from .session_snapshot import _SessionSnapshot
     from .storage_session import SessionKind
-    from .text_session import FrameId, SessionFrame, TextSessionState
 
 
 class SessionState:
@@ -25,32 +29,28 @@ class SessionState:
         return self._native.kind
 
     @property
-    def active_agent(self) -> str | None:
-        return self._native.active_agent
+    def root_agent(self) -> AgentState | None:
+        return self._native.root_agent
+
+    @property
+    def current_agent(self) -> AgentState | None:
+        return self._native.current_agent
+
+    @property
+    def agents(self) -> dict[str, AgentState]:
+        return self._native.agents
+
+    @property
+    def remote_agents(self) -> Mapping[str, HostRemoteAgentState]:
+        return cast("Mapping[str, HostRemoteAgentState]", self._native.remote_agents)
+
+    @property
+    def chat_history(self) -> ChatContext:
+        return _ReadOnlyChatContext(self._native.chat_history)
 
     @property
     def session_id(self) -> str | None:
         return self._native.session_id
-
-    @property
-    def execution_id(self) -> str | None:
-        return self._native.execution_id
-
-    @property
-    def root_frame_id(self) -> FrameId:
-        return self._native.root_frame_id
-
-    @property
-    def active_frame_id(self) -> FrameId:
-        return self._native.active_frame_id
-
-    @property
-    def ancestors(self) -> list[FrameId]:
-        return self._native.ancestors
-
-    @property
-    def frames(self) -> dict[FrameId, SessionFrame]:
-        return self._native.frames
 
     def snapshot(self) -> SessionState:
         return SessionState(self._native.snapshot())
@@ -58,8 +58,8 @@ class SessionState:
     def _to_json(self) -> str:
         return self._native._to_json()
 
-    def _text_state(self) -> TextSessionState | None:
-        return self._native._text_state()
+    def _snapshot_data(self) -> _SessionSnapshot | None:
+        return self._native._snapshot_data()
 
     def _update(self, data: str) -> None:
         self._native._update(data)
@@ -67,14 +67,6 @@ class SessionState:
     @staticmethod
     def _from_json(data: str) -> SessionState:
         return SessionState(_core._core_PersistedSessionState._from_json(data))
-
-    @staticmethod
-    def _from_text(state: TextSessionState) -> SessionState:
-        return SessionState(_core._core_PersistedSessionState._from_text(state))
-
-    @staticmethod
-    def _from_voice(agent: str, history_ids: Sequence[str]) -> SessionState:
-        return SessionState(_core._core_PersistedSessionState._from_voice(agent, history_ids))
 
 
 SessionState.__module__ = "livekit.agents.storage.session_state"

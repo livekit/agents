@@ -26,7 +26,8 @@ from livekit.protocol import agent, models
 from tests.fakes import FakeTTS, until
 
 from .processes import job_runner, running_job
-from .sfu import KEY, SECRET, connected, read_marker, room_token, tone, write_marker
+from .ready import write_marker
+from .sfu import KEY, SECRET, connected, read_marker, room_token, tone
 
 
 async def _room_job(ctx: JobContext) -> None:

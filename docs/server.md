@@ -72,8 +72,9 @@ entry points and can contain both text and voice. `livekit.agents.a2a_session` a
 `server.a2a_session` and `server.rtc_session` serve one in one step.
 
 The handler explicitly calls an agent or a [TextSession](text-session.md).
-A direct `agent.run()` executes that agent. A text-session handler loads the routing
-state, passes it to `session.run()`, and saves the returned state.
+A direct `agent.run()` executes that agent. To continue a conversation, load application
+context and pass `context=ctx.store.bind(app)` to the agent or text session. The binding
+checkpoints shared conversation state; save application fields explicitly.
 
 | `A2ASessionContext` | What                                                                                                                 |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------- |

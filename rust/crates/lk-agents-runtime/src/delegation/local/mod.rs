@@ -21,7 +21,7 @@ use lk_agents_abi::{
     ApiConnectOptions, ChatItem, ChatMessage, Clock, FunctionCall, HOST_TEARDOWN_TIMEOUT, Role,
     Spawner, WallAnchor,
 };
-use lk_agents_core::agent_tool::{self, Step};
+use lk_agents_core::delegation::local::{self as agent_tool, Step};
 use lk_agents_core::tool_outcome::Mode;
 use lk_agents_core::usage::Ledger;
 use lk_agents_core::{Opening, RunInput};

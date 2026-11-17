@@ -112,6 +112,15 @@ impl port::Reply for Reply {
             Pulled::End | Pulled::Cancelled => None,
         })
     }
+    async fn _core_next_event(
+        &self,
+    ) -> Result<Option<lk_agents_abi::a2a::protocol::StreamResponse>, AgentClientError> {
+        let pull = self.try_pull_event().ok_or(AgentClientError::Overlap)?;
+        Ok(match pull.await? {
+            Pulled::Item(event) => Some(event.response),
+            Pulled::End | Pulled::Cancelled => None,
+        })
+    }
     async fn aclose(&self) {
         Reply::aclose(self, self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
     }

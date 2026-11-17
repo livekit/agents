@@ -148,7 +148,7 @@ pub fn settle(result: &Result<RunResult, RunError>, output: Option<&Value>) -> S
     };
     match &result.outcome {
         RunOutcome::Completed { output: Output::Text(text) } => {
-            Step::Done(crate::a2a::delegation::answer(text, result.verbatim.as_deref()))
+            Step::Done(crate::delegation::remote::answer(text, result.verbatim.as_deref()))
         }
         RunOutcome::Completed { output: Output::Validated(_) } => Step::Done(match output {
             Some(Value::String(text)) => value(text.clone()),

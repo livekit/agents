@@ -11,7 +11,8 @@ use crate::record::{StorageOperation, StorageStep};
 use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::llm::chat_context::protocol::{decode_chat_item, encode_chat_item};
 use lk_agents_abi::storage::voice::{
-    StorageWork, VoiceStorage, VoiceStorageCommand, VoiceStorageEvent, VoiceStore as _,
+    StorageWork, VoiceHistory, VoiceStorage, VoiceStorageCommand, VoiceStorageEvent,
+    VoiceStore as _,
 };
 use lk_agents_abi::storage::{StorageError, Unacknowledged};
 use lk_agents_abi::telemetry::Cx;
@@ -63,7 +64,6 @@ pub struct FakeStore {
     voice: Arc<VoiceStore>,
     pub port: Arc<dyn VoiceStorage>,
     database: Arc<FakeDatabase>,
-    _dir: TempDir,
 }
 
 impl FakeStore {
@@ -83,11 +83,20 @@ impl FakeStore {
         // the test thread's 2 MiB stack in `VoiceRuntime::start_speech`'s spawn.
         let spawner = Arc::new(lk_agents_runtime::net::task::TokioSpawner::current());
         let background = Background::new(Arc::default(), spawner, clock.clone());
+        let observer_workers =
+            Workers { spawner: registry.world.clone(), background: background.clone() };
         let workers = Workers { spawner: dying.clone(), background };
         let storage = SqliteStorage::open(&dir.0, LeaseTiming::default(), workers);
         let storage = Arc::new(storage.await.expect("a storage directory"));
         let thread = storage.create_thread(Default::default()).await.expect("a thread");
-        let observer = storage.connect(&thread.thread_id).await.expect("an observer");
+        // Read-back observes faults; it is not itself a target of the dying database worker.
+        let observer = FileConnection::open(
+            dir.0.join("threads").join(format!("{}.sqlite", thread.thread_id)),
+            false,
+            observer_workers,
+        )
+        .await
+        .expect("an observer");
         let database = Arc::new(FakeDatabase::new(
             setup,
             seed,
@@ -95,6 +104,7 @@ impl FakeStore {
             clock,
             (storage.clone(), thread.thread_id.clone(), observer),
             (dying, skew),
+            dir,
         ));
         let calls = database.clone();
         let wrap = move |inner: FileConnection| {
@@ -107,8 +117,7 @@ impl FakeStore {
                 .expect("a fresh partition_key loads");
         // A bound call (`store.bind(app)`): its store carries the call's session state from the
         // start, so each turn's start writes the partition too.
-        let initial =
-            serde_json::json!({"version": 1, "kind": "voice", "agent": "", "history_ids": []});
+        let initial = serde_json::json!({"version": 1, "kind": "empty"});
         lk_agents_abi::storage::context::ContextActivation::stage_session(
             &voice.activation(),
             initial,
@@ -118,7 +127,7 @@ impl FakeStore {
         database.state.lock().armed = true;
         let port =
             Arc::new(RecordedStore { store: voice.clone(), registry, database: database.clone() });
-        Self { voice, port, database, _dir: dir }
+        Self { voice, port, database }
     }
 
     /// The host's `aclose()` once the session ended, then what it left in the database.
@@ -126,7 +135,9 @@ impl FakeStore {
         let _ = self.voice.aclose().await;
         self.database.settle().await;
         WORKER_DEATHS.fetch_add(self.database.dying.deaths(), Ordering::Relaxed);
-        self.database.observer.close().await;
+        // A checkpoint's write may have finished while its recording read is still in flight.
+        // The observer and its directory stay with those ports; their final owner drops the
+        // connection's worker after every remaining read releases the database.
         self.database.storage.close().await;
     }
 
@@ -134,6 +145,10 @@ impl FakeStore {
     /// leaves the partition taken with no `Lease` to release it.
     pub fn take_unanswered(&self) -> bool {
         self.database.state.lock().taking > 0
+    }
+
+    pub fn read_unanswered(&self) -> bool {
+        self.database.state.lock().reading > 0
     }
 }
 
@@ -151,6 +166,8 @@ struct FakeDatabase {
     registry: Arc<Registry>,
     setup: StorageSetup,
     state: Mutex<State>,
+    /// Last to drop, after the observer and every production connection using its files.
+    _dir: TempDir,
 }
 
 struct State {
@@ -167,6 +184,8 @@ struct State {
     text_turn_every: u32,
     /// Lease takes applied whose answers are still owed.
     taking: u32,
+    /// Snapshot-content queries applied whose answers are still owed.
+    reading: u32,
     /// `layer`'s own draws.
     layer: fastrand::Rng,
     /// Another worker's connection is on the partition, and how many came.
@@ -206,6 +225,7 @@ impl FakeDatabase {
         clock: Arc<dyn Clock>,
         (storage, thread_id, observer): (Arc<SqliteStorage>, String, FileConnection),
         (dying, skew): (Arc<Dying>, Arc<layer::Skewed>),
+        dir: TempDir,
     ) -> Self {
         // Mixed: neighbouring seeds' streams stay correlated at one position for a while.
         let mut rng =
@@ -220,6 +240,7 @@ impl FakeDatabase {
             takes: 0,
             text_turn_every,
             taking: 0,
+            reading: 0,
             layer: fastrand::Rng::with_seed(seed ^ 0x006c_6179_6572),
             intruding: false,
             intruders: 0,
@@ -227,7 +248,7 @@ impl FakeDatabase {
             uncertain: Vec::new(),
         };
         let state = Mutex::new(state);
-        Self { storage, thread_id, observer, dying, clock, skew, registry, setup, state }
+        Self { storage, thread_id, observer, dying, clock, skew, registry, setup, state, _dir: dir }
     }
 
     /// Stress frequencies, not measured rates.
@@ -384,6 +405,7 @@ impl FakeDatabase {
             let rows = run.history().to_vec();
             let mut items: Vec<ChatItem> =
                 rows.iter().filter_map(|row| decode_chat_item(row.payload.clone()).ok()).collect();
+            let before = items.clone();
             edit(&mut items, turn, what);
             let message_id =
                 |id: &str| rows.iter().find(|row| row.id == id).and_then(|r| r.message_id.clone());
@@ -397,7 +419,7 @@ impl FakeDatabase {
                 .collect();
             // A failed foreign commit establishes no new baseline.
             if run.commit(CommitOptions::default()).await.is_ok() {
-                self.registry.record_storage(StorageStep::ForeignCommitted { items });
+                self.registry.record_storage(StorageStep::ForeignCommitted { before, items });
             }
         }
         thread.close().await;
@@ -422,6 +444,7 @@ impl FakeDatabase {
             .map(|row| decode_chat_item(row.payload).expect("a saved conversation item decodes"))
             .collect();
         self.registry.record_storage(StorageStep::Saved { items });
+        thread.close().await;
     }
 }
 
@@ -437,6 +460,15 @@ struct Taking<'a>(&'a Mutex<State>);
 impl Drop for Taking<'_> {
     fn drop(&mut self) {
         self.0.lock().taking -= 1;
+    }
+}
+
+/// A query whose database work is complete but whose receipt can still be canceled.
+struct Reading<'a>(&'a Mutex<State>);
+
+impl Drop for Reading<'_> {
+    fn drop(&mut self) {
+        self.0.lock().reading -= 1;
     }
 }
 
@@ -462,6 +494,7 @@ impl ThreadDbConnection for FakeConnection {
 impl FakeConnection {
     async fn query_once(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         let db = &self.db;
+        let session_read = statement.kind() == Some(StatementKind::SessionItemsRead);
         let plan = db.plan(false, false, None);
         let layer = db.layer(false, false);
         if !db.wait(plan.before).await {
@@ -471,6 +504,18 @@ impl FakeConnection {
             return Err(error);
         }
         let rows = self.inner.query(statement).await;
+        let _reading = if session_read && db.state.lock().armed {
+            db.state.lock().reading += 1;
+            Some(Reading(&db.state))
+        } else {
+            None
+        };
+        if session_read
+            && let Some(ms) = db.setup.session_read_answer_ms
+            && !db.wait(Duration::from_millis(ms)).await
+        {
+            return Err(StorageError::Unavailable("the session read's deadline passed".into()));
+        }
         if !db.wait(plan.after).await {
             return Err(StorageError::Uncertain(Unacknowledged::sent("the deadline passed")));
         }
@@ -514,6 +559,8 @@ impl FakeConnection {
             return Err(error);
         }
         if plan.worker_dies {
+            // This fault can lose the run's final bookkeeping even after its lease releases.
+            db.state.lock().faulted = true;
             db.dying.die_next_poll();
         }
         let sent = statements.clone();
@@ -553,17 +600,12 @@ struct RecordedStore {
 
 impl RecordedStore {
     async fn record_checkpoint(&self, sequence: u64) {
-        let thread = self.database.thread().await.expect("the checkpoint observer opens");
-        let partition = thread.partition(PARTITION_KEY);
-        let items = partition
-            .history()
-            .await
-            .expect("the checkpoint rows read")
-            .into_iter()
-            .map(|row| decode_chat_item(row.payload).expect("a checkpoint row decodes"))
-            .collect();
-        let state =
-            partition.info().await.expect("the checkpoint state reads").and_then(|info| info.state);
+        let (items, state) = lk_agents_runtime::storage::testing::conversation(
+            &self.database.observer,
+            PARTITION_KEY,
+        )
+        .await
+        .expect("the checkpoint content reads");
         let pending_user_turns = state
             .as_ref()
             .and_then(|state| state.get("pending_user_turns"))
@@ -584,7 +626,6 @@ impl RecordedStore {
             items,
             pending_user_turns,
         });
-        thread.close().await;
     }
 }
 
@@ -592,7 +633,7 @@ impl VoiceStorage for RecordedStore {
     fn conversation(
         &self,
         progress: lk_agents_abi::storage::voice::VoiceConversationProgress,
-    ) -> StorageWork<'_, Vec<ChatItem>> {
+    ) -> StorageWork<'_, VoiceHistory> {
         let sequence = progress.sequence;
         self.registry
             .record_storage(StorageStep::ConversationRequested { progress: progress.clone() });
@@ -617,7 +658,7 @@ impl VoiceStorage for RecordedStore {
             self.registry.record_storage(StorageStep::HistorySubmitted {
                 speech: *speech,
                 sequence: *sequence,
-                history: history.clone(),
+                history: history.items.clone(),
             });
         }
         let requested = match &command {
@@ -632,7 +673,7 @@ impl VoiceStorage for RecordedStore {
         self.store.clone().dispatch(command, events)
     }
 
-    fn acquire(&self, speech: u64, local: Vec<ChatItem>) -> StorageWork<'_, Vec<ChatItem>> {
+    fn acquire(&self, speech: u64, local: VoiceHistory) -> StorageWork<'_, VoiceHistory> {
         let operation = StorageOperation::Acquire;
         self.registry.record_storage(StorageStep::Requested { speech, operation });
         let pending = self.registry.storage_pending();
@@ -654,13 +695,13 @@ impl VoiceStorage for RecordedStore {
         speech: u64,
         sequence: u64,
         agent: String,
-        history: Vec<ChatItem>,
-    ) -> StorageWork<'_, ()> {
+        history: VoiceHistory,
+    ) -> StorageWork<'_, VoiceHistory> {
         let operation = StorageOperation::Checkpoint;
         self.registry.record_storage(StorageStep::HistorySubmitted {
             speech,
             sequence,
-            history: history.clone(),
+            history: history.items.clone(),
         });
         self.registry.record_storage(StorageStep::Requested { speech, operation });
         Box::pin(async move {
@@ -668,10 +709,16 @@ impl VoiceStorage for RecordedStore {
             if result.is_ok() {
                 self.record_checkpoint(sequence).await;
             }
+            if let Some((selected, ms)) = self.database.setup.checkpoint_answer_ms
+                && selected == sequence
+            {
+                let clock = &self.database.clock;
+                clock.wait_until(clock.now().saturating_add(Duration::from_millis(ms))).await;
+            }
             self.registry.record_storage(StorageStep::Answered {
                 speech,
                 operation,
-                result: result.clone(),
+                result: result.as_ref().map(|_| ()).map_err(Clone::clone),
                 delivered: true,
             });
             result
@@ -691,9 +738,11 @@ struct RecordedEvents {
 impl StreamInput<VoiceStorageEvent> for RecordedEvents {
     fn push(&self, event: VoiceStorageEvent) -> Result<(), lk_agents_abi::errors::ProviderError> {
         let (speech, operation, result) = match &event {
-            VoiceStorageEvent::Settled { speech, result, .. } => {
-                (*speech, StorageOperation::Settle, result.clone())
-            }
+            VoiceStorageEvent::Settled { speech, result, .. } => (
+                *speech,
+                StorageOperation::Settle,
+                result.as_ref().map(|_| ()).map_err(Clone::clone),
+            ),
             VoiceStorageEvent::Abandoned { speech, result } => {
                 (*speech, StorageOperation::Abandon, result.clone())
             }

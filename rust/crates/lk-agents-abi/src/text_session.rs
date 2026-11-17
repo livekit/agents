@@ -1,90 +1,14 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use crate::{ChatItem, ChatMessage};
+use crate::ChatItem;
 use serde_json::Value;
 
 // Routing metadata contains no callbacks, tasks or host handles.
 
-/// A stable backend conversation frame, distinct from a call or invocation.
-#[crate::host(record(module = "text_session", emit, extract))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", serde(transparent))]
-pub struct FrameId {
-    pub value: String,
-}
-
-#[crate::host(record(module = "text_session", emit, extract))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParentCall {
-    pub frame_id: FrameId,
-    pub call_id: String,
-}
-
-#[crate::host(record(module = "text_session", emit, extract))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", serde(tag = "status", rename_all = "snake_case"))]
-pub enum ChildCallStatus {
-    Approval,
-    Ready,
-    Running { frame_id: FrameId },
-}
-
-#[crate::host(record(module = "text_session", emit, extract))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq)]
-pub struct PendingChildCall {
-    pub parent: ParentCall,
-    pub invocation_id: String,
-    pub execution_id: String,
-    pub tool_name: String,
-    pub agent_name: String,
-    pub validated_arguments: Value,
-    /// The shared approval gate's canonical validated identity, never the raw model arguments.
-    pub identity: String,
-    pub status: ChildCallStatus,
-}
-
-#[crate::host(record(module = "text_session", emit, extract))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq)]
-pub struct SessionFrame {
-    pub id: FrameId,
-    pub agent_name: String,
-    pub history: Vec<ChatItem>,
-    pub parent: Option<ParentCall>,
-    pub completed: bool,
-    pub pending_calls: Vec<PendingChildCall>,
-    pub answer_tool: Option<String>,
-    /// Delivery receipts, in conversation order, excluding the initial tool task and fork.
-    pub visible_dialogue: Vec<ChatMessage>,
-    pub starting_history_ids: BTreeSet<String>,
-    pub transferred_message_ids: BTreeSet<String>,
-    /// Frozen at creation: reconfiguration on a later request cannot change the return policy.
-    pub merge_chat_history: bool,
-}
-
-#[crate::host(record(
-    module = "text_session",
-    path = "livekit.agents.text_session",
-    emit,
-    extract,
-    persisted
-))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq)]
-pub struct TextSessionState {
-    pub session_id: String,
-    pub execution_id: String,
-    pub root_frame_id: FrameId,
-    pub active_frame_id: FrameId,
-    /// Root first, immediate parent last. Completed frames never occur here.
-    pub ancestors: Vec<FrameId>,
-    pub frames: BTreeMap<FrameId, SessionFrame>,
-    pub next_id: u64,
-}
+pub use crate::session::snapshot::{
+    ChildCallStatus, FrameId, FrameOptions, ParentCall, PendingChildCall, SessionFrame,
+    SessionSnapshot,
+};
 
 #[crate::host(record(module = "text_session", emit, extract))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +22,7 @@ pub enum ChatHistory {
 pub struct LocalAgentTool {
     pub agent_name: String,
     pub chat_history: ChatHistory,
-    pub merge_chat_history: bool,
+    pub merge_chat_ctx: bool,
 }
 
 #[crate::host(exceptions(
@@ -157,7 +81,7 @@ use crate::agent::run::{RunError, RunResult};
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextSessionTurn {
     pub result: RunResult,
-    pub state: TextSessionState,
+    pub state: SessionSnapshot,
 }
 
 #[crate::host(error(kind = "RuntimeError"))]
@@ -193,10 +117,13 @@ use std::sync::Arc;
 /// Receives accepted session transitions before dependent execution proceeds.
 #[crate::host(native(refused = "expected a native session binding"))]
 pub trait SessionStateSink: Send + Sync {
+    /// Read the bound conversation after its execution resources acquire and reload storage.
+    fn restore(&self) -> Result<Option<SessionSnapshot>, crate::storage::StorageError>;
+
     fn publish<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,
-        state: TextSessionState,
+        state: SessionSnapshot,
     ) -> crate::BoxFuture<'a, Result<(), crate::storage::StorageError>>;
 }
 
@@ -229,7 +156,6 @@ pub struct TextSessionRequest {
     #[host(default = None)]
     pub task_id: Option<String>,
     pub message: ChatItem,
-    pub state: Option<TextSessionState>,
     pub delegated: bool,
     pub conn_options: ApiConnectOptions,
 }
@@ -248,7 +174,7 @@ pub struct TextSessionSettled {
 #[derive(Debug, Clone)]
 pub struct TextSessionFinished {
     pub run: crate::agent::run::RunFinished,
-    pub state: TextSessionState,
+    pub state: SessionSnapshot,
 }
 
 impl From<TextSessionSettled> for TextSessionFinished {
@@ -292,7 +218,7 @@ pub struct TextSessionDelivery {
     pub messages: BTreeMap<String, String>,
 }
 
-#[crate::host(class(name = "TextSessionRunner"))]
+#[crate::host(class(name = "TextSessionRunner", native = crate::delegation::remote::RemoteCommands))]
 pub trait TextSessionRunner: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]

@@ -209,3 +209,28 @@ fn a_held_stamp_never_stands_for_what_was_heard() {
             .any(|e| matches!(e, SynthesisLossEffect::Drain { text: DrainedText::Forward, .. }))
     );
 }
+
+/// Separate provider words keep their own stamps when sentence chunks have no intervening
+/// blank. The display keeps the original punctuation instead of merging both word timings.
+#[test]
+fn adjoining_sentences_keep_their_provider_word_boundaries() {
+    let mut said = Visible::of("03/14.", &Vocabulary::LiveKit);
+    said.extend(Visible::of("Before we continue.", &Vocabulary::LiveKit));
+    let mut state = AlignedTranscript::default();
+    let first = state.word(&stamp("03/14. ", 0.0, 0.5), &said);
+    assert_eq!(state.words, "03/14.");
+    let second = state.word(&stamp("Before ", 0.5, 0.8), &said);
+    let timed = |effects: Vec<AlignedTranscriptEffect>| -> Vec<_> {
+        effects
+            .into_iter()
+            .filter_map(|effect| match effect {
+                AlignedTranscriptEffect::CaptureTimed(chunk) => {
+                    Some((chunk.text, chunk.start_time))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(timed(first), [("03/14.".into(), Some(0.0))]);
+    assert_eq!(timed(second), [("Before".into(), Some(0.5))]);
+}

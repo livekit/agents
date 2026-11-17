@@ -72,6 +72,7 @@ if TYPE_CHECKING:
     from .._generated.voice_session import VoiceCommandOrigin
     from ..inference import LLMModels, RealtimeModels
     from ..llm.tool_context import ToolHandlingOptions
+    from ..storage.session_state import BoundContext
     from .agent_run import AgentCallbacks, _TextRun
     from .events import RunContext
     from .run_result import RunResult, RunStream
@@ -313,7 +314,7 @@ class Agent(Generic[Context_T, Output_T]):
         parameters: type[object] | None = None,
         needs_approval: bool | llm.tool_context.ReadBack = False,
         chat_history: Literal["fresh", "fork"] = "fresh",
-        merge_chat_history: bool = False,
+        merge_chat_ctx: bool = False,
     ) -> llm.FunctionTool[..., Awaitable[Output_T]]:
         """This agent as a tool: its accepted output is the call's result.
 
@@ -327,7 +328,7 @@ class Agent(Generic[Context_T, Output_T]):
             parameters=parameters,
             needs_approval=needs_approval,
             chat_history=chat_history,
-            merge_chat_history=merge_chat_history,
+            merge_chat_ctx=merge_chat_ctx,
         )  # type: ignore[return-value]
 
     async def run(
@@ -335,7 +336,7 @@ class Agent(Generic[Context_T, Output_T]):
         message: str | llm.ChatMessage,
         *,
         message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
-        context: Context_T | None = None,
+        context: Context_T | BoundContext[Context_T] | None = None,
         retries: int | AgentRetries | None = None,
     ) -> RunResult[Output_T]:
         """Run the model and tool loop until an accepted output or a request for human input.
@@ -346,7 +347,15 @@ class Agent(Generic[Context_T, Output_T]):
             context: Application data and dependencies, read as ``ctx.context``.
             retries: The agent's retry budgets for this run (``AgentRetries``); an int sets both.
         """
+        from ..storage.session_state import BoundContext
         from .agent_run import door_hooks
+
+        if isinstance(context, BoundContext):
+            if message_history is not None:
+                raise ValueError("explicit history cannot be combined with a bound context")
+            from ..text_session import TextSession
+
+            return await TextSession(agent=self).run(message, context=context, retries=retries)
 
         hooks = door_hooks()
         async with self.run_stream(
@@ -365,7 +374,7 @@ class Agent(Generic[Context_T, Output_T]):
         message: str | llm.ChatMessage,
         *,
         message_history: llm.ChatContext | Sequence[llm.ChatItem] | None = None,
-        context: Context_T | None = None,
+        context: Context_T | BoundContext[Context_T] | None = None,
         retries: int | AgentRetries | None = None,
     ) -> RunStream[RunResult[Output_T]]:
         """``run()`` as an async context manager streaming text and events; it starts on entry::
@@ -375,8 +384,16 @@ class Agent(Generic[Context_T, Output_T]):
                 print(delta, end="")
             result = await stream.result()
         """
+        from ..storage.session_state import BoundContext
         from .agent_run import settled_result, start_run
         from .run_result import RunStream, _Started
+
+        if isinstance(context, BoundContext):
+            if message_history is not None:
+                raise ValueError("explicit history cannot be combined with a bound context")
+            from ..text_session import TextSession
+
+            return TextSession(agent=self).run_stream(message, context=context, retries=retries)
 
         async def start(stream: _core._core_RunStream) -> _Started[RunResult[Output_T]]:
             run = await start_run(
@@ -609,7 +626,7 @@ class _LocalAgentTool(FunctionTool[..., Awaitable[object]]):
         parameters: type[object] | None,
         needs_approval: bool | ReadBack,
         chat_history: Literal["fresh", "fork"],
-        merge_chat_history: bool,
+        merge_chat_ctx: bool,
     ) -> None:
         if not agent._output_type_explicit:
             raise ValueError("an agent tool requires an explicitly declared output_type")
@@ -627,7 +644,7 @@ class _LocalAgentTool(FunctionTool[..., Awaitable[object]]):
         self.routing = LocalAgentTool(
             agent_name=agent.name,
             chat_history=chat_history,
-            merge_chat_history=merge_chat_history,
+            merge_chat_ctx=merge_chat_ctx,
         )
 
         async def invoke(ctx: RunContext[Any], **arguments: object) -> object:

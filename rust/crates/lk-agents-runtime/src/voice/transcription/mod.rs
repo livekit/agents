@@ -15,6 +15,14 @@ use parking_lot::Mutex;
 use std::sync::{Arc, Weak};
 use tokio::sync::mpsc;
 
+/// Paced and unpaced output share one physical writer. Receipts are owned by that writer,
+/// so a canceled capture cannot let a later flush overtake already released words.
+enum TranscriptForward {
+    Output(TranscriptOutput),
+    Capture { text: TranscriptChunk, delivered: signal::Producer<Option<Result<()>>> },
+    Drain(signal::Producer<Option<Result<()>>>),
+}
+
 /// The transcript synchronizer both synced outputs and the facade report to: voice's
 /// `TranscriptSync` deciding, this executing. Nothing holds the facade, so no reference cycle.
 struct Synchronizer {
@@ -29,13 +37,11 @@ struct Synchronizer {
     /// The synchronizer's decisions.
     state: Mutex<TranscriptSync>,
     /// `None` once closed: dropping the sender is what ends the forwarder.
-    tx: Mutex<Option<mpsc::UnboundedSender<TranscriptOutput>>>,
+    tx: Mutex<Option<mpsc::UnboundedSender<TranscriptForward>>>,
     /// Shared with the forwarder task, which must not keep the synchronizer alive (or it never
     /// ends).
     /// The forwarder task's: it ends with the task, however it ends.
     forwarder_done: signal::Cell<bool>,
-    /// The first word the sink below refused, which fails the segment at its flush.
-    failed: Arc<Mutex<Option<IoError>>>,
     /// The audio node's tracker; released words are raised on it as `transcript_shown`.
     tracker: Arc<dyn PlaybackTracker>,
 }
@@ -82,9 +88,7 @@ impl Synchronizer {
                 log::warn!(target: lk_agents_abi::LOG_TARGET, "{}", warning.message());
             }
             TranscriptSyncEffect::Queue(output) => {
-                if let Some(tx) = self.tx.lock().as_ref() {
-                    let _ = tx.send(output);
-                }
+                self.queue_output(output);
             }
             TranscriptSyncEffect::RetireText { admitted } => {
                 self.apply(TranscriptSyncEvent::TextRetired { admitted }, reported);
@@ -108,6 +112,33 @@ impl Synchronizer {
 
     fn send(&self, out: TranscriptOutput) {
         self.apply(TranscriptSyncEvent::Output(out), None);
+    }
+
+    fn queue_output(&self, output: TranscriptOutput) {
+        if let Some(tx) = self.tx.lock().as_ref() {
+            let _ = tx.send(TranscriptForward::Output(output));
+        }
+    }
+
+    /// A direct capture waits for its own delivery; a drain waits for all earlier output and
+    /// the physical sink's flush boundary. The queued producer settles even if its owner dies.
+    fn forward_request(
+        &self,
+        text: Option<TranscriptChunk>,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<()>> {
+        let (delivered, receipt) = signal::once();
+        let request = match text {
+            Some(text) => TranscriptForward::Capture { text, delivered },
+            None => TranscriptForward::Drain(delivered),
+        };
+        if let Some(tx) = self.tx.lock().as_ref() {
+            let _ = tx.send(request);
+        }
+        Box::pin(async move {
+            receipt.wait().await.unwrap_or_else(|_| {
+                Err(IoError::Rtc("transcription writer ended before delivery".into()))
+            })
+        })
     }
 
     /// The physical attachment callback completed; only then does the gate change.
@@ -134,20 +165,46 @@ impl Synchronizer {
     /// The forwarder: the only task and the only place the text sink is awaited.
     async fn forward(
         next: Option<Arc<dyn TranscriptionOutput>>,
-        mut rx: mpsc::UnboundedReceiver<TranscriptOutput>,
-        failed: Arc<Mutex<Option<IoError>>>,
+        mut rx: mpsc::UnboundedReceiver<TranscriptForward>,
     ) {
-        while let Some(out) = rx.recv().await {
-            let Some(next) = &next else { continue };
-            match out {
+        // Only this writer observes output failures; its next drain reports the first once.
+        let mut failed = None;
+        while let Some(request) = rx.recv().await {
+            match request {
                 // The rest of the transcript still flows; the failure is the segment's.
-                TranscriptOutput::Word(t) => {
-                    if let Err(error) = next.capture_timed(&telemetry::Cx::NONE, &t).await {
-                        failed.lock().get_or_insert(error);
+                TranscriptForward::Output(TranscriptOutput::Word(t)) => {
+                    if let Some(next) = &next
+                        && let Err(error) = next.capture_timed(&telemetry::Cx::NONE, &t).await
+                    {
+                        failed.get_or_insert(error);
                     }
                 }
-                TranscriptOutput::Flush => next.flush(),
-                TranscriptOutput::Detached => next.on_detached(),
+                TranscriptForward::Output(TranscriptOutput::Flush) => {
+                    if let Some(next) = &next {
+                        next.flush();
+                    }
+                }
+                TranscriptForward::Output(TranscriptOutput::Detached) => {
+                    if let Some(next) = &next {
+                        next.on_detached();
+                    }
+                }
+                TranscriptForward::Capture { text, delivered } => {
+                    let result = match &next {
+                        Some(next) => next.capture_timed(&telemetry::Cx::NONE, &text).await,
+                        None => Ok(()),
+                    };
+                    delivered.resolve(result);
+                }
+                TranscriptForward::Drain(delivered) => {
+                    let error = failed.take();
+                    let result = match (error, &next) {
+                        (Some(error), _) => Err(error),
+                        (None, Some(next)) => next.wait_for_flush().await,
+                        (None, None) => Ok(()),
+                    };
+                    delivered.resolve(result);
+                }
             }
         }
     }
@@ -357,16 +414,9 @@ impl SyncedTranscriptionOutput {
             .handle(TranscriptSyncEvent::Capture { text: text.clone(), aligned });
         for effect in effects {
             match effect {
-                TranscriptSyncEffect::Capture { text, aligned: true } => {
-                    if let Some(next) = &self.next {
-                        next.capture_timed(&telemetry::Cx::NONE, &text).await?;
-                    }
-                }
                 // a settled piece passes on whole: whether it is spoken, and its delivery
-                TranscriptSyncEffect::Capture { text, aligned: false } => {
-                    if let Some(next) = &self.next {
-                        next.capture_timed(&telemetry::Cx::NONE, &text).await?;
-                    }
+                TranscriptSyncEffect::Capture { text, .. } => {
+                    self.sync.forward_request(Some(text)).await?;
                 }
                 effect => {
                     self.sync.perform(effect, None);
@@ -405,8 +455,7 @@ impl TranscriptionOutput for SyncedTranscriptionOutput {
     }
 
     fn wait_for_flush(&self) -> lk_agents_abi::BoxFuture<'_, Result<()>> {
-        let failed = self.sync.failed.lock().take();
-        Box::pin(async move { failed.map_or(Ok(()), Err) })
+        self.sync.forward_request(None)
     }
 
     fn flush(&self) {
@@ -415,9 +464,7 @@ impl TranscriptionOutput for SyncedTranscriptionOutput {
         for effect in effects {
             match effect {
                 TranscriptSyncEffect::FlushText => {
-                    if let Some(next) = &self.next {
-                        next.flush();
-                    }
+                    self.sync.queue_output(TranscriptOutput::Flush);
                 }
                 effect => {
                     self.sync.perform(effect, None);
@@ -486,8 +533,6 @@ impl TranscriptSynchronizer {
         let (tx, rx) = mpsc::unbounded_channel();
         let (done, forwarder_done) = signal::signal(false);
         let forwarder_spawner = Arc::clone(&spawner);
-        let failed = Arc::new(Mutex::new(None));
-        let forwarder_failed = Arc::clone(&failed);
         let sync = Arc::new_cyclic(|me| Synchronizer {
             state: Mutex::new(TranscriptSync::new(opts)),
             clock,
@@ -497,13 +542,12 @@ impl TranscriptSynchronizer {
             playing: Mutex::new(None),
             tx: Mutex::new(Some(tx)),
             forwarder_done,
-            failed,
             tracker: Arc::new(crate::voice::playback::Tracker::new()),
         });
         // The task holds only the done flag, so it never keeps the synchronizer alive.
         let sink = text_next.clone();
         let forwarder = forwarder_spawner.spawn(async move {
-            Synchronizer::forward(sink, rx, forwarder_failed).await;
+            Synchronizer::forward(sink, rx).await;
             done.set(true);
         });
 

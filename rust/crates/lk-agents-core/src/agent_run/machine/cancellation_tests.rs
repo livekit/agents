@@ -389,3 +389,33 @@ fn interrupted_snapshots_preserve_tool_pairs() {
         assert!(!text.contains("ship"), "{format:?}: an unanswered call is not sent: {text}");
     }
 }
+
+#[test]
+fn invocation_progress_excludes_supplied_tool_history_but_keeps_its_unfinished_calls() {
+    let call = lk_agents_abi::FunctionCall {
+        id: "previous_call".into(),
+        call_id: "previous".into(),
+        name: "charge".into(),
+        arguments: r#"{"x":"earlier"}"#.into(),
+        created_at: std::time::UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    };
+    let output = lk_agents_abi::FunctionCallOutput::new(
+        "previous_output",
+        "previous",
+        "already charged",
+        false,
+        std::time::UNIX_EPOCH,
+    );
+    let history = vec![ChatItem::FunctionCall(call), ChatItem::FunctionCallOutput(output)];
+    let mut driver = Driver::new(text_agent(vec![string_tool("ship", "x")]), "ship it", history);
+    driver.reply("On it.", &[("ship", json!({"x": "parcel"}))]);
+    prepare_all(&mut driver);
+
+    assert_eq!(
+        transcript(&driver.run.progress_new_items()),
+        pairs(&[("user", "ship it"), ("assistant", "On it."), ("call", r#"ship({"x":"parcel"})"#)]),
+        "a checkpoint carries this invocation's work without reaccepting its supplied context"
+    );
+}

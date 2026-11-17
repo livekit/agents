@@ -4,18 +4,18 @@ use std::sync::Arc;
 
 use crate::transport::HttpRequest;
 use bytes::Bytes;
-use futures_util::{Stream, StreamExt};
+use futures_util::StreamExt;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::{ApiConnectOptions, Clock, Ts};
 use lk_agents_core::request::{AttemptFailure, Policy, Request, Step};
 use tokio::sync::mpsc;
 
-use super::{GatewayHttp, Reporter, Sent, Stamped, error_chain};
+use super::port::{HttpExchangePort, HttpResponse, ResponseBody};
+use super::{Reporter, Sent, Stamped};
 
 // Dropping an attempt releases its reqwest exchange directly; no detached task owns I/O.
 
-type Sending = Pin<Box<dyn Future<Output = Result<reqwest::Response, AttemptFailure>> + Send>>;
-type Body = Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>;
+type Sending = Pin<Box<dyn Future<Output = Result<HttpResponse, AttemptFailure>> + Send>>;
 
 pub enum HttpEvent {
     /// A retry discards response data that has not been delivered to the consumer.
@@ -34,7 +34,7 @@ pub enum ResponsePolicy {
 
 pub struct Exchange {
     core: Request,
-    http: Arc<GatewayHttp>,
+    http: Arc<dyn HttpExchangePort>,
     request: HttpRequest,
     method: reqwest::Method,
     response_policy: ResponsePolicy,
@@ -42,7 +42,7 @@ pub struct Exchange {
     reporter: Reporter<(u32, Sent)>,
     observations: mpsc::Receiver<Stamped<(u32, Sent)>>,
     sending: Option<Sending>,
-    body: Option<Body>,
+    body: Option<ResponseBody>,
     error: Option<ApiError>,
     started: bool,
     ended: bool,
@@ -52,7 +52,7 @@ pub struct Exchange {
 
 impl Exchange {
     pub fn new(
-        http: Arc<GatewayHttp>,
+        http: Arc<dyn HttpExchangePort>,
         method: reqwest::Method,
         request: HttpRequest,
         options: &ApiConnectOptions,
@@ -69,7 +69,7 @@ impl Exchange {
     }
 
     pub fn with_response_policy(
-        http: Arc<GatewayHttp>,
+        http: Arc<dyn HttpExchangePort>,
         method: reqwest::Method,
         request: HttpRequest,
         options: &ApiConnectOptions,
@@ -177,7 +177,7 @@ impl Exchange {
     /// `None` keeps waiting: the attempt failed, or it is no longer the current one.
     fn on_response(
         &mut self,
-        result: Result<reqwest::Response, AttemptFailure>,
+        result: Result<HttpResponse, AttemptFailure>,
         expecting: Option<Ts>,
     ) -> Option<HttpEvent> {
         self.sending = None;
@@ -186,10 +186,9 @@ impl Exchange {
         match result {
             Ok(response) => {
                 self.core.progress(attempt, now);
-                self.status = Some(response.status());
-                let headers = response.headers().clone();
-                self.body = Some(Box::pin(response.bytes_stream()));
-                Some(HttpEvent::Headers(headers))
+                self.status = Some(response.status);
+                self.body = Some(response.body);
+                Some(HttpEvent::Headers(response.headers))
             }
             Err(failure) => {
                 self.failed(failure, now);
@@ -201,7 +200,7 @@ impl Exchange {
     /// `None` keeps waiting: the read failed, or its attempt is no longer the current one.
     fn on_chunk(
         &mut self,
-        chunk: Option<Result<Bytes, reqwest::Error>>,
+        chunk: Option<Result<Bytes, AttemptFailure>>,
         expecting: Option<Ts>,
     ) -> Option<HttpEvent> {
         let now = self.reporter.clock.now();
@@ -213,7 +212,7 @@ impl Exchange {
                 Some(HttpEvent::Bytes(bytes))
             }
             Some(Err(error)) => {
-                self.failed(AttemptFailure::Connection(error_chain(&error)), now);
+                self.failed(error, now);
                 None
             }
             None => {
@@ -301,15 +300,10 @@ impl Exchange {
         let method = self.method.clone();
         let policy = self.response_policy;
         self.status = None;
-        self.sending = Some(Box::pin(async move {
-            let tag = |sent| (attempt, sent);
-            match policy {
-                ResponsePolicy::Successful => {
-                    http.send_method(method, request, &reporter, tag).await
-                }
-                ResponsePolicy::Protocol => http.send_raw(method, request, &reporter, tag).await,
-            }
-        }));
+        self.sending =
+            Some(Box::pin(
+                async move { http.send(method, request, policy, reporter, attempt).await },
+            ));
         self.started = true;
     }
 

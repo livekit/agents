@@ -36,7 +36,7 @@ async fn standalone_session_owns_a_run_and_settles_only_explicit_app_saves() {
         .await
         .unwrap();
     store
-        .stage_session(json!({"version":1,"kind":"voice","agent":"desk","history_ids":[]}))
+        .stage_session(crate::session_state::voice_value("desk".into(), vec![], None).unwrap())
         .unwrap();
     store.flush_session(vec![]).await.unwrap();
     let thread = fixture.thread().await;
@@ -86,7 +86,7 @@ async fn direct_context_saves_survive_reload_and_refuse_stale_activations(backen
     let fields = vec![field("draft", json!("first"))];
     let a = first.load("root:desk".into(), "Booking".into(), fields.clone()).await.unwrap();
     let b = stale.load("root:desk".into(), "Booking".into(), fields.clone()).await.unwrap();
-    let session = crate::session_state::voice_value("desk".into(), vec![]).unwrap();
+    let session = crate::session_state::voice_value("desk".into(), vec![], None).unwrap();
     let saved = first
         .save(
             "root:desk".into(),
@@ -123,7 +123,7 @@ async fn direct_context_saves_survive_reload_and_refuse_stale_activations(backen
                 "Booking".into(),
                 b.revision,
                 vec![field("draft", json!("stale"))],
-                Some(crate::session_state::voice_value("stale".into(), vec![]).unwrap())
+                Some(crate::session_state::voice_value("stale".into(), vec![], None).unwrap())
             )
             .await,
         Err(StorageError::VersionConflict { .. })

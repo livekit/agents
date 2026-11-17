@@ -753,6 +753,7 @@ impl Module<'_> {
                     let value = format!("{prefix}{}", invocation(8));
                     format!("return {ret}([x.{field} for x in {value}])")
                 }
+                None if getter => format!("return {ret}({prefix}{head})"),
                 None => {
                     let flat = format!("return {ret}({prefix}{head}({}))", arguments.join(", "));
                     match 8 + flat.len() <= 100 {
@@ -821,6 +822,10 @@ impl Module<'_> {
             body.push_str(&call(&head, &passed, 8));
         }
         let asynchronous = awaited && !adapt.future;
+        if adapt.returns.is_some() && adapt.annotations.iter().any(|(name, _)| name == "ret") {
+            // The constructed value may be a private implementation of the declared API type.
+            ret = self.returned(method);
+        }
         let mut text = def(&m.name, asynchronous, &signature, &ret);
         if m.kind == MethodKind::Getter {
             text = format!("    @property\n{text}");

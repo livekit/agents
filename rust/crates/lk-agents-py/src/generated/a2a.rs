@@ -311,6 +311,23 @@ impl Reply {
         })
     }
 
+    /// The unnormalized SDK response for native state inspection and protocol conformance.
+    fn _core_next_event<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let out = <ReplyImpl as ::lk_agents_abi::a2a::client::Reply>::_core_next_event(&this, )
+                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    out.map(|value| crate::py_protocol::a2a_stream_response_to_py(py, value))
+                        .transpose()?,
+                    py,
+                )
+            })
+        })
+    }
+
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -646,7 +663,7 @@ impl CoreRemoteInteraction {
     /// request is announced through `host.delegated` and each question answered through
     /// `host.ask`. Returns the outcome, or, off a call, the expert's question. The client and
     /// its reply are closed before it returns.
-    #[pyo3(signature = (host, arguments, structured, history, token, thread_id, conn_options, live))]
+    #[pyo3(signature = (host, arguments, structured, history, token, thread_id, conn_options, live, owner = None, origin = None))]
     fn run<'py>(
         &self,
         py: Python<'py>,
@@ -658,6 +675,8 @@ impl CoreRemoteInteraction {
         thread_id: ::std::option::Option<::std::string::String>,
         conn_options: Option<Bound<'_, PyAny>>,
         live: bool,
+        owner: Option<Bound<'_, PyAny>>,
+        origin: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
@@ -674,11 +693,29 @@ impl CoreRemoteInteraction {
         let conn_options = conn_options
             .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
             .transpose()?;
+        let owner = owner
+            .map(|v| {
+                crate::py_objects::native::<
+                        dyn ::lk_agents_abi::delegation::remote::RemoteCommands,
+                    >(v.as_any())
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "owner",
+                                ": expected the active native conversation owner"
+                            ))
+                        })
+                    })
+            })
+            .transpose()?;
+        let origin = origin
+            .map(|v| crate::generated::records::session::tool_call_ref_from_py(v.as_any()))
+            .transpose()?;
         let context = crate::py_calls::entered();
         let cx = crate::py_calls::entry_cx()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::run(&this, &env, host, arguments, structured, history, token, thread_id, conn_options, live, context, cx)
+            let out = <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::run(&this, &env, host, arguments, structured, history, token, thread_id, conn_options, live, owner, origin, context, cx)
                 .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
@@ -689,8 +726,8 @@ impl CoreRemoteInteraction {
         })
     }
 
-    /// The tool call was cancelled: the interaction records it and a running delegation stops,
-    /// closing its reply (which cancels the remote task) and client; `settled()` waits for that.
+    /// Stop the local tool wait and close its observation resources. Remote business work is
+    /// unchanged; `settled()` waits for local cleanup, not remote task cancellation.
     fn cancelled(&self, py: Python<'_>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
         py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::cancelled(&self.0)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;

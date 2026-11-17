@@ -62,6 +62,8 @@ pub enum StorageStep {
     /// Another writer committed this complete partition view. Its unseen additions and edits
     /// remain authoritative until a later accepted local revision or another foreign commit.
     ForeignCommitted {
+        /// Rows that writer actually read, so unchanged rows are not mistaken for its edits.
+        before: Vec<lk_agents_abi::ChatItem>,
         items: Vec<lk_agents_abi::ChatItem>,
     },
     /// The fake database holds a request's answer this long on purpose (a slow lease take).

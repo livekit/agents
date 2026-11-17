@@ -50,7 +50,6 @@ fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
         | VoiceEffect::Answer(..)
         | VoiceEffect::Host(_)
         | VoiceEffect::ChatContext(_)
-        | VoiceEffect::StorageCommit { .. }
         | VoiceEffect::SaveConversation(_)
         | VoiceEffect::StorageAbort(_)
         | VoiceEffect::Outputs(_)
@@ -83,8 +82,11 @@ fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
         VoiceEffect::CancelTool { call_id, .. } => {
             Step::Tool(ToolStep::Cancelled { call_id: call_id.clone() })
         }
-        VoiceEffect::StorageCheckpoint { .. }
-        | VoiceEffect::ValidateOutput { .. }
+        VoiceEffect::StorageCommit { sequence, .. }
+        | VoiceEffect::StorageCheckpoint { checkpoint: sequence, .. } => {
+            Step::Core(CoreStep::ConversationCheckpointPrepared { sequence: *sequence })
+        }
+        VoiceEffect::ValidateOutput { .. }
         | VoiceEffect::CancelOutputValidation { .. }
         | VoiceEffect::RenderToolHandlingTemplate { .. }
         | VoiceEffect::CancelToolRefusal { .. }

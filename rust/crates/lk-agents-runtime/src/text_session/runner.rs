@@ -15,6 +15,30 @@ struct Control {
     release: mpsc::Sender<Release>,
     progress: mpsc::Sender<(String, u64, String)>,
     usage: signal::Cell<Usage>,
+    remote: mpsc::Sender<RemoteCommand>,
+}
+
+impl lk_agents_abi::delegation::remote::RemoteCommands for Runner {
+    fn remote<'a>(
+        &'a self,
+        command: lk_agents_abi::delegation::remote::RemoteCommand,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), lk_agents_abi::storage::StorageError>> {
+        Box::pin(async move {
+            use lk_agents_abi::storage::StorageError;
+            let sender =
+                self.control.lock().as_ref().map(|control| control.remote.clone()).ok_or_else(
+                    || StorageError::Invalid("the conversation owner is not running".into()),
+                )?;
+            let (done, settled) = signal::once();
+            sender
+                .send(RemoteCommand { command, done })
+                .await
+                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
+            settled.wait().await.map_err(|_| {
+                StorageError::Invalid("the conversation owner ended before checkpointing".into())
+            })?
+        })
+    }
 }
 
 pub struct Runner {
@@ -154,14 +178,23 @@ fn start(
     let ChatItem::Message(message) = request.message.clone() else {
         return Err(Invalid("a session message must be a ChatMessage".into()));
     };
+    let state = request
+        .session_sink
+        .as_ref()
+        .map(|binding| binding.restore())
+        .transpose()
+        .map_err(|error| Invalid(error.to_string()))?
+        .flatten();
     let mut session = TextSession::new(
         config,
         TextSessionInput {
-            session_id: request.session_id.clone(),
+            session_id: state
+                .as_ref()
+                .map_or_else(|| request.session_id.clone(), |state| state.session_id.clone()),
             id_seed: request.id_seed.unwrap_or_else(telemetry::random_seed),
             execution_id: request.execution_id.clone(),
             task_id: request.task_id.clone(),
-            state: request.state.clone(),
+            state,
             wall: WallAnchor::of(&*clock),
             cleanup_timeout: lk_agents_abi::HOST_TEARDOWN_TIMEOUT,
             delegated: request.delegated,
@@ -177,6 +210,7 @@ fn start(
     let (events_tx, events) = mpsc::channel(64);
     let (progress_tx, progress) = mpsc::channel(32);
     let (release_tx, releases) = mpsc::channel(1);
+    let (remote_tx, remote) = mpsc::channel(32);
     let (usage_tx, usage) = signal::signal(session.usage());
     let driver = Driver {
         usage: usage_tx,
@@ -199,11 +233,11 @@ fn start(
     driving.spawn(
         &*spawner,
         "text session",
-        driver.drive(message, events, progress, releases, cancel.clone()),
+        driver.drive(message, events, progress, releases, remote, cancel.clone()),
     );
     Ok((
         Updates { cancel, receiver, clock, _driver: driving },
-        Control { release: release_tx, progress: progress_tx, usage },
+        Control { release: release_tx, progress: progress_tx, usage, remote: remote_tx },
     ))
 }
 

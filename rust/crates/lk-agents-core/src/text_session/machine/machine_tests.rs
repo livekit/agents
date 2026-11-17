@@ -84,6 +84,32 @@ fn message(id: &str, role: Role, text: &str) -> ChatMessage {
 }
 
 #[test]
+fn closing_refuses_remote_dispatch_even_before_invocation_cleanup_finishes() {
+    use lk_agents_abi::delegation::remote::{A2ARequest, RemoteCommand, RemoteInput};
+    let mut session =
+        TextSession::new(config(false, ChatHistory::Fresh, false), input(None)).unwrap();
+    session.handle(TextSessionEvent::Start(message("human", Role::User, "Book a room")), Ts::ZERO);
+    session.handle(TextSessionEvent::Cancel, Ts::ZERO);
+    let command = RemoteCommand {
+        remote_id: "booking".into(),
+        endpoint: "https://booking.test".into(),
+        input: RemoteInput::Prepare {
+            request_id: "late".into(),
+            request: A2ARequest::Get(lk_agents_abi::a2a_protocol::GetTaskRequest {
+                id: "booking".into(),
+                history_length: None,
+                tenant: None,
+            }),
+            streaming: false,
+            origin: None,
+            input_request: None,
+        },
+    };
+    assert!(session.remote(command).is_err());
+    assert!(session.snapshot().remote_agents.is_empty());
+}
+
+#[test]
 fn streaming_checkpoints_are_bounded_by_time_and_bytes_and_mark_incomplete_text() {
     let mut driver = Driver::new(config(false, ChatHistory::Fresh, false), None, "hello");
     driver.session.recording = true;
@@ -151,11 +177,7 @@ fn config(approval: bool, mode: ChatHistory, merge: bool) -> TextSessionConfig {
     let mut root = agent("desk", vec![tool], OutputSpec::Text { validated: false });
     root.agent_tools.insert(
         "book".into(),
-        LocalAgentTool {
-            agent_name: "booking".into(),
-            chat_history: mode,
-            merge_chat_history: merge,
-        },
+        LocalAgentTool { agent_name: "booking".into(), chat_history: mode, merge_chat_ctx: merge },
     );
     let child = agent(
         "booking",
@@ -170,7 +192,7 @@ fn config(approval: bool, mode: ChatHistory, merge: bool) -> TextSessionConfig {
     )
 }
 
-fn input(state: Option<TextSessionState>) -> TextSessionInput {
+fn input(state: Option<SessionSnapshot>) -> TextSessionInput {
     TextSessionInput {
         session_id: "conversation".into(),
         id_seed: 0,
@@ -191,7 +213,7 @@ struct Driver {
 }
 
 impl Driver {
-    fn new(config: TextSessionConfig, state: Option<TextSessionState>, text: &str) -> Self {
+    fn new(config: TextSessionConfig, state: Option<SessionSnapshot>, text: &str) -> Self {
         let mut driver = Self {
             session: TextSession::new(config.clone(), input(state)).unwrap(),
             effects: Vec::new(),
@@ -394,7 +416,18 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
     third.accepted(json!({"reference":"R-1"}));
     let parent_request = third.request().1;
     assert_eq!(parent_request.items.iter().filter(|i| matches!(i, ChatItem::FunctionCallOutput(o) if o.call_id == call.call_id && o.output == "{\"reference\":\"R-1\"}")).count(), 1);
-    assert!(third.session.state.frames[&child_id].completed);
+    assert!(!third.session.state.frames.contains_key(&child_id));
+    assert!(
+        third.session.state.chat_history.iter().any(|message| message.id == question_message.id)
+    );
+    assert!(
+        third
+            .session
+            .state
+            .chat_history
+            .iter()
+            .any(|message| message.raw_text_content().as_deref() == Some("Friday"))
+    );
     assert!(third.session.state.ancestors.is_empty());
     assert!(parent_request.items.iter().any(|i| i.id() == question_message.id));
     assert!(!parent_request.items.iter().any(|i| {
@@ -575,7 +608,7 @@ fn fork_preserves_complete_exchanges_and_merge_requires_delivery_receipts() {
     incomplete.call_id = "unresolved".into();
     let mut parent_history = history.clone();
     parent_history.push(ChatItem::FunctionCall(incomplete));
-    assert_eq!(crate::agent_tool::opening(&parent_history, ChatHistory::Fork), history);
+    assert_eq!(crate::delegation::local::opening(&parent_history, ChatHistory::Fork), history);
     driver.reply("", &[("book", json!({"nights":2}))]);
     driver.prepare(json!({"nights":2}));
     let child_invocation = driver.invocation();
@@ -735,7 +768,7 @@ fn direct_child_execution_reconciles_with_its_original_parent_call() {
         },
         Ts::ZERO,
     );
-    assert!(session.state.frames[&frame_id].completed);
+    assert!(!session.state.frames.contains_key(&frame_id));
     assert!(effects.iter().any(|e| matches!(e, TextSessionEffect::Run { effect:agent_run::AgentRunEffect::LlmRequestStart { chat_ctx, .. }, .. } if chat_ctx.items.iter().any(|i| matches!(i, ChatItem::FunctionCallOutput(o) if o.output == "{\"reference\":\"direct\"}")))));
     assert!(
         session

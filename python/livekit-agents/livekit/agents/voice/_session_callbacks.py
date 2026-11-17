@@ -128,7 +128,7 @@ class _AgentHooks:
     async def _core_on_enter(self, agent: Agent) -> None:
         binding = self._session._session_binding
         if binding is not None:
-            binding.update_voice(agent.name, [item.id for item in self._session.history.items])
+            binding.update_voice(agent.name, list(self._session.history.items))
         with _in_hook("on_enter", self._session, agent):
             await agent._run_hook("on_enter")
 
@@ -379,8 +379,8 @@ def dispatch(self: VoiceSession[Any], wire: HostWire) -> None:
 
 def _on_item_added(self: VoiceSession[Any], wire: ItemAddedWire) -> None:
     binding = self._session_binding
-    if binding is not None and binding.state.active_agent is not None:
-        binding.update_voice(binding.state.active_agent, [item.id for item in self.history.items])
+    if binding is not None and (agent := binding.state.current_agent) is not None:
+        binding.update_voice(agent.agent_name, list(self.history.items))
     # the same object as in `session.history`
     if (item := wire.host_item) is None:
         return

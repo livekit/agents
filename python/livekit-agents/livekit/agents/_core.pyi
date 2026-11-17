@@ -152,6 +152,11 @@ from ._generated._core_native_enums import (
 from ._generated._core_recorder import (
     SessionRecorder as SessionRecorder,
 )
+from ._generated._core_session import (
+    RemoteAgentState as RemoteAgentState,
+    RemoteContextState as RemoteContextState,
+    RemoteTask as RemoteTask,
+)
 from ._generated._core_storage import (
     Run as Run,
     Storage as Storage,
@@ -190,8 +195,6 @@ from ._generated._core_text_session import (
     TextSessionRunner as TextSessionRunner,
     TextSessionUpdates as TextSessionUpdates,
     _core_LocalInteraction as _core_LocalInteraction,
-    _core_persist_text_session_state as _core_persist_text_session_state,
-    _core_restore_text_session_state as _core_restore_text_session_state,
 )
 from ._generated._core_tokenize import (
     BM25Index as BM25Index,

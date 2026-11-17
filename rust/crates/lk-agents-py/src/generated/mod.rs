@@ -22,6 +22,7 @@ pub mod metrics;
 pub mod native_enums;
 pub mod recorder;
 pub mod records;
+pub mod session;
 pub mod storage;
 pub mod stt;
 pub mod telemetry;
@@ -111,6 +112,12 @@ pub trait Implementations: 'static {
     type LlmMetricState: ::lk_agents_abi::metrics::provider::LlmMetricState;
     type TtsMetricState: ::lk_agents_abi::metrics::provider::TtsMetricState;
     type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
+    type RemoteAgentView: ::lk_agents_abi::session::remote::RemoteAgentView<
+            Task = Self::RemoteTaskView,
+            Context = Self::RemoteContextView,
+        >;
+    type RemoteContextView: ::lk_agents_abi::session::remote::RemoteContextView<Task = Self::RemoteTaskView>;
+    type RemoteTaskView: ::lk_agents_abi::session::remote::RemoteTaskView;
     type Storage: ::lk_agents_abi::storage::Storage<
             Thread = Self::Thread,
             ContextActivation = Self::ContextActivation,
@@ -122,7 +129,9 @@ pub trait Implementations: 'static {
     type Run: ::lk_agents_abi::storage::handles::Run;
     type ThreadHandle: ::lk_agents_abi::storage::handles::ThreadHandle<Namespace = Self::Storage>;
     type ThreadServer: ::lk_agents_abi::storage::http::ThreadServer;
-    type PersistedSessionState: ::lk_agents_abi::storage::session::PersistedSessionState;
+    type PersistedSessionState: ::lk_agents_abi::storage::session::PersistedSessionState<
+            RemoteAgent = Self::RemoteAgentView,
+        >;
     type SessionBinding: ::lk_agents_abi::storage::session::SessionBinding<
             Activation = Self::ContextActivation,
             View = Self::PersistedSessionState,
@@ -382,6 +391,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<metrics::LlmMetricState>()?;
     m.add_class::<metrics::TtsMetricState>()?;
     m.add_class::<recorder::SessionRecorder>()?;
+    m.add_class::<session::RemoteAgentState>()?;
+    m.add_class::<session::RemoteContextState>()?;
+    m.add_class::<session::RemoteTask>()?;
     m.add_class::<storage::Storage>()?;
     m.add_class::<storage::CoreContextActivation>()?;
     m.add_class::<storage::CoreAppTransaction>()?;
@@ -561,8 +573,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::NodeText>()?;
     m.add_class::<voice::NodeAudio>()?;
     m.add_class::<voice::NodeTranscript>()?;
-    m.add_function(wrap_pyfunction!(text_session::_core_persist_text_session_state, m)?)?;
-    m.add_function(wrap_pyfunction!(text_session::_core_restore_text_session_state, m)?)?;
     m.add_function(wrap_pyfunction!(voice::video_queue_frames, m)?)?;
     m.add(
         "WARM_TRANSFER_IDENTITY",

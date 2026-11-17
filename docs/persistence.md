@@ -11,7 +11,7 @@ Database runs, leases, reconciliation and write receipts are described in
 | --- | --- |
 | Marked application fields | Explicit `save_context`; binding does not save ordinary field mutations |
 | Bound session state | Incremental conversation checkpoints during execution |
-| Detached session snapshots | Assign the returned state to a marked field and explicitly save it |
+| Detached session snapshots | Assign an inspection snapshot to a marked field and explicitly save it |
 | A2A transport history and task records | The managed endpoint's checkpoints and final commit |
 | External business effects | The application's authoritative service and idempotency protocol |
 
@@ -88,7 +88,8 @@ Mutating a marked application field changes only the in-memory object until
 `save_context` is called. Returning from `agent.run()` or a handler does not save
 those mutations. Streaming uses the same boundary: `stream.result()` settles
 the invocation, not the surrounding handler transaction. Bound session state
-checkpoints automatically; unbound session snapshots require explicit saving.
+checkpoints automatically. Assigning an inspection snapshot to an application field requires
+an explicit save, like any other field assignment.
 See [stream delivery](agents.md#managed-endpoints-and-persistence) for forwarding
 text through an endpoint.
 
@@ -126,7 +127,7 @@ field path requires no handwritten snapshots or repositories.
 
 ## Session state and explicit binding
 
-TextSession and VoiceSession accept an application context with an optional persisted
+Agent.run, TextSession and VoiceSession accept an application context with an optional persisted
 SessionState field:
 
 ```python
@@ -142,13 +143,24 @@ class App:
 app = App(services=services)
 await ctx.store.load_context(app)
 binding = ctx.store.bind(app)
-turn = await TextSession(agent=main).run(ctx.message, context=binding)
+result = await TextSession(agent=main).run(ctx.message, context=binding)
 ```
 
 `ctx.store.bind(app)` declares that session execution manages the selected conversation.
 Constructing the declaration performs no I/O and changes no application fields. Execution
 activates it, keeps the same app.session object current, checkpoints conversation progress,
 and unbinds during cleanup. Tools receive the original app through ctx.context.
+
+Bound `agent.run(...)` and `agent.run_stream(...)` use the same native conversation owner as
+TextSession. Pass `context=ctx.store.bind(app)` to continue it; a bound run rejects competing
+explicit `message_history`. `Agent.run()` still returns its invocation's RunResult.
+
+Inspect `app.session.current_agent.chat_ctx` for the current agent's private model context and
+`app.session.root_agent` for the top-level agent. `app.session.chat_history` contains accepted
+human input and assistant content actually delivered across local agent changes. Private tools,
+instructions and synthetic child tasks stay out of that delivered history. These are generated
+read-only views; `snapshot()` captures a detached view without saving it. Root and current are
+None before the conversation starts.
 
 Use `ctx.store.bind()` when execution has no application context. A `thread=`
 association alone does not enable VoiceSession persistence.
@@ -158,36 +170,48 @@ bound sessions restore their own state internally. A declared field must be hydr
 the same store before execution. Ordinary application fields remain explicitly saved with
 save_context; binding does not automatically save draft changes.
 
-TextSession with plain `context=app` executes from the supplied session snapshot
-without updating app.session or enabling automatic session writes. Two runs from
-unchanged context start from the same state; model outputs and tool side effects
-can still differ. VoiceSession with plain context keeps its live conversation
-in memory without managed session persistence.
+Plain `context=app` supplies application dependencies to a fresh run. It does not discover
+or restore app.session. Use store binding for every conversation continuation.
 
 `await ctx.store.load_session()` returns an immutable detached read of committed state.
 It never binds and never aliases app.session. Bound state can lead stored state until a
 checkpoint completes. `await ctx.store.flush()` waits for accepted conversation checkpoints;
 it does not commit ordinary application saves staged for the managed turn.
 
-For manual TextSession persistence, assign the returned snapshot before saving:
+SessionState.snapshot() returns a detached inspection view. It is not an execution input:
+Agent.run, TextSession and VoiceSession continue the selected conversation through store.bind().
+TextSession returns RunResult directly, like Agent.run; there is no result/state envelope or
+state= continuation argument. Runtime services, Python stacks and media connections are not
+serialized. Storage uses one shared conversation encoding and has no legacy mode migration.
+See [TextSession](text-session.md#running-a-conversation) and
+[voice persistence](voice-session.md#the-calls-thread).
+
+### Inspecting remote communication
+
+`app.session.remote_agents` exposes retained communication with each remote. Its `messages`
+index contains observed A2A messages in both directions, including direct replies without a
+task or context. Its `tasks` index contains task views; each view's `task` is the upstream SDK
+Task, with its observed status, artifacts and optional history. `input_requests` and
+`cancel_requested` describe local task handling separately from that protocol status.
 
 ```python
-app = await ctx.store.load_context(App(services=services))
-turn = await TextSession(agent=main).run(ctx.message, context=app)
-app.session = turn.state
-await ctx.store.save_context(app)
+remote = app.session.remote_agents[remote_id]
+task = remote.tasks[task_id]
+observed_status = task.task.status
+events = remote.events
+context = remote.contexts[task.task.context_id]
 ```
 
-The snapshot and marked application fields join the handler's commit together.
-Without assignment and saving, detached execution leaves the stored session
-unchanged. Explicit `state=` cannot be combined with a bound context or a second
-session-state field. Use `await ctx.store.load_session()` for a detached starting
-state when the context has no session field.
+`contexts` groups the same messages and tasks by their context IDs. It does not maintain a
+second message history. `events` retains requests, responses and observed errors in local
+journal order. This communication journal is separate from the person's `chat_history`:
+receiving remote text does not mean it was delivered to the person.
 
-TextSessionTurn.state is a detached snapshot. Retained snapshots and results do not follow
-later execution. Runtime services, Python stacks and media connections are not serialized.
-See [TextSession](text-session.md#loading-and-saving-session-state) and
-[voice persistence](voice-session.md#the-calls-thread).
+Inspection performs no network calls and describes retained observations, which may be
+partial. A task can exist without a full history or status snapshot. Collections and SDK
+values returned to Python are copies; editing them does not change the conversation. Retained
+remote/task views follow their bound SessionState. Views obtained through `state.snapshot()`
+stay detached and fixed.
 
 ## Application records and transactions
 

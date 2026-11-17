@@ -51,5 +51,5 @@ async def phone(ctx: JobContext) -> None:
 )
 async def text(ctx: A2ASessionContext) -> RunResult[str]:
     binding = ctx.store.bind()
-    turn = await TextSession(agent=chat).run(ctx.message, context=binding)
-    return turn.result
+    result = await TextSession(agent=chat).run(ctx.message, context=binding)
+    return result

@@ -11,18 +11,19 @@ use lk_agents_abi::invoke::{CallContext, Cancellation as _};
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::{ApiConnectOptions, ChatItem, FunctionCall, HOST_TEARDOWN_TIMEOUT};
 use lk_agents_core::a2a::caller_history::{CallerHistory, HistorySharing};
-use lk_agents_core::a2a::delegation::{
+use lk_agents_core::delegation::remote::{
     DelegationUpdate, InteractionId, RemoteInteraction as Policy, retained,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use super::host::message_from_wire;
-use super::{AgentClient, Reply};
-use crate::env::ProcessEnv;
-use crate::signal;
-use crate::task::Cancellation;
+use lk_agents_core::a2a::client::message_from_wire;
+use lk_agents_net::a2a_client::{AgentClient, Reply};
+use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::signal;
+use lk_agents_net::task::Cancellation;
 use lk_agents_telemetry as telemetry;
+pub mod journal;
 
 #[cfg(test)]
 #[path = "remote_tests.rs"]
@@ -79,7 +80,7 @@ impl Port for RemoteInteraction {
             ));
         };
         let id = InteractionId {
-            delegation_id: crate::strings::shortuuid("dlg_"),
+            delegation_id: lk_agents_net::strings::shortuuid("dlg_"),
             endpoint: endpoint.trim_end_matches('/').into(),
             tool_id,
             parent_call_id: function_call.call_id.clone(),
@@ -106,7 +107,7 @@ impl Port for RemoteInteraction {
             serde_json::to_value(&chain)
                 .map_err(|error| AgentClientError::InvalidInput(error.to_string()))?,
         );
-        let chain = lk_agents_core::a2a::delegation::partition_chain(&metadata)?;
+        let chain = lk_agents_core::delegation::remote::partition_chain(&metadata)?;
         self.inner.0.lock().partition_chain = chain;
         Ok(())
     }
@@ -134,6 +135,8 @@ impl Port for RemoteInteraction {
         thread_id: Option<String>,
         conn_options: Option<ApiConnectOptions>,
         live: bool,
+        owner: Option<Arc<dyn lk_agents_abi::delegation::remote::RemoteCommands>>,
+        origin: Option<lk_agents_abi::session::ToolCallRef>,
         context: CallContext,
         cx: telemetry::Cx,
     ) -> Result<RemoteEvent, AgentClientError> {
@@ -152,7 +155,15 @@ impl Port for RemoteInteraction {
         let (done, settled) = signal::once::<()>();
         *self.running.lock() =
             Some(Running { stop: stop.clone(), settled, clock: Arc::clone(&background.clock) });
-        let delegation = Delegation { interaction: self.inner.clone(), client, host, context, cx };
+        let delegation = Delegation {
+            interaction: self.inner.clone(),
+            client,
+            host,
+            context,
+            cx,
+            owner,
+            origin,
+        };
         // The process's task: a dropped `run` leaves it to the host, which stops it in the same
         // turn (`cancelled()`), and `settled()` waits for its cleanup.
         let (outcome, result) = tokio::sync::oneshot::channel();
@@ -169,9 +180,8 @@ impl Port for RemoteInteraction {
         if let Some(running) = &*self.running.lock() {
             running.stop.cancel();
         }
-        let mut state = self.inner.0.lock();
-        state.policy.cancel();
-        state.policy.cancellation_settled();
+        // The frontend stopped awaiting this call. Its remote task and input occurrence
+        // retain their observed state; explicit task cancellation is a separate operation.
         Ok(())
     }
 
@@ -206,6 +216,8 @@ struct Delegation {
     host: Arc<dyn DelegationHost>,
     context: CallContext,
     cx: telemetry::Cx,
+    owner: Option<Arc<dyn lk_agents_abi::delegation::remote::RemoteCommands>>,
+    origin: Option<lk_agents_abi::session::ToolCallRef>,
 }
 
 impl Delegation {
@@ -258,8 +270,12 @@ impl Delegation {
             }
             *reply = Some(match event {
                 Some(RemoteEvent::Follow { task_id, thread_id }) => {
-                    let cx = self.cx.clone();
-                    port::AgentClient::_core_subscribe(client, task_id, thread_id, cx).await?
+                    let task =
+                        lk_agents_core::a2a::rpc::TaskRef { id: task_id, context_id: thread_id };
+                    client
+                        .subscribe_observed(task, None, &self.cx, self.observer())
+                        .await
+                        .map_err(AgentClientError::from)?
                 }
                 Some(RemoteEvent::InputRequired {
                     request_id, question, verbatim_full, ..
@@ -282,8 +298,23 @@ impl Delegation {
 
     async fn send(&self, message: Message) -> Result<Reply, AgentClientError> {
         let message = MessageInput::Message(Box::new(message));
-        let cx = self.cx.clone();
-        port::AgentClient::send(&self.client, message, None, None, None, None, cx).await
+        let message = lk_agents_net::a2a_client::host::message_to_wire(message)?;
+        self.client
+            .send_observed(message, None, None, None, &self.cx, self.observer())
+            .await
+            .map_err(AgentClientError::from)
+    }
+
+    fn observer(&self) -> Option<Arc<dyn lk_agents_net::a2a_client::observer::RequestObserver>> {
+        let owner = self.owner.clone()?;
+        let endpoint = self.interaction.0.lock().policy.snapshot().id.endpoint;
+        Some(Arc::new(journal::Journal {
+            owner,
+            remote_id: endpoint.clone(),
+            endpoint,
+            request_id: lk_agents_net::strings::shortuuid("request_"),
+            origin: self.origin.clone(),
+        }))
     }
 
     /// The reply's updates, each reported to the host, until one ends it.
@@ -325,7 +356,7 @@ impl Interaction {
                         "sharing a thread needs the endpoint on the configured project".into(),
                     )
                 })?;
-                let assertion = super::authority::AuthorityAssertion::Grant {
+                let assertion = lk_agents_net::a2a_client::authority::AuthorityAssertion::Grant {
                     project_url: &project.url,
                     api_key: &project.api_key,
                     api_secret: &project.api_secret,
@@ -333,8 +364,10 @@ impl Interaction {
                 };
                 let now = std::time::SystemTime::now();
                 Some(
-                    super::authority::verify(&endpoint, thread, DELEGATE, assertion, now)
-                        .map_err(protocol)?,
+                    lk_agents_net::a2a_client::authority::verify(
+                        &endpoint, thread, DELEGATE, assertion, now,
+                    )
+                    .map_err(protocol)?,
                 )
             }
             _ => None,
@@ -366,7 +399,7 @@ impl Interaction {
             .policy
             .message(
                 text,
-                crate::strings::shortuuid("msg_"),
+                lk_agents_net::strings::shortuuid("msg_"),
                 thread_id.as_deref().filter(|_| authority.is_some()),
                 DELEGATE,
                 authority.as_ref(),
@@ -396,7 +429,7 @@ impl Interaction {
         let livekit = state.livekit;
         let mut message = state
             .policy
-            .message(text, crate::strings::shortuuid("msg_"), None, "", None, livekit, None)
+            .message(text, lk_agents_net::strings::shortuuid("msg_"), None, "", None, livekit, None)
             .map_err(protocol)?;
         if livekit && !state.partition_chain.is_empty() {
             message.metadata.get_or_insert_default().insert(
@@ -450,7 +483,7 @@ fn host_error(error: HostError) -> AgentClientError {
     AgentClientError::Provider(error.into())
 }
 
-fn unavailable(error: crate::env::ProcessError) -> AgentClientError {
+fn unavailable(error: lk_agents_net::env::ProcessError) -> AgentClientError {
     AgentClientError::Provider(ProviderError::Local(error.into()))
 }
 
@@ -483,7 +516,7 @@ impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
     fn _core_delegation_chain(
         metadata: Map<String, Value>,
     ) -> Result<Vec<lk_agents_abi::a2a::remote::DelegationPartition>, AgentClientError> {
-        lk_agents_core::a2a::delegation::partition_chain(&metadata)
+        lk_agents_core::delegation::remote::partition_chain(&metadata)
     }
 
     fn _core_delegation_tool(
@@ -508,7 +541,8 @@ impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
         }
         let project = Project { url: project_url, api_key, api_secret };
         let Some(project) = project.serving(&endpoint)? else { return Ok(None) };
-        let credentials = crate::a2a_auth::Credentials::new(project.api_key, project.api_secret);
+        let credentials =
+            lk_agents_net::a2a_auth::Credentials::new(project.api_key, project.api_secret);
         match thread_id.filter(|id| !id.is_empty()) {
             // An endpoint call alone grants no thread access.
             Some(thread_id) => credentials.thread_grant_token(
@@ -559,7 +593,7 @@ impl Project {
         {
             return Ok(None);
         }
-        let destination = super::checked_url(endpoint).map_err(protocol)?;
+        let destination = url::Url::parse(endpoint).map_err(protocol)?;
         if project.origin() != destination.origin() {
             return Ok(None);
         }

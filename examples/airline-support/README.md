@@ -26,9 +26,9 @@ async def text(ctx: A2ASessionContext) -> RunResult[str]:
     app = SupportContext()
     await ctx.store.load_context(app)
     binding = ctx.store.bind(app)
-    turn = await TextSession(agent=backend).run(ctx.message, context=binding)
+    result = await TextSession(agent=backend).run(ctx.message, context=binding)
     await ctx.store.save_context(app)
-    return turn.result
+    return result
 ```
 
 - **Questions wait across turns.** Without a booking reference of the sender's own, or a bag's

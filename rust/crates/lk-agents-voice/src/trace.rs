@@ -78,6 +78,10 @@ pub enum CoreStep {
     WallEpoch {
         at: std::time::SystemTime,
     },
+    /// This history revision was captured; queued execution cannot include later input.
+    ConversationCheckpointPrepared {
+        sequence: u64,
+    },
     /// Never silent.
     PortFailure(&'static str),
 }

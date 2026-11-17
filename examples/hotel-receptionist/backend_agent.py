@@ -414,6 +414,6 @@ async def text(ctx: A2ASessionContext) -> RunResult[str]:
     app = HotelContext(hotel=hotel)
     await ctx.store.load_context(app)
     binding = ctx.store.bind(app)
-    turn = await TextSession(agent=backend).run(ctx.message, context=binding)
+    result = await TextSession(agent=backend).run(ctx.message, context=binding)
     await ctx.store.save_context(app)  # Business fields are saved explicitly.
-    return turn.result
+    return result

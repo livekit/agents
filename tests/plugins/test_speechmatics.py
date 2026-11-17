@@ -57,11 +57,14 @@ class SpeechmaticsPeer:
         self.at_end_of_stream: list[dict[str, object]] = []
         self.speakers: list[dict[str, object]] = []
         self.socket: web.WebSocketResponse | None = None
+        self.audio_received = False
 
     async def handle(self, request: web.Request) -> web.WebSocketResponse:
         ws = self.socket = web.WebSocketResponse()
         await ws.prepare(request)
         async for message in ws:
+            if message.type == web.WSMsgType.BINARY:
+                self.audio_received = True
             if message.type != web.WSMsgType.TEXT:
                 continue
             event = json.loads(message.data)
@@ -232,18 +235,19 @@ async def test_invalid_speaker_reply_fails_the_request_not_recognition(
     server, url = peer
     server.speakers = [{"label": "Agent", "speaker_identifiers": 7}]
     model = STT(api_key="k", base_url=url, vad=None, enable_diarization=True)
-    stream = model.stream(conn_options=NO_RETRY)
-    stream.push_frame(audio_frame(0.1))
-    await until(lambda: server.start, "StartRecognition")
+    async with model.stream(conn_options=NO_RETRY) as stream:
+        stream.push_frame(audio_frame(0.2))
+        # Audio is gated on RecognitionStarted; the received frame proves the client has
+        # processed that reply, whereas StartRecognition only proves the peer saw its request.
+        await until(lambda: server.audio_received, "audio after RecognitionStarted")
 
-    with pytest.raises(APIError, match="invalid speaker identifiers") as raised:
-        await model.get_speaker_ids()
-    server.speakers = [{"label": "Agent", "speaker_identifiers": ["voice-1"]}]
-    speakers = await model.get_speaker_ids()
-    assert server.socket is not None
-    await server.socket.send_json(segment("Still listening"))
-    event = await anext(event async for event in stream if event.alternatives)
-    await stream.aclose()
+        with pytest.raises(APIError, match="invalid speaker identifiers") as raised:
+            await model.get_speaker_ids()
+        server.speakers = [{"label": "Agent", "speaker_identifiers": ["voice-1"]}]
+        speakers = await model.get_speaker_ids()
+        assert server.socket is not None
+        await server.socket.send_json(segment("Still listening"))
+        event = await anext(event async for event in stream if event.alternatives)
 
     assert isinstance(raised.value.__cause__, ValidationError)
     [speaker] = speakers

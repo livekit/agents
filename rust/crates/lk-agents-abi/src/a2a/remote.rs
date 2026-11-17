@@ -125,12 +125,16 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
         thread_id: Option<String>,
         conn_options: Option<crate::ApiConnectOptions>,
         live: bool,
+        #[host(default = None)] owner: Option<
+            std::sync::Arc<dyn crate::delegation::remote::RemoteCommands>,
+        >,
+        #[host(default = None)] origin: Option<crate::session::ToolCallRef>,
         #[host(context)] context: crate::invoke::CallContext,
         cx: crate::telemetry::Cx,
     ) -> Result<RemoteEvent, AgentClientError>;
 
-    /// The tool call was cancelled: the interaction records it and a running delegation stops,
-    /// closing its reply (which cancels the remote task) and client; `settled()` waits for that.
+    /// Stop the local tool wait and close its observation resources. Remote business work is
+    /// unchanged; `settled()` waits for local cleanup, not remote task cancellation.
     #[host(call)]
     fn cancelled(&self) -> Result<(), AgentClientError>;
 

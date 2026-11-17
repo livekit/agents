@@ -44,7 +44,7 @@ pub use lk_agents_storage as storage;
 
 pub mod a2a;
 pub mod agent_run;
-pub mod agent_tool;
+pub mod delegation;
 pub mod host;
 pub mod mcp;
 mod output_validation;

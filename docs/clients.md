@@ -78,7 +78,7 @@ items = await thread.chat_history(agent="eligibility")    # one agent's partitio
 
 `create`, `get`, `list`, `info`, `update`, `delete`, and `chat_history`
 use the threads service. Thread history selects configured transport partitions;
-it does not flatten private `TextSessionState` frame histories. See
+it does not flatten private `SessionState` frame histories. See
 [thread reads](#reading-a-thread).
 
 An endpoint client owns message delivery, task progress, replies, and

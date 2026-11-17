@@ -33,6 +33,16 @@ pub(super) struct Release {
     delivered: BTreeMap<String, String>,
 }
 
+pub(super) struct RemoteCommand {
+    command: lk_agents_abi::delegation::remote::RemoteCommand,
+    done: signal::Producer<Option<Result<(), lk_agents_abi::storage::StorageError>>>,
+}
+
+enum DriverEvent {
+    Core(Option<Box<TextSessionEvent>>),
+    Remote(Box<RemoteCommand>),
+}
+
 /// What opens an invocation: the core's `InvocationStarted`.
 struct InvocationStart {
     frame_id: FrameId,
@@ -71,6 +81,7 @@ impl Driver {
         mut events: mpsc::Receiver<(String, Report)>,
         mut progress: mpsc::Receiver<(String, u64, String)>,
         mut releases: mpsc::Receiver<Release>,
+        mut remote: mpsc::Receiver<RemoteCommand>,
         cancelled: CancellationToken,
     ) {
         let mut cancel_seen = false;
@@ -105,28 +116,52 @@ impl Driver {
             }
             let clock = self.clock.clone();
             let wake = self.session.wake_at();
-            let event = tokio::select! {
+            let ready = tokio::select! {
                 biased;
-                () = crate::agent_run::wait(&*clock, wake) => Some(TextSessionEvent::Wake),
+                () = crate::agent_run::wait(&*clock, wake) => DriverEvent::Core(Some(Box::new(TextSessionEvent::Wake))),
                 () = cancelled.cancelled(), if !cancel_seen => {
                     cancel_seen = true;
-                    Some(TextSessionEvent::Cancel)
+                    DriverEvent::Core(Some(Box::new(TextSessionEvent::Cancel)))
                 }
                 Some(release) = releases.recv() => {
                     self.releases.push_back(release);
-                    None
+                    DriverEvent::Core(None)
                 }
+                Some(command) = remote.recv() => DriverEvent::Remote(Box::new(command)),
                 Some((invocation_id, operation, message)) = progress.recv() => {
-                    self.progress_event(invocation_id, operation, message)
+                    DriverEvent::Core(self.progress_event(invocation_id, operation, message).map(Box::new))
                 }
                 Some((invocation_id, report)) = events.recv() => {
-                    self.report_event(invocation_id, report)
+                    DriverEvent::Core(self.report_event(invocation_id, report).map(Box::new))
                 }
-                _ = settle_work(&mut self.work) => None,
+                _ = settle_work(&mut self.work) => DriverEvent::Core(None),
+            };
+            let event = match ready {
+                DriverEvent::Remote(command) => {
+                    self.remote(*command, &mut effects).await;
+                    continue;
+                }
+                DriverEvent::Core(event) => event.map(|event| *event),
             };
             let Some(event) = event else { continue };
             effects.extend(self.session.handle(event, self.clock.now()));
         }
+    }
+
+    async fn remote(&mut self, command: RemoteCommand, effects: &mut VecDeque<TextSessionEffect>) {
+        let mut result = self.session.remote(command.command);
+        // A valid observation can be journaled even when its projection is refused. Persist
+        // the evidence before returning either acknowledgement or refusal to the client.
+        if let Some(sink) = &self.request.session_sink
+            && let Err(error) = sink.publish(&self.cx, self.session.snapshot()).await
+        {
+            effects.extend(
+                self.session
+                    .handle(TextSessionEvent::PersistenceFailed(error.clone()), self.clock.now()),
+            );
+            result = Err(error);
+        }
+        command.done.resolve(result);
     }
 
     /// Republishes the turn's usage when it moved.

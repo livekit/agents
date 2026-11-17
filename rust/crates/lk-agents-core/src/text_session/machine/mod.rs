@@ -21,8 +21,8 @@ mod continuation;
 mod tests;
 
 pub use lk_agents_abi::text_session::{
-    ChildCallStatus, FrameId, ParentCall, PendingChildCall, SessionFrame, TextSessionError,
-    TextSessionState, TextSessionTurn,
+    ChildCallStatus, FrameId, ParentCall, PendingChildCall, SessionFrame, SessionSnapshot,
+    TextSessionError, TextSessionTurn,
 };
 pub use routing::{ChatHistory, LocalAgentTool, RoutingError, SessionAgent, TextSessionConfig};
 
@@ -36,7 +36,7 @@ pub struct TextSessionInput {
     pub id_seed: u64,
     pub execution_id: String,
     pub task_id: Option<String>,
-    pub state: Option<TextSessionState>,
+    pub state: Option<SessionSnapshot>,
     pub wall: WallAnchor,
     pub cleanup_timeout: Duration,
     pub delegated: bool,
@@ -132,13 +132,14 @@ impl Phase {
 pub struct TextSession {
     failure_input_requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
     config: TextSessionConfig,
-    state: TextSessionState,
+    state: SessionSnapshot,
     id_seed: u64,
     wall: WallAnchor,
     cleanup_timeout: Duration,
     delegated: bool,
     checkpoints: bool,
     persistence_failure: Option<lk_agents_abi::storage::StorageError>,
+    closing: bool,
     recording: bool,
     checkpoint_due: Option<Ts>,
     checkpoint_bytes: usize,
@@ -170,6 +171,17 @@ impl TextSession {
                     None if !pending => state.execution_id = input.execution_id,
                     None => {}
                 }
+                // Root completion describes the preceding invocation, not the lifetime of
+                // the conversation. A new turn reopens that same agent context.
+                if state.active_frame_id == state.root_frame_id {
+                    let root = state
+                        .frames
+                        .get_mut(&state.root_frame_id)
+                        .expect("the active root was checked above");
+                    root.completed = false;
+                    root.output = None;
+                    root.error = None;
+                }
                 state
             }
             None => {
@@ -180,14 +192,16 @@ impl TextSession {
                     history: Vec::new(),
                     parent: None,
                     completed: false,
+                    output: None,
+                    error: None,
+                    input_requests: BTreeMap::new(),
                     pending_calls: Vec::new(),
                     answer_tool: None,
                     visible_dialogue: Vec::new(),
                     starting_history_ids: BTreeSet::new(),
-                    transferred_message_ids: BTreeSet::new(),
-                    merge_chat_history: false,
+                    options: Default::default(),
                 };
-                TextSessionState {
+                SessionSnapshot {
                     session_id: input.session_id,
                     execution_id: input.task_id.unwrap_or(input.execution_id),
                     root_frame_id: root.clone(),
@@ -195,6 +209,8 @@ impl TextSession {
                     ancestors: Vec::new(),
                     frames: BTreeMap::from([(root, frame)]),
                     next_id: 0,
+                    chat_history: Vec::new(),
+                    remote_agents: BTreeMap::new(),
                 }
             }
         };
@@ -209,6 +225,7 @@ impl TextSession {
             delegated: input.delegated,
             checkpoints: false,
             persistence_failure: None,
+            closing: false,
             recording: false,
             checkpoint_due: None,
             checkpoint_bytes: 0,
@@ -234,6 +251,47 @@ impl TextSession {
         self
     }
 
+    /// Remote tools share this serialized owner with local agent execution. Runtime must
+    /// checkpoint the resulting snapshot before acknowledging a command or starting I/O.
+    pub fn remote(
+        &mut self,
+        command: lk_agents_abi::delegation::remote::RemoteCommand,
+    ) -> Result<(), lk_agents_abi::storage::StorageError> {
+        use lk_agents_abi::delegation::remote::RemoteAgentState;
+        use lk_agents_abi::storage::StorageError;
+        if matches!(self.phase, Phase::Done) {
+            return Err(StorageError::Invalid("the conversation owner has ended".into()));
+        }
+        if (self.closing || self.persistence_failure.is_some())
+            && matches!(
+                command.input,
+                lk_agents_abi::delegation::remote::RemoteInput::Prepare { .. }
+                    | lk_agents_abi::delegation::remote::RemoteInput::DispatchStarted { .. }
+            )
+        {
+            return Err(StorageError::Invalid(
+                "the conversation owner is closing; no new remote dispatch is admitted".into(),
+            ));
+        }
+        if command.remote_id.is_empty() || command.endpoint.is_empty() {
+            return Err(StorageError::Invalid("remote identity and endpoint are required".into()));
+        }
+        let remote = self
+            .state
+            .remote_agents
+            .entry(command.remote_id)
+            .or_insert_with(|| RemoteAgentState::new(command.endpoint.clone()));
+        if remote.endpoint != command.endpoint {
+            return Err(StorageError::Invalid("the saved remote endpoint changed".into()));
+        }
+        crate::delegation::remote::journal::apply(remote, command.input)
+            .map_err(|error| StorageError::Invalid(error.to_string()))
+    }
+
+    pub fn snapshot(&self) -> SessionSnapshot {
+        self.state.clone()
+    }
+
     pub fn wake_at(&self) -> Option<Ts> {
         match (self.phase.invocation().and_then(|i| i.run.wake_at()), self.checkpoint_due) {
             (Some(a), Some(b)) => Some(a.min(b)),
@@ -243,6 +301,9 @@ impl TextSession {
 
     pub fn handle(&mut self, event: TextSessionEvent, now: Ts) -> Vec<TextSessionEffect> {
         let mut effects = Vec::new();
+        if matches!(event, TextSessionEvent::Cancel) {
+            self.closing = true;
+        }
         // A late host receipt still transfers ownership of its prepared-arguments resource.
         // Invocation identity suffices for runtime cleanup, even after this request settled.
         if let TextSessionEvent::Run {
@@ -266,8 +327,8 @@ impl TextSession {
                 return self.handle(TextSessionEvent::Cancel, now);
             }
             TextSessionEvent::Start(message) if matches!(self.phase, Phase::NotStarted) => {
+                self.record_dialogue(message.clone());
                 let frame = self.active_frame_mut();
-                record_delivered(frame, message.clone());
                 // An answered read-back is now ordinary history. AgentRun alone decides whether
                 // a repeated validated call consumes it; a model argument cannot grant approval.
                 frame.pending_calls.retain(|p| p.status != ChildCallStatus::Approval);
@@ -294,8 +355,7 @@ impl TextSession {
             TextSessionEvent::DialogueDelivered { invocation_id, message }
                 if self.is_current(&invocation_id) =>
             {
-                let frame = self.active_frame_mut();
-                record_delivered(frame, message);
+                self.record_dialogue(message);
             }
             TextSessionEvent::InvocationReleased { invocation_id, delivered } if matches!(&self.phase, Phase::Releasing(invocation, _) if invocation.id == invocation_id) =>
             {
@@ -404,6 +464,10 @@ impl TextSession {
         effects: &mut Vec<TextSessionEffect>,
     ) {
         let invocation_id = self.mint("invocation");
+        let frame = self.active_frame_mut();
+        frame.completed = false;
+        frame.output = None;
+        frame.error = None;
         let frame = &self.state.frames[&self.state.active_frame_id];
         let agent = &self.config.agents[&frame.agent_name];
         let resume = message.is_none();
@@ -787,9 +851,22 @@ impl TextSession {
                 Some(message)
             })
             .collect();
-        let frame = self.active_frame_mut();
         for message in received {
-            record_delivered(frame, message);
+            self.record_dialogue(message);
+        }
+    }
+
+    fn record_dialogue(&mut self, message: ChatMessage) {
+        let frame = self.active_frame_mut();
+        if !matches!(message.role, Role::User | Role::Assistant)
+            || frame.starting_history_ids.contains(&message.id)
+        {
+            return;
+        }
+        record_delivered(frame, message.clone());
+        match self.state.chat_history.iter_mut().find(|item| item.id == message.id) {
+            Some(delivered) => *delivered = message,
+            None => self.state.chat_history.push(message),
         }
     }
 
@@ -832,6 +909,20 @@ impl TextSession {
             }
             _ => None,
         };
+        if let Err(error) = &result {
+            let history =
+                self.phase.invocation().map(|invocation| invocation.run.progress_history());
+            let frame = self.active_frame_mut();
+            if let Some(history) = history {
+                frame.history = history;
+            }
+            frame.completed = false;
+            frame.output = None;
+            frame.error = Some(error.to_string());
+            if self.checkpoints && !matches!(error, TextSessionError::Storage(_)) {
+                effects.push(TextSessionEffect::Checkpoint(Box::new(self.state.clone())));
+            }
+        }
         self.end_invocation();
         self.usage.settle();
         if let Ok(turn) = &mut result {
@@ -846,7 +937,7 @@ impl TextSession {
 }
 
 /// The pending execution continues under `execution_id`: its waiting child calls move with it.
-fn reidentify(state: &mut TextSessionState, execution_id: String) {
+fn reidentify(state: &mut SessionSnapshot, execution_id: String) {
     for frame in state.frames.values_mut() {
         for pending in &mut frame.pending_calls {
             if pending.execution_id == state.execution_id {
@@ -888,23 +979,23 @@ fn validated_output(invocation: &Invocation, outcome: &RunOutcome) -> Option<Val
 fn record_delivered(frame: &mut SessionFrame, message: ChatMessage) {
     if !matches!(message.role, Role::User | Role::Assistant)
         || frame.starting_history_ids.contains(&message.id)
-        || frame.visible_dialogue.iter().any(|m| m.id == message.id)
     {
         return;
     }
-    frame.visible_dialogue.push(message);
+    match frame.visible_dialogue.iter_mut().find(|delivered| delivered.id == message.id) {
+        Some(delivered) => *delivered = message,
+        None => frame.visible_dialogue.push(message),
+    }
 }
 
 fn transfer(child: &mut SessionFrame, parent: &mut SessionFrame) {
-    if !child.merge_chat_history {
+    if !child.options.merge_chat_ctx {
         return;
     }
     for message in &child.visible_dialogue {
-        if child.transferred_message_ids.insert(message.id.clone()) {
-            if !parent.history.iter().any(|item| item.id() == message.id) {
-                parent.history.push(ChatItem::Message(message.clone()));
-            }
-            record_delivered(parent, message.clone());
+        if !parent.history.iter().any(|item| item.id() == message.id) {
+            parent.history.push(ChatItem::Message(message.clone()));
         }
+        record_delivered(parent, message.clone());
     }
 }

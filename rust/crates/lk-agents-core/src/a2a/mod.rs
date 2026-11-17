@@ -4,7 +4,6 @@ pub mod auth;
 pub mod caller_history;
 pub mod card;
 pub mod client;
-pub mod delegation;
 pub mod handler;
 mod host;
 pub mod outcome;

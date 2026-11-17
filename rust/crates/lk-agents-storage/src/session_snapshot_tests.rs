@@ -5,6 +5,51 @@ use crate::testing::Backend;
 use crate::{CommitOptions, Holder, RunOptions};
 
 #[tokio::test]
+async fn remote_communication_payloads_are_append_only_journal_content_not_routing_copies() {
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let thread = fixture.thread().await;
+    let partition = thread.partition("default");
+    let holder = Holder::new("remote-journal");
+    let mut run = partition.open(RunOptions::new("first", ""), &holder).await.unwrap();
+    let request = json!({"sequence":0,"request_id":"send","kind":"request_recorded",
+        "payload":{"content":"x".repeat(80_000)}});
+    let response = json!({"sequence":1,"request_id":"send","kind":"response_received",
+        "payload":{"messageId":"receipt","text":"Booked"}});
+    let message = json!({"messageId":"outgoing","role":"ROLE_USER",
+        "parts":[{"text":"request ".repeat(10_000)}]});
+    let task = json!({"id":"task","contextId":"trip",
+        "status":{"state":"TASK_STATE_WORKING"},
+        "artifacts":[{"artifactId":"report","parts":[{"text":"result ".repeat(10_000)}]}]});
+    let mut state = json!({"version":1,"kind":"conversation","state":{
+        "frames":{},"chat_history":[],"remote_agents":{"booking":{
+            "endpoint":"https://booking.test","events":[request.clone()],
+            "requests":{"send":{"dispatch_started":true}},
+            "messages":{"outgoing":message.clone()},
+            "tasks":{"task":{"task":task.clone(),"input_requests":{},"cancel_requested":false,"next_input":0}}
+        }}
+    }});
+    run.checkpoint_session(state.clone(), vec![]).await.unwrap();
+    state["state"]["remote_agents"]["booking"]["events"]
+        .as_array_mut()
+        .unwrap()
+        .push(response.clone());
+    run.checkpoint_session(state.clone(), vec![]).await.unwrap();
+    run.checkpoint_session(state.clone(), vec![]).await.unwrap();
+    let raw = partition.info().await.unwrap().unwrap().state;
+    assert!(serde_json::to_string(&raw).unwrap().len() < 1000);
+    let journal = thread.journal(0, 100).await.unwrap();
+    assert_eq!(journal.iter().filter(|entry| entry.payload == request).count(), 1);
+    assert_eq!(journal.iter().filter(|entry| entry.payload == response).count(), 1);
+    assert_eq!(journal.iter().filter(|entry| entry.payload == message).count(), 1);
+    assert_eq!(journal.iter().filter(|entry| entry.payload == task).count(), 1);
+    run.commit(CommitOptions::default()).await.unwrap();
+    let mut reopened = partition.open(RunOptions::new("second", ""), &holder).await.unwrap();
+    assert_eq!(reopened.state(), Some(&state));
+    reopened.commit(CommitOptions::default()).await.unwrap();
+    fixture.cleanup(&[&thread]).await;
+}
+
+#[tokio::test]
 async fn compact_checkpoints_reuse_values_and_preserve_private_revisions() {
     let fixture = Backend::Sqlite.fixture(None).await;
     let thread = fixture.thread().await;
@@ -12,7 +57,7 @@ async fn compact_checkpoints_reuse_values_and_preserve_private_revisions() {
     let holder = Holder::new("snapshot-test");
     let mut run = partition.open(RunOptions::new("first", ""), &holder).await.unwrap();
     let original = json!({"id": "shared", "text": "x".repeat(80_000)});
-    let mut state = json!({"version": 1, "kind": "text", "state": {"frames": {
+    let mut state = json!({"version": 1, "kind": "conversation", "state": {"frames": {
         "root": {"history": [original.clone()], "visible_dialogue": [original.clone()]},
         "child": {"history": [original.clone()], "visible_dialogue": []}
     }}});
@@ -43,7 +88,7 @@ async fn a_missing_immutable_revision_is_an_error() {
     let fixture = Backend::Sqlite.fixture(None).await;
     let thread = fixture.thread().await;
     thread.ensure_schema().await.unwrap();
-    let packed = json!({"version": 1, "kind": "text", "storage_version": 1,
+    let packed = json!({"version": 1, "kind": "conversation", "storage_version": 1,
         "state": {"frames": {"root": {"history": "missing", "visible_dialogue": "missing"}}}});
     assert!(matches!(
         hydrate(&**thread.conn(), "default", Some(packed)).await,
@@ -60,7 +105,7 @@ async fn long_histories_do_not_grow_the_routing_snapshot() {
     let holder = Holder::new("long-history");
     let mut run = partition.open(RunOptions::new("long", ""), &holder).await.unwrap();
     let items: Vec<_> = (0..2500).map(|index| json!({"id":index,"text":"saved"})).collect();
-    let state = json!({"version":1,"kind":"text","state":{"frames":{"root":{
+    let state = json!({"version":1,"kind":"conversation","state":{"frames":{"root":{
         "history":items,"visible_dialogue":[]
     }}}});
     run.checkpoint_session(state.clone(), vec![]).await.unwrap();
@@ -138,7 +183,7 @@ async fn long_history_checkpoint_latency_benchmark() {
             "role":"assistant","content":["word ".repeat(100)],"created_at":1700000000})
         })
         .collect();
-    let mut state = json!({"version":1,"kind":"text","state":{"frames":{"root":{
+    let mut state = json!({"version":1,"kind":"conversation","state":{"frames":{"root":{
         "history":history,"visible_dialogue":[]
     }}}});
     let started = std::time::Instant::now();

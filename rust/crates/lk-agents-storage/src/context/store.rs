@@ -174,6 +174,17 @@ impl Database {
 }
 
 impl ContextStore {
+    /// A binding supplies the current agent's saved model context, independently of the
+    /// partition's delivered history. A plain thread association does not select this state.
+    pub fn bound_history(&self) -> Result<Option<Vec<lk_agents_abi::ChatItem>>, StorageError> {
+        use lk_agents_abi::storage::session::PersistedSessionState as _;
+        let value = self.activation.lock().session_state();
+        let Some(value) = value else { return Ok(None) };
+        let view = crate::session_state::SessionState::from_value(value)?;
+        let Some(agent) = view.current_agent()? else { return Ok(None) };
+        Ok(Some(agent.chat_ctx))
+    }
+
     pub(crate) fn acknowledge_session_state(&self) {
         self.activation.lock().acknowledge_session();
     }
@@ -447,10 +458,9 @@ impl HostContextActivation for ContextStore {
         Ok(())
     }
 
-    fn stage_session(&self, mut state: Value) -> Result<(), StorageError> {
+    fn stage_session(&self, state: Value) -> Result<(), StorageError> {
         let view = self.session_view.lock().clone();
         let mut activation = self.activation.lock();
-        crate::session_state::merge_projection(&mut state, activation.session_state().as_ref())?;
         let checked = view
             .as_ref()
             .map(|_| crate::session_state::SessionState::from_value(state.clone()))

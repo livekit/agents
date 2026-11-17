@@ -93,6 +93,8 @@ pub enum StatementKind {
     Commit,
     /// Reads the partition's version and lease.
     FenceRead,
+    /// Loads immutable content referenced by a session snapshot.
+    SessionItemsRead,
     /// Writes the partition row or the journal, nothing a run staged.
     Bookkeeping,
 }
@@ -966,7 +968,7 @@ ORDER BY i.id
 
 statement! {
     /// Immutable values referenced by compact routing snapshots, indexed by event_key.
-    SelectSessionItems<'a> { partition_key: &'a str, keys: SqlValue } => r#"
+    SelectSessionItems<'a> { partition_key: &'a str, keys: SqlValue } as SessionItemsRead => r#"
 SELECT event_key, json(payload) FROM events
 WHERE partition_key = :partition_key AND type = 'session_item'
   AND event_key IN (SELECT value FROM json_each(:keys))

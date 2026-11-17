@@ -173,6 +173,7 @@ impl VoiceRuntime {
                 let storage = self.storage.clone();
                 let queue = self.reports.clone();
                 let lost = queue.clone();
+                let read = history.items.clone();
                 self.speeches.spawn_feeding(
                     speech,
                     "voice conversation checkpoint",
@@ -190,8 +191,11 @@ impl VoiceRuntime {
                             Some(storage) => {
                                 storage.checkpoint(speech.0, checkpoint, agent, history).await
                             }
-                            None => Ok(()),
+                            None => Ok(history),
                         };
+                        let result = result.map(|history| {
+                            let _ = queue.send(VoiceEvent::StorageReloaded { read, history });
+                        });
                         let request = StorageRequest::Checkpoint(checkpoint);
                         let _ = queue.send(VoiceEvent::StorageAnswered { speech, request, result });
                     },
@@ -435,7 +439,7 @@ impl VoiceRuntime {
         });
         let bound =
             super::generation::ReplyExecution::bind(context, llm, tts, &self.shared.resources);
-        let mut context = match bound {
+        let context = match bound {
             Ok(context) => super::generation::ReplyExecution { span, ..context },
             Err(error) => {
                 let error = Box::new(lk_agents_voice::generation::fatal(error.to_string()));
@@ -445,12 +449,16 @@ impl VoiceRuntime {
         };
         let shared = Arc::clone(&self.shared);
         let task = Arc::clone(&handle);
-        let mut storage = self.storage.clone().filter(|_| history == SpeechHistory::VoicePartition);
+        let mut storage = match history {
+            SpeechHistory::VoicePartition { history } => {
+                self.storage.clone().map(|storage| (storage, history))
+            }
+            SpeechHistory::InMemory => None,
+        };
         let queue = self.reports.clone();
         if player.is_some()
-            && let Some(storage) = storage.take()
+            && let Some((storage, local)) = storage.take()
         {
-            let local = context.plan.request.chat_ctx.items.clone();
             let queue = queue.clone();
             let speech = Arc::clone(&handle);
             let reload = async move {
@@ -469,11 +477,11 @@ impl VoiceRuntime {
             reports.report(GenEvent::Failed { speech, error });
         };
         self.speeches.spawn_feeding(handle.id(), "speech", lost, async move {
-            if let Some(storage) = storage {
-                let local = context.plan.request.chat_ctx.items.clone();
+            if let Some((storage, local)) = storage {
                 match reload_history(&task, storage, local, &queue).await {
-                    Ok(Some(history)) => context.plan.request.chat_ctx.items = history,
-                    Ok(None) => {} // An interrupted speech settles through the normal core path.
+                    // The core receives the reconciled record before startup asks it to replan.
+                    // An interrupted speech settles through the normal core path.
+                    Ok(_) => {}
                     // The refused take is the speech's answer: the core ends the speech with it.
                     Err(_) => return,
                 }
@@ -745,9 +753,10 @@ impl VoiceRuntime {
 async fn reload_history(
     handle: &super::SpeechHandle,
     storage: Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>,
-    local: Vec<lk_agents_abi::ChatItem>,
+    local: lk_agents_abi::storage::voice::VoiceHistory,
     queue: &crate::voice::session::Tx,
-) -> Result<Option<Vec<lk_agents_abi::ChatItem>>, lk_agents_abi::storage::StorageError> {
+) -> Result<Option<lk_agents_abi::storage::voice::VoiceHistory>, lk_agents_abi::storage::StorageError>
+{
     let speech = handle.id();
     let request = StorageRequest::Acquire;
     let acquired = tokio::select! {
@@ -763,8 +772,8 @@ async fn reload_history(
     };
     match acquired {
         Ok(history) => {
-            let _ =
-                queue.send(VoiceEvent::StorageReloaded { read: local, history: history.clone() });
+            let _ = queue
+                .send(VoiceEvent::StorageReloaded { read: local.items, history: history.clone() });
             let _ = queue.send(VoiceEvent::StorageAnswered { speech, request, result: Ok(()) });
             let _ = storage.clone().dispatch(
                 lk_agents_abi::storage::voice::VoiceStorageCommand::ObserveLoss {

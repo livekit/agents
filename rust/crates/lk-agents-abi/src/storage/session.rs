@@ -7,47 +7,43 @@ use super::StorageError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionKind {
     Empty,
-    Text,
-    Voice,
+    Conversation,
 }
-use crate::text_session::{FrameId, SessionFrame, TextSessionState};
+use crate::session::snapshot::SessionSnapshot;
 
 /// Read-only conversation state. Reads and results are detached; an explicitly bound
 /// application field retains its identity while the native store updates its contents.
 #[crate::host(class(name = "_core_PersistedSessionState", pid = false))]
 pub trait PersistedSessionState: Clone + Send + Sync + Sized + 'static {
+    #[host(class(name = "RemoteAgentState"))]
+    type RemoteAgent: crate::session::remote::RemoteAgentView;
+
     #[host(new)]
     fn new(#[host(default = None)] data: Option<String>) -> Result<Self, StorageError>;
     #[host(getter)]
     fn kind(&self) -> SessionKind;
     #[host(getter)]
-    fn active_agent(&self) -> Option<String>;
+    fn root_agent(&self) -> Result<Option<crate::session::AgentState>, StorageError>;
+    #[host(getter)]
+    fn current_agent(&self) -> Result<Option<crate::session::AgentState>, StorageError>;
+    #[host(getter)]
+    fn agents(&self) -> Result<BTreeMap<String, crate::session::AgentState>, StorageError>;
+    #[host(getter)]
+    fn remote_agents(&self) -> BTreeMap<String, Self::RemoteAgent>;
+    #[host(getter)]
+    fn chat_history(&self) -> Vec<crate::ChatItem>;
     #[host(getter)]
     fn session_id(&self) -> Option<String>;
-    #[host(getter)]
-    fn execution_id(&self) -> Option<String>;
-    #[host(getter)]
-    fn root_frame_id(&self) -> Result<FrameId, StorageError>;
-    #[host(getter)]
-    fn active_frame_id(&self) -> Result<FrameId, StorageError>;
-    #[host(getter)]
-    fn ancestors(&self) -> Vec<FrameId>;
-    #[host(getter)]
-    fn frames(&self) -> BTreeMap<FrameId, SessionFrame>;
     #[host(call)]
     fn snapshot(&self) -> String;
     #[host(call)]
     fn _to_json(&self) -> String;
     #[host(call)]
-    fn _text_state(&self) -> Result<Option<TextSessionState>, StorageError>;
+    fn _snapshot_data(&self) -> Result<Option<SessionSnapshot>, StorageError>;
     #[host(call)]
     fn _update(&self, data: String) -> Result<(), StorageError>;
     #[host(call)]
     fn _from_json(data: String) -> Result<String, StorageError>;
-    #[host(call)]
-    fn _from_text(state: TextSessionState) -> Result<String, StorageError>;
-    #[host(call)]
-    fn _from_voice(agent: String, history_ids: Vec<String>) -> Result<String, StorageError>;
 }
 
 /// A detached snapshot, or a view updated only by an explicit store binding.
@@ -58,30 +54,31 @@ pub trait SessionStateFacade: Sized {
     #[host(getter)]
     fn kind(&self) -> SessionKind;
     #[host(getter)]
-    fn active_agent(&self) -> Option<String>;
+    fn root_agent(&self) -> Result<Option<crate::session::AgentState>, StorageError>;
+    #[host(getter)]
+    fn current_agent(&self) -> Result<Option<crate::session::AgentState>, StorageError>;
+    #[host(getter)]
+    fn agents(&self) -> Result<BTreeMap<String, crate::session::AgentState>, StorageError>;
+    #[host(
+        getter,
+        annotation(ret = "collections.abc.Mapping[str, ..storage.session_state.RemoteAgentState]")
+    )]
+    fn remote_agents(&self) -> BTreeMap<String, crate::HostRef>;
+    #[host(
+        getter,
+        returns = "..llm.chat_context._ReadOnlyChatContext",
+        annotation(ret = "..llm.ChatContext")
+    )]
+    fn chat_history(&self) -> Vec<crate::ChatItem>;
     #[host(getter)]
     fn session_id(&self) -> Option<String>;
-    #[host(getter)]
-    fn execution_id(&self) -> Option<String>;
-    #[host(getter)]
-    fn root_frame_id(&self) -> Result<FrameId, StorageError>;
-    #[host(getter)]
-    fn active_frame_id(&self) -> Result<FrameId, StorageError>;
-    #[host(getter)]
-    fn ancestors(&self) -> Vec<FrameId>;
-    #[host(getter)]
-    fn frames(&self) -> BTreeMap<FrameId, SessionFrame>;
     #[host(returns = "..storage.session_state.SessionState")]
     fn snapshot(&self) -> String;
     fn _to_json(&self) -> String;
-    fn _text_state(&self) -> Result<Option<TextSessionState>, StorageError>;
+    fn _snapshot_data(&self) -> Result<Option<SessionSnapshot>, StorageError>;
     fn _update(&self, data: String) -> Result<(), StorageError>;
     #[host(returns = "..storage.session_state.SessionState")]
     fn _from_json(data: String) -> Result<String, StorageError>;
-    #[host(returns = "..storage.session_state.SessionState")]
-    fn _from_text(state: TextSessionState) -> Result<String, StorageError>;
-    #[host(returns = "..storage.session_state.SessionState")]
-    fn _from_voice(agent: String, history_ids: Vec<String>) -> Result<String, StorageError>;
 }
 
 /// An inert execution declaration; tools receive the original context object.
@@ -114,7 +111,11 @@ pub trait SessionBinding: Send + Sync + Sized + 'static {
     #[host(call)]
     fn update(&self, state: String) -> Result<(), StorageError>;
     #[host(call)]
-    fn update_voice(&self, agent: String, history_ids: Vec<String>) -> Result<(), StorageError>;
+    fn update_voice(
+        &self,
+        agent: String,
+        history: Vec<crate::ChatItem>,
+    ) -> Result<(), StorageError>;
     #[host(call)]
     fn validate_voice(&self, agent: String) -> Result<(), StorageError>;
     #[host(await)]
@@ -131,7 +132,11 @@ pub trait SessionBinding: Send + Sync + Sized + 'static {
 #[crate::host(facade(path = "livekit.agents.storage.context", name = "_SessionBinding", native = SessionBinding, extended, from_native))]
 pub trait SessionBindingFacade {
     fn update(&self, state: String) -> Result<(), StorageError>;
-    fn update_voice(&self, agent: String, history_ids: Vec<String>) -> Result<(), StorageError>;
+    fn update_voice(
+        &self,
+        agent: String,
+        history: Vec<crate::ChatItem>,
+    ) -> Result<(), StorageError>;
     fn validate_voice(&self, agent: String) -> Result<(), StorageError>;
     #[host(bind(history = "_history()"))]
     async fn flush(&self) -> Result<(), StorageError>;

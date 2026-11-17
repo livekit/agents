@@ -175,6 +175,20 @@ impl TextSessionRunner {
     }
 }
 
+// Wherever the host passes a `::lk_agents_abi::delegation::remote::RemoteCommands`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::delegation::remote::RemoteCommands>(),
+        read: |obj| match obj.cast::<TextSessionRunner>() {
+            Ok(this) => {
+                let native: ::std::sync::Arc<dyn ::lk_agents_abi::delegation::remote::RemoteCommands> = this.get().0.clone();
+                Ok(crate::py_objects::Taken::Native(::std::boxed::Box::new(native)))
+            }
+            Err(_) => Ok(crate::py_objects::Taken::Other),
+        },
+    }
+}
+
 /// One stream of `::lk_agents_abi::text_session::TextSessionUpdate` items: `recv()` resolves to the next, `None` at the end.
 #[pyclass(frozen, name = "TextSessionUpdates", module = "livekit.agents._core")]
 pub struct TextSessionUpdates(
@@ -369,27 +383,6 @@ impl CoreLocalInteraction {
         })?;
         Ok(())
     }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/text_session.rs.
-
-/// `TextSessionState.to_json()`.
-#[pyfunction]
-pub fn _core_persist_text_session_state(record: Bound<'_, PyAny>) -> PyResult<String> {
-    let record = crate::generated::records::text_session::text_session_state_from_py(&record)?;
-    ::serde_json::to_string(&record)
-        .map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("TextSessionState: {e}")))
-}
-
-/// `TextSessionState.from_json(data)`.
-#[pyfunction]
-pub fn _core_restore_text_session_state<'py>(
-    py: Python<'py>,
-    data: &str,
-) -> PyResult<Bound<'py, PyAny>> {
-    let record: ::lk_agents_abi::text_session::TextSessionState = ::serde_json::from_str(data)
-        .map_err(|e| ::pyo3::exceptions::PyValueError::new_err(format!("TextSessionState: {e}")))?;
-    crate::generated::records::text_session::text_session_state_to_py(py, record)
 }
 
 impl crate::py_errors::HostException for ::lk_agents_abi::text_session::RoutingError {

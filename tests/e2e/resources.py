@@ -53,6 +53,14 @@ class Child:
     log: Path
     reaped: bool = False
 
+    async def kill(self) -> None:
+        """Crash the whole application process group, then reap its leader."""
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(self.process.pid, signal.SIGKILL)
+        async with asyncio.timeout(CLOSE_SECONDS):
+            await self.process.wait()
+        self.reaped = True
+
     async def stop(self) -> None:
         # Kill the group even if the leader exited with descendants still running.
         with contextlib.suppress(ProcessLookupError, PermissionError):

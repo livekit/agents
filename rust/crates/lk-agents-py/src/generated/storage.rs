@@ -1784,9 +1784,7 @@ impl CoreThreadServer {
 // Declared in rust/crates/lk-agents-abi/src/storage/session.rs.
 type CorePersistedSessionStateImpl =
     <crate::generated::implementations::Selected as super::Implementations>::PersistedSessionState;
-type PersistedSessionStateActiveAgentOutput = ::std::option::Option<::std::string::String>;
 type PersistedSessionStateSessionIdOutput = ::std::option::Option<::std::string::String>;
-type PersistedSessionStateExecutionIdOutput = ::std::option::Option<::std::string::String>;
 
 /// Read-only conversation state. Reads and results are detached; an explicitly bound
 /// application field retains its identity while the native store updates its contents.
@@ -1812,43 +1810,66 @@ impl CorePersistedSessionState {
     }
 
     #[getter]
-    fn active_agent(&self, py: Python<'_>) -> PyResult<PersistedSessionStateActiveAgentOutput> {
-        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::active_agent(&self.0));
-        ::pyo3::PyResult::Ok(out)
+    fn root_agent<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::root_agent(&self.0)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        out.map(|value| crate::generated::records::session::agent_state_to_py(py, value))
+            .transpose()
     }
 
     #[getter]
-    fn session_id(&self, py: Python<'_>) -> PyResult<PersistedSessionStateSessionIdOutput> {
-        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::session_id(&self.0));
-        ::pyo3::PyResult::Ok(out)
+    fn current_agent<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::current_agent(&self.0)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        out.map(|value| crate::generated::records::session::agent_state_to_py(py, value))
+            .transpose()
     }
 
     #[getter]
-    fn execution_id(&self, py: Python<'_>) -> PyResult<PersistedSessionStateExecutionIdOutput> {
-        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::execution_id(&self.0));
-        ::pyo3::PyResult::Ok(out)
+    fn agents<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::agents(&self.0)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        ::pyo3::PyResult::Ok({
+            let d = ::pyo3::types::PyDict::new(py);
+            for (k, x) in out {
+                d.set_item(
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?,
+                    crate::generated::records::session::agent_state_to_py(py, x)?,
+                )?;
+            }
+            d.into_any()
+        })
     }
 
     #[getter]
-    fn root_frame_id<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::root_frame_id(&self.0)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
-        crate::generated::records::text_session::frame_id_to_py(py, out)
+    fn remote_agents<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::remote_agents(&self.0));
+        ::pyo3::PyResult::Ok({
+            let dict = ::pyo3::types::PyDict::new(py);
+            for (key, value) in out {
+                dict.set_item(
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(key, py)?,
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(
+                        super::session::RemoteAgentState(::std::sync::Arc::new(value)),
+                        py,
+                    )?,
+                )?;
+            }
+            dict.into_any()
+        })
     }
 
     #[getter]
-    fn active_frame_id<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::active_frame_id(&self.0)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
-        crate::generated::records::text_session::frame_id_to_py(py, out)
-    }
-
-    #[getter]
-    fn ancestors<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::ancestors(&self.0));
+    fn chat_history<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::chat_history(&self.0));
         ::pyo3::PyResult::Ok(
             ::pyo3::types::PyList::new(
                 py,
                 out.into_iter()
-                    .map(|x| crate::generated::records::text_session::frame_id_to_py(py, x))
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
@@ -1856,18 +1877,9 @@ impl CorePersistedSessionState {
     }
 
     #[getter]
-    fn frames<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::frames(&self.0));
-        ::pyo3::PyResult::Ok({
-            let d = ::pyo3::types::PyDict::new(py);
-            for (k, x) in out {
-                d.set_item(
-                    crate::generated::records::text_session::frame_id_to_py(py, k)?,
-                    crate::generated::records::text_session::session_frame_to_py(py, x)?,
-                )?;
-            }
-            d.into_any()
-        })
+    fn session_id(&self, py: Python<'_>) -> PyResult<PersistedSessionStateSessionIdOutput> {
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::session_id(&self.0));
+        ::pyo3::PyResult::Ok(out)
     }
 
     fn snapshot(&self, py: Python<'_>) -> PyResult<::std::string::String> {
@@ -1880,13 +1892,13 @@ impl CorePersistedSessionState {
         ::pyo3::PyResult::Ok(out)
     }
 
-    fn _text_state<'py>(
+    fn _snapshot_data<'py>(
         &self,
         py: Python<'py>,
     ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
-        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::_text_state(&self.0)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::_snapshot_data(&self.0)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
         out.map(|value| {
-            crate::generated::records::text_session::text_session_state_to_py(py, value)
+            crate::generated::records::session_snapshot::session_snapshot_to_py(py, value)
         })
         .transpose()
     }
@@ -1901,26 +1913,6 @@ impl CorePersistedSessionState {
     #[pyo3(signature = (data))]
     fn _from_json(py: Python<'_>, data: ::std::string::String) -> PyResult<::std::string::String> {
         let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::_from_json(data)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (state))]
-    fn _from_text(py: Python<'_>, state: Bound<'_, PyAny>) -> PyResult<::std::string::String> {
-        let state =
-            crate::generated::records::text_session::text_session_state_from_py(state.as_any())?;
-        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::_from_text(state)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (agent, history_ids))]
-    fn _from_voice(
-        py: Python<'_>,
-        agent: ::std::string::String,
-        history_ids: ::std::vec::Vec<::std::string::String>,
-    ) -> PyResult<::std::string::String> {
-        let out = py.detach(|| <CorePersistedSessionStateImpl as ::lk_agents_abi::storage::session::PersistedSessionState>::_from_voice(agent, history_ids)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(out)
     }
 }
@@ -1971,15 +1963,23 @@ impl CoreSessionBinding {
         Ok(())
     }
 
-    #[pyo3(signature = (agent, history_ids))]
+    #[pyo3(signature = (agent, history))]
     fn update_voice(
         &self,
         py: Python<'_>,
         agent: ::std::string::String,
-        history_ids: ::std::vec::Vec<::std::string::String>,
+        history: Bound<'_, PyAny>,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        py.detach(|| <CoreSessionBindingImpl as ::lk_agents_abi::storage::session::SessionBinding>::update_voice(&self.0, agent, history_ids)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let history = history.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    crate::generated::records::chat_items::chat_item_from_py(item.as_any())
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })?;
+        py.detach(|| <CoreSessionBindingImpl as ::lk_agents_abi::storage::session::SessionBinding>::update_voice(&self.0, agent, history)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
     }
 

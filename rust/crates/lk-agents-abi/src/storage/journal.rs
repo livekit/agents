@@ -13,7 +13,7 @@ use super::thread::RunOutcome;
 pub enum JournalEvent {
     RunStarted(RunStarted),
     RunEnded(RunEnded),
-    Usage(#[serde(deserialize_with = "stored_usage")] crate::usage::Usage),
+    Usage(crate::usage::Usage),
     /// An item entered the history.
     ConversationItemAdded {
         item: Box<crate::livekit_protocol::agent::chat_context::ChatItem>,
@@ -42,41 +42,6 @@ impl JournalEvent {
     pub fn from_row(r#type: &str, payload: Value) -> Result<Self, serde_json::Error> {
         serde_json::from_value(serde_json::json!({"type": r#type, "payload": payload}))
     }
-}
-
-/// A stored `usage` payload: the record, or a row written before it existed
-/// (`{requests, input_tokens, output_tokens, tool_calls}`), read as one unidentified LLM entry.
-#[cfg(feature = "serde")]
-fn stored_usage<'de, D: serde::Deserializer<'de>>(d: D) -> Result<crate::usage::Usage, D::Error> {
-    use crate::usage::{LlmUsage, ModelUsage, TokenUsage, Usage};
-    use serde::de::Error as _;
-    #[derive(Deserialize, Default)]
-    #[serde(default)]
-    struct Legacy {
-        requests: u64,
-        input_tokens: u64,
-        output_tokens: u64,
-        tool_calls: u64,
-    }
-    let value = Value::deserialize(d)?;
-    if value.get("models").is_some() {
-        return serde_json::from_value(value).map_err(D::Error::custom);
-    }
-    let legacy: Legacy = serde_json::from_value(value).map_err(D::Error::custom)?;
-    let tokens = TokenUsage {
-        input_tokens: legacy.input_tokens,
-        output_tokens: legacy.output_tokens,
-        ..TokenUsage::default()
-    };
-    let llm = LlmUsage { requests: legacy.requests, tokens: tokens.clone(), ..LlmUsage::default() };
-    Ok(Usage {
-        models: if legacy.requests == 0 { Vec::new() } else { vec![ModelUsage::Llm(llm)] },
-        tokens,
-        requests: legacy.requests,
-        tool_calls: legacy.tool_calls,
-        settled: true,
-        ..Usage::default()
-    })
 }
 
 /// `run_started`: a run began.
@@ -186,23 +151,5 @@ mod tests {
         .into_row();
         assert_eq!(payload, json!({"phase": "update", "text": "checking"}));
         assert!(JournalEvent::from_row("run_ended", json!({"outcome": "maybe"})).is_err());
-    }
-
-    /// usage.md "Removing duplicate contracts": a row stored before `Usage` existed reads as one
-    /// unidentified LLM entry, with no old field names in the returned record.
-    #[test]
-    fn a_legacy_usage_row_reads_as_one_unidentified_llm_entry() {
-        use crate::usage::{LlmUsage, ModelUsage, TokenUsage};
-        let row = json!({"requests": 2, "input_tokens": 100, "output_tokens": 30, "tool_calls": 1});
-        let JournalEvent::Usage(usage) = JournalEvent::from_row("usage", row).unwrap() else {
-            panic!("a usage row is a usage event");
-        };
-        let tokens = TokenUsage { input_tokens: 100, output_tokens: 30, ..TokenUsage::default() };
-        let llm = LlmUsage { requests: 2, tokens: tokens.clone(), ..LlmUsage::default() };
-        assert_eq!(usage.models, vec![ModelUsage::Llm(llm)]);
-        assert_eq!((&usage.tokens, usage.requests, usage.tool_calls), (&tokens, 2, 1));
-        assert!(usage.settled);
-        let (_, payload) = JournalEvent::Usage(usage).into_row();
-        assert!(payload.get("models").is_some(), "re-stored in the record's shape: {payload}");
     }
 }

@@ -438,8 +438,8 @@ impl Run {
             loaded: &self.loaded,
             state: Some(&state),
             loaded_state: self.loaded_state.as_ref(),
-            events: &[],
-            tasks: &[],
+            events: &self.events.new,
+            tasks: self.tasks.writes(),
             usage: &Usage::default(),
             outcome: self.outcome,
             reason: None,
@@ -478,6 +478,11 @@ impl Run {
         self.session_items = cache;
         self.loaded_state = Some(state.clone());
         self.state = Some(state);
+        // These framework writes are durable. A later checkpoint or the final commit must
+        // not publish their journal entries twice; task lookups read back the committed rows.
+        self.events.new.clear();
+        self.tasks.writes.clear();
+        self.tasks.loaded = None;
         Ok(())
     }
 

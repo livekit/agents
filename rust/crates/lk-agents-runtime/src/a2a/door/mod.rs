@@ -401,7 +401,7 @@ impl Inner {
                 metadata.iter().map(|(key, value)| (key.clone(), value.clone())).collect()
             })
             .unwrap_or_default();
-        lk_agents_core::a2a::delegation::validate_partition_delegation(&metadata, &target)?;
+        lk_agents_core::delegation::remote::validate_partition_delegation(&metadata, &target)?;
         message.context_id = Some(context.clone());
         let thread = self.namespace.storage().await?.open(&context).await?;
         let continuing = match message.task_id.clone() {

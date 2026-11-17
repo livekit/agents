@@ -64,7 +64,7 @@ Dispatch, not to this framework.
 
 A voice door and text endpoint configured for the same partition share transport
 history. Application code explicitly reloads marked context fields to observe
-changes made by another activation. Saved private `TextSessionState` histories
+changes made by another activation. Saved private `SessionState` histories
 remain separate from that transport view; partition sharing does not merge them.
 
 A reply follows the channel of its incoming request. A text received during a

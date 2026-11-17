@@ -63,6 +63,7 @@ fn pending_voice_progress_is_coalesced_until_the_writer_acknowledges() {
     assert_eq!(histories.len(), 1);
     assert_eq!(
         histories[0]
+            .items
             .iter()
             .find(|item| item.id() == "reply")
             .and_then(|item| item.as_message())
@@ -148,7 +149,7 @@ fn a_final_voice_commit_waits_for_delivered_progress_checkpoint_receipts() {
         .iter()
         .find_map(|effect| match effect {
             VoiceEffect::StorageCheckpoint { checkpoint, history, .. } => {
-                assert!(history.iter().any(|item| item.id() == "reply"));
+                assert!(history.items.iter().any(|item| item.id() == "reply"));
                 Some(*checkpoint)
             }
             _ => None,
