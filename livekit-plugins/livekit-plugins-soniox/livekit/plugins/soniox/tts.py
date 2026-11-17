@@ -541,15 +541,22 @@ class SynthesizeStream(tts.SynthesizeStream):
         transiently.
         """
         failure: APIError | None = None
+        interrupted = False
         try:
             await active.waiter
+        except asyncio.CancelledError:
+            interrupted = True
+            raise
         except APIError as e:
             failure = e
         except Exception as e:
             raise APIConnectionError() from e
         finally:
-            # release before any replay so only one stream is ever registered
-            self._note_timed_end(active.connection.unregister_stream(active.stream_id))
+            # release before any replay so only one stream is ever registered;
+            # an interrupted stream flushes its held word, as `_run` would have
+            self._note_timed_end(
+                active.connection.unregister_stream(active.stream_id, flush=interrupted)
+            )
 
         if failure is None:
             return None

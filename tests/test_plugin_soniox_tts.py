@@ -155,7 +155,9 @@ class _StreamSlot:
 class _FakeConnection:
     """Stand-in for ``_Connection``: text produces audio, ``text_end`` terminates."""
 
-    def __init__(self, *, fail_on_send: int | None = None) -> None:
+    def __init__(self, *, fail_on_send: int | None = None, terminate: bool = True) -> None:
+        # False: `text_end` leaves the stream waiting for its audio to end.
+        self._terminate = terminate
         self.is_current = True
         self.closed = False
         self.registered_ids: list[str] = []
@@ -196,7 +198,7 @@ class _FakeConnection:
             return
         if text_end and not text:
             # server: final audio + audio_end + terminated
-            if not slot.waiter.done():
+            if self._terminate and not slot.waiter.done():
                 slot.waiter.set_result(None)
             return
         self._sends += 1
@@ -532,6 +534,28 @@ async def test_an_interrupted_turn_releases_its_stream_with_a_flush() -> None:
     # The word held back has had its audio pushed, so releasing the stream has
     # to flush it; a stream released any other way must not be flushed.
     assert fake.unregister_calls[-1][1] is True
+
+
+async def test_a_turn_interrupted_while_finishing_releases_its_stream_with_a_flush() -> None:
+    fake = _FakeConnection(terminate=False)
+    tts = soniox.TTS(api_key="fake-key", word_timestamps=True)
+
+    async def _fake_current_connection(*, timeout: float) -> tuple[Any, float, bool]:
+        return fake, 0.0, True
+
+    tts._current_connection = _fake_current_connection  # type: ignore[method-assign]
+
+    stream = tts.stream()
+    stream.push_text(SENTENCES[0])
+    stream.end_input()
+    # The text is all sent and the stream waits for its audio to end.
+    while not any(text_end for _, _, text_end in fake.send_calls):
+        await asyncio.sleep(0.01)
+    await stream.aclose()
+
+    # The first release is the one that drops the stream, so it has to flush the
+    # held word; a later one finds nothing left to flush.
+    assert fake.unregister_calls[0][1] is True
 
 
 class _RecordingEmitter:
