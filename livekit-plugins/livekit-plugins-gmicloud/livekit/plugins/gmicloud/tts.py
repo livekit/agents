@@ -28,6 +28,10 @@ request family is supported behind one adapter:
 Responses are handled in both documented shapes: synchronous (``outcome``
 returned inline) and queued (``queued`` / ``dispatched`` followed by polling
 ``GET /api/v1/ie/requestqueue/apikey/requests/{request_id}``).
+
+Every response is decoded and normalized to the service's declared format
+(mono at the declared sample rate) before it is emitted, so emitted frames
+always match :attr:`TTS.sample_rate` and :attr:`TTS.num_channels`.
 """
 
 from __future__ import annotations
@@ -35,12 +39,14 @@ from __future__ import annotations
 import asyncio
 import io
 import os
+import struct
 import wave
 from dataclasses import dataclass, field, replace
 from typing import Any
 
 import aiohttp
 
+from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
@@ -51,8 +57,6 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-
-from .log import logger
 
 DEFAULT_BASE_URL = "https://console.gmicloud.ai"
 QUEUE_PATH = "/api/v1/ie/requestqueue/apikey/requests"
@@ -163,13 +167,48 @@ def _extract_audio_url(data: dict[str, Any]) -> str | None:
     return None
 
 
-def _wav_info(data: bytes) -> tuple[int, int]:
-    """Return (sample_rate, num_channels) from a WAV header, or (0, 0)."""
+def _parse_wav(data: bytes) -> tuple[bytes, int, int, int] | None:
+    """Decode a WAV blob into (pcm, sample_rate, num_channels, sample_width).
+
+    Returns ``None`` when the blob is not a parseable WAV file.
+    """
     try:
         with wave.open(io.BytesIO(data), "rb") as wav:
-            return wav.getframerate(), wav.getnchannels()
+            pcm = wav.readframes(wav.getnframes())
+            return pcm, wav.getframerate(), wav.getnchannels(), wav.getsampwidth()
     except Exception:
-        return 0, 0
+        return None
+
+
+def _to_mono_s16(pcm: bytes, channels: int) -> bytes:
+    """Downmix interleaved 16-bit PCM to mono by averaging the channels."""
+    if channels <= 1:
+        return pcm
+    samples = struct.unpack(f"<{len(pcm) // 2}h", pcm)
+    mono = [sum(samples[i : i + channels]) // channels for i in range(0, len(samples), channels)]
+    return struct.pack(f"<{len(mono)}h", *mono)
+
+
+def _resample_s16(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
+    """Resample mono 16-bit PCM from one rate to another."""
+    frame = rtc.AudioFrame(
+        data=pcm, sample_rate=src_rate, num_channels=1, samples_per_channel=len(pcm) // 2
+    )
+    resampler = rtc.AudioResampler(input_rate=src_rate, output_rate=dst_rate, num_channels=1)
+    chunks = [f.data.tobytes() for f in resampler.push(frame)]
+    chunks += [f.data.tobytes() for f in resampler.flush()]
+    return b"".join(chunks)
+
+
+def _wrap_wav_s16(pcm: bytes, sample_rate: int) -> bytes:
+    """Wrap mono 16-bit PCM in a WAV container."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm)
+    return buf.getvalue()
 
 
 class TTS(tts.TTS):
@@ -210,11 +249,14 @@ class TTS(tts.TTS):
                 (Inworld family only).
             extra_payload: Provider-specific payload fields merged into the
                 request unchanged.
-            audio_format: Output container requested from GMI Cloud.
-                Defaults to ``"WAV"``.
-            sample_rate: Declared sample rate of this TTS instance. The
-                emitted audio uses the rate of the WAV returned by the model
-                (read from its header), so this is only a nominal default.
+            audio_format: Output container requested from GMI Cloud. Only
+                ``"WAV"`` is supported: responses are decoded and re-emitted
+                as WAV at the declared format.
+            sample_rate: Sample rate of the audio emitted by this service.
+                GMI Cloud returns each model's native format (e.g. 48 kHz
+                mono for Inworld, 32 kHz stereo for MiniMax); responses are
+                down-mixed to mono and resampled to this rate before being
+                emitted, so emitted frames always match this declaration.
             api_key: GMI Cloud API key. Falls back to the
                 ``GMI_CLOUD_API_KEY`` or ``GMI_API_KEY`` environment
                 variables.
@@ -231,8 +273,14 @@ class TTS(tts.TTS):
                 your own session or synthesis raises an error.
 
         Raises:
-            ValueError: If no API key is available.
+            ValueError: If no API key is available, or if ``audio_format`` is
+                not ``"WAV"``.
         """
+        if audio_format.upper() != "WAV":
+            raise ValueError(
+                f"unsupported audio_format {audio_format!r}: "
+                "livekit.plugins.gmicloud emits WAV audio only"
+            )
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False, aligned_transcript=False),
             sample_rate=sample_rate,
@@ -306,15 +354,27 @@ class ChunkedStream(tts.ChunkedStream):
         audio_url = _extract_audio_url(data)
 
         if not audio_url and status != "failed" and request_id:
+            poll_url = f"{self._opts.base_url}{QUEUE_PATH}/{request_id}"
+            timeout = aiohttp.ClientTimeout(total=self._conn_options.timeout)
             for _ in range(self._opts.poll_attempts):
                 await asyncio.sleep(self._opts.poll_interval_secs)
                 async with session.get(
-                    f"{self._opts.base_url}{QUEUE_PATH}/{request_id}",
+                    poll_url,
                     headers={"Authorization": f"Bearer {self._opts.api_key}"},
+                    timeout=timeout,
                 ) as response:
-                    if response.status != 200:
-                        continue
-                    data = await response.json(content_type=None)
+                    if response.status == 200:
+                        data = await response.json(content_type=None)
+                    elif response.status in (408, 429) or response.status >= 500:
+                        continue  # transient: keep polling
+                    else:
+                        error_text = await response.text()
+                        raise APIStatusError(
+                            f"GMI Cloud queue poll error: HTTP {response.status} - {error_text}",
+                            status_code=response.status,
+                            request_id=str(request_id),
+                            body=error_text,
+                        )
                 status = data.get("status")
                 audio_url = _extract_audio_url(data)
                 if status in ("success", "failed") or audio_url:
@@ -330,7 +390,7 @@ class ChunkedStream(tts.ChunkedStream):
             output_emitter.initialize(
                 request_id=utils.shortuuid(),
                 sample_rate=self._tts.sample_rate,
-                num_channels=1,
+                num_channels=self._tts.num_channels,
                 mime_type="audio/wav",
             )
             return
@@ -406,18 +466,28 @@ class ChunkedStream(tts.ChunkedStream):
                 f"GMI Cloud TTS unexpected error: {type(e).__name__}: {e}"
             ) from e
 
-        sample_rate, num_channels = _wav_info(wav_bytes)
-        if not sample_rate:
-            logger.warning(
-                "GMI Cloud TTS: could not read WAV header, falling back to declared rate",
-                extra={"tts": self._tts._label},
+        parsed = _parse_wav(wav_bytes)
+        if parsed is None:
+            raise APIError("GMI Cloud TTS error: response is not WAV audio", retryable=False)
+        pcm, sample_rate, num_channels, sample_width = parsed
+        if sample_width != 2:
+            raise APIError(
+                f"GMI Cloud TTS error: unsupported WAV sample width {sample_width}, "
+                "only 16-bit PCM is supported",
+                retryable=False,
             )
-            sample_rate, num_channels = self._tts.sample_rate, 1
+
+        out_rate = self._tts.sample_rate
+        if num_channels > 1:
+            pcm = _to_mono_s16(pcm, num_channels)
+        if sample_rate != out_rate:
+            pcm = _resample_s16(pcm, sample_rate, out_rate)
+        wav_bytes = _wrap_wav_s16(pcm, out_rate)
 
         output_emitter.initialize(
             request_id=str(data.get("request_id") or request_id),
-            sample_rate=sample_rate,
-            num_channels=num_channels,
+            sample_rate=out_rate,
+            num_channels=self._tts.num_channels,
             mime_type="audio/wav",
         )
         output_emitter.push(wav_bytes)

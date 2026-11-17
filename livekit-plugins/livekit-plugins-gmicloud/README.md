@@ -45,6 +45,11 @@ Responses may arrive synchronously or as queued/dispatched generations that the
 plugin resolves by polling. Queued generations are slow on GMI Cloud (the
 plugin polls for up to 3 minutes by default, configurable via `poll_attempts`
 and `poll_interval_secs`); prefer the Inworld family for latency-sensitive
-agents. Output is WAV at the model's native rate; the plugin reads the real
-sample rate and channel count from each response and emits audio frames at
-that format. Synthesis is chunked (non-streaming).
+agents.
+
+Output is normalized to the service's declared format: mono audio at the
+declared `sample_rate` (48 kHz by default). GMI Cloud returns each model's
+native format (e.g. Inworld 48 kHz mono, MiniMax 32 kHz stereo), so responses
+are down-mixed and resampled before being emitted. Only WAV output is
+supported (`audio_format` other than `WAV` is rejected). Synthesis is chunked
+(non-streaming).
