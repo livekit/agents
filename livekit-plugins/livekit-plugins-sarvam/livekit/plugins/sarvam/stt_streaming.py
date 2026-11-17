@@ -349,6 +349,7 @@ class STTRealtime(stt.STT):
         self,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[RealtimeModel | str] = NOT_GIVEN,
         stream_type: NotGivenOr[RealtimeStreamType | str] = NOT_GIVEN,
         mode: NotGivenOr[RealtimeMode | str] = NOT_GIVEN,
         endpointing: NotGivenOr[RealtimeEndpointing | str] = NOT_GIVEN,
@@ -362,7 +363,7 @@ class STTRealtime(stt.STT):
     ) -> None:
         """Update options for this instance and every stream it created.
 
-        Options that Sarvam only accepts at connection time (``sample_rate``,
+        Options that Sarvam only accepts at connection time (``model``, ``sample_rate``,
         ``return_timestamps``, and ``vad_prefix_padding_ms``) take effect on
         newly created streams only.
         The remaining options are sent to active streams as an in-band
@@ -371,6 +372,7 @@ class STTRealtime(stt.STT):
 
         Args:
             language: BCP-47 language code, or ``auto`` for adaptive language identification.
+            model: ``saaras:v3-realtime`` or ``saaras:v4``; applies to new streams only.
             stream_type: Latency profile: ``fast``, ``balanced``, or ``simulated``.
             mode: Task applied to finals.
             endpointing: ``vad`` for server-side turn detection, or ``manual``.
@@ -388,7 +390,7 @@ class STTRealtime(stt.STT):
         opts = RealtimeSTTOptions(
             language=language if is_given(language) else self._opts.language,
             api_key=self._opts.api_key,
-            model=self._opts.model,
+            model=model if is_given(model) else self._opts.model,
             stream_type=stream_type if is_given(stream_type) else self._opts.stream_type,
             mode=mode if is_given(mode) else self._opts.mode,
             endpointing=endpointing if is_given(endpointing) else self._opts.endpointing,

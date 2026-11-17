@@ -516,6 +516,32 @@ async def test_instance_update_preserves_per_stream_language_override(
     await stt_impl.aclose()
 
 
+def test_update_options_switches_model_for_new_streams(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[stt_streaming.RealtimeSTTOptions] = []
+
+    class _CapturedStream:
+        def __init__(self, **kwargs: object) -> None:
+            opts = kwargs["opts"]
+            assert isinstance(opts, stt_streaming.RealtimeSTTOptions)
+            captured.append(opts)
+
+        def update_options(self, **kwargs: object) -> None:
+            assert "model" not in kwargs  # open streams keep their connection's model
+
+    monkeypatch.setattr(stt_streaming, "RealtimeSpeechStream", _CapturedStream)
+    stt = stt_streaming.STTRealtime(api_key="sk_test", http_session=object())  # type: ignore[arg-type]
+    stt.stream()
+
+    stt.update_options(model="saaras:v4")
+    stt.stream()
+
+    assert stt.model == "saaras:v4"
+    assert [opts.model for opts in captured] == ["saaras:v3-realtime", "saaras:v4"]
+    with pytest.raises(ValueError, match="model must be one of"):
+        stt.update_options(model="saaras:v3")
+    assert stt.model == "saaras:v4"
+
+
 def test_stream_update_options_without_arguments_is_a_no_op() -> None:
     stream = _make_stream()
     stream._pending_config_update = None
