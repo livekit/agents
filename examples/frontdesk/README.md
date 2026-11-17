@@ -47,6 +47,8 @@ Use an [A2A client](../../docs/clients.md) for text requests.
 `FRONTDESK_NOW` pins the practice's clock, so the seeded openings and the scenarios' absolute
 dates stay where they are; without it the practice runs on the wall clock, with the same
 openings as days from today. `CAL_API_KEY` swaps the fake calendar for cal.com.
+`AGENT_STORAGE=sqlite` keeps threads in a local SQLite file instead of AgentDB, which needs a
+LiveKit Cloud project: for a self-hosted server or local testing.
 
 ## Scenarios
 
