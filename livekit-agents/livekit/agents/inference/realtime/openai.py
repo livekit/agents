@@ -220,6 +220,7 @@ class RealtimeSession(_RealtimeSession):
         self._response_spoke = False
         self._user_speaking = False
         self._speech_stopped_at = None
+        self._pending_input_transcriptions: set[str] = set()
 
     async def aclose(self) -> None:
         self._cancel_handoff()
@@ -235,6 +236,21 @@ class RealtimeSession(_RealtimeSession):
         elif kind == "input_audio_buffer.speech_stopped":
             self._user_speaking = False
             self._speech_stopped_at = time.monotonic()
+            if self._opts.input_audio_transcription is not None and (
+                item_id := event.get("item_id")
+            ):
+                self._pending_input_transcriptions.add(item_id)
+        elif kind == "input_audio_buffer.committed":
+            if self._opts.input_audio_transcription is not None and (
+                item_id := event.get("item_id")
+            ):
+                self._pending_input_transcriptions.add(item_id)
+        elif kind in (
+            "conversation.item.input_audio_transcription.completed",
+            "conversation.item.input_audio_transcription.failed",
+        ):
+            if event.get("status") != "in_progress":
+                self._pending_input_transcriptions.discard(event.get("item_id", ""))
         elif kind == "response.created":
             self._speech_stopped_at = None
         elif kind == "session.handoff.request" and self._handoff_task is None:
@@ -249,7 +265,7 @@ class RealtimeSession(_RealtimeSession):
             return False
         if any(not fut.done() for fut in self._response_created_futures.values()):
             return False
-        if self._user_speaking:
+        if self._user_speaking or self._pending_input_transcriptions:
             return False
         stopped = self._speech_stopped_at
         return stopped is None or time.monotonic() - stopped >= _HANDOFF_RESPONSE_GRACE
@@ -366,6 +382,7 @@ class RealtimeSession(_RealtimeSession):
     def _handle_conversion_item_deleted(self, event: ConversationItemDeletedEvent) -> None:
         if self._is_xai and event.item_id == "" and self._item_delete_future:
             event.item_id = list(self._item_delete_future.keys())[0]
+        self._pending_input_transcriptions.discard(event.item_id)
         super()._handle_conversion_item_deleted(event)
 
     def _handle_conversion_item_input_audio_transcription_completed(
