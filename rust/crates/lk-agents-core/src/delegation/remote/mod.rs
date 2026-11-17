@@ -177,6 +177,7 @@ impl RemoteInteraction {
         authority: Option<&VerifiedAuthority>,
         offers_extension: bool,
         history: Option<&CallerHistory>,
+        default_context: Option<&str>,
     ) -> Result<Message, DelegationError> {
         if matches!(
             self.state.phase,
@@ -187,7 +188,7 @@ impl RemoteInteraction {
         ) {
             return Err(DelegationError::Settled);
         }
-        if message_id.is_empty() {
+        if message_id.is_empty() || default_context == Some("") {
             return Err(DelegationError::InvalidState);
         }
         let shared = match authority {
@@ -216,7 +217,11 @@ impl RemoteInteraction {
         }
         let message = Message {
             message_id,
-            context_id: shared.or_else(|| self.state.context_id.clone()),
+            // A task continuation keeps its context; verified caller sharing is authoritative.
+            // The saved default only addresses new work and never implies a pending task.
+            context_id: shared
+                .or_else(|| self.state.context_id.clone())
+                .or_else(|| default_context.map(str::to_owned)),
             task_id: self.state.pending_task_id.clone(),
             role: Role::User,
             parts,

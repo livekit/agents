@@ -31,9 +31,17 @@ pub(super) struct Release {
     delivered: BTreeMap<String, String>,
 }
 
-pub(super) struct RemoteCommand {
-    command: lk_agents_abi::delegation::remote::RemoteCommand,
-    done: signal::Producer<Option<Result<(), lk_agents_abi::storage::StorageError>>>,
+pub(super) enum RemoteCommand {
+    Apply {
+        command: Box<lk_agents_abi::delegation::remote::RemoteCommand>,
+        done: signal::Producer<Option<Result<(), lk_agents_abi::storage::StorageError>>>,
+    },
+    DefaultContext {
+        remote_id: String,
+        endpoint: String,
+        done:
+            signal::Producer<Option<Result<Option<String>, lk_agents_abi::storage::StorageError>>>,
+    },
 }
 
 enum DriverEvent {
@@ -147,7 +155,14 @@ impl Driver {
     }
 
     async fn remote(&mut self, command: RemoteCommand, effects: &mut VecDeque<SessionEffect>) {
-        let mut result = self.session.remote(command.command);
+        let (command, done) = match command {
+            RemoteCommand::DefaultContext { remote_id, endpoint, done } => {
+                done.resolve(self.session.remote_context(&remote_id, &endpoint));
+                return;
+            }
+            RemoteCommand::Apply { command, done } => (command, done),
+        };
+        let mut result = self.session.remote(*command);
         // A valid observation can be journaled even when its projection is refused. Persist
         // the evidence before returning either acknowledgement or refusal to the client.
         if let Some(sink) = &self.request.session_sink
@@ -159,7 +174,7 @@ impl Driver {
             );
             result = Err(error);
         }
-        command.done.resolve(result);
+        done.resolve(result);
     }
 
     /// Republishes the turn's usage when it moved.

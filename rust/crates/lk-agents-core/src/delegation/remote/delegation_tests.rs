@@ -37,8 +37,31 @@ fn begin(interaction: &mut RemoteInteraction, extension: bool) -> Message {
             None,
             extension,
             None,
+            None,
         )
         .unwrap()
+}
+
+#[test]
+fn new_work_reuses_the_saved_remote_context_without_inheriting_a_task_or_thread_authority() {
+    let mut remote = interaction("new-work");
+    let message = remote
+        .message(
+            "Another request".into(),
+            "new-message".into(),
+            Some("private-caller-thread"),
+            "caller",
+            None,
+            false,
+            None,
+            Some("saved-remote-context"),
+        )
+        .unwrap();
+    assert_eq!(message.context_id.as_deref(), Some("saved-remote-context"));
+    assert_eq!(message.task_id, None, "context reuse does not select an existing task");
+    assert_eq!(message.metadata, None, "a saved remote context is not caller sharing authority");
+    assert_eq!(remote.snapshot().context_id, message.context_id);
+    assert_eq!(begin(&mut interaction("different-conversation"), false).context_id, None);
 }
 
 #[test]
@@ -77,6 +100,7 @@ fn delegation_authority_matrix_never_treats_a_capability_as_thread_permission() 
             None,
             true,
             Some(&history),
+            None,
         )
         .unwrap();
     assert_eq!(outgoing.context_id, None);
@@ -100,6 +124,7 @@ fn delegation_authority_matrix_never_treats_a_capability_as_thread_permission() 
             Some(&proof),
             true,
             Some(&history),
+            Some("another-saved-context"),
         )
         .unwrap();
     assert_eq!(outgoing.context_id.as_deref(), Some("caller-thread"));
@@ -123,7 +148,8 @@ fn delegation_authority_matrix_never_treats_a_capability_as_thread_permission() 
                 "caller",
                 Some(&proof),
                 true,
-                Some(&history)
+                Some(&history),
+                None,
             ),
             Err(DelegationError::InvalidAuthority)
         );
@@ -143,6 +169,7 @@ fn arbitrary_peer_receives_text_only_and_keeps_its_own_remote_task_context() {
             None,
             false,
             Some(&history()),
+            None,
         )
         .unwrap();
     assert_eq!(outgoing.parts, vec![Part::text("help")]);
@@ -161,6 +188,7 @@ fn arbitrary_peer_receives_text_only_and_keeps_its_own_remote_task_context() {
             None,
             false,
             Some(&history()),
+            Some("different-default-context"),
         )
         .unwrap();
     assert_eq!(answer.context_id.as_deref(), Some("peer-context"));
@@ -199,6 +227,7 @@ fn remote_interaction_continuation_is_isolated_and_restores_the_exact_pending_ta
                 None,
                 true,
                 None,
+                None,
             )
             .unwrap();
         assert_eq!(answer.context_id.as_deref(), Some(context));
@@ -218,7 +247,7 @@ fn a_new_question_on_the_same_task_rejects_a_late_reply_to_the_previous_question
         panic!()
     };
     remote.accepts_reply(&first).unwrap();
-    remote.message("42".into(), "answer-1".into(), None, "caller", None, true, None).unwrap();
+    remote.message("42".into(), "answer-1".into(), None, "caller", None, true, None, None).unwrap();
     let DelegationUpdate::InputRequired { request_id: second, .. } =
         remote.update(&update(TaskState::InputRequired, "context", "task", "Date?")).unwrap()
     else {
@@ -355,7 +384,9 @@ fn restoring_a_pending_question_preserves_the_sequence_and_rejects_previous_roun
     let saved = serde_json::from_value(saved).unwrap();
     let mut restored = RemoteInteraction::restore(saved, &remote.snapshot().id).unwrap();
     restored.accepts_reply(&first).unwrap();
-    restored.message("42".into(), "answer-first".into(), None, "caller", None, true, None).unwrap();
+    restored
+        .message("42".into(), "answer-first".into(), None, "caller", None, true, None, None)
+        .unwrap();
     let DelegationUpdate::InputRequired { request_id: second, .. } =
         restored.update(&update(TaskState::InputRequired, "context", "task", "Date?")).unwrap()
     else {

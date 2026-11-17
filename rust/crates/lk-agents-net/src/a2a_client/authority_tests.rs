@@ -63,6 +63,7 @@ fn delegation_authority_matrix_shares_only_after_local_grant_verification() {
             Some(&proof),
             false,
             None,
+            None,
         )
         .unwrap();
     assert_eq!(outgoing.context_id.as_deref(), Some(THREAD));
@@ -123,7 +124,16 @@ fn configured_delegation_trust_covers_exact_canonical_destination_thread_and_ide
     .unwrap();
     assert_eq!(
         interaction
-            .message("request".into(), "m1".into(), Some(THREAD), CALLER, Some(&proof), true, None,)
+            .message(
+                "request".into(),
+                "m1".into(),
+                Some(THREAD),
+                CALLER,
+                Some(&proof),
+                true,
+                None,
+                None
+            )
             .unwrap()
             .context_id
             .as_deref(),

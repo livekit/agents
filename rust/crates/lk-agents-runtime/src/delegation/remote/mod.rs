@@ -121,7 +121,14 @@ impl Port for RemoteInteraction {
         thread_id: Option<String>,
         token: Option<String>,
     ) -> Result<Message, AgentClientError> {
-        self.inner.message(arguments, structured, offers_extension, &history, thread_id, token)
+        self.inner.message(
+            arguments,
+            structured,
+            offers_extension,
+            &history,
+            thread_id.map(|thread| (thread, token)),
+            None,
+        )
     }
 
     async fn run(
@@ -247,14 +254,23 @@ impl Delegation {
     ) -> Result<RemoteEvent, AgentClientError> {
         let client = &self.client;
         port::AgentClient::connect(client).await?;
-        let (thread_id, token) = request.shared.unzip();
+        let default_context = match &self.owner {
+            Some(owner) => {
+                let endpoint = self.interaction.0.lock().policy.snapshot().id.endpoint;
+                owner
+                    .default_context(&endpoint, &endpoint)
+                    .await
+                    .map_err(|error| AgentClientError::Protocol(error.to_string()))?
+            }
+            None => None,
+        };
         let message = self.interaction.message(
             request.arguments,
             request.structured,
             client.offers_extension(),
             &request.history,
-            thread_id,
-            token.flatten(),
+            request.shared,
+            default_context,
         )?;
         *reply = Some(self.send(message).await?);
         if request.live {
@@ -343,10 +359,12 @@ impl Interaction {
         structured: bool,
         offers_extension: bool,
         history: &[ChatItem],
-        thread_id: Option<String>,
-        token: Option<String>,
+        shared: Option<(String, Option<String>)>,
+        default_context: Option<String>,
     ) -> Result<Message, AgentClientError> {
         let mut state = self.0.lock();
+        let (thread_id, token) = shared.unzip();
+        let token = token.flatten();
         // sharing the caller's thread needs a grant this project signed for it, verified here
         let authority = match (thread_id.as_deref(), token.as_deref()) {
             (Some(thread), Some(token)) => {
@@ -405,6 +423,7 @@ impl Interaction {
                 authority.as_ref(),
                 offers_extension,
                 caller_history.as_ref(),
+                default_context.as_deref(),
             )
             .map_err(protocol)?;
         if structured {
@@ -429,7 +448,16 @@ impl Interaction {
         let livekit = state.livekit;
         let mut message = state
             .policy
-            .message(text, lk_agents_net::strings::shortuuid("msg_"), None, "", None, livekit, None)
+            .message(
+                text,
+                lk_agents_net::strings::shortuuid("msg_"),
+                None,
+                "",
+                None,
+                livekit,
+                None,
+                None,
+            )
             .map_err(protocol)?;
         if livekit && !state.partition_chain.is_empty() {
             message.metadata.get_or_insert_default().insert(

@@ -662,6 +662,17 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
     let restored = view._snapshot_data().unwrap().unwrap();
     let remote = &restored.remote_agents[ENDPOINT];
     assert!(matches!(recovery(remote, "answer").unwrap(), Recovery::GetTask(_)));
+    assert_eq!(second.default_context(ENDPOINT, ENDPOINT).await.unwrap().as_deref(), Some("trip"));
+    assert!(second.default_context(ENDPOINT, "https://another.test").await.is_err());
+    assert_eq!(
+        second.default_context("another-remote", "https://another.test").await.unwrap(),
+        None
+    );
+    assert_eq!(
+        view._snapshot_data().unwrap().unwrap().remote_agents,
+        restored.remote_agents,
+        "reading the saved context does not append communication or create remote state"
+    );
     assert_eq!(
         remote.tasks["booking"].input_requests[&occurrence].response_message_id.as_deref(),
         Some("answer")

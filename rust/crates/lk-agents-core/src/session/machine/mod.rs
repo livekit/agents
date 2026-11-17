@@ -144,6 +144,26 @@ impl Session {
             .map_err(|error| StorageError::Invalid(error.to_string()))
     }
 
+    /// A saved context is routing data for this destination, never authority for another one.
+    pub fn remote_context(
+        &self,
+        remote_id: &str,
+        endpoint: &str,
+    ) -> Result<Option<String>, lk_agents_abi::storage::StorageError> {
+        use lk_agents_abi::storage::StorageError;
+        if self.closing || self.persistence_failure.is_some() || matches!(self.phase, Phase::Done) {
+            return Err(StorageError::Invalid("the conversation owner is closing or ended".into()));
+        }
+        if remote_id.is_empty() || endpoint.is_empty() {
+            return Err(StorageError::Invalid("remote identity and endpoint are required".into()));
+        }
+        let Some(remote) = self.state.remote_agents.get(remote_id) else { return Ok(None) };
+        if remote.endpoint != endpoint {
+            return Err(StorageError::Invalid("the saved remote endpoint changed".into()));
+        }
+        Ok(remote.default_context_id.clone())
+    }
+
     pub fn snapshot(&self) -> SessionSnapshot {
         self.state.clone()
     }

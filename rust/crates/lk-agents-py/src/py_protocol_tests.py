@@ -99,6 +99,9 @@ async def test_bound_remote_work_journals_protocol_before_returning_the_tool_res
     assert task.task.id == "remote-task", "protocol inspection cannot mutate the conversation"
     assert all(isinstance(message, pb.Message) for message in bound.messages.values())
     await session.run("Check again.", context=store.bind(app))
+    assert "contextId" not in peer.messages[0]
+    assert peer.messages[1]["contextId"] == "remote-context", "new work reuses the saved context"
+    assert "taskId" not in peer.messages[1], "new work does not resume the completed task"
     assert len(bound.events) == 10, "a retained bound view follows the owner's checkpoints"
     assert len(detached.events) == 5, "an inspection snapshot stays fixed"
 

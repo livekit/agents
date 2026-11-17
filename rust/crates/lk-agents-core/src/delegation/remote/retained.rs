@@ -131,7 +131,9 @@ mod tests {
 
     fn question(conversation: &str) -> ChatItem {
         let mut interaction = RemoteInteraction::new(identity(conversation)).unwrap();
-        interaction.message("help".into(), "message".into(), None, "", None, false, None).unwrap();
+        interaction
+            .message("help".into(), "message".into(), None, "", None, false, None, None)
+            .unwrap();
         interaction
             .update(&TaskUpdate {
                 state: TaskState::InputRequired,
@@ -156,7 +158,7 @@ mod tests {
         for (conversation, item) in [("first", first.clone()), ("second", second.clone())] {
             let mut restored = for_call(identity("next"), &[item]).unwrap();
             let message = restored
-                .message("Acme".into(), "answer".into(), None, "", None, false, None)
+                .message("Acme".into(), "answer".into(), None, "", None, false, None, None)
                 .unwrap();
             assert_eq!(message.task_id, Some(format!("task-{conversation}")));
             assert_eq!(message.context_id, Some(format!("context-{conversation}")));
@@ -174,7 +176,9 @@ mod tests {
         let question = question("first");
         let mut interaction =
             for_call(identity("answer"), std::slice::from_ref(&question)).unwrap();
-        interaction.message("Acme".into(), "answer".into(), None, "", None, false, None).unwrap();
+        interaction
+            .message("Acme".into(), "answer".into(), None, "", None, false, None, None)
+            .unwrap();
         interaction
             .update(&TaskUpdate {
                 state: TaskState::Completed,
@@ -193,7 +197,16 @@ mod tests {
             for_call(identity("new-request"), &[question, ChatItem::FunctionCall(receipt)])
                 .unwrap();
         let message = next
-            .message("Another question".into(), "next-message".into(), None, "", None, false, None)
+            .message(
+                "Another question".into(),
+                "next-message".into(),
+                None,
+                "",
+                None,
+                false,
+                None,
+                None,
+            )
             .unwrap();
         assert_eq!(message.context_id.as_deref(), Some("context-first"));
         assert_eq!(message.task_id, None);

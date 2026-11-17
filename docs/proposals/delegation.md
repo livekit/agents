@@ -345,8 +345,7 @@ still require explicit saves. Snapshots remain useful detached reads, not a seco
 input path. Neither form contains Python coroutines, media connections or the transient
 presentation queue.
 
-The following examples define the proposed public shape. VoiceSession/TextSession binding
-exists today; durable delegation records and Agent.run state integration are new work.
+The following examples define the public shape across voice, text and direct agent execution.
 The handlers assume configured agents/models and a runtime-provided store for the selected
 thread/partition. Sharing configuration or a room alone does not select the same conversation.
 
@@ -388,8 +387,7 @@ result = await TextSession(agent=front_desk, delegation=delegation).run(
 return result
 ```
 
-Agent.run should accept that binding too, without requiring a TextSession wrapper. This is a
-proposed addition: today's Agent.run does not unwrap BoundContext or restore SessionState.
+Agent.run accepts the same binding without requiring a TextSession wrapper:
 
 ```python
 app = App()
@@ -422,6 +420,8 @@ become a hidden live endpoint.
   explicitly configured routing model is agreed for all automatic-detection frontends.
 - [ ] Integrate Agent.run binding and shared SessionState, including transitions between
   executors, current-agent input handling and removal of detached continuation entry points.
+  Bound Agent.run activation and removal of detached continuation inputs are implemented;
+  the shared voice/current-agent execution path remains to be integrated.
 - [ ] Finalize reference spelling, custom card-schema collisions and explicit overrides in detector mode.
 - [ ] Decide inbound messages without `taskId`: continue a local waiting task or retain new-task/`mergedInto` behavior.
 - [ ] Finalize RemoteTask.cancel() failure/uncertainty outcomes and bound control-activation
@@ -1042,6 +1042,9 @@ than another simulation framework. Stock-peer HTTP and AgentDB conformance remai
 - [ ] Add bounded card/503/stream recovery and reconciliation of potentially accepted sends.
 - [ ] Define the stock-peer snapshot/resubscribe fallback without assuming replay, repeated
   message-id execution is safe, or unknown task identity can always be recovered.
+  New tool calls resolve the saved default remote context through the serialized native owner.
+  This read appends no communication or dispatch facts. A task continuation keeps its original
+  context, and verified caller-thread sharing takes precedence over the saved default.
 - [ ] Preserve cancellation intent versus observed outcome; handle refused/lost cancel responses,
   stale snapshots and overlapping subscriptions without duplicate artifact appends.
   Native client cancellation now uses the same journal/checkpoint seam as sends and task reads.

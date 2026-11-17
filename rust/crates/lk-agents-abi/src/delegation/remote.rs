@@ -216,6 +216,14 @@ pub struct RemoteCommand {
 /// A serialized native command port, never a host policy callback or a stored resource.
 #[crate::host(native(refused = "expected the active native conversation owner"))]
 pub trait RemoteCommands: Send + Sync {
+    /// Reuse only this conversation's saved remote context, after checking its pinned endpoint.
+    /// This read neither dispatches work nor appends a communication event.
+    fn default_context<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+    ) -> crate::BoxFuture<'a, Result<Option<String>, crate::storage::StorageError>>;
+
     fn remote<'a>(
         &'a self,
         command: RemoteCommand,
