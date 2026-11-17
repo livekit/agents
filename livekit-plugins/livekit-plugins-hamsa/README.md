@@ -32,7 +32,7 @@ session = AgentSession(
 
 ### Text-to-speech
 
-`TTS` talks to `WS /v1/realtime/ws`. Each request carries one complete text and the audio streams back as raw 16-bit PCM, so `stream()` splits the agent's text into sentences and sends one request per sentence on a pooled connection; `synthesize()` sends the whole text in one request. `prewarm()` opens a connection ahead of the first request.
+`TTS` talks to `WS /v1/realtime/ws`. Each request carries one complete text and the audio streams back as raw 16-bit PCM, so `stream()` splits the agent's text into sentences and sends one request per sentence on a pooled connection; `synthesize()` sends the whole text in one request. `prewarm()` opens a connection ahead of the first request. Hamsa accepts up to 2,000 characters per request; longer text is split at word boundaries into several requests on the same connection.
 
 ```python
 tts = hamsa.TTS(speaker="Carla", dialect="leb")

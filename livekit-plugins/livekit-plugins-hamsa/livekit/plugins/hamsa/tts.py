@@ -34,6 +34,9 @@ from .models import (
     TTSSampleRate,
 )
 
+# Hamsa rejects a request whose text is longer than this.
+MAX_REQUEST_CHARS = 2000
+
 # Close code Hamsa sends when the API key is missing or invalid.
 _AUTH_FAILED_CLOSE_CODE = 4001
 
@@ -133,7 +136,7 @@ class TTS(tts.TTS):
             max_session_duration=300,
             mark_refreshed_on_get=True,
         )
-        self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._streams = weakref.WeakSet[ChunkedStream | SynthesizeStream]()
 
     @property
     def model(self) -> str:
@@ -205,14 +208,19 @@ class TTS(tts.TTS):
     ) -> ChunkedStream:
         """Synthesize text to speech in a single request.
 
+        Text longer than Hamsa's 2,000-character request limit is sent as several
+        requests on the same connection.
+
         Args:
-            text: The text to synthesize (up to 2000 characters).
+            text: The text to synthesize.
             conn_options: Connection options for the request.
 
         Returns:
             A ``ChunkedStream`` that yields ``SynthesizedAudio`` events.
         """
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        stream = ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -283,6 +291,32 @@ async def _receive_audio(
             raise APIError("Hamsa returned an error response", retryable=False)
 
 
+def _split_text(text: str, limit: int = MAX_REQUEST_CHARS) -> list[str]:
+    """Split text into pieces of at most ``limit`` characters, at spaces where possible."""
+    text = text.strip()
+    if len(text) <= limit:
+        return [text] if text else []
+    pieces: list[str] = []
+    current = ""
+    for word in text.split():
+        while len(word) > limit:  # a single run longer than the limit: cut it
+            if current:
+                pieces.append(current)
+                current = ""
+            pieces.append(word[:limit])
+            word = word[limit:]
+        if not current:
+            current = word
+        elif len(current) + 1 + len(word) <= limit:
+            current = f"{current} {word}"
+        else:
+            pieces.append(current)
+            current = word
+    if current:
+        pieces.append(current)
+    return pieces
+
+
 def _build_request(opts: _TTSOptions, text: str) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "text": text,
@@ -314,17 +348,23 @@ class ChunkedStream(tts.ChunkedStream):
             mime_type="audio/pcm",
         )
 
+        pieces = _split_text(self._input_text)
+        if not pieces:
+            output_emitter.flush()  # nothing to say: no request
+            return
+
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
                 self._acquire_time = self._tts._pool.last_acquire_time
                 self._connection_reused = self._tts._pool.last_connection_reused
-                await ws.send_str(json.dumps(_build_request(self._opts, self._input_text)))
-                await _receive_audio(
-                    ws,
-                    output_emitter,
-                    request_id=request_id,
-                    timeout=self._conn_options.timeout,
-                )
+                for piece in pieces:
+                    await ws.send_str(json.dumps(_build_request(self._opts, piece)))
+                    await _receive_audio(
+                        ws,
+                        output_emitter,
+                        request_id=request_id,
+                        timeout=self._conn_options.timeout,
+                    )
                 output_emitter.flush()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
@@ -397,13 +437,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                         output_emitter.start_segment(segment_id=segment_id)
 
                     self._mark_started()
-                    await ws.send_str(json.dumps(_build_request(self._opts, text)))
-                    await _receive_audio(
-                        ws,
-                        output_emitter,
-                        request_id=request_id,
-                        timeout=self._conn_options.timeout,
-                    )
+                    # The sentence tokenizer has no length cap; keep each request
+                    # within Hamsa's limit.
+                    for piece in _split_text(text):
+                        await ws.send_str(json.dumps(_build_request(self._opts, piece)))
+                        await _receive_audio(
+                            ws,
+                            output_emitter,
+                            request_id=request_id,
+                            timeout=self._conn_options.timeout,
+                        )
                     output_emitter.flush()
 
                 if segment_id is not None:

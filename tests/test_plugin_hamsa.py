@@ -281,3 +281,87 @@ async def test_prewarm_opens_a_connection_before_the_first_request():
     finally:
         await runner.cleanup()
     assert seen["connections"] == 1
+
+
+# --- request size limit and shutdown ---
+
+
+def test_split_text_keeps_requests_within_the_limit():
+    from livekit.plugins.hamsa.tts import _split_text
+
+    assert _split_text("  أهلا وسهلا  ") == ["أهلا وسهلا"]
+    assert _split_text("   ") == []
+    words = ["كلمة"] * 30  # 4 chars + spaces
+    pieces = _split_text(" ".join(words), limit=20)
+    assert all(len(p) <= 20 for p in pieces)
+    assert " ".join(pieces) == " ".join(words)
+    assert _split_text("x" * 45, limit=20) == ["x" * 20, "x" * 20, "x" * 5]
+
+
+async def test_a_streamed_sentence_over_the_limit_becomes_several_requests():
+    seen: dict[str, Any] = {}
+    long_sentence = " ".join(["مرحبا"] * 500) + "."  # about 3,000 characters, one sentence
+    events = await _synthesize_stream([long_sentence], seen)
+    texts = [r["payload"]["text"] for r in seen["requests"]]
+    assert len(texts) >= 2
+    assert all(len(t) <= 2000 for t in texts)
+    assert " ".join(texts) == long_sentence
+    assert seen["connections"] == 1
+    assert len({ev.segment_id for ev in events}) == 1
+
+
+async def test_synthesize_splits_text_over_the_limit():
+    from livekit.plugins.hamsa import TTS
+
+    seen: dict[str, Any] = {}
+    runner, base = await _hamsa_server(seen)
+    try:
+        async with aiohttp.ClientSession() as session:
+            t = TTS(api_key="sk-test", base_url=base, http_session=session)
+            text = " ".join(["أهلا"] * 900)  # about 4,500 characters
+            await t.synthesize(text, conn_options=APIConnectOptions(max_retry=0)).collect()
+            await t.aclose()
+    finally:
+        await runner.cleanup()
+    texts = [r["payload"]["text"] for r in seen["requests"]]
+    assert len(texts) == 3
+    assert all(len(x) <= 2000 for x in texts)
+    assert seen["connections"] == 1
+
+
+async def test_synthesize_with_empty_text_opens_no_connection():
+    from livekit.plugins.hamsa import TTS
+
+    seen: dict[str, Any] = {}
+    runner, base = await _hamsa_server(seen)
+    try:
+        async with aiohttp.ClientSession() as session:
+            t = TTS(api_key="sk-test", base_url=base, http_session=session)
+            events = [ev async for ev in t.synthesize("  ")]
+            await t.aclose()
+    finally:
+        await runner.cleanup()
+    assert events == []
+    assert seen["connections"] == 0
+
+
+async def test_aclose_stops_an_in_flight_synthesize():
+    from livekit.plugins.hamsa import TTS
+
+    seen: dict[str, Any] = {}
+    runner, base = await _hamsa_server(seen, reply="silent")
+    try:
+        async with aiohttp.ClientSession() as session:
+            t = TTS(api_key="sk-test", base_url=base, http_session=session)
+            stream = t.synthesize("أهلا", conn_options=APIConnectOptions(max_retry=3, timeout=30))
+            task = asyncio.create_task(stream.collect())
+            for _ in range(100):
+                if seen["requests"]:
+                    break
+                await asyncio.sleep(0.001)
+            await t.aclose()
+            await asyncio.gather(task, return_exceptions=True)
+            assert task.done()
+    finally:
+        await runner.cleanup()
+    assert seen["connections"] == 1  # no retry reopened a connection after shutdown
