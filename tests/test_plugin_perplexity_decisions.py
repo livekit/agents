@@ -99,6 +99,16 @@ async def test_batch_is_sent_as_one_request_with_bearer_auth_and_attribution() -
     }
 
 
+async def test_extra_headers_go_out_below_the_auth_header() -> None:
+    model, http = model_for(response_body())
+    await model.evaluate(
+        input="", decisions=QUESTIONS, extra_headers={"X-Feature": "test", "Authorization": "x"}
+    )
+    headers = http.post.call_args.kwargs["headers"]
+    assert (headers["X-Feature"], headers["Authorization"]) == ("test", "Bearer test-key")
+    assert "X-Feature" not in model._headers
+
+
 async def test_every_kind_is_decoded_from_string_keyed_distributions() -> None:
     model, _ = model_for(response_body())
 

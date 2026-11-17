@@ -123,6 +123,7 @@ class DecisionModel(llm.DecisionModel):
         input: str,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         body = {
             "model": self._model,
@@ -134,7 +135,7 @@ class DecisionModel(llm.DecisionModel):
         try:
             async with session.post(
                 self._url,
-                headers=self._headers,
+                headers={**extra_headers, **self._headers},
                 json=body,
                 timeout=aiohttp.ClientTimeout(total=conn_options.timeout),
             ) as response:
