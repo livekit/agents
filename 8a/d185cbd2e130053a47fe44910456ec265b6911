@@ -1,0 +1,218 @@
+livekit-plugins/livekit-plugins-krisp/livekit/plugins/krisp/_krisp.py
+  s_64f4ed07eec395::t_4514fc5ce541e5 144-146
+  s_64f4ed07eec395::t_b1775ca68f0cbe 111,190,248,290
+scripts/check_exception_logging.py
+  s_64f4ed07eec395::t_cbdd1c66495b81 20-29,31
+  s_64f4ed07eec395::t_1c5e6ab07bb36a 1-17,30,32-59,67-87,99-109,114-117,121-126
+  s_64f4ed07eec395::t_4514fc5ce541e5 88-95,97-98,119
+  s_64f4ed07eec395::t_b1775ca68f0cbe 60-66,110-113,118,120
+  s_64f4ed07eec395::t_4293b9a96c80e9 18-19
+  s_64f4ed07eec395::t_e05bb6adc0c635 96
+livekit-agents/livekit/agents/llm/_realtime/openai.py
+  s_64f4ed07eec395::t_4293b9a96c80e9 2461
+  s_64f4ed07eec395::t_b1775ca68f0cbe 2032,2049
+  s_64f4ed07eec395::t_918bea924f5f67 2462
+  s_64f4ed07eec395::t_a2f482ea006f72 1558,2114
+tests/test_telemetry_redaction.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 28-36,43-48
+  s_64f4ed07eec395::t_63e75613931e53 822-867
+  s_64f4ed07eec395::t_9dc1715879083b 870-892
+  s_64f4ed07eec395::t_65b3a75a7dc5d9 868-869
+makefile
+  s_64f4ed07eec395::t_1c5e6ab07bb36a 59
+livekit-agents/livekit/agents/voice/generation.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 687
+livekit-plugins/livekit-plugins-azure/livekit/plugins/azure/realtime/realtime_model.py
+  s_64f4ed07eec395::t_79ac7203f6bff1 1306-1307,1333,1352,1355
+livekit-agents/livekit/agents/inference/eot/base.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 424,445,474-475
+  s_64f4ed07eec395::t_88a0eb4255708a 422
+livekit-agents/livekit/agents/job.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 794
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 370,721,724,730,1087,1096-1098,1106-1108,1116-1118,1169,1185,1196,1326,1385,1387,1413,1415,1455,1465,1530,1532,1571,1573,1580,1632,1634-1635,1691,1693
+livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/experimental/realtime/realtime_model.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 294,317,794,819,853,1131,1659,1663,1692,1716,1720,1733
+.github/workflows/ci.yml
+  s_64f4ed07eec395::t_1c5e6ab07bb36a 37-39
+livekit-plugins/livekit-plugins-nvidia/livekit/plugins/nvidia/experimental/realtime/realtime_model.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 393,531,569,595
+livekit-plugins/livekit-plugins-gladia/livekit/plugins/gladia/stt.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 403,407,416,421,449,967-968
+  s_64f4ed07eec395::t_0e2a8488ab92e3 370-372
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/tts_v2.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 223
+livekit-agents/livekit/agents/inference/eot/transports.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 334,337
+livekit-agents/livekit/agents/inference/interruption.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 482,484-485
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/realtime/realtime_api.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 611,1359,1452,1628
+  s_64f4ed07eec395::t_eaab0b6e710b7a 1249
+  s_64f4ed07eec395::t_250e8144615994 1225-1227
+livekit-agents/livekit/agents/cli/discover.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 60
+livekit-agents/livekit/agents/stt/fallback_adapter.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 203,208,255,440,443,517,520
+livekit-plugins/livekit-plugins-neuphonic/livekit/plugins/neuphonic/tts.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 447
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/stt.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 643
+livekit-plugins/livekit-plugins-phonic/livekit/plugins/phonic/realtime/realtime_model.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 584,1291,1300,1357,1457
+  s_64f4ed07eec395::t_4293b9a96c80e9 1335-1337
+livekit-plugins/livekit-plugins-avatartalk/livekit/plugins/avatartalk/avatar.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 157
+livekit-plugins/livekit-plugins-minimax/livekit/plugins/minimax/tts.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 706
+  s_64f4ed07eec395::t_eaab0b6e710b7a 573-574,586-587,697
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/tts.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 176
+livekit-plugins/livekit-plugins-simplismart/livekit/plugins/simplismart/tts.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 233,236
+livekit-plugins/livekit-plugins-upliftai/livekit/plugins/upliftai/tts.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 270,309,532
+livekit-plugins/livekit-plugins-lemonslice/livekit/plugins/lemonslice/api.py
+  s_64f4ed07eec395::t_345e443a0010bc 279
+  s_64f4ed07eec395::t_78a683ce11de4f 285-287
+livekit-plugins/livekit-plugins-liveavatar/livekit/plugins/liveavatar/avatar.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 354-355
+livekit-agents/livekit/agents/ipc/supervised_proc.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 475,477,668
+livekit-agents/livekit/agents/voice/room_io/_input.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 517
+livekit-agents/livekit/agents/voice/room_io/_output.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 598,850,888
+livekit-plugins/livekit-plugins-fishaudio/livekit/plugins/fishaudio/stt.py
+  s_64f4ed07eec395::t_4293b9a96c80e9 607-610,750-755
+livekit-agents/livekit/agents/utils/hw/cpu.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 29
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/qwen3_tts.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 418
+livekit-plugins/livekit-plugins-simplismart/livekit/plugins/simplismart/stt.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 270,273,395,494,545,547-548
+livekit-agents/livekit/agents/tts/tts.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 449,452,665,668
+livekit-plugins/livekit-plugins-trugen/livekit/plugins/trugen/avatar.py
+  s_64f4ed07eec395::t_345e443a0010bc 167
+  s_64f4ed07eec395::t_ffa6cea6ce64da 174
+livekit-agents/livekit/agents/utils/connection_pool.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 95
+livekit-plugins/livekit-plugins-rtzr/livekit/plugins/rtzr/rtzrapi.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 184,190,233,239
+livekit-plugins/livekit-plugins-rtzr/livekit/plugins/rtzr/stt.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 177,185
+  s_64f4ed07eec395::t_9150b40c9ccb08 410
+livekit-agents/livekit/agents/__main__.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 33,51
+livekit-plugins/livekit-plugins-soniox/livekit/plugins/soniox/stt.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 387,402,406,426,461,556-558,685-686,694,696
+  s_64f4ed07eec395::t_4514fc5ce541e5 395
+livekit-agents/livekit/agents/evals/evaluation.py
+  s_64f4ed07eec395::t_15dce1a54a947e 172
+livekit-plugins/livekit-plugins-krisp/examples/krisp_minimal_example.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 111
+livekit-plugins/livekit-plugins-hamming/livekit/plugins/hamming/_plugin.py
+  s_64f4ed07eec395::t_eaab0b6e710b7a 396
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/tts.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 1084,1087,1170,1173,1175,1233,1241,1290,1292,1300,1323
+  s_64f4ed07eec395::t_bf936d4b0b28ce 588,664
+livekit-plugins/livekit-plugins-inworld/livekit/plugins/inworld/stt.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 323,326,331,334,351,360,405,408,411
+livekit-agents/livekit/agents/llm/llm.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 371-373
+livekit-plugins/livekit-plugins-assemblyai/livekit/plugins/assemblyai/tts.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 843,849
+livekit-plugins/livekit-plugins-ultravox/livekit/plugins/ultravox/realtime/realtime_model.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 794,856-857,882-883,899,1252
+tests/test_check_exception_logging.py
+  s_64f4ed07eec395::t_4293b9a96c80e9 31-32,56-70
+  s_64f4ed07eec395::t_1c5e6ab07bb36a 1-30,33-35,37-41,43-45,47-54
+  s_64f4ed07eec395::t_b1775ca68f0cbe 36,42,46,55
+livekit-agents/livekit/agents/llm/fallback_adapter.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 273,276
+livekit-agents/livekit/agents/tts/fallback_adapter.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 277-279,459
+livekit-agents/livekit/agents/stt/stt.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 270-272,566,572
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 2454,3619,4374,4396,4453,4455
+  s_64f4ed07eec395::t_4e927105e5817b 4929,4979,5099,5403,5499-5501
+livekit-plugins/livekit-plugins-soniox/livekit/plugins/soniox/tts.py
+  s_64f4ed07eec395::t_b1775ca68f0cbe 548,551,912,941
+livekit-agents/livekit/agents/voice/agent_session.py
+  s_64f4ed07eec395::t_4293b9a96c80e9 2084-2087
+  s_64f4ed07eec395::t_dc03e740a59ef8 1401
+livekit-agents/livekit/agents/beta/translation/translation_session.py
+  s_64f4ed07eec395::t_342836a011d84a 539
+livekit-agents/livekit/agents/inference/avatar.py
+  s_64f4ed07eec395::t_4d69acf7f6501e 462,470
+livekit-agents/livekit/agents/llm/delegation.py
+  s_64f4ed07eec395::t_58b32753cf2cb7 178-180
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_64f4ed07eec395::t_1455d580356d43 495
+livekit-agents/livekit/agents/worker.py
+  s_64f4ed07eec395::t_83d2f723dbaa33 1206-1210
+livekit-plugins/livekit-plugins-anam/livekit/plugins/anam/api.py
+  s_64f4ed07eec395::t_71b542b13125c9 177,185
+livekit-plugins/livekit-plugins-atmee/livekit/plugins/atmee/api.py
+  s_64f4ed07eec395::t_dcd731c540b869 341,503
+livekit-plugins/livekit-plugins-atmee/livekit/plugins/atmee/avatar.py
+  s_64f4ed07eec395::t_546aa665b837e9 427,434
+livekit-plugins/livekit-plugins-avatario/livekit/plugins/avatario/api.py
+  s_64f4ed07eec395::t_782bc75f35e1b9 139
+livekit-plugins/livekit-plugins-bey/livekit/plugins/bey/avatar.py
+  s_64f4ed07eec395::t_d0c477e2731cdd 164
+livekit-plugins/livekit-plugins-bithuman/livekit/plugins/bithuman/avatar.py
+  s_64f4ed07eec395::t_ef6f0cee58fdcd 681
+livekit-plugins/livekit-plugins-bland/livekit/plugins/bland/tts.py
+  s_64f4ed07eec395::t_fc4b5d9023f92a 237,532
+livekit-plugins/livekit-plugins-cartesia/livekit/plugins/cartesia/tts.py
+  s_64f4ed07eec395::t_17620c5615971c 560
+livekit-plugins/livekit-plugins-did/livekit/plugins/did/api.py
+  s_64f4ed07eec395::t_3189a47d37d85d 86
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/tts.py
+  s_64f4ed07eec395::t_3f0f189242ef74 1025-1029
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/llm.py
+  s_64f4ed07eec395::t_88241dda7fe46e 812
+livekit-plugins/livekit-plugins-inworld/livekit/plugins/inworld/tts.py
+  s_64f4ed07eec395::t_8f5e65303ed6ad 245,558,1096-1098
+livekit-plugins/livekit-plugins-keyframe/livekit/plugins/keyframe/api.py
+  s_64f4ed07eec395::t_95318a46e74b1e 109-111
+livekit-plugins/livekit-plugins-liveavatar/livekit/plugins/liveavatar/api.py
+  s_64f4ed07eec395::t_5382c7a29cc4e1 130
+livekit-plugins/livekit-plugins-reson8/livekit/plugins/reson8/stt.py
+  s_64f4ed07eec395::t_ddec7c469e1758 904
+livekit-plugins/livekit-plugins-runway/livekit/plugins/runway/avatar.py
+  s_64f4ed07eec395::t_1080f071279025 196,235,276
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt_streaming.py
+  s_64f4ed07eec395::t_7318a992bb25e9 906,915,925
+livekit-plugins/livekit-plugins-simli/livekit/plugins/simli/avatar.py
+  s_64f4ed07eec395::t_ab4acd507d4286 230,249-251,304-305
+livekit-plugins/livekit-plugins-spatius/livekit/plugins/spatius/avatar.py
+  s_64f4ed07eec395::t_137518e3349615 337
+livekit-plugins/livekit-plugins-synthesia/livekit/plugins/synthesia/api.py
+  s_64f4ed07eec395::t_3e959409504b02 134
+livekit-plugins/livekit-plugins-synthesia/livekit/plugins/synthesia/avatar.py
+  s_64f4ed07eec395::t_c060fd8f4bb79c 346
+livekit-plugins/livekit-plugins-tavus/livekit/plugins/tavus/api.py
+  s_64f4ed07eec395::t_9222798215253d 222-223
+livekit-plugins/livekit-plugins-telnyx/livekit/plugins/telnyx/tts.py
+  s_64f4ed07eec395::t_a743652982a8d0 183
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8ad185cbd2e130053a47fe44910456ec265b6911",
+  "prompts": {},
+  "sessions": {
+    "s_64f4ed07eec395": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1e9f7-b2d8-7663-a1e4-d6ecad76c415",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
