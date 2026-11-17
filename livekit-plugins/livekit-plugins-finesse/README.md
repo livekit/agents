@@ -43,6 +43,21 @@ with the [Finesse API](https://docs.finesse.flamapp.ai/voice-api/list-voices).
 | `guidance_scale` | server default (2.0) | 0-10 |
 | `length_scale` | server default (1.0) | speaking rate, greater than 0 up to 5; higher is slower |
 | `idle_flush_ms` | server default (800) | 200-5000 ms; speak a pending partial sentence after this long without new text |
+| `use_direct_session` | `False` | connect straight to the synthesis GPU in your account's region, for lower first-audio latency |
 
 When the user interrupts, the plugin cancels the turn on the Finesse server, so it stops
 synthesizing right away. Each open connection holds one of your plan's concurrent streams.
+
+### Direct sessions
+
+With `use_direct_session=True`, the plugin connects straight to the synthesis GPU in your account's
+region over a short-lived, voice-scoped session, rather than the relayed public stream — one hop
+fewer, for noticeably lower first-audio latency on live calls:
+
+```python
+tts = finesse.TTS(voice="<your voice id>", use_direct_session=True)
+```
+
+The plugin mints a session for the current voice and reuses it across turns; changing the voice
+(via `update_options`) mints a new one, and a session is renewed automatically when it ends.
+Everything else behaves exactly the same.

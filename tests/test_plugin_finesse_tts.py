@@ -41,6 +41,10 @@ class FakeFinesse:
     reject_status: int | None = None
     answer_finalize: bool = True
     frame_bytes: list[int] = field(default_factory=list)
+    offered: list[str | None] = field(default_factory=list)
+    mint_requests: list[dict[str, Any]] = field(default_factory=list)
+    mint_status: int = 201
+    http_base: str = ""
 
 
 async def _answer(ws: web.WebSocketResponse, context_id: str, chunks: int = 2) -> None:
@@ -59,6 +63,7 @@ async def server() -> AsyncIterator[FakeFinesse]:
         if fake.reject_status is not None:
             return web.json_response({"code": "token_invalid"}, status=fake.reject_status)
         fake.headers.append(dict(request.headers))
+        fake.offered.append(request.headers.get("Sec-WebSocket-Protocol"))
         ws = web.WebSocketResponse(protocols=("finesse.v1",))
         await ws.prepare(request)
         fake.protocols.append(ws.ws_protocol)
@@ -79,14 +84,25 @@ async def server() -> AsyncIterator[FakeFinesse]:
         fake.closed_by_client.set()
         return ws
 
+    async def mint(request: web.Request) -> web.StreamResponse:
+        fake.mint_requests.append(await request.json())
+        if fake.mint_status != 201:
+            return web.json_response({"code": "insufficient_credits"}, status=fake.mint_status)
+        return web.json_response(
+            {"data": {"url": fake.url, "token": "sess_token", "protocol": "finesse.v1"}},
+            status=201,
+        )
+
     app = web.Application()
     app.router.add_get("/stream", handler)
+    app.router.add_post("/realtime/sessions", mint)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
     fake.url = f"ws://127.0.0.1:{port}/stream"
+    fake.http_base = f"http://127.0.0.1:{port}"
     try:
         yield fake
     finally:
@@ -104,6 +120,21 @@ def _tts(server: FakeFinesse, session: aiohttp.ClientSession, **kwargs: Any):  #
 
     tts = TTS(api_key=API_KEY, voice=VOICE, http_session=session, **kwargs)
     tts._opts.ws_url = server.url
+    return tts
+
+
+def _tts_direct(server: FakeFinesse, session: aiohttp.ClientSession, **kwargs: Any):  # type: ignore[no-untyped-def]
+    from livekit.plugins.finesse import TTS
+
+    tts = TTS(
+        api_key=API_KEY,
+        voice=VOICE,
+        http_session=session,
+        use_direct_session=True,
+        **kwargs,
+    )
+    # The mint lives on the fake's HTTP base; its response points the socket back at /stream.
+    tts._opts.api_base = server.http_base
     return tts
 
 
@@ -470,6 +501,92 @@ async def test_frames_stay_under_1_mib_for_any_text(
 
     assert "".join(m["text"] for m in server.received) == text
     assert max(server.frame_bytes) < 1024 * 1024
+    await tts.aclose()
+
+
+# ---- direct session -------------------------------------------------------------------------
+
+
+async def test_direct_session_mints_and_connects_with_the_token(
+    server: FakeFinesse, session: aiohttp.ClientSession
+) -> None:
+    from livekit.plugins.finesse.tts import _SESSION_BUDGET_CHARS
+
+    tts = _tts_direct(server, session)
+
+    audio = await _collect(tts.synthesize("Hello there.", conn_options=NO_RETRY))
+
+    assert audio.startswith(CHUNK * 2)
+    # One session was minted for the current voice, with a budget.
+    assert server.mint_requests == [{"voice_ids": [VOICE], "budget_chars": _SESSION_BUDGET_CHARS}]
+    # The socket is authed by the token as the second subprotocol, not by the API key.
+    assert "sess_token" in (server.offered[0] or "")
+    assert "X-API-Key" not in server.headers[0]
+    assert server.headers[0]["X-Finesse-Client"].startswith("livekit-agents/")
+    await tts.aclose()
+
+
+async def test_direct_session_is_reused_across_turns(
+    server: FakeFinesse, session: aiohttp.ClientSession
+) -> None:
+    tts = _tts_direct(server, session)
+    for text in ("One.", "Two."):
+        await _collect(tts.synthesize(text, conn_options=NO_RETRY))
+
+    # The same session serves both turns: one mint, one socket.
+    assert len(server.mint_requests) == 1
+    assert len(server.headers) == 1
+    await tts.aclose()
+
+
+async def test_direct_session_remints_when_the_voice_changes(
+    server: FakeFinesse, session: aiohttp.ClientSession
+) -> None:
+    tts = _tts_direct(server, session)
+    await _collect(tts.synthesize("One.", conn_options=NO_RETRY))
+    tts.update_options(voice="221100ffeeddccbbaa998877")
+    await _collect(tts.synthesize("Two.", conn_options=NO_RETRY))
+
+    # A session is pinned to its voice, so the change mints a new one.
+    assert [m["voice_ids"] for m in server.mint_requests] == [
+        [VOICE],
+        ["221100ffeeddccbbaa998877"],
+    ]
+    await tts.aclose()
+
+
+async def test_direct_session_budget_exhaustion_is_retryable(
+    server: FakeFinesse, session: aiohttp.ClientSession
+) -> None:
+    async def on_task(ws: web.WebSocketResponse, ctx: str) -> None:
+        # The GPU reports a spent session budget as a fatal insufficient_credits.
+        await ws.send_json(
+            {"type": "error", "code": "insufficient_credits", "fatal": True, "context_id": ctx}
+        )
+
+    server.on_task = on_task
+    tts = _tts_direct(server, session)
+
+    err = await _synthesize_error(tts)
+
+    assert isinstance(err, APIStatusError)
+    assert err.body == {"code": "insufficient_credits"}
+    # Retryable here: a new session is minted and the turn continues (classic mode is not).
+    assert err.retryable is True
+    await tts.aclose()
+
+
+async def test_direct_session_mint_refusal_is_surfaced(
+    server: FakeFinesse, session: aiohttp.ClientSession
+) -> None:
+    server.mint_status = 402  # the account really is out of credits
+    tts = _tts_direct(server, session)
+
+    err = await _synthesize_error(tts)
+
+    assert isinstance(err, APIStatusError)
+    assert err.status_code == 402
+    assert err.retryable is False
     await tts.aclose()
 
 

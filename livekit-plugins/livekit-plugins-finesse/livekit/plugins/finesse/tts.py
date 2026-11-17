@@ -41,7 +41,13 @@ from .log import logger
 from .version import __version__
 
 _WS_URL = "wss://fi.production.flamapis.com/flam-voice-svc/api/v1/public/stream"
+_API_BASE = "https://fi.production.flamapis.com/flam-voice-svc/api/v1/public"
 _SUBPROTOCOL = "finesse.v1"
+
+# A direct session is minted with a generous character budget so a single call rarely exhausts
+# it; the server clamps this to its own maximum. When a session does run out (or its ~1 hour TTL
+# expires) the next synthesis mints a fresh one.
+_SESSION_BUDGET_CHARS = 200_000
 
 # Finesse synthesizes at 24 kHz and upsamples above it. Below it, it produces only 8 kHz
 # telephony audio, so the rates it returns are 8000 and 24000 to 48000.
@@ -81,6 +87,10 @@ _NON_RETRYABLE_CODES = frozenset(
     }
 )
 
+# On a direct session these codes signal the session's own budget is spent (not the account's
+# credits), so a freshly minted session continues; see _event_error.
+_SESSION_RENEWABLE_CODES = frozenset({"insufficient_credits"})
+
 # Close codes that fail the same way on a new connection: out of credits, frame too large.
 # Any other close (normal, going away, service restart, engine failure) is retried.
 _NON_RETRYABLE_CLOSE_CODES = frozenset({1008, 1009})
@@ -104,6 +114,8 @@ class _TTSOptions:
     length_scale: float | None
     idle_flush_ms: int | None
     ws_url: str
+    api_base: str
+    use_direct_session: bool
 
 
 def _validate(
@@ -148,6 +160,7 @@ class TTS(tts.TTS):
         guidance_scale: float | None = None,
         length_scale: float | None = None,
         idle_flush_ms: int | None = None,
+        use_direct_session: bool = False,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         """Create a new instance of Finesse TTS.
@@ -172,6 +185,11 @@ class TTS(tts.TTS):
                 slower. Defaults to the server's 1.0.
             idle_flush_ms (int, optional): Speak a pending partial sentence after this many
                 milliseconds without new text, 200-5000. Defaults to the server's 800.
+            use_direct_session (bool, optional): Connect straight to the synthesis GPU in your
+                account's region over a short-lived, voice-scoped session, instead of the
+                relayed public stream. Lowers first-audio latency for live agents. The session
+                is minted for the current voice; changing the voice mints a new one. Defaults
+                to False.
             http_session (aiohttp.ClientSession, optional): An existing aiohttp ClientSession
                 to use. If not provided, a new session is created.
         """
@@ -206,6 +224,8 @@ class TTS(tts.TTS):
             length_scale=length_scale,
             idle_flush_ms=idle_flush_ms,
             ws_url=_WS_URL,
+            api_base=_API_BASE,
+            use_direct_session=use_direct_session,
         )
         self._session = http_session
         # Every setting travels in each context's task_start, so a settings change applies to
@@ -227,6 +247,9 @@ class TTS(tts.TTS):
         return "Finesse"
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        if self._opts.use_direct_session:
+            return await self._connect_direct(timeout)
+
         session = self._ensure_session()
         try:
             return await asyncio.wait_for(
@@ -246,6 +269,68 @@ class TTS(tts.TTS):
                 "Finesse refused the connection",
                 status_code=e.status,
             ) from None
+
+    async def _connect_direct(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        """Mint a direct realtime session and connect straight to the GPU region.
+
+        The backend issues a short-lived, voice-scoped session token; the client then opens the
+        socket against the synthesis GPU itself, one hop closer than the relayed stream. The
+        per-turn protocol is identical.
+        """
+        session = self._ensure_session()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        minted = await self._mint_session(session, timeout)
+        remaining = max(0.0, deadline - loop.time())
+        try:
+            return await asyncio.wait_for(
+                session.ws_connect(
+                    minted["url"],
+                    # The session token is the auth; it travels as the second subprotocol.
+                    protocols=(_SUBPROTOCOL, minted["token"]),
+                    headers={"X-Finesse-Client": f"livekit-agents/{__version__}"},
+                ),
+                remaining,
+            )
+        except aiohttp.WSServerHandshakeError as e:
+            raise APIStatusError(
+                "Finesse refused the session connection",
+                status_code=e.status,
+            ) from None
+
+    async def _mint_session(self, session: aiohttp.ClientSession, timeout: float) -> dict[str, Any]:
+        body = {"voice_ids": [self._opts.voice], "budget_chars": _SESSION_BUDGET_CHARS}
+        try:
+            async with session.post(
+                f"{self._opts.api_base}/realtime/sessions",
+                json=body,
+                headers={
+                    "X-API-Key": self._opts.api_key,
+                    "X-Finesse-Client": f"livekit-agents/{__version__}",
+                },
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as resp:
+                try:
+                    payload: Any = await resp.json(content_type=None)
+                except (ValueError, aiohttp.ClientError):
+                    payload = None
+                if resp.status not in (200, 201):
+                    code = payload.get("code") if isinstance(payload, dict) else None
+                    raise APIStatusError(
+                        f"Finesse could not create a realtime session: {code or resp.reason}",
+                        status_code=resp.status,
+                        body=payload,
+                    )
+                data = payload.get("data") if isinstance(payload, dict) else None
+                if not isinstance(data, dict) or not data.get("url") or not data.get("token"):
+                    raise APIStatusError(
+                        "Finesse returned an unexpected session response",
+                        status_code=resp.status,
+                        body=payload,
+                    )
+                return data
+        except aiohttp.ClientError as e:
+            raise APIConnectionError() from e
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
@@ -284,8 +369,12 @@ class TTS(tts.TTS):
             guidance_scale=guidance_scale,
             length_scale=length_scale,
         )
-        if is_given(voice):
+        if is_given(voice) and voice != self._opts.voice:
             self._opts.voice = voice
+            if self._opts.use_direct_session:
+                # A direct session is pinned to its voice, so drop the pooled sessions; the
+                # next synthesis mints one for the new voice.
+                self._pool.invalidate()
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(num_step):
@@ -377,15 +466,21 @@ async def _cancel_context(ws: aiohttp.ClientWebSocketResponse, context_id: str) 
         pass
 
 
-def _event_error(data: dict[str, Any], request_id: str) -> APIStatusError:
+def _event_error(data: dict[str, Any], request_id: str, *, direct: bool = False) -> APIStatusError:
     code = data.get("code")
     if not isinstance(code, str) or not _ERROR_CODE_RE.match(code):
         code = "unknown_error"
+    retryable = code not in _NON_RETRYABLE_CODES
+    if direct and code in _SESSION_RENEWABLE_CODES:
+        # On a direct session this means the session's character budget is spent, not that the
+        # account is out of credits: the next attempt mints a fresh session and continues. A
+        # truly empty account instead fails when that mint is refused.
+        retryable = True
     return APIStatusError(
         f"Finesse {data.get('type')}: {code}",
         request_id=request_id,
         body={"code": code},
-        retryable=code not in _NON_RETRYABLE_CODES,
+        retryable=retryable,
     )
 
 
@@ -422,6 +517,7 @@ async def _receive_context(
     sample_rate: int,
     output_emitter: tts.AudioEmitter,
     timeout: float,
+    direct: bool = False,
     input_done: asyncio.Event | None = None,
 ) -> None:
     """Push the context's audio until it finishes.
@@ -465,7 +561,7 @@ async def _receive_context(
         elif kind == "error":
             # A fatal error ends the session; a non-fatal one only rejected one message.
             if data.get("fatal") or event_context in (None, context_id):
-                raise _event_error(data, context_id)
+                raise _event_error(data, context_id, direct=direct)
         elif kind == "session_ended":
             raise APIStatusError(
                 "Finesse session ended", request_id=context_id, body={"reason": data.get("reason")}
@@ -485,7 +581,7 @@ async def _receive_context(
             # server: the speech is incomplete.
             raise APIStatusError("Finesse cancelled the context", request_id=context_id)
         elif kind == "task_failed":
-            raise _event_error(data, context_id)
+            raise _event_error(data, context_id, direct=direct)
         elif kind != "sentence_done":
             logger.debug("ignoring Finesse message type %s", kind)
 
@@ -522,6 +618,7 @@ class ChunkedStream(tts.ChunkedStream):
                         sample_rate=self._opts.sample_rate,
                         output_emitter=output_emitter,
                         timeout=self._conn_options.timeout,
+                        direct=self._opts.use_direct_session,
                     )
                 except asyncio.CancelledError:
                     await _cancel_context(ws, context_id)
@@ -597,6 +694,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 sample_rate=self._opts.sample_rate,
                 output_emitter=output_emitter,
                 timeout=self._conn_options.timeout,
+                direct=self._opts.use_direct_session,
                 input_done=input_done,
             )
             finished = True
