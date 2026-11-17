@@ -89,6 +89,16 @@ pub enum TurnEvent {
 /// what it reports, in the order it awaited each report.
 #[crate::host(native(refused = "expected a native handler turn"))]
 pub trait HandlerPort: std::any::Any + Send + Sync {
+    fn acquire_session_checkpoint(
+        &self,
+        _history: crate::storage::voice::VoiceHistory,
+    ) -> crate::BoxFuture<'_, Result<Arc<dyn crate::session::SessionCheckpoint>, StorageError>>
+    {
+        Box::pin(async {
+            Err(StorageError::Invalid("this handler cannot acquire voice checkpoints".into()))
+        })
+    }
+
     /// The run reached a checkpoint; whether it yields. Waits for the turn's verdict.
     fn checkpoint(&self) -> crate::BoxFuture<'_, bool>;
     fn save_session(

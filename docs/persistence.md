@@ -179,7 +179,13 @@ checkpoint completes. `await ctx.store.flush()` waits for accepted conversation 
 it does not commit ordinary application saves staged for the managed turn.
 A checkpoint acknowledges the snapshot it wrote; input arriving while the write waits remains
 unsaved until its own checkpoint. Each new voice lease reloads the latest remote communication
-state, including work saved by an intervening text turn.
+state, including work saved by an intervening text turn, before a command reads or changes it.
+Remote updates can checkpoint while voice is idle. Their private Rust scope retains the
+partition through the write, even if the last speech ends. Storage owns an admitted write
+through its exact acknowledgement and release, even if the caller stops awaiting the receipt.
+An idle checkpoint does not save application fields. A real speech may take over that scope
+and keeps the normal explicit application-save contract. Acquiring and writing run alongside
+media and interruption events.
 
 SessionState.snapshot() returns a detached inspection view. It is not an execution input:
 Agent.run, TextSession and VoiceSession continue the selected conversation through store.bind().

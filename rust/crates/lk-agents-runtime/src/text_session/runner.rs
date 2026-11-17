@@ -29,6 +29,13 @@ impl Runner {
 }
 
 impl lk_agents_abi::session::SessionCommands for Runner {
+    fn checkpoint(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<serde_json::Value, lk_agents_abi::storage::StorageError>>
+    {
+        Box::pin(async move { self.commands()?.checkpoint().await })
+    }
+
     fn held_input<'a>(
         &'a self,
         remote_id: &'a str,

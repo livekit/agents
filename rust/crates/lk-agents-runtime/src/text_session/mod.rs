@@ -155,6 +155,17 @@ impl Driver {
 
     async fn command(&mut self, command: SessionCommand, effects: &mut VecDeque<SessionEffect>) {
         let (command, done) = match command {
+            SessionCommand::Flush { done } => {
+                let result = self.checkpoint_command(effects).await.and_then(|state| {
+                    state.ok_or_else(|| {
+                        lk_agents_abi::storage::StorageError::Invalid(
+                            "explicit checkpoints require a bound conversation".into(),
+                        )
+                    })
+                });
+                done.resolve(result);
+                return;
+            }
             SessionCommand::HeldInput { remote_id, endpoint, done } => {
                 done.resolve(self.session.held_remote_input(&remote_id, &endpoint));
                 return;
@@ -189,17 +200,22 @@ impl Driver {
     async fn checkpoint_command(
         &mut self,
         effects: &mut VecDeque<SessionEffect>,
-    ) -> Result<(), lk_agents_abi::storage::StorageError> {
-        if let Some(sink) = &self.request.session_sink
-            && let Err(error) = sink.publish(&self.cx, self.session.snapshot()).await
-        {
-            effects.extend(
-                self.session
-                    .handle(SessionEvent::PersistenceFailed(error.clone()), self.clock.now()),
-            );
-            return Err(error);
+    ) -> Result<Option<serde_json::Value>, lk_agents_abi::storage::StorageError> {
+        if let Some(sink) = &self.request.session_sink {
+            return match sink.publish(&self.cx, self.session.snapshot()).await {
+                Ok(state) => Ok(Some(state)),
+                Err(error) => {
+                    effects.extend(
+                        self.session.handle(
+                            SessionEvent::PersistenceFailed(error.clone()),
+                            self.clock.now(),
+                        ),
+                    );
+                    Err(error)
+                }
+            };
         }
-        Ok(())
+        Ok(None)
     }
 
     /// Republishes the turn's usage when it moved.

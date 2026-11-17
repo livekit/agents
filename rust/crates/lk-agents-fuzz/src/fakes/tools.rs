@@ -242,7 +242,7 @@ impl AgentCallbacks for FakeTools {
                 let refs: Arc<dyn lk_agents_abi::RefRegistry> = Arc::new(NoRefs);
                 lk_agents_abi::HostRef::new(completion_value(&call.call_id), &refs)
             });
-            let report = ToolReport { outcome, transition };
+            let report = ToolReport { outcome, input_request: None, transition };
             Ok(lk_agents_abi::agent::ToolCompletion { report, extra: call.extra, usage: None })
         })
     }

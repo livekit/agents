@@ -5,6 +5,11 @@ use lk_agents_net::signal;
 use tokio::sync::mpsc;
 
 pub(crate) enum SessionCommand {
+    Flush {
+        done: signal::Producer<
+            Option<Result<serde_json::Value, lk_agents_abi::storage::StorageError>>,
+        >,
+    },
     HeldInput {
         remote_id: String,
         endpoint: String,
@@ -59,6 +64,20 @@ pub(crate) enum SessionCommand {
     },
 }
 
+impl SessionCommand {
+    pub(crate) fn fail(self, error: lk_agents_abi::storage::StorageError) {
+        match self {
+            Self::Flush { done } => done.resolve(Err(error)),
+            Self::HeldInput { done, .. } => done.resolve(Err(error)),
+            Self::Response { done, .. } => done.resolve(Err(error)),
+            Self::Input { done, .. } => done.resolve(Err(error)),
+            Self::Apply { done, .. } => done.resolve(Err(error)),
+            Self::DefaultContext { done, .. } => done.resolve(Err(error)),
+            Self::Recover { done, .. } => done.resolve(Err(error)),
+        }
+    }
+}
+
 /// The sender retains no owner or saved authority. The receiving execution owns each receipt;
 /// ending it drops queued producers and settles every caller, even if another sender survives.
 #[derive(Clone)]
@@ -72,6 +91,23 @@ impl CommandPort {
 }
 
 impl lk_agents_abi::session::SessionCommands for CommandPort {
+    fn checkpoint(
+        &self,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<serde_json::Value, lk_agents_abi::storage::StorageError>>
+    {
+        Box::pin(async move {
+            use lk_agents_abi::storage::StorageError;
+            let (done, result) = signal::once();
+            self.0
+                .send(SessionCommand::Flush { done })
+                .await
+                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
+            result.wait().await.map_err(|_| {
+                StorageError::Invalid("the conversation owner ended before its checkpoint".into())
+            })?
+        })
+    }
+
     fn held_input<'a>(
         &'a self,
         remote_id: &'a str,

@@ -25676,6 +25676,15 @@ pub mod tool_report {
             outcome: crate::py_values::attr_with(obj, "ToolReport", "outcome", |v| {
                 crate::generated::records::tool_report::tool_outcome_from_py(v)
             })?,
+            input_request: crate::py_values::attr_with(obj, "ToolReport", "input_request", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    ((crate::generated::records::session_input::input_request_ref_from_py(v))
+                        .map(::std::boxed::Box::new))
+                    .map(Some)
+                }
+            })?,
             transition: crate::py_values::attr_with(obj, "ToolReport", "transition", |v| {
                 if v.is_none() {
                     Ok(None)
@@ -25690,11 +25699,22 @@ pub mod tool_report {
         py: Python<'py>,
         value: ::lk_agents_abi::llm::tool_executor::ToolReport,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::llm::tool_executor::ToolReport { outcome, transition } = value;
+        let ::lk_agents_abi::llm::tool_executor::ToolReport { outcome, input_request, transition } =
+            value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item(
             "outcome",
             crate::generated::records::tool_report::tool_outcome_to_py(py, outcome)?,
+        )?;
+        kwargs.set_item(
+            "input_request",
+            match input_request {
+                None => py.None().into_bound(py),
+                Some(x) => {
+                    let value = *x;
+                    crate::generated::records::session_input::input_request_ref_to_py(py, value)?
+                }
+            },
         )?;
         kwargs.set_item(
             "transition",

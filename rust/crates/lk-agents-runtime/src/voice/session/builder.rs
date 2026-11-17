@@ -471,6 +471,9 @@ impl DriverBuilder {
         };
 
         let (conversation, commands) = crate::session::CommandPort::channel(32);
+        if let Some(storage) = &self.storage {
+            storage.bind_session_commands(Arc::new(conversation.clone()));
+        }
         let cores = SessionCores {
             publications,
             driver,

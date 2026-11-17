@@ -67,6 +67,8 @@ pub enum VoiceStorageEvent {
 /// Runtime-owned lease and commit resource; host implementations cannot replace its policy.
 #[crate::host(native(refused = "expected a native voice storage manager"))]
 pub trait VoiceStorage: Send + Sync {
+    /// Installed by this call's native executor before it accepts host work.
+    fn bind_session_commands(&self, commands: std::sync::Arc<dyn crate::session::SessionCommands>);
     /// Checkpoints live recognition, or settles an accepted user turn with no reply. Returns
     /// history reconciled under partition ownership, without exposing pending input as final.
     fn conversation(&self, progress: VoiceConversationProgress) -> StorageWork<'_, VoiceHistory>;

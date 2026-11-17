@@ -75,11 +75,17 @@ impl HostBinding for SessionBinding {
 }
 
 impl SessionStateSink for SessionBinding {
-    fn flush_voice<'a>(
+    fn checkpoint_voice<'a>(
         &'a self,
-        _cx: &'a lk_agents_abi::telemetry::Cx,
-    ) -> BoxFuture<'a, Result<(), StorageError>> {
-        Box::pin(async move { self.flush(None).await })
+        history: lk_agents_abi::storage::voice::VoiceHistory,
+    ) -> BoxFuture<
+        'a,
+        Result<std::sync::Arc<dyn lk_agents_abi::session::SessionCheckpoint>, StorageError>,
+    > {
+        Box::pin(async move {
+            self.ensure_open()?;
+            self.store.voice_checkpoint(history).await
+        })
     }
 
     fn stage_voice(&self, state: SessionSnapshot) -> Result<(), StorageError> {
@@ -109,11 +115,14 @@ impl SessionStateSink for SessionBinding {
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
         state: SessionSnapshot,
-    ) -> BoxFuture<'a, Result<(), StorageError>> {
+    ) -> BoxFuture<'a, Result<serde_json::Value, StorageError>> {
         Box::pin(async move {
             self.ensure_open()?;
             self.store.stage_session(crate::session_state::snapshot_value(state)?)?;
-            self.flush(None).await
+            self.flush(None).await?;
+            self.store
+                .committed_session()
+                .ok_or_else(|| StorageError::Invalid("the conversation has no checkpoint".into()))
         })
     }
 }

@@ -19,6 +19,7 @@ from ._generated.a2a_door import DoorConfig
 from ._generated.a2a_metadata import RPC_PATH
 from ._generated.a2a_remote import DelegationPartition, RemoteEventInputRequired, RemoteEventOutcome
 from ._generated.public_a2a import *  # noqa: F403
+from ._generated.session_input import InputRequestRef
 from ._generated.storage_options import TurnOptions, TurnOptionsKwargs
 from ._generated.tool_report import ToolOutcomeInputRequired, ToolReport
 from .job import _server_credentials
@@ -209,14 +210,16 @@ class _Delegation:
     async def _core_delegated(self) -> None:
         await self._ctx.update(_DELEGATED)
 
-    async def _core_ask(self, question: str, verbatim: bool) -> str:
+    async def _core_ask(
+        self, question: str, verbatim: bool, input_request: InputRequestRef | None
+    ) -> str:
         ctx = self._ctx
         assert ctx._session is not None
         ctx._expert_answer = asyncio.get_running_loop().create_future()
         ctx._session._settled_by_events(ctx._expert_answer)
         outcome = ToolOutcomeInputRequired(question=question, verbatim=verbatim)
         try:
-            ctx._tool_update(ToolReport(outcome=outcome))
+            ctx._tool_update(ToolReport(outcome=outcome, input_request=input_request))
             return await ctx._expert_answer
         finally:
             ctx._expert_answer = None

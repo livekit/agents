@@ -6,6 +6,9 @@
 mod drive;
 mod fakes;
 
+#[cfg(test)]
+mod voice_checkpoint_tests;
+
 pub use drive::{Outcome, Scenario, TurnPlan, run};
 pub use fakes::{Callback, Fault};
 

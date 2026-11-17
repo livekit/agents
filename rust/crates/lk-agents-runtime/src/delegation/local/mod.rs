@@ -205,7 +205,7 @@ impl Delegate {
             let all_messages = result.map(|r| r.all_messages).unwrap_or_default();
             match step {
                 Step::Ask { question, verbatim } if live => {
-                    let asked = self.host.ask(&self.cx, &self.context, question, verbatim);
+                    let asked = self.host.ask(&self.cx, &self.context, question, verbatim, None);
                     let answer = tokio::select! {
                         biased;
                         () = self.stop.cancelled() => return ToolOutcome::Cancelled,

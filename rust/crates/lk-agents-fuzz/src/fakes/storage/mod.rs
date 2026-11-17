@@ -64,6 +64,7 @@ pub struct FakeStore {
     voice: Arc<VoiceStore>,
     pub port: Arc<dyn VoiceStorage>,
     database: Arc<FakeDatabase>,
+    _session_sink: lk_agents_runtime::storage::context::store::SessionSinkGuard,
 }
 
 impl FakeStore {
@@ -138,10 +139,14 @@ impl FakeStore {
         )
         .expect("an empty voice session state stages");
         let voice = Arc::new(voice);
+        let session_sink = voice
+            .activation()
+            .attach_session_sink(voice.session_sink())
+            .expect("a fake voice execution owns its native sink");
         database.state.lock().armed = true;
         let port =
             Arc::new(RecordedStore { store: voice.clone(), registry, database: database.clone() });
-        Self { voice, port, database }
+        Self { voice, port, database, _session_sink: session_sink }
     }
 
     /// The host's `aclose()` once the session ended, then what it left in the database.
@@ -644,6 +649,10 @@ impl RecordedStore {
 }
 
 impl VoiceStorage for RecordedStore {
+    fn bind_session_commands(&self, commands: Arc<dyn lk_agents_abi::session::SessionCommands>) {
+        self.store.bind_session_commands(commands);
+    }
+
     fn conversation(
         &self,
         progress: lk_agents_abi::storage::voice::VoiceConversationProgress,

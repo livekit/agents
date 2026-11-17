@@ -7,6 +7,14 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
+/// A private acquired checkpoint scope. Dropping it releases its storage ownership; it is
+/// neither a saved snapshot nor a host API. The owner applies decisions before committing it.
+pub trait SessionCheckpoint: Send + Sync {
+    /// Rows reconciled under the acquired lease; memory-only checkpoints have no reload.
+    fn history(&self) -> Option<crate::storage::voice::VoiceHistory>;
+    fn commit(&self) -> crate::BoxFuture<'_, Result<Value, crate::storage::StorageError>>;
+}
+
 /// Owner-qualified input occurrence. Local continuation and remote transport remain distinct.
 #[crate::host(record(module = "session_input", emit, extract))]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
@@ -52,6 +60,8 @@ pub enum InputRoute {
 /// Serialized conversation authority. No host policy callback or saved command capability.
 #[crate::host(native(refused = "expected the active native conversation owner"))]
 pub trait SessionCommands: Send + Sync {
+    fn checkpoint(&self) -> crate::BoxFuture<'_, Result<Value, crate::storage::StorageError>>;
+
     fn input<'a>(
         &'a self,
         command: SessionInputCommand,

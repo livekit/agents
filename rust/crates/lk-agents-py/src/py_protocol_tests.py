@@ -1,6 +1,9 @@
 """Native observations use the upstream SDK records and retain every stream event."""
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
+from typing import cast
 
 import pytest
 from a2a.types import a2a_pb2 as pb
@@ -9,9 +12,10 @@ from google.protobuf.json_format import MessageToDict
 from livekit.agents import Agent, SessionState, TextSession, VoiceSession, persisted
 from livekit.agents.a2a import AgentClient, RemoteAgent
 from livekit.agents.llm import ChatContext, FunctionToolCall
-from livekit.agents.storage import ContextStore
+from livekit.agents.storage import ContextStore, SQLiteStorage, Thread
 from livekit.agents.storage.session_state import RemoteAgentState, RemoteContextState, RemoteTask
-from tests.fakes import FakeLLM, tool_call, until
+from livekit.agents.voice.events import CloseEvent
+from tests.fakes import FakeAudioOutput, FakeLLM, FakeTTS, Hang, Reply, tool_call, until
 from tests.host.a2a_peer import Peer
 
 pytest_plugins = ["tests.host.a2a_peer"]
@@ -62,6 +66,90 @@ async def test_voice_checkpoints_remote_sdk_observations_before_presenting_the_r
     assert saved.remote_agents[peer.url].tasks["remote-task"].task.artifacts[0].parts[0].text == (
         "Confirmed"
     )
+
+
+@pytest.mark.parametrize("persist", [False, True])
+async def test_a_voice_question_is_presented_only_after_its_audio_reaches_the_person(
+    peer: Peer,
+    tmp_path: Path,
+    persist: bool,
+) -> None:
+    @dataclass
+    class App:
+        session: SessionState = persisted(default_factory=SessionState)
+
+    peer.question = "Which date?"
+    retry = Hang()
+    questions = 0
+
+    def frontend(history: ChatContext) -> Reply:
+        nonlocal questions
+        if any(
+            item.type == "message"
+            and item.role == "system"
+            and "Which date?" in (item.text_content or "")
+            for item in history.items
+        ):
+            questions += 1
+            return "Which date?" if questions == 1 else [retry, "Which date?"]
+        if any(item.type == "function_call" for item in history.items):
+            return ""
+        return tool_call("coverage_expert", request="Check coverage.")
+
+    storage = SQLiteStorage(directory=tmp_path) if persist else None
+    if storage is not None:
+        thread_id = (await storage.threads.create_thread()).thread_id
+        thread = Thread(storage, thread_id, partition_key="desk")
+        activation = await storage.threads._core_context_store(thread_id, "desk")
+        store = ContextStore(activation=activation, scope_id="root:desk", thread=thread)
+    else:
+        store = ContextStore()
+    try:
+        app = await store.load_context(App())
+        remote = RemoteAgent(peer.url, name="coverage_expert", description="Check coverage.")
+        agent = Agent(
+            name="desk", instructions="Help.", tools=[remote.as_tool()], llm=FakeLLM(frontend)
+        )
+
+        def presentation_id(view: SessionState) -> str | None:
+            state = json.loads(view._to_json())["state"]
+            requests = state["remote_agents"][peer.url]["tasks"]["remote-task"]["input_requests"]
+            [request] = requests.values()
+            return cast("str | None", request.get("presented_message_id"))
+
+        output = FakeAudioOutput(fail_at_frame=0)
+        closes: list[CloseEvent] = []
+        async with VoiceSession(context=store.bind(app), vad=None, tts=FakeTTS()) as voice:
+            voice.on("close", closes.append)
+            voice.output.audio = output
+            await voice.start(agent)
+            await voice.generate_reply(user_input="Check coverage.")
+            await until(
+                lambda: retry.started.is_set() or closes,
+                "the unheard question was not offered again",
+            )
+            assert not closes, f"the call ended instead of offering the question again: {closes}"
+            assert presentation_id(app.session) is None, (
+                "a failed first frame cannot present a question"
+            )
+
+            retry.release()
+            await until(
+                lambda: presentation_id(app.session) is not None,
+                "the heard question has no receipt",
+            )
+            heard = next(
+                item for item in voice.history.items if item.id == presentation_id(app.session)
+            )
+            assert heard.type == "message" and heard.text_content == "Which date?"
+        saved = await store.load_session()
+        assert presentation_id(saved) == heard.id, "the delivery correlation survives call close"
+        assert len(saved.remote_agents[peer.url].tasks["remote-task"].input_requests) == 1
+        assert peer.cancelled == [], "ending the call does not cancel the remote task"
+    finally:
+        store._close()
+        if storage is not None:
+            await storage.aclose()
 
 
 async def test_raw_a2a_observations_retain_artifacts_as_sdk_events(peer: Peer) -> None:

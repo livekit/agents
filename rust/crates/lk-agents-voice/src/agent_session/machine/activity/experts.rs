@@ -56,7 +56,13 @@ impl VoiceDriver {
             ToolUpdate::Final { report } => match &report.outcome {
                 ToolOutcome::InputRequired { question, verbatim, .. } => {
                     let request_id = self.session.ids.mint("ask");
-                    self.session.experts.ask(call_id, &request_id, question.clone(), *verbatim);
+                    self.session.experts.ask(
+                        call_id,
+                        &request_id,
+                        question.clone(),
+                        *verbatim,
+                        report.input_request.as_deref().cloned(),
+                    );
                 }
                 outcome => {
                     let Some(_running) =
@@ -101,12 +107,19 @@ impl VoiceDriver {
                     let instructions = format!("{PRESENT_PROGRESS}{text}");
                     self.reply_with_instructions(now, instructions, None, outside);
                 }
-                Presentation::Question { question, verbatim: true, .. } => {
-                    self.say_text(now, question, outside);
-                }
-                Presentation::Question { question, verbatim: false, .. } => {
-                    let instructions = format!("{ASK_IN_OWN_WORDS}{question}");
-                    self.reply_with_instructions(now, instructions, None, outside);
+                Presentation::Question { call_id, request_id, question, verbatim } => {
+                    let speech = if verbatim {
+                        self.say_text(now, question, outside)
+                    } else {
+                        let instructions = format!("{ASK_IN_OWN_WORDS}{question}");
+                        self.reply_with_instructions(now, instructions, None, outside)
+                    };
+                    if let Some(speech) = speech {
+                        self.session.experts.presenting(
+                            speech,
+                            crate::experts::PendingRequest { call_id, request_id },
+                        );
+                    }
                 }
                 Presentation::Outcome { call_id, outcome } => {
                     self.resolve_expert_call(now, &call_id, outcome)

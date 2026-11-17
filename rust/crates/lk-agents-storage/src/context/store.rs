@@ -201,6 +201,27 @@ impl Database {
 }
 
 impl ContextStore {
+    pub(crate) fn committed_session(&self) -> Option<Value> {
+        self.activation.lock().committed_session()
+    }
+
+    pub(crate) async fn voice_checkpoint(
+        &self,
+        history: lk_agents_abi::storage::voice::VoiceHistory,
+    ) -> Result<Arc<dyn lk_agents_abi::session::SessionCheckpoint>, StorageError> {
+        self.activation.lock().ensure_open()?;
+        let sink = self.session_sink.lock().clone();
+        match sink {
+            Some(sink) => sink.acquire_session_checkpoint(history).await,
+            None if self.database.is_none() => {
+                Ok(Arc::new(super::checkpoint::Checkpoint::memory(self.clone())))
+            }
+            None => {
+                Err(StorageError::Invalid("voice checkpoints require their execution sink".into()))
+            }
+        }
+    }
+
     /// Lend an activation to one execution owner without closing it when that owner ends.
     pub fn attach_session_sink(&self, sink: SessionSink) -> Result<SessionSinkGuard, StorageError> {
         self.activation.lock().ensure_open()?;
@@ -337,17 +358,39 @@ impl ContextStore {
         &self,
         scopes: Vec<ContextScope>,
         routing: Option<Value>,
+        operation: &tokio::sync::OwnedMutexGuard<()>,
+    ) -> Result<(), StorageError> {
+        self.rebase_checkpoint(scopes, routing, operation)?;
+        self.assume_managed(operation);
+        Ok(())
+    }
+
+    pub(crate) fn rebase_checkpoint(
+        &self,
+        scopes: Vec<ContextScope>,
+        routing: Option<Value>,
         _operation: &tokio::sync::OwnedMutexGuard<()>,
     ) -> Result<(), StorageError> {
-        {
-            let mut activation = self.activation.lock();
-            activation.rebase(scopes, routing)?;
-            self.session_receipts.fetch_add(1, Ordering::AcqRel);
-        }
+        let mut activation = self.activation.lock();
+        activation.rebase(scopes, routing)?;
+        self.session_receipts.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+
+    pub(crate) fn assume_managed(&self, _operation: &tokio::sync::OwnedMutexGuard<()>) {
         self.clear_statements();
         self.turn.fetch_add(1, Ordering::AcqRel);
         self.managed.store(true, Ordering::Release);
-        Ok(())
+    }
+
+    pub(crate) fn end_checkpoint(
+        &self,
+        saved_session: Option<Value>,
+        _operation: tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        let mut activation = self.activation.lock();
+        activation.acknowledge_session(saved_session);
+        self.session_receipts.fetch_add(1, Ordering::AcqRel);
     }
 
     pub(crate) fn end_managed(
@@ -546,6 +589,7 @@ impl HostContextActivation for ContextStore {
         if self.database.is_none() {
             let saved = activation.session_state();
             activation.acknowledge_session(saved);
+            self.session_receipts.fetch_add(1, Ordering::AcqRel);
         }
         if let Some((view, checked)) = view.zip(checked) {
             view.assign(&checked);

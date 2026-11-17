@@ -10,6 +10,7 @@ use crate::StorageError;
 use crate::sql::{Bind, Cells, Row, SqlValue, Statement};
 use crate::thread::db::{Fence, STATE_LIMIT};
 
+pub(crate) mod checkpoint;
 pub mod store;
 pub mod transaction;
 

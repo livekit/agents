@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 from pydantic import JsonValue
 
@@ -21,6 +21,9 @@ from livekit.agents._generated.tool_outcomes import Failed, Rejected, ToolResult
 from livekit.agents.llm.tool_context import Completed
 
 from .usage import Usage
+
+if TYPE_CHECKING:
+    from .session_input import InputRequestRef
 
 
 @dataclass
@@ -189,6 +192,8 @@ class ToolReport:
     """The host's report of one run: its outcome."""
 
     outcome: ToolOutcome
+    input_request: InputRequestRef | None = None
+    """Native input occurrence being presented; wording alone never identifies its owner."""
     transition: object | None = None
     """For a `Completed` from a VoiceTask's tool, the value the host validated, which ends the
     task.

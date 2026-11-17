@@ -691,7 +691,7 @@ impl PartialEq for HostedTool {
 /// The one formatter: every committed `FunctionCallOutput` comes through here, from the one
 /// decision table (`lk_agents_core::tool_outcome`), a verbatim result rewritten as delivered.
 pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolExecution {
-    let ToolReport { outcome, transition } = report;
+    let ToolReport { outcome, transition, .. } = report;
     let shape =
         lk_agents_core::tool_outcome::shape(&outcome, lk_agents_core::tool_outcome::Mode::Voice);
     let mut output = FunctionCallOutput::new(

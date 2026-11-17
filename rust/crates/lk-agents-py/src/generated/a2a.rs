@@ -1173,6 +1173,7 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
         context: &::lk_agents_abi::invoke::CallContext,
         question: ::std::string::String,
         verbatim: bool,
+        input_request: ::std::option::Option<::lk_agents_abi::session::InputRequestRef>,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
         ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError>,
@@ -1180,6 +1181,7 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
         let host = ::std::clone::Clone::clone(&self.host);
         let question_arg = question;
         let verbatim_arg = verbatim;
+        let input_request_arg = input_request;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DelegationHost._core_ask",
@@ -1187,9 +1189,17 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(question_arg, py)?,
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim_arg, py)?,
+                    match input_request_arg {
+                        None => py.None().into_bound(py),
+                        Some(x) => {
+                            crate::generated::records::session_input::input_request_ref_to_py(
+                                py, x,
+                            )?
+                        }
+                    },
                 ];
                 Ok((
                     host.bind(py)?.getattr("_core_ask")?,

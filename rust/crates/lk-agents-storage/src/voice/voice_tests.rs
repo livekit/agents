@@ -38,14 +38,13 @@ async fn a_delayed_voice_checkpoint_receipt_preserves_later_live_input() {
     let initial = store.acquire(1, VoiceHistory::default()).await.unwrap();
     store.checkpoint(1, 1, "desk".into(), initial).await.unwrap();
     let activation = store.activation();
-    let _attachment = activation.attach_session_sink(store.session_sink()).unwrap();
+    let checkpoint = store.acquire_checkpoint(VoiceHistory::default()).await.unwrap();
     let before = activation.session_state().unwrap();
     let (committed, release) = faults.hold_next_receipt("UPDATE partitions SET state =");
     let (done, receipt) = lk_agents_net::signal::once();
-    let writing = activation.clone();
     let background = storage.background();
     let _flush = background.tasks.scoped(&*background.spawner, "voice flush", async move {
-        done.resolve(writing.flush_session(vec![]).await);
+        done.resolve(checkpoint.commit().await);
     });
     committed.wait().await.unwrap();
     let later = ChatItem::Message(ChatMessage::text(
@@ -83,9 +82,9 @@ async fn a_queued_voice_flush_keeps_remote_state_admitted_before_it_gets_the_wri
     let initial = store.acquire(1, VoiceHistory::default()).await.unwrap();
     store.checkpoint(1, 1, "desk".into(), initial).await.unwrap();
     let activation = store.activation();
-    let _attachment = activation.attach_session_sink(store.session_sink()).unwrap();
+    let checkpoint = store.acquire_checkpoint(VoiceHistory::default()).await.unwrap();
     let owner = store.state.lock().await;
-    let mut flush = std::pin::pin!(activation.flush_session(vec![]));
+    let mut flush = std::pin::pin!(checkpoint.commit());
     assert!(
         std::future::Future::poll(
             flush.as_mut(),
@@ -547,11 +546,7 @@ async fn a_host_flush_preserves_the_confirmed_partial_prefix() {
         std::time::UNIX_EPOCH,
     ));
     store.checkpoint(1, 1, "desk".into(), VoiceHistory::new(vec![partial])).await.unwrap();
-    store
-        .session_sink()
-        .save_session(store.activation().session_state().unwrap(), vec![])
-        .await
-        .unwrap();
+    store.acquire_checkpoint(VoiceHistory::default()).await.unwrap().commit().await.unwrap();
     store.aclose().await.unwrap();
     let thread = fixture.thread().await;
     let rows = thread.partition("desk").history().await.unwrap();

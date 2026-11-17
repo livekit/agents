@@ -223,7 +223,7 @@ impl VoiceDriver {
 
     /// The conversation as the session will hold it with what the turns have in flight: the
     /// words heard so far and the replies' tool records, each where a commit puts it.
-    pub(crate) fn checkpoint_history(&self) -> VoiceHistory {
+    pub fn checkpoint_history(&self) -> VoiceHistory {
         let storage = &self.session.storage;
         let progress = (storage.progress.iter())
             .map(|(n, m)| (ChatItem::Message(m.clone()), storage.turns.get(n).map(|t| t.speech)));

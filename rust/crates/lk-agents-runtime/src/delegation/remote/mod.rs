@@ -404,6 +404,7 @@ impl Delegation {
                         &self.request.context,
                         question,
                         verbatim_full,
+                        self.journal.as_ref().and_then(|journal| journal.observed_input()),
                     );
                     let answer = answer.await.map_err(host_error)?;
                     self.send(self.interaction.answer(&request_id, answer)?).await?

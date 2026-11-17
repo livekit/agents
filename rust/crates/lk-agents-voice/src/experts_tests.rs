@@ -24,11 +24,46 @@ fn question(request_id: &str) -> Presentation {
 }
 
 fn ask(experts: &mut Experts, request_id: &str) -> bool {
-    experts.ask("call_1", request_id, "What email should receive the receipt?".into(), false)
+    experts.ask("call_1", request_id, "What email should receive the receipt?".into(), false, None)
 }
 
 fn pending(request_id: &str) -> PendingRequest {
     PendingRequest { call_id: "call_1".into(), request_id: request_id.into() }
+}
+
+#[test]
+fn a_late_speech_receipt_keeps_the_occurrence_it_actually_presented() {
+    let tools = [refunds()];
+    let mut experts = opened();
+    let reference = |request: &str| InputRequestRef::RemoteTask {
+        remote_id: "refunds".into(),
+        task: lk_agents_abi::delegation::remote::RemoteTaskRef {
+            context_id: "conversation".into(),
+            task_id: "refund".into(),
+        },
+        request_id: request.into(),
+    };
+    experts.ask("call_1", "r1", "Which email?".into(), false, Some(reference("input_1")));
+    experts.next(floor(&tools));
+    experts.presenting(SpeechId(1), pending("r1"));
+
+    experts.ask("call_1", "r2", "Which address?".into(), false, Some(reference("input_2")));
+    assert_eq!(experts.delivered(SpeechId(1)), Some(reference("input_1")));
+    experts.next(floor(&tools));
+    experts.presenting(SpeechId(2), pending("r2"));
+    assert_eq!(experts.delivered(SpeechId(2)), Some(reference("input_2")));
+    assert_eq!(experts.delivered(SpeechId(2)), None, "one receipt presents an occurrence once");
+}
+
+#[test]
+fn an_unspoken_question_is_available_for_representing() {
+    let tools = [refunds()];
+    let mut experts = opened();
+    assert!(ask(&mut experts, "r1"));
+    assert_eq!(experts.next(floor(&tools)), Some(question("r1")));
+    experts.presenting(SpeechId(1), pending("r1"));
+    experts.presentation_ended(SpeechId(1));
+    assert_eq!(experts.next(floor(&tools)), Some(question("r1")));
 }
 
 #[test]
@@ -83,7 +118,7 @@ fn only_one_expert_question_owns_the_reply_destination_at_a_time() {
     let mut experts = opened();
     assert!(experts.open("call_2", tools[1].clone()));
     ask(&mut experts, "r1");
-    experts.ask("call_2", "b1", "Which bag?".into(), true);
+    experts.ask("call_2", "b1", "Which bag?".into(), true, None);
     assert!(experts.progress("call_2", 1, "Tracing the bag".into()));
     assert_eq!(experts.next(floor(&tools)), Some(question("r1")));
     // The second question waits; other events still present.

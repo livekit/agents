@@ -170,6 +170,9 @@ impl VoiceRuntime {
                 None => {}
             },
             E::Host(event) => self.deliver_host_event(event),
+            E::InputPresented { requests, message_id } => {
+                self.input_presented(requests, message_id)
+            }
             E::StorageCheckpoint { checkpoint, speech, agent, history } => {
                 let storage = self.storage.clone();
                 let queue = self.reports.clone();

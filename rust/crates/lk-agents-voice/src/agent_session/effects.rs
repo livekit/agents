@@ -27,6 +27,11 @@ pub enum SpeechHistory {
 /// significant. Driver-owned deadlines and deferred callbacks never cross this boundary.
 #[derive(Debug)]
 pub enum VoiceEffect {
+    /// Canonical assistant words reached the output boundary for these native occurrences.
+    InputPresented {
+        requests: Vec<lk_agents_abi::session::InputRequestRef>,
+        message_id: String,
+    },
     /// Comes back as `VoiceEvent::StreamOpened{open}`: the loop never awaits `stream()`.
     OpenSttStream {
         open: u64,

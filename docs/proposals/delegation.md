@@ -859,8 +859,9 @@ a public Python export or an additional SDK constructor.
 | RemoteAgentView, RemoteContextView and RemoteTaskView, internal ABI traits | Generated bindings for the three public inspection types. | Native storage handles retain the enclosing SessionState's bound or detached owner. Getter results copy SDK values; grouping adds no duplicate histories or network calls. |
 | SessionCommands, SessionInputCommand, RemoteCommand and RemoteInput, internal ABI port/data | One serialized owner for input admission and remote observations. | Presentation receipts, response reservations, preparation, dispatch markers, responses and errors receive their checkpoint before acknowledgement. An accepted remote input observation returns its existing InputRequestRef; no new controller or stored command capability. |
 | ConversationHistory and ConversationStateFailed | Internal voice effect/input; no Python types. | Publish core-accepted history through the native binding before host callbacks; preserve pending recognition and refreshed remote state. The core closes voice on a refused state publication. |
+| InputPresented and ToolReport.input_request | Reuse the shared InputRequestRef in a private voice effect and the existing host report. | A checkpointed A2A occurrence follows rephrasing into actual output delivery. The existing voice inbox holds transient speech correlation; a failed/unspoken presentation can be retried without creating another input occurrence. No new question or presentation class. |
 | SessionCommand and CommandPort | Shared native runtime command queue in session/. | Text and voice use bounded command admission and producer-owned receipts. Voice checkpoints run on owned tasks alongside audio and interruption events. Ending the receiver settles received, queued and capacity-waiting requests; a client retains no execution authority after owner loss. No Python export. |
-| voice::conversation::Checkpoint, private runtime record | Owned voice command write. | Retains its ScopedTask and completion signal while media/events continue; carries no second conversation snapshot or Python API. |
+| voice::conversation::Work, private runtime record | A voice command's acquisition/write phase. | Retains its ScopedTask, caller receipt and completion signal while media/events continue; carries no second conversation snapshot or Python API. |
 | RemoteRecovery, internal ABI decision | Reuses the core journal's recovery classification. | Carries an unsent original SDK request, a task to read, an accepted direct reply or uncertainty. Returned through the native owner; neither serialized nor exported as Python state classes. |
 | RemoteInvocation, internal runtime input | Groups the existing invocation arguments and services. | Production and DST use the same remote executor; only its endpoint client is injected. No new Python API or second controller. |
 | RemoteTaskCommands, conditional internal ABI port | Extend the existing binding/owner command path where possible. | Bound RemoteTask.cancel() reaches the authorized owner without putting a runtime dependency in storage or adding a public controller. |
@@ -870,7 +871,7 @@ a public Python export or an additional SDK constructor.
 | InputRoutingRequest | Ephemeral native request for the configured routing model. | Classification-attempt identity, canonical human message, visible history and presented candidates; no persisted command or second history. |
 | InputRoute | Internal ABI detector verdict. | Match zero/one/several input references or request clarification; use existing LLM interfaces rather than a new public detector base class. |
 | PresentationEvent | Evolve existing voice Presentation/ExpertInboxEvent records. | Transient normalized notification with original correlation, grouping and exact-output information. |
-| SessionCheckpoint, proposed | New typed batch extending the existing checkpoint contract. | Atomically commit related framework state/history/task/journal changes without arbitrary application-field saves. |
+| SessionCheckpoint | Private acquired scope extending the existing checkpoint contract. | Retains partition ownership from state reload through atomic framework state/history/task/journal writes, even when voice is idle or its last speech finishes. Dropping it releases ownership. It neither saves arbitrary application fields nor enters the Python API. |
 | VoiceHistory, private I/O record | Captures the conversation and the database baseline observed by that snapshot. | Reconciled receipts retain their fence and observation order; overlapping writes cannot relabel a stale snapshot as a new local edit. This is not a persisted format or a public constructor. |
 | TranscriptForward, private I/O request | Serializes the existing transcript writer's paced output, direct captures and delivery drains. | One physical output order and owned receipts across synchronization changes; no new Python API or presentation policy. |
 | DeliveryReceipt, working name only | Internal awaitable adapter over existing signal/playback machinery if required by binding generation. | Immediate enqueue with an awaitable admission/delivery result. Public constructor/result type is not agreed; do not silently invent one. |
@@ -1179,11 +1180,20 @@ passes deterministic stock-peer transport and failure tests.
 - [x] Publish accepted voice history through native effects before host callbacks. Rebase from
   the current binding, preserve pending recognition, and use the production binding in the
   SQLite-backed voice DST. Remove Python-driven voice state updates and startup validation.
-- [x] Share the bounded native conversation command port with text. Stage transitions before
-  checkpointing on owned tasks, keep the voice loop serving media/events, and stop queued
-  callers when the owner ends. Gate real SQLite receipts to prove that delayed writes preserve
-  newer live input and remote metadata; acknowledge the actual written snapshot.
+- [x] Share the bounded native conversation command port with text. Acquire a checkpoint scope
+  before reading or applying transitions, retain it through writes on owned tasks, keep the voice
+  loop serving media/events, and stop queued callers when the owner ends. Gate real SQLite
+  receipts to prove that delayed writes preserve
+  newer live input and remote metadata; acknowledge the actual written snapshot. Keep an
+  admitted write in storage's task set so canceling its waiter cannot leave the native
+  acknowledgement behind an applied database write. Cover idle writes, scope promotion,
+  abandoned runs and final-commit refusal with readable SQLite stories. A DST story reuses
+  the shared applied-write/held-receipt fault and the production checkpoint writer; it
+  reproduces lost remote state when run against the previous writer implementation.
 - [ ] Connect question/exact-text presentation to pipeline/realtime delivery receipts.
+  Remote questions carry their checkpointed InputRequestRef through rephrasing into actual
+  speech delivery. Failed output retries preserve that occurrence; exact ctx.say delivery and
+  the complete realtime acceptance stories remain separate work.
 - [ ] Implement immediate update/say receipts, request-view notes and interruption handling.
   Awaited progress admission is now bounded and lossless for direct runs, TextSession and local
   agent delegates. A public streaming regression covers a burst of one thousand updates before

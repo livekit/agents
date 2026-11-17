@@ -26,6 +26,8 @@ pub struct Store {
     /// A connection of the observer's own, never faulted.
     observer: FileConnection,
     faults: Arc<Faults>,
+    #[cfg(test)]
+    receipts: Arc<lk_agents_runtime::storage::testing::Faults>,
     clock: Arc<dyn Clock>,
     _dir: TempDir,
 }
@@ -64,13 +66,26 @@ impl Store {
             clock: clock.clone(),
         });
         let wrapped = faults.clone();
+        let receipts = Arc::<lk_agents_runtime::storage::testing::Faults>::default();
+        let held_receipts = receipts.clone();
         let wrap = move |inner: FileConnection| {
+            let inner = Arc::new(held_receipts.over(Box::new(inner)));
             Arc::new(FaultyConnection { inner, faults: wrapped.clone() })
                 as Arc<dyn ThreadDbConnection>
         };
         let backend: Arc<dyn Storage> = Arc::new(Wrapped { storage: storage.clone(), wrap });
         let thread_id = thread.thread_id;
-        Self { storage, backend, thread_id, observer, faults, clock, _dir: dir }
+        Self {
+            storage,
+            backend,
+            thread_id,
+            observer,
+            faults,
+            #[cfg(test)]
+            receipts,
+            clock,
+            _dir: dir,
+        }
     }
 
     /// A worker's handle on the thread, through the faulted connection.
@@ -105,6 +120,18 @@ impl Store {
         let mut forced = self.faults.forced_write.lock();
         assert!(forced.is_none(), "only one authored write fault is armed");
         *forced = Some(Plan { answer_lost: true, ..Plan::default() });
+    }
+
+    /// Apply the selected write, then hold its receipt until the story releases it.
+    #[cfg(test)]
+    pub fn hold_next_receipt(
+        &self,
+        sql: &'static str,
+    ) -> (
+        lk_agents_runtime::net::signal::Cell<Option<()>>,
+        lk_agents_runtime::net::signal::Producer<Option<()>>,
+    ) {
+        self.receipts.hold_next_receipt(sql)
     }
 
     /// Whether a lease holds `partition_key` now, by the database's clock.
@@ -183,7 +210,7 @@ impl Faults {
 }
 
 struct FaultyConnection {
-    inner: FileConnection,
+    inner: Arc<dyn ThreadDbConnection>,
     faults: Arc<Faults>,
 }
 

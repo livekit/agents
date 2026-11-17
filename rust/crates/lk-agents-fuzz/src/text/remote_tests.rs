@@ -448,6 +448,7 @@ impl lk_agents_abi::a2a::remote::DelegationHost for Presenter {
         _: &'a lk_agents_abi::invoke::CallContext,
         question: String,
         _: bool,
+        _: Option<lk_agents_abi::session::InputRequestRef>,
     ) -> BoxFuture<'a, Result<String, HostError>> {
         Box::pin(async move {
             assert_eq!(question, "Which day?");

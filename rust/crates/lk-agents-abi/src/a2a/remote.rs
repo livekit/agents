@@ -67,6 +67,7 @@ pub trait DelegationHost: Send + Sync {
         #[host(context)] context: &'a crate::invoke::CallContext,
         question: String,
         verbatim: bool,
+        input_request: Option<crate::session::InputRequestRef>,
     ) -> crate::BoxFuture<'a, Result<String, crate::errors::HostError>>;
 }
 

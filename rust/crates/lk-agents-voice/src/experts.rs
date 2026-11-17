@@ -1,6 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
+use lk_agents_abi::session::InputRequestRef;
 use serde::{Deserialize, Serialize};
 
 // Owned by the session, not the agent: replacing the speaking agent keeps the queue.
@@ -65,7 +67,7 @@ struct Delegation {
     /// The last progress occurrence taken: an older or repeated one is a duplicate.
     progress_seen: u64,
     /// Every input request taken.
-    requests: BTreeSet<String>,
+    requests: BTreeMap<String, Option<InputRequestRef>>,
     /// The originating call's pending output is on the record: its outcome can replace it.
     recorded: bool,
     settled: bool,
@@ -104,6 +106,9 @@ pub struct Experts {
     delegations: BTreeMap<String, Delegation>,
     queue: VecDeque<Queued>,
     foreground: Option<Foreground>,
+    /// Live output receipts have no meaning after a call ends; communication owns recovery.
+    #[serde(skip)]
+    presentations: BTreeMap<SpeechId, PendingRequest>,
 }
 
 impl Experts {
@@ -115,7 +120,7 @@ impl Experts {
         let delegation = Delegation {
             tool,
             progress_seen: 0,
-            requests: BTreeSet::new(),
+            requests: BTreeMap::new(),
             recorded: false,
             settled: false,
         };
@@ -164,13 +169,15 @@ impl Experts {
         request_id: &str,
         question: String,
         verbatim: bool,
+        input_request: Option<InputRequestRef>,
     ) -> bool {
         let Some(d) = self.delegations.get_mut(call_id).filter(|d| !d.settled) else {
             return false;
         };
-        if !d.requests.insert(request_id.to_owned()) {
+        if d.requests.contains_key(request_id) {
             return false;
         }
+        d.requests.insert(request_id.to_owned(), input_request);
         self.withdraw(call_id);
         let event =
             ExpertInboxEvent::Question { request_id: request_id.into(), question, verbatim };
@@ -280,6 +287,29 @@ impl Experts {
             .take_if(|f| f.call_id == request.call_id && f.request_id == request.request_id)
             .map(|_| ())
             .ok_or(Stale)
+    }
+
+    /// A scheduled question has no delivery authority until that speech reports actual words.
+    pub fn presenting(&mut self, speech: SpeechId, request: PendingRequest) {
+        self.presentations.insert(speech, request);
+    }
+
+    pub fn delivered(&mut self, speech: SpeechId) -> Option<InputRequestRef> {
+        let request = self.presentations.remove(&speech)?;
+        // A late receipt belongs to the words actually delivered, even if a newer input has
+        // superseded that occurrence. Shared input state decides response eligibility.
+        self.delegations.get(&request.call_id)?.requests.get(&request.request_id)?.clone()
+    }
+
+    /// An unspoken scheduled question is offered again when the floor permits.
+    pub fn presentation_ended(&mut self, speech: SpeechId) {
+        if let Some(request) = self.presentations.remove(&speech)
+            && let Some(foreground) = self.foreground.as_mut()
+            && foreground.call_id == request.call_id
+            && foreground.request_id == request.request_id
+        {
+            foreground.suspended = true;
+        }
     }
 }
 

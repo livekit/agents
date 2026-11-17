@@ -968,13 +968,32 @@ impl VoiceDriver {
         };
         self.apply_end_of_speech(now, eos);
         self.commit_spoken(speech, item);
+        self.session.experts.presentation_ended(speech);
     }
 
     /// A step's words: into the record, or only told to the handle under `add_to_chat_ctx=False`.
     fn commit_spoken(&mut self, speech: SpeechId, item: Option<(ChatItem, Source)>) {
         let Some((item, source)) = item else { return };
         if self.activity.speech_scheduler.add_to_chat_ctx(speech) {
+            let presented = item
+                .as_message()
+                .filter(|message| {
+                    message.role == Role::Assistant
+                        && message.raw_text_content().is_some_and(|text| !text.trim().is_empty())
+                })
+                .and_then(|message| {
+                    self.session
+                        .experts
+                        .delivered(speech)
+                        .map(|request| (request, message.id.clone()))
+                });
             self.commit_item(item, source, Visibility::Both);
+            if let Some((request, message_id)) = presented {
+                self.record_effect(crate::agent_session::effects::VoiceEffect::InputPresented {
+                    requests: vec![request],
+                    message_id,
+                });
+            }
         } else if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
             state.item_added(&item);
         }
@@ -1043,6 +1062,7 @@ impl VoiceDriver {
     }
 
     pub(crate) fn release_speech(&mut self, now: Ts, speech: SpeechId) {
+        self.session.experts.presentation_ended(speech);
         let s = &mut self.session;
         let (requests, usage, mut run) = (&mut s.requests, &mut s.usage, s.runs.usage());
         requests.retain(|(of, _), unmeasured| {

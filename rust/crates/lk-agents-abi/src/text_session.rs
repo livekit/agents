@@ -117,22 +117,24 @@ use std::sync::Arc;
 /// Receives accepted session transitions before dependent execution proceeds.
 #[crate::host(native(refused = "expected a native session binding"))]
 pub trait SessionStateSink: Send + Sync {
+    fn checkpoint_voice<'a>(
+        &'a self,
+        history: crate::storage::voice::VoiceHistory,
+    ) -> crate::BoxFuture<
+        'a,
+        Result<Arc<dyn crate::session::SessionCheckpoint>, crate::storage::StorageError>,
+    >;
+
     /// Read the bound conversation after its execution resources acquire and reload storage.
     fn restore(&self) -> Result<Option<SessionSnapshot>, crate::storage::StorageError>;
 
     /// Publish the live voice view without I/O or clearing unaccepted recognition progress.
     fn stage_voice(&self, state: SessionSnapshot) -> Result<(), crate::storage::StorageError>;
-    /// Flush already staged voice state without replacing newer accepted speech history.
-    fn flush_voice<'a>(
-        &'a self,
-        cx: &'a crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'a, Result<(), crate::storage::StorageError>>;
-
     fn publish<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,
         state: SessionSnapshot,
-    ) -> crate::BoxFuture<'a, Result<(), crate::storage::StorageError>>;
+    ) -> crate::BoxFuture<'a, Result<Value, crate::storage::StorageError>>;
 }
 
 /// Shared definitions and live resources; no host resource enters the saved state.

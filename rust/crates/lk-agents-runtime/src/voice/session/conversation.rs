@@ -14,6 +14,10 @@ impl VoiceSession {
 }
 
 impl SessionCommands for VoiceSession {
+    fn checkpoint(&self) -> BoxFuture<'_, Result<serde_json::Value, StorageError>> {
+        Box::pin(async move { self.conversation()?.checkpoint().await })
+    }
+
     fn held_input<'a>(
         &'a self,
         remote_id: &'a str,

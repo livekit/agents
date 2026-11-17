@@ -243,6 +243,26 @@ impl VoiceDriver {
         Ok(())
     }
 
+    pub fn validate_conversation(
+        &self,
+        state: &lk_agents_abi::session::snapshot::SessionSnapshot,
+    ) -> Result<(), lk_agents_abi::storage::StorageError> {
+        self.admit_conversation()?;
+        lk_agents_core::session::validate_voice(state, &self.session.root_agent)
+            .map_err(|error| lk_agents_abi::storage::StorageError::Invalid(error.0))
+    }
+
+    /// An unrelated speech can abandon the run a control guard pinned. Nothing dependent
+    /// was acknowledged yet; re-admit that same command under a fresh scope while still open.
+    pub fn retry_conversation_checkpoint(
+        &self,
+        error: &lk_agents_abi::storage::StorageError,
+    ) -> bool {
+        !self.stopped()
+            && self.session.closing.is_none()
+            && matches!(error, lk_agents_abi::storage::StorageError::Cancelled(_))
+    }
+
     pub fn admit_remote(
         &self,
         input: &lk_agents_abi::delegation::remote::RemoteInput,

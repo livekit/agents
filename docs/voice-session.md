@@ -736,8 +736,11 @@ The remote service owns its conversation and approval behavior. The adapter
 places expert progress, questions, and outcomes in the conversation-owned inbox.
 The live session schedules frontend presentation around speech and interruptions.
 The fast brain phrases questions while the live session correlates replies with the
-remote task. Completion supplies the
-parent's tool result; a failed remote task becomes a tool error.
+remote task. Rephrasing keeps the same native input occurrence. A question counts as presented
+when its actual words reach the output boundary. An output failure before the first word leaves
+it available for another presentation; interrupted delivery records the delivered prefix.
+Queued wording alone never makes a question eligible for response recognition. Completion
+supplies the parent's tool result; a failed remote task becomes a tool error.
 Connection lifecycle and delegation metadata are managed internally. See
 [remote agents as tools](tools.md#remote-agents-as-tools) for routing and
 persistence ownership.

@@ -193,6 +193,9 @@ pub trait ToolReports {
 #[derive(Debug, Clone)]
 pub struct ToolReport {
     pub outcome: ToolOutcome,
+    /// Native input occurrence being presented; wording alone never identifies its owner.
+    #[host(default = None)]
+    pub input_request: Option<Box<crate::session::InputRequestRef>>,
     /// For a `Completed` from a VoiceTask's tool, the value the host validated, which ends the
     /// task.
     #[host(default = None)]
@@ -201,7 +204,7 @@ pub struct ToolReport {
 
 impl From<ToolOutcome> for ToolReport {
     fn from(outcome: ToolOutcome) -> Self {
-        ToolReport { outcome, transition: None }
+        ToolReport { outcome, input_request: None, transition: None }
     }
 }
 

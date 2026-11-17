@@ -524,12 +524,16 @@ impl VoiceDriver {
         self.record_effect(VoiceEffect::ChatContext(Arc::new(
             self.session.chat_ctx.agent_chat_ctx(),
         )));
-        let history = self.session.chat_ctx.history().cloned().collect();
-        self.record_effect(VoiceEffect::ConversationHistory {
+        self.record_effect(self.conversation_history());
+    }
+
+    /// Republish canonical history after storage reloads even when no chat item changed.
+    pub fn conversation_history(&self) -> VoiceEffect {
+        VoiceEffect::ConversationHistory {
             session_id: self.session.ids.session.clone(),
             root_agent: self.session.root_agent.clone(),
-            history,
-        });
+            history: self.session.chat_ctx.history().cloned().collect(),
+        }
     }
 
     /// `AgentHandoff`, then `AgentConfigUpdate` (skipped with neither instructions nor tools).
