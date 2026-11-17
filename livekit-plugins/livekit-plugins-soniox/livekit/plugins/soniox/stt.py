@@ -49,6 +49,7 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice.events import ConversationItemAddedEvent
 from livekit.agents.voice.io import (
     AudioOutput,
+    AudioOutputCapabilities,
     PlaybackFinishedEvent,
     PlaybackProgressedEvent,
     PlaybackStartedEvent,
@@ -167,7 +168,8 @@ class STTOptions:
     """Send the agent's speech to Soniox as agent text while it plays, which also lets Soniox
     cancel the agent's echo in the user's audio. Implies ``enable_agent_text_input``. Put
     ``STT.agent_text_output()`` in front of the session's transcription output so it receives
-    the agent's words with their Text-to-Speech timestamps."""
+    the agent's words with their Text-to-Speech timestamps, and its ``audio_output`` in front
+    of the session's audio output."""
 
     agent_text_lead_ms: int = 700
     """How far ahead of playback each of the agent's words is sent, in milliseconds.
@@ -290,17 +292,21 @@ class STT(stt.STT):
         audio_output: AudioOutput,
         next_in_chain: TextOutput | None = None,
         transform: Callable[..., list[TimedString]] = drop_bracket_cues,
-    ) -> TextOutput:
+    ) -> _AgentTextOutput:
         """Return a text output that sends the agent's speech to Soniox as it is spoken.
 
         It paces the agent's words against playback itself, sending each one
         ``agent_text_lead_ms`` before the caller hears it, so it goes *ahead* of the
         transcript synchronizer rather than after it - that is where the words still
-        carry the Text-to-Speech timestamps - and forwards everything on unchanged::
+        carry the Text-to-Speech timestamps - and forwards everything on unchanged.
+        Its ``audio_output`` goes in front of the session's audio, so it can see the
+        session pause the voice while the caller may be interrupting::
 
-            session.output.transcription = stt.agent_text_output(
+            agent_text = stt.agent_text_output(
                 session.output.audio, next_in_chain=session.output.transcription
             )
+            session.output.audio = agent_text.audio_output
+            session.output.transcription = agent_text
 
         Requires ``STTOptions.enable_echo_cancellation``, and, for the pacing to have
         anything to work from, ``use_tts_aligned_transcript=True`` on the session with a
@@ -329,7 +335,10 @@ class STT(stt.STT):
                 cues such as ``[laughs]``, which the voice performs rather than says.
 
         Returns:
-            The text output to put in front of the transcript synchronizer.
+            The text output to put in front of the transcript synchronizer. Its
+            ``audio_output`` goes in front of the session's audio output; without it
+            a pause is not seen, and the agent's words are sent on while the voice is
+            stopped.
         """
         return _AgentTextOutput(
             self, audio_output=audio_output, next_in_chain=next_in_chain, transform=transform
@@ -879,38 +888,106 @@ class _AgentText(NamedTuple):
 class _Playback:
     """How much of the reply being spoken the caller has heard.
 
-    Fed by the audio output's own playback reports, which are only made once the
-    audio can no longer be discarded, so the position is never revised
-    backwards. A sink that reports no progress at all leaves the time since
-    playback began as the estimate.
+    Counts from the last point known: the start of playback, or the end of the
+    last stretch the audio output reported played. A stretch is reported when it
+    ends, so after an underrun the report comes as the audio resumes, and the
+    count goes on from there. A pause is reported too, but the audio stays
+    stopped, so the count is frozen from `pause()` to `resume()`, which only an
+    `_AgentTextAudioOutput` in the session's audio chain can see.
     """
 
+    # When counting from `offset` began, 0.0 while the count is stopped.
     began_at: float = 0.0
     offset: float = 0.0
-    duration: float = 0.0
+    # Where the last stretch the audio output reported played ended.
+    reported: float | None = None
+    playing: bool = False
+    paused: bool = False
 
     def reset(self) -> None:
         """Forget the last reply, so the next one is not paced against where it ended."""
-        self.began_at = self.offset = self.duration = 0.0
+        self.began_at = self.offset = 0.0
+        self.reported = None
+        self.playing = False
 
     def on_started(self, ev: PlaybackStartedEvent) -> None:
-        self.began_at = time.time()
-        self.offset = self.duration = 0.0
+        self.playing = True
+        self.offset = 0.0
+        self.reported = None
+        self._count_on()
 
     def on_progressed(self, ev: PlaybackProgressedEvent) -> None:
-        self.began_at = ev.started_at
-        self.offset = ev.offset
-        self.duration = ev.duration
+        self.playing = True
+        self.reported = self.offset = ev.offset + ev.duration
+        self._count_on()
+
+    def pause(self) -> None:
+        if not self.paused:
+            self.offset = self.seconds()
+            self.paused = True
+            self.began_at = 0.0
+
+    def resume(self) -> None:
+        # The session resumes the audio before every segment, paused or not.
+        if self.paused:
+            self.paused = False
+            self._count_on()
+
+    def _count_on(self) -> None:
+        self.began_at = time.time() if self.playing and not self.paused else 0.0
 
     def seconds(self) -> float:
         if not self.began_at:
-            return 0.0
-        elapsed = time.time() - self.began_at
-        if not self.duration:
-            return max(0.0, elapsed)
-        # Never count past the stretch the sink has proven played, so the text
-        # cannot run ahead of the voice when the Text-to-Speech falls behind.
-        return self.offset + min(elapsed, self.duration)
+            return self.offset
+        return self.offset + time.time() - self.began_at
+
+
+class _AgentTextAudioOutput(AudioOutput):
+    """Passes the agent's audio through, and tells the pacing when playback pauses.
+
+    The session pauses the audio output while the caller may be interrupting,
+    and no playback report says when it resumes, so this sits in the audio chain
+    as the framework's own `TranscriptSynchronizer` does.
+    """
+
+    def __init__(self, text_output: _AgentTextOutput, *, next_in_chain: AudioOutput) -> None:
+        super().__init__(
+            label="SonioxAgentText",
+            next_in_chain=next_in_chain,
+            capabilities=AudioOutputCapabilities(pause=True),
+        )
+        self._text_output = text_output
+        # Whether the session's audio passes through here, so its pauses are seen.
+        self.captured = False
+
+    @property
+    def sample_rate(self) -> int | None:
+        if self._sample_rate is not None:
+            return self._sample_rate
+        return self.next_in_chain.sample_rate if self.next_in_chain else None
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        self.captured = True
+        if self.next_in_chain:
+            await self.next_in_chain.capture_frame(frame)
+        await super().capture_frame(frame)
+
+    def flush(self) -> None:
+        super().flush()
+        if self.next_in_chain:
+            self.next_in_chain.flush()
+
+    def clear_buffer(self) -> None:
+        if self.next_in_chain:
+            self.next_in_chain.clear_buffer()
+
+    def pause(self) -> None:
+        self._text_output._on_pause()
+        super().pause()
+
+    def resume(self) -> None:
+        super().resume()
+        self._text_output._on_resume()
 
 
 class _AgentTextOutput(TextOutput):
@@ -941,6 +1018,7 @@ class _AgentTextOutput(TextOutput):
         super().__init__(label="SonioxAgentText", next_in_chain=next_in_chain)
         self._stt = stt
         self._audio_output = audio_output
+        self._pause_output: _AgentTextAudioOutput | None = None
         self._segment_open = False
         # The reply's text is all here and only its playback is left.
         self._text_complete = False
@@ -958,6 +1036,7 @@ class _AgentTextOutput(TextOutput):
         self._space = ""
         self._pacing: asyncio.Task[None] | None = None
         self._warned_untimed = False
+        self._warned_no_pause_output = False
         # Set when the audio output revises the playback position, so a word
         # waiting on the old estimate is reconsidered against the new one.
         self._revised = asyncio.Event()
@@ -969,7 +1048,7 @@ class _AgentTextOutput(TextOutput):
 
     def _listen_to_playback(self) -> None:
         # The emitter keys listeners by callback, so registering twice is a no-op.
-        self._audio_output.on("playback_started", self._playback.on_started)
+        self._audio_output.on("playback_started", self._on_playback_started)
         self._audio_output.on("playback_progressed", self._on_playback_progressed)
         self._audio_output.on("playback_finished", self._on_playback_finished)
 
@@ -980,7 +1059,7 @@ class _AgentTextOutput(TextOutput):
         super().on_attached()
 
     def on_detached(self) -> None:
-        self._audio_output.off("playback_started", self._playback.on_started)
+        self._audio_output.off("playback_started", self._on_playback_started)
         self._audio_output.off("playback_progressed", self._on_playback_progressed)
         self._audio_output.off("playback_finished", self._on_playback_finished)
         self._attached = False
@@ -1014,6 +1093,32 @@ class _AgentTextOutput(TextOutput):
         if self.next_in_chain:
             self.next_in_chain.flush()
 
+    @property
+    def audio_output(self) -> AudioOutput:
+        """The audio output to put in front of the session's, so pauses are seen."""
+        if self._pause_output is None:
+            self._pause_output = _AgentTextAudioOutput(self, next_in_chain=self._audio_output)
+        return self._pause_output
+
+    def _on_pause(self) -> None:
+        self._playback.pause()
+
+    def _on_resume(self) -> None:
+        # No wake-up needed: a paused count only makes the pacing's wait too short.
+        self._playback.resume()
+
+    def _on_playback_started(self, ev: PlaybackStartedEvent) -> None:
+        if not self._warned_no_pause_output and (
+            self._pause_output is None or not self._pause_output.captured
+        ):
+            self._warned_no_pause_output = True
+            logger.warning(
+                "Soniox agent text cannot see the session pause the agent's voice, so "
+                "it sends the agent's words on while the voice is paused; set "
+                "session.output.audio to the agent text output's audio_output"
+            )
+        self._playback.on_started(ev)
+
     def _on_playback_progressed(self, ev: PlaybackProgressedEvent) -> None:
         """Take the revised position, and let a word waiting on the old one go."""
         self._playback.on_progressed(ev)
@@ -1024,12 +1129,17 @@ class _AgentTextOutput(TextOutput):
             if ev.interrupted:
                 # The words the caller heard are sent. The rest of the reply is
                 # dropped, and so is what the transform still holds back, such
-                # as a tag that was cut off.
-                self._send_until(ev.playback_position)
+                # as a tag that was cut off. After a pause `playback_position`
+                # is the time played rather than the position in the reply, so
+                # the stretch reported just before it is trusted first.
+                reported = self._playback.reported
+                self._send_until(ev.playback_position if reported is None else reported)
             else:
                 self._queue(self._transform([], self._held, final=True))
                 self._send_until(float("inf"))
             self._end_segment()
+        # A reply can play with no segment open, and its count must not run on.
+        self._playback.reset()
 
     def _end_segment(self) -> None:
         """Close the open segment, dropping whatever of it is still unsent."""
@@ -1105,9 +1215,9 @@ class _AgentTextOutput(TextOutput):
         The wait is computed from the playback position each time round, as the
         framework's own `TranscriptSynchronizer` recomputes its delay per word.
         A revision of that position cuts the wait short rather than waiting it
-        out: the audio output reports a run when it has played, so the position
-        it reports can be well ahead of the estimate, and a word that is due by
-        then has to go now or the caller hears it first.
+        out: when the audio output reports a run, the position it reports can be
+        ahead of the estimate, and a word that is due by then has to go now or
+        the caller hears it first.
         """
         try:
             while self._pending:

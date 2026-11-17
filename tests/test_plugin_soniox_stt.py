@@ -1398,6 +1398,119 @@ async def test_agent_text_goes_out_early_when_playback_turns_out_to_be_ahead() -
 
 
 @pytest.mark.virtual_time
+async def test_agent_text_keeps_pace_with_playback_resumed_after_an_underrun() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+    _heard(audio_output, 0.0)
+    await output.capture_text(TimedString("one ", start_time=2.5, end_time=2.8))
+
+    # The TTS fell behind: the first 2s ran out, and the room output reports
+    # that run only when the next audio arrives and playback resumes.
+    await asyncio.sleep(2.5)
+    _heard(audio_output, 2.0)
+    assert _sent(stream) == []
+
+    # Half a second into the resumed run the word is heard, though no report
+    # comes until that run ends.
+    await asyncio.sleep(0.55)
+    assert [message["text"] for message in _sent(stream)] == ["one "]
+    output.on_detached()
+
+
+@pytest.mark.virtual_time
+async def test_agent_text_waits_out_a_pause() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+    audio = output.audio_output
+    _heard(audio_output, 0.0)
+    await output.capture_text(TimedString("heard ", start_time=0.5, end_time=0.8))
+    await output.capture_text(TimedString("later ", start_time=1.2, end_time=1.5))
+
+    await asyncio.sleep(1.0)
+    # The caller may be interrupting, so the session pauses the audio; the room
+    # output reports the run that stopped, and the audio stays stopped.
+    audio.pause()
+    _heard(audio_output, 1.0)
+    await asyncio.sleep(2.0)
+    assert [message["text"] for message in _sent(stream)] == ["heard "]
+
+    # It was not an interruption after all, and the reply plays on.
+    audio.resume()
+    await asyncio.sleep(0.25)
+    assert [message["text"] for message in _sent(stream)] == ["later "]
+    output.on_detached()
+
+
+@pytest.mark.virtual_time
+async def test_agent_text_ignores_a_resume_that_follows_no_pause() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+    _heard(audio_output, 0.0)
+    await output.capture_text(TimedString("on ", start_time=1.6, end_time=1.8))
+
+    await asyncio.sleep(1.5)
+    # The session resumes the audio before every segment, paused or not.
+    output.audio_output.resume()
+    await asyncio.sleep(0.15)
+
+    assert [message["text"] for message in _sent(stream)] == ["on "]
+    output.on_detached()
+
+
+@pytest.mark.virtual_time
+async def test_agent_text_does_not_count_on_from_a_reply_that_played_without_text() -> None:
+    from livekit.agents.voice.io import PlaybackStartedEvent
+
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+    audio_output.emit("playback_started", PlaybackStartedEvent(created_at=time.time()))
+    await asyncio.sleep(1.0)
+    _played_out(output, position=1.0, interrupted=True)
+
+    # The next reply's text arrives before its playback starts.
+    await output.capture_text(TimedString("next ", start_time=0.5, end_time=0.8))
+    await asyncio.sleep(1.0)
+
+    assert _sent(stream) == []
+    output.on_detached()
+
+
+async def test_agent_text_warns_once_when_its_audio_output_is_not_in_the_chain(caplog) -> None:
+    from livekit import rtc
+    from livekit.agents.voice.io import PlaybackStartedEvent
+
+    def started(output) -> None:
+        output._audio_output.emit("playback_started", PlaybackStartedEvent(created_at=time.time()))
+
+    def warnings() -> int:
+        return sum("cannot see the session pause" in r.getMessage() for r in caplog.records)
+
+    with caplog.at_level("WARNING", logger="livekit.plugins.soniox"):
+        output, _, audio_output = _agent_text_output()
+        await output.audio_output.capture_frame(rtc.AudioFrame.create(16000, 1, 160))
+        started(output)
+        assert warnings() == 0
+        assert audio_output._pushed_duration > 0  # the audio went on to the session's output
+
+        bare, _, _ = _agent_text_output()
+        started(bare)
+        started(bare)
+        assert warnings() == 1
+
+
+async def test_agent_text_sends_what_the_last_run_played_when_interrupted() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+    await output.capture_text(TimedString("heard ", start_time=1.4, end_time=1.5))
+    output.flush()
+
+    # Interrupted: the room output reports the run that played up to 1.5s, then
+    # a position that, after a pause, is only the time played (1.3s).
+    _heard(audio_output, 1.5)
+    _played_out(output, position=1.3, interrupted=True)
+
+    assert _sent(stream) == [
+        {"type": "agent_text", "text": "heard ", "end_of_segment": False},
+        {"type": "agent_text", "text": "", "end_of_segment": True},
+    ]
+
+
+@pytest.mark.virtual_time
 async def test_agent_text_waits_for_the_word_itself_not_for_a_fixed_interval() -> None:
     output, stream, audio_output = _agent_text_output(lead_ms=0)
     _heard(audio_output, 0.0)
