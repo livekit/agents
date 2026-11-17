@@ -4,15 +4,15 @@ use super::*;
 use lk_agents_net::task::ScopedTask;
 
 pub(super) struct RoutingWork {
-    message_id: String,
+    request_id: String,
     _task: ScopedTask,
     result: signal::Cell<Option<SessionEvent>>,
 }
 
 impl Driver {
     pub(super) fn route(&mut self, input: lk_agents_core::session::InputRoutingRequest) {
-        let message_id = input.message.id.clone();
-        let lost_message_id = message_id.clone();
+        let request_id = input.request_id.clone();
+        let lost_request_id = request_id.clone();
         let delegation = self.delegation.clone();
         let background = self.routing_background.clone();
         let cx = self.cx.clone();
@@ -31,21 +31,21 @@ impl Driver {
                         options,
                     )
                     .await;
-                    SessionEvent::InputRouted { message_id, result: Some(result), usage }
+                    SessionEvent::InputRouted { request_id, result: Some(result), usage }
                 } else {
-                    SessionEvent::InputRoutingUnavailable
+                    SessionEvent::InputRoutingUnavailable { request_id }
                 };
                 done.resolve(event);
             },
         );
-        self.routing = Some(RoutingWork { message_id: lost_message_id, _task: task, result });
+        self.routing = Some(RoutingWork { request_id: lost_request_id, _task: task, result });
     }
 }
 
 pub(super) async fn routed(work: &Option<RoutingWork>) -> SessionEvent {
     let Some(work) = work else { return std::future::pending().await };
     work.result.wait().await.unwrap_or_else(|_| SessionEvent::InputRouted {
-        message_id: work.message_id.clone(),
+        request_id: work.request_id.clone(),
         result: None,
         usage: Default::default(),
     })

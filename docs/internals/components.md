@@ -26,7 +26,7 @@ activity-owned history, including the intentional late-event retention window.
 | --- | --- |
 | Agent instructions, tools and output contract | Shared Agent definition |
 | One model/tool conversation's progress and accepted output | Agent invocation |
-| Backend parent/child routing and private histories | TextSession state supplied by the application |
+| Parent/child routing and private histories | Shared conversation snapshot under the core session coordinator |
 | Active frontend role, floor and temporary live interactions | VoiceSession composition |
 | Speech eligibility, authorization and terminal outcome | Speech scheduling/lifecycle machine |
 | User transcript and recognition progress | Recognition child machines |
@@ -52,14 +52,22 @@ machines. Direct `Agent.run()`, TextSession and VoiceSession reuse its code with
 separate invocation state; the reusable Agent definition holds configuration.
 When composed inside a session, AgentRun has no independent task or queue.
 
-`TextSession` also lives in `lk-agents-core`. It is a separate request-scoped
-coordinator that owns backend frames, parent/child routing and history selection,
-and composes AgentRun for each invocation. It accepts explicitly supplied saved
-state and returns updated state. Runtime resolves agent resources and performs
-I/O; application code explicitly loads/saves session state. AgentRun and
-TextSession do not compose A2A partition orchestration or VoiceSession; the separate
+The core `Session` coordinator drives request-scoped TextSession execution. It owns private
+agent contexts, parent/child routing and history selection, and composes AgentRun for each
+invocation. A store binding supplies saved conversation state and receives native framework
+checkpoints. Runtime resolves agent resources and performs I/O; application-field saves remain
+explicit. Bound Agent.run uses the same coordinator. AgentRun and
+Session do not compose A2A partition orchestration or VoiceSession; the separate
 `a2a` module decides A2A tasks over ABI-declared storage records. Direct agent runs and voice execution
 use AgentRun without requiring TextSession.
+
+`session::input` owns presentation validation, grouped response reservation, held-response
+correction and detector admission over the shared snapshot. `session::remote` owns pinned
+destination lookup, journal application and origin-scoped recovery. These functions do not own
+an invocation, queue, lease or provider. The execution owner admits command lifetime and must
+checkpoint related state before acknowledging a command or allowing dependent I/O. Detector
+results carry their classification identity; a transcript revision invalidates the old verdict
+even when the human message retains its ID.
 
 These entrypoints use one shared Rust implementation of agent execution:
 request planning, model/tool step decisions, argument preparation, approval,
@@ -87,7 +95,7 @@ client-generated request.
 | Tool calls | Validated arguments, approval binding, call phase, progress and terminal result | Host executes the body; every result is correlated; changes to approved terms require fresh approval |
 | Output acceptance | Validation and application acceptance of the final value | Conversational text is distinct from accepted typed output; rejection returns explicit feedback |
 | Context construction | Application dependencies and explicitly persisted fields | Host creates runtime dependencies; load/save is explicit; control state never serializes host objects |
-| TextSession | Backend routing frames, pending child calls and context/history ownership | New human input starts a fresh invocation from supplied state; child completion resolves the original parent call |
+| Core session coordinator | Private agent contexts, local calls and history ownership | A bound human turn starts a fresh invocation from the selected conversation; child completion resolves the original parent call |
 | Frontend remote interaction | Pending remote request identity and reply correlation | Owned by the frontend conversation; delivery eligibility follows the active agent's configured remote tool |
 
 #### Shared tool execution

@@ -56,6 +56,11 @@ output and cancellation state are subordinate to that invocation, not independen
 A2A is a separate transport/durable-task boundary. Follow [`core::a2a`](../../rust/crates/lk-agents-core/src/a2a/mod.rs)
 and [`runtime::a2a`](../../rust/crates/lk-agents-runtime/src/a2a/mod.rs) only when investigating that door.
 
+Shared record-level decisions are in [`session::input`](../../rust/crates/lk-agents-core/src/session/input.rs)
+and [`session::remote`](../../rust/crates/lk-agents-core/src/session/remote.rs). They operate on the
+same native snapshot without constructing an AgentRun or doing I/O. Execution owners supply
+lifetime, delivery and checkpoint ordering; component contracts define those responsibilities.
+
 ### Pipeline voice reply
 
 1. [`VoiceDriver`](../../rust/crates/lk-agents-voice/src/agent_session/machine/driver.rs) receives

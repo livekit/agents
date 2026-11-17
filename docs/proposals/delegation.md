@@ -748,7 +748,7 @@ Use the existing crate graph:
 | Crate | Target responsibility/folder |
 | --- | --- |
 | ABI | session/ for shared conversation records/references/views; delegation/local/ and delegation/remote/ for their orchestration contracts. a2a/ retains protocol/client/endpoint contracts; storage/ retains binding/checkpoint contracts. |
-| Core | session/ for shared coordination; delegation/local/ and delegation/remote/ for their distinct decisions, retention and sibling tests. agent_run/ retains the invocation loop; a2a/ retains protocol and endpoint/task behavior. |
+| Core | session/ for shared coordination, with input.rs and remote.rs applying common rules to the native snapshot; delegation/local/ and delegation/remote/ for their distinct decisions, retention and sibling tests. agent_run/ retains the invocation loop; a2a/ retains protocol and endpoint/task behavior. |
 | Runtime | session/ for bound ownership and shared effect driving; delegation/local/ for child execution and delegation/remote/ for remote orchestration across persistence, detector and transport ports. |
 | Net | a2a_client/ remains the reusable transport client. Move the current remote orchestration executor to runtime/delegation/remote/; net does not gain storage or inference dependencies. |
 
@@ -857,7 +857,7 @@ a public Python export or an additional SDK constructor.
 | RemoteTaskRef | Reuse/promote the current core A2A TaskRef shape. | Context/task addressing; keep internal unless a public control signature requires it. |
 | InputRequestRef | New shared reference, not a lifecycle owner. | Qualify a local or remote input occurrence; keep internal by default. |
 | InputCandidate | Ephemeral detector input resolved by the core. | The qualified reference, question, canonical assistant presentation and any held human response eligible for correction; no private model history or authority to dispatch. |
-| InputRoutingRequest | Ephemeral native request for the configured routing model. | Canonical human message, visible history and presented candidates; no persisted command or second history. |
+| InputRoutingRequest | Ephemeral native request for the configured routing model. | Classification-attempt identity, canonical human message, visible history and presented candidates; no persisted command or second history. |
 | InputRoute | Internal ABI detector verdict. | Match zero/one/several input references or request clarification; use existing LLM interfaces rather than a new public detector base class. |
 | PresentationEvent | Evolve existing voice Presentation/ExpertInboxEvent records. | Transient normalized notification with original correlation, grouping and exact-output information. |
 | SessionCheckpoint, proposed | New typed batch extending the existing checkpoint contract. | Atomically commit related framework state/history/task/journal changes without arbitrary application-field saves. |
@@ -1139,6 +1139,9 @@ passes deterministic stock-peer transport and failure tests.
   response's identity before atomically applying new answers and corrections, so a late verdict
   cannot replace a newer response or partly admit a group. Voice/public explicit selection
   still needs the same shared owner integration.
+  Transcript revisions also invalidate the classification of the earlier words. The native
+  owner reclassifies the current message with a fresh attempt ID; a delayed old verdict or
+  configuration failure cannot authorize the revision or end its new classification.
 - [ ] Implement explicit references and the shared validation/reservation/dispatch path.
 - [ ] Implement eligibility, incarnations, passing, fairness and nested references.
 - [ ] Use source_message_id/response_message_id for remote input occurrences and canonical

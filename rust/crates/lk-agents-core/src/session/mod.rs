@@ -1,8 +1,10 @@
 //! Conversation coordination shared by execution modes; no I/O or host resources.
 
 pub mod effects;
+pub mod input;
 pub mod input_routing;
 mod machine;
+pub mod remote;
 mod resume;
 mod routing;
 
@@ -59,6 +61,8 @@ pub struct InputCandidate {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InputRoutingRequest {
+    /// One classification attempt; a transcript revision gets a fresh identity.
+    pub request_id: String,
     pub message: ChatMessage,
     pub history: Vec<ChatMessage>,
     pub candidates: Vec<InputCandidate>,
@@ -71,12 +75,14 @@ pub enum SessionEvent {
     PersistenceFailed(lk_agents_abi::storage::StorageError),
     Start(ChatMessage),
     InputRouted {
-        message_id: String,
+        request_id: String,
         /// Dropping the producer reports task death; it cannot leave admission waiting.
         result: Option<Result<InputRoute, lk_agents_abi::errors::ProviderError>>,
         usage: Usage,
     },
-    InputRoutingUnavailable,
+    InputRoutingUnavailable {
+        request_id: String,
+    },
     Run {
         invocation_id: String,
         event: agent_run::AgentRunEvent,
@@ -138,7 +144,7 @@ struct Invocation {
 
 enum Phase {
     NotStarted,
-    Routing { message: ChatMessage, candidates: Vec<InputCandidate> },
+    Routing { request_id: String, message: ChatMessage, candidates: Vec<InputCandidate> },
     Running(Invocation),
     Releasing(Invocation, InvocationRelease),
     Done,

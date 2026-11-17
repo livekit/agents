@@ -375,11 +375,11 @@ impl Driver {
     }
 
     fn route_answer(&mut self) {
-        let Phase::Routing { message, candidates } = &self.session.phase else {
+        let Phase::Routing { request_id, candidates, .. } = &self.session.phase else {
             panic!("a presented question awaits routing")
         };
         self.send(SessionEvent::InputRouted {
-            message_id: message.id.clone(),
+            request_id: request_id.clone(),
             result: Some(Ok(InputRoute::Matched(
                 candidates.iter().map(|candidate| candidate.reference.clone()).collect(),
             ))),

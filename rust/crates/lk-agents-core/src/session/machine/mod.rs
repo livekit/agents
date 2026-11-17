@@ -116,7 +116,6 @@ impl Session {
         Option<lk_agents_abi::delegation::remote::InputRequestRef>,
         lk_agents_abi::storage::StorageError,
     > {
-        use lk_agents_abi::delegation::remote::RemoteAgentState;
         use lk_agents_abi::storage::StorageError;
         if matches!(self.phase, Phase::Done) {
             return Err(StorageError::Invalid("the conversation owner has ended".into()));
@@ -132,21 +131,7 @@ impl Session {
                 "the conversation owner is closing; no new remote dispatch is admitted".into(),
             ));
         }
-        if command.remote_id.is_empty() || command.endpoint.is_empty() {
-            return Err(StorageError::Invalid("remote identity and endpoint are required".into()));
-        }
-        self.validate_input_dispatch(&command)?;
-        let remote_id = command.remote_id;
-        let remote = self
-            .state
-            .remote_agents
-            .entry(remote_id.clone())
-            .or_insert_with(|| RemoteAgentState::new(command.endpoint.clone()));
-        if remote.endpoint != command.endpoint {
-            return Err(StorageError::Invalid("the saved remote endpoint changed".into()));
-        }
-        crate::delegation::remote::journal::apply(&remote_id, remote, command.input)
-            .map_err(|error| StorageError::Invalid(error.to_string()))
+        crate::session::remote::apply(&mut self.state, command)
     }
 
     fn remote_state(
@@ -161,14 +146,7 @@ impl Session {
         if self.closing || self.persistence_failure.is_some() || matches!(self.phase, Phase::Done) {
             return Err(StorageError::Invalid("the conversation owner is closing or ended".into()));
         }
-        if remote_id.is_empty() || endpoint.is_empty() {
-            return Err(StorageError::Invalid("remote identity and endpoint are required".into()));
-        }
-        let Some(remote) = self.state.remote_agents.get(remote_id) else { return Ok(None) };
-        if remote.endpoint != endpoint {
-            return Err(StorageError::Invalid("the saved remote endpoint changed".into()));
-        }
-        Ok(Some(remote))
+        crate::session::remote::state(&self.state, remote_id, endpoint)
     }
 
     /// A saved context is routing data for this destination, never authority for another one.
@@ -193,23 +171,8 @@ impl Session {
         Option<lk_agents_abi::delegation::remote::RemoteRecovery>,
         lk_agents_abi::storage::StorageError,
     > {
-        use lk_agents_abi::delegation::remote::A2AJournalPayload;
-        use lk_agents_abi::delegation::remote::A2ARequest;
         let Some(state) = self.remote_state(remote_id, endpoint)? else { return Ok(None) };
-        let request = state
-            .requests
-            .iter()
-            .filter(|(_, request)| {
-                request.origin.as_ref() == Some(origin)
-                    && state.events.get(request.request_event as usize).is_some_and(|event| {
-                        matches!(event.payload, A2AJournalPayload::Request(A2ARequest::Send(_)))
-                    })
-            })
-            .max_by_key(|(_, request)| request.request_event);
-        let Some((id, _)) = request else { return Ok(None) };
-        crate::delegation::remote::journal::recovery(state, id)
-            .map(Some)
-            .map_err(|error| lk_agents_abi::storage::StorageError::Invalid(error.to_string()))
+        crate::session::remote::recovery(state, origin)
     }
 
     pub fn snapshot(&self) -> SessionSnapshot {
@@ -252,27 +215,14 @@ impl Session {
             }
             SessionEvent::Start(message) if matches!(self.phase, Phase::NotStarted) => {
                 self.record_dialogue(message.clone());
-                let candidates = self.input_candidates();
-                if candidates.is_empty()
-                    || message.raw_text_content().unwrap_or_default().trim().is_empty()
-                {
-                    self.invoke(Some(message), now, &mut effects);
-                } else {
-                    // Receipt and human input precede classification. The detector never sees
-                    // a queued question or an agent's private model history.
-                    effects.push(SessionEffect::RouteInput(super::InputRoutingRequest {
-                        message: message.clone(),
-                        history: self.state.chat_history.clone(),
-                        candidates: candidates.clone(),
-                    }));
-                    self.phase = Phase::Routing { message, candidates };
-                }
+                // Receipt and human input precede classification. The detector never sees
+                // a queued question or an agent's private model history.
+                self.route_input(message, now, &mut effects);
             }
-            SessionEvent::InputRouted { message_id, result, usage } => {
-                self.input_routed(message_id, result, usage, now, &mut effects);
+            SessionEvent::InputRouted { request_id, result, usage } => {
+                self.input_routed(request_id, result, usage, now, &mut effects);
             }
-            SessionEvent::InputRoutingUnavailable
-                if matches!(self.phase, Phase::Routing { .. }) =>
+            SessionEvent::InputRoutingUnavailable { request_id } if matches!(&self.phase, Phase::Routing { request_id: current, .. } if *current == request_id) =>
             {
                 self.finish(
                     Err(TextSessionError::Routing(RoutingError::InvalidState(

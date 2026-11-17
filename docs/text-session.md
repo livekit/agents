@@ -115,6 +115,8 @@ requests that were actually presented. This includes a single question and earli
 questions from inactive agents. A side question such as "Why do you need the date?" leaves the
 date request open. An unclear or failed classification lets the current agent clarify; it does
 not guess a destination. Without presented candidates, no classification call is made.
+The verdict applies to the exact message classified. A revised transcript must be classified
+again before its current words can answer a request.
 
 The current agent still receives the entire human message and a private routing observation.
 The native owner validates selected occurrences and checkpoints their canonical human response

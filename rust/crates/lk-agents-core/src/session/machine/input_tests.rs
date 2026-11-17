@@ -4,6 +4,13 @@ use lk_agents_abi::session::{
     AgentInputRequest, InputRequestRef, InputRequestState, SessionInputCommand,
 };
 
+fn routing_id(session: &Session) -> String {
+    let Phase::Routing { request_id, .. } = &session.phase else {
+        panic!("the model has no input classification to answer")
+    };
+    request_id.clone()
+}
+
 fn remote(session: &mut Session, input: RemoteInput) -> Option<InputRequestRef> {
     session
         .remote(RemoteCommand {
@@ -335,7 +342,7 @@ fn a_stale_correction_verdict_cannot_overwrite_a_newer_response_or_partly_reserv
         };
         session.handle(
             SessionEvent::InputRouted {
-                message_id: "correction".into(),
+                request_id: routing_id(&session),
                 result: Some(Ok(InputRoute::Matched(vec![name, flight.clone()]))),
                 usage: Default::default(),
             },
@@ -434,7 +441,7 @@ fn routing_precedes_the_current_agents_turn_and_checkpoints_the_selected_respons
     assert_eq!(session.snapshot().chat_history.last().unwrap().id, "reply");
     let effects = session.handle(
         SessionEvent::InputRouted {
-            message_id: "reply".into(),
+            request_id: routing_id(&session),
             result: Some(Ok(InputRoute::Matched(vec![reference.clone()]))),
             usage: Default::default(),
         },
@@ -480,7 +487,7 @@ fn side_questions_ambiguous_verdicts_and_router_death_preserve_the_open_request(
         );
         session.handle(
             SessionEvent::InputRouted {
-                message_id: "reply".into(),
+                request_id: routing_id(&session),
                 result,
                 usage: Default::default(),
             },
@@ -506,6 +513,7 @@ fn a_stale_or_late_detector_cannot_reserve_or_reopen_a_request() {
         let mut session =
             Session::new(previous.config, input(Some(previous.session.snapshot()))).unwrap();
         session.handle(SessionEvent::Start(message("reply", Role::User, "Friday")), Ts::ZERO);
+        let route_id = routing_id(&session);
         if cancel {
             session.handle(SessionEvent::Cancel, Ts::ZERO);
         } else {
@@ -517,7 +525,7 @@ fn a_stale_or_late_detector_cannot_reserve_or_reopen_a_request() {
         }
         session.handle(
             SessionEvent::InputRouted {
-                message_id: "reply".into(),
+                request_id: route_id,
                 result: Some(Ok(InputRoute::Matched(vec![reference.clone()]))),
                 usage: Default::default(),
             },
@@ -532,4 +540,86 @@ fn a_stale_or_late_detector_cannot_reserve_or_reopen_a_request() {
         );
         assert_eq!(matches!(session.phase, Phase::Done), cancel);
     }
+}
+
+#[test]
+fn a_revised_transcript_is_classified_again_before_it_can_answer_a_question() {
+    let mut previous = Driver::new(config(false, ChatHistory::Fresh, false), None, "Find flights");
+    let reference = question(&mut previous.session);
+    present(&mut previous, vec![reference.clone()]);
+    let mut session =
+        Session::new(previous.config, input(Some(previous.session.snapshot()))).unwrap();
+    session.handle(SessionEvent::Start(message("reply", Role::User, "Friday")), Ts::ZERO);
+    let original_request = routing_id(&session);
+    session.record_dialogue(message("reply", Role::User, "Why do you need the date?"));
+    let effects = session.handle(
+        SessionEvent::InputRouted {
+            request_id: original_request.clone(),
+            result: Some(Ok(InputRoute::Matched(vec![reference.clone()]))),
+            usage: Default::default(),
+        },
+        Ts::ZERO,
+    );
+    let request = effects
+        .iter()
+        .find_map(|effect| match effect {
+            SessionEffect::RouteInput(request) => Some(request),
+            _ => None,
+        })
+        .expect("a detector verdict cannot authorize different transcript words");
+    assert_eq!(request.message.raw_text_content().as_deref(), Some("Why do you need the date?"));
+    assert!(!effects.iter().any(|effect| matches!(effect, SessionEffect::Run { .. })));
+    let revised_request = request.request_id.clone();
+    assert_ne!(original_request, revised_request);
+    let usage = session.usage();
+    let late = session.handle(
+        SessionEvent::InputRouted {
+            request_id: original_request.clone(),
+            result: Some(Ok(InputRoute::Matched(vec![reference.clone()]))),
+            usage: lk_agents_abi::usage::Usage { requests: 99, ..Default::default() },
+        },
+        Ts::ZERO,
+    );
+    assert!(late.is_empty(), "the old verdict cannot be reinterpreted as the revised request");
+    assert_eq!(session.usage(), usage, "a late receipt cannot charge its usage twice");
+    assert!(
+        session
+            .handle(
+                SessionEvent::InputRoutingUnavailable { request_id: original_request },
+                Ts::ZERO,
+            )
+            .is_empty(),
+        "an old configuration failure cannot end the revised classification"
+    );
+
+    let input = &session.state.remote_agents["flights"].tasks["flight"].input_requests
+        [reference.remote().unwrap().2];
+    assert_eq!(input.state, InputRequestState::Open);
+    assert_eq!(input.human_response_id, None);
+    let effects = session.handle(
+        SessionEvent::InputRouted {
+            request_id: revised_request,
+            result: Some(Ok(InputRoute::NoMatch)),
+            usage: Default::default(),
+        },
+        Ts::ZERO,
+    );
+    let history = effects
+        .iter()
+        .find_map(|effect| match effect {
+            SessionEffect::Run {
+                effect: agent_run::AgentRunEffect::LlmRequestStart { chat_ctx, .. },
+                ..
+            } => Some(chat_ctx),
+            _ => None,
+        })
+        .expect("the current agent handles the revised side question");
+    let human: Vec<_> = history
+        .items
+        .iter()
+        .filter_map(ChatItem::as_message)
+        .filter(|message| message.id == "reply")
+        .collect();
+    assert_eq!(human.len(), 1);
+    assert_eq!(human[0].raw_text_content().as_deref(), Some("Why do you need the date?"));
 }
