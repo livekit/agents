@@ -473,6 +473,53 @@ fn routing_precedes_the_current_agents_turn_and_checkpoints_the_selected_respons
 }
 
 #[test]
+fn routing_exposes_reservations_only_after_the_whole_group_is_accepted() {
+    for stale in [false, true] {
+        let mut driver =
+            Driver::new(config(false, ChatHistory::Fresh, false), None, "Find flights");
+        let flight = question(&mut driver.session);
+        let name = local_question(&mut driver.session);
+        present(&mut driver, vec![name.clone(), flight.clone()]);
+        let offered = driver.session.input_candidates();
+        let human = message("reply", Role::User, "Ada, next Friday");
+        driver.session.record_dialogue(human.clone());
+        if stale {
+            driver
+                .session
+                .state
+                .remote_agents
+                .get_mut("flights")
+                .unwrap()
+                .tasks
+                .get_mut("flight")
+                .unwrap()
+                .input_requests
+                .get_mut(flight.remote().unwrap().2)
+                .unwrap()
+                .state = InputRequestState::Closed;
+        }
+        let before = driver.session.snapshot();
+        let selected = vec![name, flight];
+        let admission = crate::session::input::route(
+            &mut driver.session.state,
+            &human,
+            &offered,
+            Some(Ok(InputRoute::Matched(selected.clone()))),
+        )
+        .unwrap();
+        if stale {
+            assert!(admission.requests.is_empty(), "a partly stale group cannot be forwarded");
+            assert_eq!(driver.session.snapshot(), before, "no member is partly reserved");
+        } else {
+            assert_eq!(admission.requests, selected);
+            for reference in &admission.requests {
+                assert_eq!(driver.session.input_response(reference).unwrap().id, human.id);
+            }
+        }
+    }
+}
+
+#[test]
 fn side_questions_ambiguous_verdicts_and_router_death_preserve_the_open_request() {
     for result in [Some(Ok(InputRoute::NoMatch)), Some(Ok(InputRoute::Unclear)), None] {
         let mut previous =

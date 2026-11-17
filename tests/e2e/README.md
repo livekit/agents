@@ -42,6 +42,27 @@ an ordinary RemoteAgent tool and resumes its input-required task after frontend 
 The shared `framework/media.py` also supplies the v1 compatibility speech fixtures.
 See the [framework design](../../docs/proposals/e2e.md) for provider and acceptance policies.
 
+## Live conversation evaluations
+
+Real models are an explicit additional run:
+
+```sh
+uv run --no-sync pytest tests/e2e/test_delegation_live_models.py --e2e --live-models
+```
+
+Configure the cloud project's `LIVEKIT_URL` and its `LIVEKIT_INFERENCE_API_KEY` and
+`LIVEKIT_INFERENCE_API_SECRET` (or `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`). The selected
+project must match the inference gateway. `E2E_FRONTEND_MODEL` and `E2E_ROUTING_MODEL` select
+the two model IDs; both default to `google/gemma-4-31b-it`, using separate model instances.
+There is no scripted fallback when a selected model or its credentials fail.
+
+The journeys use a real frontend, a real routing model and independent stock A2A services.
+They check date responses, side questions, new topics, ambiguity and grouped name collection
+with full and partial answers. Each writes `live-model-report.json` beneath its pytest artifact
+directory: model IDs, turn timings, perceived conversation, original communication events and
+task/input state. Assertions check original-task routing and the person's exact forwarded words;
+they allow the model to choose natural wording. Keep failed runs when evaluating model quality.
+
 ## Files
 
 | File | Journey | Live or scripted |
@@ -49,6 +70,7 @@ See the [framework design](../../docs/proposals/e2e.md) for provider and accepta
 | `test_framework.py` | Conversation restart, received speech and interruption during actual audio playback | Scripted models and tone speech; real app processes, SQLite and isolated SFU |
 | `test_stock_a2a.py` | Remote Message replies and input-required continuation after frontend restart | A stock A2A SDK server in a separate process; ordinary frontend, scripted model, real HTTP/SSE and SQLite |
 | `test_adk.py` | The same RemoteAgent frontend runs an ADK agent and its tool | Pinned ADK and A2A SDK in a separate environment/process; scripted inference, real server and HTTP transport |
+| `test_delegation_live_models.py` | Intent routing, grouped remote questions and partial responses | Opt-in real frontend and routing models; stock A2A peer processes and real HTTP/SSE |
 | `test_worker.py` | Job processes: IPC launch, health kill, wire faults, stress; a real worker's crashed, leaking, slow-initializing and orphaned jobs and their logs; a process that dies holding a storage turn; worker processes serving their text doors | Hermetic: real OS processes, local SQLite (AgentDB case skips without a project) |
 | `test_cli.py` | The CLI launcher: module launch, failure exits, one shutdown budget across drain and cleanup, signals while a real job process runs | Hermetic: real OS processes and signals |
 | `test_preload.py` | Application preloads before readiness, spawn and forkserver, copy-on-write, unsafe preloads refused | Hermetic; forkserver cases run on Linux only |

@@ -20,6 +20,10 @@ pub struct RunInputRequirement {
     pub call: crate::a2a::turn::PendingCall,
     pub question: String,
     pub verbatim: bool,
+    /// The prompt selected to include this requirement, not proof it reached the person.
+    /// The conversation owner checks that message's actual output receipt before routing.
+    #[host(default = None)]
+    pub presentation_message_id: Option<String>,
 }
 
 /// The settled invocation: its status, then the history and usage every branch exposes. The host
@@ -39,8 +43,8 @@ pub struct RunResult {
     pub verbatim: Option<String>,
     /// The selected tool call waiting on human input, supplied by the execution core.
     pub pending_call: Option<crate::a2a::turn::PendingCall>,
-    /// Every tool-originated input requirement, in model-call order. The singular outcome and
-    /// `pending_call` remain the compatibility projection; other requirements are not answered.
+    /// Every tool-originated input requirement, in model-call order. Presentation membership
+    /// is explicit; grouping questions never combines their answer or delivery state.
     pub input_requirements: Vec<RunInputRequirement>,
 }
 

@@ -38,6 +38,73 @@ def request_state(app: App) -> str:
     return next(iter(current.input_requests.values())).state
 
 
+@pytest.mark.parametrize("partial", [False, True])
+async def test_a_grouped_name_prompt_reserves_only_the_fields_the_person_answered(
+    partial: bool,
+) -> None:
+    store = ContextStore()
+    app = await store.load_context(App())
+    grouped = "What are your first and last names?"
+    replies: list[object] = [
+        [tool_call("first_name"), tool_call("last_name")],
+        tool_call("present_input_requests", requests=[0, 1], text=grouped),
+    ]
+    replies.extend(
+        ["And your last name?", "Thanks, Ada Lovelace."] if partial else ["Thanks, Ada Lovelace."]
+    )
+    frontend = FakeLLM(replies)
+
+    def route(history: ChatContext) -> FunctionToolCall:
+        prompt = json.loads(history.items[-1].text_content)
+        expected = {"What is your first name?", "What is your last name?"}
+        if prompt["latest_message"] == "Ada":
+            expected = {"What is your first name?"}
+        elif prompt["latest_message"] == "Lovelace":
+            expected = {"What is your last name?"}
+        return tool_call(
+            "route_input_response",
+            candidates=[
+                candidate["index"]
+                for candidate in prompt["candidates"]
+                if candidate["question"] in expected
+            ],
+            unclear=False,
+        )
+
+    agent = Agent(name="intake", instructions="Collect the guest's name.", llm=frontend)
+
+    @agent.tool
+    async def first_name() -> InputRequired:
+        """Ask for the first name."""
+        return InputRequired("What is your first name?", verbatim=False)
+
+    @agent.tool
+    async def last_name() -> InputRequired:
+        """Ask for the last name."""
+        return InputRequired("What is your last name?", verbatim=False)
+
+    session = TextSession(agent=agent, delegation=DelegationOptions(routing_model=FakeLLM(route)))
+    result = await session.run("Check me in.", context=store.bind(app))
+    assert result.status == "input_required" and result.question == grouped
+    assert app.session.current_agent is not None
+    assert len(app.session.current_agent.input_requests) == 2
+    await session.run("Ada" if partial else "Ada Lovelace", context=store.bind(app))
+    requests = {
+        request.source_message.text_content: request
+        for request in app.session.current_agent.input_requests.values()
+    }
+    assert requests["What is your first name?"].state == "responded"
+    assert requests["What is your last name?"].state == ("open" if partial else "responded")
+    if partial:
+        await session.run("Lovelace", context=store.bind(app))
+        requests = {
+            request.source_message.text_content: request
+            for request in app.session.current_agent.input_requests.values()
+        }
+        assert requests["What is your first name?"].response_message.text_content == "Ada"
+        assert requests["What is your last name?"].response_message.text_content == "Lovelace"
+
+
 async def test_a_side_question_does_not_consume_the_date_and_a_later_response_is_routed() -> None:
     store = ContextStore()
     app = await store.load_context(App())
@@ -89,6 +156,45 @@ async def test_a_side_question_does_not_consume_the_date_and_a_later_response_is
     prompt = json.loads(routing.requests[-1].items[-1].text_content)
     assert prompt["latest_message"] == "Friday"
     assert [candidate["question"] for candidate in prompt["candidates"]] == ["Which date?"]
+
+
+async def test_an_unconsumed_grouped_prompt_does_not_make_its_sources_response_eligible() -> None:
+    store = ContextStore()
+    app = await store.load_context(App())
+    routing = FakeLLM([])
+    agent = Agent(
+        name="intake",
+        instructions="Collect a name.",
+        llm=FakeLLM(
+            [
+                [tool_call("first_name"), tool_call("last_name")],
+                tool_call(
+                    "present_input_requests", requests=[0, 1], text="Your first and last name?"
+                ),
+                "How can I help?",
+            ]
+        ),
+    )
+
+    @agent.tool
+    async def first_name() -> InputRequired:
+        """Ask for the first name."""
+        return InputRequired("First name?", verbatim=False)
+
+    @agent.tool
+    async def last_name() -> InputRequired:
+        """Ask for the last name."""
+        return InputRequired("Last name?", verbatim=False)
+
+    session = TextSession(agent=agent, delegation=DelegationOptions(routing_model=routing))
+    async with session.run_stream("Check me in", context=store.bind(app)) as stream:
+        result = await stream.result()
+        assert result.status == "input_required"
+    result = await session.run("Ada Lovelace", context=store.bind(app))
+    assert result.output == "How can I help?" and routing.requests == []
+    current = app.session.current_agent
+    assert current is not None and len(current.input_requests) == 2
+    assert all(request.state == "open" for request in current.input_requests.values())
 
 
 @pytest.mark.parametrize(

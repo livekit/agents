@@ -334,6 +334,10 @@ class RunInputRequirement:
     call: PendingCall
     question: str
     verbatim: bool
+    presentation_message_id: str | None = None
+    """The prompt selected to include this requirement, not proof it reached the person.
+    The conversation owner checks that message's actual output receipt before routing.
+    """
 
 
 @dataclass(kw_only=True, slots=True)

@@ -169,6 +169,7 @@ pub(super) fn input_requirement(
         },
         question: question.clone(),
         verbatim: *verbatim,
+        presentation_message_id: None,
     })
 }
 

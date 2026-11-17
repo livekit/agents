@@ -29,6 +29,19 @@ impl Runner {
 }
 
 impl lk_agents_abi::session::SessionCommands for Runner {
+    fn admit_input(
+        &self,
+        request: lk_agents_abi::session::InputRoutingRequest,
+        verdict: Option<
+            Result<lk_agents_abi::session::InputRoute, lk_agents_abi::errors::ProviderError>,
+        >,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::session::InputAdmission, lk_agents_abi::storage::StorageError>,
+    > {
+        Box::pin(async move { self.commands()?.admit_input(request, verdict).await })
+    }
+
     fn checkpoint(
         &self,
     ) -> lk_agents_abi::BoxFuture<'_, Result<serde_json::Value, lk_agents_abi::storage::StorageError>>

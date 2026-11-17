@@ -57,10 +57,45 @@ pub enum InputRoute {
     Unclear,
 }
 
+/// Ephemeral detector input, resolved from canonical content and actual presentation evidence.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InputCandidate {
+    pub reference: InputRequestRef,
+    pub question: String,
+    pub presentation: crate::ChatMessage,
+    /// A held response can be corrected only before its dispatch starts.
+    pub response: Option<crate::ChatMessage>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InputRoutingRequest {
+    /// One classification attempt; a transcript revision gets a fresh identity.
+    pub request_id: String,
+    pub message: crate::ChatMessage,
+    pub history: Vec<crate::ChatMessage>,
+    pub candidates: Vec<InputCandidate>,
+}
+
+/// Accepted correlation, distinct from the detector's untrusted verdict. Not serialized.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InputAdmission {
+    /// Private context for the frontend model; never parsed to decide whether to send.
+    pub observation: String,
+    /// Atomically reserved occurrences; delivery still requires a checkpoint and eligibility.
+    pub requests: Vec<InputRequestRef>,
+}
+
 /// Serialized conversation authority. No host policy callback or saved command capability.
 #[crate::host(native(refused = "expected the active native conversation owner"))]
 pub trait SessionCommands: Send + Sync {
     fn checkpoint(&self) -> crate::BoxFuture<'_, Result<Value, crate::storage::StorageError>>;
+
+    /// Validate the offered occurrences and checkpoint their reservations before continuation.
+    fn admit_input(
+        &self,
+        request: InputRoutingRequest,
+        verdict: Option<Result<InputRoute, crate::errors::ProviderError>>,
+    ) -> crate::BoxFuture<'_, Result<InputAdmission, crate::storage::StorageError>>;
 
     fn input<'a>(
         &'a self,

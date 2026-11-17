@@ -58,8 +58,8 @@ impl Session {
         }
         let message = message.clone();
         self.usage.add(&usage);
-        let observation = match input::route(&mut self.state, &message, candidates, result) {
-            Ok(observation) => observation,
+        let admission = match input::route(&mut self.state, &message, candidates, result) {
+            Ok(admission) => admission,
             Err(error) => {
                 let Some(current) = self
                     .state
@@ -85,7 +85,8 @@ impl Session {
         // The current agent receives the same human message exactly once and a private
         // framework observation. It does not lose the conversational floor to the detector.
         let id = self.mint("input_route");
-        let observation = ChatMessage::text(id, Role::System, observation, self.stamp(now));
+        let observation =
+            ChatMessage::text(id, Role::System, admission.observation, self.stamp(now));
         let frame = self.active_frame_mut();
         frame.history.push(observation.into());
         self.phase = Phase::NotStarted;
@@ -102,6 +103,18 @@ impl Session {
             return Err(StorageError::Invalid("the conversation owner is closing".into()));
         }
         input::apply(&mut self.state, vec![command])
+    }
+
+    pub fn admit_input(
+        &mut self,
+        request: super::InputRoutingRequest,
+        verdict: Option<Result<super::InputRoute, lk_agents_abi::errors::ProviderError>>,
+    ) -> Result<super::InputAdmission, StorageError> {
+        if self.closing || self.persistence_failure.is_some() || matches!(self.phase, Phase::Done) {
+            return Err(StorageError::Invalid("the conversation owner is closing or ended".into()));
+        }
+        input::route(&mut self.state, &request.message, &request.candidates, verdict)
+            .map_err(|error| StorageError::Invalid(error.0))
     }
     pub fn input_candidates(&self) -> Vec<InputCandidate> {
         input::candidates(&self.state)

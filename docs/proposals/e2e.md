@@ -83,6 +83,20 @@ silently replaces a fake nor falls back to one when credentials are absent. Mode
 scores do not substitute for deterministic framework assertions. A passing fake-model test
 does not establish that a real model selects good routes or sounds natural.
 
+Select live-model evaluations with `--e2e --live-models`. The first Gemma routing journey uses
+a real frontend LLM, a separately configured Gemma instance, ordinary TextSession/store binding
+and a stock A2A peer process. `E2E_FRONTEND_MODEL` and `E2E_ROUTING_MODEL` select the model IDs;
+credentials come from the explicit LiveKit Inference environment. Keep `LIVEKIT_URL` for the
+selected cloud project, or set `LIVEKIT_INFERENCE_URL` explicitly, so staging credentials reach
+the matching gateway. Missing credentials fail the
+selected run. The default correctness suite does not collect these live evaluations.
+Each selected journey writes `live-model-report.json` in its test artifact directory, with
+requested model IDs, turn timings, delivered conversation, task/input state and the original
+SDK communication journal. Model wording is not matched against one fixed sentence.
+The name-collection journeys start two independent stock A2A services. They check that the
+frontend groups their related questions, that a full name reaches both original tasks, and
+that a first-name-only response leaves the last-name task open until the next response.
+
 ## Shared resources and real boundaries
 
 Launch application modules with serializable configuration and service addresses. Construct

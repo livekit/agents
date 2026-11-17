@@ -14,6 +14,16 @@ impl VoiceSession {
 }
 
 impl SessionCommands for VoiceSession {
+    fn admit_input(
+        &self,
+        request: lk_agents_abi::session::InputRoutingRequest,
+        verdict: Option<
+            Result<lk_agents_abi::session::InputRoute, lk_agents_abi::errors::ProviderError>,
+        >,
+    ) -> BoxFuture<'_, Result<lk_agents_abi::session::InputAdmission, StorageError>> {
+        Box::pin(async move { self.conversation()?.admit_input(request, verdict).await })
+    }
+
     fn checkpoint(&self) -> BoxFuture<'_, Result<serde_json::Value, StorageError>> {
         Box::pin(async move { self.conversation()?.checkpoint().await })
     }

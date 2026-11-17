@@ -21,9 +21,13 @@ _MAX_OPEN_FILES = 8192
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--e2e", action="store_true", help="also run tests/e2e (live services)")
+    parser.addoption(
+        "--live-models", action="store_true", help="run explicitly selected live-model evaluations"
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line("markers", "live_models: explicitly configured paid-model evaluation")
     if sys.platform == "darwin":
         import resource
 
@@ -32,16 +36,26 @@ def pytest_configure(config: pytest.Config) -> None:
             resource.setrlimit(resource.RLIMIT_NOFILE, (_MAX_OPEN_FILES, hard))
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+def pytest_collection_modifyitems(items: list[pytest.Item], config: pytest.Config) -> None:
     # a hermetic test runs in well under a second, so the suite-wide limit is short; live
     # services are slow, so `e2e/` keeps its own
     for item in items:
+        if item.get_closest_marker("live_models") is not None and not config.getoption(
+            "--live-models"
+        ):
+            item.add_marker(pytest.mark.skip(reason="live-model evaluations require --live-models"))
         if item.path.is_relative_to(_E2E) and item.get_closest_marker("timeout") is None:
             item.add_marker(pytest.mark.timeout(_E2E_TIMEOUT))
 
 
 def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
     if not config.getoption("--e2e") and collection_path.is_relative_to(_E2E):
+        return True
+    if (
+        collection_path.is_relative_to(_E2E)
+        and collection_path.name.endswith("_live_models.py")
+        and not config.getoption("--live-models")
+    ):
         return True
     return None
 

@@ -158,9 +158,20 @@ impl Session {
         };
         for requirement in &result.input_requirements {
             let reference = retain_input(frame, requirement, stamp);
-            if result.pending_call.as_ref() == Some(&requirement.call)
-                && let Some(message_id) = &delivered_question
-            {
+            if let Some(message_id) = requirement.presentation_message_id.as_ref().filter(|id| {
+                frame.visible_dialogue.iter().any(|message| {
+                    message.id == **id
+                        && !message.interrupted
+                        && message.role == lk_agents_abi::Role::Assistant
+                        && message.raw_text_content().is_some_and(|text| !text.trim().is_empty())
+                        && result.new_messages.iter().any(|item| {
+                            item.as_message().is_some_and(|source| {
+                                source.id == message.id
+                                    && source.raw_text_content() == message.raw_text_content()
+                            })
+                        })
+                })
+            }) {
                 presentations.push((reference, message_id.clone()));
             }
         }

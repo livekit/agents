@@ -27,7 +27,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-pub use lk_agents_abi::session::InputRoute;
+pub use lk_agents_abi::session::{InputAdmission, InputCandidate, InputRoute, InputRoutingRequest};
 pub use lk_agents_abi::text_session::{
     ChildCallStatus, FrameId, ParentCall, PendingChildCall, SessionFrame, SessionSnapshot,
     TextSessionError, TextSessionTurn,
@@ -48,25 +48,6 @@ pub struct SessionInput {
     pub wall: WallAnchor,
     pub cleanup_timeout: Duration,
     pub delegated: bool,
-}
-
-/// Ephemeral detector input, resolved from canonical content and actual presentation evidence.
-#[derive(Debug, Clone, PartialEq)]
-pub struct InputCandidate {
-    pub reference: lk_agents_abi::session::InputRequestRef,
-    pub question: String,
-    pub presentation: ChatMessage,
-    /// A held human response may be corrected only while its dispatch has not begun.
-    pub response: Option<ChatMessage>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct InputRoutingRequest {
-    /// One classification attempt; a transcript revision gets a fresh identity.
-    pub request_id: String,
-    pub message: ChatMessage,
-    pub history: Vec<ChatMessage>,
-    pub candidates: Vec<InputCandidate>,
 }
 
 /// Every event belonging to an invocation carries its identity. Late receipts cannot mutate

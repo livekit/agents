@@ -1,5 +1,6 @@
 """A stock A2A SDK application: no LiveKit imports, extensions or shared database."""
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from uuid import uuid4
@@ -14,6 +15,9 @@ from starlette.applications import Starlette
 
 
 class Travel(AgentExecutor):
+    def __init__(self, question: str, result_prefix: str) -> None:
+        self.question, self.result_prefix = question, result_prefix
+
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         assert context.message is not None
         text = "".join(part.text for part in context.message.parts)
@@ -62,13 +66,13 @@ class Travel(AgentExecutor):
                     task_id=task_id,
                     context_id=context_id,
                     role=pb.Role.ROLE_AGENT,
-                    parts=[pb.Part(text="Which day?")],
+                    parts=[pb.Part(text=self.question)],
                 )
             )
             return
 
         await updater.start_work()
-        await updater.add_artifact([pb.Part(text="Booked for ")], artifact_id="confirmation")
+        await updater.add_artifact([pb.Part(text=self.result_prefix)], artifact_id="confirmation")
         await updater.add_artifact(
             [pb.Part(text=f"{text}.")], artifact_id="confirmation", append=True, last_chunk=True
         )
@@ -85,7 +89,9 @@ def create_app(url: str) -> Starlette:
     assert "livekit.agents" not in sys.modules, "the peer runs independently of LiveKit"
     card = pb.AgentCard(
         name="travel",
-        description="Book a flight; ask for the day if it is missing.",
+        description=os.environ.get(
+            "STOCK_DESCRIPTION", "Book a flight; ask for the day if it is missing."
+        ),
         version="1",
         supported_interfaces=[
             pb.AgentInterface(url=f"{url}/rpc", protocol_binding="JSONRPC", protocol_version="1.0")
@@ -94,7 +100,14 @@ def create_app(url: str) -> Starlette:
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain"],
     )
-    handler = DefaultRequestHandler(Travel(), InMemoryTaskStore(), card)
+    handler = DefaultRequestHandler(
+        Travel(
+            os.environ.get("STOCK_QUESTION", "Which day?"),
+            os.environ.get("STOCK_RESULT_PREFIX", "Booked for "),
+        ),
+        InMemoryTaskStore(),
+        card,
+    )
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncIterator[None]:

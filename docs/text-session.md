@@ -118,6 +118,12 @@ not guess a destination. Without presented candidates, no classification call is
 The verdict applies to the exact message classified. A revised transcript must be classified
 again before its current words can answer a request.
 
+Related tool questions can become one prompt, such as "What are your first and last names?"
+The frontend selects the sources and wording together; each input request keeps its identity.
+A clear full-name response can address both requests. "My first name is Ada" answers only the
+first-name request, leaving the last name open. Questions omitted from the delivered prompt
+are not offered to the routing model. Grouping questions never grants business approval.
+
 The current agent still receives the entire human message and a private routing observation.
 The native owner validates selected occurrences and checkpoints their canonical human response
 before dispatch. Recognition can retain an answer while another agent is current. It does not

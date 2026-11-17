@@ -2722,6 +2722,7 @@ pub mod agent_run {
             call,
             question,
             verbatim,
+            presentation_message_id,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item(
@@ -2734,6 +2735,13 @@ pub mod agent_run {
         )?;
         kwargs.set_item("question", ::pyo3::IntoPyObjectExt::into_bound_py_any(question, py)?)?;
         kwargs.set_item("verbatim", ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?)?;
+        kwargs.set_item(
+            "presentation_message_id",
+            match presentation_message_id {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
         crate::py_calls::call(
             RUN_INPUT_REQUIREMENT
                 .import(py, "livekit.agents._generated.agent_run", "RunInputRequirement")?

@@ -3,8 +3,12 @@
 use std::sync::Arc;
 
 use super::{Now, VoiceEvent, VoiceRuntime};
-use crate::session::SessionCommand;
-use lk_agents_abi::session::{InputRequestRef, SessionCheckpoint, snapshot::SessionSnapshot};
+use crate::session::{Receipt, SessionCommand};
+use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::session::{
+    InputAdmission, InputRequestRef, InputRoute, InputRoutingRequest, SessionCheckpoint,
+    SessionInputCommand, snapshot::SessionSnapshot,
+};
 use lk_agents_abi::storage::StorageError;
 use lk_agents_core::session::{input, remote};
 use lk_agents_net::{signal, task::ScopedTask};
@@ -20,13 +24,57 @@ pub(super) enum Work {
         result: signal::Cell<Option<Result<Arc<dyn SessionCheckpoint>, StorageError>>>,
     },
     Writing {
-        command: SessionCommand,
-        outcome: Result<Option<InputRequestRef>, StorageError>,
+        write: ConversationWrite,
         _task: ScopedTask,
         result: signal::Cell<Option<Result<Value, StorageError>>>,
     },
     /// The caller has ended; the admitted write and its scope still join session cleanup.
     Closing { _task: ScopedTask },
+}
+
+/// Each write retains its original command and correctly typed caller until the receipt.
+pub(super) enum ConversationWrite {
+    Flush {
+        done: Receipt<Value>,
+    },
+    Input {
+        command: SessionInputCommand,
+        done: Receipt<()>,
+        outcome: Result<(), StorageError>,
+    },
+    Remote {
+        command: Box<lk_agents_abi::delegation::remote::RemoteCommand>,
+        done: Receipt<Option<InputRequestRef>>,
+        outcome: Result<Option<InputRequestRef>, StorageError>,
+    },
+    Admission {
+        request: Box<InputRoutingRequest>,
+        verdict: Option<Result<InputRoute, ProviderError>>,
+        done: Receipt<InputAdmission>,
+        outcome: Result<InputAdmission, StorageError>,
+    },
+}
+
+impl ConversationWrite {
+    fn into_command(self) -> SessionCommand {
+        match self {
+            Self::Flush { done } => SessionCommand::Flush { done },
+            Self::Input { command, done, .. } => SessionCommand::Input { command, done },
+            Self::Remote { command, done, .. } => SessionCommand::Apply { command, done },
+            Self::Admission { request, verdict, done, .. } => {
+                SessionCommand::AdmitInput { request, verdict, done }
+            }
+        }
+    }
+
+    fn resolve(self, saved: Result<Value, StorageError>) {
+        match self {
+            Self::Flush { done } => done.resolve(saved),
+            Self::Input { done, outcome, .. } => done.resolve(saved.and(outcome)),
+            Self::Remote { done, outcome, .. } => done.resolve(saved.and(outcome)),
+            Self::Admission { done, outcome, .. } => done.resolve(saved.and(outcome)),
+        }
+    }
 }
 
 pub(super) enum Advance {
@@ -130,26 +178,15 @@ impl VoiceRuntime {
                 self.perform_voice(vec![effect]);
                 self.apply_conversation_command(command, scope);
             }
-            (Work::Writing { command, outcome, .. }, Advance::Written(saved)) => {
+            (Work::Writing { write, .. }, Advance::Written(saved)) => {
                 if let Err(error) = &saved
                     && self.driver.retry_conversation_checkpoint(error)
                 {
-                    self.conversation_command(command);
+                    self.conversation_command(write.into_command());
                     return;
                 }
                 let failed = saved.as_ref().err().cloned();
-                match command {
-                    SessionCommand::Flush { done } => done.resolve(saved),
-                    SessionCommand::Input { done, .. } => {
-                        done.resolve(saved.map(drop).and(outcome.map(drop)));
-                    }
-                    SessionCommand::Apply { done, .. } => {
-                        done.resolve(saved.map(drop).and(outcome));
-                    }
-                    command => command.fail(StorageError::Invalid(
-                        "a read-only command cannot own a write".into(),
-                    )),
-                }
+                write.resolve(saved);
                 if let Some(error) = failed {
                     self.handle(VoiceEvent::ConversationStateFailed(error).into(), now);
                 }
@@ -171,61 +208,66 @@ impl VoiceRuntime {
                 return;
             }
         };
-        let outcome = match &command {
-            SessionCommand::HeldInput { remote_id, endpoint, .. } => {
-                let result = remote::state(&state, remote_id, endpoint).and_then(|remote| {
+        let write = match command {
+            SessionCommand::HeldInput { remote_id, endpoint, done } => {
+                let result = remote::state(&state, &remote_id, &endpoint).and_then(|remote| {
                     remote
-                        .map(|remote| input::held_remote_input(remote_id, remote))
+                        .map(|remote| input::held_remote_input(&remote_id, remote))
                         .transpose()
                         .map(Option::flatten)
                 });
-                if let SessionCommand::HeldInput { done, .. } = command {
-                    done.resolve(result);
-                }
+                done.resolve(result);
                 return;
             }
-            SessionCommand::Response { reference, .. } => {
-                let result = input::response(&state, reference);
-                if let SessionCommand::Response { done, .. } = command {
-                    done.resolve(result);
-                }
+            SessionCommand::Response { reference, done } => {
+                done.resolve(input::response(&state, &reference));
                 return;
             }
-            SessionCommand::DefaultContext { remote_id, endpoint, .. } => {
-                let result = remote::state(&state, remote_id, endpoint)
+            SessionCommand::DefaultContext { remote_id, endpoint, done } => {
+                let result = remote::state(&state, &remote_id, &endpoint)
                     .map(|remote| remote.and_then(|remote| remote.default_context_id.clone()));
-                if let SessionCommand::DefaultContext { done, .. } = command {
-                    done.resolve(result);
-                }
+                done.resolve(result);
                 return;
             }
-            SessionCommand::Recover { remote_id, endpoint, origin, .. } => {
-                let result = remote::state(&state, remote_id, endpoint).and_then(|remote| {
+            SessionCommand::Recover { remote_id, endpoint, origin, done } => {
+                let result = remote::state(&state, &remote_id, &endpoint).and_then(|remote| {
                     remote
-                        .map(|remote| remote::recovery(remote, origin))
+                        .map(|remote| remote::recovery(remote, &origin))
                         .transpose()
                         .map(Option::flatten)
                 });
-                if let SessionCommand::Recover { done, .. } = command {
-                    done.resolve(result);
-                }
+                done.resolve(result);
                 return;
             }
-            SessionCommand::Input { command, .. } => {
-                input::apply(&mut state, vec![command.clone()]).map(|()| None)
+            SessionCommand::Input { command, done } => {
+                let outcome = input::apply(&mut state, vec![command.clone()]);
+                ConversationWrite::Input { command, done, outcome }
             }
-            SessionCommand::Apply { command, .. } => self
-                .driver
-                .admit_remote(&command.input)
-                .and_then(|()| remote::apply(&mut state, *command.clone())),
-            SessionCommand::Flush { .. } => Ok(None),
+            SessionCommand::Apply { command, done } => {
+                let outcome = self
+                    .driver
+                    .admit_remote(&command.input)
+                    .and_then(|()| remote::apply(&mut state, *command.clone()));
+                ConversationWrite::Remote { command, done, outcome }
+            }
+            SessionCommand::AdmitInput { request, verdict, done } => {
+                let outcome = input::route(
+                    &mut state,
+                    &request.message,
+                    &request.candidates,
+                    verdict.clone(),
+                )
+                .map_err(|error| StorageError::Invalid(error.0));
+                ConversationWrite::Admission { request, verdict, done, outcome }
+            }
+            SessionCommand::Flush { done } => ConversationWrite::Flush { done },
         };
         // A refused projection can retain valid protocol evidence. Persist that evidence
         // before acknowledging either outcome, as the text owner does.
         if let Err(error) =
             self.session_sink.as_ref().expect("snapshot has a binding").stage_voice(state)
         {
-            command.fail(error.clone());
+            write.into_command().fail(error.clone());
             let _ = self.reports.send(VoiceEvent::ConversationStateFailed(error));
             return;
         }
@@ -237,7 +279,7 @@ impl VoiceRuntime {
                 complete.resolve(scope.commit().await);
             },
         );
-        self.conversation_work = Some(Work::Writing { command, outcome, _task: task, result });
+        self.conversation_work = Some(Work::Writing { write, _task: task, result });
     }
 
     pub(super) fn close_conversation(&mut self) {
@@ -246,8 +288,8 @@ impl VoiceRuntime {
             command.fail(StorageError::Cancelled("the voice conversation ended".into()));
         }
         match self.conversation_work.take() {
-            Some(Work::Writing { command, _task, .. }) => {
-                command.fail(StorageError::Cancelled(
+            Some(Work::Writing { write, _task, .. }) => {
+                write.into_command().fail(StorageError::Cancelled(
                     "the voice conversation ended during its write".into(),
                 ));
                 self.conversation_work = Some(Work::Closing { _task });

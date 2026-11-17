@@ -1,7 +1,7 @@
 //! Shared input admission over conversation records. The execution owner supplies lifecycle,
 //! actual delivery receipts and persistence; these rules contain no model or transport loop.
 
-use super::{InputCandidate, InputRoute, SessionSnapshot};
+use super::{InputAdmission, InputCandidate, InputRoute, SessionSnapshot};
 use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::session::{InputRequestRef, InputRequestState, SessionInputCommand};
 use lk_agents_abi::storage::StorageError;
@@ -112,7 +112,7 @@ pub fn route(
     message: &ChatMessage,
     candidates: &[InputCandidate],
     result: Option<Result<InputRoute, lk_agents_abi::errors::ProviderError>>,
-) -> Result<String, Invalid> {
+) -> Result<InputAdmission, Invalid> {
     if message.role == Role::User
         && !matches!(canonical(&state.chat_history, &message.id, Role::User), Ok(current) if current == message)
     {
@@ -127,7 +127,8 @@ pub fn route(
             (candidate.reference.clone(), candidate.response.as_ref().map(|held| held.id.clone()))
         })
         .collect();
-    Ok(match result {
+    let mut accepted = Vec::new();
+    let observation = match result {
         Some(Ok(InputRoute::Matched(requests)))
             if unique(&requests).is_ok()
                 && requests.iter().all(|reference| offered.contains_key(reference)) =>
@@ -148,13 +149,17 @@ pub fn route(
                 .collect();
             let selected = apply(state, commands);
             match selected {
-                Ok(()) => format!(
-                    "This human message responds to these presented input requests: {}. \
+                Ok(()) => {
+                    let observation = format!(
+                        "This human message responds to these presented input requests: {}. \
                      The responses are reserved; they are not proof of remote delivery. \
                      Continue handling the entire message, including any other topic. \
                      Recognition is not approval for a business operation.",
-                    serde_json::to_string(&requests).expect("input references serialize"),
-                ),
+                        serde_json::to_string(&requests).expect("input references serialize"),
+                    );
+                    accepted = requests;
+                    observation
+                }
                 Err(_) => "The selected input requests changed. Keep them pending and clarify; \
                     do not guess a destination or forward an answer automatically."
                     .into(),
@@ -168,7 +173,8 @@ pub fn route(
             its intended destination naturally. Keep the input requests pending and do \
             not guess an answer destination."
             .into(),
-    })
+    };
+    Ok(InputAdmission { observation, requests: accepted })
 }
 
 /// Validate the entire group against one snapshot, then publish it together. A stale member

@@ -155,6 +155,12 @@ impl Driver {
 
     async fn command(&mut self, command: SessionCommand, effects: &mut VecDeque<SessionEffect>) {
         let (command, done) = match command {
+            SessionCommand::AdmitInput { request, verdict, done } => {
+                let result = self.session.admit_input(*request, verdict);
+                let saved = self.checkpoint_command(effects).await;
+                done.resolve(saved.and(result));
+                return;
+            }
             SessionCommand::Flush { done } => {
                 let result = self.checkpoint_command(effects).await.and_then(|state| {
                     state.ok_or_else(|| {

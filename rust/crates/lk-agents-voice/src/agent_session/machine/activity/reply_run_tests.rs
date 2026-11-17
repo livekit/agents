@@ -240,6 +240,7 @@ fn failed_reply_keeps_correlated_input_requirements_in_the_voice_run_failure() {
         },
         question: "Which city?".into(),
         verbatim: true,
+        presentation_message_id: None,
     };
     driver.reply_effects(
         speech,

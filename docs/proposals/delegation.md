@@ -182,6 +182,10 @@ name?" If the person supplies only their first name, continue with the missing i
 If separate input requests contributed to that prompt, track their responses individually;
 grouping alone neither resolves them nor makes an ambiguous response sufficient. A clear
 response can address several requests, each validated and reserved against its own target.
+For text tool batches, the frontend selects a group and its wording in one structured
+presentation response. Each selected source keeps the resulting prompt's message ID. The
+owner marks those sources presented only after that prompt reaches the text output boundary;
+unselected sources stay unpresented. A malformed selection fails without delivering its text.
 Preserve per-request presentation evidence: an interruption before part of the grouped prompt
 is delivered must not mark every included question as presented. Exact wording and approval
 contracts still apply when choosing what can be grouped.
@@ -861,7 +865,7 @@ a public Python export or an additional SDK constructor.
 | ConversationHistory and ConversationStateFailed | Internal voice effect/input; no Python types. | Publish core-accepted history through the native binding before host callbacks; preserve pending recognition and refreshed remote state. The core closes voice on a refused state publication. |
 | InputPresented and ToolReport.input_request | Reuse the shared InputRequestRef in a private voice effect and the existing host report. | A checkpointed A2A occurrence follows rephrasing into actual output delivery. The existing voice inbox holds transient speech correlation; a failed/unspoken presentation can be retried without creating another input occurrence. No new question or presentation class. |
 | SessionCommand and CommandPort | Shared native runtime command queue in session/. | Text and voice use bounded command admission and producer-owned receipts. Voice checkpoints run on owned tasks alongside audio and interruption events. Ending the receiver settles received, queued and capacity-waiting requests; a client retains no execution authority after owner loss. No Python export. |
-| voice::conversation::Work, private runtime record | A voice command's acquisition/write phase. | Retains its ScopedTask, caller receipt and completion signal while media/events continue; carries no second conversation snapshot or Python API. |
+| voice::conversation::{Work, ConversationWrite}, private runtime records | A voice command's acquisition/write phase and typed write receipt. | Retain the original command, outcome, ScopedTask and matching caller while media/events continue. A retry re-admits the original input; one command kind cannot resolve another kind's receipt. No second conversation snapshot or Python API. |
 | RemoteRecovery, internal ABI decision | Reuses the core journal's recovery classification. | Carries an unsent original SDK request, a task to read, an accepted direct reply or uncertainty. Returned through the native owner; neither serialized nor exported as Python state classes. |
 | RemoteInvocation, internal runtime input | Groups the existing invocation arguments and services. | Production and DST use the same remote executor; only its endpoint client is injected. No new Python API or second controller. |
 | RemoteTaskCommands, conditional internal ABI port | Extend the existing binding/owner command path where possible. | Bound RemoteTask.cancel() reaches the authorized owner without putting a runtime dependency in storage or adding a public controller. |
@@ -870,6 +874,8 @@ a public Python export or an additional SDK constructor.
 | InputCandidate | Ephemeral detector input resolved by the core. | The qualified reference, question, canonical assistant presentation and any held human response eligible for correction; no private model history or authority to dispatch. |
 | InputRoutingRequest | Ephemeral native request for the configured routing model. | Classification-attempt identity, canonical human message, visible history and presented candidates; no persisted command or second history. |
 | InputRoute | Internal ABI detector verdict. | Match zero/one/several input references or request clarification; use existing LLM interfaces rather than a new public detector base class. |
+| InputAdmission | Private native result after validating the detector's offered references. | Carries atomically reserved occurrences separately from the frontend model's explanatory note. Forwarding reads these references after the checkpoint; it never parses that note. No saved record or Python API. |
+| AgentRun presentation purpose and RunInputRequirement.presentation_message_id | Extend the existing model step and requirement metadata; no new public class. | The frontend names the selected sources and their combined wording before text is emitted. Native validation rejects duplicate/unknown indices. The owner independently checks the full prompt's delivery; metadata alone cannot mark a source presented. |
 | PresentationEvent | Evolve existing voice Presentation/ExpertInboxEvent records. | Transient normalized notification with original correlation, grouping and exact-output information. |
 | SessionCheckpoint | Private acquired scope extending the existing checkpoint contract. | Retains partition ownership from state reload through atomic framework state/history/task/journal writes, even when voice is idle or its last speech finishes. Dropping it releases ownership. It neither saves arbitrary application fields nor enters the Python API. |
 | VoiceHistory, private I/O record | Captures the conversation and the database baseline observed by that snapshot. | Reconciled receipts retain their fence and observation order; overlapping writes cannot relabel a stale snapshot as a new local edit. This is not a persisted format or a public constructor. |
@@ -1289,6 +1295,14 @@ model use scripted inference for correctness runs, while real native delegation 
 task state, storage and RTC/A2A transport are exercised. Scripts provide model output through
 the normal parser/validation path; they do not implement a second delegation state machine.
 Live-provider conversation evaluation runs separately through the same applications.
+Completion also requires recorded runs with a real frontend LLM and a separate configured
+routing model, starting with Gemma. Add a Decision model comparison after that baseline.
+Exercise related-question grouping, partial/grouped answers,
+side questions, ambiguity and corrections through the ordinary SDK path. Record exact model
+identifiers and settings, scenario results, routing/delivery timings, transcripts and correlated
+task/journal evidence. Review actual wording and audio as well as routing outcomes; a scripted
+pass does not count as live-model evidence. Credentials and model identifiers are explicit
+configuration, with no implicit provider fallback.
 
 ### E2E journeys
 

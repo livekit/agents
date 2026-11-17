@@ -502,3 +502,58 @@ fn model_failure_retains_a_reported_question_before_the_stream_ends() {
         driver.send(AgentRunEvent::ToolSettled { call: sibling, outcome: ToolOutcome::Cancelled });
     assert_reported_question(&effects, &call_id);
 }
+
+#[test]
+fn a_grouped_prompt_records_only_its_selected_sources_and_never_streams_unvalidated_text() {
+    for indices in [json!([0, 1]), json!([1]), json!([0, 0]), json!([2])] {
+        let mut driver = Driver::new(
+            text_agent(vec![string_tool("first", "name"), string_tool("last", "name")]),
+            "Check me in",
+            Vec::new(),
+        );
+        driver.reply("", &[("first", json!({"name":"?"})), ("last", json!({"name":"?"}))]);
+        driver.run_tools(|name| ToolOutcome::InputRequired {
+            question: format!("What is your {name} name?"),
+            verbatim: false,
+            tool: None,
+        });
+        let effects = driver.reply(
+            "unvalidated text",
+            &[(
+                "present_input_requests",
+                json!({
+                    "requests":indices, "text":"Your name?"
+                }),
+            )],
+        );
+        assert!(!effects.iter().any(|effect| matches!(effect,
+            AgentRunEffect::Emit(StreamEvent::TextDelta { delta, .. })
+                if delta == "unvalidated text")));
+        if indices == json!([0, 1]) || indices == json!([1]) {
+            let result = driver.result();
+            let selected: Vec<_> = result
+                .input_requirements
+                .iter()
+                .enumerate()
+                .filter_map(|(index, input)| input.presentation_message_id.as_ref().map(|_| index))
+                .collect();
+            assert_eq!(json!(selected), indices);
+            assert!(
+                result
+                    .input_requirements
+                    .iter()
+                    .filter_map(|input| { input.presentation_message_id.as_ref() })
+                    .all(|id| result.new_messages.iter().any(|item| item.id() == *id))
+            );
+        } else {
+            assert!(driver.finished().unwrap().is_err());
+            assert!(
+                driver
+                    .run
+                    .input_requirements
+                    .iter()
+                    .all(|input| { input.presentation_message_id.is_none() })
+            );
+        }
+    }
+}

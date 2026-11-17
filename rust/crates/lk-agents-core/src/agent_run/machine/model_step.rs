@@ -8,6 +8,8 @@ pub(super) enum Purpose {
     Turn,
     /// The facing agent words a question; `ask` is what it asks.
     Phrase(lk_agents_abi::agent::run::RunQuestion),
+    /// Select a manageable group and its wording together, retaining each source identity.
+    Present(Vec<lk_agents_abi::agent::run::RunInputRequirement>),
 }
 
 #[derive(Debug)]
@@ -19,12 +21,14 @@ pub(super) struct ModelStep {
     pub(super) text: String,
     /// Calls the response made so far: each is admitted as it arrives.
     calls: usize,
+    presentation: Vec<FunctionToolCall>,
 }
 
 /// The finished response; its calls were taken as they arrived.
 #[derive(Debug)]
 pub(super) struct Response {
     pub(super) text: String,
+    pub(super) presentation: Vec<FunctionToolCall>,
 }
 
 /// What one chunk adds: text to stream, and the calls it made with their index in the response.
@@ -36,7 +40,14 @@ pub(super) struct Added {
 
 impl ModelStep {
     pub(super) fn new(request: RequestId, purpose: Purpose, message_id: String) -> Self {
-        ModelStep { request, purpose, message_id, text: String::new(), calls: 0 }
+        ModelStep {
+            request,
+            purpose,
+            message_id,
+            text: String::new(),
+            calls: 0,
+            presentation: Vec::new(),
+        }
     }
 
     /// Takes one chunk: the text it adds, to stream, and the calls it makes, to admit, as they
@@ -45,11 +56,15 @@ impl ModelStep {
         let Some(delta) = chunk.delta else { return Added::default() };
         let mut added = Added::default();
         // A phrasing request offers no tools; a call it makes anyway is not one to run.
-        if self.purpose == Purpose::Turn {
+        if matches!(self.purpose, Purpose::Turn) {
             for call in delta.tool_calls {
                 added.calls.push((self.calls, call));
                 self.calls += 1;
             }
+        } else if matches!(self.purpose, Purpose::Present(_)) {
+            self.presentation.extend(delta.tool_calls);
+            // The structured prompt is admitted before any of its words are delivered.
+            return added;
         }
         added.text = delta.content.filter(|t| !t.is_empty());
         if let Some(text) = &added.text {
@@ -63,6 +78,6 @@ impl ModelStep {
     }
 
     pub(super) fn end(self) -> Response {
-        Response { text: self.text }
+        Response { text: self.text, presentation: self.presentation }
     }
 }

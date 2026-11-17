@@ -30,6 +30,7 @@ mod cancellation;
 mod checkpoint;
 mod coordinated;
 mod model_step;
+mod presentation;
 mod step_outcome;
 mod text_session;
 
@@ -697,6 +698,10 @@ impl AgentRun {
                 tools.extend(agent::final_result_tool(&self.agent));
             }
             Purpose::Phrase(ask) => phrase = Some(format!("{ASK_IN_OWN_WORDS}{}", ask.question)),
+            Purpose::Present(candidates) => {
+                phrase = Some(presentation::prompt(candidates));
+                tools.push(presentation::tool());
+            }
         }
         if self.input.opening.coordinated() {
             let request = RequestId(self.mint());
@@ -809,12 +814,16 @@ impl AgentRun {
         let (message_id, purpose) = (step.message_id.clone(), step.purpose.clone());
         let response = step.end();
         self.ledger.finish(request.0, true);
+        if let Purpose::Present(candidates) = &purpose {
+            return self.presented(candidates, response.presentation, now, fx);
+        }
         if let Purpose::Phrase(ask) = purpose {
             let text = response.text.trim();
             let question = if text.is_empty() { ask.question.clone() } else { text.to_owned() };
             return self.asked(
                 RunQuestion { question, ..ask },
                 (!text.is_empty()).then_some(message_id),
+                &[],
                 now,
                 fx,
             );
@@ -959,9 +968,18 @@ impl AgentRun {
         }
         if !ask.verbatim && !self.input.delegated {
             let dynamic = self.dynamic.clone();
+            let candidates: Vec<_> = self
+                .input_requirements
+                .iter()
+                .filter(|requirement| !requirement.verbatim)
+                .cloned()
+                .collect();
+            if candidates.len() > 1 {
+                return self.request(Purpose::Present(candidates), dynamic, now, fx);
+            }
             return self.request(Purpose::Phrase(ask), dynamic, now, fx);
         }
-        self.asked(ask, None, now, fx)
+        self.asked(ask, None, &[], now, fx)
     }
 
     /// Records the question as the reply (`message_id` when a request streamed it) and settles.
@@ -969,11 +987,21 @@ impl AgentRun {
         &mut self,
         ask: RunQuestion,
         message_id: Option<String>,
+        members: &[String],
         now: Ts,
         fx: &mut Vec<AgentRunEffect>,
     ) {
         let streamed = message_id.is_some();
         let id = message_id.unwrap_or_else(|| self.item_id());
+        if let Some(call) = &self.pending_call {
+            for requirement in &mut self.input_requirements {
+                if (requirement.call == *call || members.contains(&requirement.call.call_id))
+                    && requirement.presentation_message_id.is_none()
+                {
+                    requirement.presentation_message_id = Some(id.clone());
+                }
+            }
+        }
         self.record(
             ChatMessage::text(id.clone(), Role::Assistant, &ask.question, self.stamp(now)).into(),
         );

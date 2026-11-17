@@ -4,7 +4,24 @@
 use lk_agents_net::signal;
 use tokio::sync::mpsc;
 
+pub(crate) type Receipt<T> =
+    signal::Producer<Option<Result<T, lk_agents_abi::storage::StorageError>>>;
+
 pub(crate) enum SessionCommand {
+    AdmitInput {
+        request: Box<lk_agents_abi::session::InputRoutingRequest>,
+        verdict: Option<
+            Result<lk_agents_abi::session::InputRoute, lk_agents_abi::errors::ProviderError>,
+        >,
+        done: signal::Producer<
+            Option<
+                Result<
+                    lk_agents_abi::session::InputAdmission,
+                    lk_agents_abi::storage::StorageError,
+                >,
+            >,
+        >,
+    },
     Flush {
         done: signal::Producer<
             Option<Result<serde_json::Value, lk_agents_abi::storage::StorageError>>,
@@ -67,6 +84,7 @@ pub(crate) enum SessionCommand {
 impl SessionCommand {
     pub(crate) fn fail(self, error: lk_agents_abi::storage::StorageError) {
         match self {
+            Self::AdmitInput { done, .. } => done.resolve(Err(error)),
             Self::Flush { done } => done.resolve(Err(error)),
             Self::HeldInput { done, .. } => done.resolve(Err(error)),
             Self::Response { done, .. } => done.resolve(Err(error)),
@@ -91,6 +109,31 @@ impl CommandPort {
 }
 
 impl lk_agents_abi::session::SessionCommands for CommandPort {
+    fn admit_input(
+        &self,
+        request: lk_agents_abi::session::InputRoutingRequest,
+        verdict: Option<
+            Result<lk_agents_abi::session::InputRoute, lk_agents_abi::errors::ProviderError>,
+        >,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<lk_agents_abi::session::InputAdmission, lk_agents_abi::storage::StorageError>,
+    > {
+        Box::pin(async move {
+            use lk_agents_abi::storage::StorageError;
+            let (done, result) = signal::once();
+            self.0
+                .send(SessionCommand::AdmitInput { request: Box::new(request), verdict, done })
+                .await
+                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
+            result.wait().await.map_err(|_| {
+                StorageError::Invalid(
+                    "the conversation owner ended before admitting the response".into(),
+                )
+            })?
+        })
+    }
+
     fn checkpoint(
         &self,
     ) -> lk_agents_abi::BoxFuture<'_, Result<serde_json::Value, lk_agents_abi::storage::StorageError>>

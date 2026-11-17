@@ -264,6 +264,7 @@ fn retained_requirements_survive_result_precedence_and_close() {
         },
         question: "Which day?".into(),
         verbatim: true,
+        presentation_message_id: None,
     };
     runs.retain_input_requirements(std::slice::from_ref(&requirement));
     // A coordinated step and its terminal envelope report the same request. Keep one
