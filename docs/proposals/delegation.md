@@ -931,12 +931,16 @@ writer's edit, even after lease reacquisition; submission order spans the whole 
 Acquiring a lease does not publish unsequenced local revisions. A mutable baseline shared by
 overlapping turns cannot establish which values a late snapshot intentionally edits.
 
-The latest 4,096-seed window beginning at seed 1,024 still fails `speech_settles` (1,646),
-`storage_preserves_item_payloads` (3,642) and `storage_saves_the_conversation_in_order` (3,024).
-Rerun a retained finding with `VOICE_SEED=<seed> VOICE_POLICY=<policy>` on its recorded revision;
-the first uses Arrival, the two storage cases use BasicPos. Earlier focused cases at seeds
-1,025, 1,499, 1,993, 2,800 and 3,569 now clear after their authored fixes. The full campaign
-still needs another complete pass after the remaining cases are resolved.
+The latest 4,096-seed window beginning at seed 1,024 passes. Focused regressions cover a final
+realtime transcript retaining its known timestamp and position, a newer storage observation
+updating a previously loaded row while preserving local edits, and restored tool outputs
+keeping their canonical timestamps. A realtime tool can also retake the idle floor after its
+speech is interrupted; speech interruption does not end application work.
+
+Retained replays include seed 1,646 under Arrival, seeds 3,024 and 3,642 under BasicPos, and
+seed 4,110 under TaskBridge. Rerun a finding with `VOICE_SEED=<seed> VOICE_POLICY=<policy>` on
+its recorded revision. The full 32,768-seed campaign still needs another complete pass; the
+smaller passing window does not close that gate.
 
 Local real-process E2E and all v1 client compatibility stories pass. Cloud AgentDB conformance
 has not run: this environment has no LiveKit project configuration. Local SQLite tests and
@@ -946,6 +950,10 @@ lost-acknowledgement fault tests do not substitute for that external gate.
 
 Record unresolved contracts here while implementation proceeds on the agreed boundaries.
 Routine private type layout and generator work do not require another public primitive.
+
+- When interruption prevents complete `ctx.say()` delivery, should awaiting its receipt raise
+  an existing delivery error or return an outcome the caller must inspect? Either way, the
+  receipt settles and remote business work continues. The recommended contract is an error.
 
 - The pinned Python A2A SDK exposes protobuf operation models but no JSON-RPC error class.
   Native storage preserves the SDK's exact code/message/data. Decide whether public inspection
@@ -1029,7 +1037,7 @@ than another simulation framework. Stock-peer HTTP and AgentDB conformance remai
   message-id execution is safe, or unknown task identity can always be recovered.
 - [ ] Preserve cancellation intent versus observed outcome; handle refused/lost cancel responses,
   stale snapshots and overlapping subscriptions without duplicate artifact appends.
-- [ ] Add the native exchange seam and a readable text DST story: a known task accepts a
+- [x] Add the native exchange seam and a readable text DST story: a known task accepts a
   response, the reply is lost, the owner crashes and a fresh owner reconciles it. Check stored
   state and remote/service observations. A companion unprovable outcome remains unknown.
 - [ ] Cover pre-dispatch failure and a database commit whose acknowledgement was lost;

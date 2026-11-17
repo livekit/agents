@@ -427,8 +427,12 @@ impl VoiceDriver {
         }
         self.session.storage.revision = history.revision;
         self.session.storage.stored = history.stored;
-        if !self.session.chat_ctx.reload_transport(&read, history.items, self.activity.agent_name())
-        {
+        if !self.session.chat_ctx.reload_transport(
+            &read,
+            history.items,
+            &self.session.storage.stored,
+            self.activity.agent_name(),
+        ) {
             return;
         }
         self.publish_event(SessionEvent::HistoryReloaded {

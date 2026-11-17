@@ -94,6 +94,9 @@ pub struct Committed {
     pub source: Source,
     pub visibility: Visibility,
     pub agent: String,
+    /// This exact revision was observed in storage. A newer read can rebase it even when that
+    /// read's request predates the row; a local replacement clears the observation.
+    stored_revision: bool,
 }
 
 /// One edit the end-of-turn hook asks for, applied to that turn's request.
@@ -221,22 +224,29 @@ impl SessionChatCtx {
         visibility: Visibility,
         agent: &str,
     ) -> (Committed, CommitOutcome) {
-        let mut entry = Committed { item, source, visibility, agent: agent.to_owned() };
+        let mut entry =
+            Committed { item, source, visibility, agent: agent.to_owned(), stored_revision: false };
         if entry.item.id() == INSTRUCTIONS_MESSAGE_ID {
             return (entry, CommitOutcome::Filtered);
         }
-        if let Source::ToolCall { speech, .. } = entry.source {
+        if matches!(entry.source, Source::ToolCall { .. } | Source::ToolOutput { .. }) {
             let canonical = self
                 .items
                 .iter()
                 .find(|held| held.item.id() == entry.item.id() && held.visibility.history());
             if let Some(held) = canonical {
-                // A checkpoint may restore the projected call before execution reports it.
-                // Its raw start time cannot replace that already accepted conversation time.
-                if let ChatItem::FunctionCall(call) = &mut entry.item {
-                    call.created_at = held.item.created_at();
+                // A checkpoint can restore a projected call or output before execution reports
+                // it. Raw execution time cannot replace its accepted conversation timestamp.
+                match &mut entry.item {
+                    ChatItem::FunctionCall(call) => call.created_at = held.item.created_at(),
+                    ChatItem::FunctionCallOutput(output) => {
+                        output.created_at = held.item.created_at();
+                    }
+                    _ => {}
                 }
-            } else if !self.ids.contains(entry.item.id()) {
+            } else if let Source::ToolCall { speech, .. } = entry.source
+                && !self.ids.contains(entry.item.id())
+            {
                 let held = self.items.iter().map(|c| (&c.item, c.source.speech()));
                 with_its_turn(&mut entry.item, speech, held);
             }
@@ -253,6 +263,8 @@ impl SessionChatCtx {
                 .iter()
                 .position(|c| c.item.id() == id)
                 .expect("an id in the set is on the record");
+            entry.stored_revision =
+                self.items[idx].stored_revision && self.items[idx].item == entry.item;
             // A replaced item keeps every projection it was in and gains the replacement's.
             let was = self.items[idx].visibility;
             let visibility =
@@ -262,15 +274,22 @@ impl SessionChatCtx {
                     (false, _) => Visibility::History,
                 };
             if !was.history() && visibility.history() {
-                // Joining the history, it takes its place there by its own instant, as an item
-                // added now would: one the model saw earlier carried an earlier stamp.
-                self.items.remove(idx);
-                if let Source::ToolCall { speech, .. } = entry.source {
-                    let held = self.items.iter().map(|c| (&c.item, c.source.speech()));
-                    with_its_turn(&mut entry.item, speech, held);
+                // A message's known instant keeps its place among equal timestamps. Heard
+                // assistant words can carry a new instant; calls join their heard turn.
+                let same_message_instant = matches!(entry.item, ChatItem::Message(_))
+                    && self.items[idx].item.created_at() == entry.item.created_at();
+                if same_message_instant {
+                    self.items[idx] = Committed { visibility, ..entry.clone() };
+                } else {
+                    self.items.remove(idx);
+                    entry.stored_revision = false;
+                    if let Source::ToolCall { speech, .. } = entry.source {
+                        let held = self.items.iter().map(|c| (&c.item, c.source.speech()));
+                        with_its_turn(&mut entry.item, speech, held);
+                    }
+                    let at = self.find_insertion_index(&mut entry.item);
+                    self.items.insert(at, Committed { visibility, ..entry.clone() });
                 }
-                let at = self.find_insertion_index(&mut entry.item);
-                self.items.insert(at, Committed { visibility, ..entry.clone() });
                 CommitOutcome::Added
             } else {
                 self.items[idx] = Committed { visibility, ..entry.clone() };
@@ -285,16 +304,20 @@ impl SessionChatCtx {
     /// the record's to take. Rows the turn read are the partition's to change: another turn's
     /// edits replace them in place (a row given back as the turn read it is the turn's own
     /// rendering, never an edit), and rows it removed, compacted away or abandoned leave. Rows
-    /// the turn did not read (another agent's, one dropped from the view, one committed since)
-    /// stay. New stored rows keep their neighbors when those neighbors agree with the record;
+    /// the turn did not read stay unless their exact current revision was already observed in
+    /// storage: a newer observation can update those too. Local edits remain protected. New
+    /// stored rows keep their neighbors when those neighbors agree with the record;
     /// without that anchor they join by instant. True when the record changed.
     pub(crate) fn reload_transport(
         &mut self,
         read: &[ChatItem],
         items: Vec<ChatItem>,
+        stored: &[ChatItem],
         agent: &str,
     ) -> bool {
         let read: BTreeMap<&str, &ChatItem> = read.iter().map(|item| (item.id(), item)).collect();
+        let stored: BTreeMap<&str, &ChatItem> =
+            stored.iter().map(|item| (item.id(), item)).collect();
         let before: Vec<ChatItem> = self.items.iter().map(|entry| entry.item.clone()).collect();
         let order: Vec<_> = items
             .iter()
@@ -312,18 +335,31 @@ impl SessionChatCtx {
         let unsaved = &self.unsaved;
         self.items.retain_mut(|entry| {
             let id = entry.item.id().to_owned();
-            match (take(&id), read.get(id.as_str())) {
-                // An unread row is not the partition's to change; a read one given back as read is
-                // the turn's own rendering, and one rewritten here no save carried yet is ours.
-                (Some(row), Some(read))
-                    if *read != &row && &entry.item == *read && !unsaved.contains_key(&id) =>
-                {
-                    entry.item = row;
-                    true
+            let row = take(&id);
+            let observed = stored.get(id.as_str()).copied();
+            if entry.stored_revision && !unsaved.contains_key(&id) {
+                let Some(observed) = observed else { return false };
+                // Rendered items can contain unsaved proposals from an older request. Only
+                // the actual database observation supersedes a previously stored revision.
+                entry.item = observed.clone();
+            } else {
+                match (row, read.get(id.as_str())) {
+                    // A read row given back as read is the turn's own rendering. A newer local
+                    // revision or a correction whose save is unanswered remains ours.
+                    (Some(row), Some(read))
+                        if *read != &row && &entry.item == *read && !unsaved.contains_key(&id) =>
+                    {
+                        entry.item = row;
+                    }
+                    (Some(_), _) | (None, None) => {}
+                    (None, Some(read)) if &entry.item == *read && !unsaved.contains_key(&id) => {
+                        return false;
+                    }
+                    (None, Some(_)) => {}
                 }
-                (Some(_), _) | (None, None) => true,
-                (None, Some(read)) => &entry.item != *read || unsaved.contains_key(&id),
             }
+            entry.stored_revision = observed == Some(&entry.item);
+            true
         });
         self.ids = self.items.iter().map(|entry| entry.item.id().to_owned()).collect();
         let ids = &self.ids;
@@ -333,6 +369,7 @@ impl SessionChatCtx {
         for (index, row) in partition.into_iter().enumerate() {
             let Some(row) = row.filter(|row| !read.contains_key(row.id())) else { continue };
             let mut entry = Committed {
+                stored_revision: false,
                 item: row,
                 source: Source::HostCtx,
                 visibility: Visibility::Both,
@@ -354,6 +391,7 @@ impl SessionChatCtx {
             } else {
                 anchor.unwrap_or_else(|| self.find_insertion_index(&mut entry.item))
             };
+            entry.stored_revision = stored.get(entry.item.id()).copied() == Some(&entry.item);
             self.ids.insert(entry.item.id().to_owned());
             self.items.insert(at, entry);
         }
@@ -518,6 +556,7 @@ mod tests {
             ctx.reload_transport(
                 &[said("book a table for two")],
                 vec![said("book a table")],
+                &[],
                 "agent",
             )
         };
@@ -552,7 +591,12 @@ mod tests {
         });
         let mut context = SessionChatCtx::new("agent");
         let _ = context.commit(call.clone(), Source::HostCtx, Visibility::Both, "agent");
-        context.reload_transport(std::slice::from_ref(&call), vec![prefix, call.clone()], "agent");
+        context.reload_transport(
+            std::slice::from_ref(&call),
+            vec![prefix, call.clone()],
+            &[],
+            "agent",
+        );
         let ids: Vec<_> = context.history().map(ChatItem::id).collect();
         assert_eq!(
             ids,
@@ -574,14 +618,56 @@ mod tests {
         context.reload_transport(
             std::slice::from_ref(&read),
             vec![item("an older foreign edit")],
+            &[],
             "agent",
         );
         assert_eq!(
             context.history().cloned().collect::<Vec<_>>(),
             std::slice::from_ref(&final_input)
         );
-        context.reload_transport(&[read], Vec::new(), "agent");
+        context.reload_transport(&[read], Vec::new(), &[], "agent");
         assert_eq!(context.history().cloned().collect::<Vec<_>>(), [final_input]);
+    }
+
+    #[test]
+    fn a_newer_storage_observation_updates_a_row_missing_from_its_request() {
+        let item = |text| {
+            ChatItem::Message(ChatMessage::text(
+                "text",
+                Role::Assistant,
+                text,
+                SystemTime::UNIX_EPOCH,
+            ))
+        };
+        let mut context = SessionChatCtx::new("agent");
+        context.reload_transport(&[], vec![item("Sent.")], &[item("Sent.")], "agent");
+        // Both reads began before this row arrived. The second observes its foreign edit.
+        context.reload_transport(&[], vec![item("Edited.")], &[item("Edited.")], "agent");
+        assert_eq!(context.history().cloned().collect::<Vec<_>>(), [item("Edited.")]);
+        context.reload_transport(&[], Vec::new(), &[], "agent");
+        assert_eq!(context.history().count(), 0, "a later foreign deletion is also observed");
+    }
+
+    #[test]
+    fn a_storage_observation_cannot_replace_a_locally_edited_stored_row() {
+        let item = |text| {
+            ChatItem::Message(ChatMessage::text(
+                "text",
+                Role::Assistant,
+                text,
+                SystemTime::UNIX_EPOCH,
+            ))
+        };
+        let mut context = SessionChatCtx::new("agent");
+        context.reload_transport(&[], vec![item("Stored.")], &[item("Stored.")], "agent");
+        let _ = context.commit(item("New words."), Source::HostCtx, Visibility::Both, "agent");
+        context.reload_transport(
+            &[],
+            vec![item("Foreign edit.")],
+            &[item("Foreign edit.")],
+            "agent",
+        );
+        assert_eq!(context.history().cloned().collect::<Vec<_>>(), [item("New words.")]);
     }
 
     #[test]
@@ -629,6 +715,7 @@ mod tests {
         assert!(ctx.reload_transport(
             &read,
             vec![output("waiting"), said("hello, edited")],
+            &[],
             "caller"
         ));
         let items: Vec<_> = ctx.items().cloned().collect();
@@ -649,7 +736,7 @@ mod tests {
         }
         let read = [said("asked", 1), said("reply", 3)];
         let partition = vec![said("reply", 3), said("text", 2), said("asked", 1)];
-        assert!(ctx.reload_transport(&read, partition, "caller"));
+        assert!(ctx.reload_transport(&read, partition, &[], "caller"));
         let ids: Vec<_> = ctx.items().map(|item| item.id().to_owned()).collect();
         assert_eq!(ids, ["asked", "text", "reply"]);
     }
@@ -727,7 +814,7 @@ mod tests {
         let words =
             ChatItem::Message(ChatMessage::text("words", Role::Assistant, "Checking.", heard));
         let mut ctx = SessionChatCtx::new("agent");
-        ctx.reload_transport(&[], vec![words, call(heard)], "agent");
+        ctx.reload_transport(&[], vec![words, call(heard)], &[], "agent");
         let _ = ctx.commit(
             call(started),
             Source::ToolCall { speech, step: 1 },
@@ -737,6 +824,27 @@ mod tests {
         let items: Vec<_> = ctx.history().collect();
         assert_eq!(items.iter().map(|item| item.id()).collect::<Vec<_>>(), ["words", "call"]);
         assert_eq!(items[1].created_at(), heard);
+    }
+
+    #[test]
+    fn a_restored_tool_output_keeps_its_checkpointed_timestamp_when_execution_reports_it() {
+        let speech = SpeechId(7);
+        let heard = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        let finished = heard + Duration::from_secs(2);
+        let output = |at| {
+            ChatItem::FunctionCallOutput(FunctionCallOutput::new(
+                "output", "call", "Found.", false, at,
+            ))
+        };
+        let mut context = SessionChatCtx::new("agent");
+        context.reload_transport(&[], vec![output(heard)], &[output(heard)], "agent");
+        let _ = context.commit(
+            output(finished),
+            Source::ToolOutput { speech, step: 1 },
+            Visibility::Both,
+            "agent",
+        );
+        assert_eq!(context.history().cloned().collect::<Vec<_>>(), [output(heard)]);
     }
 
     // Catches (survey seed 317): a step's calls kept the instants they started at while its words

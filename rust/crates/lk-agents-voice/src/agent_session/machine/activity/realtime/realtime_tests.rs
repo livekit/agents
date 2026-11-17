@@ -5,6 +5,42 @@ use crate::generation::GenEvent;
 use lk_agents_abi::voice::events::AgentState;
 
 #[test]
+fn a_final_keeps_its_placeholder_before_later_text_with_the_same_timestamp() {
+    let mut driver = crate::agent_session::tests::driver();
+    let onset = std::time::UNIX_EPOCH + Duration::from_secs(1);
+    driver.mirror_remote_item(None, ChatMessage::text("input", Role::User, "", onset).into());
+    driver.commit_item(
+        ChatMessage::text("text", Role::Assistant, "Sent by text.", onset).into(),
+        Source::HostCtx,
+        Visibility::Both,
+    );
+    driver.handle(
+        None,
+        Now {
+            at: Ts::ZERO.saturating_add(Duration::from_secs(3)),
+            wall: std::time::UNIX_EPOCH + Duration::from_secs(3),
+        },
+    );
+    driver.upsert_user_transcript(
+        rt::InputTranscription {
+            item_id: "input".into(),
+            transcript: "What?".into(),
+            is_final: true,
+            ..Default::default()
+        },
+        None,
+    );
+    let history: Vec<_> = driver
+        .session
+        .chat_ctx
+        .history()
+        .filter(|item| matches!(item.id(), "input" | "text"))
+        .collect();
+    assert_eq!(history.iter().map(|item| item.id()).collect::<Vec<_>>(), ["input", "text"]);
+    assert_eq!(history[0].created_at(), onset);
+}
+
+#[test]
 fn a_final_transcript_republishes_a_restored_placeholder_under_the_same_id() {
     use crate::agent_session::effects::VoiceEffect;
     let mut driver = crate::agent_session::tests::driver();

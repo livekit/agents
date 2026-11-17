@@ -1054,7 +1054,7 @@ impl VoiceDriver {
     }
 
     /// A final server transcript, upserted by `item_id` (a repeated final replaces in place).
-    /// Placed at the turn's onset (wall seconds) when reported, else now.
+    /// Uses the reported onset, then the known item's timestamp, then the current wall time.
     pub(crate) fn upsert_user_transcript(
         &mut self,
         t: lk_agents_abi::llm::realtime::InputTranscription,
@@ -1064,7 +1064,17 @@ impl VoiceDriver {
             let since_epoch = Duration::try_from_secs_f64(at).ok()?;
             Some((at, std::time::UNIX_EPOCH + since_epoch))
         });
-        let created_at = started.map_or_else(|| self.step.wall(), |(_, wall)| wall);
+        let created_at = started
+            .map(|(_, wall)| wall)
+            .or_else(|| {
+                self.session
+                    .chat_ctx
+                    .entry(&t.item_id)
+                    .and_then(|entry| entry.item.as_message())
+                    .filter(|item| item.role == Role::User)
+                    .map(|item| item.created_at)
+            })
+            .unwrap_or_else(|| self.step.wall());
         let mut item = ChatMessage::text(t.item_id.clone(), Role::User, &t.transcript, created_at);
         item.metrics.started_speaking_at = started.map(|(at, _)| at);
         let replaces_history =

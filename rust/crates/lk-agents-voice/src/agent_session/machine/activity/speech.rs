@@ -674,8 +674,8 @@ impl VoiceDriver {
                     item,
                 );
                 self.reply_spoken(speech, text);
-                // Cut by the person before its words were done: it is done on reaching its tools,
-                // which a cut step reports as not running though its calls still are.
+                // Cut by the person before its words were done: release its speech while its
+                // application tools continue. Their result still belongs to this reply.
                 if !self.session.closing_past_edge() {
                     self.release_to_running_tools(now, speech);
                 }

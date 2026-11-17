@@ -208,7 +208,7 @@ python/livekit-agents/livekit/agents/   # the public Python API and host adapter
 ├── ipc/                # Job-process bootstrap
 ├── http/               # The HTTP client and the ASGI app endpoint streams are served into
 ├── cli.py              # dev / start subcommands invoked by `lk agent`
-├── text_session.py     # Backend conversations and explicitly supplied routing state
+├── text_session.py     # Backend conversations continued through a context store binding
 ├── evals.py            # Conversation judges (simulation context and verdicts: _generated/simulation.py)
 ├── telemetry.py        # OTel API provider adapter, configure, GenAI message capture, diagnostics
 ├── _generated/         # Generated implementations and forwarding modules (never edited)

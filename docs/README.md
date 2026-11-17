@@ -28,11 +28,11 @@ To expose and call your application, read [server entrypoints](server.md) and
 | [usage.md](usage.md) | Usage snapshots, token and billing units, accounting scope, measurement availability, and performance metrics |
 | [context.md](context.md) | Runtime dependencies, persisted field declarations, context scopes, and schema evolution |
 | [persistence.md](persistence.md) | Explicit load/save, session binding and snapshots, durability, transactions, and concurrent updates |
-| [text-session.md](text-session.md) | Session rehydration, backend agent frames, delegation, private histories, and continuation across requests |
+| [text-session.md](text-session.md) | Session rehydration, local agent state, delegation, private histories, and continuation across requests |
 | [voice-session.md](voice-session.md) | Audio and turn configuration, agent replacement, frontend expert events, and reply routing |
 | [lexer.md](lexer.md) | A model reply's text on its way to the voice, the transcript and the history: hidden reasoning and template leaks, expressive markup, markdown and emoji, transcript sync, and how long text is held |
 | [voice-tasks.md](voice-tasks.md) | Constructing and running bounded voice interactions, typed completion, suspension, and cleanup |
-| [threads.md](threads.md) | Conversation identity, lifecycle, public history/task access, and the relationship between partitions and session frames |
+| [threads.md](threads.md) | Conversation identity, lifecycle, public history/task access, and the relationship between partitions and local agent state |
 | [server.md](server.md) | AgentServer/AgentHandler, text and voice entrypoints, handler outcomes, and request policies |
 | [clients.md](clients.md) | Thread service and handles, endpoint clients, grants, browser access, and call dispatch |
 | [auth.md](auth.md) | Principals, grants, how a thread id travels with its token, agent-db access, and endpoint verification |
@@ -94,7 +94,7 @@ Start with the [execution paths](internals/architecture.md#execution-paths) to f
 | --- | --- |
 | Agent | Shared behavior configuration; not a conversation or mutable application state |
 | Run | One input to a completed result or input-required outcome, including model/tool execution |
-| Text session | Request-scoped conversation execution continued through an explicit snapshot or store binding |
+| Text session | Request-scoped conversation execution continued through a context store binding |
 | Voice session | A running frontend conversation with audio resources, turn handling, and in-process interaction state |
 | Voice task | A temporary voice interaction that returns a typed result and restores its caller |
 | Thread | A durable conversation identity (`AT_...`), also used as A2A `contextId` |

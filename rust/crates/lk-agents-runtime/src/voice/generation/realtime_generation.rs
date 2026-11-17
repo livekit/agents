@@ -185,8 +185,9 @@ pub(crate) async fn realtime_generation_task(
     let has_calls = !tools.is_empty();
     // No model timings on the message: the response's own metrics hold its ttft.
     let stats = TurnStats::default();
-    // A reply whose audio was cut still has its tools running.
-    let tools_running = has_calls && !handle.interrupted();
+    // Speech interruption does not end application tools. They must be able to acquire the
+    // idle floor while their interrupted reply waits for their result.
+    let tools_running = has_calls;
     let request_ids = response_id.map(|id| vec![id]);
     // The server's id replaces the placeholder.
     let message_id = message_id.unwrap_or_else(|| ctx.plan.message_id.clone());
