@@ -372,12 +372,12 @@ async def test_socket_closed_mid_synthesis_raises_its_close_code() -> None:
             with pytest.raises(APIConnectionError) as error:
                 await collect(stream)
         await provider.aclose()
+        await until(closed.is_set, "the controlled peer finishes closing its synthesis socket")
 
     # a close code is not an HTTP status
     assert not isinstance(error.value, APIStatusError)
     assert "(close code 1011)" in error.value.message
     assert error.value.retryable
-    assert closed.is_set()
 
 
 @pytest.mark.parametrize("model", [FLASH, DIALOGUE])

@@ -48,12 +48,23 @@ def test_every_facade_has_a_scenario() -> None:
 
 
 @pytest.mark.parametrize("facade", sorted(FACADES))
-async def test_a_closed_facade_object_is_freed(facade: str) -> None:
+async def test_a_closed_facade_object_is_freed(
+    facade: str, caplog: pytest.LogCaptureFixture
+) -> None:
     closed = await SCENARIOS[facade]()
     assert isinstance(closed, FACADES[facade])
     freed = weakref.ref(closed)
     del closed
-    await until(lambda: gc.collect() >= 0 and freed() is None, f"a closed {{facade}} is freed")
+
+    def collected() -> bool:
+        # Expected connection failures leave captured traceback frames holding the facade.
+        # Release the test's references; formatted log diagnostics remain available.
+        for record in caplog.records:
+            record.exc_info = None
+        gc.collect()
+        return freed() is None
+
+    await until(collected, f"a closed {{facade}} is freed")
 "#
     )
 }
