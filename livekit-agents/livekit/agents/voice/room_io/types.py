@@ -45,7 +45,13 @@ NoiseCancellationSelector: TypeAlias = Callable[
 
 async def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
     async with sess._claim_user_turn():
-        await sess.interrupt()
+        speech = sess.current_speech
+        if speech is None or speech.allow_interruptions:
+            await sess.interrupt()
+        # otherwise the reply queues behind the speech that can't be interrupted
+
+        # during a handoff or an AgentTask switch, the agent taking over answers once started
+        await sess._wait_for_activity_switch()
         sess.generate_reply(user_input=ev.text)
 
 
