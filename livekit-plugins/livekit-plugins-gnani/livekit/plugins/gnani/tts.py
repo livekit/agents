@@ -343,6 +343,55 @@ def _build_headers(opts: GnaniTTSOptions) -> dict[str, str]:
     }
 
 
+# WebSocket ``error`` messages carry only a ``type`` and a ``message``, with no status code.
+# The API's input validation (an unknown voice or model, a speed out of range, ...) is
+# reported with these texts. They are the caller's mistake, so retrying cannot help, and
+# they are mapped to a 400 (not retried) just as REST and SSE report them. Any other error
+# message keeps the retryable 500: it may be a transient server failure.
+_CLIENT_ERROR_MESSAGES = (
+    "invalid request",
+    "is not supported",
+    "no longer available",
+    "invalid text or audio configuration",
+)
+
+
+def _ws_error(message: str) -> APIStatusError:
+    """Turn a WebSocket ``error`` message into an ``APIStatusError`` with the right status."""
+    lowered = message.lower()
+    status = 400 if any(text in lowered for text in _CLIENT_ERROR_MESSAGES) else 500
+    return APIStatusError(
+        message=f"Gnani TTS stream error: {message}", status_code=status, body=message
+    )
+
+
+def _ws_handshake_error(error: Any) -> APIStatusError:
+    """The server refused the WebSocket upgrade (``websockets.exceptions.InvalidStatus``).
+
+    Keep the HTTP status, so a bad key (401) fails at once like it does on REST and SSE
+    instead of being retried as a connection error.
+    """
+    response = error.response
+    body = response.body.decode(errors="replace") if response.body else None
+    return APIStatusError(
+        message=f"Gnani TTS WebSocket handshake rejected ({response.status_code})",
+        status_code=response.status_code,
+        body=body,
+    )
+
+
+def _ws_closed_error(error: Any) -> APIStatusError | APIConnectionError:
+    """The connection closed before the audio was complete. A 1008 close is the server
+    rejecting the request (a policy violation), which a retry cannot fix."""
+    rcvd = error.rcvd
+    if rcvd is not None and rcvd.code == 1008:
+        reason = rcvd.reason or "rejected"
+        return APIStatusError(
+            message=f"Gnani TTS rejected the request: {reason}", status_code=400, body=reason
+        )
+    return APIConnectionError(f"Gnani TTS WebSocket closed: {error}")
+
+
 def _mime_type(opts: GnaniTTSOptions) -> str:
     if opts.container == "raw":
         return "audio/pcm"
@@ -577,16 +626,14 @@ class WebSocketChunkedStream(tts.ChunkedStream):
                     elif msg_type == "error":
                         error_msg = payload.get("message", "Unknown error")
                         logger.error("Gnani TTS WS error: %s", error_msg)
-                        raise APIStatusError(
-                            message=f"Gnani TTS stream error: {error_msg}",
-                            status_code=500,
-                            body=error_msg,
-                        )
+                        raise _ws_error(error_msg)
 
                 output_emitter.flush()
 
+        except websockets.exceptions.InvalidStatus as e:
+            raise _ws_handshake_error(e) from e
         except websockets.exceptions.ConnectionClosed as e:
-            raise APIConnectionError(f"Gnani TTS WebSocket closed: {e}") from e
+            raise _ws_closed_error(e) from e
         except asyncio.TimeoutError as e:
             raise APITimeoutError("Gnani TTS WebSocket timed out") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
@@ -683,14 +730,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     elif msg_type == "error":
                         error_msg = payload.get("message", "Unknown error")
                         logger.error("Gnani TTS WS error: %s", error_msg)
-                        raise APIStatusError(
-                            message=f"Gnani TTS stream error: {error_msg}",
-                            status_code=500,
-                            body=error_msg,
-                        )
+                        raise _ws_error(error_msg)
 
+        except websockets.exceptions.InvalidStatus as e:
+            raise _ws_handshake_error(e) from e
         except websockets.exceptions.ConnectionClosed as e:
-            raise APIConnectionError(f"Gnani TTS WebSocket closed: {e}") from e
+            raise _ws_closed_error(e) from e
         except asyncio.TimeoutError as e:
             raise APITimeoutError("Gnani TTS WebSocket timed out") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):

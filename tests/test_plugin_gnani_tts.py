@@ -709,6 +709,11 @@ class FakeGnani:
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
         self.headers: list[dict[str, str]] = []
+        # WebSocket failure modes, to test how errors are reported and retried
+        self.ws_connections = 0
+        self.reject_ws: int | None = None  # refuse the upgrade with this HTTP status
+        self.ws_error: str | None = None  # answer every request with this `error` message
+        self.ws_close_code: int | None = None  # close the connection with this code
 
     def _record(self, request: web.Request, body: dict[str, Any]) -> None:
         self.requests.append(body)
@@ -753,7 +758,19 @@ class FakeGnani:
         await resp.write_eof()
         return resp
 
-    async def ws(self, request: web.Request) -> web.WebSocketResponse:
+    async def ws(self, request: web.Request) -> web.StreamResponse:
+        self.ws_connections += 1
+        if self.reject_ws is not None:
+            return web.json_response(
+                {
+                    "detail": {
+                        "error_code": "INVALID_API_KEY",
+                        "message": "Unauthorized",
+                        "status_code": self.reject_ws,
+                    }
+                },
+                status=self.reject_ws,
+            )
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         async for msg in ws:
@@ -761,6 +778,12 @@ class FakeGnani:
                 continue
             body = json.loads(msg.data)
             self._record(request, body)
+            if self.ws_close_code is not None:
+                await ws.close(code=self.ws_close_code, message=b"policy violation")
+                break
+            if self.ws_error is not None:
+                await ws.send_json({"type": "error", "message": self.ws_error})
+                continue
             if (err := self._error(body)) is not None:
                 await ws.send_json({"type": "error", "message": json.loads(err.text)["message"]})
                 continue
@@ -906,3 +929,114 @@ async def test_websocket_api_error_is_surfaced(server):
 
     with pytest.raises(APIStatusError, match="no longer available"):
         await _synthesize(tts)
+
+
+# ---------------------------------------------------------------------------
+# WebSocket errors: reported with the status REST and SSE use, and not retried
+# when retrying cannot help (an AgentSession always synthesizes over WebSocket,
+# so a retried client error would delay every reply by seconds)
+# ---------------------------------------------------------------------------
+
+# the framework's defaults, with a short wait so the retried cases stay quick
+RETRYING = APIConnectOptions(max_retry=3, retry_interval=0.01, timeout=10)
+
+
+async def _ws_failure(tts, path: str) -> APIStatusError:
+    """Synthesize over the WebSocket path under test, with retries enabled, and return the
+    error that reaches the caller. ``stream`` is what an AgentSession uses."""
+    with pytest.raises(APIStatusError) as exc:
+        if path == "stream":
+            async with tts.stream(conn_options=RETRYING) as stream:
+                stream.push_text("namaste")
+                stream.end_input()
+                async for _ in stream:
+                    pass
+        else:
+            async with tts.synthesize("namaste", conn_options=RETRYING) as stream:
+                async for _ in stream:
+                    pass
+    return exc.value
+
+
+@pytest.fixture(params=["stream", "synthesize"])
+def ws_path(request):
+    return request.param
+
+
+def _ws_tts(server, ws_path: str):
+    return _make_tts(
+        server,
+        model="timbre-v3.0",
+        synthesize_method="websocket" if ws_path == "synthesize" else "rest",
+    )
+
+
+async def test_websocket_bad_key_fails_at_once_and_is_not_retried(server, ws_path):
+    """The API refuses the upgrade with 401. That used to surface as a retryable connection
+    error, so the caller waited through every retry; REST and SSE return the 401 at once."""
+    server.reject_ws = 401
+
+    error = await _ws_failure(_ws_tts(server, ws_path), ws_path)
+
+    assert error.status_code == 401
+    assert not error.retryable
+    assert "Unauthorized" in str(error.body)
+    assert server.ws_connections == 1
+
+
+async def test_websocket_server_failure_at_the_handshake_is_still_retried(server, ws_path):
+    server.reject_ws = 503
+
+    error = await _ws_failure(_ws_tts(server, ws_path), ws_path)
+
+    assert error.status_code == 503
+    assert error.retryable
+    assert server.ws_connections == RETRYING.max_retry + 1
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Invalid request: 1 validation error for TextToSpeechRequest\n  Value error, Voice "
+        "'NoSuchVoice' is not supported by model 'timbre-v3.0'.",
+        "Invalid request: Value error, Invalid speed '3.0' for model 'timbre-v3.0'. "
+        "Allowed range is 0.8 to 1.2.",
+        "Model 'timbre-v9' is not supported. The supported models are \"timbre-v2.5\", "
+        '"timbre-v3.0".',
+    ],
+)
+async def test_websocket_validation_error_is_a_400_and_is_not_retried(server, ws_path, message):
+    """The API's input validation answers with an `error` message and keeps the connection
+    open. It is the caller's mistake, so it is a 400 like on REST and SSE."""
+    server.ws_error = message
+
+    error = await _ws_failure(_ws_tts(server, ws_path), ws_path)
+
+    assert error.status_code == 400
+    assert not error.retryable
+    assert error.body == message
+    assert server.ws_connections == 1
+
+
+async def test_websocket_unknown_error_is_still_retried(server, ws_path):
+    """An `error` message that is not known to be the caller's mistake may be a transient
+    server failure, so it keeps the retryable 500."""
+    server.ws_error = "Synthesis backend unavailable"
+
+    error = await _ws_failure(_ws_tts(server, ws_path), ws_path)
+
+    assert error.status_code == 500
+    assert error.retryable
+    assert server.ws_connections == RETRYING.max_retry + 1
+
+
+async def test_websocket_policy_close_is_a_400_and_is_not_retried(server, ws_path):
+    """A 1008 close is the server rejecting the request, as on the STT side."""
+    server.ws_close_code = 1008
+
+    error = await _ws_failure(_ws_tts(server, ws_path), ws_path)
+
+    assert error.status_code == 400
+    assert not error.retryable
+    assert "policy violation" in str(error)
+    assert server.ws_connections == 1
