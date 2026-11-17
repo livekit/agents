@@ -77,9 +77,17 @@ impl SessionConfig {
 
     pub(super) fn validate_state(&self, state: &SessionSnapshot) -> Result<(), RoutingError> {
         let invalid = |reason: &str| RoutingError::InvalidState(reason.into());
-        for remote in state.remote_agents.values() {
-            crate::delegation::remote::journal::validate(remote)
+        for (id, remote) in &state.remote_agents {
+            crate::delegation::remote::journal::validate(id, remote)
                 .map_err(|error| invalid(&error.to_string()))?;
+            for task in remote.tasks.values() {
+                for input in task.input_requests.values() {
+                    delivery(state, input.presented_message_id.as_deref())?;
+                    if let Some(id) = &input.human_response_id {
+                        human_response(state, id)?;
+                    }
+                }
+            }
         }
         if state.session_id.is_empty() || state.execution_id.is_empty() {
             return Err(invalid("missing session or execution identity"));
@@ -104,6 +112,14 @@ impl SessionConfig {
             }
             if !self.agents.contains_key(&frame.agent_name) {
                 return Err(RoutingError::UnknownAgent(frame.agent_name.clone()));
+            }
+            for input in frame.input_requests.values() {
+                delivery(state, input.presented_message_id.as_deref())?;
+                if let Some(response) = &input.response_message
+                    && response != human_response(state, &response.id)?
+                {
+                    return Err(invalid("local input response differs from human history"));
+                }
             }
             if let Some(parent) = &frame.parent {
                 let parent_frame = state
@@ -196,4 +212,33 @@ impl SessionConfig {
         }
         Ok(())
     }
+}
+
+fn delivery(state: &SessionSnapshot, id: Option<&str>) -> Result<(), RoutingError> {
+    if let Some(id) = id
+        && !state
+            .chat_history
+            .iter()
+            .any(|item| item.id == id && item.role == lk_agents_abi::Role::Assistant)
+    {
+        return Err(RoutingError::InvalidState(
+            "input presentation has no delivery receipt".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn human_response<'a>(
+    state: &'a SessionSnapshot,
+    id: &str,
+) -> Result<&'a lk_agents_abi::ChatMessage, RoutingError> {
+    state
+        .chat_history
+        .iter()
+        .find(|item| {
+            item.id == id
+                && item.role == lk_agents_abi::Role::User
+                && !item.raw_text_content().unwrap_or_default().trim().is_empty()
+        })
+        .ok_or_else(|| RoutingError::InvalidState("input response has no human message".into()))
 }

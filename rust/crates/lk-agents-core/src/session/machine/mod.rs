@@ -1,6 +1,7 @@
 use super::*;
 
 mod continuation;
+mod input;
 #[cfg(test)]
 #[path = "machine_tests.rs"]
 mod tests;
@@ -135,15 +136,16 @@ impl Session {
         if command.remote_id.is_empty() || command.endpoint.is_empty() {
             return Err(StorageError::Invalid("remote identity and endpoint are required".into()));
         }
+        let remote_id = command.remote_id;
         let remote = self
             .state
             .remote_agents
-            .entry(command.remote_id)
+            .entry(remote_id.clone())
             .or_insert_with(|| RemoteAgentState::new(command.endpoint.clone()));
         if remote.endpoint != command.endpoint {
             return Err(StorageError::Invalid("the saved remote endpoint changed".into()));
         }
-        crate::delegation::remote::journal::apply(remote, command.input)
+        crate::delegation::remote::journal::apply(&remote_id, remote, command.input)
             .map_err(|error| StorageError::Invalid(error.to_string()))
     }
 

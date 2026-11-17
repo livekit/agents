@@ -184,8 +184,9 @@ fn task(state: &mut RemoteAgentState, observed: a2a::Task) -> Result<(), RemoteE
         .values()
         .filter(|request| request.dispatch_started)
         .filter_map(|request| request.input_request.as_ref())
-        .filter(|reference| reference.task.task_id == observed.id)
-        .map(|reference| reference.occurrence_id.as_str())
+        .filter_map(InputRequestRef::remote)
+        .filter(|(_, task, _)| task.task_id == observed.id)
+        .map(|(_, _, occurrence)| occurrence)
         .collect();
     let saved = state.tasks.entry(observed.id.clone()).or_insert_with(|| RemoteTaskState {
         task: observed.clone(),
@@ -243,6 +244,8 @@ fn task(state: &mut RemoteAgentState, observed: a2a::Task) -> Result<(), RemoteE
                     state: InputRequestState::Open,
                     source_message_id: source_id,
                     response_message_id: None,
+                    presented_message_id: None,
+                    human_response_id: None,
                 },
             );
         }

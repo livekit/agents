@@ -32,6 +32,10 @@ pub(super) struct Release {
 }
 
 pub(super) enum RemoteCommand {
+    Input {
+        command: lk_agents_abi::session::SessionInputCommand,
+        done: signal::Producer<Option<Result<(), lk_agents_abi::storage::StorageError>>>,
+    },
     Apply {
         command: Box<lk_agents_abi::delegation::remote::RemoteCommand>,
         done: signal::Producer<
@@ -176,6 +180,12 @@ impl Driver {
 
     async fn remote(&mut self, command: RemoteCommand, effects: &mut VecDeque<SessionEffect>) {
         let (command, done) = match command {
+            RemoteCommand::Input { command, done } => {
+                let result = self.session.input(command);
+                let persisted = self.checkpoint_command(effects).await;
+                done.resolve(persisted.and(result));
+                return;
+            }
             RemoteCommand::Recover { remote_id, endpoint, origin, done } => {
                 done.resolve(self.session.remote_recovery(&remote_id, &endpoint, &origin));
                 return;
@@ -186,9 +196,17 @@ impl Driver {
             }
             RemoteCommand::Apply { command, done } => (command, done),
         };
-        let mut result = self.session.remote(*command);
+        let result = self.session.remote(*command);
         // A valid observation can be journaled even when its projection is refused. Persist
         // the evidence before returning either acknowledgement or refusal to the client.
+        let persisted = self.checkpoint_command(effects).await;
+        done.resolve(persisted.and(result));
+    }
+
+    async fn checkpoint_command(
+        &mut self,
+        effects: &mut VecDeque<SessionEffect>,
+    ) -> Result<(), lk_agents_abi::storage::StorageError> {
         if let Some(sink) = &self.request.session_sink
             && let Err(error) = sink.publish(&self.cx, self.session.snapshot()).await
         {
@@ -196,9 +214,9 @@ impl Driver {
                 self.session
                     .handle(SessionEvent::PersistenceFailed(error.clone()), self.clock.now()),
             );
-            result = Err(error);
+            return Err(error);
         }
-        done.resolve(result);
+        Ok(())
     }
 
     /// Republishes the turn's usage when it moved.

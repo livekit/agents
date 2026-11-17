@@ -6483,6 +6483,8 @@ pub mod delegation_remote {
                     }
                 },
             )?,
+            presented_message_id: ::std::default::Default::default(),
+            human_response_id: ::std::default::Default::default(),
         })
     }
 
@@ -6494,6 +6496,8 @@ pub mod delegation_remote {
             state,
             source_message_id,
             response_message_id,
+            presented_message_id: _,
+            human_response_id: _,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item(
@@ -6567,57 +6571,6 @@ pub mod delegation_remote {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/delegation/remote.rs.
-    static INPUT_REQUEST_REF: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn input_request_ref_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::delegation::remote::InputRequestRef> {
-        let py = obj.py();
-        if !obj.is_instance(INPUT_REQUEST_REF.import(
-            py,
-            "livekit.agents._generated.delegation_remote",
-            "InputRequestRef",
-        )?)? {
-            return Err(super::not_a(obj, "InputRequestRef"));
-        }
-        Ok(::lk_agents_abi::delegation::remote::InputRequestRef {
-            task: crate::py_values::attr_with(obj, "InputRequestRef", "task", |v| {
-                crate::generated::records::delegation_remote::remote_task_ref_from_py(v)
-            })?,
-            occurrence_id: crate::py_values::attr_with(
-                obj,
-                "InputRequestRef",
-                "occurrence_id",
-                |v| v.extract::<::std::string::String>(),
-            )?,
-        })
-    }
-
-    pub fn input_request_ref_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::delegation::remote::InputRequestRef,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::delegation::remote::InputRequestRef { task, occurrence_id } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item(
-            "task",
-            crate::generated::records::delegation_remote::remote_task_ref_to_py(py, task)?,
-        )?;
-        kwargs.set_item(
-            "occurrence_id",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(occurrence_id, py)?,
-        )?;
-        crate::py_calls::call(
-            INPUT_REQUEST_REF
-                .import(py, "livekit.agents._generated.delegation_remote", "InputRequestRef")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/delegation/remote.rs.
     static REMOTE_REQUEST_STATE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -6674,7 +6627,7 @@ pub mod delegation_remote {
                     if v.is_none() {
                         Ok(None)
                     } else {
-                        (crate::generated::records::delegation_remote::input_request_ref_from_py(v))
+                        (crate::generated::records::session_input::input_request_ref_from_py(v))
                             .map(Some)
                     }
                 },
@@ -6727,7 +6680,7 @@ pub mod delegation_remote {
             match input_request {
                 None => py.None().into_bound(py),
                 Some(x) => {
-                    crate::generated::records::delegation_remote::input_request_ref_to_py(py, x)?
+                    crate::generated::records::session_input::input_request_ref_to_py(py, x)?
                 }
             },
         )?;
@@ -16958,6 +16911,7 @@ pub mod session {
                     (crate::generated::records::session::tool_call_ref_from_py(v)).map(Some)
                 }
             })?,
+            presented_message_id: ::std::default::Default::default(),
         })
     }
 
@@ -16970,6 +16924,7 @@ pub mod session {
             source_message,
             response_message,
             origin,
+            presented_message_id: _,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item(
@@ -17169,6 +17124,126 @@ pub mod session_events {
                 crate::generated::records::events::tool_reply_updated_to_py(py, x)?
             }
         })
+    }
+}
+
+pub mod session_input {
+    use pyo3::prelude::*;
+
+    // Declared in rust/crates/lk-agents-abi/src/session/mod.rs.
+    static INPUT_REQUEST_REF_AGENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static INPUT_REQUEST_REF_REMOTE_TASK: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn input_request_ref_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::session::InputRequestRef> {
+        let py = obj.py();
+        if obj.is_instance(INPUT_REQUEST_REF_AGENT.import(
+            py,
+            "livekit.agents._generated.session_input",
+            "InputRequestRefAgent",
+        )?)? {
+            return Ok(::lk_agents_abi::session::InputRequestRef::Agent {
+                agent_id: crate::py_values::attr_with(
+                    obj,
+                    "InputRequestRefAgent",
+                    "agent_id",
+                    |v| v.extract::<::std::string::String>(),
+                )?,
+                request_id: crate::py_values::attr_with(
+                    obj,
+                    "InputRequestRefAgent",
+                    "request_id",
+                    |v| v.extract::<::std::string::String>(),
+                )?,
+            });
+        }
+        if obj.is_instance(INPUT_REQUEST_REF_REMOTE_TASK.import(
+            py,
+            "livekit.agents._generated.session_input",
+            "InputRequestRefRemoteTask",
+        )?)? {
+            return Ok(::lk_agents_abi::session::InputRequestRef::RemoteTask {
+                remote_id: crate::py_values::attr_with(
+                    obj,
+                    "InputRequestRefRemoteTask",
+                    "remote_id",
+                    |v| v.extract::<::std::string::String>(),
+                )?,
+                task: crate::py_values::attr_with(obj, "InputRequestRefRemoteTask", "task", |v| {
+                    crate::generated::records::delegation_remote::remote_task_ref_from_py(v)
+                })?,
+                request_id: crate::py_values::attr_with(
+                    obj,
+                    "InputRequestRefRemoteTask",
+                    "request_id",
+                    |v| v.extract::<::std::string::String>(),
+                )?,
+            });
+        }
+        Err(super::not_a(obj, "InputRequestRefAgent | InputRequestRefRemoteTask"))
+    }
+
+    pub fn input_request_ref_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::session::InputRequestRef,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        match value {
+            ::lk_agents_abi::session::InputRequestRef::Agent { agent_id, request_id } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item(
+                    "agent_id",
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(agent_id, py)?,
+                )?;
+                kwargs.set_item(
+                    "request_id",
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id, py)?,
+                )?;
+                crate::py_calls::call(
+                    INPUT_REQUEST_REF_AGENT
+                        .import(
+                            py,
+                            "livekit.agents._generated.session_input",
+                            "InputRequestRefAgent",
+                        )?
+                        .as_any(),
+                    (),
+                    Some(&kwargs),
+                )
+            }
+            ::lk_agents_abi::session::InputRequestRef::RemoteTask {
+                remote_id,
+                task,
+                request_id,
+            } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item(
+                    "remote_id",
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(remote_id, py)?,
+                )?;
+                kwargs.set_item(
+                    "task",
+                    crate::generated::records::delegation_remote::remote_task_ref_to_py(py, task)?,
+                )?;
+                kwargs.set_item(
+                    "request_id",
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id, py)?,
+                )?;
+                crate::py_calls::call(
+                    INPUT_REQUEST_REF_REMOTE_TASK
+                        .import(
+                            py,
+                            "livekit.agents._generated.session_input",
+                            "InputRequestRefRemoteTask",
+                        )?
+                        .as_any(),
+                    (),
+                    Some(&kwargs),
+                )
+            }
+        }
     }
 }
 

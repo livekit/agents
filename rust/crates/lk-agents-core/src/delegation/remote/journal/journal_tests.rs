@@ -2,6 +2,17 @@ use super::*;
 use lk_agents_abi::a2a_protocol as a2a;
 use serde_json::json;
 
+fn apply(
+    state: &mut RemoteAgentState,
+    input: RemoteInput,
+) -> Result<Option<InputRequestRef>, RemoteError> {
+    super::apply("booking", state, input)
+}
+
+fn validate(state: &RemoteAgentState) -> Result<(), RemoteError> {
+    super::validate("booking", state)
+}
+
 fn send(id: &str, text: &str, task: Option<(&str, &str)>) -> RemoteInput {
     let (context, task) = task.map_or((None, None), |(context, task)| (Some(context), Some(task)));
     RemoteInput::Prepare {
@@ -58,7 +69,10 @@ fn an_input_receipt_identifies_the_accepted_occurrence_without_following_later_q
         .unwrap()
     };
     let first = observe(&mut state, input_task()).unwrap();
-    assert_eq!(first.task, RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() });
+    assert_eq!(
+        *first.remote().unwrap().1,
+        RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() }
+    );
     assert_eq!(observe(&mut state, input_task()), Some(first.clone()));
     let mut limited = input_task();
     limited["task"]["status"].as_object_mut().unwrap().remove("message");
@@ -73,7 +87,7 @@ fn an_input_receipt_identifies_the_accepted_occurrence_without_following_later_q
     *input_request = Some(first);
     assert!(apply(&mut state, response).is_err(), "a late response cannot select the new question");
     assert_eq!(
-        state.tasks["booking"].input_requests[&second.occurrence_id].state,
+        state.tasks["booking"].input_requests[second.remote().unwrap().2].state,
         InputRequestState::Open
     );
     assert_eq!(
@@ -144,7 +158,7 @@ fn an_unconfirmed_response_does_not_make_the_same_question_available_for_another
         )
         .unwrap();
         assert_eq!(receipt, None);
-        let input = &state.tasks["booking"].input_requests[&reference.occurrence_id];
+        let input = &state.tasks["booking"].input_requests[reference.remote().unwrap().2];
         assert_eq!(input.state, InputRequestState::Responding);
         assert_eq!(input.response_message_id.as_deref(), Some("message_answer"));
         assert_eq!(input.source_message_id.as_deref(), Some("question_1"));
@@ -279,9 +293,10 @@ fn a_lost_input_response_is_reconciled_from_the_same_task_without_another_send()
     let occurrence_id = state.tasks["booking"].input_requests.keys().next().unwrap().clone();
     let mut response = send("answer", "Friday", Some(("trip", "booking")));
     if let RemoteInput::Prepare { input_request, .. } = &mut response {
-        *input_request = Some(InputRequestRef {
+        *input_request = Some(InputRequestRef::RemoteTask {
+            remote_id: "booking".into(),
             task: RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() },
-            occurrence_id: occurrence_id.clone(),
+            request_id: occurrence_id.clone(),
         });
     }
     dispatched(&mut state, "answer", response);
@@ -401,9 +416,10 @@ fn an_acknowledged_response_can_lead_to_another_input_occurrence_with_the_same_q
             let request_id = format!("answer_{round}");
             let mut response = send(&request_id, "A partial response", Some(("trip", "booking")));
             if let RemoteInput::Prepare { input_request, .. } = &mut response {
-                *input_request = Some(InputRequestRef {
+                *input_request = Some(InputRequestRef::RemoteTask {
+                    remote_id: "booking".into(),
                     task: RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() },
-                    occurrence_id: occurrence_id.clone(),
+                    request_id: occurrence_id.clone(),
                 });
             }
             dispatched(&mut state, &request_id, response);
@@ -437,9 +453,10 @@ fn a_replaced_input_request_retires_an_unsent_response_but_keeps_dispatch_uncert
         let occurrence_id = state.tasks["booking"].input_requests.keys().next().unwrap().clone();
         let mut response = send("answer", "Friday", Some(("trip", "booking")));
         if let RemoteInput::Prepare { input_request, .. } = &mut response {
-            *input_request = Some(InputRequestRef {
+            *input_request = Some(InputRequestRef::RemoteTask {
+                remote_id: "booking".into(),
                 task: RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() },
-                occurrence_id: occurrence_id.clone(),
+                request_id: occurrence_id.clone(),
             });
         }
         apply(&mut state, response).unwrap();

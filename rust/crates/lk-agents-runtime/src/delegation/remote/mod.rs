@@ -143,7 +143,7 @@ impl Port for RemoteInteraction {
         thread_id: Option<String>,
         conn_options: Option<ApiConnectOptions>,
         live: bool,
-        owner: Option<Arc<dyn lk_agents_abi::delegation::remote::RemoteCommands>>,
+        owner: Option<Arc<dyn lk_agents_abi::session::SessionCommands>>,
         origin: Option<lk_agents_abi::session::ToolCallRef>,
         context: CallContext,
         cx: telemetry::Cx,
@@ -204,7 +204,7 @@ pub struct RemoteInvocation {
     pub host: Arc<dyn DelegationHost>,
     pub context: CallContext,
     pub cx: telemetry::Cx,
-    pub owner: Option<Arc<dyn lk_agents_abi::delegation::remote::RemoteCommands>>,
+    pub owner: Option<Arc<dyn lk_agents_abi::session::SessionCommands>>,
     pub origin: Option<lk_agents_abi::session::ToolCallRef>,
 }
 

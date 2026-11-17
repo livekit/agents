@@ -850,12 +850,13 @@ a public Python export or an additional SDK constructor.
 | RemoteRequestState, working name | Evolve/replace current InteractionState at operation scope. | Method, request/payload identity, caller/input correlation, dispatch_started and local operation lifetime. It does not replace the SDK task's status. |
 | RemoteTaskState, internal data | Persisted data underlying the public RemoteTask view. | SDK Task observation, task-owned input state and cancellation intent; no serialized command capability. |
 | RemoteAgentView, RemoteContextView and RemoteTaskView, internal ABI traits | Generated bindings for the three public inspection types. | Native storage handles retain the enclosing SessionState's bound or detached owner. Getter results copy SDK values; grouping adds no duplicate histories or network calls. |
-| RemoteCommands, RemoteCommand and RemoteInput, internal ABI port/data | Serializes communication observations through the active owner. | Preparation, dispatch markers, responses and errors receive their checkpoint before the transport continues. An accepted input observation returns its existing InputRequestRef after that checkpoint; no new receipt class, host policy or stored command capability. |
+| SessionCommands, SessionInputCommand, RemoteCommand and RemoteInput, internal ABI port/data | One serialized owner for input admission and remote observations. | Presentation receipts, response reservations, preparation, dispatch markers, responses and errors receive their checkpoint before acknowledgement. An accepted remote input observation returns its existing InputRequestRef; no new controller or stored command capability. |
 | RemoteRecovery, internal ABI decision | Reuses the core journal's recovery classification. | Carries an unsent original SDK request, a task to read, an accepted direct reply or uncertainty. Returned through the native owner; neither serialized nor exported as Python state classes. |
 | RemoteInvocation, internal runtime input | Groups the existing invocation arguments and services. | Production and DST use the same remote executor; only its endpoint client is injected. No new Python API or second controller. |
 | RemoteTaskCommands, conditional internal ABI port | Extend the existing binding/owner command path where possible. | Bound RemoteTask.cancel() reaches the authorized owner without putting a runtime dependency in storage or adding a public controller. |
 | RemoteTaskRef | Reuse/promote the current core A2A TaskRef shape. | Context/task addressing; keep internal unless a public control signature requires it. |
 | InputRequestRef | New shared reference, not a lifecycle owner. | Qualify a local or remote input occurrence; keep internal by default. |
+| InputCandidate | Ephemeral detector input resolved by the core. | The qualified reference, question and canonical assistant presentation; no private model history or authority to dispatch. |
 | InputRoute, proposed | New internal parsed detector verdict. | Match zero/one/several input references or request clarification; use existing LLM interfaces rather than a new public detector base class. |
 | PresentationEvent | Evolve existing voice Presentation/ExpertInboxEvent records. | Transient normalized notification with original correlation, grouping and exact-output information. |
 | SessionCheckpoint, proposed | New typed batch extending the existing checkpoint contract. | Atomically commit related framework state/history/task/journal changes without arbitrary application-field saves. |
@@ -870,6 +871,14 @@ Held human responses are private fields on their owning input record, referencin
 human content. No separate ResponseQueue/DelegationSubmission/OutgoingA2AMessage class is
 planned. Durable presentation facts evolve existing TextSessionDelivery, ConversationReceipt
 and voice playback/delivery records; do not add a second independent conversation history.
+
+Input admission is atomic across a grouped response. An inactive agent's presented request
+remains recognizable even when the current agent has no matching remote tool. Reserving that
+response saves its canonical human-message reference without creating an outgoing request or
+changing the current agent. A correction can replace a reserved response before dispatch;
+any prepared earlier request is retired while its original journal payload stays unchanged.
+Once dispatch may have begun, reconcile that exact request instead of rewriting it. Restoring
+the native snapshot validates presentation and response references against human history.
 
 LocalInteraction, RemoteInteraction, existing DelegationHost/RemoteEvent contracts,
 VerifiedAuthority, AgentRun, LocalAgentTool, SessionStateSink/SessionBinding, the A2A server

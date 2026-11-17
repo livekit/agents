@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from pydantic import JsonValue
 
     from .session import ToolCallRef
+    from .session_input import InputRequestRef
     from .types import ErrorKind
 
 
@@ -84,12 +85,6 @@ class InputRequest:
 class RemoteTaskRef:
     context_id: str
     task_id: str
-
-
-@dataclass(kw_only=True, slots=True)
-class InputRequestRef:
-    task: RemoteTaskRef
-    occurrence_id: str
 
 
 @dataclass(kw_only=True, slots=True)

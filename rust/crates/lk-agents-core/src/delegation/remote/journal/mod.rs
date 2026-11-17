@@ -18,6 +18,7 @@ pub struct RemoteError(String);
 /// Apply one serialized input. Observed response content remains journaled even if its
 /// projection is refused; malformed or conflicting content never overwrites accepted state.
 pub fn apply(
+    remote_id: &str,
     state: &mut RemoteAgentState,
     input: RemoteInput,
 ) -> Result<Option<InputRequestRef>, RemoteError> {
@@ -26,7 +27,7 @@ pub fn apply(
             if request_id.is_empty() {
                 return Err(invalid("request identity is empty"));
             }
-            if let Some(existing) = state.requests.get_mut(&request_id) {
+            if let Some(existing) = state.requests.get(&request_id) {
                 let original = state.events.get(existing.request_event as usize);
                 let same_body = original.is_some_and(|entry| {
                     matches!(
@@ -36,12 +37,13 @@ pub fn apply(
                 if same_body
                     && existing.method == request.method(streaming)
                     && !existing.dispatch_started
+                    && (existing.input_request.is_none() || response_reserved(state, existing))
                     && (input_request.is_none() || input_request == existing.input_request)
                     && (origin.is_none() || origin == existing.origin)
                 {
                     // Before dispatch, a fresh observer may retry this exact prepared body.
                     // Retain its original content and errors rather than recording it twice.
-                    existing.ended = false;
+                    request_mut(state, &request_id)?.ended = false;
                     return Ok(None);
                 }
                 return Err(invalid("request identity is already prepared or may have been sent"));
@@ -53,18 +55,22 @@ pub fn apply(
                 projection::message(&mut next.messages, send.message.clone())?;
             }
             if let Some(reference) = &input_request {
+                let (selected_task, occurrence) = addressed_input(reference, remote_id)?;
                 let A2ARequest::Send(send) = &request else {
                     return Err(invalid("only a send can respond to input"));
                 };
-                if task.as_ref() != Some(&reference.task) {
+                if task.as_ref() != Some(selected_task) {
                     return Err(invalid("the response does not address the selected task"));
                 }
                 let input = next
                     .tasks
-                    .get_mut(&reference.task.task_id)
-                    .and_then(|task| task.input_requests.get_mut(&reference.occurrence_id))
+                    .get_mut(&selected_task.task_id)
+                    .and_then(|task| task.input_requests.get_mut(occurrence))
                     .ok_or_else(|| invalid("the input occurrence is unknown"))?;
-                if input.state != InputRequestState::Open {
+                let held = input.state == InputRequestState::Responding
+                    && input.human_response_id.is_some()
+                    && input.response_message_id.is_none();
+                if input.state != InputRequestState::Open && !held {
                     return Err(invalid("the input occurrence already has a response"));
                 }
                 input.state = InputRequestState::Responding;
@@ -101,9 +107,7 @@ pub fn apply(
             if request.ended || request.dispatch_started {
                 return Err(invalid("this request may already have been sent; reconcile it"));
             }
-            if let Some(reference) = &request.input_request
-                && !response_reserved(state, reference)
-            {
+            if request.input_request.is_some() && !response_reserved(state, request) {
                 return Err(invalid("the input occurrence no longer accepts this response"));
             }
             request_mut(state, &request_id)?.dispatch_started = true;
@@ -124,10 +128,11 @@ pub fn apply(
             // Admission resolves this occurrence before interpreting the peer's next question.
             // Projection errors discard this staged change along with the rest of `next`.
             if let Some(reference) = &request.input_request {
+                let (selected_task, occurrence) = addressed_input(reference, remote_id)?;
                 let input = next
                     .tasks
-                    .get_mut(&reference.task.task_id)
-                    .and_then(|task| task.input_requests.get_mut(&reference.occurrence_id))
+                    .get_mut(&selected_task.task_id)
+                    .and_then(|task| task.input_requests.get_mut(occurrence))
                     .ok_or_else(|| invalid("the reserved input occurrence is missing"))?;
                 input.state = InputRequestState::Responded;
             }
@@ -150,7 +155,11 @@ pub fn apply(
                 task.input_requests
                     .get(&occurrence_id)
                     .filter(|input| input.state == InputRequestState::Open)?;
-                Some(InputRequestRef { task: reference.clone(), occurrence_id })
+                Some(InputRequestRef::RemoteTask {
+                    remote_id: remote_id.into(),
+                    task: reference.clone(),
+                    request_id: occurrence_id,
+                })
             });
             if let Some(task) = task {
                 next.requests.get_mut(&request_id).expect("request was validated").task =
@@ -184,9 +193,12 @@ pub fn recovery(state: &RemoteAgentState, request_id: &str) -> Result<RemoteReco
     let request = state.requests.get(request_id).ok_or_else(|| invalid("unknown request"))?;
     if !request.dispatch_started {
         if let Some(reference) = &request.input_request
-            && !response_reserved(state, reference)
+            && !response_reserved(state, request)
         {
-            return Ok(RemoteRecovery::GetTask(reference.task.clone()));
+            let (_, task, _) = reference
+                .remote()
+                .ok_or_else(|| invalid("a remote operation selected a local input"))?;
+            return Ok(RemoteRecovery::GetTask(task.clone()));
         }
         let entry = state
             .events
@@ -233,13 +245,37 @@ pub fn recovery(state: &RemoteAgentState, request_id: &str) -> Result<RemoteReco
     Ok(RemoteRecovery::Uncertain)
 }
 
-fn response_reserved(state: &RemoteAgentState, reference: &InputRequestRef) -> bool {
+fn response_reserved(state: &RemoteAgentState, request: &RemoteRequestState) -> bool {
+    let Some(reference) = &request.input_request else { return false };
+    let Some((_, selected_task, occurrence)) = reference.remote() else { return false };
+    let Some(A2AJournalEntry {
+        payload: A2AJournalPayload::Request(A2ARequest::Send(body)), ..
+    }) = state.events.get(request.request_event as usize)
+    else {
+        return false;
+    };
     state
         .tasks
-        .get(&reference.task.task_id)
-        .filter(|task| task.task.context_id == reference.task.context_id)
-        .and_then(|task| task.input_requests.get(&reference.occurrence_id))
-        .is_some_and(|input| input.state == InputRequestState::Responding)
+        .get(&selected_task.task_id)
+        .filter(|task| task.task.context_id == selected_task.context_id)
+        .and_then(|task| task.input_requests.get(occurrence))
+        .is_some_and(|input| {
+            input.state == InputRequestState::Responding
+                && input.response_message_id.as_deref() == Some(body.message.message_id.as_str())
+        })
+}
+
+pub(super) fn addressed_input<'a>(
+    reference: &'a InputRequestRef,
+    remote_id: &str,
+) -> Result<(&'a RemoteTaskRef, &'a str), RemoteError> {
+    let Some((owner, task, occurrence)) = reference.remote() else {
+        return Err(invalid("a remote operation cannot select a local input"));
+    };
+    if owner != remote_id || owner.is_empty() || occurrence.is_empty() {
+        return Err(invalid("the input occurrence belongs to another remote owner"));
+    }
+    Ok((task, occurrence))
 }
 
 fn request_task(

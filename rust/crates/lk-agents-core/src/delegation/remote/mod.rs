@@ -142,9 +142,12 @@ impl RemoteInteraction {
             || state.phase == InteractionPhase::InputRequired
                 && (state.pending_task_id.is_none() || state.request_id.is_none())
             || state.input_request.as_ref().is_some_and(|reference| {
-                reference.occurrence_id.is_empty()
-                    || Some(&reference.task.task_id) != state.pending_task_id.as_ref()
-                    || Some(&reference.task.context_id) != state.context_id.as_ref()
+                reference.remote().is_none_or(|(owner, task, occurrence)| {
+                    owner.is_empty()
+                        || occurrence.is_empty()
+                        || Some(&task.task_id) != state.pending_task_id.as_ref()
+                        || Some(&task.context_id) != state.context_id.as_ref()
+                })
             })
         {
             return Err(DelegationError::InvalidState);
@@ -242,9 +245,12 @@ impl RemoteInteraction {
     ) -> Result<(), DelegationError> {
         if self.state.phase != InteractionPhase::InputRequired
             || reference.as_ref().is_some_and(|reference| {
-                reference.occurrence_id.is_empty()
-                    || Some(&reference.task.task_id) != self.state.pending_task_id.as_ref()
-                    || Some(&reference.task.context_id) != self.state.context_id.as_ref()
+                reference.remote().is_none_or(|(owner, task, occurrence)| {
+                    owner.is_empty()
+                        || occurrence.is_empty()
+                        || Some(&task.task_id) != self.state.pending_task_id.as_ref()
+                        || Some(&task.context_id) != self.state.context_id.as_ref()
+                })
             })
         {
             return Err(DelegationError::InvalidState);

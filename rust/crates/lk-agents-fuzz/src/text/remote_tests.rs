@@ -3,10 +3,9 @@
 use super::*;
 use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::delegation::remote::RemoteRecovery;
-use lk_agents_abi::delegation::remote::{
-    RemoteCommand, RemoteCommands, RemoteInput, RemoteTaskRef,
-};
+use lk_agents_abi::delegation::remote::{RemoteCommand, RemoteInput, RemoteTaskRef};
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::session::SessionCommands;
 use lk_agents_abi::storage::context::ContextActivation as _;
 use lk_agents_abi::storage::session::{PersistedSessionState as _, SessionBinding as _};
 use lk_agents_abi::{BoxFuture, Closed};
@@ -476,7 +475,7 @@ impl lk_agents_abi::a2a::remote::DelegationHost for Presenter {
 async fn resume(
     env: &Arc<Env>,
     service: Arc<Service>,
-    owner: Arc<dyn RemoteCommands>,
+    owner: Arc<dyn SessionCommands>,
 ) -> Result<lk_agents_abi::a2a::remote::RemoteEvent, lk_agents_abi::a2a::client::AgentClientError> {
     interact(env, service, owner, Presenter::default()).await
 }
@@ -484,7 +483,7 @@ async fn resume(
 async fn interact(
     env: &Arc<Env>,
     service: Arc<Service>,
-    owner: Arc<dyn RemoteCommands>,
+    owner: Arc<dyn SessionCommands>,
     presenter: Presenter,
 ) -> Result<lk_agents_abi::a2a::remote::RemoteEvent, lk_agents_abi::a2a::client::AgentClientError> {
     use lk_agents_abi::a2a::remote::RemoteInteraction as _;
@@ -538,7 +537,7 @@ async fn interact(
     result
 }
 
-fn journal(owner: Arc<dyn RemoteCommands>, id: &str) -> Arc<dyn RequestObserver> {
+fn journal(owner: Arc<dyn SessionCommands>, id: &str) -> Arc<dyn RequestObserver> {
     Arc::new(Journal::new(owner, ENDPOINT.into(), ENDPOINT.into(), id.into(), Some(origin()), None))
 }
 
@@ -817,12 +816,11 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
         .find(|(_, request)| request.input_request.is_some())
         .expect("the actual send reserved the input occurrence before dispatch");
     let reference = response.input_request.as_ref().unwrap();
-    assert_eq!(
-        reference.task,
-        RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() }
-    );
+    let (remote_id, task, occurrence) = reference.remote().unwrap();
+    assert_eq!(remote_id, ENDPOINT);
+    assert_eq!(*task, RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() });
     let answer_request = answer_request.clone();
-    let occurrence = reference.occurrence_id.clone();
+    let occurrence = occurrence.to_owned();
     let input = &remote.tasks["booking"].input_requests[&occurrence];
     assert_eq!(input.state, lk_agents_abi::session::InputRequestState::Responding);
     let answer_message =

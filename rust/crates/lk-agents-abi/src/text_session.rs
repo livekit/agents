@@ -218,7 +218,7 @@ pub struct TextSessionDelivery {
     pub messages: BTreeMap<String, String>,
 }
 
-#[crate::host(class(name = "TextSessionRunner", native = crate::delegation::remote::RemoteCommands))]
+#[crate::host(class(name = "TextSessionRunner", native = crate::session::SessionCommands))]
 pub trait TextSessionRunner: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]

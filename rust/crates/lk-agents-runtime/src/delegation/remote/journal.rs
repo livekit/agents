@@ -3,14 +3,14 @@ use std::sync::Arc;
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::delegation::remote::*;
-use lk_agents_abi::session::ToolCallRef;
+use lk_agents_abi::session::{SessionCommands, ToolCallRef};
 use lk_agents_core::a2a::client::{ClientError, Request};
 use lk_agents_net::a2a_client::observer::RequestObserver;
 use parking_lot::Mutex;
 
 /// Each transport exchange reports into the conversation's serialized command port.
 pub struct Journal {
-    owner: Arc<dyn RemoteCommands>,
+    owner: Arc<dyn SessionCommands>,
     endpoint: String,
     remote_id: String,
     request_id: String,
@@ -21,7 +21,7 @@ pub struct Journal {
 
 impl Journal {
     pub fn new(
-        owner: Arc<dyn RemoteCommands>,
+        owner: Arc<dyn SessionCommands>,
         endpoint: String,
         remote_id: String,
         request_id: String,

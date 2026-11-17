@@ -136,6 +136,7 @@ impl Session {
                         agent_id: active_id.value.clone(),
                         call_id: requirement.call.call_id.clone(),
                     }),
+                    presented_message_id: None,
                 }
             });
         }

@@ -9,6 +9,9 @@ use serde_json::json;
 
 use super::*;
 
+#[path = "input_tests.rs"]
+mod input;
+
 mod checkpoints {
 
     use super::*;

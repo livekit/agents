@@ -696,17 +696,17 @@ impl CoreRemoteInteraction {
             .transpose()?;
         let owner = owner
             .map(|v| {
-                crate::py_objects::native::<
-                        dyn ::lk_agents_abi::delegation::remote::RemoteCommands,
-                    >(v.as_any())
-                    .and_then(|native| {
-                        native.ok_or_else(|| {
-                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                                "owner",
-                                ": expected the active native conversation owner"
-                            ))
-                        })
+                crate::py_objects::native::<dyn ::lk_agents_abi::session::SessionCommands>(
+                    v.as_any(),
+                )
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "owner",
+                            ": expected the active native conversation owner"
+                        ))
                     })
+                })
             })
             .transpose()?;
         let origin = origin

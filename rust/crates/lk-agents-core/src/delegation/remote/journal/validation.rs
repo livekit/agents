@@ -3,7 +3,7 @@ use lk_agents_abi::delegation::remote::*;
 use lk_agents_abi::session::InputRequestState;
 
 /// Restored data carries observations, never authority to replay an incoherent operation.
-pub fn validate(state: &RemoteAgentState) -> Result<(), RemoteError> {
+pub fn validate(remote_id: &str, state: &RemoteAgentState) -> Result<(), RemoteError> {
     if state.endpoint.is_empty() || state.default_context_id.as_deref() == Some("") {
         return Err(invalid("missing endpoint or empty default context"));
     }
@@ -56,16 +56,19 @@ pub fn validate(state: &RemoteAgentState) -> Result<(), RemoteError> {
             }
         }
         if let Some(reference) = &request.input_request {
+            let (selected_task, occurrence) = super::addressed_input(reference, remote_id)?;
             let input = state
                 .tasks
-                .get(&reference.task.task_id)
-                .filter(|task| task.task.context_id == reference.task.context_id)
-                .and_then(|task| task.input_requests.get(&reference.occurrence_id))
+                .get(&selected_task.task_id)
+                .filter(|task| task.task.context_id == selected_task.context_id)
+                .and_then(|task| task.input_requests.get(occurrence))
                 .ok_or_else(|| invalid("request refers to a missing input occurrence"))?;
             let A2AJournalPayload::Request(A2ARequest::Send(body)) = &entry.payload else {
                 return Err(invalid("a control operation cannot respond to an input occurrence"));
             };
-            if input.response_message_id.as_deref() != Some(body.message.message_id.as_str()) {
+            if input.response_message_id.as_deref() != Some(body.message.message_id.as_str())
+                && (request.dispatch_started || !request.ended)
+            {
                 return Err(invalid("reserved input response identity changed"));
             }
         }
@@ -80,15 +83,28 @@ pub fn validate(state: &RemoteAgentState) -> Result<(), RemoteError> {
             return Err(invalid("task index identity changed"));
         }
         for input in task.input_requests.values() {
+            if input.state == InputRequestState::Open
+                && task.task.status.state != lk_agents_abi::a2a_protocol::TaskState::InputRequired
+            {
+                return Err(invalid("an open input occurrence requires an input-required task"));
+            }
             if input.source_message_id.as_ref().is_some_and(|id| !state.messages.contains_key(id)) {
                 return Err(invalid("input source message is missing"));
             }
             let responding =
                 matches!(input.state, InputRequestState::Responding | InputRequestState::Responded);
-            if responding && input.response_message_id.is_none() {
+            if responding
+                && input.response_message_id.is_none()
+                && input.human_response_id.is_none()
+            {
                 return Err(invalid("a selected input response has no message"));
             }
-            if input.state == InputRequestState::Open && input.response_message_id.is_some() {
+            if input.state == InputRequestState::Responded && input.response_message_id.is_none() {
+                return Err(invalid("an acknowledged input response has no outgoing message"));
+            }
+            if input.state == InputRequestState::Open
+                && (input.response_message_id.is_some() || input.human_response_id.is_some())
+            {
                 return Err(invalid("an open input occurrence already has a response"));
             }
             if let Some(response) = &input.response_message_id {

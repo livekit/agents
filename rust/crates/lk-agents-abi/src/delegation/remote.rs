@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::a2a_protocol as a2a;
+pub use crate::session::InputRequestRef;
 use crate::session::{InputRequestState, ToolCallRef};
 use serde::{Deserialize, Serialize};
 
@@ -104,20 +105,19 @@ pub struct InputRequest {
     pub source_message_id: Option<String>,
     /// Reserved outgoing A2A message, retained unchanged while its delivery is uncertain.
     pub response_message_id: Option<String>,
+    /// Canonical human-facing delivery; received remote content is not presentation evidence.
+    #[host(skip)]
+    pub presented_message_id: Option<String>,
+    /// Canonical human response retained while the current agent cannot dispatch to this task.
+    #[host(skip)]
+    pub human_response_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[crate::host(record(module = "delegation_remote", emit, extract))]
 pub struct RemoteTaskRef {
     pub context_id: String,
     pub task_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[crate::host(record(module = "delegation_remote", emit, extract))]
-pub struct InputRequestRef {
-    pub task: RemoteTaskRef,
-    pub occurrence_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -224,31 +224,4 @@ pub enum RemoteRecovery {
     Observed(Box<crate::a2a::protocol::Message>),
     /// Dispatch may have happened, but no accepted task or reply identifies its outcome.
     Uncertain,
-}
-
-/// A serialized native command port, never a host policy callback or a stored resource.
-#[crate::host(native(refused = "expected the active native conversation owner"))]
-pub trait RemoteCommands: Send + Sync {
-    /// Resume the latest send of this exact local call, without admitting another operation.
-    fn recover<'a>(
-        &'a self,
-        remote_id: &'a str,
-        endpoint: &'a str,
-        origin: &'a ToolCallRef,
-    ) -> crate::BoxFuture<'a, Result<Option<RemoteRecovery>, crate::storage::StorageError>>;
-
-    /// Reuse only this conversation's saved remote context, after checking its pinned endpoint.
-    /// This read neither dispatches work nor appends a communication event.
-    fn default_context<'a>(
-        &'a self,
-        remote_id: &'a str,
-        endpoint: &'a str,
-    ) -> crate::BoxFuture<'a, Result<Option<String>, crate::storage::StorageError>>;
-
-    /// An open input-required observation returns its exact accepted occurrence, after
-    /// its checkpoint. Presentation must retain that reference instead of selecting it later.
-    fn remote<'a>(
-        &'a self,
-        command: RemoteCommand,
-    ) -> crate::BoxFuture<'a, Result<Option<InputRequestRef>, crate::storage::StorageError>>;
 }

@@ -48,13 +48,15 @@ fn an_answer_retains_its_checkpointed_occurrence_until_the_next_peer_observation
     let mut remote = interaction("input-receipt");
     begin(&mut remote, false);
     remote.update(&update(TaskState::InputRequired, "trip", "booking", "Which day?")).unwrap();
-    let reference = InputRequestRef {
+    let reference = InputRequestRef::RemoteTask {
+        remote_id: "remote".into(),
         task: RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() },
-        occurrence_id: "booking/input_3".into(),
+        request_id: "booking/input_3".into(),
     };
     remote.retain_input_request(Some(reference.clone())).unwrap();
     let mut foreign = reference.clone();
-    foreign.task.task_id = "other-booking".into();
+    let InputRequestRef::RemoteTask { task, .. } = &mut foreign else { unreachable!() };
+    task.task_id = "other-booking".into();
     assert!(remote.retain_input_request(Some(foreign)).is_err());
     remote.message("Friday".into(), "response".into(), None, "", None, false, None, None).unwrap();
     let saved = remote.snapshot();

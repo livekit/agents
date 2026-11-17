@@ -18,7 +18,30 @@ struct Control {
     remote: mpsc::Sender<RemoteCommand>,
 }
 
-impl lk_agents_abi::delegation::remote::RemoteCommands for Runner {
+impl lk_agents_abi::session::SessionCommands for Runner {
+    fn input<'a>(
+        &'a self,
+        command: lk_agents_abi::session::SessionInputCommand,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), lk_agents_abi::storage::StorageError>> {
+        Box::pin(async move {
+            use lk_agents_abi::storage::StorageError;
+            let sender =
+                self.control.lock().as_ref().map(|control| control.remote.clone()).ok_or_else(
+                    || StorageError::Invalid("the conversation owner is not running".into()),
+                )?;
+            let (done, settled) = signal::once();
+            sender
+                .send(RemoteCommand::Input { command, done })
+                .await
+                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
+            settled.wait().await.map_err(|_| {
+                StorageError::Invalid(
+                    "the conversation owner ended before checkpointing input".into(),
+                )
+            })?
+        })
+    }
+
     fn recover<'a>(
         &'a self,
         remote_id: &'a str,

@@ -7,6 +7,71 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
+/// Owner-qualified input occurrence. Local continuation and remote transport remain distinct.
+#[crate::host(record(module = "session_input", emit, extract))]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "owner", rename_all = "snake_case")]
+pub enum InputRequestRef {
+    Agent {
+        agent_id: String,
+        request_id: String,
+    },
+    RemoteTask {
+        remote_id: String,
+        task: crate::delegation::remote::RemoteTaskRef,
+        request_id: String,
+    },
+}
+
+impl InputRequestRef {
+    /// Transport addressing exists only after the reference identifies a remote owner.
+    pub fn remote(&self) -> Option<(&str, &crate::delegation::remote::RemoteTaskRef, &str)> {
+        match self {
+            Self::RemoteTask { remote_id, task, request_id } => Some((remote_id, task, request_id)),
+            Self::Agent { .. } => None,
+        }
+    }
+}
+
+/// Native delivery and response admission. A reference never authorizes its own presentation.
+#[derive(Debug, Clone)]
+pub enum SessionInputCommand {
+    Presented { requests: Vec<InputRequestRef>, message_id: String },
+    Respond { requests: Vec<InputRequestRef>, message_id: String },
+    Correct { request: InputRequestRef, previous_message_id: String, message_id: String },
+}
+
+/// Serialized conversation authority. No host policy callback or saved command capability.
+#[crate::host(native(refused = "expected the active native conversation owner"))]
+pub trait SessionCommands: Send + Sync {
+    fn input<'a>(
+        &'a self,
+        command: SessionInputCommand,
+    ) -> crate::BoxFuture<'a, Result<(), crate::storage::StorageError>>;
+
+    fn recover<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        origin: &'a ToolCallRef,
+    ) -> crate::BoxFuture<
+        'a,
+        Result<Option<crate::delegation::remote::RemoteRecovery>, crate::storage::StorageError>,
+    >;
+
+    fn default_context<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+    ) -> crate::BoxFuture<'a, Result<Option<String>, crate::storage::StorageError>>;
+
+    /// Returns an open input observation's exact occurrence only after its checkpoint.
+    fn remote<'a>(
+        &'a self,
+        command: crate::delegation::remote::RemoteCommand,
+    ) -> crate::BoxFuture<'a, Result<Option<InputRequestRef>, crate::storage::StorageError>>;
+}
+
 #[crate::host(record(
     module = "session",
     path = "livekit.agents.storage.session_state",
@@ -105,6 +170,9 @@ pub struct AgentInputRequest {
     pub response_message: Option<crate::ChatMessage>,
     /// Asking call's provenance; it never directs the next input to a tool.
     pub origin: Option<ToolCallRef>,
+    /// Canonical assistant delivery proving this request was presented, not merely queued.
+    #[host(skip)]
+    pub presented_message_id: Option<String>,
 }
 
 #[crate::host(record(

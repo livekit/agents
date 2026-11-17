@@ -45,6 +45,14 @@ pub struct SessionInput {
     pub delegated: bool,
 }
 
+/// Ephemeral detector input, resolved from canonical content and actual presentation evidence.
+#[derive(Debug, Clone)]
+pub struct InputCandidate {
+    pub reference: lk_agents_abi::session::InputRequestRef,
+    pub question: String,
+    pub presentation: ChatMessage,
+}
+
 /// Every event belonging to an invocation carries its identity. Late receipts cannot mutate
 /// a new invocation of the same frame, nor a new request reconstructed from the returned state.
 pub enum SessionEvent {
