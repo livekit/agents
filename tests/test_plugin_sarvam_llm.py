@@ -150,6 +150,16 @@ async def test_reasoning_default_follows_model_switches() -> None:
     await stream.aclose()
 
 
+def test_explicit_base_url_survives_model_switch() -> None:
+    llm = _llm(model="gemma4", base_url="https://example.invalid/v2")
+    client = llm._client
+    # gemma4 is on /v2 and sarvam-105b-conversations on /v1: without the explicit
+    # base_url this switch would rebuild the client on the auto-resolved /v1 URL
+    llm.update_options(model=_CONVERSATIONS)
+    assert llm._client is client
+    assert llm.model == _CONVERSATIONS
+
+
 def test_request_fields_are_forwarded_and_unsupported_ones_dropped() -> None:
     llm = _llm(
         temperature=0.7,

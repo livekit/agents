@@ -390,3 +390,53 @@ async def test_server_end_speech_does_not_flush_next_utterance(
             assert await session.ws.next_message() == {"type": "flush"}
         assert session.ws.sent.empty()
         assert not session.ws.closed
+
+
+class _TimestampResponse:
+    status = 200
+
+    async def __aenter__(self) -> _TimestampResponse:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def json(self) -> dict[str, object]:
+        return {
+            "request_id": "r1",
+            "transcript": "Sarvam",
+            "language_code": "hi-IN",
+            "timestamps": {"start_time_seconds": [0.1], "end_time_seconds": [0.4]},
+        }
+
+
+class _RecordingSession:
+    def __init__(self) -> None:
+        self.fields: dict[str, object] = {}
+
+    def post(self, *, data: object, **_: object) -> _TimestampResponse:
+        for type_options, _headers, value in data._fields:  # type: ignore[attr-defined]
+            self.fields[type_options["name"]] = value
+        return _TimestampResponse()
+
+
+async def test_recognize_requests_timestamps() -> None:
+    stt = sarvam_stt.STT(api_key="sk_test", with_timestamps=True)
+    session = _RecordingSession()
+    stt._session = session  # type: ignore[assignment]
+
+    event = await stt._recognize_impl(_audio(), conn_options=APIConnectOptions(max_retry=0))
+
+    assert session.fields["with_timestamps"] == "true"
+    assert event.alternatives[0].start_time == 0.1
+    assert event.alternatives[0].end_time == 0.4
+
+
+async def test_recognize_omits_timestamps_by_default() -> None:
+    stt = sarvam_stt.STT(api_key="sk_test")
+    session = _RecordingSession()
+    stt._session = session  # type: ignore[assignment]
+
+    await stt._recognize_impl(_audio(), conn_options=APIConnectOptions(max_retry=0))
+
+    assert "with_timestamps" not in session.fields
