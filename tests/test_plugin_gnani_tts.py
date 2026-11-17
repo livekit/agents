@@ -575,6 +575,37 @@ def test_tts_speed_validation():
             TTS(api_key="k", speed=bad)
 
 
+def test_tts_speed_range_depends_on_the_model():
+    """The API accepts 0.8-1.2 on timbre-v3.0 and 0.85-1.15 on timbre-v2.5, and rejects
+    the rest with a 400."""
+    from livekit.plugins.gnani import TTS
+
+    for ok in (0.8, 1.0, 1.2):
+        assert TTS(api_key="k", model="timbre-v3.0", speed=ok)._opts.speed == ok
+    for bad in (0.79, 1.21, 0.5, 2.0):
+        with pytest.raises(ValueError, match="timbre-v3.0"):
+            TTS(api_key="k", model="timbre-v3.0", speed=bad)
+    for bad in (0.8, 1.2):
+        with pytest.raises(ValueError, match="timbre-v2.5"):
+            TTS(api_key="k", model="timbre-v2.5", speed=bad)
+
+
+def test_tts_update_options_checks_speed_against_the_new_model():
+    from livekit.plugins.gnani import TTS
+
+    tts = TTS(api_key="k", model="timbre-v3.0", speed=1.2)
+    tts.update_options(speed=0.8)
+    assert tts._opts.speed == 0.8
+    # 1.2 is fine on v3.0 but not on v2.5, so switching the model must be refused ...
+    tts.update_options(speed=1.2)
+    with pytest.raises(ValueError, match="timbre-v2.5"):
+        tts.update_options(model="timbre-v2.5")
+    assert (tts._opts.model, tts._opts.speed) == ("timbre-v3.0", 1.2)
+    # ... unless the speed is changed in the same call.
+    tts.update_options(model="timbre-v2.5", speed=1.1)
+    assert (tts._opts.model, tts._opts.speed) == ("timbre-v2.5", 1.1)
+
+
 def test_tts_update_options_speed_and_language():
     from livekit.plugins.gnani import TTS
 

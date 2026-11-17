@@ -207,6 +207,14 @@ it from the text. See https://docs.gnani.ai/api/TTS/tts-inference#supported-lang
 
 MIN_SPEED = 0.85
 MAX_SPEED = 1.15
+"""Speed range of ``timbre-v2.5``, also used for a model the plugin does not know."""
+
+SPEED_RANGES: dict[str, tuple[float, float]] = {
+    "timbre-v2.5": (MIN_SPEED, MAX_SPEED),
+    "timbre-v3.0": (0.8, 1.2),
+}
+"""Allowed ``speed`` per model. The API rejects anything outside with a 400
+(``timbre-v3.0``: "Allowed range is 0.8 to 1.2")."""
 
 GnaniTTSEncodings = Literal["linear_pcm", "oggopus"]
 GnaniTTSContainers = Literal["raw", "mp3", "wav", "ogg"]

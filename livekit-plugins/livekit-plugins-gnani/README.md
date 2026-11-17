@@ -210,7 +210,7 @@ tts = TTS(
     model="timbre-v3.0",
     voice="Shivani",
     language="hi-IN",  # optional; "auto" detects the language from the text
-    speed=1.0,  # optional; 0.85 – 1.15
+    speed=1.0,  # optional; 0.8 – 1.2 on timbre-v3.0, 0.85 – 1.15 on timbre-v2.5
 )
 ```
 
@@ -313,7 +313,7 @@ tts = TTS(
     model="timbre-v2.5",  # Default: "timbre-v2.5" (also: "timbre-v3.0")
     voice="Pranav",  # Default depends on model: "Pranav" (v2.5), "Avinash" (v3.0)
     language=None,  # e.g. "hi-IN", "en-IN", "hi-en", "auto"
-    speed=None,  # 0.85 – 1.15; omitted from the request when unset
+    speed=None,  # 0.8 – 1.2 (timbre-v3.0) or 0.85 – 1.15 (timbre-v2.5); omitted when unset
     sample_rate=16000,  # Default: 16000 (also: 8000, 22050, 24000, 44100, 48000)
     encoding="linear_pcm",  # Default: "linear_pcm" (also: "oggopus")
     container="wav",  # Default: "wav" (also: "raw", "mp3", "ogg")

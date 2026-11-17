@@ -57,6 +57,7 @@ from .models import (
     RETIRED_MODELS,
     SOURCE_HEADER,
     SOURCE_VALUE,
+    SPEED_RANGES,
     GnaniTTSBitrates,
     GnaniTTSContainers,
     GnaniTTSEncodings,
@@ -122,9 +123,13 @@ def _validate_voice(model: str, voice: str) -> None:
             )
 
 
-def _validate_speed(speed: float | None) -> None:
-    if speed is not None and not (MIN_SPEED <= speed <= MAX_SPEED):
-        raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, got {speed}")
+def _validate_speed(model: str, speed: float | None) -> None:
+    """Raise if ``speed`` is outside the range the API accepts for ``model``."""
+    if speed is None:
+        return
+    low, high = SPEED_RANGES.get(model, (MIN_SPEED, MAX_SPEED))
+    if not (low <= speed <= high):
+        raise ValueError(f"speed for {model} must be between {low} and {high}, got {speed}")
 
 
 def _default_voice(model: str) -> str:
@@ -162,8 +167,9 @@ class TTS(tts.TTS):
             "timbre-v2.0" has been retired by the API and raises ``ValueError``.
         language: Language code (e.g. "hi-IN", "auto") for timbre-v2.5 and
             timbre-v3.0. timbre-v3.0 voices speak every supported language.
-        speed: Speaking rate multiplier between 0.85 and 1.15. Omitted from the
-            request when not set (the API default is 1.0).
+        speed: Speaking rate multiplier: 0.85 to 1.15 for timbre-v2.5, 0.8 to 1.2 for
+            timbre-v3.0. Omitted from the request when not set, so the API default
+            applies (1.0, or the voice's recommended speed on timbre-v3.0).
         sample_rate: Audio output sample rate (8000, 16000, 22050, 24000, 44100, 48000).
         encoding: Audio encoding (linear_pcm or oggopus).
         container: Audio container format (raw, mp3, wav, ogg).
@@ -192,7 +198,7 @@ class TTS(tts.TTS):
         _check_deprecated_tts_args(kwargs)
 
         _validate_model(model)
-        _validate_speed(speed)
+        _validate_speed(model, speed)
         voice_is_default = not is_given(voice)
         resolved_voice = _default_voice(model) if not is_given(voice) else voice
         _validate_voice(model, resolved_voice)
@@ -272,7 +278,8 @@ class TTS(tts.TTS):
 
         new_model = model if model is not None else self._opts.model
         _validate_model(new_model)
-        _validate_speed(speed)
+        # A speed set earlier must also fit a model it is moved to.
+        _validate_speed(new_model, speed if speed is not None else self._opts.speed)
 
         # Voices are model-specific: when only the model changes and the voice was
         # never chosen explicitly, move to the new model's default voice.
