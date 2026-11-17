@@ -101,10 +101,13 @@ def test_default_model_is_sarvam_105b() -> None:
     assert llm.model == "sarvam-105b"
 
 
-def test_always_reasoning_model_warns(caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize("kwargs", [{}, {"reasoning_effort": None}])
+def test_reasoning_by_default_model_warns(
+    caplog: pytest.LogCaptureFixture, kwargs: dict[str, Any]
+) -> None:
     with caplog.at_level("WARNING", logger="livekit.plugins.sarvam"):
-        SarvamLLM(model="sarvam-105b", api_key="sk_test", client=_fake_async_client())
-    assert "reasons before every answer" in caplog.text
+        SarvamLLM(model="sarvam-105b", api_key="sk_test", client=_fake_async_client(), **kwargs)
+    assert "reasoning_effort='none'" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -113,6 +116,8 @@ def test_always_reasoning_model_warns(caplog: pytest.LogCaptureFixture) -> None:
         {"model": "sarvam-105b-conversations"},
         {"model": "gemma4"},
         {"model": "sarvam-105b", "base_url": "https://example.invalid/v1"},
+        {"model": "sarvam-105b", "reasoning_effort": "none"},
+        {"model": "sarvam-105b", "reasoning_effort": "low"},
     ],
 )
 def test_no_reasoning_warning_otherwise(
@@ -123,11 +128,20 @@ def test_no_reasoning_warning_otherwise(
     assert "reasons before every answer" not in caplog.text
 
 
-def test_switching_to_always_reasoning_model_warns(caplog: pytest.LogCaptureFixture) -> None:
+def test_switching_to_reasoning_by_default_model_warns(caplog: pytest.LogCaptureFixture) -> None:
     llm = SarvamLLM(model="gemma4", api_key="sk_test", client=_fake_async_client())
     with caplog.at_level("WARNING", logger="livekit.plugins.sarvam"):
         llm.update_options(model="sarvam-105b")
     assert "reasons before every answer" in caplog.text
+
+
+def test_no_warning_on_model_switch_with_reasoning_off(caplog: pytest.LogCaptureFixture) -> None:
+    llm = SarvamLLM(
+        model="gemma4", api_key="sk_test", reasoning_effort="none", client=_fake_async_client()
+    )
+    with caplog.at_level("WARNING", logger="livekit.plugins.sarvam"):
+        llm.update_options(model="sarvam-105b")
+    assert "reasons before every answer" not in caplog.text
 
 
 def test_no_warning_on_model_switch_with_explicit_base_url(

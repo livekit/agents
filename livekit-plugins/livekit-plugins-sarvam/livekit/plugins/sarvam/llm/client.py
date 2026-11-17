@@ -70,8 +70,8 @@ _REASONING_EFFORT_MODELS: set[str] = {
     "glm5.2",
 }
 
-# Models that reason before every answer on /v2, whatever ``reasoning_effort`` is set to
-_ALWAYS_REASONING_MODELS: set[str] = {
+# Models that reason before every answer on /v2 unless ``reasoning_effort="none"``
+_REASONING_BY_DEFAULT_MODELS: set[str] = {
     "sarvam-105b",
 }
 
@@ -123,11 +123,16 @@ def _validate_model(model: str) -> str:
     return model
 
 
-def _warn_if_always_reasoning(model: str) -> None:
-    if model in _ALWAYS_REASONING_MODELS:
+def _warn_if_reasoning_by_default(
+    model: str, reasoning_effort: NotGivenOr[ReasoningEffort]
+) -> None:
+    # an explicit level, "none" included, is the caller's choice
+    if model in _REASONING_BY_DEFAULT_MODELS and (
+        not is_given(reasoning_effort) or reasoning_effort is None
+    ):
         logger.warning(
-            "%s reasons before every answer on /v2, even with reasoning_effort unset or None, "
-            "which adds seconds to the first token; for voice agents prefer gemma4",
+            "%s reasons before every answer on /v2 unless reasoning_effort='none', "
+            "which adds seconds to the first token; for voice agents pass reasoning_effort='none'",
             model,
         )
 
@@ -163,8 +168,9 @@ class LLM(OpenAILLM):
     Supports four models:
 
     * ``gemma4`` — vision-capable, ``/v2`` endpoint
-    * ``sarvam-105b`` — text-only, ``/v2`` endpoint; always reasons before answering,
-      so first tokens take seconds. Prefer ``gemma4`` for voice agents
+    * ``sarvam-105b`` — text-only, ``/v2`` endpoint; reasons before answering unless
+      ``reasoning_effort="none"``, so first tokens take seconds. Pass
+      ``reasoning_effort="none"`` for voice agents
     * ``glm5.2`` — text-only, ``/v2`` endpoint
     * ``sarvam-105b-conversations`` — multi-turn optimized, ``/v1`` endpoint
 
@@ -209,7 +215,7 @@ class LLM(OpenAILLM):
         # with an explicit base_url the caller chose the endpoint, so don't warn about /v2
         self._sarvam_endpoint_pinned = is_given(base_url)
         if not self._sarvam_endpoint_pinned:
-            _warn_if_always_reasoning(validated_model)
+            _warn_if_reasoning_by_default(validated_model, reasoning_effort)
 
         # ---- Merge auth / telemetry headers (always enforced) ----
         merged_headers: dict[str, str] = {}
@@ -298,7 +304,7 @@ class LLM(OpenAILLM):
         new_model = _validate_model(model)
         new_version = _api_version(new_model)
         if new_model != self._opts.model and not self._sarvam_endpoint_pinned:
-            _warn_if_always_reasoning(new_model)
+            _warn_if_reasoning_by_default(new_model, self._opts.reasoning_effort)
 
         if new_version != self._sarvam_api_version:
             # Endpoint changed — recreate the client pointing at the new URL
