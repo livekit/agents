@@ -37,3 +37,42 @@ fn instruction_replacement_is_isolated_and_turn_extras_do_not_persist() {
     assert_eq!(next, ["replacement", "hello"]);
     assert_eq!(history, saved);
 }
+
+#[test]
+fn an_empty_manual_turn_does_not_consume_the_selected_readback() {
+    use super::planning::{INPUT_REQUESTED_KEY, answer_pending_input};
+    use lk_agents_abi::{FunctionCall, FunctionCallOutput};
+    let mut call = FunctionCall {
+        id: "call_item".into(),
+        call_id: "transfer".into(),
+        name: "transfer".into(),
+        arguments: "{}".into(),
+        created_at: UNIX_EPOCH,
+        group_id: None,
+        extra: Default::default(),
+    };
+    call.extra.insert(INPUT_REQUESTED_KEY.into(), true.into());
+    let mut history = vec![
+        ChatItem::FunctionCall(call),
+        ChatItem::FunctionCallOutput(FunctionCallOutput {
+            id: "output".into(),
+            call_id: "transfer".into(),
+            name: "transfer".into(),
+            output: format!(
+                "{}Confirm the transfer?",
+                lk_agents_abi::llm::tool_executor::WAITING_PREFIX
+            ),
+            is_error: false,
+            created_at: UNIX_EPOCH,
+            reply_required: false,
+        }),
+    ];
+    let before = history.clone();
+    for silence in ["", " \t\n"] {
+        assert!(answer_pending_input(&mut history, silence).is_empty());
+        assert_eq!(history, before);
+    }
+    assert_eq!(answer_pending_input(&mut history, "sure"), ["transfer".into()].into());
+    let ChatItem::FunctionCallOutput(output) = &history[1] else { unreachable!() };
+    assert_eq!(output.output, "sure");
+}

@@ -275,6 +275,9 @@ behavior explicitly.
 
 ## Human input
 
+Empty or whitespace-only input leaves a pending requirement open; silence does not answer a
+question or consume an approval read-back.
+
 ```python
 @fnol.tool
 async def request_photo(ctx: RunContext[LossContext]) -> InputRequired:

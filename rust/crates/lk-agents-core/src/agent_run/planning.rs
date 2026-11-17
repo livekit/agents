@@ -66,6 +66,11 @@ pub fn answer_pending_input(
     history: &mut [ChatItem],
     answer: &str,
 ) -> std::collections::BTreeSet<String> {
+    // A manual voice commit can settle without recognized words. Silence leaves the
+    // selected requirement open; it cannot consume the person's later response.
+    if answer.trim().is_empty() {
+        return std::collections::BTreeSet::new();
+    }
     let marked: std::collections::BTreeSet<_> = history
         .iter()
         .filter_map(|item| match item {
