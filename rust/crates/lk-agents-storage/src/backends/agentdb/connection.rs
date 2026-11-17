@@ -124,9 +124,13 @@ pub const MAX_FRAME: usize = 16 << 20;
 /// What this client names itself in `Hello`.
 const CLIENT_VERSION: &str = concat!("lk-agents/", env!("CARGO_PKG_VERSION"));
 
-/// The codes the server ends a socket with, on request id 0.
+/// The codes the server ends a socket with, on request id 0. Each leaves every unanswered
+/// request unapplied: it is sent again on the next socket, where a deleted database's `Hello`
+/// answers `NOT_FOUND`, final.
 fn is_notice(code: ErrorCode) -> bool {
-    code == ErrorCode::IDLE_EVICTED || code == ErrorCode::WRONG_SHARD_SERVER
+    code == ErrorCode::IDLE_EVICTED
+        || code == ErrorCode::WRONG_SHARD_SERVER
+        || code == ErrorCode::NOT_FOUND
 }
 
 /// A frame for the socket writer, and who learns that the socket took all of it.

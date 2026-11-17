@@ -392,6 +392,21 @@ async fn a_redial_the_server_refuses_for_good_fails_later_calls_with_its_error()
     assert_eq!(hellos(&log), 2, "no redial after a final refusal");
 }
 
+/// Catches: a deleted database's notice read as a protocol error, failing its unanswered write
+/// as outcome unknown. The write was never applied: it fails with the deletion's `NOT_FOUND`.
+#[tokio::test]
+async fn a_deleted_database_notice_fails_its_unanswered_write_not_found() {
+    let (url, log) = serve_draining(ErrorCode::NOT_FOUND, is_exec, false).await;
+    let conn = dial(&url, "DB_1").await.unwrap();
+    let err = conn.exec(&st("INSERT", vec![]), conn.deadline()).await.err().unwrap();
+    assert!(
+        matches!(&err, WriteError::NotSent(WsdbError::Server { code: ErrorCode::NOT_FOUND, .. })),
+        "{err}"
+    );
+    assert_eq!(sent(&log, is_exec).len(), 1, "never applied, never sent again");
+    assert_eq!(hellos(&log), 2, "no redial after the final refusal");
+}
+
 /// Catches: a request waiting out a redial budget of the connection's own instead of its
 /// caller's deadline, or a redial that keeps dialing once no request waits. The request fails
 /// unsent at its deadline, and the redial stops with it.
@@ -712,9 +727,15 @@ async fn serve_draining(
                 while let Some(Ok(Message::Binary(b))) = ws.next().await {
                     let msg = pb::ClientMessage::decode(b.as_ref()).unwrap();
                     seen.lock().push(msg.clone());
+                    let gone = notice == ErrorCode::NOT_FOUND && drained.load(Ordering::SeqCst);
                     let drain = drains(&msg) && !drained.swap(true, Ordering::SeqCst);
                     let hello = matches!(msg.message, Some(pb::client_message::Message::Hello(_)));
-                    let mut answers = if drain && !hello { vec![] } else { script(&msg) };
+                    let mut answers = match () {
+                        // a deleted database stays gone: every later `Hello` is refused
+                        _ if gone && hello => vec![error(notice, "the database was deleted")],
+                        _ if drain && !hello => vec![],
+                        _ => script(&msg),
+                    };
                     answers.iter_mut().for_each(|a| a.request_id = msg.request_id);
                     if drain {
                         let mut notice = error(notice, "draining");
