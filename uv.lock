@@ -2942,7 +2942,7 @@ requires-dist = [
     { name = "aiobotocore", specifier = ">=3.0.0" },
     { name = "aws-sdk-bedrock-runtime", marker = "python_full_version >= '3.12' and extra == 'realtime'", specifier = ">=0.2.0" },
     { name = "aws-sdk-signers", marker = "python_full_version >= '3.12' and extra == 'realtime'", specifier = ">=0.0.3" },
-    { name = "aws-sdk-transcribe-streaming", marker = "python_full_version >= '3.12'", specifier = ">=0.11.0" },
+    { name = "aws-sdk-transcribe-streaming", marker = "python_full_version >= '3.12'", specifier = ">=0.11.0,<0.13.0" },
     { name = "boto3", marker = "extra == 'realtime'", specifier = ">1.35.10" },
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "smithy-http", extras = ["awscrt"], marker = "python_full_version >= '3.12'" },
