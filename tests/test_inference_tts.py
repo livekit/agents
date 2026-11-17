@@ -11,7 +11,7 @@ import aiohttp
 import pytest
 
 import livekit.agents.inference.tts as inference_tts
-from livekit.agents import APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
 from livekit.agents.inference import FallbackActivatedEvent
 from livekit.agents.inference._utils import HEADER_SESSION_ID
 from livekit.agents.inference.tts import (
@@ -527,5 +527,27 @@ async def test_idle_connection_closed_by_the_gateway_is_not_reused() -> None:
         assert await _speak(tts, "second.") > 0
         assert gateway.sockets[0].types().count("input_transcript") == 1
         assert errors == []
+    finally:
+        await tts.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_socket_error_fails_synthesis_without_waiting_for_receive_timeout() -> None:
+    gateway = _Gateway()
+    tts = _make_tts(http_session=gateway)
+    try:
+        async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=10.0)) as stream:
+            stream.push_text("hello.")
+            stream.flush()
+            await _until(
+                lambda: gateway.sockets and "input_transcript" in gateway.sockets[0].types()
+            )
+            gateway.sockets[0]._inbox.put_nowait(
+                aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, ConnectionResetError("lost"), None)
+            )
+            with pytest.raises(APIConnectionError, match="Gateway connection lost"):
+                async with asyncio.timeout(0.1):
+                    async for _ in stream:
+                        pass
     finally:
         await tts.aclose()

@@ -884,6 +884,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                         "Gateway connection closed unexpectedly", request_id=request_id
                     )
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    raise APIConnectionError("Gateway connection lost") from (
+                        msg.data if isinstance(msg.data, BaseException) else None
+                    )
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected Gateway message type %s", msg.type)
                     continue
