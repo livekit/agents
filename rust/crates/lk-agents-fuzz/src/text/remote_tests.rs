@@ -506,7 +506,6 @@ async fn interact(
             extra: Default::default(),
             group_id: None,
         }),
-        Vec::new(),
         String::new(),
         String::new(),
         String::new(),

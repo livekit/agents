@@ -33,17 +33,21 @@ fn send(id: &str, text: &str, selected: Option<InputRequestRef>) -> RemoteInput 
 }
 
 fn question(session: &mut Session) -> InputRequestRef {
-    remote(session, send("start", "Find flights", None));
-    remote(session, RemoteInput::DispatchStarted { request_id: "start".into() });
+    question_for(session, "start", "flight", "question")
+}
+
+fn question_for(session: &mut Session, request: &str, task: &str, source: &str) -> InputRequestRef {
+    remote(session, send(request, "Find flights", None));
+    remote(session, RemoteInput::DispatchStarted { request_id: request.into() });
     remote(
         session,
         RemoteInput::Response {
-            request_id: "start".into(),
+            request_id: request.into(),
             response: Box::new(A2AResponse::Stream(
                 serde_json::from_value(json!({
-                    "task": {"id": "flight", "contextId": "trip", "status": {
+                    "task": {"id": task, "contextId": "trip", "status": {
                         "state": "TASK_STATE_INPUT_REQUIRED", "message": {
-                            "messageId": "question", "role": "ROLE_AGENT",
+                            "messageId": source, "role": "ROLE_AGENT",
                             "parts": [{"text": "Which day?"}]}
                     }}
                 }))
@@ -83,6 +87,25 @@ fn present(driver: &mut Driver, requests: Vec<InputRequestRef>) {
 fn answer(session: &mut Session, requests: Vec<InputRequestRef>, text: &str) {
     session.record_dialogue(message("answer", Role::User, text));
     session.input(SessionInputCommand::Respond { requests, message_id: "answer".into() }).unwrap();
+}
+
+#[test]
+fn held_responses_can_cross_agent_contexts_but_never_guess_between_two_tasks() {
+    let mut driver = Driver::new(config(false, ChatHistory::Fresh, false), None, "Find flights");
+    let first = question(&mut driver.session);
+    let second = question_for(&mut driver.session, "another", "return-flight", "return-date");
+    present(&mut driver, vec![first.clone(), second.clone()]);
+    answer(&mut driver.session, vec![second.clone()], "Friday");
+    assert_eq!(
+        driver.session.held_remote_input("flights", "https://flights.test").unwrap(),
+        Some(second),
+        "an unanswered earlier task does not override the selected response"
+    );
+    assert!(driver.session.held_remote_input("flights", "https://another.test").is_err());
+    answer(&mut driver.session, vec![first], "Friday");
+    let before = driver.session.snapshot();
+    assert!(driver.session.held_remote_input("flights", "https://flights.test").is_err());
+    assert_eq!(driver.session.snapshot(), before, "ambiguous selection cannot reserve either task");
 }
 
 #[test]

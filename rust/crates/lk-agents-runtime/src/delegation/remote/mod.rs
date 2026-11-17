@@ -70,7 +70,6 @@ impl Port for RemoteInteraction {
         endpoint: String,
         tool_id: String,
         function_call: ChatItem,
-        history: Vec<ChatItem>,
         project_url: String,
         api_key: String,
         api_secret: String,
@@ -86,7 +85,7 @@ impl Port for RemoteInteraction {
             tool_id,
             parent_call_id: function_call.call_id.clone(),
         };
-        let policy = retained::for_call(id, &history).map_err(protocol)?;
+        let policy = Policy::new(id).map_err(protocol)?;
         let project = Project { url: project_url, api_key, api_secret };
         let state = State {
             policy,
@@ -122,6 +121,7 @@ impl Port for RemoteInteraction {
         thread_id: Option<String>,
         token: Option<String>,
     ) -> Result<Message, AgentClientError> {
+        self.inner.restore_unbound(&history)?;
         self.inner.message(
             arguments,
             structured,
@@ -263,6 +263,9 @@ impl Delegation {
     }
 
     async fn drive(&mut self, reply: &mut Option<Reply>) -> Result<RemoteEvent, AgentClientError> {
+        if self.request.owner.is_none() {
+            self.interaction.restore_unbound(&self.request.history)?;
+        }
         port::AgentClient::connect(&self.client).await?;
         self.interaction.0.lock().livekit = self.client.offers_extension();
         let recovery = match (&self.request.owner, &self.request.origin) {
@@ -311,7 +314,23 @@ impl Delegation {
                 ));
             }
             None => {
-                let selected = self.interaction.0.lock().policy.snapshot().input_request;
+                let selected = match &self.request.owner {
+                    Some(owner) => {
+                        let endpoint = self.interaction.0.lock().policy.snapshot().id.endpoint;
+                        let selected =
+                            owner.held_input(&endpoint, &endpoint).await.map_err(protocol)?;
+                        if let Some(reference) = &selected {
+                            self.interaction
+                                .0
+                                .lock()
+                                .policy
+                                .respond_to(reference.clone())
+                                .map_err(protocol)?;
+                        }
+                        selected
+                    }
+                    None => None,
+                };
                 let (arguments, structured) = match (&self.request.owner, selected) {
                     (Some(owner), Some(reference)) => {
                         let response = owner.response(&reference).await.map_err(protocol)?;
@@ -472,6 +491,15 @@ impl Delegation {
 }
 
 impl Interaction {
+    fn restore_unbound(&self, history: &[ChatItem]) -> Result<(), AgentClientError> {
+        let mut state = self.0.lock();
+        let snapshot = state.policy.snapshot();
+        if snapshot.phase == lk_agents_core::delegation::remote::InteractionPhase::Ready {
+            state.policy = retained::for_call(snapshot.id, history).map_err(protocol)?;
+        }
+        Ok(())
+    }
+
     fn message(
         &self,
         arguments: Value,

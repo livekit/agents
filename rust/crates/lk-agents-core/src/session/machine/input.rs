@@ -6,6 +6,44 @@ use lk_agents_abi::{ChatMessage, Role};
 use std::collections::BTreeSet;
 
 impl Session {
+    /// Tool eligibility comes from the caller's configured destination, not the identity of the
+    /// agent that originally asked. No response is guessed from the current agent's private chat.
+    pub fn held_remote_input(
+        &self,
+        remote_id: &str,
+        endpoint: &str,
+    ) -> Result<Option<InputRequestRef>, StorageError> {
+        let Some(remote) = self.remote_state(remote_id, endpoint)? else { return Ok(None) };
+        let mut selected = None;
+        for (task_id, task) in &remote.tasks {
+            for (request_id, input) in &task.input_requests {
+                if input.state != InputRequestState::Responding || input.human_response_id.is_none()
+                {
+                    continue;
+                }
+                if input.response_message_id.is_some() {
+                    return Err(invalid(
+                        "the held response already has an outgoing operation; reconcile it first",
+                    ));
+                }
+                if selected.is_some() {
+                    return Err(invalid(
+                        "several held responses address this remote; select an explicit input request",
+                    ));
+                }
+                selected = Some(InputRequestRef::RemoteTask {
+                    remote_id: remote_id.into(),
+                    task: lk_agents_abi::delegation::remote::RemoteTaskRef {
+                        context_id: task.task.context_id.clone(),
+                        task_id: task_id.clone(),
+                    },
+                    request_id: request_id.clone(),
+                });
+            }
+        }
+        Ok(selected)
+    }
+
     pub(super) fn validate_input_dispatch(
         &self,
         command: &lk_agents_abi::delegation::remote::RemoteCommand,

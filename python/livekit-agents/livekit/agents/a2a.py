@@ -139,7 +139,6 @@ class _RemoteTool(Toolset):
             url,
             agent._card.name,
             ctx.function_call,
-            history.items,
             *project,
         )
         # with no token of its own, the call shares its thread under a grant minted for it

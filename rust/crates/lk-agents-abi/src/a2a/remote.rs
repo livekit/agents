@@ -84,7 +84,6 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
         endpoint: String,
         tool_id: String,
         function_call: ChatItem,
-        history: Vec<ChatItem>,
         project_url: String,
         api_key: String,
         api_secret: String,

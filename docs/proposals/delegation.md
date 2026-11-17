@@ -1113,6 +1113,10 @@ passes deterministic stock-peer transport and failure tests.
   Delivery receipts cover verbatim and empty-phrasing fallback questions as well as model text.
   Remote questions retain one owner rather than a duplicate local question. Voice admission,
   dispatch when an eligible agent returns and multiple-task explicit selection remain open.
+  A later tool invocation now resolves a held response from the shared owner. A different
+  eligible agent with fresh private history can continue its original remote task/context,
+  without the model rewriting the human response. Multiple held responses require explicit
+  selection; an existing outgoing response must be reconciled rather than prepared again.
   Binding stories also prove that a side question or another child call cannot discard a
   waiting agent approval. A phrasing failure saves the tool's source request but does not
   make that unheard question a detector candidate; a later validated repeat still owns approval.

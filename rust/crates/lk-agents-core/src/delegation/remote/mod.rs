@@ -159,6 +159,29 @@ impl RemoteInteraction {
         self.state.clone()
     }
 
+    /// The conversation owner selected this held response. A replacement agent need not inherit
+    /// the original agent's tool history to continue the exact same task and input occurrence.
+    pub fn respond_to(
+        &mut self,
+        reference: lk_agents_abi::session::InputRequestRef,
+    ) -> Result<(), DelegationError> {
+        let Some((remote_id, task, request_id)) = reference.remote() else {
+            return Err(DelegationError::InvalidState);
+        };
+        if self.state.phase != InteractionPhase::Ready
+            || remote_id.is_empty()
+            || request_id.is_empty()
+            || task.task_id.is_empty()
+            || task.context_id.is_empty()
+        {
+            return Err(DelegationError::InvalidState);
+        }
+        self.state.context_id = Some(task.context_id.clone());
+        self.state.pending_task_id = Some(task.task_id.clone());
+        self.state.input_request = Some(reference);
+        Ok(())
+    }
+
     /// Builds every initial/subsequent/answer message through the same policy. Caller history
     /// here is explicitly supplied and already validated; implicit thread history requires the
     /// local proof. A capability only controls understanding of the explicit data part.

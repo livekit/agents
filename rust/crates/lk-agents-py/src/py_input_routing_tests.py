@@ -11,6 +11,7 @@ from livekit.agents import (
     APIStatusError,
     DelegationOptions,
     InputRequired,
+    RunContext,
     SessionState,
     TextSession,
     persisted,
@@ -224,6 +225,79 @@ async def test_a_remote_date_response_keeps_its_task_and_the_persons_exact_words
     )
     assert next(iter(observed.input_requests.values())).state == "responded"
     assert len(routing.requests) == 2
+
+
+async def test_a_response_held_during_a_local_child_can_be_sent_by_another_eligible_agent(
+    peer: Peer,
+) -> None:
+    peer.question = "Which date?"
+    store = ContextStore()
+    app = await store.load_context(App())
+    local = Agent(
+        name="policy",
+        instructions="Explain the policy.",
+        output_type=str,
+        llm=FakeLLM([tool_call("topic"), tool_call("continue_local"), "Policy explained."]),
+    )
+
+    @local.tool
+    async def topic() -> InputRequired:
+        """Ask which policy to explain."""
+        return InputRequired("Which policy?", verbatim=True)
+
+    @local.tool
+    async def continue_local(ctx: RunContext[App]) -> str:
+        """Continue the local conversation before returning the floor."""
+        remote = ctx.context.session.remote_agents[peer.url].tasks["remote-task"]
+        held = next(iter(remote.input_requests.values()))
+        assert held.state == "responding" and held.response_message_id is None
+        assert len(peer.messages) == 1, "the local child has no remote tool"
+        return "Continue explaining."
+
+    sender = Agent(
+        name="followup",
+        instructions="Follow up on the remote request.",
+        output_type=str,
+        tools=[
+            RemoteAgent(peer.url, name="coverage_expert", description="Check coverage.").as_tool()
+        ],
+        llm=FakeLLM([tool_call("coverage_expert", request="Saturday"), "Confirmed."]),
+    )
+    root = Agent(
+        name="desk",
+        instructions="Help.",
+        tools=[
+            RemoteAgent(peer.url, name="coverage_expert", description="Check coverage.").as_tool(),
+            local.as_tool(),
+            sender.as_tool(),
+        ],
+        llm=FakeLLM(
+            [
+                tool_call("coverage_expert", request="Check coverage"),
+                "Which date?",
+                tool_call("policy"),
+                tool_call("followup"),
+                "Confirmed for Friday.",
+            ]
+        ),
+    )
+    routing = FakeLLM(
+        [
+            tool_call("route_input_response", candidates=[], unclear=False),
+            tool_call("route_input_response", candidates=[1], unclear=False),
+        ]
+    )
+    session = TextSession(agent=root, delegation=DelegationOptions(routing_model=routing))
+    await session.run("Check coverage", context=store.bind(app))
+    await session.run("Explain the hotel policy", context=store.bind(app))
+    assert app.session.current_agent is not None
+    assert app.session.current_agent.agent_name == "policy"
+    result = await session.run("Friday", context=store.bind(app))
+    assert result.output == "Confirmed for Friday."
+    assert len(peer.messages) == 2
+    assert peer.messages[1]["taskId"] == "remote-task"
+    assert peer.messages[1]["contextId"] == "remote-context"
+    assert peer.messages[1]["parts"][0] == {"text": "Friday"}
 
 
 async def test_routed_approval_still_requires_a_validated_repeat() -> None:

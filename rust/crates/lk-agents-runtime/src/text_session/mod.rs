@@ -33,6 +33,18 @@ pub(super) struct Release {
 }
 
 pub(super) enum SessionCommand {
+    HeldInput {
+        remote_id: String,
+        endpoint: String,
+        done: signal::Producer<
+            Option<
+                Result<
+                    Option<lk_agents_abi::session::InputRequestRef>,
+                    lk_agents_abi::storage::StorageError,
+                >,
+            >,
+        >,
+    },
     Response {
         reference: lk_agents_abi::session::InputRequestRef,
         done: signal::Producer<
@@ -197,6 +209,10 @@ impl Driver {
 
     async fn command(&mut self, command: SessionCommand, effects: &mut VecDeque<SessionEffect>) {
         let (command, done) = match command {
+            SessionCommand::HeldInput { remote_id, endpoint, done } => {
+                done.resolve(self.session.held_remote_input(&remote_id, &endpoint));
+                return;
+            }
             SessionCommand::Response { reference, done } => {
                 done.resolve(self.session.input_response(&reference));
                 return;

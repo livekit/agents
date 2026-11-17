@@ -142,7 +142,6 @@ class _core_RemoteInteraction:
         endpoint: str,
         tool_id: str,
         function_call: ChatItem,
-        history: Sequence[ChatItem],
         project_url: str,
         api_key: str,
         api_secret: str,

@@ -63,6 +63,13 @@ pub trait SessionCommands: Send + Sync {
         reference: &'a InputRequestRef,
     ) -> crate::BoxFuture<'a, Result<crate::ChatMessage, crate::storage::StorageError>>;
 
+    /// One undispatched human response for this destination. Ambiguity requires explicit routing.
+    fn held_input<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+    ) -> crate::BoxFuture<'a, Result<Option<InputRequestRef>, crate::storage::StorageError>>;
+
     fn recover<'a>(
         &'a self,
         remote_id: &'a str,

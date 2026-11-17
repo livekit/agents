@@ -19,6 +19,40 @@ struct Control {
 }
 
 impl lk_agents_abi::session::SessionCommands for Runner {
+    fn held_input<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            Option<lk_agents_abi::session::InputRequestRef>,
+            lk_agents_abi::storage::StorageError,
+        >,
+    > {
+        Box::pin(async move {
+            use lk_agents_abi::storage::StorageError;
+            let sender =
+                self.control.lock().as_ref().map(|control| control.commands.clone()).ok_or_else(
+                    || StorageError::Invalid("the conversation owner is not running".into()),
+                )?;
+            let (done, settled) = signal::once();
+            sender
+                .send(SessionCommand::HeldInput {
+                    remote_id: remote_id.into(),
+                    endpoint: endpoint.into(),
+                    done,
+                })
+                .await
+                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
+            settled.wait().await.map_err(|_| {
+                StorageError::Invalid(
+                    "the conversation owner ended before selecting the response".into(),
+                )
+            })?
+        })
+    }
+
     fn response<'a>(
         &'a self,
         reference: &'a lk_agents_abi::session::InputRequestRef,

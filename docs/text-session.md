@@ -123,6 +123,11 @@ switch agents, approve a business operation or prove that a remote received the 
 When a selected response continues a remote task, it keeps that task's context and sends the
 person's reserved words. Model-generated tool arguments cannot rewrite them.
 
+The response belongs to the conversation's remote task. An eligible agent can send it even
+when that agent has a fresh private history. Until an eligible agent invokes the remote tool,
+the response stays held. A tool call cannot choose arbitrarily between several held responses
+or create a second outgoing operation for a response whose dispatch is already being tracked.
+
 Text consumed from run_stream establishes delivery at that output boundary. Verbatim tool
 questions use the same stream and receipts as model text. Reading only a result without
 consuming its text does not establish presentation. Routing model consumption is included in

@@ -588,13 +588,12 @@ impl CoreRemoteInteraction {
     /// `project_url`, `api_key` and `api_secret` are the server's LiveKit project, which grants
     /// and verifies a shared thread; empty when there is none.
     #[new]
-    #[pyo3(signature = (endpoint, tool_id, function_call, history, project_url, api_key, api_secret))]
+    #[pyo3(signature = (endpoint, tool_id, function_call, project_url, api_key, api_secret))]
     fn new(
         py: Python<'_>,
         endpoint: ::std::string::String,
         tool_id: ::std::string::String,
         function_call: Bound<'_, PyAny>,
-        history: Bound<'_, PyAny>,
         project_url: ::std::string::String,
         api_key: ::std::string::String,
         api_secret: ::std::string::String,
@@ -602,15 +601,7 @@ impl CoreRemoteInteraction {
         crate::py_calls::check_pid()?;
         let function_call =
             crate::generated::records::chat_items::chat_item_from_py(function_call.as_any())?;
-        let history = history.try_iter().and_then(|items| {
-            items
-                .map(|item| {
-                    let item = item?;
-                    crate::generated::records::chat_items::chat_item_from_py(item.as_any())
-                })
-                .collect::<PyResult<Vec<_>>>()
-        })?;
-        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::new(endpoint, tool_id, function_call, history, project_url, api_key, api_secret)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::new(endpoint, tool_id, function_call, project_url, api_key, api_secret)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(CoreRemoteInteraction(::std::sync::Arc::new(out)))
     }
 

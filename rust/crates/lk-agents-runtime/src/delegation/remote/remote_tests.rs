@@ -18,7 +18,6 @@ fn input_required_answers_keep_the_original_partition_ancestry() {
             extra: Default::default(),
             group_id: None,
         }),
-        vec![],
         String::new(),
         String::new(),
         String::new(),
