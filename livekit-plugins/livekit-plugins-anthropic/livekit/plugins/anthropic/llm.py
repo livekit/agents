@@ -178,13 +178,18 @@ class LLM(llm.LLM):
         if is_given(self._opts.user):
             extra["metadata"] = {**(extra.get("metadata") or {}), "user_id": self._opts.user}
 
-        # SDK 1.x dropped temperature/top_k from messages.create(). Older models
+        # SDK 1.x dropped temperature/top_p/top_k from messages.create(). Older models
         # still honor them when they are merged into the request JSON.
         sampling: dict[str, Any] = {}
         if is_given(self._opts.temperature):
             sampling["temperature"] = self._opts.temperature
         if is_given(self._opts.top_k):
             sampling["top_k"] = self._opts.top_k
+        # the same applies to extra_kwargs (the evals judges pass temperature there),
+        # which override the options above
+        for param in ("temperature", "top_p", "top_k"):
+            if param in extra:
+                sampling[param] = extra.pop(param)
         if sampling:
             extra_body = dict(extra.get("extra_body") or {})
             extra_body.update(sampling)

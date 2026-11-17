@@ -380,6 +380,22 @@ class _AMDClassifier(EventEmitter[Literal["amd_prediction"]]):
             )
         self._try_emit_result()
 
+    def on_participant_disconnected(self) -> None:
+        """Release a verdict now: the callee left, so no greeting remains to wait for.
+
+        A held ``machine-unavailable`` verdict is kept, because carriers hang up after
+        that announcement. Any other held verdict becomes ``uncertain``: acting on it
+        (talking, leaving a voicemail, navigating a menu) needs a callee who is gone.
+        """
+        if self._closed or self._emitted:
+            return
+        held = self._verdict_result
+        if held is not None and held.category != AMDCategory.MACHINE_UNAVAILABLE:
+            self._verdict_result = None
+        # settle() keeps the end-of-turn gate shut after speech under wait_until_finished
+        self._eot_reached = True
+        self.settle(AMDCategory.UNCERTAIN, reason="participant_disconnected")
+
     @_listening_guard
     def push_text(self, text: str, source: str = "stt") -> None:
         """Push transcript text to the AMD classifier."""

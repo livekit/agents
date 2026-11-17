@@ -20,7 +20,7 @@ from livekit.agents.beta.translation import (
 from livekit.plugins.openai.beta import RealtimeTranslationModel, RealtimeTranslationSession
 from livekit.plugins.openai.beta.translation_model import _translation_url
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 
 class _FakeWS:
