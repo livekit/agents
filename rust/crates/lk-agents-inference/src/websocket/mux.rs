@@ -42,6 +42,9 @@ enum State {
 struct Socket {
     id: u64,
     sender: Arc<dyn WsSender>,
+    /// Taken by the first closer; subsequent callers join its one terminal receipt.
+    transport: Mutex<Option<Owned<SocketTransport>>>,
+    closed: signal::Cell<Option<Closed>>,
     routes: Mutex<BTreeMap<String, mpsc::UnboundedSender<Routed>>>,
     /// When the last frame went out, for the keepalive.
     last_sent: Mutex<Ts>,
@@ -56,6 +59,11 @@ struct Socket {
     cancelling: Mutex<Option<Cancelling>>,
 }
 
+struct SocketTransport {
+    sender: Arc<dyn WsSender>,
+    goodbye: bool,
+}
+
 /// A stream left an unrouted socket mid-answer: it is reused once the provider ended each
 /// cancelled context, by `until`, else closed.
 #[derive(Debug, Clone)]
@@ -65,6 +73,21 @@ struct Cancelling {
 }
 
 impl Socket {
+    async fn close(&self, deadline: Ts, goodbye: bool) -> Closed {
+        let transport = self.transport.lock().take();
+        if let Some(mut transport) = transport {
+            transport.goodbye = goodbye;
+            return transport.close_by(deadline).await;
+        }
+        match self.closed.wait().await {
+            Ok(closed) => closed,
+            Err(_) => {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "a shared socket's close ended without a receipt");
+                Closed::Failed
+            }
+        }
+    }
+
     async fn send(&self, frame: WsFrame, clock: &dyn Clock) -> Result<(), TransportError> {
         match frame {
             WsFrame::Text(text) => self.sender.send_text(text).await?,
@@ -179,6 +202,14 @@ pub(super) struct Shared {
     connecting: tokio::sync::Mutex<()>,
     /// The readers and the closes of sockets no stream holds.
     tasks: Arc<TaskSet>,
+}
+
+impl Drop for Shared {
+    fn drop(&mut self) {
+        // Readers hold transport guards on this set. Cancel them even when nobody awaited
+        // the pool's close, so those guards hand their bounded cleanup back to the owner.
+        self.tasks.close();
+    }
 }
 
 impl Shared {
@@ -368,13 +399,19 @@ impl Shared {
             let (sender, receiver) =
                 open_direct(&self.transports, &self.env, conn_options, &connection).await?;
             let clock = Arc::clone(&self.env.clock);
+            let host = Arc::clone(&self.host);
+            let (closed, receipt) = signal::once::<Closed>();
             let sender = Owned::new(
                 background,
-                sender,
-                Box::new(move |sender, deadline| {
-                    Box::pin(
-                        async move { close_by(clock.as_ref(), deadline, sender.as_ref()).await },
-                    )
+                SocketTransport { sender, goodbye: false },
+                Box::new(move |transport, deadline| {
+                    Box::pin(async move {
+                        let outcome =
+                            close_transport(host.as_ref(), clock.as_ref(), deadline, transport)
+                                .await;
+                        closed.resolve(outcome);
+                        outcome
+                    })
                 }),
             );
             let keepalive_only_while_unused =
@@ -385,7 +422,7 @@ impl Shared {
                 .as_deref()
                 .and_then(|name| receiver.response_header(name));
             for frame in connection.setup {
-                super::send(sender.as_ref(), frame).await?;
+                super::send(sender.sender.as_ref(), frame).await?;
             }
             let initial = if connection.awaits_ready { State::Opening } else { State::Ready };
             let (state, ready) = signal::signal(initial);
@@ -395,7 +432,9 @@ impl Shared {
                     sockets.next_id += 1;
                     let socket = Arc::new(Socket {
                         id: sockets.next_id,
-                        sender: Arc::clone(&sender),
+                        sender: Arc::clone(&sender.sender),
+                        transport: Mutex::new(Some(sender)),
+                        closed: receipt,
                         routes: Mutex::new(BTreeMap::new()),
                         last_sent: Mutex::new(now),
                         state: ready,
@@ -412,12 +451,9 @@ impl Shared {
                 })
             });
             let Some(socket) = opened else {
-                // the options changed while it connected: it has the old ones
-                sender.close().await;
+                // The rejected transport guard closes on the owner's cleanup set.
                 continue;
             };
-            // The registered socket and its reader now own the close.
-            drop(sender.into_inner());
             let reader = Reader {
                 mux: Arc::downgrade(self),
                 host: Arc::clone(&self.host),
@@ -572,35 +608,30 @@ impl Shared {
         self.tasks.close();
         let deadline = self.clock().now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         for (socket, _) in open.into_values() {
-            close_with_goodbye(self.host.as_ref(), self.clock(), deadline, &socket).await;
+            socket.close(deadline, true).await;
         }
         self.tasks.cancel_and_wait(self.clock()).await;
     }
 
     /// Closes `socket` on the mux's tasks, its goodbye first; its reader then ends.
     fn close_later(&self, background: &Background, socket: Arc<Socket>) {
-        let clock = Arc::clone(&self.env.clock);
-        let host = Arc::clone(&self.host);
         let deadline = background.deadline();
-        background.cleanup("socket mux close", async move {
-            close_with_goodbye(host.as_ref(), clock.as_ref(), deadline, &socket).await
-        });
+        background.cleanup("socket mux close", async move { socket.close(deadline, true).await });
     }
 }
 
-/// Closes a socket the multiplexer is done with by `deadline`, its goodbye frames first while
-/// the socket is still open: the provider session ends on its own terms. A goodbye that fails
-/// or runs late leaves the close to end the session.
-async fn close_with_goodbye(
+/// The one transport close, including any courtesy goodbye within its original deadline.
+/// A failed goodbye cannot prevent the transport from closing.
+async fn close_transport(
     host: &dyn WebSocketMuxHost,
     clock: &dyn Clock,
     deadline: Ts,
-    socket: &Socket,
+    transport: SocketTransport,
 ) -> Closed {
-    if !socket.sender.is_closed() {
+    if transport.goodbye && !transport.sender.is_closed() {
         let goodbye = async {
             for frame in host.goodbye(&Cx::NONE).await? {
-                socket.send(frame, clock).await.map_err(lost)?;
+                super::send(transport.sender.as_ref(), frame).await?;
             }
             Ok::<(), ProviderError>(())
         };
@@ -614,7 +645,7 @@ async fn close_with_goodbye(
             }
         }
     }
-    close_by(clock, deadline, socket.sender.as_ref()).await
+    close_by(clock, deadline, transport.sender.as_ref()).await
 }
 
 /// A shared socket's reader: each frame to its context (routed by the multiplexer, or straight
@@ -766,11 +797,7 @@ impl Reader {
             let _ = route.send(end.clone());
         }
         let deadline = clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        if closed_by_pool {
-            close_with_goodbye(host.as_ref(), clock, deadline, &socket).await;
-        } else {
-            close_by(clock, deadline, socket.sender.as_ref()).await;
-        }
+        socket.close(deadline, closed_by_pool).await;
     }
 }
 

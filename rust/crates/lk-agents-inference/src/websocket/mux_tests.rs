@@ -48,6 +48,34 @@ fn stream(
     (protocol, input, run)
 }
 
+// The peer ended a live stream; its close acknowledgement is still being written when the
+// application closes the provider. Canceling the reader must leave that same close owned.
+#[tokio::test]
+async fn closing_the_pool_joins_a_provider_initiated_close_already_in_flight() {
+    let clock = Arc::new(VirtualClock::new());
+    let provider = Provider::default();
+    provider.held_closes.store(true, Ordering::SeqCst);
+    let mux = mux(&clock, &provider, quiet(), pool(Some(1), None));
+    let (_, _input, run) = stream(&clock, &mux, "a");
+    until("the socket opens", || provider.count() == 1).await;
+    let socket = provider.socket(0);
+    socket.close(Some(1011), Some("the provider failed"));
+    until("the peer's close starts", || socket.close_started.load(Ordering::SeqCst) == 1).await;
+    assert!(run.ended().await.is_err(), "the stream observes its provider failure");
+
+    let closing = tokio::spawn({
+        let mux = Arc::clone(&mux);
+        async move { mux.aclose().await }
+    });
+    // Closing the owner canceled its reader. The receiver's drop proves cancellation ran;
+    // no timer or scheduling pause is used to guess whether its cleanup was interrupted.
+    until("the canceled reader releases its input", || socket.peer.is_closed()).await;
+    provider.held_closes.store(false, Ordering::SeqCst);
+    closing.await.unwrap();
+    assert!(socket.closed.load(Ordering::SeqCst), "the owner returned before closing its socket");
+    assert_eq!(socket.close_started.load(Ordering::SeqCst), 1, "the original close continues once");
+}
+
 // Catches: cancellation during provider readiness keeping a reserved pool slot forever.
 #[tokio::test]
 async fn cancelling_before_ready_releases_the_socket_and_its_pool_slot() {

@@ -25,6 +25,8 @@ struct FakeSocket {
     peer: mpsc::UnboundedSender<Peer>,
     sent: Mutex<Vec<String>>,
     closed: AtomicBool,
+    close_started: AtomicUsize,
+    held_closes: Arc<AtomicBool>,
     /// While set, a write reaches the peer but does not return to the writer.
     held_writes: Arc<AtomicBool>,
 }
@@ -58,6 +60,7 @@ struct Provider {
     /// The handshake is refused with this status and reason.
     refused: Option<(i64, &'static str)>,
     held_writes: Arc<AtomicBool>,
+    held_closes: Arc<AtomicBool>,
 }
 
 impl Provider {
@@ -99,6 +102,8 @@ impl WsTransport for Provider {
             peer,
             sent: Mutex::new(Vec::new()),
             closed: AtomicBool::new(false),
+            close_started: AtomicUsize::new(0),
+            held_closes: Arc::clone(&self.held_closes),
             held_writes: Arc::clone(&self.held_writes),
         });
         self.sockets.lock().push(Arc::clone(&socket));
@@ -139,6 +144,10 @@ impl WsSender for FakeSender {
     }
 
     async fn close(&self) {
+        self.0.close_started.fetch_add(1, Ordering::SeqCst);
+        while self.0.held_closes.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
         self.0.closed.store(true, Ordering::SeqCst);
     }
 }
