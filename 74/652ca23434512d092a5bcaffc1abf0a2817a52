@@ -1,0 +1,25 @@
+examples/homepage/card-auth/uv.lock
+  s_d522e117d394a7::t_8149f36d8a395b 2,332,610,1141,1147,1149-1153
+examples/homepage/frontdesk/uv.lock
+  s_d522e117d394a7::t_06d767d6d37215 2,579,606,1141,1147,1149-1153
+examples/homepage/restaurant-ordering/uv.lock
+  s_d522e117d394a7::t_87bad8ffed2805 2,607,1134,1140,1142-1146,2177
+examples/homepage/vehicle-service/uv.lock
+  s_d522e117d394a7::t_0e6306d9998786 2,607,1134,1140,1142-1146,2366
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "74652ca23434512d092a5bcaffc1abf0a2817a52",
+  "prompts": {},
+  "sessions": {
+    "s_d522e117d394a7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ab7b825d-534b-4b3c-ad23-6c61601aa7fe",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
