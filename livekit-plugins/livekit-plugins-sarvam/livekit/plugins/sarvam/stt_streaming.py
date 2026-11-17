@@ -21,7 +21,7 @@ import platform
 import time
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, get_args
 from urllib.parse import urlencode
 
 import aiohttp
@@ -58,7 +58,7 @@ RealtimeEndpointing = Literal["vad", "manual"]
 RealtimeEncoding = Literal["linear16", "linear32", "mulaw", "alaw"]
 RealtimeMode = Literal["transcribe", "translate", "verbatim", "translit", "codemix"]
 
-SUPPORTED_MODELS = {"saaras:v3-realtime", "saaras:v4"}
+SUPPORTED_MODELS = set(get_args(RealtimeModel))
 SUPPORTED_SAMPLE_RATES = {8000, 16000}
 SUPPORTED_STREAM_TYPES = {"fast", "balanced", "simulated"}
 SUPPORTED_ENDPOINTING = {"vad", "manual"}
