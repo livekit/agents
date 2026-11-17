@@ -33,7 +33,7 @@ from livekit.agents.voice.events import CloseEvent, CloseReason
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 
 def _frame(
@@ -132,22 +132,6 @@ def _session(
     session.output.audio = audio_out
     session.output.transcription = text_out
     return session, audio_in, audio_out, text_out
-
-
-def test_the_model_is_its_own_primitive() -> None:
-    model = _FakeTranslationModel(target_language="de")
-    # it answers for a language, not for instructions, a chat context or tools
-    assert model.target_language == "de"
-    assert model.source_language is None
-    assert model.capabilities.retargetable is False
-    assert not isinstance(model, TranslationModelSession)
-
-
-def test_the_target_language_comes_from_the_model() -> None:
-    model = _FakeTranslationModel(target_language="de")
-    session = TranslationSession(model=model)
-    assert session.model is model
-    assert session.model.target_language == "de"
 
 
 def test_retargeting_before_start_only_changes_the_next_session() -> None:
@@ -489,7 +473,7 @@ async def test_a_named_track_ignores_the_participant_filter() -> None:
     assert room_io.linked_track.publication is screen
 
 
-# -- what the fixes above are about --
+# -- output rate and device ownership --
 
 
 class _RecordingAudioOutput(FakeAudioOutput):

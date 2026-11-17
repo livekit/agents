@@ -147,13 +147,35 @@ RealtimeModel(
 | --- | --- | --- | --- |
 | `name` | `str` | — | Tool this config applies to (required) |
 | `require_speech_before_tool_call` | `bool` | `False` | Require the agent to speak before the tool can be called |
-| `forbid_speech_after_tool_call` | `bool` | `False` | Suppress the auto-generated spoken reply after the tool. Use for tools that always hand off to another agent (a non-handoff tool set here would leave the agent silent) |
+| `forbid_speech_after_tool_call` | `bool` | `False` | Suppress the auto-generated spoken reply after the tool. Use for tools that always hand off to another agent (a non-handoff tool set here would leave the agent silent). An async tool with `wait_for_response` still speaks its result. |
 | `forbid_tool_call_after_speech` | `bool` | `False` | Drop the tool call if the agent already spoke this turn |
 | `allow_tool_chaining` | `bool` | `False` | Allow another tool call immediately after this tool's output |
+| `execution_mode` | `str` | `"sync"` | `"sync"` or `"async"`. The agent waits for a sync tool's output before it continues, and a caller interruption marks the call interrupted. With an async tool it keeps talking while the tool runs and replies when the output arrives. |
+| `wait_for_response` | `bool` | `False` | **Async tools only.** Keep the caller engaged and make no other tool calls until this tool's output arrives. Can't be combined with `allow_tool_chaining`. |
+| `uninterruptible` | `bool` | `False` | **Sync tools only.** Caller speech can't interrupt the agent while this tool call is running. |
+| `can_run_during_user_speech` | `bool` | `False` | Let the agent call this tool while the caller is still speaking. |
+| `tool_call_output_timeout_ms` | `int` | `60000` | How long Phonic waits for this tool's output. |
 | `respond_after_sec` | `float` | — | **`choose_not_to_respond` only.** Seconds to wait after the tool fires; if the user stays silent, the agent speaks a follow-up. Omit to keep the default (stay silent). |
 | `speech_before_tool_call` | `str` | — | **`keypad_input` / `natural_conversation_ending` only.** `required` \| `optional` \| `suppressed`. |
 
 The plugin always sends tool calls with `wait_for_speech_before_tool_call` on; this is not configurable per tool.
+
+Combinations Phonic rejects (`wait_for_response` on a sync tool or with `allow_tool_chaining`, `uninterruptible` on an async tool) raise a `ValueError` when the model is created or updated, rather than ending the session.
+
+For a slow lookup the agent should wait on, use an async tool with `wait_for_response` and `forbid_speech_after_tool_call`, and leave `allow_tool_chaining` off. The agent acknowledges the request, keeps the caller engaged without calling other tools, and speaks the result when it arrives. Without `forbid_speech_after_tool_call`, the agent may keep talking after the acknowledgement and guess at the result.
+
+```python
+RealtimeModel(
+    configs_for_tools=[
+        {
+            "name": "check_order_status",
+            "execution_mode": "async",
+            "wait_for_response": True,
+            "forbid_speech_after_tool_call": True,
+        },
+    ],
+)
+```
 
 > **Deprecated:** the top-level `forbid_speech_after_tool_call: list[str]` option still works but is deprecated — it now folds each listed tool into `configs_for_tools` as `forbid_speech_after_tool_call=True` (an explicit `configs_for_tools` entry wins) and logs a warning. Prefer `configs_for_tools`.
 

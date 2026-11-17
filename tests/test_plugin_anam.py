@@ -1,9 +1,4 @@
-"""Tests for the Anam plugin's AvatarSession.
-
-Covers what ``start()`` hands to the agent and to the Anam API: the audio output that
-replaces the session's audio tail, and the LiveKit token the avatar joins with. The
-Anam API and the base ``AvatarSession.start`` are faked.
-"""
+"""Anam AvatarSession.start hands the agent its audio output and the avatar its LiveKit token."""
 
 from __future__ import annotations
 
@@ -17,7 +12,8 @@ import pytest
 from livekit import api, rtc
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
-from livekit.plugins.anam import AnamException, PersonaConfig, avatar
+from livekit.plugins.anam import AnamException, PersonaConfig, SessionOptions, avatar
+from livekit.plugins.anam.api import AnamAPI
 
 pytestmark = pytest.mark.unit
 
@@ -116,6 +112,45 @@ async def test_start_mints_a_publish_on_behalf_token(output_cls: MagicMock) -> N
     assert claims.video.room_join is True
     assert claims.video.room == "room"
     assert claims.attributes == {ATTRIBUTE_PUBLISH_ON_BEHALF: "agent"}
+
+
+async def _session_options_sent(
+    monkeypatch: pytest.MonkeyPatch, session_options: SessionOptions | None
+) -> dict[str, Any] | None:
+    post = AsyncMock(return_value={"sessionId": "session-1"})
+    monkeypatch.setattr(AnamAPI, "_post", post)
+    anam_api = AnamAPI(api_key="anam-key", api_url="https://api.anam.ai")
+    await anam_api.start_session(
+        persona_config=PERSONA,
+        livekit_url="wss://example.livekit.cloud",
+        livekit_token="token",
+        session_options=session_options,
+    )
+    endpoint, payload, _ = post.call_args.args
+    assert endpoint == "/v1/engine/session"
+    session_options_sent: dict[str, Any] | None = payload.get("sessionOptions")
+    return session_options_sent
+
+
+async def test_start_session_forwards_region_and_region_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent = await _session_options_sent(
+        monkeypatch,
+        SessionOptions(video_width=1280, video_height=720, region="eu", region_policy="strict"),
+    )
+
+    assert sent == {
+        "videoWidth": 1280,
+        "videoHeight": 720,
+        "region": "eu",
+        "regionPolicy": "strict",
+    }
+
+
+async def test_start_session_omits_unset_session_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert await _session_options_sent(monkeypatch, None) is None
+    assert await _session_options_sent(monkeypatch, SessionOptions()) is None
 
 
 def test_requires_an_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

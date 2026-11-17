@@ -21,7 +21,6 @@ from .._exceptions import (
     APIError,
     APIStatusError,
     APITimeoutError,
-    create_api_error_from_http,
 )
 from ..language import LanguageCode
 from ..log import logger
@@ -36,6 +35,7 @@ from ..utils import is_given
 from ._utils import (
     HEADER_SESSION_ID,
     create_access_token,
+    create_api_error_from_response,
     get_default_inference_url,
     get_inference_headers,
 )
@@ -69,6 +69,7 @@ AssemblyAIModels = Literal[
     "assemblyai/u3-rt-pro",
     "assemblyai/universal-3-5-pro",
     "assemblyai/universal-3-6-pro",
+    "assemblyai/assemblyai-stt-3-7-realtime-agent",
 ]
 XaiModels = Literal[
     "xai/stt-1",
@@ -115,7 +116,10 @@ class DeepgramOptions(TypedDict, total=False):
     dictation: bool
     detect_language: bool
     no_delay: bool  # default: True
-    utterance_end: bool
+    # Gap after the last finalized word before Deepgram sends UtteranceEnd: 1000-5000 ms,
+    # and it needs interim_results on. The gateway does not forward the event.
+    utterance_end_ms: int
+    utterance_end: bool  # alias: True is utterance_end_ms=1000; prefer utterance_end_ms
     redact: str | list[str]
     replace: str | list[str]
     search: str | list[str]
@@ -329,6 +333,7 @@ _ASSEMBLYAI_CARRYOVER_MODELS = (
     "assemblyai/u3-rt-pro",
     "assemblyai/universal-3-5-pro",
     "assemblyai/universal-3-6-pro",
+    "assemblyai/assemblyai-stt-3-7-realtime-agent",
 )
 
 _ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS = 1750
@@ -357,6 +362,7 @@ _WORD_ALIGNED_MODELS = frozenset(
         "assemblyai/u3-rt-pro",
         "assemblyai/universal-3-5-pro",
         "assemblyai/universal-3-6-pro",
+        "assemblyai/assemblyai-stt-3-7-realtime-agent",
         "xai/stt-1",
         "xai/stt-2",
         "speechmatics/enhanced",
@@ -1443,7 +1449,7 @@ class SpeechStream(stt.SpeechStream):
             if session_id is not None:
                 self._request_id = session_id
         except aiohttp.ClientResponseError as e:
-            raise create_api_error_from_http(e.message, status=e.status) from e
+            raise create_api_error_from_response(e) from e
         except asyncio.TimeoutError as e:
             raise APITimeoutError("LiveKit Inference STT connection timed out.") from e
         except aiohttp.ClientConnectorError as e:
