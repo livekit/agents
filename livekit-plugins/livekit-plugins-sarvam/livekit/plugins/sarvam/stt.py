@@ -1134,7 +1134,6 @@ class SpeechStream(stt.SpeechStream):
         )
         self._eos_emitted_for_utterance = True
         self._pending_eos = False
-        self._utterance_settled.set()
         self._utterance_resolved.set()
         if is_given(self._pending_keyterms):
             self._reconnect_with_keyterms(self._pending_keyterms)
@@ -1562,6 +1561,23 @@ class SpeechStream(stt.SpeechStream):
         if excess > 0:
             del self._recent_audio[:excess]
 
+    async def _send_pcm(self, ws: aiohttp.ClientWebSocketResponse, pcm: bytes) -> None:
+        """Send 16-bit PCM samples in Sarvam's audio message and keep them for replay."""
+        import base64
+
+        await ws.send_str(
+            json.dumps(
+                {
+                    "audio": {
+                        "data": base64.b64encode(pcm).decode("utf-8"),
+                        "encoding": self._audio_encoding,
+                        "sample_rate": self._opts.sample_rate,
+                    }
+                }
+            )
+        )
+        self._remember_sent_audio(pcm)
+
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Process audio frames and send them in chunks."""
@@ -1579,19 +1595,7 @@ class SpeechStream(stt.SpeechStream):
             nonlocal flushed
             if not audio_buffer:
                 return
-            tail = np.array(audio_buffer, dtype=np.int16).tobytes()
-            await ws.send_str(
-                json.dumps(
-                    {
-                        "audio": {
-                            "data": base64.b64encode(tail).decode("utf-8"),
-                            "encoding": self._audio_encoding,
-                            "sample_rate": self._opts.sample_rate,
-                        }
-                    }
-                )
-            )
-            self._remember_sent_audio(tail)
+            await self._send_pcm(ws, np.array(audio_buffer, dtype=np.int16).tobytes())
             audio_buffer.clear()
             flushed = False
 
@@ -1878,6 +1882,9 @@ class SpeechStream(stt.SpeechStream):
         # Prefer the per-message request_id from the server; fall back to the
         # session-wide server request_id captured from an earlier message.
         request_id = transcript_data.get("request_id") or self._server_request_id or ""
+        # the utterance is settled once Sarvam has transcribed it, even to nothing; the
+        # END_OF_SPEECH fallback can fire before that, so it doesn't count
+        self._utterance_settled.set()
 
         if not transcript_text:
             self._logger.debug("Received empty transcript", extra=self._build_log_context())
