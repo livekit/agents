@@ -70,6 +70,8 @@ AUDIO_CHUNK_MS = 50
 # Sarvam closes a stream that receives no audio for 60 s (`inactivity_timeout`), and this
 # stream never reconnects. When the caller stops pushing audio (muted or gated input), a
 # short chunk of silence is sent after this many idle seconds to keep the session open.
+# In manual endpointing it goes out between utterances, outside a speech_start/speech_end
+# pair: Sarvam accepts that, opens no utterance for it, and counts it on its audio clock.
 KEEPALIVE_INTERVAL_S = 30.0
 
 
@@ -534,7 +536,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
             duration=5.0,
         )
         self._last_audio_sent_at = time.monotonic()
-        self._input_ended = False
         self._logger = logger
 
     @property
@@ -796,11 +797,10 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 asyncio.create_task(self._process_audio(ws)),
                 asyncio.create_task(self._process_messages(ws)),
             ]
-            keepalive_task = asyncio.create_task(self._keepalive(ws))
             try:
                 await asyncio.gather(*tasks)
             finally:
-                await utils.aio.gracefully_cancel(*tasks, keepalive_task)
+                await utils.aio.gracefully_cancel(*tasks)
         except asyncio.TimeoutError as e:
             raise APITimeoutError("Timed out connecting to Sarvam realtime STT") from e
         except aiohttp.ClientResponseError as e:
@@ -941,33 +941,24 @@ class RealtimeSpeechStream(stt.SpeechStream):
         )
         return ws
 
-    @utils.log_exceptions(logger=logger)
-    async def _keepalive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        """Send a chunk of silence whenever no audio has gone out for ``KEEPALIVE_INTERVAL_S``.
+    async def _send_keepalive_silence(
+        self, ws: aiohttp.ClientWebSocketResponse, samples_per_channel: int
+    ) -> None:
+        """Send a chunk of silence so Sarvam's inactivity timeout doesn't close the stream.
 
-        Sarvam's inactivity timeout counts audio only, so pings alone don't keep the stream
-        open. The silence is real audio on Sarvam's clock: it advances the audio position
-        and is metered like any other audio.
+        That timeout counts audio only, so pings alone don't keep the stream open. The
+        silence is real audio on Sarvam's clock: it advances the audio position and is
+        metered like any other audio.
         """
-        samples_per_channel = max(int(self._opts.sample_rate * AUDIO_CHUNK_MS / 1000), 1)
+        self._logger.debug(
+            "No audio for a while, sending silence to keep the Sarvam stream open",
+            extra=self._build_log_context(),
+        )
         chunk = np.zeros(samples_per_channel, dtype=np.int16).tobytes()
         duration = samples_per_channel / self._opts.sample_rate
-
-        while True:
-            idle = time.monotonic() - self._last_audio_sent_at
-            if idle < KEEPALIVE_INTERVAL_S:
-                await asyncio.sleep(KEEPALIVE_INTERVAL_S - idle)
-                continue
-            if self._session_ended or self._input_ended or ws.closed:
-                return
-
-            self._logger.debug(
-                "No audio for a while, sending silence to keep the Sarvam stream open",
-                extra=self._build_log_context(),
-            )
-            self._audio_duration_collector.push(duration)
-            self._audio_position += duration
-            await self._safe_send_bytes(ws, _encode_pcm_for_wire(self._opts.encoding, chunk))
+        self._audio_duration_collector.push(duration)
+        self._audio_position += duration
+        await self._safe_send_bytes(ws, _encode_pcm_for_wire(self._opts.encoding, chunk))
 
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -978,7 +969,22 @@ class RealtimeSpeechStream(stt.SpeechStream):
             samples_per_channel=samples_per_channel,
         )
 
-        async for data in self._input_ch:
+        input_frames = aiter(self._input_ch)
+        while True:
+            idle = time.monotonic() - self._last_audio_sent_at
+            try:
+                # wake up for the keepalive too, so this stays the only audio writer
+                data = await asyncio.wait_for(
+                    anext(input_frames), timeout=max(KEEPALIVE_INTERVAL_S - idle, 0.0)
+                )
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                if self._session_ended or ws.closed:
+                    break
+                await self._send_keepalive_silence(ws, samples_per_channel)
+                continue
+
             # The server is done reading, so stop the pump instead of writing into a
             # socket whose reset would fail the whole stream (max_retry is forced to 0).
             if self._session_ended or ws.closed:
@@ -1011,7 +1017,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
                     self._manual_speech_started = False
                     self._end_manual_utterance()
 
-        self._input_ended = True
         self._emit_local_usage_fallback()
         if not self._session_ended:
             await self._safe_send_str(ws, {"event": "end"})

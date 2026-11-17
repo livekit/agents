@@ -1881,47 +1881,60 @@ async def test_process_audio_forwards_small_frames_regardless_of_stream_type(
     assert {len(payload) for payload in sent} == {expected_bytes}
 
 
-async def test_keepalive_sends_silence_when_input_goes_idle(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(stt_streaming, "KEEPALIVE_INTERVAL_S", 0.05)
-    stream = _make_stream()
-    sent: list[bytes] = []
+def _keepalive_ws() -> tuple[SimpleNamespace, list[bytes], list[str]]:
+    audio: list[bytes] = []
+    events: list[str] = []
 
     async def _send_bytes(payload: bytes) -> None:
-        sent.append(payload)
+        audio.append(payload)
 
-    ws = SimpleNamespace(closed=False, send_bytes=_send_bytes)
+    async def _send_str(payload: str) -> None:
+        events.append(json.loads(payload)["event"])
+
+    return SimpleNamespace(closed=False, send_bytes=_send_bytes, send_str=_send_str), audio, events
+
+
+def _keepalive_stream(endpointing: str = "vad") -> stt_streaming.RealtimeSpeechStream:
+    stream = _make_stream(endpointing=endpointing)
+    stream._input_ch = stt_streaming.utils.aio.Chan()
+    stream._FlushSentinel = stt_streaming.stt.RecognizeStream._FlushSentinel
     stream._last_audio_sent_at = stt_streaming.time.monotonic()
+    return stream
 
-    task = asyncio.create_task(stream._keepalive(ws))
-    await asyncio.sleep(0.02)
-    assert sent == []  # not idle long enough yet
 
-    await asyncio.sleep(0.15)
-    assert sent, "expected silence after the idle interval"
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("endpointing", ["vad", "manual"])
+async def test_keepalive_sends_silence_when_input_goes_idle(endpointing: str) -> None:
+    stream = _keepalive_stream(endpointing)
+    ws, audio, events = _keepalive_ws()
+    task = asyncio.create_task(stream._process_audio(ws))
+
+    await asyncio.sleep(stt_streaming.KEEPALIVE_INTERVAL_S - 1)
+    assert audio == []  # not idle long enough yet
+
+    await asyncio.sleep(2)
     chunk_samples = int(16000 * stt_streaming.AUDIO_CHUNK_MS / 1000)
-    assert sent[0] == bytes(chunk_samples * 2)
-    assert stream._audio_position == pytest.approx(len(sent) * chunk_samples / 16000)
+    assert audio == [bytes(chunk_samples * 2)]
+    assert stream._audio_position == pytest.approx(chunk_samples / 16000)
+    # between utterances the silence opens no manual utterance
+    assert "speech_start" not in events
 
-    stream._input_ended = True
+    stream._input_ch.close()
     await asyncio.wait_for(task, timeout=1.0)
 
 
-async def test_keepalive_stays_quiet_while_audio_flows(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(stt_streaming, "KEEPALIVE_INTERVAL_S", 0.05)
-    stream = _make_stream()
-    sent: list[bytes] = []
+@pytest.mark.virtual_time
+async def test_keepalive_stays_quiet_while_audio_flows() -> None:
+    stream = _keepalive_stream()
+    ws, audio, _ = _keepalive_ws()
+    task = asyncio.create_task(stream._process_audio(ws))
+    frame = stt_streaming.rtc.AudioFrame(
+        data=bytes(1600), sample_rate=16000, num_channels=1, samples_per_channel=800
+    )
+    for _ in range(6):
+        stream._input_ch.send_nowait(frame)
+        await asyncio.sleep(stt_streaming.KEEPALIVE_INTERVAL_S / 2)
 
-    async def _send_bytes(payload: bytes) -> None:
-        sent.append(payload)
-
-    ws = SimpleNamespace(closed=False, send_bytes=_send_bytes)
-    task = asyncio.create_task(stream._keepalive(ws))
-    for _ in range(10):
-        stream._last_audio_sent_at = stt_streaming.time.monotonic()
-        await asyncio.sleep(0.02)
-
-    assert sent == []
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
+    assert bytes(1600) * 6 == b"".join(audio)  # only the pushed audio, no extra silence
+    stream._input_ch.close()
+    await asyncio.wait_for(task, timeout=1.0)
