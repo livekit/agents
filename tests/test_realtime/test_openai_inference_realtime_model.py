@@ -30,6 +30,21 @@ from livekit.agents.llm._realtime.openai import _DiscardedGeneration, _MessageGe
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("kwargs", [{}, {"provider": None}, {"provider": "azure"}])
+def test_provider_pinning_warns_only_when_explicitly_passed(
+    kwargs: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        RealtimeModel("openai/gpt-realtime", api_key="key", api_secret="secret", **kwargs)
+
+    if kwargs:
+        assert len(caplog.messages) == 1
+        assert "provider is deprecated and will be removed on March 1, 2027" in caplog.text
+        assert "Omit this argument" in caplog.text
+    else:
+        assert not caplog.messages
+
+
 def test_plugin_import_is_canonical_class() -> None:
     from livekit.plugins.openai.realtime import InferenceRealtimeModel
     from livekit.plugins.openai.realtime.inference_realtime_model import (

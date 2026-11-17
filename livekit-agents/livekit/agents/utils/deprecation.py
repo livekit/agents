@@ -19,11 +19,14 @@ def deprecate_params(
     mapping: dict[str, str],
     *,
     target_version: str | None = None,
+    target_date: str | None = None,
 ) -> Callable[[_F], _F]:
     """
     Args:
         mapping: {old_param: suggestion}
         target_version: If set, the warning includes "will be removed in {target_version}".
+        target_date: If set, the warning includes "will be removed on {target_date}".
+            Can be combined with target_version.
 
     Example:
     >>> @deprecate_params({
@@ -38,6 +41,10 @@ def deprecate_params(
     """
 
     removal = f" and will be removed in {target_version}" if target_version else ""
+    if target_date:
+        removal = (
+            f"{removal} on {target_date}" if removal else f" and will be removed on {target_date}"
+        )
 
     def decorator(fn: Callable[_P, _R]) -> Callable[_P, _R]:
         signature = inspect.signature(fn)

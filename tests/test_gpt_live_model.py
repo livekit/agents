@@ -2091,6 +2091,21 @@ def _inference_model(**kwargs: Any) -> inference.DuplexModel:
     )
 
 
+@pytest.mark.parametrize("kwargs", [{}, {"provider": None}, {"provider": "openai"}])
+def test_inference_provider_pinning_warns_only_when_explicitly_passed(
+    kwargs: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        _inference_model(**kwargs)
+
+    if kwargs:
+        assert len(caplog.messages) == 1
+        assert "provider is deprecated and will be removed on March 1, 2027" in caplog.text
+        assert "Omit this argument" in caplog.text
+    else:
+        assert not caplog.messages
+
+
 def test_the_plugin_and_inference_share_one_client() -> None:
     from livekit.plugins.openai.realtime import gpt_live_types
 
