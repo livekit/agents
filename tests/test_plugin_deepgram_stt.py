@@ -8,6 +8,9 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from livekit.agents.stt import SpeechEventType
+from livekit.agents.utils.aio.channel import Chan, ChanEmpty
+
 pytestmark = pytest.mark.plugin("deepgram")
 
 
@@ -291,6 +294,138 @@ def _live_stream(ws: _LiveWS):
     # patched before the _run task gets its first tick, so no real socket is opened
     stream._connect_ws = _fake_connect
     return stream
+
+
+def _drain_events(stream):
+    events = []
+    while True:
+        try:
+            events.append(stream._event_ch.recv_nowait())
+        except ChanEmpty:
+            return events
+
+
+def _nova_result(*, speech_final=False, transcript="hello", words=None):
+    return {
+        "type": "Results",
+        "metadata": {"request_id": "req-1"},
+        "is_final": True,
+        "speech_final": speech_final,
+        "channel": {
+            "alternatives": [
+                {
+                    "transcript": transcript,
+                    "confidence": 0.9,
+                    "words": words
+                    if words is not None
+                    else [{"word": "hello", "start": 1.0, "end": 2.4}],
+                }
+            ]
+        },
+    }
+
+
+@pytest.mark.parametrize("offset", [0.0, 8.5])
+@pytest.mark.parametrize("empty_endpoint", [False, True])
+async def test_nova_eos_uses_final_word_end_time(offset, empty_endpoint):
+    stream = _live_stream(_LiveWS())
+    stream.start_time_offset = offset
+    try:
+        stream._process_stream_event(_nova_result(speech_final=not empty_endpoint))
+        if empty_endpoint:
+            stream._process_stream_event(_nova_result(speech_final=True, transcript="", words=[]))
+
+        endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
+        assert len(endpoints) == 1
+        assert endpoints[0].alternatives[0].end_time == pytest.approx(offset + 2.4)
+
+        stream._process_stream_event({"type": "SpeechStarted"})
+        stream._process_stream_event(_nova_result(speech_final=True, transcript="", words=[]))
+        endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
+        assert len(endpoints) == 1
+        assert endpoints[0].alternatives == []
+    finally:
+        await stream.aclose()
+
+
+async def test_nova_eos_drops_word_timing_from_a_previous_connection():
+    stream = _live_stream(_LiveWS())
+    connections = []
+
+    async def connect():
+        ws = _LiveWS()
+        connections.append(ws)
+        return ws
+
+    stream._connect_ws = connect
+    try:
+        await _wait_until(lambda: len(connections) == 1 and connections[-1].wire)
+        stream._process_stream_event(_nova_result())
+        _drain_events(stream)
+
+        stream._reconnect_event.set()
+        await _wait_until(lambda: len(connections) == 2 and connections[-1].wire)
+        stream._process_stream_event(_nova_result(speech_final=True, transcript="", words=[]))
+
+        endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
+        assert len(endpoints) == 1
+        assert endpoints[0].alternatives == []
+    finally:
+        await stream.aclose()
+
+
+async def test_nova_utterance_end_uses_last_word_end():
+    stream = _live_stream(_LiveWS())
+    stream.start_time_offset = 8.5
+    try:
+        stream._process_stream_event({"type": "SpeechStarted"})
+        stream._process_stream_event({"type": "UtteranceEnd", "last_word_end": 2.4})
+
+        endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
+        assert len(endpoints) == 1
+        assert endpoints[0].alternatives[0].end_time == pytest.approx(10.9)
+
+        stream._process_stream_event({"type": "SpeechStarted"})
+        stream._process_stream_event({"type": "UtteranceEnd", "last_word_end": -1})
+        assert [e.type for e in _drain_events(stream)] == [SpeechEventType.START_OF_SPEECH]
+        assert stream._speaking
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.parametrize("last_word_end", [2.4, None])
+def test_flux_eos_uses_word_timing_instead_of_audio_window_end(last_word_end):
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    stream = SpeechStreamv2.__new__(SpeechStreamv2)
+    stream._opts = SimpleNamespace(language="en")
+    stream._event_ch = Chan()
+    stream._speaking = True
+    stream._request_id = "req-1"
+    stream._input_ch = SimpleNamespace(start_time_offset=8.5)
+    word = {"word": "hello", "start": 1.0, "confidence": 0.9}
+    if last_word_end is not None:
+        word["end"] = last_word_end
+
+    stream._process_stream_event(
+        {
+            "type": "TurnInfo",
+            "event": "EndOfTurn",
+            "transcript": "hello",
+            "words": [word],
+            "audio_window_start": 1.0,
+            "audio_window_end": 3.0,
+        }
+    )
+
+    final, endpoint = _drain_events(stream)
+    assert final.type == SpeechEventType.FINAL_TRANSCRIPT
+    assert final.alternatives[0].end_time == pytest.approx(11.5)
+    assert endpoint.type == SpeechEventType.END_OF_SPEECH
+    if last_word_end is None:
+        assert endpoint.alternatives == []
+    else:
+        assert endpoint.alternatives[0].end_time == pytest.approx(10.9)
 
 
 def _frame(ms: int, sample_rate: int = 16000):
@@ -628,6 +763,45 @@ async def test_heartbeat_timeout_reconnects_without_spinning():
         assert sockets[0].receives == 1
     finally:
         await stream.aclose()
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.deepgram.stt import STT
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    provider = STT(api_key="test-key", http_session=clock)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream.update_options(language="fr"))
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+
+@pytest.mark.no_concurrent
+async def test_flux_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.deepgram import STTv2
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    provider = STTv2(api_key="test-key", http_session=clock)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream.update_options(model="flux-general-multi"))
+        stream.update_options(keyterm=["LiveKit"])
+        await stream._reconfigure_atask
+        await clock.push(stream, captured_at=1020.0)
+        assert len(clock.sockets) == 2
+        assert stream.start_time_offset == pytest.approx(17.0)
+    finally:
+        await stream.aclose()
+        await provider.aclose()
 
 
 class _ConnectRecordingSession:

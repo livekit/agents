@@ -1,14 +1,4 @@
-"""
-Hermetic tests for the Reson8 STT plugin.
-
-Two layers, no credentials and no external network:
-
-* pure checks on the option sections, the query string they produce and the
-  turn state machine in ``SpeechStream._process_message``;
-* a loopback ``aiohttp`` stand-in for the Reson8 API, so the real request,
-  websocket-upgrade and error-mapping paths run end to end rather than against
-  a mock.
-"""
+"""Hermetic tests for the Reson8 STT plugin, against a loopback aiohttp stand-in for the API."""
 
 from __future__ import annotations
 
@@ -16,8 +6,9 @@ import asyncio
 import contextlib
 import json
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Protocol, cast
 
 import aiohttp
@@ -42,7 +33,6 @@ from livekit.plugins.reson8._utils import (
     PRERECORDED_PATH,
     TURNS_PATH,
     _confidence,
-    _word_time,
     build_speech_data,
     build_url,
     normalize_languages,
@@ -50,7 +40,6 @@ from livekit.plugins.reson8._utils import (
     status_error,
 )
 from livekit.plugins.reson8.stt import (
-    _FINAL_TURN_TIMEOUT,
     AudioOptions,
     BiasingOptions,
     SpeechStream,
@@ -63,16 +52,27 @@ pytestmark = pytest.mark.unit
 
 SpeechEventType = stt.SpeechEventType
 NO_RETRY = APIConnectOptions(max_retry=0)
-INTEGRATION = f"livekit-python:{reson8.__version__}"
+ONE_RETRY = APIConnectOptions(max_retry=1, timeout=5)
+TURN = [
+    {"type": "turn_start"},
+    {"type": "turn_end_candidate", "text": "hello world"},
+    {"type": "turn_end"},
+]
+TURN_TYPES = [
+    SpeechEventType.START_OF_SPEECH,
+    SpeechEventType.PREFLIGHT_TRANSCRIPT,
+    SpeechEventType.FINAL_TRANSCRIPT,
+    SpeechEventType.END_OF_SPEECH,
+]
 
 HOSTED = "https://api.reson8.dev"
 SELF_HOSTED = "https://stt.internal.example"
 OTHER = "https://other.example"
+LIMITS_URL = "https://docs.reson8.dev/limits/"
+REJECTED = "Reson8 rejected the request"
 
 
 def _frame(num_channels: int = 1, samples: int = 1600) -> rtc.AudioFrame:
-    """0.1s of silent 16 kHz audio."""
-
     return rtc.AudioFrame(
         data=b"\x00\x00" * samples * num_channels,
         sample_rate=16000,
@@ -81,14 +81,24 @@ def _frame(num_channels: int = 1, samples: int = 1600) -> rtc.AudioFrame:
     )
 
 
-# ---------------------------------------------------------------------------
-# fixtures
-# ---------------------------------------------------------------------------
+async def _until(predicate: Callable[[], bool]) -> None:
+    async with asyncio.timeout(5):
+        while not predicate():
+            await asyncio.sleep(0.005)
+
+
+@pytest.fixture(autouse=True)
+def _env_and_timing(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("RESON8_API_KEY", "RESON8_BASE_URL", "RESON8_API_URL"):
+        monkeypatch.delenv(name, raising=False)
+    # the production ceilings are tuned for real latency; a loopback answers in microseconds
+    monkeypatch.setattr(reson8_stt, "_FINAL_TURN_TIMEOUT", 0.1)
+    monkeypatch.setattr(reson8_stt, "_FINAL_TURN_GRACE", 0.02)
+    # the framework's first retry otherwise waits a fixed 0.1s
+    monkeypatch.setattr(APIConnectOptions, "_interval_for_retry", lambda self, n: 0.0)
 
 
 class FakeChan:
-    """Stand-in for the stream's event channel that just records."""
-
     def __init__(self) -> None:
         self.events: list[stt.SpeechEvent] = []
 
@@ -96,46 +106,27 @@ class FakeChan:
         self.events.append(event)
 
 
-class MakeStream(Protocol):
-    def __call__(self, **overrides: object) -> SpeechStream: ...
-
-
 @pytest.fixture
-def make_stream() -> MakeStream:
-    """
-    Build a ``SpeechStream`` without running its base ``__init__``.
-
-    ``RecognizeStream.__init__`` spawns background tasks that open a websocket.
-    ``_process_message`` is synchronous and touches only these attributes, so
-    bypassing ``__init__`` keeps the state-machine tests network- and loop-free.
-    """
-
-    def _make(**overrides: object) -> SpeechStream:
-        stream = SpeechStream.__new__(SpeechStream)
-        stream._opts = STTOptions(**overrides)  # type: ignore[arg-type]
-        stream._request_id = "req-test"
-        stream._speaking = False
-        stream._candidate = None
-        stream._pending_reconnect = False
-        stream._turn_settled = asyncio.Event()
-        stream._turn_ended = asyncio.Event()
-        stream._start_time_offset = 0.0
-        stream._speech_duration = 0.0
-        stream._event_ch = FakeChan()  # type: ignore[assignment]
-        return stream
-
-    return _make
-
-
-def emitted(stream: SpeechStream) -> list[stt.SpeechEvent]:
-    return cast(FakeChan, stream._event_ch).events
+def offline_stream() -> SpeechStream:
+    """A stream built without ``__init__``, so ``_process_message`` runs with no socket."""
+    stream = SpeechStream.__new__(SpeechStream)
+    stream._opts = STTOptions(language="en")
+    stream._request_id = "req-test"
+    stream._speaking = False
+    stream._candidate = None
+    stream._turn_settled = asyncio.Event()
+    stream._turn_ended = asyncio.Event()
+    stream._input_ch = SimpleNamespace(start_time_offset=0.0)  # type: ignore[assignment]
+    stream._speech_duration = 0.0
+    stream._event_ch = FakeChan()  # type: ignore[assignment]
+    return stream
 
 
 @dataclass
 class Recorded:
     """What the fake Reson8 server saw, and how to talk back."""
 
-    base_url: str
+    base_url: str = ""
     handshake_headers: dict[str, str] = field(default_factory=dict)
     post_headers: dict[str, str] = field(default_factory=dict)
     query: dict[str, str] = field(default_factory=dict)
@@ -143,26 +134,17 @@ class Recorded:
     text: list[str] = field(default_factory=list)
     connected: asyncio.Event = field(default_factory=asyncio.Event)
     connections: int = 0
-    _ws: web.WebSocketResponse | None = None
+    ws: web.WebSocketResponse | None = None
 
-    async def send(self, message: object) -> None:
+    async def send(self, *messages: object) -> None:
         await asyncio.wait_for(self.connected.wait(), timeout=5)
-        assert self._ws is not None
-        await self._ws.send_str(json.dumps(message))
+        assert self.ws is not None
+        for message in messages:
+            await self.ws.send_str(json.dumps(message))
 
-    async def wait_for_connections(self, count: int) -> None:
-        async def _poll() -> None:
-            while self.connections < count:
-                await asyncio.sleep(0.01)
-
-        await asyncio.wait_for(_poll(), timeout=5)
-
-    async def wait_for_text(self, count: int = 1) -> None:
-        async def _poll() -> None:
-            while len(self.text) < count:
-                await asyncio.sleep(0.01)
-
-        await asyncio.wait_for(_poll(), timeout=5)
+    async def hang_up(self) -> None:
+        assert self.ws is not None
+        await self.ws.close()
 
 
 class StartServer(Protocol):
@@ -173,12 +155,15 @@ class StartServer(Protocol):
         post_body: str = ...,
         ws_status: int | None = ...,
         ws_error_message: str | None = ...,
+        answer_flush: list[dict[str, object]] | None = ...,
+        hang_up_after_flush: bool = ...,
     ) -> Recorded: ...
 
 
 @pytest.fixture
 async def reson8_server() -> AsyncIterator[StartServer]:
     runners: list[web.AppRunner] = []
+    tasks: list[asyncio.Task[None]] = []
 
     async def _start(
         *,
@@ -186,8 +171,10 @@ async def reson8_server() -> AsyncIterator[StartServer]:
         post_body: str = '{"text": "hello"}',
         ws_status: int | None = None,
         ws_error_message: str | None = None,
+        answer_flush: list[dict[str, object]] | None = None,
+        hang_up_after_flush: bool = False,
     ) -> Recorded:
-        rec = Recorded(base_url="")
+        rec = Recorded()
 
         async def prerecorded(request: web.Request) -> web.StreamResponse:
             rec.post_headers = dict(request.headers)
@@ -195,105 +182,50 @@ async def reson8_server() -> AsyncIterator[StartServer]:
             await request.read()
             return web.Response(status=post_status, text=post_body, content_type="application/json")
 
-        async def accept_turns(request: web.Request) -> web.StreamResponse:
+        async def turns(request: web.Request) -> web.StreamResponse:
             rec.handshake_headers = dict(request.headers)
             rec.query = dict(request.query)
+            if ws_status is not None:
+                # a rejected upgrade carries no body, only this header
+                headers = {ERROR_MESSAGE_HEADER: ws_error_message} if ws_error_message else {}
+                return web.Response(status=ws_status, headers=headers, text="")
 
             ws = web.WebSocketResponse()
             await ws.prepare(request)
-            rec._ws = ws
+            rec.ws = ws
             rec.connections += 1
             rec.connected.set()
+
+            async def answer() -> None:
+                # finalising is not instant
+                await asyncio.sleep(0.02)
+                for message in answer_flush or []:
+                    await ws.send_str(json.dumps(message))
+                if hang_up_after_flush:
+                    await ws.close()
 
             async for msg in ws:
                 if msg.type is aiohttp.WSMsgType.BINARY:
                     rec.audio.append(msg.data)
                 elif msg.type is aiohttp.WSMsgType.TEXT:
                     rec.text.append(msg.data)
-
+                    if answer_flush is not None or hang_up_after_flush:
+                        tasks.append(asyncio.create_task(answer()))
             return ws
-
-        async def reject_turns(request: web.Request) -> web.StreamResponse:
-            rec.handshake_headers = dict(request.headers)
-            rec.query = dict(request.query)
-            headers = {ERROR_MESSAGE_HEADER: ws_error_message} if ws_error_message else {}
-            # a rejected upgrade carries no body, only this header
-            return web.Response(status=ws_status or 500, headers=headers, text="")
 
         app = web.Application()
         app.router.add_post(PRERECORDED_PATH, prerecorded)
-        app.router.add_get(TURNS_PATH, reject_turns if ws_status is not None else accept_turns)
-
+        app.router.add_get(TURNS_PATH, turns)
         runner = web.AppRunner(app)
         await runner.setup()
-
         runners.append(runner)
         await web.TCPSite(runner, "127.0.0.1", 0).start()
-
         rec.base_url = f"http://127.0.0.1:{runner.addresses[0][1]}"
         return rec
 
     yield _start
 
-    for runner in runners:
-        await runner.cleanup()
-
-
-@pytest.fixture
-async def finalizing_server() -> AsyncIterator[Callable[..., Awaitable[str]]]:
-    """
-    A Reson8 stand-in that answers only after it sees ``flush_request``.
-
-    That is what asking Reson8 to finalise looks like from the server side: the
-    turn events arrive in response to the flush, not before it.
-    """
-
-    runners: list[web.AppRunner] = []
-
-    async def _start(*, answer_flush: bool = True, hang_up: bool = False) -> str:
-        saw_flush = asyncio.Event()
-
-        async def turns(request: web.Request) -> web.StreamResponse:
-            ws = web.WebSocketResponse()
-            await ws.prepare(request)
-
-            async def answer() -> None:
-                await saw_flush.wait()
-                await asyncio.sleep(0.05)  # finalising is not instant
-                if answer_flush:
-                    for message in (
-                        {"type": "turn_start"},
-                        {"type": "turn_end_candidate", "text": "hello world"},
-                        {"type": "turn_end"},
-                    ):
-                        await ws.send_str(json.dumps(message))
-
-                if hang_up:
-                    await ws.close()
-
-            task = asyncio.create_task(answer())
-            try:
-                async for msg in ws:
-                    if msg.type is aiohttp.WSMsgType.TEXT and "flush_request" in msg.data:
-                        saw_flush.set()
-            finally:
-                await utils.aio.cancel_and_wait(task)
-
-            return ws
-
-        app = web.Application()
-        app.router.add_get(TURNS_PATH, turns)
-
-        runner = web.AppRunner(app)
-        await runner.setup()
-
-        runners.append(runner)
-        await web.TCPSite(runner, "127.0.0.1", 0).start()
-
-        return f"http://127.0.0.1:{runner.addresses[0][1]}"
-
-    yield _start
-
+    await utils.aio.cancel_and_wait(*tasks)
     for runner in runners:
         await runner.cleanup()
 
@@ -309,25 +241,15 @@ class EventLog:
 
     def __init__(self, stream: SpeechStream) -> None:
         self.events: list[stt.SpeechEvent] = []
-        self._stream = stream
-        self._task = asyncio.create_task(self._read())
+        self._task = asyncio.create_task(self._read(stream))
 
-    async def _read(self) -> None:
-        async for event in self._stream:
+    async def _read(self, stream: SpeechStream) -> None:
+        async for event in stream:
             self.events.append(event)
 
-    async def wait_for(self, count: int, timeout: float = 5.0) -> list[stt.SpeechEvent]:
-        async def _poll() -> None:
-            while len(self.events) < count:
-                await asyncio.sleep(0.01)
-
-        await asyncio.wait_for(_poll(), timeout=timeout)
+    async def wait_for(self, count: int) -> list[stt.SpeechEvent]:
+        await _until(lambda: len(self.events) >= count)
         return self.events
-
-    async def assert_quiet(self, seconds: float = 0.5) -> None:
-        before = len(self.events)
-        await asyncio.sleep(seconds)
-        assert len(self.events) == before, f"unexpected events: {self.events[before:]}"
 
     async def aclose(self) -> None:
         self._task.cancel()
@@ -336,24 +258,27 @@ class EventLog:
 
 
 def _stt(base_url: str, session: aiohttp.ClientSession, **kwargs: object) -> reson8.STT:
-    return reson8.STT(
-        api_key="secret",
-        base_url=base_url,
-        http_session=session,
-        **kwargs,  # type: ignore[arg-type]
-    )
+    return reson8.STT(api_key="secret", base_url=base_url, http_session=session, **kwargs)  # type: ignore[arg-type]
+
+
+async def _drain(stream: SpeechStream) -> list[stt.SpeechEvent]:
+    events: list[stt.SpeechEvent] = []
+    try:
+        async with asyncio.timeout(5):
+            async for event in stream:
+                events.append(event)
+    finally:
+        await stream.aclose()
+    return events
+
+
+def _finals(events: list[stt.SpeechEvent]) -> list[str]:
+    return [e.alternatives[0].text for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
 
 
 # ---------------------------------------------------------------------------
-# construction: credentials and endpoint resolution
+# construction and options
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("RESON8_API_KEY", raising=False)
-    monkeypatch.delenv("RESON8_BASE_URL", raising=False)
-    monkeypatch.delenv("RESON8_API_URL", raising=False)
 
 
 def test_a_missing_api_key_raises() -> None:
@@ -366,33 +291,30 @@ def test_the_api_key_is_read_from_the_environment(monkeypatch: pytest.MonkeyPatc
     assert reson8.STT()._api_key == "from-env"
 
 
-def test_base_url_defaults_to_the_hosted_api() -> None:
-    assert reson8.STT(api_key="k")._base_url == HOSTED
-
-
-def test_base_url_argument_wins_over_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RESON8_BASE_URL", OTHER)
-    assert reson8.STT(api_key="k", base_url=SELF_HOSTED)._base_url == SELF_HOSTED
-
-
-def test_base_url_reads_its_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RESON8_BASE_URL", SELF_HOSTED)
-    assert reson8.STT(api_key="k")._base_url == SELF_HOSTED
+@pytest.mark.parametrize(
+    ("env", "argument", "expected"),
+    [
+        ({}, None, HOSTED),
+        ({"RESON8_BASE_URL": OTHER}, SELF_HOSTED, SELF_HOSTED),
+        ({"RESON8_BASE_URL": SELF_HOSTED}, None, SELF_HOSTED),
+        ({"RESON8_BASE_URL": SELF_HOSTED, "RESON8_API_URL": OTHER}, None, SELF_HOSTED),
+        ({"RESON8_BASE_URL": f"{SELF_HOSTED}/"}, None, SELF_HOSTED),
+    ],
+)
+def test_base_url_resolution(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], argument: str | None, expected: str
+) -> None:
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    kwargs = {"base_url": argument} if argument else {}
+    assert reson8.STT(api_key="k", **kwargs)._base_url == expected
 
 
 def test_the_renamed_env_var_is_honoured_with_a_warning(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """
-    A self-hosted deployment on the old name must not be sent to the public API.
-
-    ``RESON8_API_URL`` was the name in the standalone 0.2.x releases of this
-    plugin. Without the fallback the endpoint would silently become
-    api.reson8.dev, sending audio and the API key to the wrong host.
-    """
-
+    """A self-hosted deployment on the 0.2.x name must not be sent to the public API."""
     monkeypatch.setenv("RESON8_API_URL", SELF_HOSTED)
-
     with caplog.at_level("WARNING"):
         instance = reson8.STT(api_key="k")
 
@@ -400,67 +322,40 @@ def test_the_renamed_env_var_is_honoured_with_a_warning(
     assert "RESON8_API_URL is deprecated" in caplog.text
 
 
-def test_the_current_env_var_wins_over_the_renamed_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RESON8_BASE_URL", SELF_HOSTED)
-    monkeypatch.setenv("RESON8_API_URL", OTHER)
-    assert reson8.STT(api_key="k")._base_url == SELF_HOSTED
-
-
-def test_a_trailing_slash_is_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RESON8_BASE_URL", f"{SELF_HOSTED}/")
-    assert reson8.STT(api_key="k")._base_url == SELF_HOSTED
-
-
-def test_capabilities_track_the_transcript_options() -> None:
-    plain = reson8.STT(api_key="k")
-    assert plain.capabilities.streaming
-    assert plain.capabilities.offline_recognize
-    assert plain.capabilities.aligned_transcript is False
-
-    # word timings are what make an aligned transcript possible
-    aligned = reson8.STT(api_key="k", transcript=TranscriptOptions(words=True))
-    assert aligned.capabilities.aligned_transcript == "word"
-
-
 @pytest.mark.parametrize(
-    ("words", "expected"),
-    [(True, "word"), (False, False)],
+    ("base_url", "warns"),
+    [
+        ("http://reson8.internal.example", True),
+        ("http://10.0.0.5:8080", True),
+        ("https://api.reson8.dev", False),
+        ("http://127.0.0.1:8080", False),
+        ("http://localhost:8080", False),
+        ("http://[::1]:8080", False),
+    ],
 )
-def test_update_options_moves_the_aligned_transcript_capability(
-    words: bool, expected: str | bool
+def test_a_plaintext_remote_base_url_warns(
+    base_url: str, warns: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """
-    The capability has to follow the option it is derived from.
+    with caplog.at_level("WARNING"):
+        reson8.STT(api_key="k", base_url=base_url)
+    assert ("not encrypted" in caplog.text) is warns
 
-    Consumers decide whether to ask for word alignment from it, so leaving it
-    at the constructor value makes them act on configuration that is gone.
-    """
 
+@pytest.mark.parametrize("words", [True, False])
+def test_the_aligned_transcript_capability_follows_the_options(words: bool) -> None:
     instance = reson8.STT(api_key="k", transcript=TranscriptOptions(words=not words))
     assert instance.capabilities.aligned_transcript == (False if words else "word")
 
-    instance.update_options(transcript=TranscriptOptions(words=words))
-    assert instance.capabilities.aligned_transcript == expected
-
-
-def test_an_unrelated_update_leaves_the_capability_alone() -> None:
-    instance = reson8.STT(api_key="k", transcript=TranscriptOptions(words=True))
-
     instance.update_options(language="de")
+    assert instance.capabilities.aligned_transcript == (False if words else "word")
 
-    assert instance.capabilities.aligned_transcript == "word"
+    instance.update_options(transcript=TranscriptOptions(words=words))
+    assert instance.capabilities.aligned_transcript == ("word" if words else False)
 
 
-def test_model_and_provider() -> None:
-    assert reson8.STT(api_key="k").provider == "Reson8"
+def test_the_model_is_the_custom_model_id() -> None:
     assert reson8.STT(api_key="k").model == "default"
-    biasing = BiasingOptions(custom_model_id="m1")
-    assert reson8.STT(api_key="k", biasing=biasing).model == "m1"
-
-
-# ---------------------------------------------------------------------------
-# languages
-# ---------------------------------------------------------------------------
+    assert reson8.STT(api_key="k", biasing=BiasingOptions(custom_model_id="m1")).model == "m1"
 
 
 @pytest.mark.parametrize(
@@ -469,12 +364,12 @@ def test_model_and_provider() -> None:
         (None, None),
         ("", None),
         ([], None),
-        ("nl", "nl"),
         ("NL", "nl"),
         ("nl,de", "nl,de"),
         (["nl", "de"], "nl,de"),
         (" nl , de ", "nl,de"),
         (["nl", "", "de"], "nl,de"),
+        *((code, code) for code in reson8.SUPPORTED_LANGUAGES),
     ],
 )
 def test_normalize_languages(value: str | list[str] | None, expected: str | None) -> None:
@@ -487,224 +382,95 @@ def test_an_unsupported_language_raises(value: str | list[str]) -> None:
         reson8.STT(api_key="k", language=value)
 
 
-def test_every_advertised_language_is_accepted() -> None:
-    for code in reson8.SUPPORTED_LANGUAGES:
-        assert normalize_languages(code) == code
-
-
-# ---------------------------------------------------------------------------
-# option validation, all before any request
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("build", "message"),
     [
-        pytest.param(lambda: AudioOptions(num_channels=0), "between 1 and 10", id="no-channels"),
-        pytest.param(lambda: AudioOptions(num_channels=11), "between 1 and 10", id="too-many"),
-        pytest.param(lambda: AudioOptions(sample_rate=0), "must be positive", id="zero-rate"),
-        pytest.param(lambda: AudioOptions(sample_rate=-16000), "must be positive", id="negative"),
+        (lambda: AudioOptions(num_channels=0), "between 1 and 10"),
+        (lambda: AudioOptions(num_channels=11), "between 1 and 10"),
+        (lambda: AudioOptions(sample_rate=0), "must be positive"),
+        (lambda: AudioOptions(sample_rate=-16000), "must be positive"),
+        # rtc frames are PCM, so any other label would mislabel the bytes on the wire
+        *(
+            (lambda e=e: AudioOptions(encoding=e), "(?i)unsupported encoding")
+            for e in ("mulaw", "alaw", "auto", "flac")
+        ),
+        (lambda: TurnOptions(final_probability=-0.1), "must be between 0 and 1"),
+        (lambda: TurnOptions(final_probability=1.1), "must be between 0 and 1"),
+        (lambda: TurnOptions(eager_probability=0.5, final_probability=0.4), "must be below"),
+        (lambda: TurnOptions(eager_probability=0.9, final_probability=0.7), "must be below"),
+        # above the server's 0.92 default final
+        (lambda: TurnOptions(eager_probability=0.95), "must be below"),
+        (lambda: BiasingOptions(phrases=[f"p{i}" for i in range(251)]), "at most 250 entries"),
+        (lambda: BiasingOptions(phrases=["fine", "not,fine"]), "cannot contain a comma"),
+        (lambda: BiasingOptions(phrases=["ok", "  "]), "empty entry"),
+        (lambda: BiasingOptions(patterns=["ok", "  "]), "empty entry"),
+        # a bare str is a Sequence[str] that would be split per character
+        (lambda: BiasingOptions(patterns="[0-9]{4}"), "takes a sequence of strings"),
+        (lambda: BiasingOptions(patterns=["a,b"]), "outside"),
+        (lambda: BiasingOptions(patterns=["AMZ[0-9]{6},X"]), "outside"),
+        (lambda: BiasingOptions(strength=-0.1), "must be non-negative"),
+        (lambda: TranscriptOptions(filler_mode="loud"), "(?i)unsupported filler_mode"),
     ],
 )
-def test_bad_audio_options_are_rejected(build: Callable[[], AudioOptions], message: str) -> None:
+def test_invalid_options_raise(build: Callable[[], object], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         build()
 
 
-@pytest.mark.parametrize("num_channels", [1, 10])
-def test_the_documented_channel_bounds_are_accepted(num_channels: int) -> None:
-    assert AudioOptions(num_channels=num_channels).num_channels == num_channels
-
-
-def test_pcm_is_the_only_encoding() -> None:
-    """
-    rtc frames are signed 16-bit PCM and we forward them unchanged.
-
-    Accepting mulaw/alaw would only let a caller mislabel what is on the wire:
-    the batch path overrides the encoding anyway, and the streaming path would
-    tell Reson8 to decode PCM bytes as companded ones.
-    """
-
-    assert AudioOptions().encoding == "pcm_s16le"
-
-    for encoding in ("mulaw", "alaw", "auto", "flac"):
-        with pytest.raises(ValueError, match=r"(?i)unsupported encoding"):
-            AudioOptions(encoding=encoding)  # type: ignore[arg-type]
-
-
-@pytest.mark.parametrize("value", [-0.1, 1.1])
-def test_an_out_of_range_probability_raises(value: float) -> None:
-    with pytest.raises(ValueError, match="must be between 0 and 1"):
-        reson8.STT(api_key="k", turn=TurnOptions(final_probability=value))
-
-
 @pytest.mark.parametrize(
-    ("eager", "final"),
+    "build",
     [
-        (0.5, 0.4),
-        (0.9, 0.7),
-        (0.95, None),  # above the server's 0.92 default
+        lambda: AudioOptions(num_channels=1),
+        lambda: AudioOptions(num_channels=10),
+        lambda: BiasingOptions(phrases=[f"p{i}" for i in range(250)]),
+        # the comma in a {m,n} repeat is not a separator on the wire
+        *(
+            (lambda p=p: BiasingOptions(patterns=[p]))
+            for p in ("[0-9]{4,6}", "(INV)?[0-9]{4,5}", "[A-Z]{2}[0-9]{2} [A-Z]{3}")
+        ),
     ],
 )
-def test_inverted_thresholds_raise(eager: float, final: float | None) -> None:
-    with pytest.raises(ValueError, match="must be below"):
-        TurnOptions(eager_probability=eager, final_probability=final)
+def test_boundary_options_are_accepted(build: Callable[[], object]) -> None:
+    build()
 
 
 @pytest.mark.parametrize(
-    ("eager", "final"),
+    ("eager", "final", "warns"),
     [
-        (0.5, 0.5),  # both explicit, identical
-        (None, 0.5),  # 0.5 == the server's default eager
+        (0.5, 0.5, True),
+        (None, 0.5, True),  # 0.5 is the server's default eager
+        (None, None, False),
+        (0.35, 0.7, False),
     ],
 )
 def test_equal_thresholds_warn(
-    eager: float | None, final: float, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Equal thresholds are legal but pointless: the preflight gets no lead."""
-
-    with caplog.at_level("WARNING"):
-        TurnOptions(eager_probability=eager, final_probability=final)
-    assert caplog.records
-
-
-@pytest.mark.parametrize(("eager", "final"), [(None, None), (0.35, 0.7)])
-def test_sane_thresholds_are_quiet(
-    eager: float | None, final: float | None, caplog: pytest.LogCaptureFixture
+    eager: float | None, final: float | None, warns: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level("WARNING"):
         TurnOptions(eager_probability=eager, final_probability=final)
-    assert not caplog.records
-
-
-def test_too_many_phrases_raises() -> None:
-    with pytest.raises(ValueError, match="at most 250 entries"):
-        BiasingOptions(phrases=[f"p{i}" for i in range(251)])
-
-
-def test_the_documented_phrase_maximum_is_accepted() -> None:
-    phrases = [f"p{i}" for i in range(250)]
-    assert BiasingOptions(phrases=phrases).phrases == tuple(phrases)
-
-
-def test_a_comma_inside_a_phrase_raises() -> None:
-    with pytest.raises(ValueError, match="cannot contain a comma"):
-        BiasingOptions(phrases=["fine", "not,fine"])
+    assert bool(caplog.records) is warns
 
 
 @pytest.mark.parametrize(
     "build",
     [
-        pytest.param(lambda v: BiasingOptions(phrases=[v]), id="phrases-comma"),
-        pytest.param(lambda v: BiasingOptions(patterns=[f"{v},x"]), id="patterns-comma"),
-        pytest.param(lambda v: BiasingOptions(phrases=v), id="phrases-bare-string"),
+        lambda v: BiasingOptions(phrases=[v]),
+        lambda v: BiasingOptions(patterns=[f"{v},x"]),
+        lambda v: BiasingOptions(phrases=v),
     ],
 )
-def test_rejected_vocabulary_is_not_quoted_back(
-    build: Callable[[str], BiasingOptions],
-) -> None:
-    """
-    Phrases and patterns are customer vocabulary.
-
-    A ValueError message is not a structured attribute, so anything put there
-    survives redaction and reaches any log that formats the exception.
-    """
-
-    name = "Jan, Willem de Vries"
-
+def test_rejected_vocabulary_is_not_quoted_back(build: Callable[[str], BiasingOptions]) -> None:
+    """Customer vocabulary in a ValueError message escapes redaction."""
     with pytest.raises(ValueError) as excinfo:
-        build(name)
+        build("Jan, Willem de Vries")
 
-    assert "Jan" not in str(excinfo.value)
-    assert "Willem" not in str(excinfo.value)
-    assert "phrases" in str(excinfo.value) or "patterns" in str(excinfo.value)
-
-
-@pytest.mark.parametrize(
-    "build",
-    [
-        pytest.param(lambda values: BiasingOptions(phrases=values), id="phrases"),
-        pytest.param(lambda values: BiasingOptions(patterns=values), id="patterns"),
-    ],
-)
-def test_an_empty_entry_raises(build: Callable[[Sequence[str]], BiasingOptions]) -> None:
-    with pytest.raises(ValueError, match="empty entry"):
-        build(["ok", "  "])
-
-
-@pytest.mark.parametrize(
-    "build",
-    [
-        pytest.param(lambda: BiasingOptions(phrases="Reson8"), id="phrases"),
-        pytest.param(lambda: BiasingOptions(patterns="[0-9]{4}"), id="patterns"),
-    ],
-)
-def test_a_bare_string_is_rejected(build: Callable[[], BiasingOptions]) -> None:
-    """A bare ``str`` satisfies ``Sequence[str]``, so it would be split per character."""
-    with pytest.raises(ValueError, match="takes a sequence of strings"):
-        build()
-
-
-@pytest.mark.parametrize(
-    "pattern",
-    ["[0-9]{4,6}", "(INV)?[0-9]{4,5}", "AMZ[0-9]{6}", "[A-Z]{2}[0-9]{2} [A-Z]{3}"],
-)
-def test_a_braced_repeat_range_survives_validation(pattern: str) -> None:
-    """The comma in ``{m,n}`` is not a separator on the wire, so it must be allowed."""
-
-    assert BiasingOptions(patterns=[pattern]).patterns == (pattern,)
-
-
-@pytest.mark.parametrize("pattern", ["a,b", "AMZ[0-9]{6},X"])
-def test_a_comma_outside_braces_still_raises(pattern: str) -> None:
-    with pytest.raises(ValueError, match="outside"):
-        BiasingOptions(patterns=[pattern])
-
-
-@pytest.mark.parametrize("field", ["phrases", "patterns"])
-def test_a_mutated_sequence_cannot_change_a_built_option(field: str) -> None:
-    shared = ["LiveKit"]
-    options = BiasingOptions(**{field: shared})
-
-    shared.append("Reson8")
-
-    assert getattr(options, field) == ("LiveKit",)
-    assert options.query_params()[field] == "LiveKit"
-
-
-async def test_a_mutated_sequence_still_triggers_a_reconnect(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession
-) -> None:
-    server = await reson8_server()
-    shared = ["LiveKit"]
-    stream = _stt(server.base_url, client_session, biasing=BiasingOptions(phrases=shared)).stream(
-        conn_options=NO_RETRY
-    )
-
-    await asyncio.wait_for(server.connected.wait(), timeout=5)
-    assert server.query["phrases"] == "LiveKit"
-
-    try:
-        shared.append("Reson8")
-        stream.update_options(biasing=BiasingOptions(phrases=shared))
-        await server.wait_for_connections(2)
-        assert server.query["phrases"] == "LiveKit,Reson8"
-    finally:
-        await stream.aclose()
-
-
-def test_negative_strength_raises() -> None:
-    with pytest.raises(ValueError, match="must be non-negative"):
-        BiasingOptions(strength=-0.1)
-
-
-def test_an_unsupported_filler_mode_raises() -> None:
-    with pytest.raises(ValueError, match=r"(?i)unsupported filler_mode"):
-        TranscriptOptions(filler_mode="loud")  # type: ignore[arg-type]
+    message = str(excinfo.value)
+    assert "Jan" not in message and "Willem" not in message
+    assert "phrases" in message or "patterns" in message
 
 
 # ---------------------------------------------------------------------------
-# query string
+# query string and payload mapping
 # ---------------------------------------------------------------------------
 
 
@@ -718,47 +484,25 @@ def test_query_params_defaults() -> None:
     }
 
 
-@pytest.mark.parametrize(
-    ("language", "expected"),
-    [("nl", "nl"), ("nl,de", "nl,de")],
-)
-def test_a_pinned_language_reaches_the_query_string(language: str, expected: str) -> None:
-    params = STTOptions(language=language).query_params(streaming=True)
-    assert params["language"] == expected
-
-
-def test_language_is_omitted_for_auto_detection() -> None:
-    assert "language" not in STTOptions().query_params(streaming=True)
-
-
-def test_confidence_is_batch_only() -> None:
-    """/turns reports no confidence, so the flag would be meaningless there."""
-
-    opts = STTOptions(transcript=TranscriptOptions(confidence=True))
-    assert "include_confidence" not in opts.query_params(streaming=True)
-    assert opts.query_params(streaming=False)["include_confidence"] == "true"
-
-
-def test_the_turn_thresholds_are_streaming_only() -> None:
-    opts = STTOptions(turn=TurnOptions(eager_probability=0.35, final_probability=0.7))
+def test_query_params_by_endpoint() -> None:
+    opts = STTOptions(
+        language="nl,de",
+        audio=AudioOptions(sample_rate=8000, num_channels=2),
+        transcript=TranscriptOptions(confidence=True),
+        turn=TurnOptions(eager_probability=0.35, final_probability=0.7),
+    )
 
     streaming = opts.query_params(streaming=True)
+    assert streaming["language"] == "nl,de"
+    assert (streaming["sample_rate"], streaming["channels"]) == ("8000", "2")
     assert streaming["eager_turn_probability"] == "0.35"
     assert streaming["final_turn_probability"] == "0.7"
+    # /turns reports no confidence
+    assert "include_confidence" not in streaming
 
     batch = opts.query_params(streaming=False)
-    assert "eager_turn_probability" not in batch
-    assert "final_turn_probability" not in batch
-
-
-def test_the_audio_shape_is_described_in_reson8s_own_words() -> None:
-    opts = STTOptions(audio=AudioOptions(sample_rate=8000, num_channels=2))
-    params = opts.query_params(streaming=True)
-
-    assert params["encoding"] == "pcm_s16le"
-    assert params["sample_rate"] == "8000"
-    # Reson8 spells it "channels"; num_channels is the framework's word
-    assert params["channels"] == "2"
+    assert batch["include_confidence"] == "true"
+    assert "eager_turn_probability" not in batch and "final_turn_probability" not in batch
 
 
 @pytest.mark.parametrize("streaming", [True, False])
@@ -783,96 +527,35 @@ def test_biasing_applies_to_both_endpoints(streaming: bool) -> None:
 
 
 def test_zero_strength_is_sent_rather_than_treated_as_unset() -> None:
-    """0 is a value the server accepts; ``if self.strength`` would drop it."""
-
     opts = STTOptions(biasing=BiasingOptions(strength=0))
     assert opts.query_params(streaming=True)["bias_strength"] == "0"
 
 
-def test_omitted_biasing_sends_nothing() -> None:
-    params = STTOptions().query_params(streaming=True)
-    for key in ("phrases", "patterns", "bias_strength", "filler_mode", "custom_model_id"):
-        assert key not in params
+@pytest.mark.parametrize(
+    ("base_url", "params", "expected"),
+    [
+        (HOSTED, {"a": "1"}, "https://api.reson8.dev/turns?a=1"),
+        (f"{HOSTED}/", {"a": "1"}, "https://api.reson8.dev/turns?a=1"),
+        ("http://localhost:8080", {"a": "1"}, "http://localhost:8080/turns?a=1"),
+        (HOSTED, {"language": "nl,de"}, "https://api.reson8.dev/turns?language=nl%2Cde"),
+    ],
+)
+def test_build_url(base_url: str, params: dict[str, str], expected: str) -> None:
+    assert build_url(base_url, "/turns", params) == expected
 
 
 @pytest.mark.parametrize(
-    ("base_url", "expected"),
+    ("word", "expected"),
     [
-        ("https://api.reson8.dev", "https://api.reson8.dev/turns?a=1"),
-        ("https://api.reson8.dev/", "https://api.reson8.dev/turns?a=1"),
-        ("http://localhost:8080", "http://localhost:8080/turns?a=1"),
+        ({"confidence": 0.99}, 0.99),
+        ({"confidence": 1.5}, 1.0),
+        ({"text": "hi"}, NOT_GIVEN),
+        ({"confidence": 0.0}, NOT_GIVEN),
+        ({"confidence": -0.5}, NOT_GIVEN),
     ],
 )
-def test_build_url_keeps_the_scheme(base_url: str, expected: str) -> None:
-    assert build_url(base_url, "/turns", {"a": "1"}) == expected
-
-
-@pytest.mark.parametrize(
-    "base_url",
-    [
-        "http://reson8.internal.example",
-        "http://10.0.0.5:8080",
-    ],
-)
-def test_a_plaintext_base_url_warns(base_url: str, caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level("WARNING"):
-        reson8.STT(api_key="k", base_url=base_url)
-
-    assert "not encrypted" in caplog.text
-
-
-@pytest.mark.parametrize(
-    "base_url",
-    [
-        "https://api.reson8.dev",
-        "http://127.0.0.1:8080",
-        "http://localhost:8080",
-        "http://[::1]:8080",
-    ],
-)
-def test_an_encrypted_or_loopback_base_url_is_quiet(
-    base_url: str, caplog: pytest.LogCaptureFixture
-) -> None:
-    with caplog.at_level("WARNING"):
-        reson8.STT(api_key="k", base_url=base_url)
-
-    assert "not encrypted" not in caplog.text
-
-
-def test_build_url_encodes_params() -> None:
-    url = build_url(HOSTED, "/turns", {"language": "nl,de"})
-    assert url == "https://api.reson8.dev/turns?language=nl%2Cde"
-
-
-# ---------------------------------------------------------------------------
-# transcript payload mapping
-# ---------------------------------------------------------------------------
-
-
-def test_confidence_passes_through_the_documented_range() -> None:
-    """Reson8 reports a probability in (0, 1]; it must not be transformed."""
-
-    assert _confidence({"confidence": 0.99}) == pytest.approx(0.99)
-    assert _confidence({"confidence": 1.5}) == 1.0
-
-
-@pytest.mark.parametrize("word", [{"text": "hi"}, {"confidence": 0.0}, {"confidence": -0.5}])
-def test_an_absent_or_impossible_confidence_is_not_given(word: dict[str, object]) -> None:
-    assert _confidence(word) is NOT_GIVEN
-
-
-def test_word_times_apply_the_stream_offset() -> None:
-    word = {"start_ms": 1000, "duration_ms": 500}
-    assert _word_time(word, "start", offset=2.0) == pytest.approx(3.0)
-    assert _word_time(word, "end", offset=2.0) == pytest.approx(3.5)
-    assert _word_time({}, "start", offset=1.0) is NOT_GIVEN
-
-
-def test_build_speech_data_minimal() -> None:
-    data = build_speech_data({"text": "hello"}, language="en")
-    assert data.text == "hello"
-    assert data.language == "en"
-    assert data.words == []
+def test_confidence(word: dict[str, object], expected: object) -> None:
+    assert _confidence(word) == expected
 
 
 @pytest.mark.parametrize(
@@ -881,7 +564,7 @@ def test_build_speech_data_minimal() -> None:
         ("fr", "en", "fr"),  # what the server detected wins
         (None, "es", "es"),  # a single pinned language is a safe fallback
         ("", "nl", "nl"),
-        (None, None, ""),  # auto-detection with nothing reported
+        (None, None, ""),
         (None, "nl,de", ""),  # no single dominant language to assume
         ("nl", "nl,de", "nl"),
     ],
@@ -892,41 +575,29 @@ def test_build_speech_data_language(
     msg: dict[str, object] = {"text": "hi"}
     if msg_language is not None:
         msg["language"] = msg_language
-
     assert build_speech_data(msg, language=configured).language == expected
 
 
-def test_build_speech_data_words_carry_timings_and_confidence() -> None:
-    msg = {
-        "text": "hi",
-        "words": [{"text": "hi", "start_ms": 0, "duration_ms": 200, "confidence": 0.9}],
-    }
-    data = build_speech_data(msg, language="en", start_time_offset=1.0)
-
-    assert data.words is not None
-    word = data.words[0]
-    assert word == "hi"  # TimedString subclasses str
-    assert word.start_time == pytest.approx(1.0)
-    assert word.end_time == pytest.approx(1.2)
-    assert word.confidence == pytest.approx(0.9)
-
-
-def test_build_speech_data_confidence_is_the_mean_of_the_words() -> None:
+def test_build_speech_data_timings_and_confidence() -> None:
     msg = {
         "text": "hi there",
+        "start_ms": 1000,
+        "duration_ms": 500,
         "words": [
-            {"text": "hi", "confidence": 0.99},
+            {"text": "hi", "start_ms": 1000, "duration_ms": 200, "confidence": 0.99},
             {"text": "there", "confidence": 0.97},
         ],
     }
-    assert build_speech_data(msg, language="en").confidence == pytest.approx(0.98)
-
-
-def test_build_speech_data_applies_the_offset_to_the_turn() -> None:
-    msg = {"text": "hi", "start_ms": 1000, "duration_ms": 500}
     data = build_speech_data(msg, language="en", start_time_offset=2.0)
-    assert data.start_time == pytest.approx(3.0)
-    assert data.end_time == pytest.approx(3.5)
+
+    assert (data.start_time, data.end_time) == (pytest.approx(3.0), pytest.approx(3.5))
+    assert data.confidence == pytest.approx(0.98)
+    assert data.words is not None
+    hi, there = data.words
+    assert hi == "hi"
+    assert (hi.start_time, hi.end_time) == (pytest.approx(3.0), pytest.approx(3.2))
+    assert hi.confidence == pytest.approx(0.99)
+    assert there.start_time is NOT_GIVEN
 
 
 # ---------------------------------------------------------------------------
@@ -934,102 +605,74 @@ def test_build_speech_data_applies_the_offset_to_the_turn() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_provider_event_content_stays_out_of_log_bodies(
-    make_stream: MakeStream, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize(
+    ("candidates", "preflights"),
+    [
+        # a repeated preflight would restart the agent's generation for nothing
+        (["order lunch", "order lunch"], ["order lunch"]),
+        (["order", "order lunch"], ["order", "order lunch"]),
+        (["", "order lunch"], ["order lunch"]),
+    ],
+)
+def test_candidates_become_preflights_then_the_final(
+    offline_stream: SpeechStream, candidates: list[str], preflights: list[str]
 ) -> None:
-    """
-    A message body cannot be redacted, so provider fields must not land there.
+    offline_stream._process_message({"type": "turn_start"})
+    offline_stream._process_message({"type": "turn_start"})
+    offline_stream._process_message({"type": "something_new"})
+    for text in candidates:
+        offline_stream._process_message({"type": "turn_end_candidate", "text": text})
+    offline_stream._process_message({"type": "turn_end"})
 
-    Nothing constrains what a server puts in ``type``, so it is treated the
-    same as the transcript: static message, value under an ``lk.pii.*`` key.
-    """
+    events = cast(FakeChan, offline_stream._event_ch).events
+    assert [e.type for e in events] == [
+        SpeechEventType.START_OF_SPEECH,
+        *[SpeechEventType.PREFLIGHT_TRANSCRIPT] * len(preflights),
+        SpeechEventType.FINAL_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+    ]
+    texts = [e.alternatives[0].text for e in events if e.alternatives]
+    assert texts == [*preflights, candidates[-1]]
 
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"words": ["hi"]},
+        {"start_ms": "abc"},
+        {"words": [{"text": "hi", "confidence": "high"}]},
+        {"words": [{"text": "hi", "start_ms": "x", "duration_ms": 1}]},
+        {"start_ms": int("9" * 4000)},
+        {"words": [{"text": "hi", "start_ms": int("9" * 4000)}]},
+    ],
+)
+def test_a_malformed_turn_payload_is_skipped(
+    offline_stream: SpeechStream, payload: dict[str, object]
+) -> None:
+    """A mapping error would escape the recv task and end the stream unretried."""
+    offline_stream._process_message({"type": "turn_end_candidate", "text": "hi", **payload})
+    offline_stream._process_message({"type": "turn_end_candidate", "text": "recovered"})
+    offline_stream._process_message({"type": "turn_end"})
+
+    events = cast(FakeChan, offline_stream._event_ch).events
+    assert _finals(events) == ["recovered"]
+
+
+def test_provider_event_content_stays_out_of_log_bodies(
+    offline_stream: SpeechStream, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A log body cannot be redacted, so provider fields go under ``lk.pii.*`` keys."""
     smuggled = "turn_end; patient Jan Willem de Vries"
-    stream = make_stream()
-
     with caplog.at_level("DEBUG", logger="livekit.plugins.reson8"):
-        stream._process_message({"type": smuggled, "text": "secret words"})
+        offline_stream._process_message({"type": smuggled, "text": "secret words"})
 
     assert smuggled not in caplog.text
     assert "secret words" not in caplog.text
-
     for record in caplog.records:
         for key, value in record.__dict__.items():
             if value in (smuggled, "secret words"):
                 assert key.startswith("lk.pii."), f"{key} is not a redactable key"
-
-    tagged = [r for r in caplog.records if getattr(r, "lk.pii.type", None) == smuggled]
-    assert tagged, "the event type was never recorded at all"
-
-
-def test_start_of_speech_is_emitted_once(make_stream: MakeStream) -> None:
-    stream = make_stream()
-
-    stream._process_message({"type": "turn_start"})
-    stream._process_message({"type": "turn_start"})
-
-    starts = [e for e in emitted(stream) if e.type == SpeechEventType.START_OF_SPEECH]
-    assert len(starts) == 1
-
-
-def test_an_empty_candidate_is_not_surfaced_as_a_preflight(make_stream: MakeStream) -> None:
-    stream = make_stream()
-
-    stream._process_message({"type": "turn_start"})
-    stream._process_message({"type": "turn_end_candidate", "text": ""})
-
-    assert all(e.type != SpeechEventType.PREFLIGHT_TRANSCRIPT for e in emitted(stream))
-
-
-def test_an_unhandled_message_type_produces_no_events(make_stream: MakeStream) -> None:
-    stream = make_stream()
-
-    stream._process_message({"type": "something_new"})
-
-    assert emitted(stream) == []
-
-
-def test_a_repeated_candidate_does_not_re_emit_a_preflight(make_stream: MakeStream) -> None:
-    """
-    A preflight cancels the generation running on the previous one.
-
-    Re-sending unchanged text would restart the agent from scratch and throw
-    away the head start it already had.
-    """
-
-    stream = make_stream(language="en")
-
-    stream._process_message({"type": "turn_start"})
-    stream._process_message({"type": "turn_end_candidate", "text": "order lunch"})
-    stream._process_message({"type": "turn_end_candidate", "text": "order lunch"})
-
-    preflights = [e for e in emitted(stream) if e.type == SpeechEventType.PREFLIGHT_TRANSCRIPT]
-    assert len(preflights) == 1
-
-
-def test_a_revised_candidate_does_re_emit_a_preflight(make_stream: MakeStream) -> None:
-    stream = make_stream(language="en")
-
-    stream._process_message({"type": "turn_start"})
-    stream._process_message({"type": "turn_end_candidate", "text": "order"})
-    stream._process_message({"type": "turn_end_candidate", "text": "order lunch"})
-
-    preflights = [e for e in emitted(stream) if e.type == SpeechEventType.PREFLIGHT_TRANSCRIPT]
-    assert [e.alternatives[0].text for e in preflights] == ["order", "order lunch"]
-
-
-def test_the_last_candidate_still_becomes_the_final(make_stream: MakeStream) -> None:
-    """Deduping the preflight must not stop turn_end promoting the candidate."""
-
-    stream = make_stream(language="en")
-
-    stream._process_message({"type": "turn_start"})
-    stream._process_message({"type": "turn_end_candidate", "text": "order lunch"})
-    stream._process_message({"type": "turn_end_candidate", "text": "order lunch"})
-    stream._process_message({"type": "turn_end"})
-
-    finals = [e for e in emitted(stream) if e.type == SpeechEventType.FINAL_TRANSCRIPT]
-    assert [e.alternatives[0].text for e in finals] == ["order lunch"]
+    assert any(getattr(r, "lk.pii.type", None) == smuggled for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -1057,113 +700,65 @@ def test_problem_parts(body: str, expected: tuple[str | None, str | None]) -> No
     assert problem_parts(body) == expected
 
 
-def test_the_server_free_text_stays_off_the_exception(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """
-    The framework logs the exception inside its retry message.
-
-    ``stt.py`` does ``f"failed to recognize speech: {e}, ..."``, and
-    ``APIStatusError.__str__`` renders both ``message`` and ``body`` -- so
-    anything on the exception lands in a log message body, where redaction
-    cannot reach it. A rejection can quote request input, and a biasing phrase
-    is customer vocabulary.
-    """
-
+def test_the_server_free_text_stays_off_the_exception(caplog: pytest.LogCaptureFixture) -> None:
+    """The framework logs the exception's str, so free text there escapes redaction."""
     phrase = "Jan Willem de Vries"
-
     with caplog.at_level("WARNING"):
         err = status_error(400, code="invalid_query_parameter", detail=f"bad phrase: {phrase}")
 
-    assert phrase not in str(err)
-    assert phrase not in err.message
-    assert phrase not in str(err.body)
-
-    # ...but it is still reachable, under a redactable key
-    record = next(r for r in caplog.records if r.message == "Reson8 rejected the request")
+    assert phrase not in str(err) and phrase not in err.message and phrase not in str(err.body)
+    record = next(r for r in caplog.records if r.message == REJECTED)
     assert getattr(record, "lk.pii.detail") == f"bad phrase: {phrase}"
     assert getattr(record, "lk.pii.code") == "invalid_query_parameter"
 
 
 @pytest.mark.parametrize(
-    "code",
+    ("code", "identifier"),
     [
-        "invalid_query_parameter",
-        "session_rejected",
-        "a",
-        "code_9",
+        ("invalid_query_parameter", True),
+        ("a", True),
+        ("code_9", True),
+        ("phrase rejected: Jan Willem de Vries", False),
+        ("UPPER_SNAKE", False),
+        ("has-a-hyphen", False),
+        ("trailing space ", False),
+        ("x" * 65, False),
     ],
 )
-def test_an_identifier_shaped_code_reaches_the_exception(code: str) -> None:
-    assert code in status_error(400, code=code).message
-
-
-@pytest.mark.parametrize(
-    "code",
-    [
-        "phrase rejected: Jan Willem de Vries",
-        "Jan Willem de Vries",
-        "UPPER_SNAKE",
-        "has-a-hyphen",
-        "trailing space ",
-        "x" * 65,
-    ],
-)
-def test_a_code_that_is_not_an_identifier_is_treated_as_free_text(
-    code: str, caplog: pytest.LogCaptureFixture
+def test_only_an_identifier_shaped_code_reaches_the_exception(
+    code: str, identifier: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level("WARNING"):
         err = status_error(400, code=code)
 
-    assert code not in str(err)
-    assert code not in caplog.text
-
-    record = next(r for r in caplog.records if r.message == "Reson8 rejected the request")
+    assert (code in err.message) is identifier
+    record = next(r for r in caplog.records if r.message == REJECTED)
     assert getattr(record, "lk.pii.code") == code
-
-
-def test_a_code_is_recorded_even_with_no_detail(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level("WARNING"):
-        status_error(402, code="session_rejected")
-
-    record = next(r for r in caplog.records if r.message == "Reson8 rejected the request")
-    assert getattr(record, "lk.pii.code") == "session_rejected"
+    if not identifier:
+        assert code not in caplog.text
 
 
 @pytest.mark.parametrize(
-    ("status_code", "retryable"),
+    ("status_code", "code", "retryable", "hint"),
     [
-        (400, False),
-        (401, False),  # a bad key will keep being a bad key
-        (402, False),  # so will an empty balance
-        (429, True),  # concurrency frees up
-        (500, True),
+        (400, None, False, "400"),
+        (401, None, False, "RESON8_API_KEY"),
+        (402, "session_rejected", False, LIMITS_URL),
+        (429, None, True, LIMITS_URL),
+        (500, None, True, "500"),
     ],
 )
-def test_status_error_retryability(status_code: int, retryable: bool) -> None:
-    assert status_error(status_code).retryable is retryable
-
-
-def test_status_error_adds_an_actionable_hint() -> None:
-    assert "RESON8_API_KEY" in status_error(401).message
-    assert "https://docs.reson8.dev/limits/" in status_error(402).message
-    assert "https://docs.reson8.dev/limits/" in status_error(429).message
-
-
-def test_status_error_keeps_the_code_and_the_hint_without_repeating_them() -> None:
-    message = status_error(402, code="session_rejected").message
-    assert message.count("session_rejected") == 1
-    assert "https://docs.reson8.dev/limits/" in message
-
-
-def test_status_error_renders_an_unmapped_status() -> None:
-    err = status_error(500)
-    assert err.status_code == 500
-    assert "500" in err.message
+def test_status_error(status_code: int, code: str | None, retryable: bool, hint: str) -> None:
+    err = status_error(status_code, code=code)
+    assert err.status_code == status_code
+    assert err.retryable is retryable
+    assert hint in err.message
+    if code:
+        assert err.message.count(code) == 1
 
 
 # ---------------------------------------------------------------------------
-# over the wire, against a loopback Reson8
+# streaming, against a loopback Reson8
 # ---------------------------------------------------------------------------
 
 
@@ -1172,10 +767,11 @@ async def test_requests_are_authenticated_and_attributed(
 ) -> None:
     server = await reson8_server()
     instance = _stt(server.base_url, client_session)
+    integration = f"livekit-python:{reson8.__version__}"
 
     await instance.recognize(_frame(), conn_options=NO_RETRY)
     assert server.post_headers["Authorization"] == "ApiKey secret"
-    assert server.post_headers[INTEGRATION_HEADER] == INTEGRATION
+    assert server.post_headers[INTEGRATION_HEADER] == integration
     assert server.post_headers["Content-Type"] == "application/octet-stream"
 
     stream = instance.stream(conn_options=NO_RETRY)
@@ -1183,231 +779,131 @@ async def test_requests_are_authenticated_and_attributed(
         await asyncio.wait_for(server.connected.wait(), timeout=5)
     finally:
         await stream.aclose()
-
     assert server.handshake_headers["Authorization"] == "ApiKey secret"
-    assert server.handshake_headers[INTEGRATION_HEADER] == INTEGRATION
+    assert server.handshake_headers[INTEGRATION_HEADER] == integration
 
 
 async def test_closing_the_recognizer_closes_its_streams(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
-    """
-    ``STT.aclose`` is documented as closing every stream it created.
-
-    Inherited, it does nothing, so ``async with`` left live sockets behind for
-    the rest of the process.
-    """
-
-    server = await reson8_server()
-    instance = _stt(server.base_url, client_session)
-
-    async with instance:
-        first = instance.stream(conn_options=NO_RETRY)
-        second = instance.stream(conn_options=NO_RETRY)
-        await server.wait_for_connections(2)
-
-    for stream in (first, second):
-        # aclose closes the input channel first, so that is the guard it trips
-        with pytest.raises(RuntimeError, match="input ended|is closed"):
-            stream.push_frame(_frame())
-
-    # the session is the caller's or the shared context's, never ours to close
-    assert not client_session.closed
-
-
-async def test_closing_the_recognizer_survives_an_already_closed_stream(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession
-) -> None:
-    """One stream failing to close must not abandon the rest."""
-
     server = await reson8_server()
     instance = _stt(server.base_url, client_session)
 
     first = instance.stream(conn_options=NO_RETRY)
     second = instance.stream(conn_options=NO_RETRY)
-    await server.wait_for_connections(2)
+    await _until(lambda: server.connections == 2)
+    # one stream already closed must not stop the rest from closing
     await first.aclose()
-
     await instance.aclose()
 
     with pytest.raises(RuntimeError, match="input ended|is closed"):
         second.push_frame(_frame())
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        pytest.param({"words": ["hi"]}, id="words-not-objects"),
-        pytest.param({"start_ms": "abc"}, id="turn-start-not-a-number"),
-        pytest.param({"words": [{"text": "hi", "confidence": "high"}]}, id="confidence-a-string"),
-        pytest.param(
-            {"words": [{"text": "hi", "start_ms": "x", "duration_ms": 1}]},
-            id="word-start-a-string",
-        ),
-        pytest.param({"start_ms": int("9" * 4000)}, id="turn-start-overflows"),
-        pytest.param(
-            {"words": [{"text": "hi", "start_ms": int("9" * 4000)}]},
-            id="word-start-overflows",
-        ),
-    ],
-)
-async def test_a_malformed_turn_payload_is_skipped(
-    reson8_server: StartServer,
-    client_session: aiohttp.ClientSession,
-    payload: dict[str, object],
-) -> None:
-    """
-    Nested words and timings are provider data, not something to trust.
-
-    Mapping them raises AttributeError or TypeError, which escapes recv_task
-    as a bare exception outside the API-error mapping, so the framework ends
-    the stream instead of retrying.
-    """
-
-    server = await reson8_server()
-    stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
-    log = EventLog(stream)
-
-    await asyncio.wait_for(server.connected.wait(), timeout=5)
-    try:
-        await server.send({"type": "turn_start"})
-        await server.send({"type": "turn_end_candidate", "text": "hi", **payload})
-
-        # the bad frame is dropped, and recognition carries on
-        await server.send({"type": "turn_end_candidate", "text": "recovered"})
-        await server.send({"type": "turn_end"})
-
-        events = await log.wait_for(4)
-        assert [e.type for e in events] == [
-            SpeechEventType.START_OF_SPEECH,
-            SpeechEventType.PREFLIGHT_TRANSCRIPT,
-            SpeechEventType.FINAL_TRANSCRIPT,
-            SpeechEventType.END_OF_SPEECH,
-        ]
-        assert events[2].alternatives[0].text == "recovered"
-    finally:
-        await log.aclose()
-        await stream.aclose()
+    # the session belongs to the caller
+    assert not client_session.closed
 
 
 async def test_a_turn_over_the_wire(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
-    """
-    A whole turn, in the order an ``AgentSession`` depends on.
-
-    FINAL must land before END_OF_SPEECH: in ``turn_detection="stt"`` mode
-    END_OF_SPEECH commits the user turn, so the transcript has to be
-    accumulated by then.
-    """
-
+    """FINAL lands before END_OF_SPEECH, which commits the user turn in stt mode."""
     server = await reson8_server()
     stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
     log = EventLog(stream)
 
     stream.push_frame(_frame())
     stream.flush()
-    await server.wait_for_text()
-
-    await server.send({"type": "turn_start"})
-    await server.send({"type": "turn_end_candidate", "text": "hello world"})
-    await server.send({"type": "turn_end"})
+    await _until(lambda: bool(server.text))
+    await server.send(*TURN)
 
     try:
         events = await log.wait_for(5)
-        assert [e.type for e in events] == [
-            SpeechEventType.START_OF_SPEECH,
-            SpeechEventType.PREFLIGHT_TRANSCRIPT,
-            SpeechEventType.FINAL_TRANSCRIPT,
-            SpeechEventType.END_OF_SPEECH,
-            SpeechEventType.RECOGNITION_USAGE,
-        ]
-        assert events[1].alternatives[0].text == "hello world"
+        assert [e.type for e in events] == [*TURN_TYPES, SpeechEventType.RECOGNITION_USAGE]
         assert events[2].alternatives[0].text == "hello world"
         assert events[2].alternatives[0].language == "en"
-
-        usage = events[4].recognition_usage
-        assert usage is not None
-        assert usage.audio_duration == pytest.approx(0.1)
+        assert events[4].recognition_usage is not None
+        assert events[4].recognition_usage.audio_duration == pytest.approx(0.1)
     finally:
         await log.aclose()
         await stream.aclose()
 
-    # the flush sentinel is what lets a caller commit a turn early, without
-    # waiting for final_turn_probability to be crossed
     assert json.loads(server.text[0]) == {"type": "flush_request"}
-    assert server.audio, "no audio frame reached the server"
+    assert server.audio
     assert server.query["language"] == "en"
 
 
-async def test_end_input_waits_for_the_final_transcript(
-    finalizing_server: Callable[..., Awaitable[str]], client_session: aiohttp.ClientSession
+async def test_unusable_frames_are_skipped_and_no_audio_means_no_usage(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
-    """
-    ``end_input`` queues a flush; the transcript answers it.
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
+    log = EventLog(stream)
 
-    Closing the socket as soon as the input channel ends discards the turn_end
-    the flush asked for, and the caller sees the stream finish empty.
-    """
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    try:
+        assert server.ws is not None
+        for frame in ("[]", "null", "5", '"text"', "not json"):
+            await server.ws.send_str(frame)
+        await server.send(*TURN)
 
-    base_url = await finalizing_server()
-    stream = _stt(base_url, client_session, language="en").stream(conn_options=NO_RETRY)
+        events = await log.wait_for(4)
+        await asyncio.sleep(0.02)
+        assert [e.type for e in events] == TURN_TYPES
+    finally:
+        await log.aclose()
+        await stream.aclose()
+
+
+@pytest.mark.parametrize("hang_up", [False, True])
+async def test_end_input_waits_for_the_final_transcript(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession, hang_up: bool
+) -> None:
+    """``end_input`` queues a flush, and its answer must not be discarded by closing early."""
+    server = await reson8_server(answer_flush=TURN, hang_up_after_flush=hang_up)
+    stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
 
     stream.push_frame(_frame())
     stream.end_input()
 
-    events: list[stt.SpeechEvent] = []
-    try:
-        async with asyncio.timeout(10):
-            async for event in stream:
-                events.append(event)
-    finally:
-        await stream.aclose()
-
-    types = [e.type for e in events]
-    assert SpeechEventType.FINAL_TRANSCRIPT in types, f"stream ended with {types}"
-    final = next(e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT)
-    assert final.alternatives[0].text == "hello world"
+    assert _finals(await _drain(stream)) == ["hello world"]
 
 
-async def test_a_close_right_after_the_final_turn_is_clean(
+async def test_an_unanswered_flush_closes_cleanly(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    server = await reson8_server(answer_flush=[])
+    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
+
+    stream.push_frame(_frame())
+    stream.end_input()
+
+    assert await _drain(stream) == []
+
+
+async def test_a_close_inside_the_final_turn_hold_is_clean(
     reson8_server: StartServer,
     client_session: aiohttp.ClientSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # wide enough that the close lands squarely inside the hold
-    monkeypatch.setattr(reson8_stt, "_FINAL_TURN_GRACE", 2.0)
-
+    monkeypatch.setattr(reson8_stt, "_FINAL_TURN_GRACE", 0.1)
     server = await reson8_server()
     stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
 
     await asyncio.wait_for(server.connected.wait(), timeout=5)
     stream.push_frame(_frame())
     stream.end_input()
-    await server.wait_for_text()
+    await _until(lambda: bool(server.text))
 
     async def answer_then_hang_up() -> None:
-        await server.send({"type": "turn_end_candidate", "text": "delivered"})
-        await server.send({"type": "turn_end"})
-        # let the waiter wake and start its hold, so the close arrives while
-        # the notification is cleared -- the moment the race needs
-        await asyncio.sleep(0.1)
-        assert server._ws is not None
-        await server._ws.close()
+        await server.send({"type": "turn_end_candidate", "text": "delivered"}, {"type": "turn_end"})
+        # let the waiter start its hold, so the close lands while the notification is cleared
+        await asyncio.sleep(0.03)
+        await server.hang_up()
 
     answering = asyncio.create_task(answer_then_hang_up())
-
-    events: list[stt.SpeechEvent] = []
     try:
-        async with asyncio.timeout(10):
-            async for event in stream:
-                events.append(event)
+        assert _finals(await _drain(stream)) == ["delivered"]
     finally:
         await utils.aio.cancel_and_wait(answering)
-        await stream.aclose()
-
-    finals = [e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
-    assert [e.alternatives[0].text for e in finals] == ["delivered"]
 
 
 async def test_end_input_waits_past_a_stale_confirmation(
@@ -1415,41 +911,28 @@ async def test_end_input_waits_past_a_stale_confirmation(
     client_session: aiohttp.ClientSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # a wide hold, so the point under test is the ordering rather than a race
-    # between a real sleep and a real timer
-    monkeypatch.setattr(reson8_stt, "_FINAL_TURN_GRACE", 2.0)
-
+    monkeypatch.setattr(reson8_stt, "_FINAL_TURN_GRACE", 0.1)
     server = await reson8_server()
     stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
 
     await asyncio.wait_for(server.connected.wait(), timeout=5)
-
     # turn A is outstanding, then audio for turn B goes out
     await server.send({"type": "turn_start"})
     stream.push_frame(_frame())
     stream.end_input()
-    await server.wait_for_text()
+    await _until(lambda: bool(server.text))
 
     async def confirm_a_then_b() -> None:
         # A's confirmation lands alone first, carrying no transcript for B
         await server.send({"type": "turn_end"})
-        await asyncio.sleep(0.05)
-        await server.send({"type": "turn_end_candidate", "text": "turn B"})
-        await server.send({"type": "turn_end"})
+        await asyncio.sleep(0.03)
+        await server.send({"type": "turn_end_candidate", "text": "turn B"}, {"type": "turn_end"})
 
     answering = asyncio.create_task(confirm_a_then_b())
-
-    events: list[stt.SpeechEvent] = []
     try:
-        async with asyncio.timeout(10):
-            async for event in stream:
-                events.append(event)
+        assert _finals(await _drain(stream)) == ["turn B"]
     finally:
         await utils.aio.cancel_and_wait(answering)
-        await stream.aclose()
-
-    finals = [e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
-    assert [e.alternatives[0].text for e in finals] == ["turn B"]
 
 
 async def test_a_close_with_a_turn_open_is_an_error(
@@ -1461,25 +944,14 @@ async def test_a_close_with_a_turn_open_is_an_error(
     await asyncio.wait_for(server.connected.wait(), timeout=5)
     stream.push_frame(_frame())
     stream.end_input()
-    await server.wait_for_text()
-
+    await _until(lambda: bool(server.text))
     await server.send({"type": "turn_start"})
-
-    async def hang_up() -> None:
-        await asyncio.sleep(0.05)
-        assert server._ws is not None
-        await server._ws.close()
-
-    closing = asyncio.create_task(hang_up())
+    await asyncio.sleep(0.01)
+    await server.hang_up()
 
     with pytest.raises(APIConnectionError, match="turn still open") as excinfo:
-        async with asyncio.timeout(10):
-            async for _ in stream:
-                pass
-
+        await _drain(stream)
     assert excinfo.value.retryable is False
-    await utils.aio.cancel_and_wait(closing)
-    await stream.aclose()
 
 
 async def test_trailing_silence_does_not_fail_the_stream(
@@ -1490,134 +962,40 @@ async def test_trailing_silence_does_not_fail_the_stream(
 
     await asyncio.wait_for(server.connected.wait(), timeout=5)
     stream.push_frame(_frame())
-    await server.send({"type": "turn_start"})
-    await server.send({"type": "turn_end_candidate", "text": "all done"})
-    await server.send({"type": "turn_end"})
-
-    # ...and the caller keeps pushing silence after the turn closed
-    await asyncio.sleep(0.1)
+    await server.send(*TURN)
+    await asyncio.sleep(0.02)
+    # the caller keeps pushing silence after the turn closed
     stream.push_frame(_frame())
     stream.end_input()
 
-    events: list[stt.SpeechEvent] = []
-    started = time.time()
-    async with asyncio.timeout(10):
-        async for event in stream:
-            events.append(event)
-
-    elapsed = time.time() - started
-    await stream.aclose()
-
-    finals = [e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
-    assert [e.alternatives[0].text for e in finals] == ["all done"]
-    assert elapsed < _FINAL_TURN_TIMEOUT * 3
+    started = time.monotonic()
+    assert _finals(await _drain(stream)) == ["hello world"]
+    assert time.monotonic() - started < reson8_stt._FINAL_TURN_TIMEOUT * 3
 
 
-async def test_an_unanswered_flush_closes_cleanly(
-    finalizing_server: Callable[..., Awaitable[str]], client_session: aiohttp.ClientSession
+@pytest.mark.parametrize("push_audio", [False, True])
+async def test_teardown_does_not_wait_for_a_turn(
+    reson8_server: StartServer,
+    client_session: aiohttp.ClientSession,
+    monkeypatch: pytest.MonkeyPatch,
+    push_audio: bool,
 ) -> None:
-    base_url = await finalizing_server(answer_flush=False)
-    stream = _stt(base_url, client_session).stream(conn_options=NO_RETRY)
-
-    stream.push_frame(_frame())
-    stream.end_input()
-
-    async with asyncio.timeout(10):
-        async for _ in stream:
-            pass
-
-    await stream.aclose()
-
-
-async def test_a_close_after_the_final_turn_is_clean(
-    finalizing_server: Callable[..., Awaitable[str]], client_session: aiohttp.ClientSession
-) -> None:
-    """Hanging up once the turn is answered is how a server says it is done."""
-
-    base_url = await finalizing_server(answer_flush=True, hang_up=True)
-    stream = _stt(base_url, client_session, language="en").stream(conn_options=NO_RETRY)
-
-    stream.push_frame(_frame())
-    stream.end_input()
-
-    events: list[stt.SpeechEvent] = []
-    async with asyncio.timeout(10):
-        async for event in stream:
-            events.append(event)
-
-    await stream.aclose()
-
-    types = [e.type for e in events]
-    assert SpeechEventType.FINAL_TRANSCRIPT in types, f"stream ended with {types}"
-
-
-async def test_end_input_does_not_wait_when_nothing_was_sent(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession
-) -> None:
-    """
-    A stream that carried no audio has nothing to wait for.
-
-    The drain is bounded by the connect timeout, so gating it on outstanding
-    audio is what keeps an empty teardown from stalling for that long.
-    """
-
+    """With no audio sent, end_input has nothing to wait for; aclose never waits at all."""
     server = await reson8_server()
     # a long drain deadline, so a wrong gate shows up as a hang not a pass
-    stream = _stt(server.base_url, client_session).stream(
-        conn_options=APIConnectOptions(max_retry=0, timeout=30)
-    )
-
-    await asyncio.wait_for(server.connected.wait(), timeout=5)
-    stream.end_input()
-
-    async with asyncio.timeout(5):
-        async for _ in stream:
-            pass
-
-    await stream.aclose()
-
-
-async def test_aclose_stays_immediate_with_a_turn_outstanding(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession
-) -> None:
-    """``aclose`` cancels the run task, so it must not sit in the drain."""
-
-    server = await reson8_server()
-    # a long drain deadline, so a wrong gate shows up as a hang not a pass
-    stream = _stt(server.base_url, client_session).stream(
-        conn_options=APIConnectOptions(max_retry=0, timeout=30)
-    )
-
-    await asyncio.wait_for(server.connected.wait(), timeout=5)
-    stream.push_frame(_frame())
-    stream.flush()
-    await server.wait_for_text()
-
-    # audio is outstanding and the server will never answer it
-    async with asyncio.timeout(5):
-        await stream.aclose()
-
-
-async def test_usage_is_not_reported_without_audio(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession
-) -> None:
-    """A turn that carried no audio must not emit a zero-duration usage event."""
-
-    server = await reson8_server()
+    monkeypatch.setattr(reson8_stt, "_FINAL_TURN_TIMEOUT", 30.0)
     stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
-    log = EventLog(stream)
 
     await asyncio.wait_for(server.connected.wait(), timeout=5)
-    await server.send({"type": "turn_start"})
-    await server.send({"type": "turn_end_candidate", "text": "hi"})
-    await server.send({"type": "turn_end"})
-
-    try:
-        events = await log.wait_for(4)
-        assert SpeechEventType.RECOGNITION_USAGE not in [e.type for e in events]
-    finally:
-        await log.aclose()
-        await stream.aclose()
+    async with asyncio.timeout(2):
+        if push_audio:
+            stream.push_frame(_frame())
+            stream.flush()
+            await _until(lambda: bool(server.text))
+            await stream.aclose()
+        else:
+            stream.end_input()
+            await _drain(stream)
 
 
 async def test_an_internal_redial_is_not_counted_twice(
@@ -1625,33 +1003,29 @@ async def test_an_internal_redial_is_not_counted_twice(
 ) -> None:
     server = await reson8_server()
     created = time.time()
-    stream = _stt(server.base_url, client_session, language="en").stream(
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.1, timeout=5)
-    )
+    stream = _stt(server.base_url, client_session, language="en").stream(conn_options=ONE_RETRY)
     log = EventLog(stream)
 
     await asyncio.wait_for(server.connected.wait(), timeout=5)
     try:
         # an internal redial, which contributes to the offset
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.05)
         stream.update_options(language="de")
-        await server.wait_for_connections(2)
+        await _until(lambda: server.connections == 2)
 
         # then a failure, so the framework retries the whole run
-        assert server._ws is not None
-        await server._ws.close()
-        await server.wait_for_connections(3)
+        await server.hang_up()
+        await _until(lambda: server.connections == 3)
 
-        await server.send({"type": "turn_start"})
         await server.send(
-            {"type": "turn_end_candidate", "text": "after both", "start_ms": 0, "duration_ms": 100}
+            {"type": "turn_start"},
+            {"type": "turn_end_candidate", "text": "after", "start_ms": 0, "duration_ms": 100},
+            {"type": "turn_end"},
         )
-        await server.send({"type": "turn_end"})
-
-        final = next(e for e in await log.wait_for(2) if e.type == SpeechEventType.FINAL_TRANSCRIPT)
+        events = await log.wait_for(2)
+        final = next(e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT)
         # the offset can never exceed wall clock; counting the redial twice does
-        elapsed = time.time() - created
-        assert final.alternatives[0].start_time <= elapsed
+        assert final.alternatives[0].start_time <= time.time() - created
     finally:
         await log.aclose()
         await stream.aclose()
@@ -1660,64 +1034,59 @@ async def test_an_internal_redial_is_not_counted_twice(
 async def test_a_reconnect_does_not_rewind_transcript_timing(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
-    """
-    Reson8 restarts start_ms at zero on a new socket.
-
-    The offset the framework keeps for that is advanced per ``_run`` call, but
-    this plugin reconnects inside one, so it has to carry the timeline itself.
-    Otherwise the second turn's timestamps land back on top of the first's.
-    """
-
+    """Each connection restarts start_ms, but transcripts share one audio timeline."""
     server = await reson8_server()
     stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
     log = EventLog(stream)
 
-    await asyncio.wait_for(server.connected.wait(), timeout=5)
-    await server.send({"type": "turn_start"})
-    await server.send(
-        {"type": "turn_end_candidate", "text": "first", "start_ms": 0, "duration_ms": 100}
-    )
-    await server.send({"type": "turn_end"})
-    first = (await log.wait_for(4))[2]
+    async def turn(text: str, events: int) -> None:
+        stream.push_frame(_frame())
+        stream.flush()
+        await _until(lambda: len(server.text) == server.connections)
+        await server.send(
+            {"type": "turn_start"},
+            {"type": "turn_end_candidate", "text": text, "start_ms": 0, "duration_ms": 20},
+            {"type": "turn_end"},
+        )
+        await log.wait_for(events)
 
     try:
-        gap = 0.3
+        await asyncio.wait_for(server.connected.wait(), timeout=5)
+        await turn("first", 5)
+        gap = 0.05
         await asyncio.sleep(gap)
         stream.update_options(language="de")
-        await server.wait_for_connections(2)
+        await _until(lambda: server.connections == 2)
+        await turn("second", 10)
 
-        await server.send({"type": "turn_start"})
-        await server.send(
-            {"type": "turn_end_candidate", "text": "second", "start_ms": 0, "duration_ms": 100}
-        )
-        await server.send({"type": "turn_end"})
-        second = (await log.wait_for(8))[6]
-
-        assert first.alternatives[0].text == "first"
-        assert second.alternatives[0].text == "second"
-        assert second.alternatives[0].start_time >= gap * 0.8, (
-            "the second session's timeline restarted at zero"
-        )
-        assert second.alternatives[0].start_time >= first.alternatives[0].end_time, (
-            "the second turn overlaps audio the first turn already covered"
-        )
+        first, second = [
+            e.alternatives[0] for e in log.events if e.type == SpeechEventType.FINAL_TRANSCRIPT
+        ]
+        assert (first.start_time, first.end_time) == (pytest.approx(0.0), pytest.approx(0.02))
+        assert second.start_time >= gap * 0.8, "the second session's timeline restarted at zero"
+        assert second.start_time >= first.end_time
     finally:
         await log.aclose()
         await stream.aclose()
 
 
-async def test_update_options_reconnects_immediately(
+async def test_a_mutated_sequence_still_triggers_a_reconnect(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
-    """Options live in the query string, so applying them means a new socket."""
+    """Options copy the caller's list, so a later change to it is a real update."""
     server = await reson8_server()
-    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
+    shared = ["LiveKit"]
+    stream = _stt(server.base_url, client_session, biasing=BiasingOptions(phrases=shared)).stream(
+        conn_options=NO_RETRY
+    )
 
     await asyncio.wait_for(server.connected.wait(), timeout=5)
+    assert server.query["phrases"] == "LiveKit"
     try:
-        stream.update_options(language="de")
-        await server.wait_for_connections(2)
-        assert server.query["language"] == "de"
+        shared.append("Reson8")
+        stream.update_options(biasing=BiasingOptions(phrases=shared))
+        await _until(lambda: server.connections == 2)
+        assert server.query["phrases"] == "LiveKit,Reson8"
     finally:
         await stream.aclose()
 
@@ -1730,19 +1099,16 @@ async def test_an_unchanged_update_does_not_reconnect(
     log = EventLog(stream)
 
     await asyncio.wait_for(server.connected.wait(), timeout=5)
-    await server.send({"type": "turn_start"})
-    await server.send({"type": "turn_end_candidate", "text": "mid turn"})
+    await server.send(*TURN[:2])
     await log.wait_for(2)
-
     try:
         stream.update_options(language="nl", transcript=TranscriptOptions())
-        await asyncio.sleep(0.3)
-        assert server.connections == 1, "redialled for an unchanged configuration"
+        await asyncio.sleep(0.05)
+        assert server.connections == 1
 
-        await server.send({"type": "turn_end"})
+        await server.send(TURN[2])
         events = await log.wait_for(4)
-        assert events[2].type == SpeechEventType.FINAL_TRANSCRIPT
-        assert events[2].alternatives[0].text == "mid turn"
+        assert _finals(events) == ["hello world"]
     finally:
         await log.aclose()
         await stream.aclose()
@@ -1751,50 +1117,28 @@ async def test_an_unchanged_update_does_not_reconnect(
 async def test_update_options_mid_turn_abandons_that_turn(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
-    """
-    The documented cost of redialling: the turn in progress is lost.
-
-    Reson8 holds turn state server-side and nothing in the protocol ties a
-    turn_end to a position in the audio sent, so the client cannot know when a
-    redial is safe. The replacement session starts clean instead: a leftover
-    candidate would be promoted by an unrelated turn_end, and a leftover
-    speaking flag would swallow the next START_OF_SPEECH.
-    """
-
+    """A redial loses the turn in progress, and nothing of it leaks into the new session."""
     server = await reson8_server()
     stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
     log = EventLog(stream)
 
     await asyncio.wait_for(server.connected.wait(), timeout=5)
-    await server.send({"type": "turn_start"})
-    await server.send({"type": "turn_end_candidate", "text": "stale text"})
-    opening = await log.wait_for(2)
-    assert opening[1].type == SpeechEventType.PREFLIGHT_TRANSCRIPT
-
+    await server.send({"type": "turn_start"}, {"type": "turn_end_candidate", "text": "stale"})
+    await log.wait_for(2)
     try:
         stream.update_options(transcript=TranscriptOptions(words=True))
-        await server.wait_for_connections(2)
-
+        await _until(lambda: server.connections == 2)
         # the interrupted turn is closed out rather than left open
         events = await log.wait_for(3)
         assert events[2].type == SpeechEventType.END_OF_SPEECH
 
-        # and nothing from it survives into the new session
-        await server.send({"type": "turn_end"})
-        await log.assert_quiet()
-
-        await server.send({"type": "turn_start"})
-        await server.send({"type": "turn_end_candidate", "text": "fresh text"})
-        await server.send({"type": "turn_end"})
-
+        # a leftover turn_end would promote the stale candidate
+        await server.send(TURN[2])
+        await server.send(*TURN)
         events = await log.wait_for(7)
-        assert [e.type for e in events[3:]] == [
-            SpeechEventType.START_OF_SPEECH,
-            SpeechEventType.PREFLIGHT_TRANSCRIPT,
-            SpeechEventType.FINAL_TRANSCRIPT,
-            SpeechEventType.END_OF_SPEECH,
-        ]
-        assert events[5].alternatives[0].text == "fresh text"
+        await asyncio.sleep(0.02)
+        assert [e.type for e in events[3:]] == TURN_TYPES
+        assert _finals(events) == ["hello world"]
     finally:
         await log.aclose()
         await stream.aclose()
@@ -1803,79 +1147,50 @@ async def test_update_options_mid_turn_abandons_that_turn(
 async def test_a_reconnect_keeps_audio_that_has_not_been_sent_yet(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
-    """
-    Audio is chunked to 100ms before it goes out.
-
-    A shorter frame sits in the chunker until enough arrives, and those bytes
-    have already been taken off the input channel -- so a chunker rebuilt for
-    the replacement connection would drop them silently.
-    """
-
+    """A partial 100ms chunk already taken off the input must survive the redial."""
     server = await reson8_server()
     stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
 
     await asyncio.wait_for(server.connected.wait(), timeout=5)
     try:
-        # half a chunk: consumed from the input channel, not yet on the wire
         stream.push_frame(_frame(samples=800))
-        await asyncio.sleep(0.1)
-        assert not server.audio, "a partial chunk should not have been sent"
+        await asyncio.sleep(0.02)
+        assert not server.audio
 
         stream.update_options(language="de")
-        await server.wait_for_connections(2)
-
-        # the other half completes the chunk on the new connection
+        await _until(lambda: server.connections == 2)
         stream.push_frame(_frame(samples=800))
         stream.flush()
-        await server.wait_for_text()
+        await _until(lambda: bool(server.text))
     finally:
         await stream.aclose()
 
-    assert sum(len(chunk) for chunk in server.audio) == 800 * 2 * 2, (
-        "the buffered half-chunk was dropped by the reconnect"
-    )
+    assert sum(len(chunk) for chunk in server.audio) == 800 * 2 * 2
 
 
 async def test_a_dropped_socket_closes_out_the_open_turn(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
-    """
-    A turn interrupted by a retry must not leave speech open.
-
-    ``turn_detection="stt"`` commits the user turn on END_OF_SPEECH, so a
-    START_OF_SPEECH with no partner leaves the session believing the user is
-    still talking. ``_speaking`` outlives ``_run``, so the framework's retry
-    lands in the same place an internal redial does.
-    """
-
+    """A framework retry mid-turn emits END_OF_SPEECH so the session is not left waiting."""
     server = await reson8_server()
-    stream = _stt(server.base_url, client_session).stream(
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.1, timeout=5)
-    )
+    stream = _stt(server.base_url, client_session).stream(conn_options=ONE_RETRY)
     log = EventLog(stream)
 
     await asyncio.wait_for(server.connected.wait(), timeout=5)
     try:
         stream.push_frame(_frame())
         await server.send({"type": "turn_start"})
-        opening = await log.wait_for(1)
-        assert opening[0].type == SpeechEventType.START_OF_SPEECH
+        await log.wait_for(1)
 
-        # the socket dies mid-turn; the framework retries _run
-        assert server._ws is not None
-        await server._ws.close()
-        await server.wait_for_connections(2)
-
-        events = await log.wait_for(2)
-        assert [e.type for e in events[:2]] == [
-            SpeechEventType.START_OF_SPEECH,
-            SpeechEventType.END_OF_SPEECH,
-        ]
-
-        # and the replacement session can open a fresh turn
+        await server.hang_up()
+        await _until(lambda: server.connections == 2)
         await server.send({"type": "turn_start"})
         events = await log.wait_for(3)
-        assert events[2].type == SpeechEventType.START_OF_SPEECH
+        assert [e.type for e in events] == [
+            SpeechEventType.START_OF_SPEECH,
+            SpeechEventType.END_OF_SPEECH,
+            SpeechEventType.START_OF_SPEECH,
+        ]
     finally:
         await log.aclose()
         await stream.aclose()
@@ -1886,70 +1201,25 @@ async def test_a_rejected_upgrade_surfaces_the_status_and_the_reason(
     client_session: aiohttp.ClientSession,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """
-    Reson8 rejects the upgrade with a status and an X-Error-Message header.
-
-    Reporting it as a connection error instead would make an exhausted credit
-    balance look like a network blip, and retry it with backoff.
-    """
-
+    """A rejected upgrade is a status error, not a retried network blip."""
     server = await reson8_server(ws_status=402, ws_error_message="organization out of credits")
     stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
 
     with caplog.at_level("WARNING"), pytest.raises(APIStatusError) as excinfo:
         await stream._run()
+    await stream.aclose()
 
     assert excinfo.value.status_code == 402
     assert excinfo.value.retryable is False
-    # the status and our hint carry the actionable part
-    assert "https://docs.reson8.dev/limits/" in excinfo.value.message
-    # the header text is free-form, so it goes to a redactable key instead of
-    # the exception or the log message body
+    assert LIMITS_URL in excinfo.value.message
+    # the header is free text, so it only reaches a redactable key
     assert "organization out of credits" not in str(excinfo.value)
     assert "organization out of credits" not in caplog.text
-    record = next(r for r in caplog.records if r.message == "Reson8 rejected the request")
+    record = next(r for r in caplog.records if r.message == REJECTED)
     assert getattr(record, "lk.pii.detail") == "organization out of credits"
-    await stream.aclose()
-
-
-async def test_a_rejected_upgrade_without_a_reason_still_explains_itself(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession
-) -> None:
-    server = await reson8_server(ws_status=401)
-    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
-
-    with pytest.raises(APIStatusError, match="RESON8_API_KEY"):
-        await stream._run()
-
-    await stream.aclose()
 
 
 async def test_a_send_failure_is_retryable(
-    reson8_server: StartServer,
-    client_session: aiohttp.ClientSession,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    server = await reson8_server()
-
-    async def boom(self: object, *args: object, **kwargs: object) -> None:
-        raise aiohttp.ClientConnectionResetError("cannot write to closing transport")
-
-    monkeypatch.setattr(aiohttp.ClientWebSocketResponse, "send_bytes", boom)
-
-    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
-    stream.push_frame(_frame())
-
-    with pytest.raises(APIConnectionError, match="Failed to send audio") as excinfo:
-        async with asyncio.timeout(10):
-            async for _ in stream:
-                pass
-
-    assert excinfo.value.retryable is True
-    assert excinfo.value.__cause__ is None
-    await stream.aclose()
-
-
-async def test_a_send_failure_reconnects(
     reson8_server: StartServer,
     client_session: aiohttp.ClientSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -1966,17 +1236,21 @@ async def test_a_send_failure_reconnects(
         await real(self, *args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(aiohttp.ClientWebSocketResponse, "send_bytes", fail_once)
-
-    stream = _stt(server.base_url, client_session).stream(
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.1, timeout=5)
-    )
+    instance = _stt(server.base_url, client_session)
+    errors: list[stt.STTError] = []
+    instance.on("error", errors.append)
+    stream = instance.stream(conn_options=ONE_RETRY)
     try:
-        await asyncio.wait_for(server.connected.wait(), timeout=5)
         stream.push_frame(_frame())
-        await server.wait_for_connections(2)
-        assert failures == 1
+        await _until(lambda: server.connections == 2)
     finally:
         await stream.aclose()
+
+    [error] = errors
+    assert isinstance(error.error, APIConnectionError)
+    assert "Failed to send audio" in str(error.error)
+    assert error.error.retryable and error.recoverable
+    assert error.error.__cause__ is None
 
 
 async def test_a_websocket_error_frame_surfaces_its_cause(
@@ -1984,13 +1258,7 @@ async def test_a_websocket_error_frame_surfaces_its_cause(
     client_session: aiohttp.ClientSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """
-    An ERROR frame carries the transport failure in ``msg.data``.
-
-    aiohttp closes the socket before returning it, so a CLOSED would follow and
-    the stream would still fail -- but as a generic close, losing the cause.
-    """
-
+    """An ERROR frame's cause must not be lost to the CLOSED that follows it."""
     server = await reson8_server()
     sent = False
 
@@ -2001,43 +1269,57 @@ async def test_a_websocket_error_frame_surfaces_its_cause(
             return aiohttp.WSMessage(
                 aiohttp.WSMsgType.ERROR, aiohttp.WebSocketError(1002, "invalid frame"), None
             )
-
         await asyncio.sleep(0)
         return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, None)
 
     monkeypatch.setattr(aiohttp.ClientWebSocketResponse, "receive", error_frame)
-
     stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
 
     with pytest.raises(APIConnectionError, match="WebSocketError") as excinfo:
-        async with asyncio.timeout(10):
-            async for _ in stream:
-                pass
-
+        await _drain(stream)
     assert excinfo.value.__cause__ is None
-    await stream.aclose()
 
 
 async def test_an_unreachable_host_is_a_connection_error(
     client_session: aiohttp.ClientSession,
 ) -> None:
     stream = _stt("http://127.0.0.1:1", client_session).stream(conn_options=NO_RETRY)
-
     with pytest.raises(APIConnectionError, match="Failed to connect to Reson8"):
         await stream._run()
-
     await stream.aclose()
+
+
+async def test_streaming_frame_shape_must_match_the_configured_channels(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    """The base class never remixes, so a mismatched frame would be silently mislabelled."""
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session, audio=AudioOptions(num_channels=2)).stream(
+        conn_options=NO_RETRY
+    )
+    try:
+        with pytest.raises(ValueError, match="expected 2-channel frames, got 1"):
+            stream.push_frame(_frame(num_channels=1))
+        stream.push_frame(_frame(num_channels=2))
+        stream.flush()
+        await _until(lambda: bool(server.text))
+    finally:
+        await stream.aclose()
+
+    assert sum(len(chunk) for chunk in server.audio) == 1600 * 2 * 2
+    assert server.query["channels"] == "2"
+
+
+# ---------------------------------------------------------------------------
+# batch recognition
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     ("status", "body", "expected"),
     [
         (402, '{"code": "session_rejected"}', "session_rejected"),
-        (
-            400,
-            '{"code": "invalid_query_parameter", "detail": "Invalid encoding: mp3"}',
-            "invalid_query_parameter",
-        ),
+        (400, '{"code": "invalid_query_parameter", "detail": "x"}', "invalid_query_parameter"),
         (413, "", "413"),
     ],
 )
@@ -2057,45 +1339,25 @@ async def test_a_rejected_batch_request_reports_why(
     assert expected in excinfo.value.message
 
 
-@pytest.mark.parametrize("body", ["[]", "null", "5", '"text"', "not json", ""])
-async def test_an_unusable_batch_body_is_a_connection_error(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession, body: str
-) -> None:
-    """
-    A valid JSON scalar or array is as unusable as invalid JSON.
-
-    Both used to reach mapping-only code, so the AttributeError escaped as a
-    bare exception rather than an APIError -- which the framework does not
-    retry.
-    """
-
-    server = await reson8_server(post_body=body)
-
-    with pytest.raises(APIConnectionError, match="malformed response body") as excinfo:
-        await _stt(server.base_url, client_session).recognize(_frame(), conn_options=NO_RETRY)
-
-    assert excinfo.value.retryable is True
-
-
 @pytest.mark.parametrize(
     "body",
     [
-        pytest.param('{"text": "hi", "words": ["hi"]}', id="words-not-objects"),
-        pytest.param('{"text": "hi", "start_ms": "abc"}', id="turn-start-not-a-number"),
-        pytest.param(
-            '{"text": "hi", "words": [{"text": "hi", "confidence": "high"}]}',
-            id="confidence-a-string",
-        ),
-        pytest.param('{"text": "hi", "start_ms": ' + "9" * 4000 + "}", id="turn-start-overflows"),
-        pytest.param(
-            '{"text": "hi", "words": [{"text": "hi", "start_ms": ' + "9" * 4000 + "}]}",
-            id="word-start-overflows",
-        ),
+        "[]",
+        "null",
+        "5",
+        '"text"',
+        "not json",
+        "",
+        '{"text": "hi", "words": ["hi"]}',
+        '{"text": "hi", "start_ms": "abc"}',
+        '{"text": "hi", "words": [{"text": "hi", "confidence": "high"}]}',
+        '{"text": "hi", "start_ms": ' + "9" * 4000 + "}",
     ],
 )
-async def test_an_unmappable_batch_body_is_a_connection_error(
+async def test_an_unusable_batch_body_is_a_retryable_connection_error(
     reson8_server: StartServer, client_session: aiohttp.ClientSession, body: str
 ) -> None:
+    """A bare mapping error would escape as a non-API exception the framework never retries."""
     server = await reson8_server(post_body=body)
 
     with pytest.raises(APIConnectionError, match="malformed response body") as excinfo:
@@ -2109,133 +1371,35 @@ async def test_an_empty_batch_body_is_an_empty_transcript(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
     server = await reson8_server(post_body="{}")
-
     event = await _stt(server.base_url, client_session).recognize(_frame(), conn_options=NO_RETRY)
 
     assert event.type == SpeechEventType.FINAL_TRANSCRIPT
     assert event.alternatives[0].text == ""
 
 
-@pytest.mark.parametrize("frame", ["[]", "null", "5", '"text"', "not json"])
-async def test_an_unusable_turn_frame_is_skipped(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession, frame: str
-) -> None:
-    """One unusable frame must not take the stream down with it."""
-
-    server = await reson8_server()
-    stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
-    log = EventLog(stream)
-
-    await asyncio.wait_for(server.connected.wait(), timeout=5)
-    try:
-        assert server._ws is not None
-        await server._ws.send_str(frame)
-
-        await server.send({"type": "turn_start"})
-        await server.send({"type": "turn_end_candidate", "text": "still here"})
-        await server.send({"type": "turn_end"})
-
-        events = await log.wait_for(4)
-        assert [e.type for e in events] == [
-            SpeechEventType.START_OF_SPEECH,
-            SpeechEventType.PREFLIGHT_TRANSCRIPT,
-            SpeechEventType.FINAL_TRANSCRIPT,
-            SpeechEventType.END_OF_SPEECH,
-        ]
-        assert events[2].alternatives[0].text == "still here"
-    finally:
-        await log.aclose()
-        await stream.aclose()
-
-
 async def test_a_batch_timeout_is_a_timeout_error(
-    reson8_server: StartServer,
-    client_session: aiohttp.ClientSession,
-    monkeypatch: pytest.MonkeyPatch,
+    client_session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    server = await reson8_server()
-
     def timing_out_post(*args: object, **kwargs: object) -> None:
         raise asyncio.TimeoutError
 
     monkeypatch.setattr(client_session, "post", timing_out_post)
-
     with pytest.raises(APITimeoutError):
-        await _stt(server.base_url, client_session).recognize(_frame(), conn_options=NO_RETRY)
-
-
-async def test_streaming_rejects_a_frame_of_the_wrong_shape(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession
-) -> None:
-    """
-    The channel count is in the query string before any frame arrives.
-
-    The base class resamples to the declared rate but never remixes, so a frame
-    with a different channel count would be re-chunked under the wrong layout
-    and silently mislabelled.
-    """
-
-    server = await reson8_server()
-    stream = _stt(server.base_url, client_session, audio=AudioOptions(num_channels=1)).stream(
-        conn_options=NO_RETRY
-    )
-
-    with pytest.raises(ValueError, match="expected 1-channel frames, got 2"):
-        stream.push_frame(_frame(num_channels=2))
-
-    await stream.aclose()
-    assert not server.audio, "nothing should have reached the server"
-
-
-async def test_streaming_accepts_the_configured_shape(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession
-) -> None:
-    server = await reson8_server()
-    stream = _stt(server.base_url, client_session, audio=AudioOptions(num_channels=2)).stream(
-        conn_options=NO_RETRY
-    )
-
-    stream.push_frame(_frame(num_channels=2))
-    stream.flush()
-
-    try:
-        await server.wait_for_text()
-    finally:
-        await stream.aclose()
-
-    assert server.audio, "no audio frame reached the server"
-    assert server.query["channels"] == "2"
+        await _stt(HOSTED, client_session).recognize(_frame(), conn_options=NO_RETRY)
 
 
 async def test_batch_describes_the_buffer_it_actually_posts(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
-    """recognize() reports the audio it sends, not the configured shape."""
-
     server = await reson8_server()
     instance = _stt(
-        server.base_url,
-        client_session,
-        audio=AudioOptions(sample_rate=48000, num_channels=1),
+        server.base_url, client_session, audio=AudioOptions(sample_rate=48000, num_channels=1)
     )
 
     await instance.recognize(_frame(num_channels=2), conn_options=NO_RETRY)
-
     assert server.query["sample_rate"] == "16000"
     assert server.query["channels"] == "2"
     assert server.query["encoding"] == "pcm_s16le"
 
-
-async def test_batch_rejects_a_buffer_with_too_many_channels(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession
-) -> None:
-    """The buffer's own shape is validated too, before anything is posted."""
-
-    server = await reson8_server()
-
     with pytest.raises(ValueError, match="between 1 and 10"):
-        await _stt(server.base_url, client_session).recognize(
-            _frame(num_channels=11), conn_options=NO_RETRY
-        )
-
-    assert not server.post_headers, "nothing should have been posted"
+        await instance.recognize(_frame(num_channels=11), conn_options=NO_RETRY)

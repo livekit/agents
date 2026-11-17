@@ -14,6 +14,9 @@ class _TagEntry:
     timestamp: float = field(default_factory=time.time)
 
 
+_OUTCOME_TAGS = ("lk.success", "lk.fail")
+
+
 class Tagger:
     """Tag sessions with metadata for observability.
 
@@ -74,10 +77,17 @@ class Tagger:
     def add(self, tag: str, *, metadata: dict[str, Any] | None = None) -> None:
         """Add a tag to the session with optional structured metadata.
 
+        Adding `lk.success` or `lk.fail` replaces the current outcome and its reason.
+
         Args:
             tag: The tag string in "key:value" format (e.g., "voicemail:true", "language:es").
             metadata: Optional dict of structured metadata associated with this tag.
         """
+        if tag in _OUTCOME_TAGS:
+            # keep the outcome tags mutually exclusive, like success()/fail() do
+            for outcome_tag in _OUTCOME_TAGS:
+                self._tags.pop(outcome_tag, None)
+            self._outcome_reason = None
         self._tags[tag] = _TagEntry(metadata=metadata)
 
     def remove(self, tag: str) -> None:
@@ -86,7 +96,8 @@ class Tagger:
         Args:
             tag: The tag string to remove.
         """
-        self._tags.pop(tag, None)
+        if self._tags.pop(tag, None) is not None and tag in _OUTCOME_TAGS:
+            self._outcome_reason = None
 
     @property
     def tags(self) -> set[str]:

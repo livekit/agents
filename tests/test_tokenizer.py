@@ -1,10 +1,12 @@
 import asyncio
+import functools
 
 import pytest
 
 from livekit.agents import tokenize
-from livekit.agents.tokenize import basic, blingfire
+from livekit.agents.tokenize import basic, blingfire, token_stream
 from livekit.agents.tokenize._basic_paragraph import split_paragraphs
+from livekit.agents.tokenize._basic_sent import split_sentences
 from livekit.plugins import nltk
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
@@ -535,3 +537,39 @@ def test_split_paragraphs(test_case):
     input_text, expected_output = test_case
     result = split_paragraphs(input_text)
     assert result == expected_output, f"Failed for input: {input_text}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Hello world.",
+        # dotted numbers (versions, IPs) are one sentence, not "1.2." + "3 is out today."
+        "Version 1.2.3 is out today.",
+        "The server is at 192.168.1.1 right now.",
+    ],
+)
+def test_basic_sent_single_sentence_span_covers_the_whole_text(text: str) -> None:
+    assert split_sentences(text, min_sentence_len=20) == [(text, 0, len(text))]
+
+
+def test_basic_sent_last_span_ends_at_the_text_end() -> None:
+    text = "This is the first sentence. Second one here."
+    sentences = split_sentences(text, min_sentence_len=20)
+    assert sentences[-1][2] == len(text)
+    assert text[sentences[-1][1] : sentences[-1][2]].strip() == sentences[-1][0]
+
+
+def test_basic_sent_still_splits_after_a_number() -> None:
+    text = "One 1. Two 2. Three 3."
+    sentences = split_sentences(text, min_sentence_len=0)
+    assert [sent for sent, _, _ in sentences] == ["One 1.", "Two 2.", "Three 3."]
+    for sent, start, end in sentences:
+        assert text[start:end].strip() == sent
+
+
+def test_basic_sent_xml_wrapper_keeps_last_char() -> None:
+    wrapped = token_stream._xml_wrap_tokenizer(
+        functools.partial(split_sentences, min_sentence_len=20)
+    )
+    text = "<expr type='expression' label='happy'/>Hello world."
+    assert wrapped(text) == [(text, 0, len(text))]

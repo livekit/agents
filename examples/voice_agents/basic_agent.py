@@ -77,10 +77,12 @@ async def entrypoint(ctx: JobContext) -> None:
     session: AgentSession = AgentSession(
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         # See all available models at https://docs.livekit.io/agents/models/stt/
-        stt=inference.STT("deepgram/nova-3", language="multi"),
+        stt=inference.STT("deepgram/flux-general", language="en"),
         # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
         # See all available models at https://docs.livekit.io/agents/models/llm/
-        llm=inference.LLM("openai/gpt-4.1-mini"),
+        llm=inference.LLM("google/gemma-4-31b-it"),
+        # Or an OpenAI model over the Responses API:
+        # llm=inference.responses.LLM("openai/gpt-6-luna"),
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),

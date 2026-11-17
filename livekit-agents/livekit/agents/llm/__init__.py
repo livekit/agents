@@ -28,6 +28,12 @@ from .decisions import (
     Score,
     ScoreResult,
 )
+from .delegation import (
+    DelegationCheck,
+    DelegationCreatedEvent,
+    DelegationDetectionOptions,
+    DelegationDetector,
+)
 from .duplex import (
     DuplexAudioFrame,
     DuplexCapabilities,
@@ -167,6 +173,10 @@ __all__ = [
     "GenerationCreatedEvent",
     "MessageGeneration",
     "RealtimeSessionReconnectedEvent",
+    "DelegationCheck",
+    "DelegationCreatedEvent",
+    "DelegationDetectionOptions",
+    "DelegationDetector",
     "LLMError",
     "RemoteItemAddedEvent",
 ]
