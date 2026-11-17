@@ -1,5 +1,6 @@
 //! Communication observations and dispatch intent are committed by the conversation owner.
 
+use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::delegation::remote::*;
 use lk_agents_abi::session::InputRequestState;
 
@@ -16,7 +17,10 @@ pub struct RemoteError(String);
 
 /// Apply one serialized input. Observed response content remains journaled even if its
 /// projection is refused; malformed or conflicting content never overwrites accepted state.
-pub fn apply(state: &mut RemoteAgentState, input: RemoteInput) -> Result<(), RemoteError> {
+pub fn apply(
+    state: &mut RemoteAgentState,
+    input: RemoteInput,
+) -> Result<Option<InputRequestRef>, RemoteError> {
     match input {
         RemoteInput::Prepare { request_id, request, streaming, origin, input_request } => {
             if request_id.is_empty() {
@@ -38,7 +42,7 @@ pub fn apply(state: &mut RemoteAgentState, input: RemoteInput) -> Result<(), Rem
                     // Before dispatch, a fresh observer may retry this exact prepared body.
                     // Retain its original content and errors rather than recording it twice.
                     existing.ended = false;
-                    return Ok(());
+                    return Ok(None);
                 }
                 return Err(invalid("request identity is already prepared or may have been sent"));
             }
@@ -127,12 +131,33 @@ pub fn apply(state: &mut RemoteAgentState, input: RemoteInput) -> Result<(), Rem
                     .ok_or_else(|| invalid("the reserved input occurrence is missing"))?;
                 input.state = InputRequestState::Responded;
             }
+            let input_required = match response.as_ref() {
+                A2AResponse::Task(task)
+                | A2AResponse::Send(a2a::SendMessageResponse::Task(task))
+                | A2AResponse::Stream(a2a::StreamResponse::Task(task)) => {
+                    task.status.state == a2a::TaskState::InputRequired
+                }
+                A2AResponse::Stream(a2a::StreamResponse::StatusUpdate(update)) => {
+                    update.status.state == a2a::TaskState::InputRequired
+                }
+                _ => false,
+            };
             let task = projection::response(&mut next, &request, *response)?;
+            let input_request = task.as_ref().filter(|_| input_required).and_then(|reference| {
+                let task = next.tasks.get(&reference.task_id)?;
+                let sequence = task.next_input.checked_sub(1)?;
+                let occurrence_id = format!("{}/input_{sequence}", reference.task_id);
+                task.input_requests
+                    .get(&occurrence_id)
+                    .filter(|input| input.state == InputRequestState::Open)?;
+                Some(InputRequestRef { task: reference.clone(), occurrence_id })
+            });
             if let Some(task) = task {
                 next.requests.get_mut(&request_id).expect("request was validated").task =
                     Some(task);
             }
             *state = next;
+            return Ok(input_request);
         }
         RemoteInput::Error { request_id, error } => {
             let request = request_mut(state, &request_id)?;
@@ -151,7 +176,7 @@ pub fn apply(state: &mut RemoteAgentState, input: RemoteInput) -> Result<(), Rem
             request_mut(state, &request_id)?.ended = true;
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Recovery never replays a send merely to discover the task it may have created.

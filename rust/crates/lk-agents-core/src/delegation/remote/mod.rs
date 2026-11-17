@@ -84,6 +84,8 @@ pub struct InteractionState {
     pub pending_task_id: Option<String>,
     pub phase: InteractionPhase,
     pub request_id: Option<String>,
+    /// The checkpointed input occurrence this presentation asks the person to answer.
+    pub input_request: Option<lk_agents_abi::delegation::remote::InputRequestRef>,
     pub question_sequence: u64,
 }
 
@@ -125,6 +127,7 @@ impl RemoteInteraction {
                 pending_task_id: None,
                 phase: InteractionPhase::Ready,
                 request_id: None,
+                input_request: None,
                 question_sequence: 0,
             },
         })
@@ -138,6 +141,11 @@ impl RemoteInteraction {
             || state.pending_task_id.is_some() && state.context_id.is_none()
             || state.phase == InteractionPhase::InputRequired
                 && (state.pending_task_id.is_none() || state.request_id.is_none())
+            || state.input_request.as_ref().is_some_and(|reference| {
+                reference.occurrence_id.is_empty()
+                    || Some(&reference.task.task_id) != state.pending_task_id.as_ref()
+                    || Some(&reference.task.context_id) != state.context_id.as_ref()
+            })
         {
             return Err(DelegationError::InvalidState);
         }
@@ -226,11 +234,31 @@ impl RemoteInteraction {
         Ok(())
     }
 
+    /// Bind the observation's committed occurrence before presenting it. A later status may
+    /// supersede it; sending this reference then fails instead of answering another question.
+    pub fn retain_input_request(
+        &mut self,
+        reference: Option<lk_agents_abi::delegation::remote::InputRequestRef>,
+    ) -> Result<(), DelegationError> {
+        if self.state.phase != InteractionPhase::InputRequired
+            || reference.as_ref().is_some_and(|reference| {
+                reference.occurrence_id.is_empty()
+                    || Some(&reference.task.task_id) != self.state.pending_task_id.as_ref()
+                    || Some(&reference.task.context_id) != self.state.context_id.as_ref()
+            })
+        {
+            return Err(DelegationError::InvalidState);
+        }
+        self.state.input_request = reference;
+        Ok(())
+    }
+
     pub fn update(&mut self, update: &TaskUpdate) -> Result<DelegationUpdate, DelegationError> {
         if self.state.phase == InteractionPhase::Settled {
             return Err(DelegationError::Settled);
         }
         self.identify(update)?;
+        self.state.input_request = None;
         let exact = update.metadata.get("livekit/verbatim").and_then(|v| v.as_str());
         let outcome = match update.state {
             TaskState::Unspecified | TaskState::Submitted | TaskState::Working => {

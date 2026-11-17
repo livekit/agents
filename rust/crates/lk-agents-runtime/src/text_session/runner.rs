@@ -83,7 +83,13 @@ impl lk_agents_abi::delegation::remote::RemoteCommands for Runner {
     fn remote<'a>(
         &'a self,
         command: lk_agents_abi::delegation::remote::RemoteCommand,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<(), lk_agents_abi::storage::StorageError>> {
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            Option<lk_agents_abi::delegation::remote::InputRequestRef>,
+            lk_agents_abi::storage::StorageError,
+        >,
+    > {
         Box::pin(async move {
             use lk_agents_abi::storage::StorageError;
             let sender =

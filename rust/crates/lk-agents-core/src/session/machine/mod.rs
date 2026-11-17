@@ -112,7 +112,10 @@ impl Session {
     pub fn remote(
         &mut self,
         command: lk_agents_abi::delegation::remote::RemoteCommand,
-    ) -> Result<(), lk_agents_abi::storage::StorageError> {
+    ) -> Result<
+        Option<lk_agents_abi::delegation::remote::InputRequestRef>,
+        lk_agents_abi::storage::StorageError,
+    > {
         use lk_agents_abi::delegation::remote::RemoteAgentState;
         use lk_agents_abi::storage::StorageError;
         if matches!(self.phase, Phase::Done) {

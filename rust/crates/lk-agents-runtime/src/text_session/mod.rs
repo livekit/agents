@@ -34,7 +34,14 @@ pub(super) struct Release {
 pub(super) enum RemoteCommand {
     Apply {
         command: Box<lk_agents_abi::delegation::remote::RemoteCommand>,
-        done: signal::Producer<Option<Result<(), lk_agents_abi::storage::StorageError>>>,
+        done: signal::Producer<
+            Option<
+                Result<
+                    Option<lk_agents_abi::delegation::remote::InputRequestRef>,
+                    lk_agents_abi::storage::StorageError,
+                >,
+            >,
+        >,
     },
     DefaultContext {
         remote_id: String,

@@ -245,8 +245,10 @@ pub trait RemoteCommands: Send + Sync {
         endpoint: &'a str,
     ) -> crate::BoxFuture<'a, Result<Option<String>, crate::storage::StorageError>>;
 
+    /// An open input-required observation returns its exact accepted occurrence, after
+    /// its checkpoint. Presentation must retain that reference instead of selecting it later.
     fn remote<'a>(
         &'a self,
         command: RemoteCommand,
-    ) -> crate::BoxFuture<'a, Result<(), crate::storage::StorageError>>;
+    ) -> crate::BoxFuture<'a, Result<Option<InputRequestRef>, crate::storage::StorageError>>;
 }

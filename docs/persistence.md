@@ -219,6 +219,13 @@ When an unresolved remote-tool call resumes, the native owner finds its latest o
 request by the originating `ToolCallRef`. Another local call does not consume that receipt.
 The saved endpoint remains pinned to the original destination.
 
+An input-required observation is saved before its question is presented. Its exact input
+occurrence travels with the response; sending reserves that occurrence and the outgoing
+message together. A newer question cannot silently redirect an older answer. If delivery is
+uncertain, the same response identity remains available for reconciliation.
+Observing the same question without evidence that the earlier response arrived keeps that
+response uncertain; it does not authorize another answer.
+
 - An intent saved before dispatch can be sent with its original SDK body, method, request ID
   and message ID.
 - A request that may have been sent and has a known task is reconciled with `GetTask`.

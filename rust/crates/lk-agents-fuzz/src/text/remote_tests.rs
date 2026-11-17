@@ -4,7 +4,7 @@ use super::*;
 use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::delegation::remote::RemoteRecovery;
 use lk_agents_abi::delegation::remote::{
-    InputRequestRef, RemoteCommand, RemoteCommands, RemoteInput, RemoteTaskRef,
+    RemoteCommand, RemoteCommands, RemoteInput, RemoteTaskRef,
 };
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::storage::context::ContextActivation as _;
@@ -433,7 +433,11 @@ fn origin() -> lk_agents_abi::session::ToolCallRef {
     lk_agents_abi::session::ToolCallRef { agent_id: "root".into(), call_id: "book-seat".into() }
 }
 
-struct Presenter;
+#[derive(Default)]
+struct Presenter {
+    answer: Option<String>,
+    lose_write_ack: Option<Arc<Store>>,
+}
 
 impl lk_agents_abi::a2a::remote::DelegationHost for Presenter {
     fn progress<'a>(
@@ -456,10 +460,16 @@ impl lk_agents_abi::a2a::remote::DelegationHost for Presenter {
         &'a self,
         _: &lk_agents_abi::telemetry::Cx,
         _: &'a lk_agents_abi::invoke::CallContext,
-        _: String,
+        question: String,
         _: bool,
     ) -> BoxFuture<'a, Result<String, HostError>> {
-        unreachable!("a text invocation returns its input request")
+        Box::pin(async move {
+            assert_eq!(question, "Which day?");
+            if let Some(database) = &self.lose_write_ack {
+                database.lose_next_write_acknowledgement();
+            }
+            Ok(self.answer.clone().expect("a text invocation returns its input request"))
+        })
     }
 }
 
@@ -467,6 +477,15 @@ async fn resume(
     env: &Arc<Env>,
     service: Arc<Service>,
     owner: Arc<dyn RemoteCommands>,
+) -> Result<lk_agents_abi::a2a::remote::RemoteEvent, lk_agents_abi::a2a::client::AgentClientError> {
+    interact(env, service, owner, Presenter::default()).await
+}
+
+async fn interact(
+    env: &Arc<Env>,
+    service: Arc<Service>,
+    owner: Arc<dyn RemoteCommands>,
+    presenter: Presenter,
 ) -> Result<lk_agents_abi::a2a::remote::RemoteEvent, lk_agents_abi::a2a::client::AgentClientError> {
     use lk_agents_abi::a2a::remote::RemoteInteraction as _;
     use lk_agents_runtime::delegation::remote::{RemoteInteraction, RemoteInvocation};
@@ -506,8 +525,8 @@ async fn resume(
                 structured: false,
                 history: Vec::new(),
                 shared: None,
-                live: false,
-                host: Arc::new(Presenter),
+                live: presenter.answer.is_some(),
+                host: Arc::new(presenter),
                 context: Default::default(),
                 cx: env.tracer.root(),
                 owner: Some(owner),
@@ -520,13 +539,7 @@ async fn resume(
 }
 
 fn journal(owner: Arc<dyn RemoteCommands>, id: &str) -> Arc<dyn RequestObserver> {
-    Arc::new(Journal {
-        owner,
-        endpoint: ENDPOINT.into(),
-        remote_id: ENDPOINT.into(),
-        request_id: id.into(),
-        origin: Some(origin()),
-    })
+    Arc::new(Journal::new(owner, ENDPOINT.into(), ENDPOINT.into(), id.into(), Some(origin()), None))
 }
 
 #[tokio::test(start_paused = true)]
@@ -770,7 +783,7 @@ async fn reconcile_cancellation(cancel_reply: CancelReply) {
 async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
     let clock: Arc<dyn Clock> = Arc::new(lk_agents_runtime::net::clock::SimClock::new());
     let env = environment(clock.clone());
-    let database = Store::open(23, false, clock.clone()).await;
+    let database = Arc::new(Store::open(23, false, clock.clone()).await);
     let service = Arc::new(Service::default());
     let store = ContextStore::bound(
         database.backend.clone(),
@@ -781,85 +794,46 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
     .await
     .unwrap();
     let (first, updates, binding, view) = owner(&env, store.clone()).await;
-    let client = AgentClient::with_transport(
-        ENDPOINT.into(),
-        None,
-        Default::default(),
-        service.clone(),
-        (env.process.spawner)().unwrap(),
-        clock.clone(),
-    )
-    .unwrap();
-    let reply = client
-        .send_observed(
-            message("start", "Book a seat", false),
-            None,
-            None,
-            None,
-            &env.tracer.root(),
-            Some(journal(first.clone(), "start")),
+    // The real executor asks and sends the person's response. No test command reserves the
+    // input occurrence: its committed observation must carry that correlation through.
+    assert!(
+        interact(
+            &env,
+            service.clone(),
+            first.clone(),
+            Presenter {
+                answer: Some("Friday".into()),
+                lose_write_ack: lose_intent_write_ack.then(|| database.clone()),
+            }
         )
         .await
-        .unwrap();
-    reply.aclose(clock.now().saturating_add(Duration::from_secs(1))).await;
+        .is_err()
+    );
     let snapshot = view._snapshot_data().unwrap().unwrap();
-    let occurrence = snapshot.remote_agents[ENDPOINT].tasks["booking"]
-        .input_requests
-        .keys()
-        .next()
-        .unwrap()
-        .clone();
-    // Reserve the exact response before transmission. The production owner checkpoints this
-    // command; the client then records the same immutable body and its dispatch marker.
-    let input = InputRequestRef {
-        task: RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() },
-        occurrence_id: occurrence.clone(),
-    };
-    if lose_intent_write_ack {
-        database.lose_next_write_acknowledgement();
-    }
-    first
-        .remote(RemoteCommand {
-            remote_id: ENDPOINT.into(),
-            endpoint: ENDPOINT.into(),
-            input: RemoteInput::Prepare {
-                request_id: "answer".into(),
-                request: lk_agents_abi::delegation::remote::A2ARequest::Send(Box::new(
-                    a2a::SendMessageRequest {
-                        message: message("answer", "Friday", true),
-                        configuration: None,
-                        metadata: None,
-                        tenant: None,
-                    },
-                )),
-                streaming: true,
-                origin: Some(origin()),
-                input_request: Some(input),
-            },
-        })
-        .await
-        .unwrap();
+    let remote = &snapshot.remote_agents[ENDPOINT];
+    let (answer_request, response) = remote
+        .requests
+        .iter()
+        .find(|(_, request)| request.input_request.is_some())
+        .expect("the actual send reserved the input occurrence before dispatch");
+    let reference = response.input_request.as_ref().unwrap();
+    assert_eq!(
+        reference.task,
+        RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() }
+    );
+    let answer_request = answer_request.clone();
+    let occurrence = reference.occurrence_id.clone();
+    let input = &remote.tasks["booking"].input_requests[&occurrence];
+    assert_eq!(input.state, lk_agents_abi::session::InputRequestState::Responding);
+    let answer_message =
+        input.response_message_id.clone().expect("the outgoing response is retained");
+    assert_eq!(service.messages.lock()[1].message_id, answer_message);
     if lose_intent_write_ack {
         assert!(
             database.faulted(),
             "SQLite committed the intent before losing its acknowledgement"
         );
     }
-    assert!(service.bookings.lock().is_empty(), "the durable intent alone did not book anything");
-    // Use the journal's reservation on the same operation, never a second prepared request.
-    let observer = journal(first.clone(), "answer");
-    let answer = client
-        .send_observed(
-            message("answer", "Friday", true),
-            None,
-            None,
-            None,
-            &env.tracer.root(),
-            Some(observer),
-        )
-        .await;
-    assert!(answer.is_err());
-    client.aclose().await;
     assert_eq!(
         Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,
         Closed::Clean
@@ -880,7 +854,7 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
     let (second, updates, binding, view) = owner(&env, fresh_store.clone()).await;
     let restored = view._snapshot_data().unwrap().unwrap();
     let remote = &restored.remote_agents[ENDPOINT];
-    assert!(matches!(recovery(remote, "answer").unwrap(), RemoteRecovery::GetTask(_)));
+    assert!(matches!(recovery(remote, &answer_request).unwrap(), RemoteRecovery::GetTask(_)));
     assert_eq!(second.default_context(ENDPOINT, ENDPOINT).await.unwrap().as_deref(), Some("trip"));
     assert!(second.default_context(ENDPOINT, "https://another.test").await.is_err());
     assert_eq!(
@@ -894,7 +868,7 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
     );
     assert_eq!(
         remote.tasks["booking"].input_requests[&occurrence].response_message_id.as_deref(),
-        Some("answer")
+        Some(answer_message.as_str())
     );
     let event = resume(&env, service.clone(), second.clone()).await.unwrap();
     assert!(matches!(event, lk_agents_abi::a2a::remote::RemoteEvent::Outcome {

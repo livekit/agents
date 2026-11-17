@@ -209,16 +209,28 @@ fn task(state: &mut RemoteAgentState, observed: a2a::Task) -> Result<(), RemoteE
     if observed.status.state == a2a::TaskState::InputRequired {
         // Older uncertain responses can remain in the map. Only the latest occurrence can
         // keep this question open; a newly admitted response can lead to the same question.
-        let latest = saved.next_input.checked_sub(1).and_then(|sequence| {
-            saved.input_requests.get(&format!("{}/input_{sequence}", observed.id))
-        });
+        let latest_id = saved
+            .next_input
+            .checked_sub(1)
+            .map(|sequence| format!("{}/input_{sequence}", observed.id));
+        let latest = latest_id.as_ref().and_then(|id| saved.input_requests.get(id));
         let same_occurrence = saved.task.status.state == a2a::TaskState::InputRequired
-            && saved.task.status.message.as_ref().map(|message| &message.message_id)
-                == source_id.as_ref()
             && latest.is_some_and(|input| {
                 matches!(input.state, InputRequestState::Open | InputRequestState::Responding)
+                    && source_id.as_ref().is_none_or(|id| {
+                        input.source_message_id.as_ref().is_none_or(|known| known == id)
+                    })
             });
-        if !same_occurrence {
+        if same_occurrence {
+            // A limited snapshot omitting the optional message is not another question.
+            // Its later first message enriches the occurrence without changing its identity.
+            let latest = latest_id
+                .and_then(|id| saved.input_requests.get_mut(&id))
+                .expect("same_occurrence checked the latest input");
+            if latest.source_message_id.is_none() {
+                latest.source_message_id = source_id;
+            }
+        } else {
             retire_inputs(&mut saved.input_requests, InputRequestState::Superseded, &dispatched);
             let occurrence_id = format!("{}/input_{}", observed.id, saved.next_input);
             saved.next_input = saved

@@ -850,7 +850,7 @@ a public Python export or an additional SDK constructor.
 | RemoteRequestState, working name | Evolve/replace current InteractionState at operation scope. | Method, request/payload identity, caller/input correlation, dispatch_started and local operation lifetime. It does not replace the SDK task's status. |
 | RemoteTaskState, internal data | Persisted data underlying the public RemoteTask view. | SDK Task observation, task-owned input state and cancellation intent; no serialized command capability. |
 | RemoteAgentView, RemoteContextView and RemoteTaskView, internal ABI traits | Generated bindings for the three public inspection types. | Native storage handles retain the enclosing SessionState's bound or detached owner. Getter results copy SDK values; grouping adds no duplicate histories or network calls. |
-| RemoteCommands, RemoteCommand and RemoteInput, internal ABI port/data | Serializes communication observations through the active owner. | Preparation, dispatch markers, responses and errors receive their checkpoint before the transport continues; no host policy or stored command capability. |
+| RemoteCommands, RemoteCommand and RemoteInput, internal ABI port/data | Serializes communication observations through the active owner. | Preparation, dispatch markers, responses and errors receive their checkpoint before the transport continues. An accepted input observation returns its existing InputRequestRef after that checkpoint; no new receipt class, host policy or stored command capability. |
 | RemoteRecovery, internal ABI decision | Reuses the core journal's recovery classification. | Carries an unsent original SDK request, a task to read, an accepted direct reply or uncertainty. Returned through the native owner; neither serialized nor exported as Python state classes. |
 | RemoteInvocation, internal runtime input | Groups the existing invocation arguments and services. | Production and DST use the same remote executor; only its endpoint client is injected. No new Python API or second controller. |
 | RemoteTaskCommands, conditional internal ABI port | Extend the existing binding/owner command path where possible. | Bound RemoteTask.cancel() reaches the authorized owner without putting a runtime dependency in storage or adding a public controller. |
@@ -920,7 +920,7 @@ a spoken response, interruption of frontend speech and the eventual result. Conf
 receiver audio as well as transcripts and service effects. Realtime parity follows that proof.
 
 The voice DST remains a release gate. The 1,024-seed survey and eight-call soak pass. The
-32,768-seed campaign completed with 20 contract/subject findings; the gate is still red.
+latest 32,768-seed campaign completed with 16 contract/subject findings; the gate is still red.
 An unchanged checkout also fails its initial survey, so each finding needs a focused
 reproduction before attribution. Seed numbers alone do not identify equivalent cases across
 revisions. Saved storage replays and authored regressions cover snapshot baselines, canonical
@@ -934,7 +934,7 @@ writer's edit, even after lease reacquisition; submission order spans the whole 
 Acquiring a lease does not publish unsequenced local revisions. A mutable baseline shared by
 overlapping turns cannot establish which values a late snapshot intentionally edits.
 
-The latest 4,096-seed window beginning at seed 1,024 passes. Focused regressions cover a final
+Focused regressions cover a final
 realtime transcript retaining its known timestamp and position, a newer storage observation
 updating a previously loaded row while preserving local edits, and restored tool outputs
 keeping their canonical timestamps. A realtime tool can also retake the idle floor after its
@@ -942,8 +942,9 @@ speech is interrupted; speech interruption does not end application work.
 
 Retained replays include seed 1,646 under Arrival, seeds 3,024 and 3,642 under BasicPos, and
 seed 4,110 under TaskBridge. Rerun a finding with `VOICE_SEED=<seed> VOICE_POLICY=<policy>` on
-its recorded revision. The full 32,768-seed campaign still needs another complete pass; the
-smaller passing window does not close that gate.
+its recorded revision. The latest full campaign still finds payload preservation, input
+resolution and voice/media failures. Its retained storage replay starts at seed 14,379 under
+TaskBridge. Smaller passing windows do not close that gate.
 
 Local real-process E2E and all v1 client compatibility stories pass. Cloud AgentDB conformance
 has not run: this environment has no LiveKit project configuration. Local SQLite tests and

@@ -6,18 +6,45 @@ use lk_agents_abi::delegation::remote::*;
 use lk_agents_abi::session::ToolCallRef;
 use lk_agents_core::a2a::client::{ClientError, Request};
 use lk_agents_net::a2a_client::observer::RequestObserver;
+use parking_lot::Mutex;
 
 /// Each transport exchange reports into the conversation's serialized command port.
 pub struct Journal {
-    pub owner: Arc<dyn RemoteCommands>,
-    pub endpoint: String,
-    pub remote_id: String,
-    pub request_id: String,
-    pub origin: Option<ToolCallRef>,
+    owner: Arc<dyn RemoteCommands>,
+    endpoint: String,
+    remote_id: String,
+    request_id: String,
+    origin: Option<ToolCallRef>,
+    input_request: Option<InputRequestRef>,
+    observed_input: Mutex<Option<InputRequestRef>>,
 }
 
 impl Journal {
-    async fn apply(&self, input: RemoteInput) -> Result<(), ClientError> {
+    pub fn new(
+        owner: Arc<dyn RemoteCommands>,
+        endpoint: String,
+        remote_id: String,
+        request_id: String,
+        origin: Option<ToolCallRef>,
+        input_request: Option<InputRequestRef>,
+    ) -> Self {
+        Self {
+            owner,
+            endpoint,
+            remote_id,
+            request_id,
+            origin,
+            input_request,
+            observed_input: Mutex::new(None),
+        }
+    }
+
+    /// Only this exchange's acknowledged observation can be attached to its presentation.
+    pub fn observed_input(&self) -> Option<InputRequestRef> {
+        self.observed_input.lock().clone()
+    }
+
+    async fn apply(&self, input: RemoteInput) -> Result<Option<InputRequestRef>, ClientError> {
         self.owner
             .remote(RemoteCommand {
                 remote_id: self.remote_id.clone(),
@@ -62,19 +89,26 @@ impl RequestObserver for Journal {
                     ));
                 }
             };
+            let input_request =
+                matches!(body, A2ARequest::Send(_)).then(|| self.input_request.clone()).flatten();
             self.apply(RemoteInput::Prepare {
                 request_id: self.request_id.clone(),
                 request: body,
                 streaming: request.streaming,
                 origin: self.origin.clone(),
-                input_request: None,
+                input_request,
             })
             .await
+            .map(|_| ())
         })
     }
 
     fn dispatch_started(&self) -> BoxFuture<'_, Result<(), ClientError>> {
-        Box::pin(self.apply(RemoteInput::DispatchStarted { request_id: self.request_id.clone() }))
+        Box::pin(async {
+            self.apply(RemoteInput::DispatchStarted { request_id: self.request_id.clone() })
+                .await
+                .map(|_| ())
+        })
     }
 
     fn response<'a>(
@@ -103,11 +137,14 @@ impl RequestObserver for Journal {
                     other => A2AResponse::Stream(other),
                 }
             };
-            self.apply(RemoteInput::Response {
-                request_id: self.request_id.clone(),
-                response: Box::new(response),
-            })
-            .await
+            let input = self
+                .apply(RemoteInput::Response {
+                    request_id: self.request_id.clone(),
+                    response: Box::new(response),
+                })
+                .await?;
+            *self.observed_input.lock() = input;
+            Ok(())
         })
     }
 
@@ -132,7 +169,7 @@ impl RequestObserver for Journal {
                 },
                 None => RemoteInput::Ended { request_id: self.request_id.clone() },
             };
-            self.apply(input).await
+            self.apply(input).await.map(|_| ())
         })
     }
 }

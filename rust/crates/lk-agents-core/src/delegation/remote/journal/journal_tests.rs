@@ -44,6 +44,116 @@ fn input_task() -> serde_json::Value {
 }
 
 #[test]
+fn an_input_receipt_identifies_the_accepted_occurrence_without_following_later_questions() {
+    let mut state = RemoteAgentState::new("https://booking.test".into());
+    dispatched(&mut state, "start", send("start", "Book a seat", None));
+    let observe = |state: &mut RemoteAgentState, value| {
+        apply(
+            state,
+            RemoteInput::Response {
+                request_id: "start".into(),
+                response: Box::new(A2AResponse::Stream(serde_json::from_value(value).unwrap())),
+            },
+        )
+        .unwrap()
+    };
+    let first = observe(&mut state, input_task()).unwrap();
+    assert_eq!(first.task, RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() });
+    assert_eq!(observe(&mut state, input_task()), Some(first.clone()));
+    let mut limited = input_task();
+    limited["task"]["status"].as_object_mut().unwrap().remove("message");
+    assert_eq!(observe(&mut state, limited), Some(first.clone()));
+    assert_eq!(observe(&mut state, input_task()), Some(first.clone()));
+    let mut next = input_task();
+    next["task"]["status"]["message"]["messageId"] = json!("question_2");
+    let second = observe(&mut state, next).unwrap();
+    assert_ne!(first, second);
+    let mut response = send("answer", "Friday", Some(("trip", "booking")));
+    let RemoteInput::Prepare { input_request, .. } = &mut response else { unreachable!() };
+    *input_request = Some(first);
+    assert!(apply(&mut state, response).is_err(), "a late response cannot select the new question");
+    assert_eq!(
+        state.tasks["booking"].input_requests[&second.occurrence_id].state,
+        InputRequestState::Open
+    );
+    assert_eq!(
+        observe(
+            &mut state,
+            json!({"task":{"id":"booking","contextId":"trip",
+        "status":{"state":"TASK_STATE_WORKING"}}})
+        ),
+        None
+    );
+    validate(&state).unwrap();
+}
+
+#[test]
+fn an_unconfirmed_response_does_not_make_the_same_question_available_for_another_answer() {
+    for with_message in [true, false] {
+        let mut state = RemoteAgentState::new("https://booking.test".into());
+        dispatched(&mut state, "start", send("start", "Book a seat", None));
+        let response = A2AResponse::Stream(serde_json::from_value(input_task()).unwrap());
+        let reference = apply(
+            &mut state,
+            RemoteInput::Response {
+                request_id: "start".into(),
+                response: Box::new(response.clone()),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        let mut answer = send("answer", "Friday", Some(("trip", "booking")));
+        let RemoteInput::Prepare { input_request, .. } = &mut answer else { unreachable!() };
+        *input_request = Some(reference.clone());
+        dispatched(&mut state, "answer", answer);
+        apply(
+            &mut state,
+            RemoteInput::Error {
+                request_id: "answer".into(),
+                error: RemoteFailure::Protocol { message: "the reply was lost".into() },
+            },
+        )
+        .unwrap();
+        // Another observer sees the same input-required status, without history proving the
+        // first response arrived. That is uncertainty, not permission to ask and send it twice.
+        dispatched(
+            &mut state,
+            "recover",
+            RemoteInput::Prepare {
+                request_id: "recover".into(),
+                request: A2ARequest::Get(a2a::GetTaskRequest {
+                    id: "booking".into(),
+                    history_length: None,
+                    tenant: None,
+                }),
+                streaming: false,
+                origin: None,
+                input_request: None,
+            },
+        );
+        let mut observed = state.tasks["booking"].task.clone();
+        if !with_message {
+            observed.status.message = None;
+        }
+        let receipt = apply(
+            &mut state,
+            RemoteInput::Response {
+                request_id: "recover".into(),
+                response: Box::new(A2AResponse::Task(observed)),
+            },
+        )
+        .unwrap();
+        assert_eq!(receipt, None);
+        let input = &state.tasks["booking"].input_requests[&reference.occurrence_id];
+        assert_eq!(input.state, InputRequestState::Responding);
+        assert_eq!(input.response_message_id.as_deref(), Some("message_answer"));
+        assert_eq!(input.source_message_id.as_deref(), Some("question_1"));
+        assert_eq!(state.tasks["booking"].input_requests.len(), 1);
+        validate(&state).unwrap();
+    }
+}
+
+#[test]
 fn a_rejected_response_cannot_complete_recovery_just_because_it_is_journaled() {
     let mut state = RemoteAgentState::new("https://booking.test".into());
     dispatched(&mut state, "start", send("start", "Hello", None));

@@ -43,6 +43,33 @@ fn begin(interaction: &mut RemoteInteraction, extension: bool) -> Message {
 }
 
 #[test]
+fn an_answer_retains_its_checkpointed_occurrence_until_the_next_peer_observation() {
+    use lk_agents_abi::delegation::remote::{InputRequestRef, RemoteTaskRef};
+    let mut remote = interaction("input-receipt");
+    begin(&mut remote, false);
+    remote.update(&update(TaskState::InputRequired, "trip", "booking", "Which day?")).unwrap();
+    let reference = InputRequestRef {
+        task: RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() },
+        occurrence_id: "booking/input_3".into(),
+    };
+    remote.retain_input_request(Some(reference.clone())).unwrap();
+    let mut foreign = reference.clone();
+    foreign.task.task_id = "other-booking".into();
+    assert!(remote.retain_input_request(Some(foreign)).is_err());
+    remote.message("Friday".into(), "response".into(), None, "", None, false, None, None).unwrap();
+    let saved = remote.snapshot();
+    assert_eq!(saved.input_request, Some(reference.clone()));
+    let mut restored = RemoteInteraction::restore(saved.clone(), &saved.id).unwrap();
+    assert_eq!(restored.snapshot().input_request, Some(reference));
+    restored.update(&update(TaskState::Working, "trip", "booking", "Checking.")).unwrap();
+    assert_eq!(
+        restored.snapshot().input_request,
+        None,
+        "the new observation cannot reuse an earlier answer selection"
+    );
+}
+
+#[test]
 fn new_work_reuses_the_saved_remote_context_without_inheriting_a_task_or_thread_authority() {
     let mut remote = interaction("new-work");
     let message = remote
