@@ -1030,6 +1030,8 @@ than another simulation framework. Stock-peer HTTP and AgentDB conformance remai
   supported protocol's complete task-state set when aligning existing TaskState bindings.
 - [ ] Normalize status, flagged progress, exact text, input requests, artifacts and outcomes
   for presentation without overwriting the original protocol observations.
+  Flagged working progress is implemented through `TaskUpdate.progress`; unflagged status
+  stays observable without requesting an announcement. Exact-text delivery remains separate work.
 - [ ] Assemble append/replacement/interleaved artifacts; define answer selection and typed-output validation.
 - [ ] Support existing/new verbatim metadata without required LiveKit negotiation. Unflagged working text remains status.
 - [ ] Add bounded card/503/stream recovery and reconciliation of potentially accepted sends.

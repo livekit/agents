@@ -18,6 +18,7 @@ fn update(state: TaskState, context: &str, task: &str, text: &str) -> TaskUpdate
     TaskUpdate {
         state,
         text: text.into(),
+        progress: false,
         task_id: task.into(),
         context_id: context.into(),
         metadata: Map::new(),
@@ -38,6 +39,23 @@ fn begin(interaction: &mut RemoteInteraction, extension: bool) -> Message {
             None,
         )
         .unwrap()
+}
+
+#[test]
+fn only_explicitly_flagged_working_updates_request_an_announcement() {
+    for flag in [false, true] {
+        let mut remote = interaction("progress");
+        begin(&mut remote, false);
+        let mut status = update(TaskState::Working, "context", "task", "Checking.");
+        status.progress = flag;
+        let outcome = remote.update(&status).unwrap();
+        if flag {
+            assert_eq!(outcome, DelegationUpdate::Progress("Checking.".into()));
+        } else {
+            assert_eq!(outcome, DelegationUpdate::Pending);
+        }
+        assert_eq!(remote.ended(), Err(DelegationError::MissingOutcome));
+    }
 }
 
 fn history() -> CallerHistory {
@@ -257,10 +275,9 @@ fn remote_cancellation_and_failure_settle_truthfully_and_verbatim_is_split_once(
 fn progress_eof_never_becomes_an_answer_and_local_cancel_keeps_uncertain_effects() {
     let mut remote = interaction("cancel");
     begin(&mut remote, true);
-    assert_eq!(
-        remote.update(&update(TaskState::Working, "context", "task", "Checking")).unwrap(),
-        DelegationUpdate::Progress("Checking".into())
-    );
+    let mut progress = update(TaskState::Working, "context", "task", "Checking");
+    progress.progress = true;
+    assert_eq!(remote.update(&progress).unwrap(), DelegationUpdate::Progress("Checking".into()));
     assert_eq!(remote.ended(), Err(DelegationError::MissingOutcome));
     let effect = remote.cancel().unwrap();
     assert_eq!(effect.task, TaskRef { id: "task".into(), context_id: "context".into() });

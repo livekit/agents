@@ -166,6 +166,7 @@ and must not be interpreted as instructions or authorization.
 | `livekit/reason` | failed task's `status.message.metadata` | server | String failure code from the errors table below. |
 | `livekit/interrupted` | `Task.metadata` and final canceled `TaskStatusUpdateEvent.metadata` | server | Boolean `true` when the handler reports an interrupted result. Absent on ordinary cancellation. |
 | `livekit/mergedInto` | `Task.metadata` and final completed `TaskStatusUpdateEvent.metadata` | server | String task ID of the turn that answered this message too. |
+| `livekit/progress` | Working `status.message.metadata`, `Task.metadata` or `TaskStatusUpdateEvent.metadata` | server | Boolean `true` explicitly offers the text for conversational progress. `ctx.update()` sets it. |
 | `livekit/verbatim` | `Task.metadata` and final completed or input-required `TaskStatusUpdateEvent.metadata` | server | String prefix of the answer/question to deliver exactly as written; the frontend may phrase the remaining text. |
 
 Server-owned fields cannot be set by a caller to alter task outcomes. An absent
@@ -173,6 +174,12 @@ field makes no claim: in particular, `completed` with `mergedInto` means the
 answer belongs to the referenced task, rather than an empty successful answer.
 For interrupted turns, earlier artifact chunks are partial. A newer request does not
 interrupt an active turn; it follows the endpoint’s queue or batch policy.
+
+Working text alone does not request an announcement: a peer can put a draft answer or internal
+status there. A remote tool offers only explicitly flagged working text for presentation.
+`TaskUpdate.progress` accepts a boolean `true` on the message or its enclosing task/update;
+other values do not set it.
+Third-party peers can use the namespaced flag without advertising a LiveKit extension.
 
 A text answered together with the one that followed it:
 

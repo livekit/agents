@@ -198,6 +198,34 @@ fn progress_and_partial_artifacts_cannot_become_a_success_at_eof_or_remote_failu
 }
 
 #[test]
+fn a_working_message_progress_flag_is_not_hidden_by_its_update_metadata() {
+    let key = "https://livekit.io/a2a/ext/agents/v1/progress";
+    for (outer, inner, expected) in [
+        (json!(false), json!(true), true),
+        (json!(true), json!(false), true),
+        (json!(false), json!(false), false),
+        (json!("true"), json!(false), false),
+    ] {
+        let mut reply = ReplyState::default();
+        let update = reply
+            .accept(event(json!({
+                "statusUpdate": {
+                    "taskId": "task", "contextId": "context", "metadata": {key: outer},
+                    "status": {"state": "TASK_STATE_WORKING", "message": {
+                        "messageId": "checking", "role": "ROLE_AGENT",
+                        "parts": [{"text": "Checking."}], "metadata": {key: inner}
+                    }}
+                }
+            })))
+            .unwrap()
+            .unwrap();
+        assert_eq!(update.progress, expected);
+        assert_eq!(update.text, "Checking.");
+        assert_eq!(reply.finish(), Err(ClientError::incomplete()));
+    }
+}
+
+#[test]
 fn input_required_settles_the_stream_with_the_exact_pending_task() {
     let mut reply =
         ReplyState::new(Some(TaskRef { id: "task".into(), context_id: "context".into() }));

@@ -39,6 +39,23 @@ class Travel(AgentExecutor):
                     status=pb.TaskStatus(state=pb.TaskState.TASK_STATE_SUBMITTED),
                 )
             )
+            # Ordinary working text can contain a draft answer; only explicit progress should
+            # ask the frontend to announce anything. Neither requires extension negotiation.
+            await updater.update_status(
+                pb.TaskState.TASK_STATE_WORKING,
+                message=pb.Message(
+                    message_id=uuid4().hex,
+                    role=pb.Role.ROLE_AGENT,
+                    parts=[pb.Part(text="A draft answer that must stay in status.")],
+                ),
+            )
+            progress = pb.Message(
+                message_id=uuid4().hex,
+                role=pb.Role.ROLE_AGENT,
+                parts=[pb.Part(text="Checking available dates.")],
+            )
+            progress.metadata.update({"https://livekit.io/a2a/ext/agents/v1/progress": True})
+            await updater.update_status(pb.TaskState.TASK_STATE_WORKING, message=progress)
             await updater.requires_input(
                 pb.Message(
                     message_id=uuid4().hex,

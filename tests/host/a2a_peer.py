@@ -152,7 +152,14 @@ def _envelope(rpc: Json, result: Json) -> bytes:
 
 
 def _status(task: dict[str, str], state: str, text: str) -> Json:
-    message = {"messageId": f"status-{state}", "role": "ROLE_AGENT", "parts": [{"text": text}]}
+    message: Json = {
+        "messageId": f"status-{state}",
+        "role": "ROLE_AGENT",
+        "parts": [{"text": text}],
+    }
+    if state == "WORKING":
+        # This peer's "Checking" is explicit conversational progress, like ctx.update().
+        message["metadata"] = {f"{URI}/progress": True}
     status = {"state": f"TASK_STATE_{state}", "message": message}
     return {
         "statusUpdate": {"taskId": task["id"], "contextId": task["contextId"], "status": status}

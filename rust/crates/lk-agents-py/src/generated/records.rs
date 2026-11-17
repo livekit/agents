@@ -1114,6 +1114,9 @@ pub mod a2a_client {
             text: crate::py_values::attr_with(obj, "TaskUpdate", "text", |v| {
                 v.extract::<::std::string::String>()
             })?,
+            progress: crate::py_values::attr_with(obj, "TaskUpdate", "progress", |v| {
+                v.extract::<bool>()
+            })?,
             task_id: crate::py_values::attr_with(obj, "TaskUpdate", "task_id", |v| {
                 v.extract::<::std::string::String>()
             })?,
@@ -1154,6 +1157,7 @@ pub mod a2a_client {
         let ::lk_agents_abi::a2a::client::TaskUpdate {
             state,
             text,
+            progress,
             task_id,
             context_id,
             metadata,
@@ -1165,6 +1169,7 @@ pub mod a2a_client {
             crate::generated::records::storage_class::task_state_to_py(py, state)?,
         )?;
         kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+        kwargs.set_item("progress", ::pyo3::IntoPyObjectExt::into_bound_py_any(progress, py)?)?;
         kwargs.set_item("task_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(task_id, py)?)?;
         kwargs
             .set_item("context_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(context_id, py)?)?;

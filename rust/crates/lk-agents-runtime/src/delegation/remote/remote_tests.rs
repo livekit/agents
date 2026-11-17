@@ -39,6 +39,7 @@ fn input_required_answers_keep_the_original_partition_ancestry() {
         .inner
         .update(TaskUpdate {
             state: TaskState::InputRequired,
+            progress: false,
             text: "Your name?".into(),
             task_id: "task".into(),
             context_id: "AT_expert".into(),

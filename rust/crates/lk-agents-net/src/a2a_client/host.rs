@@ -136,6 +136,7 @@ pub fn update_from_wire(update: lk_agents_core::a2a::client::TaskUpdate) -> Task
     TaskUpdate {
         state: update.state,
         text: update.text,
+        progress: update.progress,
         task_id: update.task_id,
         context_id: update.context_id,
         metadata: update.metadata,

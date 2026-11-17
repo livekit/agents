@@ -127,6 +127,9 @@ pub struct Artifact {
 pub struct TaskUpdate {
     pub state: crate::storage::TaskState,
     pub text: String,
+    /// The working message or update explicitly requests progress presentation.
+    #[host(default = false)]
+    pub progress: bool,
     pub task_id: String,
     pub context_id: String,
     pub metadata: Map<String, Value>,

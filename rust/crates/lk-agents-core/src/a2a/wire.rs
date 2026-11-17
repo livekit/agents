@@ -77,6 +77,8 @@ pub fn progress(
     message.message_id = message_id;
     message.task_id = Some(id.to_owned());
     message.context_id = Some(context.to_owned());
+    message.metadata =
+        Some([(lk_agents_abi::a2a::metadata::PROGRESS_KEY.into(), true.into())].into());
     StreamResponse::StatusUpdate(a2a::TaskStatusUpdateEvent {
         task_id: id.to_owned(),
         context_id: context.into(),

@@ -92,6 +92,8 @@ class Artifact:
 class TaskUpdate:
     state: TaskState
     text: str
+    progress: bool = False
+    """The working message or update explicitly requests progress presentation."""
     task_id: str
     context_id: str
     metadata: dict[str, object]

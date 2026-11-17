@@ -33,6 +33,8 @@ async def test_a_stock_input_required_task_resumes_after_frontend_restart(e2e: E
         thread = reply.thread_id
     assert updates[-1].state == "input-required"
     assert "Which day?" in updates[-1].text
+    assert [update.text for update in updates if update.progress] == ["Checking available dates."]
+    assert all("draft answer" not in update.text for update in updates)
 
     await desk.restart()
     async with e2e.text_client(desk) as client:

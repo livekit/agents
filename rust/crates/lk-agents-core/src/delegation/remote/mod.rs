@@ -256,7 +256,7 @@ impl RemoteInteraction {
         let exact = update.metadata.get("livekit/verbatim").and_then(|v| v.as_str());
         let outcome = match update.state {
             TaskState::Submitted | TaskState::Working => {
-                if update.text.is_empty() {
+                if update.text.is_empty() || !update.progress {
                     DelegationUpdate::Pending
                 } else {
                     DelegationUpdate::Progress(update.text.clone())

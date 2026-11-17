@@ -92,6 +92,7 @@ pub fn update_from_host(
     Ok(crate::a2a::client::TaskUpdate {
         state,
         text: update.text,
+        progress: update.progress,
         task_id: update.task_id,
         context_id: update.context_id,
         metadata: update.metadata,
@@ -134,6 +135,7 @@ mod tests {
         interaction
             .update(&TaskUpdate {
                 state: TaskState::InputRequired,
+                progress: false,
                 text: "Which payer?".into(),
                 task_id: format!("task-{conversation}"),
                 context_id: format!("context-{conversation}"),
@@ -176,6 +178,7 @@ mod tests {
         interaction
             .update(&TaskUpdate {
                 state: TaskState::Completed,
+                progress: false,
                 text: "Covered".into(),
                 task_id: "task-first".into(),
                 context_id: "context-first".into(),

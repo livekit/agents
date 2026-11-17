@@ -19,6 +19,10 @@ INTERRUPTION_REASON: Final = "https://livekit.io/a2a/ext/agents/v1/interruptionR
 MERGED_INTO: Final = "https://livekit.io/a2a/ext/agents/v1/mergedInto"
 REASON: Final = "https://livekit.io/a2a/ext/agents/v1/reason"
 VERBATIM: Final = "https://livekit.io/a2a/ext/agents/v1/verbatim"
+PROGRESS: Final = "https://livekit.io/a2a/ext/agents/v1/progress"
+"""A working message explicitly offered for conversational presentation, without requiring
+extension negotiation. Unflagged working text is status, not an announcement request.
+"""
 KIND_DELEGATION: Final = "delegation"
 KIND_CHAT_CTX: Final = "chat_ctx"
 ANSWER_ARTIFACT_NAME: Final = "answer"

@@ -244,11 +244,12 @@ async def test_cancelling_a_delegating_run_preserves_the_remote_task(peer: Peer)
                     progress.append(event.message)
 
     run = asyncio.create_task(check())
-    await until(lambda: progress, "the remote task's working status reached the client")
-    run.cancel()
-
-    with pytest.raises(asyncio.CancelledError):
-        await run
+    try:
+        await until(lambda: progress, "the remote task's flagged progress reached the client")
+    finally:
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run
     assert peer.cancelled == []
     assert len(peer.messages) == 1
 

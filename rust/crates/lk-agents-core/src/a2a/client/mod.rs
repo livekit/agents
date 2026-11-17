@@ -8,7 +8,7 @@ use a2a::{
     AgentCard, Artifact, CancelTaskRequest, JsonRpcId, JsonRpcRequest, JsonRpcResponse, Message,
     Part, PartContent, SendMessageRequest, StreamResponse, SubscribeToTaskRequest,
 };
-use lk_agents_abi::a2a::metadata::{EXTENSION_URI, MERGED_INTO_KEY, REASON_KEY};
+use lk_agents_abi::a2a::metadata::{EXTENSION_URI, MERGED_INTO_KEY, PROGRESS_KEY, REASON_KEY};
 use lk_agents_abi::storage::TaskState;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -423,6 +423,7 @@ fn check_task(task: &TaskRef) -> Result<(), ClientError> {
 pub struct TaskUpdate {
     pub state: TaskState,
     pub text: String,
+    pub progress: bool,
     pub task_id: String,
     pub context_id: String,
     pub metadata: Map<String, Value>,
@@ -595,6 +596,7 @@ impl ReplyState {
         Ok(Some(TaskUpdate {
             state: TaskState::Completed,
             text,
+            progress: false,
             task_id: message.task_id.unwrap_or_default(),
             context_id: message.context_id.unwrap_or_default(),
             metadata: short_metadata(
@@ -637,6 +639,15 @@ impl ReplyState {
         let state = task_state(&status.state).ok_or_else(|| {
             ClientError::invalid_response("the peer reported an unsupported task state")
         })?;
+        let progress = state == TaskState::Working
+            && (metadata.get(PROGRESS_KEY).and_then(Value::as_bool) == Some(true)
+                || status
+                    .message
+                    .as_ref()
+                    .and_then(|message| message.metadata.as_ref())
+                    .and_then(|metadata| metadata.get(PROGRESS_KEY))
+                    .and_then(Value::as_bool)
+                    == Some(true));
         if let Some(message) = &status.message
             && let Some(message_metadata) = &message.metadata
         {
@@ -671,6 +682,7 @@ impl ReplyState {
         Ok(Some(TaskUpdate {
             state,
             text,
+            progress,
             task_id: task.id.clone(),
             context_id: task.context_id.clone(),
             metadata: short_metadata(metadata),

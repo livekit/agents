@@ -25,6 +25,10 @@ pub const MERGED_INTO_KEY: &str = "https://livekit.io/a2a/ext/agents/v1/mergedIn
 pub const REASON_KEY: &str = "https://livekit.io/a2a/ext/agents/v1/reason";
 #[crate::host(constant(name = "VERBATIM"))]
 pub const VERBATIM_KEY: &str = "https://livekit.io/a2a/ext/agents/v1/verbatim";
+/// A working message explicitly offered for conversational presentation, without requiring
+/// extension negotiation. Unflagged working text is status, not an announcement request.
+#[crate::host(constant(name = "PROGRESS", path = "livekit.agents.a2a"))]
+pub const PROGRESS_KEY: &str = "https://livekit.io/a2a/ext/agents/v1/progress";
 #[crate::host(constant)]
 pub const KIND_DELEGATION: &str = "delegation";
 #[crate::host(constant)]
