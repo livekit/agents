@@ -1,5 +1,5 @@
 from . import io, run_result
-from .agent import Agent, AgentTask, ModelSettings
+from .agent import Agent, AgentTask, AgentTaskCancelledError, ModelSettings
 from .agent_session import (
     AgentSession,
     ExpressiveOptions,
@@ -60,6 +60,7 @@ __all__ = [
     "Agent",
     "ModelSettings",
     "AgentTask",
+    "AgentTaskCancelledError",
     "SpeechHandle",
     "RunContext",
     "UserInputTranscribedEvent",
