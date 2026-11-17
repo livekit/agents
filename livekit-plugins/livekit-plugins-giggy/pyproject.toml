@@ -9,6 +9,7 @@ description = "Giggy text-to-speech and speech-to-text plugin for LiveKit Agents
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["voice", "ai", "realtime", "audio", "livekit", "giggy", "tts", "stt"]
 classifiers = [
     "Intended Audience :: Developers",
@@ -19,11 +20,11 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents>=1.8.11", "livekit-plugins-silero>=1.8.11", "aiohttp>=3.10,<4"]
+dependencies = ["livekit-agents>=1.8.12", "aiohttp>=3.10,<4"]
 
 [project.urls]
-Documentation = "https://giggy.ai/docs/speech-api"
-Website = "https://giggy.ai"
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
 Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
@@ -33,7 +34,7 @@ path = "livekit/plugins/giggy/version.py"
 packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/livekit", "/tests", "/README.md"]
+include = ["/livekit"]
 
 [tool.uv]
 exclude-newer = "7 days"

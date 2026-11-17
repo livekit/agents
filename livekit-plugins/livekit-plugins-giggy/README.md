@@ -2,7 +2,7 @@
 
 Support for [Giggy](https://giggy.ai/)'s text-to-speech and speech-to-text in LiveKit Agents.
 
-More information is available in the [Giggy speech API docs](https://giggy.ai/docs/speech-api).
+LiveKit docs: [speech-to-text](https://docs.livekit.io/agents/models/stt/giggy/) and [text-to-speech](https://docs.livekit.io/agents/models/tts/giggy/) (live with the next release).
 
 ## Installation
 
@@ -30,13 +30,5 @@ session = AgentSession(
 ```
 
 - `giggy.TTS` synthesizes each piece of text and streams back 24 kHz mono PCM audio. `speed` ranges from 0.25 to 4.
-- `giggy.STT` streams live audio over a WebSocket and returns interim and final transcripts. It uses Silero VAD to detect the end of each utterance; pass `vad=` to use a different LiveKit VAD.
+- `giggy.STT` streams live audio over a WebSocket and returns interim and final transcripts. Giggy detects the end of each utterance on the server.
 - `language` defaults to automatic detection and accepts a language name or BCP-47 code, such as `"en-US"`.
-
-## Tests
-
-The offline tests don't need Giggy credentials:
-
-```bash
-uv run --package livekit-plugins-giggy pytest -q livekit-plugins/livekit-plugins-giggy/tests/
-```

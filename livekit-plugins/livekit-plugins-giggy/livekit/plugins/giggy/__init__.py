@@ -1,4 +1,4 @@
-"""Giggy text-to-speech and utterance speech recognition for LiveKit Agents."""
+"""Giggy text-to-speech and speech-to-text for LiveKit Agents."""
 
 from livekit.agents import Plugin
 
