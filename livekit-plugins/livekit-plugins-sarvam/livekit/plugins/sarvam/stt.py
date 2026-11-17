@@ -996,7 +996,8 @@ class SpeechStream(stt.SpeechStream):
         self._eos_fallback_timeout = EOS_FALLBACK_TIMEOUT
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
-        # set once the open utterance has its final transcript or END_OF_SPEECH
+        # set when a transcript (or an empty one) arrives; END_OF_SPEECH doesn't count, since
+        # Sarvam answers a flush with END_SPEECH first and the final just after
         self._utterance_resolved = asyncio.Event()
         # samples short of a full chunk; kept on the stream so a reconnect doesn't drop them
         self._audio_buffer: list[Any] = []
@@ -1143,7 +1144,6 @@ class SpeechStream(stt.SpeechStream):
         )
         self._eos_emitted_for_utterance = True
         self._pending_eos = False
-        self._utterance_resolved.set()
         if is_given(self._pending_keyterms):
             self._reconnect_with_keyterms(self._pending_keyterms)
 

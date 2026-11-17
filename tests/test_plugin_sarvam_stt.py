@@ -749,6 +749,33 @@ async def test_reconnect_after_end_speech_waits_for_the_final(
 
 
 @pytest.mark.virtual_time
+async def test_reconnect_waits_past_end_speech_for_the_flushed_final(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """END_SPEECH answering the flush, after an earlier final, doesn't end the wait."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    await stream._handle_transcript_data({"data": {"transcript": "पहला", "language_code": "hi-IN"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    old = session.sockets[0]
+    await _wait_until(lambda: {"type": "flush"} in old.sent)
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+    await asyncio.sleep(0.05)
+    assert not old.closed  # the flushed final is still to come
+    await stream._handle_transcript_data({"data": {"transcript": "दूसरा", "language_code": "hi-IN"}})
+
+    await _wait_until(lambda: len(session.sockets) == 2)
+    events = await _next_events(stream, 6)
+    texts = [e.alternatives[0].text for e in events if e.alternatives]
+    assert texts == ["पहला", "दूसरा"]
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
 async def test_reconnect_settles_on_an_empty_final(monkeypatch: pytest.MonkeyPatch) -> None:
     session, stt = _reconnect_stt(monkeypatch)
     stream = stt.stream()
