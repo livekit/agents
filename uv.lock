@@ -71,6 +71,7 @@ members = [
     "livekit-plugins-liveavatar",
     "livekit-plugins-lmnt",
     "livekit-plugins-lokutor",
+    "livekit-plugins-marimba",
     "livekit-plugins-meta",
     "livekit-plugins-microsoft-ai",
     "livekit-plugins-minimal",
@@ -2282,6 +2283,9 @@ lmnt = [
 lokutor = [
     { name = "livekit-plugins-lokutor" },
 ]
+marimba = [
+    { name = "livekit-plugins-marimba" },
+]
 mcp = [
     { name = "mcp" },
 ]
@@ -2466,6 +2470,7 @@ requires-dist = [
     { name = "livekit-plugins-liveavatar", marker = "extra == 'liveavatar'", editable = "livekit-plugins/livekit-plugins-liveavatar" },
     { name = "livekit-plugins-lmnt", marker = "extra == 'lmnt'", editable = "livekit-plugins/livekit-plugins-lmnt" },
     { name = "livekit-plugins-lokutor", marker = "extra == 'lokutor'", editable = "livekit-plugins/livekit-plugins-lokutor" },
+    { name = "livekit-plugins-marimba", marker = "extra == 'marimba'", editable = "livekit-plugins/livekit-plugins-marimba" },
     { name = "livekit-plugins-meta", marker = "extra == 'meta'", editable = "livekit-plugins/livekit-plugins-meta" },
     { name = "livekit-plugins-microsoft-ai", marker = "extra == 'microsoft-ai'", editable = "livekit-plugins/livekit-plugins-microsoft-ai" },
     { name = "livekit-plugins-minimax-ai", marker = "extra == 'minimax'", editable = "livekit-plugins/livekit-plugins-minimax" },
@@ -2530,7 +2535,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "marimba", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
 
 [[package]]
 name = "livekit-api"
@@ -3443,6 +3448,20 @@ dependencies = [
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
+name = "livekit-plugins-marimba"
+source = { editable = "livekit-plugins/livekit-plugins-marimba" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "marimba-audio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "marimba-audio", specifier = ">=0.1.2" },
+]
+
+[[package]]
 name = "livekit-plugins-meta"
 source = { editable = "livekit-plugins/livekit-plugins-meta" }
 dependencies = [
@@ -4152,6 +4171,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5a/09/e07c4b5579a79f4b16f8d4f29f6c54514ac787c4ad506b8c4f28a0e6b0bf/mako-1.4.3.tar.gz", hash = "sha256:cd6537fe88d5fec315c55c2f8529bc4ce7a9a352ad7db3eeaa6a66e2dd4ec37a", size = 412799, upload-time = "2026-09-22T20:54:31.509Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6d/a0/053d6af3e8f871e0073b4a36732d9e65be77a72e5434c31b94f6af78a6bb/mako-1.4.3-py3-none-any.whl", hash = "sha256:723296007c870bfd6b3f0c3230dba7198096e5269297ebf5e4eff9e7ffa39d4f", size = 80164, upload-time = "2026-09-22T20:54:33.128Z" },
+]
+
+[[package]]
+name = "marimba-audio"
+version = "0.1.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "safetensors" },
+    { name = "soundfile" },
+    { name = "soxr" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f3/bc/1235ca9de5aecc2fadb0164ddcd077ed6c2e7a5a18281f2cfb613c0db735/marimba_audio-0.1.2.tar.gz", hash = "sha256:8ef809a419cf2672394a39a577785a17f285b35695015f3c71ab549812f83ec8", size = 2026178, upload-time = "2026-11-13T16:55:01.102Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f7/c7/d5e52d0ddb65bf2a0c13ffad28074365585725c133328b3b19292ac7e1fd/marimba_audio-0.1.2-py3-none-any.whl", hash = "sha256:23470b1461deb15489636dcfd08d581d1fbb8ae36fe412c15c396f9fde70d509", size = 85709, upload-time = "2026-11-13T16:54:59.591Z" },
 ]
 
 [[package]]
@@ -6351,6 +6386,27 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/71/c3/1b817965ac12dc002d7c9cd7dfffdd7d4fbf9b45763ef2ffe7b86ee94670/soupsieve-2.10.tar.gz", hash = "sha256:49e9380d7d2905463583bafe285e818c7366a9ed7b3aee221c1ac79c905d8bc0", size = 124337, upload-time = "2026-09-24T02:36:35.048Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/66/87/5ed59e1d0290564e2027ed066c52b059892c4637741337fc0967183c8d4d/soupsieve-2.10-py3-none-any.whl", hash = "sha256:8596eb8967d744174820280fa62b4542a2e955bfaccca73ed8a13c6eb8e9b502", size = 38019, upload-time = "2026-09-24T02:36:33.709Z" },
+]
+
+[[package]]
+name = "soxr"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ed/11/27cebce4a108f77afea7c80545115536b45e3f11ebfb914f638fdd9ba847/soxr-1.1.0.tar.gz", hash = "sha256:9f228ae21c78fa9359ca98d8a5e8e91f30639e438e574133dace62c5b5309e44", size = 173067, upload-time = "2026-05-03T00:15:18.214Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/06/8a/f3da7973b5f1b05d2d7e94d5376b881dcbc05297900cae6c3d33d95b209b/soxr-1.1.0-cp312-abi3-macosx_10_14_x86_64.whl", hash = "sha256:e0e09fa633ce2e67df08b298afced4d184f6e753fc330f241022250f1d0d61da", size = 204124, upload-time = "2026-05-03T00:14:54.505Z" },
+    { url = "https://files.pythonhosted.org/packages/03/dc/200013a74641f8774664bbcd2346c695c05c2e300ea792adcb40a293eed0/soxr-1.1.0-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:d6a7ad82b8d5f3fcc04b1d2ca055562b96af571e1d4fa7c6c61d0fb509ac43b4", size = 165457, upload-time = "2026-05-03T00:14:56.007Z" },
+    { url = "https://files.pythonhosted.org/packages/88/2b/2e5eba817a762a2ec589ff165b8bc5955b25a0ad140045f7cd8e45410543/soxr-1.1.0-cp312-abi3-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:bf98c0d7b7d5ef5bf072fee8d3020e8b664f2d195933ea7bc5089267c2e22a06", size = 206529, upload-time = "2026-05-03T00:14:57.646Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/f1/0e55195893228609c9a08c3b13b7a83a46c3a992cd00d3304f0f320cfb07/soxr-1.1.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3b033078e86f3c4a658e5697fac8995764fad9e799563616b630136b613167f1", size = 240413, upload-time = "2026-05-03T00:14:59.363Z" },
+    { url = "https://files.pythonhosted.org/packages/b0/4d/621e4150e4815246ad552d215a8a294a90143fedd19ee442cf82d3b3abc8/soxr-1.1.0-cp312-abi3-win_amd64.whl", hash = "sha256:6ae2a174bffea94e8ead857dad85999d3f49f091774dbad5b046c0417d7092f4", size = 174357, upload-time = "2026-05-03T00:15:00.724Z" },
+    { url = "https://files.pythonhosted.org/packages/76/cd/77b74f1e95af0e11e52e9a034421aece7f7b45afd15a909afd41d5a5d102/soxr-1.1.0-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:a941f5aaa0b8abced24318105c1ea22576afcc1138c19f625716ce4e2f76ad64", size = 207990, upload-time = "2026-05-03T00:15:02.1Z" },
+    { url = "https://files.pythonhosted.org/packages/30/86/600cc31f982288167a59972746f117790162012546f995a32b5a55394b16/soxr-1.1.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:feebcba99ac99adb8009d46c8f4c1956b8c167576b0ae8a6fb47502e9a6f78e7", size = 169288, upload-time = "2026-05-03T00:15:03.75Z" },
+    { url = "https://files.pythonhosted.org/packages/39/e4/80cd9aae0645513db1076d4384e8b2d895faf5009218b4a04348012c54fc/soxr-1.1.0-cp314-cp314t-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:52c9ca84e3dc656d83acc424574770e20ea8e0704dc3842d4e27b0fe9d3ba449", size = 211405, upload-time = "2026-05-03T00:15:05.395Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/d6/cc3c80ac9b2289da4cf46c5d53b05e4327e6f5560a25868d06f9e2213af1/soxr-1.1.0-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f4977323ef9c3aa3c2a26ff5fe0191c84b8fd759daf7afb1f25a91a55ad8b730", size = 244617, upload-time = "2026-05-03T00:15:07.134Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/9e/f7af5fae841ffe32ed8440234ea2ad6adecca3bd92b6101076268c429000/soxr-1.1.0-cp314-cp314t-win_amd64.whl", hash = "sha256:e17d4ef9b0185214b2c0935605ae63f827ea423bc74964be44763d68d2b6c21e", size = 187253, upload-time = "2026-05-03T00:15:08.813Z" },
 ]
 
 [[package]]
