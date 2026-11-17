@@ -9,9 +9,12 @@ from openai.types.responses import ResponseTextConfigParam
 from openai.types.shared_params import Reasoning
 
 from livekit.agents import llm
+from livekit.agents._exceptions import APIStatusError
 from livekit.agents.inference._utils import (
     HEADER_INFERENCE_PROVIDER,
+    _resolve_provider,
     create_access_token,
+    create_api_error_from_response,
     get_default_inference_url,
     get_inference_headers,
     resolve_credentials,
@@ -78,6 +81,8 @@ class OpenAIDuplexOptions(TypedDict, total=False):
     responses_options: OpenAIResponsesOptions
     decisions_options: DecisionsOptions
     triggers: list[DecisionsTrigger]
+    delegation_recovery: bool | llm.DelegationDetectionOptions
+    """Delegate a turn the model should have and did not, as in ``GPTLiveModel``."""
 
 
 @dataclass
@@ -95,7 +100,7 @@ class DuplexModel(_GPTLiveModel):
         self,
         model: OpenAIDuplexModels,
         *,
-        provider: str | None = None,
+        provider: NotGivenOr[str | None] = NOT_GIVEN,
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
@@ -112,7 +117,7 @@ class DuplexModel(_GPTLiveModel):
         self,
         model: str,
         *,
-        provider: str | None = None,
+        provider: NotGivenOr[str | None] = NOT_GIVEN,
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
@@ -128,7 +133,7 @@ class DuplexModel(_GPTLiveModel):
         self,
         model: DuplexModels | str,
         *,
-        provider: str | None = None,
+        provider: NotGivenOr[str | None] = NOT_GIVEN,
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
@@ -141,8 +146,9 @@ class DuplexModel(_GPTLiveModel):
         """
         Args:
             model: Provider-prefixed duplex model, for example ``openai/gpt-live-1``.
-            provider: Host that must serve the model, e.g. ``"openai"``. The session is
-                refused if no host in the region matches.
+            provider: Deprecated. Provider pinning will no longer be supported on
+                March 1, 2027. Omit this argument to let LiveKit route requests and
+                use fallback providers.
             voice: Output voice, ``marin`` by default for GPT-Live.
             extra_kwargs: Model-specific options; :class:`OpenAIDuplexOptions` for GPT-Live.
                 Delegated work runs on the default service tier only.
@@ -168,6 +174,7 @@ class DuplexModel(_GPTLiveModel):
             responses_options=responses_options if responses_options is not None else NOT_GIVEN,
             decisions_options=options.get("decisions_options", NOT_GIVEN),
             triggers=options.get("triggers", NOT_GIVEN),
+            delegation_recovery=options.get("delegation_recovery", False),
             api_key="livekit-inference",
             base_url=base_url or get_default_inference_url(),
             http_session=http_session,
@@ -175,7 +182,7 @@ class DuplexModel(_GPTLiveModel):
             conn_options=conn_options,
         )
         self._inference_opts = _InferenceOptions(
-            provider=provider,
+            provider=_resolve_provider(provider=provider),
             api_key=resolved_api_key,
             api_secret=resolved_api_secret,
         )
@@ -198,6 +205,10 @@ class DuplexSession(_GPTLiveSession):
     def __init__(self, duplex_model: DuplexModel) -> None:
         self._inference_model = duplex_model
         super().__init__(duplex_model)
+
+    def _create_ws_response_error(self, error: aiohttp.ClientResponseError) -> APIStatusError:
+        """Preserve gateway status, quota details, request ID, and retry policy on refusal."""
+        return create_api_error_from_response(error)
 
     def _create_ws_url_and_headers(self) -> tuple[str, dict[str, str]]:
         opts = self._inference_model._inference_opts

@@ -62,8 +62,6 @@ jobs:
         run: uv run python -c "import nltk; nltk.download('punkt_tab')"
 
       - name: Run tests
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: make unit-tests
 
   evaluation:

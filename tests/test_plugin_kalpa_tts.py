@@ -12,6 +12,8 @@ from aiohttp import web
 from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError
 from livekit.plugins import kalpa
 
+from .stt_reconnect import wait_until
+
 pytestmark = pytest.mark.unit
 
 CHUNK = base64.b64encode(b"\x01\x00" * 480).decode()  # 20 ms at 24 kHz
@@ -20,7 +22,7 @@ NO_RETRY = APIConnectOptions(max_retry=0, timeout=2.0)
 
 class FakeKalpa:
     """A minimal Kalpa TTS API: the WebSocket answers a flush after `delay` seconds and streams
-    `chunks` audio frames, 20 ms apart."""
+    `chunks` audio frames, 5 ms apart."""
 
     def __init__(
         self,
@@ -98,7 +100,7 @@ class FakeKalpa:
             return
         for _ in range(0 if silent else self.chunks):
             await ws.send_json({"type": "responseAudio", "response_id": "r", "pcm_b64": CHUNK})
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(0.005)
         await ws.send_json({"type": "responseDone", "response_id": "r", "status": "completed"})
 
     async def post(self, request: web.Request) -> web.StreamResponse:
@@ -153,7 +155,10 @@ async def test_replies_share_one_socket() -> None:
 
 
 @pytest.mark.parametrize("ack_cancel", [True, False])
-async def test_barge_in_reuses_socket_after_cancel_ack(ack_cancel: bool) -> None:
+async def test_barge_in_reuses_socket_after_cancel_ack(
+    ack_cancel: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(kalpa.tts, "CANCEL_ACK_TIMEOUT", 0.05)
     fake = FakeKalpa(chunks=100, ack_cancel=ack_cancel)
     async with serve(fake) as tts:
         stream = tts.stream(conn_options=NO_RETRY)
@@ -161,7 +166,7 @@ async def test_barge_in_reuses_socket_after_cancel_ack(ack_cancel: bool) -> None
         stream.end_input()
         await stream.__anext__()
         await stream.aclose()
-        await asyncio.sleep(kalpa.tts.CANCEL_ACK_TIMEOUT + 0.2)
+        await asyncio.gather(*tts._tasks)
         fake.chunks = 3
         assert await _speak(tts, "The next reply.") > 0
     assert {"type": "cancelResponse"} in fake.received
@@ -185,9 +190,9 @@ async def test_barge_in_before_flush_discards_buffered_text() -> None:
     async with serve(fake) as tts:
         stream = tts.stream(conn_options=NO_RETRY)
         stream.push_text("Half a sentence that")
-        await asyncio.sleep(0.1)
+        await wait_until(lambda: len(fake.received) == 2)
         await stream.aclose()
-        await asyncio.sleep(0.2)
+        await asyncio.gather(*tts._tasks)
         assert await _speak(tts, "The next reply.") > 0
     # text reaches the API as it arrives, so audio can start before the reply ends
     assert {"type": "sendText", "text": "Half a sentence that"} in fake.received
@@ -196,18 +201,25 @@ async def test_barge_in_before_flush_discards_buffered_text() -> None:
 
 
 async def test_timeout_counts_from_the_flush() -> None:
-    fake = FakeKalpa(delay=0.5)
+    fake = FakeKalpa(delay=0.1)
+    conn_options = APIConnectOptions(max_retry=0, timeout=0.2)
     async with serve(fake) as tts:
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        stream = tts.stream(conn_options=conn_options)
         stream.push_text("A reply from a slow LLM.")
-        await asyncio.sleep(0.8)  # a pause before the flush does not count
+        await asyncio.sleep(0.15)  # a pause before the flush does not count
         stream.end_input()
         async with stream:
             assert len([ev async for ev in stream]) > 0
 
-        fake.delay = 3.0  # the API goes silent after the flush
-        with pytest.raises(APITimeoutError):
-            await asyncio.wait_for(_speak(tts, "Hello there."), 2.5)
+        fake.delay = 10.0  # the API goes silent after the flush
+        stream = tts.stream(conn_options=conn_options)
+        stream.push_text("Hello there.")
+        stream.end_input()
+        async with stream:
+            with pytest.raises(APITimeoutError):
+                async with asyncio.timeout(5):
+                    async for _ in stream:
+                        pass
 
 
 @pytest.mark.parametrize(
@@ -229,7 +241,9 @@ async def test_failed_response_retries_on_the_same_socket() -> None:
     error = {"type": "overloaded", "message": "Busy."}
     fake = FakeKalpa(error={"type": "error", "fatal": False, "error": error})
     async with serve(fake) as tts:
-        stream = tts.stream(conn_options=APIConnectOptions(max_retry=1, timeout=2.0))
+        stream = tts.stream(
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0, timeout=2.0)
+        )
         stream.push_text("Hello there.")
         stream.end_input()
         async with stream:
@@ -243,7 +257,7 @@ async def test_refused_text_cancels_the_reply_and_keeps_the_socket() -> None:
     async with serve(fake) as tts:
         with pytest.raises(APIStatusError) as exc:
             await _speak(tts, "A reply longer than the API accepts.")
-        await asyncio.sleep(0.2)
+        await asyncio.gather(*tts._tasks)
         assert await _speak(tts, "Hello there.") > 0
     assert (exc.value.status_code, exc.value.retryable) == (400, False)
     assert {"type": "cancelResponse"} in fake.received
