@@ -332,8 +332,9 @@ pub enum GenerationStep {
         request: u64,
     },
     ChatCtxUpdated {
-        /// Accepted private context revisions, independently of human history membership.
-        items: Vec<lk_agents_abi::ChatItem>,
+        /// Accepted private context and its actual observed database baseline. A conflicting
+        /// foreign edit wins until this owner has read it, even if the local edit came later.
+        history: lk_agents_abi::storage::voice::VoiceHistory,
     },
     TtsRequested {
         speech: SpeechId,

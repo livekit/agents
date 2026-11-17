@@ -20,8 +20,8 @@ impl Rule for StoragePreservesItemPayloads {
     const CONTRACT: Contract = Contract {
         id: "storage_preserves_item_payloads",
         guarantee: "A successfully settled conversation preserves accepted item payloads through its save request, including interrupted assistant prefixes and flags. Reloads replace the expected database view; later unsaved revisions are not treated as durable.",
-        examples: &[an_explicit_private_edit_revises_a_stored_item, a_later_foreign_edit_supersedes_an_earlier_private_edit, a_foreign_write_does_not_save_unacknowledged_local_edits, an_unrelated_foreign_append_keeps_a_new_local_revision, a_late_host_callback_keeps_the_snapshot_causal_order, a_later_accepted_revision_can_already_be_saved, a_queued_snapshot_does_not_include_later_input, a_delayed_reload_cannot_undo_foreign_compaction, a_reload_does_not_accept_private_model_context, cut_saved, unsaved_revision, foreign_reload, unseen_foreign_item_kept],
-        counterexamples: &[an_explicit_private_edit_cannot_be_lost, a_private_edit_cannot_replace_a_later_foreign_edit, a_foreign_write_still_protects_its_own_addition, an_older_unsaved_local_edit_cannot_replace_a_foreign_edit, an_unrelated_foreign_append_cannot_excuse_losing_a_local_revision, a_late_host_callback_does_not_excuse_the_old_payload, a_queued_snapshot_still_protects_its_captured_input, a_delayed_reload_cannot_hide_a_lost_foreign_summary, generated_tail_saved, interruption_flag_lost, accepted_item_lost, unseen_foreign_item_lost],
+        examples: &[an_unread_foreign_edit_survives_a_stale_private_edit, an_unread_foreign_edit_survives_a_stale_public_edit, an_unchanged_snapshot_does_not_supersede_a_foreign_edit, a_changed_snapshot_can_supersede_a_foreign_edit, an_explicit_private_edit_revises_a_stored_item, a_later_foreign_edit_supersedes_an_earlier_private_edit, a_foreign_write_does_not_save_unacknowledged_local_edits, an_unrelated_foreign_append_keeps_a_new_local_revision, a_late_host_callback_keeps_the_snapshot_causal_order, a_later_accepted_revision_can_already_be_saved, a_queued_snapshot_does_not_include_later_input, a_delayed_reload_cannot_undo_foreign_compaction, a_reload_does_not_accept_private_model_context, cut_saved, unsaved_revision, foreign_reload, unseen_foreign_item_kept],
+        counterexamples: &[a_stale_private_edit_cannot_erase_an_unread_foreign_edit, a_stale_public_edit_cannot_erase_an_unread_foreign_edit, an_unchanged_snapshot_cannot_excuse_losing_a_foreign_edit, a_changed_snapshot_cannot_excuse_losing_the_new_revision, an_explicit_private_edit_cannot_be_lost, a_private_edit_cannot_replace_a_later_foreign_edit, a_foreign_write_still_protects_its_own_addition, an_older_unsaved_local_edit_cannot_replace_a_foreign_edit, an_unrelated_foreign_append_cannot_excuse_losing_a_local_revision, a_late_host_callback_does_not_excuse_the_old_payload, a_queued_snapshot_still_protects_its_captured_input, a_delayed_reload_cannot_hide_a_lost_foreign_summary, generated_tail_saved, interruption_flag_lost, accepted_item_lost, unseen_foreign_item_lost],
         probe: None,
     };
 
@@ -29,15 +29,23 @@ impl Rule for StoragePreservesItemPayloads {
         let host = r.host_view();
         let through = durable_through(r);
         let events = history_events(r);
-        let context_edits: Vec<_> = r
+        let contexts: Vec<_> = r
             .internal_view()
             .steps()
             .iter()
             .filter_map(|(at, step)| match step {
-                Step::Generation(GenerationStep::ChatCtxUpdated { items }) => Some((*at, items)),
+                Step::Generation(GenerationStep::ChatCtxUpdated { history }) => Some((*at, history)),
                 _ => None,
             })
-            .flat_map(|(at, items)| items.iter().map(move |item| (at, item)))
+            .collect();
+        // An explicit context update publishes its resulting history next. Associate that
+        // snapshot with the actual baseline captured at acceptance, including in authored cases.
+        let context_snapshots: BTreeMap<_, _> = contexts.iter().filter_map(|(at, history)| {
+            let (published, event) = events.iter().find(|(published, _)| published > at)?;
+            matches!(event, SessionEvent::HistoryReloaded { .. }).then_some((*published, *history))
+        }).collect();
+        let context_edits: Vec<_> = contexts.into_iter()
+            .flat_map(|(at, history)| history.items.iter().map(move |item| (at, item, &history.stored)))
             .collect();
         // A reload alone does not establish acceptance. Public acceptance or an observed
         // foreign commit brings an identity into this durability contract; subsequent
@@ -56,6 +64,7 @@ impl Rule for StoragePreservesItemPayloads {
             }
         }
         let mut expected = BTreeMap::new();
+        let mut observed_history = BTreeMap::<&str, &ChatItem>::new();
         let mut retired = std::collections::BTreeSet::new();
         let mut foreign_current = std::collections::BTreeSet::new();
         let mut changes = BTreeMap::new();
@@ -96,15 +105,28 @@ impl Rule for StoragePreservesItemPayloads {
                 SessionEvent::HistoryReloaded { items } => {
                     // An older read may omit a row the external writer just added. Keep
                     // that authoritative row until a later save or foreign baseline changes it.
-                    expected.retain(|id, _| foreign_current.contains(id) && !items.iter().any(|item| item.id() == *id));
+                    expected.retain(|id, _| foreign_current.contains(id) || items.iter().any(|item| item.id() == *id));
                     for item in items.iter().filter(|item| accepted_ids.contains(item.id()) && !retired.contains(item.id())) {
-                        expected.insert(item.id(), (at, item));
+                        // Publishing another row or position also copies unchanged members.
+                        // That copy is not a fresh edit superseding an unseen foreign write.
+                        let unobserved_conflict = foreign_current.contains(item.id())
+                            && context_snapshots.get(&at).is_some_and(|history| {
+                                expected.get(item.id()).is_some_and(|(_, held)| {
+                                    !history.stored.iter().any(|read| read.id() == item.id() && payload(read) == payload(held))
+                                })
+                            });
+                        if !unobserved_conflict && observed_history.get(item.id()).is_none_or(|before| payload(before) != payload(item)) {
+                            expected.insert(item.id(), (at, item));
+                            foreign_current.remove(item.id());
+                        }
                     }
+                    observed_history = items.iter().map(|item| (item.id(), item)).collect();
                 }
                 SessionEvent::ConversationItemAdded { item, visibility, .. } if visibility.history() => {
                     retired.remove(item.id());
                     foreign_current.remove(item.id());
                     expected.insert(item.id(), (at, item.as_ref()));
+                    observed_history.insert(item.id(), item.as_ref());
                 }
                 _ => {}
             }
@@ -112,18 +134,24 @@ impl Rule for StoragePreservesItemPayloads {
         // An explicit private-context edit can revise a previously stored identity without
         // publishing it as human dialogue. Read the native acceptance, never write arguments;
         // a later observed foreign/public revision still wins by causal order.
-        for (at, item) in context_edits.iter().copied() {
-            if through.is_some_and(|through| at <= through)
-                && let Some((accepted, held)) = expected.get_mut(item.id())
-                && at > *accepted
+        let mut later = BTreeMap::<_, Vec<_>>::new();
+        for (at, item, stored) in context_edits {
+            let Some((accepted, held)) = expected.get_mut(item.id()) else { continue };
+            if at <= *accepted {
+                continue;
+            }
+            // Global test order is not the owner's read order. An edit based on an older
+            // snapshot cannot overwrite a conflicting foreign revision it has not observed.
+            if foreign_current.contains(item.id())
+                && !stored.iter().any(|read| read.id() == item.id() && payload(read) == payload(held))
             {
+                continue;
+            }
+            foreign_current.remove(item.id());
+            if through.is_some_and(|through| at <= through) {
                 *accepted = at;
                 *held = item;
-            }
-        }
-        let mut later = BTreeMap::<_, Vec<_>>::new();
-        for (at, item) in context_edits {
-            if through.is_none_or(|through| at > through) {
+            } else {
                 later.entry(item.id()).or_default().push((at, item));
             }
         }
@@ -466,7 +494,12 @@ fn a_late_host_callback_does_not_excuse_the_old_payload() -> Recording {
 fn edited_private_context() -> Authored {
     Authored::new()
         .storage(StorageStep::ForeignCommitted { before: Vec::new(), items: vec![message("stored", false)] })
-        .journal(Step::Generation(GenerationStep::ChatCtxUpdated { items: vec![message("private edit", false)] }))
+        .journal(Step::Generation(GenerationStep::ChatCtxUpdated {
+            history: lk_agents_abi::storage::voice::VoiceHistory {
+                items: vec![message("private edit", false)],
+                stored: vec![message("stored", false)], revision: (1, 1),
+            },
+        }))
         // Replacing the public history does not expose the private edit as human dialogue.
         .session(SessionEvent::HistoryReloaded { items: Vec::new() })
 }
@@ -495,4 +528,74 @@ fn a_later_foreign_edit_supersedes_an_earlier_private_edit() -> Recording {
 fn a_private_edit_cannot_replace_a_later_foreign_edit() -> Recording {
     settled(later_foreign_edit())
         .storage(StorageStep::Saved { items: vec![message("private edit", false)] }).done()
+}
+
+fn snapshot_after_a_foreign_edit(changed: bool) -> Authored {
+    let before = message("original", false);
+    Authored::new()
+        .session(accepted(before.clone()))
+        .storage(StorageStep::ForeignCommitted {
+            before: vec![before.clone()], items: vec![message("foreign edit", false)],
+        })
+        .session(SessionEvent::HistoryReloaded {
+            items: vec![if changed { message("later local edit", true) } else { before }],
+        })
+}
+
+fn an_unchanged_snapshot_does_not_supersede_a_foreign_edit() -> Recording {
+    settled(snapshot_after_a_foreign_edit(false))
+        .storage(StorageStep::Saved { items: vec![message("foreign edit", false)] }).done()
+}
+
+fn an_unchanged_snapshot_cannot_excuse_losing_a_foreign_edit() -> Recording {
+    settled(snapshot_after_a_foreign_edit(false))
+        .storage(StorageStep::Saved { items: vec![message("original", false)] }).done()
+}
+
+fn a_changed_snapshot_can_supersede_a_foreign_edit() -> Recording {
+    settled(snapshot_after_a_foreign_edit(true))
+        .storage(StorageStep::Saved { items: vec![message("later local edit", true)] }).done()
+}
+
+fn a_changed_snapshot_cannot_excuse_losing_the_new_revision() -> Recording {
+    settled(snapshot_after_a_foreign_edit(true))
+        .storage(StorageStep::Saved { items: vec![message("foreign edit", false)] }).done()
+}
+
+fn an_edit_based_on_an_older_read(public: bool) -> Authored {
+    let original = message("original", false);
+    let edited = message("local edit against an older read", false);
+    let mut story = Authored::new().storage(StorageStep::ForeignCommitted {
+        before: Vec::new(), items: vec![original.clone()],
+    });
+    if public {
+        story = story.session(accepted(original.clone()));
+    }
+    story.storage(StorageStep::ForeignCommitted {
+        before: vec![original.clone()], items: vec![message("unread foreign edit", false)],
+    }).journal(Step::Generation(GenerationStep::ChatCtxUpdated {
+        history: lk_agents_abi::storage::voice::VoiceHistory {
+            items: vec![edited.clone()], stored: vec![original], revision: (1, 1),
+        },
+    })).session(SessionEvent::HistoryReloaded { items: if public { vec![edited] } else { Vec::new() } })
+}
+
+fn an_unread_foreign_edit_survives_a_stale_private_edit() -> Recording {
+    settled(an_edit_based_on_an_older_read(false))
+        .storage(StorageStep::Saved { items: vec![message("unread foreign edit", false)] }).done()
+}
+
+fn an_unread_foreign_edit_survives_a_stale_public_edit() -> Recording {
+    settled(an_edit_based_on_an_older_read(true))
+        .storage(StorageStep::Saved { items: vec![message("unread foreign edit", false)] }).done()
+}
+
+fn a_stale_private_edit_cannot_erase_an_unread_foreign_edit() -> Recording {
+    settled(an_edit_based_on_an_older_read(false))
+        .storage(StorageStep::Saved { items: vec![message("local edit against an older read", false)] }).done()
+}
+
+fn a_stale_public_edit_cannot_erase_an_unread_foreign_edit() -> Recording {
+    settled(an_edit_based_on_an_older_read(true))
+        .storage(StorageStep::Saved { items: vec![message("local edit against an older read", false)] }).done()
 }

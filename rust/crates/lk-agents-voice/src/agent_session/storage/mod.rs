@@ -121,7 +121,7 @@ impl StorageTurns {
         Self { enabled, ..Default::default() }
     }
 
-    fn capture(&self, items: Vec<ChatItem>) -> VoiceHistory {
+    pub(crate) fn capture(&self, items: Vec<ChatItem>) -> VoiceHistory {
         VoiceHistory { items, stored: self.stored.clone(), revision: self.revision }
     }
 

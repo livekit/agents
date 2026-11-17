@@ -494,6 +494,14 @@ impl VoiceDriver {
                 // its private items while retaining other agents' and accepted history items.
                 let agent = self.activity.agent.clone();
                 self.session.chat_ctx.update_agent_chat_ctx(items, &agent);
+                if self.journalled {
+                    self.record_trace(GenerationStep::ChatCtxUpdated {
+                        history: self
+                            .session
+                            .storage
+                            .capture(self.session.chat_ctx.agent_chat_ctx().items),
+                    });
+                }
                 self.conversation_changed();
                 self.publish_history();
                 if self.activity.realtime().is_some() {
@@ -501,11 +509,6 @@ impl VoiceDriver {
                     self.rt_send(lk_agents_abi::RealtimeCommand::UpdateChatCtx(
                         lk_agents_abi::UpdateChatCtx { chat_ctx: ctx },
                     ));
-                }
-                if self.journalled {
-                    self.record_trace(GenerationStep::ChatCtxUpdated {
-                        items: self.session.chat_ctx.agent_chat_ctx().items,
-                    });
                 }
             }
         }
