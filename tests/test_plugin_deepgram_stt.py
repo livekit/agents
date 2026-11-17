@@ -765,6 +765,53 @@ async def test_heartbeat_timeout_reconnects_without_spinning():
         await stream.aclose()
 
 
+class _ClosesAfterCloseStreamSocket:
+    """A socket that Deepgram closes once it has been sent CloseStream."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self._close_stream_sent = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        if json.loads(data).get("type") == "CloseStream":
+            self._close_stream_sent.set()
+
+    async def send_bytes(self, data: bytes) -> None:
+        pass
+
+    def exception(self):
+        return None
+
+    async def receive(self):
+        import aiohttp
+
+        await self._close_stream_sent.wait()
+        self.closed = True
+        return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1000, "")
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def test_stream_ends_when_deepgram_closes_after_close_stream():
+    # callers that read the stream to its end to collect every final waited for the
+    # keepalive to wake from its 5s sleep after Deepgram had already closed the socket
+    async def _connect():
+        return _ClosesAfterCloseStreamSocket()
+
+    stream = _v1_stream(connect=_connect)
+    try:
+        stream.end_input()
+
+        async def _drain() -> None:
+            async for _ in stream:
+                pass
+
+        await asyncio.wait_for(_drain(), timeout=1.0)
+    finally:
+        await stream.aclose()
+
+
 @pytest.mark.no_concurrent
 async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
     from livekit.agents import APIConnectOptions
