@@ -1,0 +1,45 @@
+examples/homepage/card-auth/pyproject.toml
+  s_d522e117d394a7::t_bc5d50c06f7eb0 13
+examples/homepage/frontdesk/pyproject.toml
+  s_d522e117d394a7::t_9a2be1f222d8e0 13
+examples/homepage/livekit-expert/pyproject.toml
+  s_d522e117d394a7::t_211e23c52ac7a7 7
+examples/homepage/restaurant-ordering/pyproject.toml
+  s_d522e117d394a7::t_df48d056da1e88 13
+examples/homepage/vehicle-service/pyproject.toml
+  s_d522e117d394a7::t_e3bd7511f928ce 13
+livekit-agents/livekit/agents/llm/realtime_fallback_adapter.py
+  s_d522e117d394a7::t_bbe3e58b3f7182 391-392,397
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_d522e117d394a7::t_cb440e3b4a7cb7 4459,4462,4518,5046,5166
+livekit-agents/livekit/agents/voice/agent_session.py
+  s_d522e117d394a7::t_7654c8388601c0 1620-1622,1684-1686
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_d522e117d394a7::t_2ad876a53b91c4 22,184-186,374-376,433,435
+spec/amd.md
+  s_d522e117d394a7::t_33b331d8183a66 71,187-189,248-251
+tests/test_amd.py
+  s_d522e117d394a7::t_2b6c28f6b0f95c 27,1169,2084-2141,4266-4268
+tests/test_realtime_fallback.py
+  s_d522e117d394a7::t_f8a2e5578f8c6e 34,439-454
+tests/test_telemetry_redaction.py
+  s_d522e117d394a7::t_724a34b9466bab 982-983,991,1016-1017,1023,1049-1051
+uv.lock
+  s_d522e117d394a7::t_2845f82d816b60 2717,2827,2833,2835-2839
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "23b1af52365513df1807223cdafc3b2d7cf67b8c",
+  "prompts": {},
+  "sessions": {
+    "s_d522e117d394a7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ab7b825d-534b-4b3c-ad23-6c61601aa7fe",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
