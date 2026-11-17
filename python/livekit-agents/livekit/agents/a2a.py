@@ -18,11 +18,20 @@ from ._generated.a2a_client import AgentCard
 from ._generated.a2a_door import DoorConfig
 from ._generated.a2a_metadata import RPC_PATH
 from ._generated.a2a_remote import DelegationPartition, RemoteEventInputRequired, RemoteEventOutcome
+from ._generated.api_errors import APIStatusError
 from ._generated.public_a2a import *  # noqa: F403
 from ._generated.storage_options import TurnOptions, TurnOptionsKwargs
 from ._generated.tool_report import ToolOutcomeInputRequired, ToolReport
 from .job import _server_credentials
-from .llm.tool_context import InputRequired, RawFunctionTool, Tool, Toolset, function_tool
+from .llm.tool_context import (
+    InputRequired,
+    RawFunctionTool,
+    Tool,
+    ToolError,
+    Toolset,
+    function_tool,
+)
+from .log import logger
 from .storage import DEFAULT_PARTITION_KEY, Storage, Thread
 from .storage.session import A2ASessionContext, _Handler, _TurnHost
 from .types import APIConnectOptions
@@ -171,6 +180,16 @@ class _RemoteTool(Toolset):
                 agent._conn_options,
                 ctx._session is not None,
             )
+        except APIStatusError as e:
+            if e.status_code != 403 or agent._token is not None or thread is not None:
+                raise
+            # a call without a thread holds no grant the expert can start its work under
+            logger.error(
+                f"{agent._card.name} refused this call because it has no thread: dispatch the "
+                "call with thread_id, or give RemoteAgent a token=",
+                extra={"endpoint": url, "error": str(e)},
+            )
+            raise ToolError(f"{agent._card.name} is not available") from e
         except asyncio.CancelledError:
             # stop in this turn, then wait for the remote task's cancellation and client close
             interaction.cancelled()

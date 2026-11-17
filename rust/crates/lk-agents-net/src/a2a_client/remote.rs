@@ -560,9 +560,18 @@ impl Project {
             return Ok(None);
         }
         let destination = super::checked_url(endpoint).map_err(protocol)?;
-        if project.origin() != destination.origin() {
+        // the worker's own listener serves its endpoints when the server does not route them
+        let own = crate::env::server_setting("LIVEKIT_AGENT_ENDPOINTS_URL")
+            .and_then(|url| url::Url::parse(&url).ok())
+            .is_some_and(|own| own.origin() == destination.origin());
+        let url = if project.origin() == destination.origin() {
+            project.to_string()
+        } else if own {
+            // the listener stands in for the project's origin, for minting and for verifying
+            destination.origin().ascii_serialization()
+        } else {
             return Ok(None);
-        }
-        Ok(Some(Project { url: project.to_string(), api_key, api_secret }))
+        };
+        Ok(Some(Project { url, api_key, api_secret }))
     }
 }
