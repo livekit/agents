@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use futures_util::{SinkExt as _, StreamExt as _};
+use futures_util::{FutureExt as _, SinkExt as _, StreamExt as _};
 pub use livekit_protocol::agent_db::wire;
 use lk_agents_abi::{Clock, Headers, Spawner, Ts};
 use lk_agents_net::signal::{self, Producer};
@@ -12,31 +12,37 @@ use lk_agents_net::transport::TransportError;
 use lk_agents_net::websocket::{Message, RawWebSocket, connect_with_limit};
 use parking_lot::Mutex;
 use prost::Message as _;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use wire as pb;
 
-use super::rows::{decode_batch, statement};
-use crate::StorageError;
+use super::TokenMinter;
+use super::rows::{Results, statement};
 use crate::sql::{BatchResult, Row, Statement, StatementResult};
 use lk_agents_abi::storage::agentdb_error::ErrorCode;
 
 // Wire protocol: `Hello` first, with a token minted for this dial. `Exec` answers one `ExecResult`;
-// `Query` streams `Columns`, `ColumnBatch`* and `Done`, paced by `Credit`; `Batch` applies its
-// statements atomically, one result per statement, then `Done`. Every request carries its caller's
-// deadline: it waits for a socket and for its answer until then. A dropped socket is redialed
-// only while a request waits for it, so the redial lives exactly as long as a caller's deadline;
-// those in flight fail `Disconnected` (outcome unknown). The server ends a socket with a notice on
-// request id 0, as HTTP/2's GOAWAY does: `wrong_shard_server` (the database moved or is draining:
-// redialed at once) or `idle_evicted` (redialed when next needed). The server answered every
-// request it read before its notice, so each one still unanswered applied nothing: like gRPC's
-// transparent retry, it is sent again on the next socket within its deadline, and its caller sees
-// only the answer. A request answered `wrong_shard_server` applied nothing either: it is sent again
-// the same way, while the socket takes no request more and ends, redialed at once, as soon as
-// the requests still in flight on it are answered. A frame the socket fails to send is not sent. Socket-less, the connection is
-// dormant, which no pool takes back. Answers and outgoing frames queue in bounded channels: a full
-// one holds its sender back.
+// `Query` streams `Columns`, `ColumnBatch`* and `Done`, paced by `Credit` past the server's initial
+// window; `Batch` applies its statements atomically, one result per statement, then `Done`. Every
+// request carries its caller's deadline: it waits for a socket and for its answer until then. A
+// dropped socket is redialed only while a request waits for it, so the redial lives exactly as
+// long as a caller's deadline; those in flight fail `Disconnected` (outcome unknown). The server
+// ends a socket with a notice on request id 0, as HTTP/2's GOAWAY does: `wrong_shard_server` (the
+// database moved or is draining: redialed at once) or `idle_evicted` (redialed when next needed).
+// The server answered every request it read before its notice, so each one still unanswered
+// applied nothing: like gRPC's transparent retry, it is sent again on the next socket within its
+// deadline, and its caller sees only the answer. A request answered `wrong_shard_server` applied
+// nothing either: it is sent again the same way, while its socket retires: it takes no request
+// more, a new socket is dialed at once for the next ones, and the retiring one ends once the
+// requests still in flight on it are answered. Any other frame on request id 0 is a protocol error
+// that ends the socket. A frame the socket fails to send is not sent. Socket-less, the connection
+// is dormant, which no pool takes back. The read loop never waits on a caller: each request's
+// answers queue in a channel sized for every answer its window allows, and a request whose
+// answers overrun it is cancelled. Outgoing frames queue for the socket's writer, which sends them
+// in order; a request's caller waits until its own frame is sent, a credit or cancel is queued and
+// forgotten.
 
 type WsRead = futures_util::stream::SplitStream<RawWebSocket>;
+type WsSink = futures_util::stream::SplitSink<RawWebSocket, Message>;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum WsdbError {
@@ -63,6 +69,10 @@ pub enum WsdbError {
     /// again on the next socket, so no caller sees this.
     #[error("agentdb client: the socket drained before answering the request")]
     Drained,
+    /// The server sent the request more answers than its window allows, faster than its caller
+    /// read them: the request was cancelled, and a write's outcome is unknown.
+    #[error("agentdb client: the request's answers overran its window; cancelled")]
+    Overrun,
 }
 
 /// A write's failure, by whether its frame reached the socket writer: once it did, the server
@@ -119,11 +129,14 @@ fn is_notice(code: ErrorCode) -> bool {
 /// A frame for the socket writer, and who learns that the socket took all of it.
 struct Outgoing {
     bytes: Vec<u8>,
-    sent: Option<tokio::sync::oneshot::Sender<()>>,
+    sent: Option<oneshot::Sender<()>>,
 }
 
-/// How long a frame may take to send, and the read deadline past a missed pong, when the server
-/// names no ping timeout.
+/// A socket's writer queue. Unbounded: a request's frame is held by its caller until sent, and a
+/// credit, cancel or ping is one small frame per answer read or per ping interval.
+type Writer = mpsc::UnboundedSender<Outgoing>;
+
+/// The read deadline past a missed pong, when the server names no ping timeout.
 const DEFAULT_PING_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Reconnection, on by default: a node draining or an idle database evicted severs the socket.
@@ -145,19 +158,16 @@ impl Default for Reconnect {
     }
 }
 
-/// Frames queued for the socket writer before a request's send waits.
-const WRITE_QUEUE: usize = 32;
-
 #[derive(Debug, Clone)]
 pub struct Options {
     /// The data-plane endpoint, `ws://host:port/db`.
     pub url: String,
     pub database_id: String,
-    /// The receive buffer, in batches, per streaming query.
+    /// The batches a streaming request may have unread: at least the server's initial window,
+    /// which each batch read renews by one credit.
     pub credits: u32,
-    /// The least time one attempt's WebSocket dial plus `Hello` gets. An attempt gets the longer
-    /// of it and the backoff before the next, so a server slower than this to answer (a cold
-    /// open) is still reached.
+    /// How long one attempt's WebSocket dial plus `Hello` may take, never past the deadline of
+    /// the request it dials for.
     pub dial_timeout: Duration,
     pub reconnect: Reconnect,
 }
@@ -181,9 +191,19 @@ pub struct ExecResult {
     pub tip: i64,
 }
 
+/// What a request's queue receives: the server's answers, then perhaps one ending of the
+/// client's, for which the queue always keeps a slot.
+enum Answer {
+    Frame(pb::ServerMessage),
+    /// Its socket drained before answering it: sent again on the next socket.
+    Drained,
+    /// Its answers overran their window: cancelled.
+    Overrun,
+}
+
 /// A request awaiting its answers, bound to the socket it goes out on.
 struct Pending {
-    answers: mpsc::Sender<pb::ServerMessage>,
+    answers: mpsc::Sender<Answer>,
     /// The generation of its socket; `None` once that socket drained (or none was live when it
     /// registered): nothing it sends there is read, so it goes out again on the next one.
     socket: Option<u64>,
@@ -191,13 +211,14 @@ struct Pending {
 
 struct State {
     pending: HashMap<u32, Pending>,
-    /// The live socket's writer; `None` between a drop or a drain notice and the redial.
-    tx: Option<mpsc::Sender<Outgoing>>,
-    /// The live socket's generation, one per `Hello` admitted.
+    /// Each open socket's writer, by generation: the live one and those retiring.
+    writers: HashMap<u64, Writer>,
+    /// The socket taking new requests; `None` between a drop, a drain or a refusal and the
+    /// redial.
+    live: Option<u64>,
+    /// The last socket's generation, one per `Hello` admitted.
     generation: u64,
     closed: bool,
-    /// The live socket refused a request `wrong_shard_server`: it ends once nothing is in flight.
-    retiring: bool,
     /// Why the connection gave up for good; later calls fail with it.
     fatal: Option<WsdbError>,
     tip: i64,
@@ -210,15 +231,17 @@ struct Inner {
     state: Mutex<State>,
     /// Whether a socket is live, published by the supervisor; ended once it is gone.
     ready: signal::Cell<bool>,
-    /// How many requests wait for a socket: the supervisor redials while any does.
-    waiting: signal::Shared<usize>,
-    /// The generation of the last retiring socket left with nothing in flight: its read ends.
-    settled: signal::Shared<u64>,
-    /// The executor the connection's supervisor, heartbeat and writer run on.
+    /// The deadlines of the requests waiting for a socket: the supervisor redials while any
+    /// does, each attempt bounded by the latest.
+    waiting: signal::Shared<Vec<Ts>>,
+    /// The retiring sockets left with nothing in flight: their reads end.
+    settled: signal::Shared<BTreeSet<u64>>,
+    /// The executor the connection's supervisor, heartbeat, readers and writers run on.
     spawner: Arc<dyn Spawner>,
     /// What its dial bound, heartbeat, redial backoff and read deadline wait on.
     clock: Arc<dyn Clock>,
-    /// The supervisor, heartbeat and socket writers; closing the connection cancels them.
+    /// The supervisor, heartbeat, retiring readers and socket writers; closing the connection
+    /// cancels them.
     tasks: Arc<TaskSet>,
 }
 
@@ -251,48 +274,88 @@ impl Inner {
             }
             st.closed = true;
             st.pending.clear();
-            st.tx = None;
+            st.writers.clear();
+            st.live = None;
         }
         self.tasks.close();
     }
 }
 
-/// A live socket's read half, with what ends it besides the server.
+/// A socket's read half, with what ends it besides the server.
 struct Socket {
+    generation: u64,
     read: WsRead,
-    /// Resolves when the writer stopped: a send failed or timed out.
-    writer_gone: tokio::sync::oneshot::Receiver<()>,
+    /// Resolves when the writer stopped: a send failed.
+    writer_gone: oneshot::Receiver<()>,
+    /// The writer stopped: what the socket already received is still read, then it ends.
+    writer_stopped: bool,
     /// No frame for this long (pongs included) is a dead socket.
     read_deadline: Option<Duration>,
     ping_interval: Duration,
+    /// Dropped with the read half: stops the writer, even mid-send to a dead peer.
+    _reader: oneshot::Sender<()>,
 }
 
 impl Socket {
-    /// An error when the writer stopped, nothing (not even a pong) arrived within the read
-    /// deadline on `clock`, or the socket ended or failed.
+    /// An error when nothing (not even a pong) arrived within the read deadline on `clock`, the
+    /// socket ended or failed, or the writer stopped and nothing received is left to read.
     async fn next_message(&mut self, clock: &dyn Clock) -> Result<Message, WsdbError> {
-        let next = async {
-            match self.read_deadline {
-                Some(d) => lk_agents_abi::timeout(clock, d, self.read.next()).await.ok(),
-                None => Some(self.read.next().await),
+        let Socket { read, writer_gone, writer_stopped, read_deadline, .. } = self;
+        if !*writer_stopped {
+            let next = async {
+                match *read_deadline {
+                    Some(d) => lk_agents_abi::timeout(clock, d, read.next()).await.ok(),
+                    None => Some(read.next().await),
+                }
+            };
+            let next = tokio::select! {
+                biased;
+                next = next => Some(next),
+                _ = writer_gone => None,
+            };
+            match next {
+                Some(None) => return Err(WsdbError::Timeout), // not even a pong in time
+                Some(Some(next)) => return Self::read(next),
+                None => *writer_stopped = true,
             }
-        };
-        let next = tokio::select! {
-            next = next => next,
-            _ = &mut self.writer_gone => return Err(WsdbError::Io("the socket stopped sending".into())),
-        };
+        }
+        match read.next().now_or_never() {
+            Some(next) => Self::read(next),
+            None => Err(WsdbError::Io("the socket stopped sending".into())),
+        }
+    }
+
+    fn read(
+        next: Option<Result<Message, lk_agents_net::websocket::tungstenite::Error>>,
+    ) -> Result<Message, WsdbError> {
         match next {
-            None => Err(WsdbError::Timeout), // not even a pong within the deadline
-            Some(Some(Ok(message))) => Ok(message),
-            Some(None) => Err(WsdbError::Io("socket closed".into())),
-            Some(Some(Err(e))) => Err(WsdbError::Io(e.to_string())),
+            Some(Ok(message)) => Ok(message),
+            None => Err(WsdbError::Io("socket closed".into())),
+            Some(Err(e)) => Err(WsdbError::Io(e.to_string())),
         }
     }
 }
 
-/// The task owning the socket's lifetime and the ready gate. However it ends (a give-up, a
-/// close, a panic, its runtime dropped), it closes the connection, failing every request in
-/// flight, then the gate ends, failing every request waiting on it.
+/// How a socket's read ended.
+enum End {
+    /// The live socket refused a request `wrong_shard_server`: it retires.
+    Retiring,
+    /// A retiring socket has nothing left in flight.
+    Settled,
+    /// The socket died, or the server ended it.
+    Dropped(WsdbError),
+}
+
+/// What one frame read from a socket did.
+enum Routed {
+    Answer,
+    /// A request answered `wrong_shard_server`: its socket retires.
+    Refused,
+}
+
+/// The task owning the live socket and the ready gate. However it ends (a give-up, a close, a
+/// panic, its runtime dropped), it closes the connection, failing every request in flight, then
+/// the gate ends, failing every request waiting on it.
 struct Supervisor {
     conn: Conn,
     ready: Producer<bool>,
@@ -305,22 +368,40 @@ impl Drop for Supervisor {
 }
 
 impl Supervisor {
-    /// Reads the live socket and, once it dies, redials while a request waits for it.
+    /// Reads the live socket and, once it dies or retires, redials: at once for a database that
+    /// moved, else while a request waits for it. A retiring socket finishes its reads meanwhile.
     async fn run(self, mut socket: Socket) {
         let conn = &self.conn;
         loop {
-            let cause = conn.read_loop(&mut socket, &self.ready).await;
+            let end = conn.read_loop(&mut socket, Some(&self.ready)).await;
             if conn.is_closed() {
                 return;
             }
             self.ready.set(false);
-            conn.dropped(&cause);
-            if conn.0.opts.reconnect.disable {
-                return;
-            }
-            // a database that moved or drains is redialed at once; any other drop when needed,
-            // which a request a drain notice left unanswered is, as it registers again
-            let now = cause.notice() == Some(ErrorCode::WRONG_SHARD_SERVER);
+            let (disable, generation) = (conn.0.opts.reconnect.disable, socket.generation);
+            let cause = match end {
+                End::Retiring if disable => return conn.unguarded().finish(socket).await,
+                End::Retiring => {
+                    let retiring = conn.unguarded().finish(socket);
+                    let spawner = &*conn.0.spawner;
+                    // Refused once the connection closed: its requests already failed.
+                    conn.0.tasks.try_spawn(spawner, "agentdb retiring reader", retiring);
+                    None
+                }
+                // only a retiring socket settles
+                End::Settled => Some(WsdbError::Disconnected),
+                End::Dropped(cause) => Some(cause),
+            };
+            let now = match cause {
+                None => true,
+                Some(cause) => {
+                    conn.ended(generation, Some(&cause));
+                    if disable {
+                        return;
+                    }
+                    cause.notice() == Some(ErrorCode::WRONG_SHARD_SERVER)
+                }
+            };
             match conn.redial(now).await {
                 Some(next) => socket = next,
                 None => return,
@@ -330,24 +411,33 @@ impl Supervisor {
     }
 }
 
-/// A request waiting for a socket, counted while it waits: what keeps the redial going.
-struct Waiting<'a>(&'a signal::Shared<usize>);
+/// A request waiting for a socket, its deadline counted while it waits: what keeps the redial
+/// going, and bounds its attempts.
+struct Waiting<'a> {
+    waiting: &'a signal::Shared<Vec<Ts>>,
+    deadline: Ts,
+}
 
 impl<'a> Waiting<'a> {
-    fn new(waiting: &'a signal::Shared<usize>) -> Self {
-        waiting.modify(|n| *n += 1);
-        Self(waiting)
+    fn new(waiting: &'a signal::Shared<Vec<Ts>>, deadline: Ts) -> Self {
+        waiting.modify(|w| w.push(deadline));
+        Self { waiting, deadline }
     }
 }
 
 impl Drop for Waiting<'_> {
     fn drop(&mut self) {
-        self.0.modify(|n| *n -= 1);
+        self.waiting.modify(|w| {
+            if let Some(i) = w.iter().position(|d| *d == self.deadline) {
+                w.swap_remove(i);
+            }
+        });
     }
 }
 
 impl Conn {
-    /// Dials, says `Hello`, and starts the supervisor on `spawner`; every wait reads `clock`.
+    /// Dials, says `Hello`, and starts the supervisor on `spawner`; every wait reads `clock`. The
+    /// attempt is bounded by the caller's deadline, else the default one.
     pub async fn dial(
         opts: Options,
         minter: TokenMinter,
@@ -361,23 +451,23 @@ impl Conn {
             next_id: AtomicU32::new(0),
             state: Mutex::new(State {
                 pending: HashMap::new(),
-                tx: None,
+                writers: HashMap::new(),
+                live: None,
                 generation: 0,
-                retiring: false,
                 closed: false,
                 fatal: None,
                 tip: 0,
             }),
             ready: ready_cell,
-            waiting: signal::Shared::new(0),
-            settled: signal::Shared::new(0),
+            waiting: signal::Shared::new(Vec::new()),
+            settled: signal::Shared::new(BTreeSet::new()),
             spawner,
             clock,
             tasks: Arc::default(),
         });
         let guard = Arc::new(CloseOnDrop(Arc::downgrade(&inner)));
         let conn = Conn(inner, Some(guard));
-        let socket = conn.connect(conn.0.opts.reconnect.min_backoff).await?;
+        let socket = conn.connect(Some(conn.deadline())).await?;
         ready.set(true);
         let ping_interval = socket.ping_interval;
         let supervisor = Supervisor { conn: conn.unguarded(), ready };
@@ -410,17 +500,16 @@ impl Conn {
         crate::deadline::or_default(&*self.0.clock)
     }
 
-    /// Dial, `Hello`, publish the writer, within the longer of the dial timeout and `backoff`.
-    async fn connect(&self, backoff: Duration) -> Result<Socket, WsdbError> {
+    /// Dial, `Hello`, publish the writer, within the dial timeout and by `deadline`, the latest
+    /// deadline of the requests it dials for.
+    async fn connect(&self, deadline: Option<Ts>) -> Result<Socket, WsdbError> {
         let clock = &*self.0.clock;
-        let timeout = self.0.opts.dial_timeout.max(backoff);
-        let deadline = Some(clock.now().saturating_add(timeout));
-        // the dial's own bound, not a caller's deadline: the next attempt may find the database
-        // warm
+        let attempt = clock.now().saturating_add(self.0.opts.dial_timeout);
+        let deadline = Some(deadline.map_or(attempt, |deadline| deadline.min(attempt)));
         let timed_out = |_| {
             WsdbError::Io(format!(
-                "dial {}: no answer within the dial timeout, {timeout:?}",
-                self.0.opts.url
+                "dial {}: no answer within the dial timeout, {:?}, or the request's deadline",
+                self.0.opts.url, self.0.opts.dial_timeout
             ))
         };
         let token = self
@@ -494,158 +583,227 @@ impl Conn {
             0 => DEFAULT_PING_TIMEOUT,
             ms => Duration::from_millis(u64::from(ms)),
         };
-        // the writer owns the sink; a send that does not finish within the ping timeout is a dead
-        // socket
-        let (tx, mut rx) = mpsc::channel::<Outgoing>(WRITE_QUEUE);
-        let (gone, writer_gone) = tokio::sync::oneshot::channel();
-        let writer_clock = self.0.clock.clone();
+        // the writer owns the sink until the read half drops: a peer that stopped reading is
+        // caught by the read deadline, never by timing out a send
+        let (tx, rx) = mpsc::unbounded_channel::<Outgoing>();
+        let (gone, writer_gone) = oneshot::channel();
+        let (reader, reader_gone) = oneshot::channel::<()>();
         // Refused once the connection closed: the sink and `gone` then drop unstarted.
         self.0.tasks.try_spawn(&*self.0.spawner, "agentdb writer", async move {
             // Declared first, so `gone` reports the writer stopped after the sink dropped.
             let _gone = gone;
-            let (mut sink, clock) = (sink, &*writer_clock);
-            // a frame that fails is not sent: its `sent` drops unanswered, and so does every one
-            // queued behind it
-            while let Some(Outgoing { bytes, sent }) = rx.recv().await {
-                let send =
-                    lk_agents_abi::timeout(clock, ping_timeout, sink.send(Message::binary(bytes)));
-                if !matches!(send.await, Ok(Ok(()))) {
-                    return;
-                }
-                if let Some(sent) = sent
-                    && sent.send(()).is_err()
-                {
-                    log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb frame sent for a request dropped meanwhile");
-                }
-            }
-            // The peer's close frame is a courtesy: the socket drops either way.
-            if !matches!(lk_agents_abi::timeout(clock, ping_timeout, sink.close()).await, Ok(Ok(()))) {
-                log::debug!(target: lk_agents_abi::LOG_TARGET, "agentdb socket close not acknowledged");
+            tokio::select! {
+                biased;
+                _ = reader_gone => {}
+                () = Self::send_frames(sink, rx) => {}
             }
         });
-        {
+        let generation = {
             let mut st = self.0.state.lock();
             st.tip = st.tip.max(ok.tip); // a reconnect can only observe a later tip
-            st.tx = Some(tx);
             st.generation += 1;
-            st.retiring = false;
-        }
+            let generation = st.generation;
+            st.live = Some(generation);
+            st.writers.insert(generation, tx);
+            generation
+        };
         let read_deadline = (!ping_interval.is_zero())
             .then(|| ping_interval + ping_timeout + Duration::from_secs(1));
-        Ok(Socket { read, writer_gone, read_deadline, ping_interval })
+        Ok(Socket {
+            generation,
+            read,
+            writer_gone,
+            writer_stopped: false,
+            read_deadline,
+            ping_interval,
+            _reader: reader,
+        })
     }
 
-    async fn read_loop(&self, socket: &mut Socket, ready: &Producer<bool>) -> WsdbError {
-        let generation = self.0.state.lock().generation;
+    /// Sends the queued frames in order. A frame that fails is not sent: its `sent` drops
+    /// unanswered, and so does every one queued behind it.
+    async fn send_frames(mut sink: WsSink, mut rx: mpsc::UnboundedReceiver<Outgoing>) {
+        while let Some(Outgoing { bytes, sent }) = rx.recv().await {
+            if sink.send(Message::binary(bytes)).await.is_err() {
+                return;
+            }
+            if let Some(sent) = sent
+                && sent.send(()).is_err()
+            {
+                log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb frame sent for a request dropped meanwhile");
+            }
+        }
+        // The peer's close frame is a courtesy: the socket drops either way.
+        if sink.close().await.is_err() {
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "agentdb socket close not acknowledged");
+        }
+    }
+
+    /// Reads a socket until it ends: the live one (`ready` given) until it dies or retires, a
+    /// retiring one until nothing is in flight on it.
+    async fn read_loop(&self, socket: &mut Socket, ready: Option<&Producer<bool>>) -> End {
+        let (generation, clock) = (socket.generation, &*self.0.clock);
         loop {
-            let message = tokio::select! {
-                biased;
-                message = socket.next_message(&*self.0.clock) => message,
-                () = self.0.settled.wait_until(|g| (*g == generation).then_some(())) => {
-                    let message = "the socket retired once its requests were answered".into();
-                    return WsdbError::Server { code: ErrorCode::WRONG_SHARD_SERVER, message };
-                }
+            let message = match ready {
+                Some(_) => socket.next_message(clock).await,
+                None => tokio::select! {
+                    biased;
+                    message = socket.next_message(clock) => message,
+                    () = self.0.settled.wait_until(|s| s.remove(&generation).then_some(())) => {
+                        return End::Settled;
+                    }
+                },
             };
             let routed = match message {
-                Ok(Message::Binary(bytes)) => self.route_response(bytes.as_ref(), ready).await,
+                Ok(Message::Binary(bytes)) => {
+                    self.route_response(bytes.as_ref(), generation, ready)
+                }
                 Ok(Message::Close(_)) => Err(WsdbError::Io("socket closed".into())),
-                Ok(_) => Ok(()),
+                Ok(_) => Ok(Routed::Answer),
                 Err(error) => Err(error),
             };
-            if let Err(error) = routed {
-                return error;
+            match routed {
+                Ok(Routed::Refused) if ready.is_some() => return End::Retiring,
+                Ok(_) => {}
+                Err(error) => return End::Dropped(error),
             }
         }
     }
 
-    /// Hands a response to the request awaiting it, waiting while its answers are queued full;
-    /// a pong only proves the socket is alive. The server's drain notice ends the socket; a
-    /// request answered `wrong_shard_server` alone is drained, and the socket retires.
-    async fn route_response(&self, bytes: &[u8], ready: &Producer<bool>) -> Result<(), WsdbError> {
+    /// Reads a retiring socket until nothing is in flight on it, then ends it.
+    async fn finish(self, mut socket: Socket) {
+        let cause = match self.read_loop(&mut socket, None).await {
+            End::Dropped(cause) => Some(cause),
+            End::Retiring | End::Settled => None,
+        };
+        self.ended(socket.generation, cause.as_ref());
+    }
+
+    /// Hands a response to the request awaiting it on this socket, never waiting on its caller;
+    /// a pong only proves the socket is alive. The server's drain notice ends the socket, as any
+    /// other frame on request id 0 does; a request answered `wrong_shard_server` alone is drained,
+    /// and the socket retires. The live socket's gate closes first, so a request registering
+    /// meanwhile waits for the next socket.
+    fn route_response(
+        &self,
+        bytes: &[u8],
+        generation: u64,
+        ready: Option<&Producer<bool>>,
+    ) -> Result<Routed, WsdbError> {
         let resp =
             pb::ServerMessage::decode(bytes).map_err(|e| WsdbError::Protocol(e.to_string()))?;
-        match &resp.message {
-            Some(pb::server_message::Message::Pong(_)) => return Ok(()),
-            // the gate closes first, so a request registering meanwhile waits for the next socket
-            Some(pb::server_message::Message::Error(e))
-                if resp.request_id == 0 && is_notice(ErrorCode(e.code)) =>
-            {
-                ready.set(false);
-                self.drain(None);
-                return Err(WsdbError::server(e.clone()));
+        match (&resp.message, resp.request_id) {
+            (Some(pb::server_message::Message::Pong(_)), _) => Ok(Routed::Answer),
+            (Some(pb::server_message::Message::Error(e)), 0) if is_notice(ErrorCode(e.code)) => {
+                if let Some(ready) = ready {
+                    ready.set(false);
+                }
+                self.drain(generation, None);
+                Err(WsdbError::server(e.clone()))
             }
-            Some(pb::server_message::Message::Error(e))
+            (message, 0) => {
+                Err(WsdbError::Protocol(format!("unexpected frame on request id 0: {message:?}")))
+            }
+            (Some(pb::server_message::Message::Error(e)), id)
                 if ErrorCode(e.code) == ErrorCode::WRONG_SHARD_SERVER =>
             {
-                ready.set(false);
-                self.drain(Some(resp.request_id));
-                return Ok(());
+                if let Some(ready) = ready {
+                    ready.set(false);
+                }
+                self.drain(generation, Some(id));
+                Ok(Routed::Refused)
             }
-            _ => {}
+            _ => {
+                self.deliver(generation, resp);
+                Ok(Routed::Answer)
+            }
         }
-        let ch = self.0.state.lock().pending.get(&resp.request_id).map(|p| p.answers.clone());
-        if let Some(ch) = ch
-            && ch.send(resp).await.is_err()
-        {
-            log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb answer for a request dropped meanwhile");
-        }
-        Ok(())
     }
 
-    /// The server's drain notice, read: it answered every request it read, so each one still
-    /// unanswered on the live socket applied nothing, and the socket takes no request more. Or
-    /// `only` one request, answered `wrong_shard_server`, applied nothing, and the socket retires.
-    /// Each of those is handed the drain on request id 0, which sends it again on the next
-    /// socket. A request without its last answer has none queued, so each has room for it; one
-    /// whose queue is full broke that promise and ends `Disconnected` after its answers.
-    fn drain(&self, only: Option<u32>) {
+    /// Queues an answer for its request, keeping the slot for its ending. A request whose answers
+    /// overran their window is cancelled: it ends `Overrun`, and the server is told to stop.
+    fn deliver(&self, generation: u64, resp: pb::ServerMessage) {
+        let id = resp.request_id;
         let mut st = self.0.state.lock();
-        match only {
-            Some(_) => st.retiring = true,
-            None => st.tx = None,
+        let Some(pending) = st.pending.get(&id).filter(|p| p.socket == Some(generation)) else {
+            log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb answer for a request dropped meanwhile");
+            return;
+        };
+        if pending.answers.capacity() > 1 {
+            if pending.answers.try_send(Answer::Frame(resp)).is_err() {
+                log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb answer for a request dropped meanwhile");
+            }
+            return;
         }
-        let live = Some(st.generation);
+        log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb request {id} answered past its window: cancelled");
+        if let Some(pending) = st.pending.remove(&id)
+            && pending.answers.try_send(Answer::Overrun).is_err()
+        {
+            log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb overrun request dropped meanwhile");
+        }
+        let writer = st.writers.get(&generation).cloned();
+        self.settle(&mut st, generation);
+        drop(st);
+        Self::queue(writer.as_ref(), id, pb::client_message::Message::Cancel(pb::Cancel {}));
+    }
+
+    /// The server's drain notice on socket `generation`, read: it answered every request it read,
+    /// so each one still unanswered there applied nothing. Or `only` one request, answered
+    /// `wrong_shard_server`, applied nothing. Either way the socket takes no request more, and
+    /// each of those is handed the drain, which sends it again on the next socket.
+    fn drain(&self, generation: u64, only: Option<u32>) {
+        let mut st = self.0.state.lock();
+        if st.live == Some(generation) {
+            st.live = None;
+        }
         st.pending.retain(|id, p| {
-            if p.socket != live || only.is_some_and(|only| only != *id) {
+            if p.socket != Some(generation) || only.is_some_and(|only| only != *id) {
                 return true;
             }
             p.socket = None;
-            p.answers.try_send(pb::ServerMessage::default()).is_ok()
+            p.answers.try_send(Answer::Drained).is_ok()
         });
-        self.settle(&mut st);
+        self.settle(&mut st, generation);
     }
 
-    /// A retiring socket with nothing in flight on it takes no request more, and its read ends.
-    fn settle(&self, st: &mut State) {
-        let live = Some(st.generation);
-        if st.retiring && st.tx.is_some() && !st.pending.values().any(|p| p.socket == live) {
-            st.tx = None;
-            let generation = st.generation;
-            self.0.settled.modify(|settled| *settled = generation);
+    /// A retiring socket with nothing in flight on it is settled: its read ends.
+    fn settle(&self, st: &mut State, generation: u64) {
+        let retiring = st.live != Some(generation) && st.writers.contains_key(&generation);
+        if retiring && !st.pending.values().any(|p| p.socket == Some(generation)) {
+            self.0.settled.modify(|settled| settled.insert(generation));
         }
     }
 
-    /// Fails everything in flight on the socket. Only after the read loop returned, so no
-    /// response can still be delivered: each request fails `Disconnected` after the answers it
-    /// already queued. One a drain notice left unanswered stays, to be sent again.
-    fn dropped(&self, cause: &WsdbError) {
+    /// Ends socket `generation` once its read returned, so no response can still be delivered:
+    /// each request in flight on it fails `Disconnected` after the answers it already queued. One
+    /// a drain notice left unanswered stays, to be sent again.
+    fn ended(&self, generation: u64, cause: Option<&WsdbError>) {
         let mut st = self.0.state.lock();
-        st.pending.retain(|_, p| p.socket.is_none());
-        st.tx = None;
+        st.pending.retain(|_, p| p.socket != Some(generation));
+        st.writers.remove(&generation);
+        if st.live == Some(generation) {
+            st.live = None;
+        }
         drop(st);
-        log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb connection lost: {cause}");
+        self.0.settled.modify(|settled| settled.remove(&generation));
+        if let Some(cause) = cause {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb connection lost: {cause}");
+        }
     }
 
     /// Dials once a request waits for the socket (`now`: at once), again with exponential
-    /// backoff while one still does; `None` once a refusal is final.
+    /// backoff while one still does, each attempt bounded by the latest waiting deadline; `None`
+    /// once a refusal is final.
     async fn redial(&self, mut now: bool) -> Option<Socket> {
         let (r, clock) = (&self.0.opts.reconnect, &*self.0.clock);
+        let latest = |waiting: &mut Vec<Ts>| waiting.iter().max().copied();
         let mut backoff = r.min_backoff;
         loop {
-            if !std::mem::take(&mut now) {
-                self.0.waiting.wait_until(|n| (*n > 0).then_some(())).await;
-            }
-            match self.connect(backoff).await {
+            let deadline = match std::mem::take(&mut now) {
+                true => self.0.waiting.with(latest),
+                false => Some(self.0.waiting.wait_until(latest).await),
+            };
+            match self.connect(deadline).await {
                 Ok(socket) => {
                     log::info!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb reconnected");
                     return Some(socket);
@@ -677,9 +835,12 @@ impl Conn {
                 continue; // mid-reconnect: a ping before Hello is a protocol error
             }
             let now = (lk_agents_abi::unix_secs(clock.wall()) * 1000.0) as i64;
-            // a writer queued full is busy sending: the ping is not needed to prove the socket
             let ping = pb::client_message::Message::Ping(pb::Ping { timestamp_ms: now });
-            self.try_write(self.next_id(), ping);
+            let writer = {
+                let st = self.0.state.lock();
+                st.live.and_then(|live| st.writers.get(&live).cloned())
+            };
+            Self::queue(writer.as_ref(), self.next_id(), ping);
         }
     }
 
@@ -700,7 +861,7 @@ impl Conn {
         self.0.close();
     }
 
-    /// Closes and observes settlement of the supervisor, heartbeat and socket writers.
+    /// Closes and observes settlement of the supervisor, heartbeat, readers and socket writers.
     /// Cancellation of this waiter leaves those tasks owned by the connection tracker.
     pub async fn aclose(&self) {
         self.close();
@@ -718,13 +879,14 @@ impl Conn {
 
     /// A request issued without a socket waits for the redial until `deadline`, then fails
     /// `Timeout`, unsent; the supervisor gone, it closed the connection first. Nothing is sent
-    /// with no time left for its answer.
-    async fn register(&self, deadline: Ts) -> Result<Request<'_>, WsdbError> {
+    /// with no time left for its answer. Its queue holds `answers`, all its window allows, and
+    /// the slot for its ending.
+    async fn register(&self, deadline: Ts, answers: usize) -> Result<Request<'_>, WsdbError> {
         if self.is_closed() {
             return Err(self.closed_error());
         }
         if !self.0.ready.get() {
-            let _waiting = Waiting::new(&self.0.waiting);
+            let _waiting = Waiting::new(&self.0.waiting, deadline);
             let ready = self.0.ready.wait_for(|ready| *ready);
             match lk_agents_abi::before(&*self.0.clock, Some(deadline), ready).await {
                 Err(_) => return Err(WsdbError::Timeout),
@@ -736,27 +898,28 @@ impl Conn {
             return Err(WsdbError::Timeout);
         }
         let id = self.next_id();
-        let (answers, rx) = mpsc::channel(self.0.opts.credits as usize + 2);
+        let (tx, rx) = mpsc::channel(answers + 1);
         let mut st = self.0.state.lock();
         if st.closed {
             drop(st);
             return Err(self.closed_error());
         }
         // the gate read open, then a drain or drop closed it: bound to no socket, sent again
-        let socket = st.tx.is_some().then_some(st.generation);
-        st.pending.insert(id, Pending { answers, socket });
+        let socket = st.live;
+        st.pending.insert(id, Pending { answers: tx, socket });
         Ok(Request { conn: self, id, rx, deadline, heard: false, answered: false })
     }
 
     /// Registers a request for `frame` and writes it, again on the next socket while the one it
-    /// was bound to drained before taking it.
+    /// was bound to drained or retired before taking it.
     async fn send(
         &self,
         frame: &mut pb::ClientMessage,
         deadline: Ts,
+        answers: usize,
     ) -> Result<Request<'_>, WsdbError> {
         loop {
-            let req = self.register(deadline).await?;
+            let req = self.register(deadline, answers).await?;
             frame.request_id = req.id;
             match self.write(frame).await {
                 Ok(()) => return Ok(req),
@@ -775,19 +938,9 @@ impl Conn {
         Ok(frame.encode_to_vec())
     }
 
-    /// The live socket's writer.
-    fn writer(&self) -> Result<mpsc::Sender<Outgoing>, WsdbError> {
-        let st = self.0.state.lock();
-        if st.closed {
-            drop(st);
-            return Err(self.closed_error());
-        }
-        st.tx.clone().ok_or(WsdbError::Disconnected)
-    }
-
-    /// The writer of the socket `request_id` is bound to, while it is the live one: `Drained`
-    /// once that socket drained, `Disconnected` once it dropped.
-    fn bound_writer(&self, request_id: u32) -> Result<mpsc::Sender<Outgoing>, WsdbError> {
+    /// The writer for request `request_id`'s frame: its socket's, while that is the live one.
+    /// `Drained` once that socket drained or retired, `Disconnected` once it dropped.
+    fn request_writer(&self, request_id: u32) -> Result<Writer, WsdbError> {
         let st = self.0.state.lock();
         if st.closed {
             drop(st);
@@ -795,48 +948,51 @@ impl Conn {
         }
         match st.pending.get(&request_id).map(|p| p.socket) {
             Some(None) => Err(WsdbError::Drained),
-            Some(Some(socket)) if socket == st.generation => {
-                st.tx.clone().ok_or(WsdbError::Disconnected)
+            Some(Some(socket)) if st.live == Some(socket) => {
+                st.writers.get(&socket).cloned().ok_or(WsdbError::Disconnected)
             }
+            Some(Some(socket)) if st.writers.contains_key(&socket) => Err(WsdbError::Drained),
             _ => Err(WsdbError::Disconnected),
         }
     }
 
-    /// Sends a request's frame on its socket, waiting while the writer's queue is full; an error
-    /// when the socket did not take all of it, which no server reads as a request: `Drained` when
-    /// that socket's drain notice was read meanwhile.
+    /// Sends a request's frame on its socket; an error when the socket did not take all of it,
+    /// which no server reads as a request: `Drained` when that socket drained or retired
+    /// meanwhile.
     async fn write(&self, frame: &pb::ClientMessage) -> Result<(), WsdbError> {
         let bytes = Self::encode(frame)?;
-        let (sent, taken) = tokio::sync::oneshot::channel();
-        let outgoing = Outgoing { bytes, sent: Some(sent) };
-        let writer = self.bound_writer(frame.request_id)?;
-        if writer.send(outgoing).await.is_ok() && taken.await.is_ok() {
+        let (sent, taken) = oneshot::channel();
+        let writer = self.request_writer(frame.request_id)?;
+        if writer.send(Outgoing { bytes, sent: Some(sent) }).is_ok() && taken.await.is_ok() {
             return Ok(());
         }
-        match self.bound_writer(frame.request_id) {
+        match self.request_writer(frame.request_id) {
             Err(WsdbError::Drained) => Err(WsdbError::Drained),
             Err(error @ (WsdbError::Closed | WsdbError::Server { .. })) => Err(error),
             _ => Err(WsdbError::Disconnected),
         }
     }
 
-    /// A credit for a request's stream. Failing, the socket is gone: the request then reads what
-    /// it already queued, then its end.
-    async fn credit(&self, request_id: u32, batches: u32) {
+    /// Queues a credit for a request's stream on the socket it went out on, live or retiring,
+    /// without waiting for it to be sent. Its socket gone, the request reads what it already
+    /// queued, then its end.
+    fn credit(&self, request_id: u32, batches: u32) {
+        let writer = {
+            let st = self.0.state.lock();
+            let socket = st.pending.get(&request_id).and_then(|p| p.socket);
+            socket.and_then(|socket| st.writers.get(&socket).cloned())
+        };
         let credit = pb::client_message::Message::Credit(pb::Credit { batches });
-        let frame = pb::ClientMessage { request_id, message: Some(credit) };
-        if let Err(error) = self.write(&frame).await {
-            log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb credit not sent: {error}");
-        }
+        Self::queue(writer.as_ref(), request_id, credit);
     }
 
-    /// Queues a frame nothing waits on (a ping, a cancel), dropped when the writer's queue is
-    /// full or the socket is gone: neither changes what the server committed.
-    fn try_write(&self, request_id: u32, message: pb::client_message::Message) {
+    /// Queues a frame nothing waits on (a credit, a cancel, a ping) behind those already queued
+    /// on `writer`; dropped when its socket is gone, which ends the request it was for.
+    fn queue(writer: Option<&Writer>, request_id: u32, message: pb::client_message::Message) {
         let frame = pb::ClientMessage { request_id, message: Some(message) };
         let queued = Self::encode(&frame).and_then(|bytes| {
-            let outgoing = Outgoing { bytes, sent: None };
-            self.writer()?.try_send(outgoing).map_err(|_| WsdbError::Disconnected)
+            let writer = writer.ok_or(WsdbError::Disconnected)?;
+            writer.send(Outgoing { bytes, sent: None }).map_err(|_| WsdbError::Disconnected)
         });
         if let Err(error) = queued {
             log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb frame not queued: {error}");
@@ -846,20 +1002,20 @@ impl Conn {
     /// The request's next answer, until its deadline: past it, `Timeout`.
     async fn wait(
         &self,
-        rx: &mut mpsc::Receiver<pb::ServerMessage>,
+        rx: &mut mpsc::Receiver<Answer>,
         deadline: Ts,
     ) -> Result<pb::ServerMessage, WsdbError> {
         let next = lk_agents_abi::before(&*self.0.clock, Some(deadline), rx.recv());
         match next.await.map_err(|_| WsdbError::Timeout)? {
             None if self.is_closed() => Err(self.closed_error()),
             None => Err(WsdbError::Disconnected),
-            // request id 0 is the connection's own: its socket drained
-            Some(pb::ServerMessage { request_id: 0, .. }) => Err(WsdbError::Drained),
-            Some(pb::ServerMessage {
+            Some(Answer::Drained) => Err(WsdbError::Drained),
+            Some(Answer::Overrun) => Err(WsdbError::Overrun),
+            Some(Answer::Frame(pb::ServerMessage {
                 message: Some(pb::server_message::Message::Error(e)),
                 ..
-            }) => Err(WsdbError::server(e)),
-            Some(resp) => Ok(resp),
+            })) => Err(WsdbError::server(e)),
+            Some(Answer::Frame(resp)) => Ok(resp),
         }
     }
 
@@ -873,7 +1029,8 @@ impl Conn {
         let exec = pb::client_message::Message::Exec(statement(s));
         let mut frame = pb::ClientMessage { request_id: 0, message: Some(exec) };
         loop {
-            let mut req = self.send(&mut frame, deadline).await.map_err(WriteError::NotSent)?;
+            // its result, or an error
+            let mut req = self.send(&mut frame, deadline, 1).await.map_err(WriteError::NotSent)?;
             match self.exec_answer(&mut req).await {
                 Err(WsdbError::Drained) => {}
                 answer => return answer.map_err(WriteError::Sent),
@@ -897,13 +1054,19 @@ impl Conn {
         })
     }
 
+    /// The batches a streaming request may have unread, and its answers besides: its `Columns`,
+    /// and its `Done` or error.
+    fn window(&self) -> usize {
+        self.0.opts.credits as usize + 2
+    }
+
     /// A query's rows, all of them, by `deadline`: one credit back per batch consumed, so the
     /// server sends no further than the caller reads.
     pub async fn query_all(&self, s: &Statement, deadline: Ts) -> Result<Vec<Row>, WsdbError> {
         let query = pb::client_message::Message::Query(statement(s));
         let mut frame = pb::ClientMessage { request_id: 0, message: Some(query) };
         loop {
-            let mut req = self.send(&mut frame, deadline).await?;
+            let mut req = self.send(&mut frame, deadline, self.window()).await?;
             match self.query_answer(&mut req).await {
                 Err(WsdbError::Drained) => {}
                 answer => return answer,
@@ -919,7 +1082,7 @@ impl Conn {
                 Some(pb::server_message::Message::Columns(columns)) => results.columns(columns)?,
                 Some(pb::server_message::Message::ColumnBatch(batch)) => {
                     results.batch(batch)?;
-                    self.credit(id, 1).await;
+                    self.credit(id, 1);
                 }
                 Some(pb::server_message::Message::Done(done)) => {
                     let mut result = results.finish(&done)?;
@@ -949,8 +1112,11 @@ impl Conn {
         let n = statements.len();
         let batch = pb::client_message::Message::Batch(pb::Batch { statements });
         let mut frame = pb::ClientMessage { request_id: 0, message: Some(batch) };
+        // its window, past one `Columns` or `ExecResult` per statement
+        let answers = self.window() + n.saturating_sub(1);
         loop {
-            let mut req = self.send(&mut frame, deadline).await.map_err(WriteError::NotSent)?;
+            let sent = self.send(&mut frame, deadline, answers).await;
+            let mut req = sent.map_err(WriteError::NotSent)?;
             match self.batch_answer(&mut req, n).await {
                 Err(WsdbError::Drained) => {}
                 answer => return answer.map_err(WriteError::Sent),
@@ -958,20 +1124,21 @@ impl Conn {
         }
     }
 
+    /// The server grants the batch its initial window, as it does a query: a credit is sent back
+    /// only per batch consumed.
     async fn batch_answer(
         &self,
         req: &mut Request<'_>,
         n: usize,
     ) -> Result<BatchResult, WsdbError> {
         let id = req.id;
-        self.credit(id, self.0.opts.credits).await;
         let mut results = Results::new(n);
         loop {
             match req.next().await?.message {
                 Some(pb::server_message::Message::Columns(columns)) => results.columns(columns)?,
                 Some(pb::server_message::Message::ColumnBatch(batch)) => {
                     results.batch(batch)?;
-                    self.credit(id, 1).await;
+                    self.credit(id, 1);
                 }
                 Some(pb::server_message::Message::ExecResult(result)) => results.exec(result)?,
                 Some(pb::server_message::Message::Done(done)) => {
@@ -991,11 +1158,11 @@ impl Conn {
 }
 
 /// One request in flight. Dropped before its answer (an error, or the caller's future dropped),
-/// it leaves the pending table and tells the server to stop, on the live socket it went out on.
+/// it leaves the pending table and tells the server to stop, on the socket it went out on.
 struct Request<'a> {
     conn: &'a Conn,
     id: u32,
-    rx: mpsc::Receiver<pb::ServerMessage>,
+    rx: mpsc::Receiver<Answer>,
     /// The caller's: its answer is awaited until then.
     deadline: Ts,
     /// Whether any answer arrived: a drain after one breaks the notice's promise.
@@ -1018,141 +1185,19 @@ impl Request<'_> {
 
 impl Drop for Request<'_> {
     fn drop(&mut self) {
-        let live = {
+        let writer = {
             let mut st = self.conn.0.state.lock();
             let socket = st.pending.remove(&self.id).and_then(|p| p.socket);
-            let live = st.tx.is_some() && socket == Some(st.generation);
-            self.conn.settle(&mut st);
-            live
+            let writer = socket.and_then(|socket| {
+                self.conn.settle(&mut st, socket);
+                st.writers.get(&socket).cloned()
+            });
+            writer.filter(|_| !self.answered)
         };
-        if live && !self.answered {
-            self.conn.try_write(self.id, pb::client_message::Message::Cancel(pb::Cancel {}));
+        if writer.is_some() {
+            let cancel = pb::client_message::Message::Cancel(pb::Cancel {});
+            Conn::queue(writer.as_ref(), self.id, cancel);
         }
-    }
-}
-
-/// The API key and secret, held for the life of the client; a token is minted on every dial.
-#[derive(Clone)]
-pub struct TokenMinter {
-    api_key: String,
-    api_secret: String,
-}
-
-impl std::fmt::Debug for TokenMinter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TokenMinter").field("api_key", &self.api_key).finish_non_exhaustive()
-    }
-}
-
-impl TokenMinter {
-    pub fn new(
-        api_key: impl Into<String>,
-        api_secret: impl Into<String>,
-    ) -> Result<Self, StorageError> {
-        let (api_key, api_secret) = (api_key.into(), api_secret.into());
-        if api_key.is_empty() || api_secret.is_empty() {
-            return Err(StorageError::Invalid(
-                "LIVEKIT_API_KEY and LIVEKIT_API_SECRET are required".into(),
-            ));
-        }
-        Ok(Self { api_key, api_secret })
-    }
-
-    pub fn api_key(&self) -> &str {
-        &self.api_key
-    }
-
-    pub fn api_secret(&self) -> &str {
-        &self.api_secret
-    }
-
-    /// A fresh data-plane token for `database_id` alone, signed by net.
-    pub fn mint(&self, database_id: &str) -> Result<String, StorageError> {
-        lk_agents_net::token::database_token(&self.api_key, &self.api_secret, database_id)
-            .map_err(|e| StorageError::Invalid(format!("token: {e}")))
-    }
-}
-
-enum ResultSet {
-    Rows { width: usize, rows: Vec<Row> },
-    Exec { rows_affected: i64, last_insert_id: i64 },
-}
-
-struct Results {
-    sets: Vec<ResultSet>,
-    expected: usize,
-    rows: u64,
-}
-
-impl Results {
-    fn new(expected: usize) -> Self {
-        Self { sets: Vec::new(), expected, rows: 0 }
-    }
-
-    fn start(&self, statement: u32) -> Result<(), WsdbError> {
-        if statement as usize != self.sets.len() || self.sets.len() >= self.expected {
-            return Err(WsdbError::Protocol(format!(
-                "result for statement {statement}, expected {} of {}",
-                self.sets.len(),
-                self.expected,
-            )));
-        }
-        Ok(())
-    }
-
-    fn columns(&mut self, columns: pb::Columns) -> Result<(), WsdbError> {
-        self.start(columns.statement)?;
-        self.sets.push(ResultSet::Rows { width: columns.names.len(), rows: Vec::new() });
-        Ok(())
-    }
-
-    fn batch(&mut self, batch: pb::ColumnBatch) -> Result<(), WsdbError> {
-        if batch.statement as usize + 1 != self.sets.len() {
-            return Err(WsdbError::Protocol("rows arrived outside their statement".into()));
-        }
-        let Some(ResultSet::Rows { width, rows }) = self.sets.last_mut() else {
-            return Err(WsdbError::Protocol("rows arrived without Columns".into()));
-        };
-        if batch.columns.len() != *width {
-            return Err(WsdbError::Protocol("row width differs from Columns".into()));
-        }
-        let decoded = decode_batch(&batch)?;
-        self.rows += u64::from(batch.rows);
-        rows.extend(decoded);
-        Ok(())
-    }
-
-    fn exec(&mut self, result: pb::ExecResult) -> Result<(), WsdbError> {
-        self.start(result.statement)?;
-        self.sets.push(ResultSet::Exec {
-            rows_affected: result.rows_affected,
-            last_insert_id: result.last_insert_id,
-        });
-        Ok(())
-    }
-
-    fn finish(self, done: &pb::Done) -> Result<BatchResult, WsdbError> {
-        if self.sets.len() != self.expected || self.rows != done.total_rows {
-            return Err(WsdbError::Protocol(format!(
-                "Done reports {} rows after {} rows and {} of {} statements",
-                done.total_rows,
-                self.rows,
-                self.sets.len(),
-                self.expected,
-            )));
-        }
-        Ok(BatchResult {
-            results: self
-                .sets
-                .into_iter()
-                .map(|set| match set {
-                    ResultSet::Rows { rows, .. } => StatementResult::Rows(rows),
-                    ResultSet::Exec { rows_affected, last_insert_id } => {
-                        StatementResult::Exec { rows_affected, last_insert_id }
-                    }
-                })
-                .collect(),
-        })
     }
 }
 

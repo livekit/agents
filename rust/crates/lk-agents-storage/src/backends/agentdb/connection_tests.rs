@@ -1,5 +1,6 @@
 use super::*;
-use crate::backends::agentdb::rows::encode_batch;
+use crate::StorageError;
+use crate::backends::agentdb::rows::{decode_batch, encode_batch};
 use crate::sql::SqlValue;
 use std::sync::atomic::AtomicBool;
 use tokio::net::TcpListener;
@@ -234,7 +235,7 @@ async fn exec_query_and_credits() {
 
 #[tokio::test]
 async fn a_batch_answers_per_statement_and_an_empty_returning_is_rows() {
-    let (url, _) = serve(script, false).await;
+    let (url, log) = serve(script, false).await;
     let conn = dial(&url, "DB_1").await.unwrap();
     let stmts: Vec<Statement> = (0..4).map(|_| st("S", vec![])).collect();
     let out = conn.batch(&stmts, conn.deadline()).await.unwrap();
@@ -244,6 +245,21 @@ async fn a_batch_answers_per_statement_and_an_empty_returning_is_rows() {
     // the acquire that lost: Columns, no ColumnBatch
     assert_eq!(out.results[2], StatementResult::Rows(vec![]));
     assert_eq!(out.results[3].rows().len(), 2);
+    // one credit per batch consumed, past the window the server grants: none up front
+    let credits = |m: &pb::ClientMessage| {
+        matches!(m.message, Some(pb::client_message::Message::Credit(pb::Credit { batches: 1 })))
+    };
+    for _ in 0..200 {
+        if sent(&log, credits).len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let all_credits =
+        |m: &pb::ClientMessage| matches!(m.message, Some(pb::client_message::Message::Credit(_)));
+    assert_eq!(sent(&log, all_credits), sent(&log, credits), "every credit is for one batch");
+    assert_eq!(sent(&log, credits), vec![sent(&log, is_batch)[0]; 2]);
 }
 
 #[tokio::test]
@@ -439,10 +455,11 @@ async fn the_token_rides_the_upgrade_as_a_bearer_header_not_the_url() {
     conn.close();
 }
 
-/// Catches: an answer queue that refuses or drops a frame when full. A server streaming more
-/// batches than a request's queue holds is read whole: the full queue holds the reader back.
+/// Catches: one request whose answers nobody reads holding back every other request's answers.
+/// The server streams a query far past its window while its caller reads nothing: an exec on the
+/// same socket is still answered.
 #[tokio::test]
-async fn answers_past_a_full_request_queue_wait_and_none_is_lost() {
+async fn a_slow_stream_does_not_stall_another_stream() {
     fn flood(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
         use pb::server_message::Message as S;
         if !matches!(m.message, Some(pb::client_message::Message::Query(_))) {
@@ -456,10 +473,35 @@ async fn answers_past_a_full_request_queue_wait_and_none_is_lost() {
         answer.push(reply(S::Done(pb::Done { tip: 8, total_rows: 64 })));
         answer
     }
-    let (url, _) = serve(flood, false).await;
+    let (url, log) = serve(flood, false).await;
     let conn = dial(&url, "DB_1").await.unwrap();
-    let rows = conn.query_all(&st("SELECT", vec![]), conn.deadline()).await.unwrap();
-    assert_eq!(rows, (0..64).map(|n| vec![SqlValue::Int(n)]).collect::<Vec<_>>());
+    let deadline = conn.0.clock.now().saturating_add(Duration::from_secs(2));
+    let query = pb::client_message::Message::Query(statement(&st("SELECT", vec![])));
+    let mut frame = pb::ClientMessage { request_id: 0, message: Some(query) };
+    let mut stalled = conn.send(&mut frame, deadline, conn.window()).await.unwrap();
+    let exec = conn.exec(&st("INSERT", vec![]), deadline).await;
+    assert_eq!(exec.expect("answered past the stalled stream").rows_affected, 1);
+    // the stalled stream reads what its window held, then that it was cancelled
+    let mut read = 0;
+    let end = loop {
+        match stalled.next().await {
+            Ok(_) => read += 1,
+            Err(error) => break error,
+        }
+    };
+    assert!(matches!(end, WsdbError::Overrun), "{end}");
+    assert_eq!(read, conn.window(), "its window, and nothing past it");
+    let cancelled = |m: &pb::ClientMessage| {
+        m.request_id == stalled.id
+            && matches!(m.message, Some(pb::client_message::Message::Cancel(_)))
+    };
+    for _ in 0..200 {
+        if !sent(&log, cancelled).is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(sent(&log, cancelled).len(), 1, "the server is told to stop");
     conn.close();
 }
 
@@ -697,7 +739,7 @@ async fn serve_draining(
 const NOTICES: [ErrorCode; 2] = [ErrorCode::WRONG_SHARD_SERVER, ErrorCode::IDLE_EVICTED];
 
 /// The request ids `log` holds for frames `kind` picks, in the order sent.
-fn sent(log: &Served, kind: fn(&pb::ClientMessage) -> bool) -> Vec<u32> {
+fn sent(log: &Served, kind: impl Fn(&pb::ClientMessage) -> bool) -> Vec<u32> {
     log.lock().iter().filter(|m| kind(m)).map(|m| m.request_id).collect()
 }
 
@@ -906,15 +948,20 @@ async fn a_refused_upgrade_names_its_cause() {
 async fn a_frame_the_socket_fails_to_send_is_not_sent() {
     let (url, _) = serve(script, false).await;
     let conn = dial(&url, "DB_1").await.unwrap();
-    // the writer gone, its queue refuses or drops every frame
-    let (tx, rx) = mpsc::channel::<Outgoing>(1);
+    let replace = |tx: Writer| {
+        let mut st = conn.0.state.lock();
+        let live = st.live.unwrap();
+        st.writers.insert(live, tx);
+    };
+    // the writer gone, its queue refuses every frame
+    let (tx, rx) = mpsc::unbounded_channel::<Outgoing>();
     drop(rx);
-    conn.0.state.lock().tx = Some(tx);
+    replace(tx);
     let err = conn.exec(&st("INSERT", vec![]), conn.deadline()).await.err().unwrap();
     assert!(matches!(err, WriteError::NotSent(_)), "{err}");
     // queued, then dropped by a writer that failed before sending it
-    let (tx, mut rx) = mpsc::channel::<Outgoing>(1);
-    conn.0.state.lock().tx = Some(tx);
+    let (tx, mut rx) = mpsc::unbounded_channel::<Outgoing>();
+    replace(tx);
     tokio::spawn(async move { drop(rx.recv().await) });
     let err = conn.exec(&st("INSERT", vec![]), conn.deadline()).await.err().unwrap();
     assert!(matches!(err, WriteError::NotSent(_)), "{err}");
@@ -922,28 +969,195 @@ async fn a_frame_the_socket_fails_to_send_is_not_sent() {
     conn.close();
 }
 
-/// An attempt gets the longer of the dial timeout and its backoff: a server slower to answer
-/// `Hello` than the dial timeout (a cold open) is still reached, rather than every attempt giving
-/// up before the answer comes.
+/// Catches: a dial attempt bounded only by the dial timeout, outliving the caller's deadline. A
+/// server that never answers `Hello` fails the dial at the caller's deadline.
 #[tokio::test]
-async fn a_dial_attempt_waits_as_long_as_its_backoff() {
+async fn a_dial_attempt_ends_at_the_callers_deadline() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/db", listener.local_addr().unwrap());
     tokio::spawn(async move {
         let (tcp, _) = listener.accept().await.unwrap();
         let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
-        let Some(Ok(Message::Binary(b))) = ws.next().await else { return };
-        let hello = pb::ClientMessage::decode(b.as_ref()).unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        let mut ok = hello_ok();
-        ok.request_id = hello.request_id;
-        ws.send(Message::binary(ok.encode_to_vec())).await.unwrap();
-        while ws.next().await.is_some() {}
+        while ws.next().await.is_some() {} // Hello read, never answered
     });
     let mut opts = Options::new(&url, "DB_1");
-    opts.dial_timeout = Duration::from_millis(50);
-    opts.reconnect.min_backoff = Duration::from_secs(1);
+    opts.dial_timeout = Duration::from_secs(60);
     let background = crate::testing::background();
-    let conn = Conn::dial(opts, minter(), background.spawner, background.clock).await.unwrap();
+    let deadline = background.clock.now().saturating_add(Duration::from_millis(200));
+    let dial = Conn::dial(opts, minter(), background.spawner, background.clock);
+    let dial =
+        tokio::time::timeout(Duration::from_secs(5), crate::deadline::within(deadline, dial));
+    let err = dial.await.expect("the dial outlived its caller's deadline").err().unwrap();
+    assert!(matches!(err, WsdbError::Io(_)), "{err}");
+}
+
+/// Catches: a frame on request id 0 other than a drain notice dropped silently, leaving the
+/// requests in flight waiting out their deadlines. It is a protocol error that ends the socket:
+/// a write in flight is `Disconnected` (outcome unknown), never sent again.
+#[tokio::test]
+async fn an_unexpected_frame_on_request_id_0_ends_the_socket() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/db", listener.local_addr().unwrap());
+    let log: Served = Arc::new(Mutex::new(Vec::new()));
+    let seen = log.clone();
+    tokio::spawn(async move {
+        loop {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let seen = seen.clone();
+            tokio::spawn(async move {
+                let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                while let Some(Ok(Message::Binary(b))) = ws.next().await {
+                    let msg = pb::ClientMessage::decode(b.as_ref()).unwrap();
+                    seen.lock().push(msg.clone());
+                    let answers = match &msg.message {
+                        // on request id 0, and not a notice; the exec itself goes unanswered
+                        Some(pb::client_message::Message::Exec(s)) if s.sql == "stray" => {
+                            vec![error(ErrorCode::SQL_ERROR, "not a notice")]
+                        }
+                        _ => script(&msg)
+                            .into_iter()
+                            .map(|mut a| {
+                                a.request_id = msg.request_id;
+                                a
+                            })
+                            .collect(),
+                    };
+                    for answer in answers {
+                        if ws.send(Message::binary(answer.encode_to_vec())).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    let conn = dial(&url, "DB_1").await.unwrap();
+    let deadline = conn.0.clock.now().saturating_add(Duration::from_secs(2));
+    let err = conn.exec(&st("stray", vec![]), deadline).await.err().unwrap();
+    assert!(matches!(err, WriteError::Sent(WsdbError::Disconnected)), "{err}");
+    assert!(matches!(StorageError::from(err), StorageError::Uncertain(_)));
+    assert_eq!(sent(&log, is_exec).len(), 1, "never sent again");
+    let r = conn.exec(&st("INSERT", vec![]), conn.deadline()).await.unwrap();
+    assert_eq!(r.rows_affected, 1, "the next request redials");
     conn.close();
+}
+
+/// Catches: new requests waiting for a socket refused `wrong_shard_server` to finish its
+/// requests in flight. As with HTTP/2's GOAWAY, the next socket opens at once: the refused query
+/// and a later exec are served there while the first socket still holds a write, which then
+/// gets its own answer there.
+#[tokio::test]
+async fn new_requests_never_wait_behind_a_retiring_socket() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/db", listener.local_addr().unwrap());
+    let log: Served = Arc::new(Mutex::new(Vec::new()));
+    let seen = log.clone();
+    let (served, served_next) = signal::signal(false);
+    let served = Arc::new(served);
+    tokio::spawn(async move {
+        let first = Arc::new(AtomicBool::new(true));
+        loop {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let (seen, first) = (seen.clone(), first.swap(false, Ordering::SeqCst));
+            let (served, served_next) = (served.clone(), served_next.clone());
+            tokio::spawn(async move {
+                let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                let mut held = None;
+                while let Some(Ok(Message::Binary(b))) = ws.next().await {
+                    let msg = pb::ClientMessage::decode(b.as_ref()).unwrap();
+                    seen.lock().push(msg.clone());
+                    let answer = |m: &pb::ClientMessage| -> Vec<pb::ServerMessage> {
+                        let mut out = script(m);
+                        out.iter_mut().for_each(|a| a.request_id = m.request_id);
+                        out
+                    };
+                    let mut answers = Vec::new();
+                    match &msg.message {
+                        Some(pb::client_message::Message::Exec(_)) if first => held = Some(msg),
+                        Some(pb::client_message::Message::Query(_)) if first => {
+                            let mut refused = error(ErrorCode::WRONG_SHARD_SERVER, "moved");
+                            refused.request_id = msg.request_id;
+                            answers.push(refused);
+                        }
+                        Some(pb::client_message::Message::Exec(_)) => {
+                            answers = answer(&msg);
+                            served.set(true);
+                        }
+                        _ => answers = answer(&msg),
+                    }
+                    for a in answers {
+                        if ws.send(Message::binary(a.encode_to_vec())).await.is_err() {
+                            return;
+                        }
+                    }
+                    if let Some(exec) = held.as_ref().filter(|_| first)
+                        && !sent(&seen, is_query).is_empty()
+                    {
+                        // the held write is answered once the next socket served one
+                        served_next.wait_for(|served| *served).await.unwrap();
+                        for a in answer(exec) {
+                            ws.send(Message::binary(a.encode_to_vec())).await.unwrap();
+                        }
+                        held = None;
+                    }
+                }
+            });
+        }
+    });
+    let conn = dial(&url, "DB_1").await.unwrap();
+    let deadline = conn.0.clock.now().saturating_add(Duration::from_secs(3));
+    let (held, insert, select) = (st("HOLD", vec![]), st("INSERT", vec![]), st("SELECT", vec![]));
+    let (held, (query, exec)) = tokio::join!(conn.exec(&held, deadline), async {
+        while sent(&log, is_exec).is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await; // the held write goes out first
+        }
+        let query = conn.query_all(&select, deadline).await;
+        (query, conn.exec(&insert, deadline).await)
+    });
+    assert_eq!(query.expect("served on the next socket").len(), 2);
+    assert_eq!(exec.expect("served on the next socket").rows_affected, 1);
+    assert_eq!(held.expect("its own answer on the retiring socket").rows_affected, 1);
+    assert_eq!(sent(&log, is_exec).len(), 2, "each write went out once");
+    assert_eq!(hellos(&log), 2);
+    conn.close();
+}
+
+/// Catches: a frame the socket already received lost to its writer stopping, which failed an
+/// answered request `Disconnected`. Received frames are read first, then the socket ends.
+#[tokio::test]
+async fn frames_received_before_the_writer_stopped_are_still_read() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/db", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        for n in [1, 2] {
+            let mut answer = hello_ok();
+            answer.request_id = n;
+            ws.send(Message::binary(answer.encode_to_vec())).await.unwrap();
+        }
+        while ws.next().await.is_some() {}
+    });
+    let ws = connect_with_limit(&url, Headers::new(), Some(MAX_FRAME)).await.unwrap();
+    let (_sink, mut read) = ws.split();
+    // both frames received before the writer stops
+    let first = read.next().await.unwrap().unwrap();
+    let (stopped, writer_gone) = oneshot::channel();
+    drop(stopped);
+    let (reader, _reader_gone) = oneshot::channel();
+    let mut socket = Socket {
+        generation: 1,
+        read,
+        writer_gone,
+        writer_stopped: false,
+        read_deadline: None,
+        ping_interval: Duration::ZERO,
+        _reader: reader,
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await; // the second frame arrives
+    let clock = lk_agents_net::clock::RealClock::new();
+    let id = |m: Message| pb::ServerMessage::decode(m.into_data().as_ref()).unwrap().request_id;
+    assert_eq!(id(first), 1);
+    assert_eq!(id(socket.next_message(&clock).await.expect("received, so read")), 2);
+    assert!(matches!(socket.next_message(&clock).await, Err(WsdbError::Io(_))), "then it ends");
 }

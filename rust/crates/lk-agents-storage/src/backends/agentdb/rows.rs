@@ -1,7 +1,7 @@
 //! Rows as the `wsdb` wire carries them: bound values, statements and column-oriented batches.
 
 use super::connection::{MAX_FRAME, WsdbError, wire};
-use crate::sql::{Row, SqlValue, Statement};
+use crate::sql::{BatchResult, Row, SqlValue, Statement, StatementResult};
 
 /// A bound value as the wire carries it.
 fn to_wire(v: &SqlValue) -> wire::Value {
@@ -89,6 +89,90 @@ pub fn decode_batch(b: &wire::ColumnBatch) -> Result<Vec<Row>, WsdbError> {
         }
     }
     Ok(out)
+}
+
+enum ResultSet {
+    Rows { width: usize, rows: Vec<Row> },
+    Exec { rows_affected: i64, last_insert_id: i64 },
+}
+
+/// A request's answers, gathered statement by statement and checked against its `Done`.
+pub struct Results {
+    sets: Vec<ResultSet>,
+    expected: usize,
+    rows: u64,
+}
+
+impl Results {
+    pub fn new(expected: usize) -> Self {
+        Self { sets: Vec::new(), expected, rows: 0 }
+    }
+
+    fn start(&self, statement: u32) -> Result<(), WsdbError> {
+        if statement as usize != self.sets.len() || self.sets.len() >= self.expected {
+            return Err(WsdbError::Protocol(format!(
+                "result for statement {statement}, expected {} of {}",
+                self.sets.len(),
+                self.expected,
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn columns(&mut self, columns: wire::Columns) -> Result<(), WsdbError> {
+        self.start(columns.statement)?;
+        self.sets.push(ResultSet::Rows { width: columns.names.len(), rows: Vec::new() });
+        Ok(())
+    }
+
+    pub fn batch(&mut self, batch: wire::ColumnBatch) -> Result<(), WsdbError> {
+        if batch.statement as usize + 1 != self.sets.len() {
+            return Err(WsdbError::Protocol("rows arrived outside their statement".into()));
+        }
+        let Some(ResultSet::Rows { width, rows }) = self.sets.last_mut() else {
+            return Err(WsdbError::Protocol("rows arrived without Columns".into()));
+        };
+        if batch.columns.len() != *width {
+            return Err(WsdbError::Protocol("row width differs from Columns".into()));
+        }
+        let decoded = decode_batch(&batch)?;
+        self.rows += u64::from(batch.rows);
+        rows.extend(decoded);
+        Ok(())
+    }
+
+    pub fn exec(&mut self, result: wire::ExecResult) -> Result<(), WsdbError> {
+        self.start(result.statement)?;
+        self.sets.push(ResultSet::Exec {
+            rows_affected: result.rows_affected,
+            last_insert_id: result.last_insert_id,
+        });
+        Ok(())
+    }
+
+    pub fn finish(self, done: &wire::Done) -> Result<BatchResult, WsdbError> {
+        if self.sets.len() != self.expected || self.rows != done.total_rows {
+            return Err(WsdbError::Protocol(format!(
+                "Done reports {} rows after {} rows and {} of {} statements",
+                done.total_rows,
+                self.rows,
+                self.sets.len(),
+                self.expected,
+            )));
+        }
+        Ok(BatchResult {
+            results: self
+                .sets
+                .into_iter()
+                .map(|set| match set {
+                    ResultSet::Rows { rows, .. } => StatementResult::Rows(rows),
+                    ResultSet::Exec { rows_affected, last_insert_id } => {
+                        StatementResult::Exec { rows_affected, last_insert_id }
+                    }
+                })
+                .collect(),
+        })
+    }
 }
 
 /// The inverse of [`decode_batch`], for tests: rows into one column-oriented batch.

@@ -27,7 +27,7 @@ use lk_agents_net::owned::Background;
 use crate::telemetry::{Cx, StorageWrite};
 use crate::thread::{LeaseTiming, Resend, Retry, SchemaCell, Thread};
 use crate::{Storage, ThreadDbConnection};
-pub use connection::{Conn, Options as ConnOptions, TokenMinter, WriteError, WsdbError};
+pub use connection::{Conn, Options as ConnOptions, WriteError, WsdbError};
 
 // The threads service owns thread metadata; agent-db holds each thread's database, over `wsdb`.
 
@@ -105,7 +105,8 @@ impl From<WsdbError> for StorageError {
             | WsdbError::Disconnected
             | WsdbError::Timeout
             | WsdbError::Io(_)
-            | WsdbError::Drained => StorageError::Unavailable(e.to_string()),
+            | WsdbError::Drained
+            | WsdbError::Overrun => StorageError::Unavailable(e.to_string()),
             WsdbError::Server { code, message } => refused(code, message),
             WsdbError::Protocol(m) => StorageError::Invalid(m),
             WsdbError::TooLarge(_) => {
@@ -422,6 +423,48 @@ impl Storage for AgentDbStorage {
     }
 }
 
+/// The API key and secret, held for the life of the client; a token is minted on every dial.
+#[derive(Clone)]
+pub struct TokenMinter {
+    api_key: String,
+    api_secret: String,
+}
+
+impl std::fmt::Debug for TokenMinter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenMinter").field("api_key", &self.api_key).finish_non_exhaustive()
+    }
+}
+
+impl TokenMinter {
+    pub fn new(
+        api_key: impl Into<String>,
+        api_secret: impl Into<String>,
+    ) -> Result<Self, StorageError> {
+        let (api_key, api_secret) = (api_key.into(), api_secret.into());
+        if api_key.is_empty() || api_secret.is_empty() {
+            return Err(StorageError::Invalid(
+                "LIVEKIT_API_KEY and LIVEKIT_API_SECRET are required".into(),
+            ));
+        }
+        Ok(Self { api_key, api_secret })
+    }
+
+    pub fn api_key(&self) -> &str {
+        &self.api_key
+    }
+
+    pub fn api_secret(&self) -> &str {
+        &self.api_secret
+    }
+
+    /// A fresh data-plane token for `database_id` alone, signed by net.
+    pub fn mint(&self, database_id: &str) -> Result<String, StorageError> {
+        lk_agents_net::token::database_token(&self.api_key, &self.api_secret, database_id)
+            .map_err(|e| StorageError::Invalid(format!("token: {e}")))
+    }
+}
+
 /// A connection on loan from the pool: closing parks it, with what is known of its schema.
 struct Pooled {
     conn: Conn,
@@ -447,9 +490,15 @@ impl ThreadDbConnection for Pooled {
         self.read(read).await
     }
 
+    /// A closed connection is final: every write sent again on it would be refused alike.
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         self.live()?;
-        Ok(self.conn.batch(&statements, self.conn.deadline()).await?)
+        match self.conn.batch(&statements, self.conn.deadline()).await {
+            Err(WriteError::NotSent(error @ WsdbError::Closed)) => {
+                Err(StorageError::Invalid(error.to_string()))
+            }
+            out => Ok(out?),
+        }
     }
 
     async fn close(&self) {
