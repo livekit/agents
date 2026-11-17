@@ -497,7 +497,7 @@ impl VoiceDriver {
                 self.session.chat_ctx.update_agent_chat_ctx(items, &agent);
                 self.conversation_changed();
                 self.publish_event(crate::events::SessionEvent::HistoryReloaded {
-                    items: self.session.chat_ctx.items().cloned().collect(),
+                    items: self.session.chat_ctx.history().cloned().collect(),
                 });
                 if self.activity.realtime().is_some() {
                     let ctx = self.session.chat_ctx.for_realtime();
@@ -655,28 +655,38 @@ impl VoiceDriver {
         {
             state.item_added(&entry.item);
         }
-        match outcome {
-            // An item only in the agent's view is the model's: the host's history never sees it.
-            CommitOutcome::Added if entry.visibility.history() => {
-                // The person's message answers the call an `InputRequired` left open.
-                if let ChatItem::Message(m) = &entry.item
-                    && m.role == lk_agents_abi::Role::User
-                {
-                    self.answer_pending_input(&m.text_content().unwrap_or_default());
-                }
-                if self.run_owns_item(&entry.source) {
-                    self.session.runs.record(&entry.item);
-                }
-                self.item_turn(&entry.item, &entry.source);
-                self.publish_event(crate::events::SessionEvent::ConversationItemAdded {
-                    item: Box::new(entry.item),
-                    agent: entry.agent,
-                    source: entry.source,
-                    visibility: entry.visibility,
-                });
+        let publish = match outcome {
+            CommitOutcome::Added => entry.visibility.history(),
+            // A reload can observe a call's earlier revision while its executor or host hook
+            // still runs. Its accepted result must replace that revision for every observer.
+            CommitOutcome::Replaced => {
+                entry.visibility.history()
+                    && matches!(
+                        entry.item,
+                        ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_)
+                    )
             }
-            CommitOutcome::Added | CommitOutcome::Replaced | CommitOutcome::Filtered => {}
+            CommitOutcome::Filtered => false,
+        };
+        if !publish {
+            return;
         }
+        // The person's message answers the call an `InputRequired` left open.
+        if let ChatItem::Message(m) = &entry.item
+            && m.role == lk_agents_abi::Role::User
+        {
+            self.answer_pending_input(&m.text_content().unwrap_or_default());
+        }
+        if self.run_owns_item(&entry.source) {
+            self.session.runs.record(&entry.item);
+        }
+        self.item_turn(&entry.item, &entry.source);
+        self.publish_event(crate::events::SessionEvent::ConversationItemAdded {
+            item: Box::new(entry.item),
+            agent: entry.agent,
+            source: entry.source,
+            visibility: entry.visibility,
+        });
     }
 }
 

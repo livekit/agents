@@ -82,7 +82,8 @@ impl Source {
 pub enum CommitOutcome {
     /// New to the record, or a context-only item (a realtime server's placeholder) now in history.
     Added,
-    /// Replaced in place (a realtime server re-finalising one `item_id`); no second `ItemAdded`.
+    /// Replaced in place. Tool revisions are republished; a realtime mirror's repeated message
+    /// does not announce another conversation item.
     Replaced,
     /// The item is the fixed-id instructions message of an older session: filtered, not recorded.
     Filtered,

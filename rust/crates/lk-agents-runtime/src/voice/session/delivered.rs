@@ -35,14 +35,13 @@ impl Default for SessionState {
 }
 
 impl SessionState {
-    /// `ChatContext.insert`: after the last item created no later. An output told again (an
-    /// answered question's) replaces its earlier telling in place.
+    /// `ChatContext.insert`: after the last item created no later. A revised item replaces its
+    /// earlier telling in place, including a restored transcript or tool call.
     fn add(&mut self, item: &ChatItem, host: HostRef) {
         let id = item.id().to_owned();
-        if matches!(item, ChatItem::FunctionCallOutput(_))
-            && let Some(told) = self.history.iter_mut().find(|told| told.id == id)
-        {
+        if let Some(told) = self.history.iter_mut().find(|told| told.id == id) {
             told.host = host;
+            told.created_at = item.created_at();
             return;
         }
         let created_at = item.created_at();
@@ -178,5 +177,31 @@ fn host_items(events: &dyn SessionEvents, items: &[ChatItem]) -> Vec<HostRef> {
             log::warn!(target: lk_agents_abi::LOG_TARGET, error = error.to_string().as_str(); "the host made no history items");
             Vec::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lk_agents_abi::{ChatMessage, RefRegistry, Role};
+
+    struct HostObjects;
+
+    impl RefRegistry for HostObjects {
+        fn release(&self, _: u64) {}
+    }
+
+    #[test]
+    fn a_revised_message_replaces_its_host_object_without_duplicating_history() {
+        let registry: Arc<dyn RefRegistry> = Arc::new(HostObjects);
+        let mut state = SessionState::default();
+        let message = |text| {
+            ChatItem::Message(ChatMessage::text("input", Role::User, text, SystemTime::UNIX_EPOCH))
+        };
+        state.add(&message(""), HostRef::new(1, &registry));
+        state.add(&message("Can you hear me?"), HostRef::new(2, &registry));
+        let history = lk_agents_abi::voice::session_effects::SessionState::history(&state);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id(), 2, "the host reads the accepted final transcript");
     }
 }

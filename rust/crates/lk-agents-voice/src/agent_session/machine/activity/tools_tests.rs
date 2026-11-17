@@ -6,6 +6,60 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::{BoxFuture, HostRef, Ts};
 use std::sync::Arc;
 
+#[test]
+fn a_tool_result_replacing_a_reloaded_output_notifies_history_observers() {
+    use crate::agent::{Source, Visibility};
+    use crate::agent_session::effects::VoiceEffect;
+    use crate::events::SessionEvent;
+    use lk_agents_abi::{FunctionCall, FunctionCallOutput};
+
+    let mut driver = crate::agent_session::tests::driver();
+    let call = FunctionCall {
+        id: "call-item".into(),
+        call_id: "call".into(),
+        name: "lookup".into(),
+        arguments: "{}".into(),
+        created_at: std::time::UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    };
+    driver.commit_item(call.clone().into(), Source::HostCtx, Visibility::Both);
+    driver.commit_item(
+        FunctionCallOutput::new("output", "call", "old", false, std::time::UNIX_EPOCH).into(),
+        Source::HostCtx,
+        Visibility::Both,
+    );
+    driver.settle_step();
+    driver.take_outbox();
+    let mut revised_call = call;
+    revised_call.extra.insert("accepted".into(), serde_json::Value::Bool(true));
+    driver.commit_item(
+        revised_call.into(),
+        Source::ToolCall { speech: SpeechId(1), step: 1 },
+        Visibility::Both,
+    );
+    driver.commit_item(
+        FunctionCallOutput::new("output", "call", "current", false, std::time::UNIX_EPOCH).into(),
+        Source::ToolOutput { speech: SpeechId(1), step: 1 },
+        Visibility::Both,
+    );
+    let effects = driver.settle_step();
+    let revised: Vec<_> = effects
+        .iter()
+        .filter_map(|effect| match effect {
+            VoiceEffect::Emit(SessionEvent::ConversationItemAdded { item, .. }) => {
+                Some(item.as_ref())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(revised.len(), 2, "both accepted revisions reach history observers");
+    assert!(
+        matches!(&revised[1], lk_agents_abi::ChatItem::FunctionCallOutput(output) if output.output == "current")
+    );
+    assert_eq!(driver.session.chat_ctx.history().filter(|item| item.id() == "output").count(), 1);
+}
+
 struct UnusedHost;
 
 impl AgentCallbacks for UnusedHost {

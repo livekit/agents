@@ -6,6 +6,40 @@ use crate::trace::{SpeechStep, Step};
 use lk_agents_abi::{ChatMessage, Role};
 use lk_agents_core::agent_run::RequestId;
 
+#[test]
+fn reloading_history_does_not_publish_a_private_realtime_placeholder() {
+    use crate::agent::{Source, Visibility};
+
+    let mut driver = driver();
+    driver.commit_item(
+        ChatMessage::text("placeholder", Role::User, "", std::time::UNIX_EPOCH).into(),
+        Source::Remote { item_id: "placeholder".into() },
+        Visibility::Model,
+    );
+    let foreign: ChatItem =
+        ChatMessage::text("text", Role::Assistant, "Sent by text.", std::time::UNIX_EPOCH).into();
+    driver.settle_step();
+    driver.take_outbox();
+    driver.storage_reloaded(
+        Vec::new(),
+        VoiceHistory { items: vec![foreign.clone()], stored: vec![foreign], revision: (1, 1) },
+    );
+    let effects = driver.settle_step();
+    let history = effects
+        .iter()
+        .find_map(|effect| match effect {
+            VoiceEffect::Emit(SessionEvent::HistoryReloaded { items }) => Some(items),
+            _ => None,
+        })
+        .expect("the foreign text reloads history");
+    assert!(history.iter().any(|item| item.id() == "text"));
+    assert!(!history.iter().any(|item| item.id() == "placeholder"));
+    assert!(
+        driver.session.chat_ctx.items().any(|item| item.id() == "placeholder"),
+        "the realtime model keeps its private placeholder until its final transcript"
+    );
+}
+
 /// A bound driver with one scheduled speech holding the partition, journalled.
 fn speaking(speech: SpeechId) -> VoiceDriver {
     let mut driver = driver();
