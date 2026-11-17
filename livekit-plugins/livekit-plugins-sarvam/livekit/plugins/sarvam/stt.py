@@ -1581,8 +1581,6 @@ class SpeechStream(stt.SpeechStream):
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Process audio frames and send them in chunks."""
-        import base64
-
         import numpy as np
 
         # Audio buffering for chunked sending
