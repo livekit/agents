@@ -6,9 +6,13 @@ import sys
 from collections.abc import Iterator
 from functools import cache
 from pathlib import Path
+from types import SimpleNamespace
 from typing import NamedTuple
 
+import aiohttp
 import pytest
+from multidict import CIMultiDict, CIMultiDictProxy
+from yarl import URL
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, utils
 from livekit.agents.cli import log
@@ -248,6 +252,32 @@ def _filter_by_provider(config: pytest.Config, items: list[pytest.Item]) -> None
     if deselected:
         config.hook.pytest_deselected(items=deselected)
         items[:] = kept
+
+
+@pytest.fixture
+def quota_http_session() -> SimpleNamespace:
+    """Refuse WebSocket upgrades with gateway quota headers without opening a socket."""
+
+    async def ws_connect(url: str, **kwargs: object) -> None:
+        request_url = URL(url)
+        raise aiohttp.WSServerHandshakeError(
+            request_info=aiohttp.RequestInfo(
+                request_url, "GET", CIMultiDictProxy(CIMultiDict()), request_url
+            ),
+            history=(),
+            status=429,
+            message="Invalid response status",
+            headers=CIMultiDict(
+                {
+                    "X-LiveKit-Inference-Quota-Category": "MaxGatewayCredits",
+                    "X-LiveKit-Inference-Quota-Message": "Credit quota exhausted.",
+                    "X-LiveKit-Request-Id": "quota-test-request",
+                    "X-Should-Retry": "false",
+                }
+            ),
+        )
+
+    return SimpleNamespace(ws_connect=ws_connect, closed=False)
 
 
 @pytest.fixture

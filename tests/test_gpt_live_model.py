@@ -28,6 +28,7 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
+    APIStatusError,
     inference,
     llm,
 )
@@ -2237,6 +2238,30 @@ async def test_inference_connects_to_the_gateway_with_a_livekit_token(
         assert headers["Authorization"] == "Bearer token-two:lk-key"
     finally:
         await session.aclose()
+
+
+async def test_failed_handshake_explains_exhausted_credits(
+    quota_http_session: SimpleNamespace,
+) -> None:
+    model = _inference_model(
+        http_session=quota_http_session,
+        conn_options=APIConnectOptions(max_retry=0, timeout=1.0),
+    )
+    session = model.session()
+    errors: asyncio.Queue[llm.RealtimeModelError] = asyncio.Queue()
+    session.on("error", errors.put_nowait)
+    try:
+        event = await asyncio.wait_for(errors.get(), timeout=1.0)
+        assert isinstance(event.error, APIStatusError)
+        assert "Credit quota exhausted." in event.error.message
+        assert event.error.status_code == 429
+        assert event.error.retryable is False
+        assert event.error.request_id == "quota-test-request"
+        assert event.error.body == {"category": "MaxGatewayCredits"}
+    finally:
+        with contextlib.suppress(APIError):
+            await session.aclose()
+        await model.aclose()
 
 
 async def test_inference_refuses_hosted_tools_the_gateway_cannot_meter(
