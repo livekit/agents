@@ -49,6 +49,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
+from ._utils import KEYTERMS_MODELS, merge_keyterms, validate_keyterms
 from .log import logger
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
@@ -277,6 +278,7 @@ class SarvamSTTOptions:
         base_url: API endpoint URL (auto-determined from model if not provided)
         streaming_url: WebSocket streaming URL (auto-determined from model if not provided)
         prompt: Optional prompt for STT translate (saaras models only)
+        keyterms: Terms to bias recognition toward (saaras:v4 only)
     """
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
@@ -286,6 +288,7 @@ class SarvamSTTOptions:
     base_url: str | None = None
     streaming_url: str | None = None
     prompt: str | None = None  # Optional prompt for STT translate (saaras models only)
+    keyterms: list[str] | None = None
     high_vad_sensitivity: bool | None = None
     sample_rate: int = 16000
     flush_signal: bool | None = None
@@ -314,6 +317,7 @@ class SarvamSTTOptions:
             self.language = model_config.default_language
         _validate_language_for_model(self.model, self.language)
         self.mode = _validate_mode_for_model(self.model, self.mode)
+        self.keyterms = validate_keyterms(self.keyterms, self.model)
         if self.sample_rate <= 0:
             raise ValueError("sample_rate must be greater than zero")
 
@@ -397,6 +401,8 @@ def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
         params["mode"] = opts.mode
     if opts.input_audio_codec:
         params["input_audio_codec"] = opts.input_audio_codec
+    if opts.keyterms:
+        params["keyterms"] = json.dumps(opts.keyterms)
 
     if _model_supports_vad_params(opts.model):
         if opts.positive_speech_threshold is not None:
@@ -469,6 +475,15 @@ class STT(stt.STT):
         base_url: API endpoint URL
         http_session: Optional aiohttp session to use
         prompt: Optional prompt for STT translate (saaras models only)
+        keyterms: Names, places, brands or technical terms to bias recognition toward
+            (saaras:v4 only). For best performance, use about 10 terms. Put a phrase such
+            as "New Delhi" in one item. Sarvam accepts up to 50 terms of at most 64
+            characters, within about 8 KB URL-encoded (15 full-length Devanagari terms).
+            Terms the agent session adds (``stt_context_options`` and keyterm detection)
+            are appended and reach open streams by reconnecting between utterances. The
+            session only adds terms when ``model`` is saaras:v4, so create the STT with
+            saaras:v4 rather than overriding the model per stream if you want them.
+            Passing keyterms with a model other than saaras:v4 raises ``ValueError``.
     """
 
     def __init__(
@@ -481,6 +496,7 @@ class STT(stt.STT):
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         prompt: str | None = None,
+        keyterms: list[str] | None = None,
         high_vad_sensitivity: bool | None = None,
         sample_rate: int = 16000,
         flush_signal: bool | None = None,
@@ -502,6 +518,8 @@ class STT(stt.STT):
                 interim_results=True,
                 # chunk timestamps don't seem to work despite the docs saying they do
                 aligned_transcript=False,
+                # framework keyterms (session config + detection) only reach saaras:v4
+                keyterms=model in KEYTERMS_MODELS,
             )
         )
 
@@ -519,6 +537,7 @@ class STT(stt.STT):
             mode=mode,
             base_url=base_url,
             prompt=prompt,
+            keyterms=keyterms,
             high_vad_sensitivity=high_vad_sensitivity,
             sample_rate=sample_rate,
             flush_signal=flush_signal,
@@ -540,6 +559,9 @@ class STT(stt.STT):
         # otherwise take its still-open per-stream aiohttp.ClientSession with it.
         # Streams discard themselves in SpeechStream.aclose() once closed.
         self._streams: set[SpeechStream] = set()
+        # keyterms set by the framework (session config + auto-detection), kept apart from
+        # the user's own so an update from either side never drops the other
+        self._session_keyterms: list[str] = []
         _warn_if_sunset_stt_model(model)
 
     @property
@@ -549,6 +571,26 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Sarvam"
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        # Sarvam takes keyterms only when a connection opens, so open streams reconnect
+        # with the merged set between utterances, as the Deepgram plugin does.
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        for stream in self._streams:
+            stream._apply_session_keyterms(self._session_keyterms)
+
+    def _keyterms_for_model(self, keyterms: list[str] | None, model: str) -> list[str] | None:
+        # The constructor rejects keyterms with another model; a per-call model override
+        # drops them with a warning instead, like SpeechStream.update_options does.
+        if keyterms and model not in KEYTERMS_MODELS:
+            self._logger.warning(
+                "Dropping keyterms: they are only supported by saaras:v4",
+                extra={"model": model},
+            )
+            return None
+        return validate_keyterms(keyterms, model)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -651,6 +693,13 @@ class STT(stt.STT):
             form_data.add_field("model", str(opts_model))
         if _model_supports_mode(opts_model):
             form_data.add_field("mode", str(opts_mode))
+        keyterms = merge_keyterms(
+            self._keyterms_for_model(self._opts.keyterms, opts_model),
+            self._session_keyterms,
+            opts_model,
+        )
+        if keyterms:
+            form_data.add_field("keyterms", json.dumps(keyterms))
 
         if not self._api_key:
             raise ValueError("API key cannot be None")
@@ -746,6 +795,7 @@ class STT(stt.STT):
         mode: NotGivenOr[SarvamSTTModes | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         prompt: NotGivenOr[str] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str] | None] = NOT_GIVEN,
         high_vad_sensitivity: NotGivenOr[bool] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         flush_signal: NotGivenOr[bool] = NOT_GIVEN,
@@ -761,7 +811,11 @@ class STT(stt.STT):
         pre_speech_pad_frames: NotGivenOr[int] = NOT_GIVEN,
         num_initial_ignored_frames: NotGivenOr[int] = NOT_GIVEN,
     ) -> SpeechStream:
-        """Create a streaming transcription session."""
+        """Create a streaming transcription session.
+
+        ``keyterms`` replaces the instance's keyterms for this stream. With a model other
+        than saaras:v4 they are dropped with a warning.
+        """
         opts_language, opts_model, opts_mode = self._resolve_opts(
             language=language,
             model=model,
@@ -770,6 +824,9 @@ class STT(stt.STT):
 
         # Handle prompt conversion from NotGiven to None
         final_prompt = prompt if isinstance(prompt, str) else self._opts.prompt
+        user_keyterms = self._keyterms_for_model(
+            keyterms if is_given(keyterms) else self._opts.keyterms, opts_model
+        )
 
         opts_high_vad = (
             high_vad_sensitivity
@@ -838,6 +895,7 @@ class STT(stt.STT):
             model=opts_model,
             mode=opts_mode,
             prompt=final_prompt,
+            keyterms=merge_keyterms(user_keyterms, self._session_keyterms, opts_model),
             high_vad_sensitivity=opts_high_vad,
             sample_rate=opts_sample_rate,
             flush_signal=opts_flush_signal,
@@ -865,6 +923,7 @@ class STT(stt.STT):
             conn_options=single_attempt_conn_options,
             api_key=self._api_key,
             http_session=stream_session,
+            user_keyterms=user_keyterms,
         )
         self._streams.add(stream)
         return stream
@@ -902,6 +961,7 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
         client_request_id: str | None = None,
         server_request_id: str | None = None,
+        user_keyterms: list[str] | None = None,
     ) -> None:
         self._opts = opts
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
@@ -954,6 +1014,10 @@ class SpeechStream(stt.SpeechStream):
         # set while no utterance is open, so end of input knows when it may close
         self._utterance_settled = asyncio.Event()
         self._utterance_settled.set()
+        # the user's own keyterms, kept apart so session updates can be re-merged
+        self._user_keyterms = user_keyterms
+        # merged keyterms waiting for the open utterance to end before reconnecting
+        self._pending_keyterms: NotGivenOr[list[str] | None] = NOT_GIVEN
 
     def _build_log_context(self) -> dict:
         """Build consistent logging context."""
@@ -1072,6 +1136,8 @@ class SpeechStream(stt.SpeechStream):
         self._pending_eos = False
         self._utterance_settled.set()
         self._utterance_resolved.set()
+        if is_given(self._pending_keyterms):
+            self._reconnect_with_keyterms(self._pending_keyterms)
 
     async def _emit_pending_eos_after_timeout(self) -> None:
         try:
@@ -1158,6 +1224,17 @@ class SpeechStream(stt.SpeechStream):
         self._opts.language = LanguageCode(language)
         self._opts.model = model
         self._opts.base_url, self._opts.streaming_url = _get_urls_for_model(model)
+        if self._user_keyterms and model not in KEYTERMS_MODELS:
+            # Sarvam rejects the connection outright when keyterms meet another model
+            self._logger.warning(
+                "Dropping keyterms while on a model other than saaras:v4",
+                extra={**self._build_log_context(), "model": model},
+            )
+        # re-merge on every switch, so going back to v4 restores the current terms
+        stt = self._stt
+        session_keyterms = stt._session_keyterms if isinstance(stt, STT) else []
+        self._opts.keyterms = self._merge_keyterms(session_keyterms)
+        self._pending_keyterms = NOT_GIVEN
         if prompt is not None:
             self._opts.prompt = prompt
 
@@ -1168,6 +1245,45 @@ class SpeechStream(stt.SpeechStream):
         self._logger.info(
             "Options updated, triggering reconnection",
             extra={**self._build_log_context(), "lk.pii.prompt": prompt},
+        )
+        self._reconnect_event.set()
+
+    def _apply_session_keyterms(self, session_keyterms: list[str]) -> None:
+        """Reconnect with new session keyterms, waiting for the open utterance to end."""
+        merged = self._merge_keyterms(session_keyterms)
+        if merged == self._opts.keyterms:
+            self._pending_keyterms = NOT_GIVEN
+            return
+        if self._audio_task is not None and self._audio_task.done():
+            # input has ended; a reconnect now would only cut the stream's tail short
+            return
+        if not self._utterance_settled.is_set():
+            # reconnecting mid-utterance would cut it off, so wait for its end
+            self._pending_keyterms = merged
+            return
+        self._reconnect_with_keyterms(merged)
+
+    def _merge_keyterms(self, session_keyterms: list[str]) -> list[str] | None:
+        """Merge the session keyterms into this stream's own keyterms for its current model.
+
+        The stream's own keyterms survive model switches but are sent only to saaras:v4;
+        on any other model both sets are dropped, since Sarvam rejects keyterms there.
+
+        Args:
+            session_keyterms: Keyterms set by the agent session.
+
+        Returns:
+            The keyterms to send on the next connection, or ``None`` for none.
+        """
+        user_keyterms = self._user_keyterms if self._opts.model in KEYTERMS_MODELS else None
+        return merge_keyterms(user_keyterms, session_keyterms, self._opts.model)
+
+    def _reconnect_with_keyterms(self, keyterms: list[str] | None) -> None:
+        self._pending_keyterms = NOT_GIVEN
+        self._opts.keyterms = keyterms
+        self._logger.info(
+            "Keyterms updated, reconnecting between utterances",
+            extra={**self._build_log_context(), "keyterm_count": len(keyterms or [])},
         )
         self._reconnect_event.set()
 
@@ -1196,8 +1312,8 @@ class SpeechStream(stt.SpeechStream):
         try:
             # a retry after an error starts here too, with the base class's clock restarted
             self._carry_audio_into_next_connection()
-            # update_options() ends a connection to reopen it with the new options;
-            # the input channel carries on into the next connection
+            # update_options() and keyterm updates end a connection to reopen it with the
+            # new options; the input channel carries on into the next connection
             while await self._run_connection():
                 # Sarvam times each connection from zero, so re-anchor on its first audio
                 self._input_ch.restart_provider_clock()
@@ -1249,7 +1365,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._logger.info(
             "Connecting to STT WebSocket",
-            extra={**self._build_log_context(), "url": ws_url, "user-agent": USER_AGENT},
+            extra={**self._build_log_context(), "lk.pii.url": ws_url, "user-agent": USER_AGENT},
         )
 
         ws = await asyncio.wait_for(
@@ -1293,8 +1409,9 @@ class SpeechStream(stt.SpeechStream):
                     "Reconnection requested, closing current connection",
                     extra=self._build_log_context(),
                 )
-                self._reconnect_event.clear()
                 await self._settle_utterance_for_reconnect(ws)
+                # settling may queue keyterms, which the new connection picks up anyway
+                self._reconnect_event.clear()
                 return True
 
             # Keep listening for server-side terminal errors when audio finishes first.
@@ -1319,8 +1436,9 @@ class SpeechStream(stt.SpeechStream):
                         "Reconnection requested, closing current connection",
                         extra=self._build_log_context(),
                     )
-                    self._reconnect_event.clear()
                     await self._settle_utterance_for_reconnect(ws)
+                    # settling may queue keyterms, which the new connection picks up anyway
+                    self._reconnect_event.clear()
                     return True
 
             # Cancel remaining tasks using LiveKit's utility
@@ -1355,6 +1473,19 @@ class SpeechStream(stt.SpeechStream):
                     extra=self._build_log_context(),
                 )
         return False
+
+    async def _wait_for_utterance_settled(self) -> None:
+        # The grace is fixed discovery time, so it doesn't count against the caller's
+        # timeout; only an utterance that is actually open is bounded by it.
+        await asyncio.sleep(END_OF_INPUT_GRACE)
+        if self._utterance_settled.is_set():
+            return
+        try:
+            await asyncio.wait_for(self._utterance_settled.wait(), self._conn_options.timeout)
+        except asyncio.TimeoutError:
+            raise APITimeoutError(
+                "Timed out waiting for the final transcript after audio input ended"
+            ) from None
 
     async def _settle_utterance_for_reconnect(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Close an open utterance on the old connection before it is replaced.
@@ -1430,19 +1561,6 @@ class SpeechStream(stt.SpeechStream):
         excess = len(self._recent_audio) - int(RECONNECT_REPLAY_S * self._opts.sample_rate) * 2
         if excess > 0:
             del self._recent_audio[:excess]
-
-    async def _wait_for_utterance_settled(self) -> None:
-        # The grace is fixed discovery time, so it doesn't count against the caller's
-        # timeout; only an utterance that is actually open is bounded by it.
-        await asyncio.sleep(END_OF_INPUT_GRACE)
-        if self._utterance_settled.is_set():
-            return
-        try:
-            await asyncio.wait_for(self._utterance_settled.wait(), self._conn_options.timeout)
-        except asyncio.TimeoutError:
-            raise APITimeoutError(
-                "Timed out waiting for the final transcript after audio input ended"
-            ) from None
 
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
