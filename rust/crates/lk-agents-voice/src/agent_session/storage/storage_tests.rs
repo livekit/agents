@@ -1,6 +1,7 @@
 use super::*;
 use crate::agent_session::machine::activity::scheduling::{SpeechKind, VoiceRunParticipation};
 use crate::agent_session::tests::driver;
+use crate::events::SessionEvent;
 use crate::speech_handle::SpeechState;
 use crate::trace::{SpeechStep, Step};
 use lk_agents_abi::{ChatMessage, Role};

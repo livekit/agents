@@ -495,9 +495,7 @@ impl VoiceDriver {
                 let agent = self.activity.agent.clone();
                 self.session.chat_ctx.update_agent_chat_ctx(items, &agent);
                 self.conversation_changed();
-                self.publish_event(crate::events::SessionEvent::HistoryReloaded {
-                    items: self.session.chat_ctx.history().cloned().collect(),
-                });
+                self.publish_history();
                 if self.activity.realtime().is_some() {
                     let ctx = self.session.chat_ctx.for_realtime();
                     self.rt_send(lk_agents_abi::RealtimeCommand::UpdateChatCtx(
@@ -649,6 +647,14 @@ impl VoiceDriver {
         }
     }
 
+    /// Host history follows the accepted native ledger, including revisions and positions that
+    /// cannot be reconstructed from added-item notifications alone.
+    pub(crate) fn publish_history(&mut self) {
+        self.publish_event(crate::events::SessionEvent::HistoryReloaded {
+            items: self.session.chat_ctx.history().cloned().collect(),
+        });
+    }
+
     fn perform_commit(&mut self, (entry, outcome): (Committed, CommitOutcome)) {
         // A call was pushed to the handle when the model made it; everything else is new here.
         let tell_speech =
@@ -660,14 +666,26 @@ impl VoiceDriver {
         }
         let publish = match outcome {
             CommitOutcome::Added => entry.visibility.history(),
+            CommitOutcome::Promoted => {
+                self.publish_history();
+                true
+            }
             // A reload can observe a call's earlier revision while its executor or host hook
             // still runs. Its accepted result must replace that revision for every observer.
             CommitOutcome::Replaced => {
-                entry.visibility.history()
-                    && matches!(
-                        entry.item,
-                        ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_)
-                    )
+                if entry.visibility.history() && matches!(entry.item, ChatItem::Message(_)) {
+                    if self.run_owns_item(&entry.source) {
+                        self.session.runs.record(&entry.item);
+                    }
+                    self.publish_history();
+                    false
+                } else {
+                    entry.visibility.history()
+                        && matches!(
+                            entry.item,
+                            ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_)
+                        )
+                }
             }
             CommitOutcome::Filtered => false,
         };

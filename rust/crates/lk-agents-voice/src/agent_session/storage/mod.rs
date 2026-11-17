@@ -25,7 +25,6 @@ use super::VoiceDriver;
 use super::effects::{Timer, VoiceEffect};
 use super::machine::StorageRequest;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
-use crate::events::SessionEvent;
 use crate::generation::TurnOutcome;
 
 mod progress;
@@ -435,9 +434,7 @@ impl VoiceDriver {
         ) {
             return;
         }
-        self.publish_event(SessionEvent::HistoryReloaded {
-            items: self.session.chat_ctx.history().cloned().collect(),
-        });
+        self.publish_history();
     }
 
     /// A started speech takes the partition: it holds it until its turn's save is answered.

@@ -2,6 +2,7 @@ use super::*;
 use crate::agent_session::Now;
 use crate::agent_session::tests::realtime_driver;
 use crate::generation::GenEvent;
+use lk_agents_abi::ChatItem;
 use lk_agents_abi::voice::events::AgentState;
 
 #[test]
@@ -21,6 +22,7 @@ fn a_final_keeps_its_placeholder_before_later_text_with_the_same_timestamp() {
             wall: std::time::UNIX_EPOCH + Duration::from_secs(3),
         },
     );
+    driver.take_outbox();
     driver.upsert_user_transcript(
         rt::InputTranscription {
             item_id: "input".into(),
@@ -38,6 +40,43 @@ fn a_final_keeps_its_placeholder_before_later_text_with_the_same_timestamp() {
         .collect();
     assert_eq!(history.iter().map(|item| item.id()).collect::<Vec<_>>(), ["input", "text"]);
     assert_eq!(history[0].created_at(), onset);
+    let effects = driver.settle_step();
+    let snapshot = effects.iter().position(|effect| matches!(effect,
+        crate::agent_session::effects::VoiceEffect::Emit(SessionEvent::HistoryReloaded { items })
+            if items.iter().filter(|item| matches!(item.id(), "input" | "text"))
+                .map(ChatItem::id).collect::<Vec<_>>() == ["input", "text"]
+    )).expect("the host receives the native order, including the promoted placeholder");
+    let added = effects.iter().position(|effect| matches!(effect,
+        crate::agent_session::effects::VoiceEffect::Emit(SessionEvent::ConversationItemAdded { item, .. }) if item.id() == "input"
+    )).unwrap();
+    assert!(snapshot < added, "the final-transcript callback reads its accepted native position");
+}
+
+#[test]
+fn a_revised_heard_message_updates_host_history_without_announcing_a_second_item() {
+    use crate::agent_session::effects::VoiceEffect;
+    let mut driver = crate::agent_session::tests::driver();
+    let source = Source::Remote { item_id: "reply".into() };
+    driver.commit_item(
+        ChatMessage::text("reply", Role::Assistant, "Hello", std::time::UNIX_EPOCH).into(),
+        source.clone(),
+        Visibility::Both,
+    );
+    driver.settle_step();
+    driver.take_outbox();
+    driver.commit_item(
+        ChatMessage::text("reply", Role::Assistant, "Hello there.", std::time::UNIX_EPOCH).into(),
+        source,
+        Visibility::Both,
+    );
+    let effects = driver.settle_step();
+    assert!(effects.iter().any(|effect| matches!(effect,
+        VoiceEffect::Emit(SessionEvent::HistoryReloaded { items }) if items.iter().any(|item|
+            item.id() == "reply" && item.as_message().and_then(ChatMessage::raw_text_content).as_deref() == Some("Hello there."))
+    )), "the host's history observes the accepted revision");
+    assert!(!effects.iter().any(|effect| matches!(effect,
+        VoiceEffect::Emit(SessionEvent::ConversationItemAdded { item, .. }) if item.id() == "reply"
+    )), "one heard message still has one added-item notification");
 }
 
 #[test]

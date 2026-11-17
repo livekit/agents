@@ -80,8 +80,11 @@ impl Source {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Vocabulary)]
 pub enum CommitOutcome {
-    /// New to the record, or a context-only item (a realtime server's placeholder) now in history.
+    /// New to the record.
     Added,
+    /// A model-only placeholder entered history. Publish its native position before the item
+    /// notification; timestamps alone cannot reconstruct its order among equal instants.
+    Promoted,
     /// Replaced in place. Tool revisions are republished; a realtime mirror's repeated message
     /// does not announce another conversation item.
     Replaced,
@@ -291,7 +294,7 @@ impl SessionChatCtx {
                     let at = self.find_insertion_index(&mut entry.item);
                     self.items.insert(at, Committed { visibility, ..entry.clone() });
                 }
-                CommitOutcome::Added
+                CommitOutcome::Promoted
             } else {
                 self.items[idx] = Committed { visibility, ..entry.clone() };
                 CommitOutcome::Replaced
@@ -765,7 +768,7 @@ mod tests {
             Visibility::Both,
             "caller",
         );
-        assert_eq!(outcome, CommitOutcome::Added);
+        assert_eq!(outcome, CommitOutcome::Promoted);
         let ids: Vec<_> = ctx.history().map(|item| item.id().to_owned()).collect();
         assert_eq!(ids, ["asked", "reply"]);
     }
