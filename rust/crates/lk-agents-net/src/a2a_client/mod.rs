@@ -752,6 +752,7 @@ impl<'a> ReplyReader<'a> {
         if let Some(observer) = &updates.observer {
             observer.response(self.request, response.clone()).await?;
         }
+        self.request.validate_response(&response)?;
         let update = self.state.accept(response.clone())?;
         Ok(ReplyEvent { response, update })
     }

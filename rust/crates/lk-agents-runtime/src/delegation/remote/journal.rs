@@ -84,26 +84,24 @@ impl RequestObserver for Journal {
     ) -> BoxFuture<'a, Result<(), ClientError>> {
         Box::pin(async move {
             let response = if request.task_response {
-                let a2a::StreamResponse::Task(task) = response else {
-                    return Err(ClientError::invalid_response(
-                        "a task method returned another response",
-                    ));
-                };
-                A2AResponse::Task(task)
+                match response {
+                    a2a::StreamResponse::Task(task) => A2AResponse::Task(task),
+                    other => A2AResponse::Stream(other),
+                }
             } else if request.streaming {
                 A2AResponse::Stream(response)
             } else {
-                A2AResponse::Send(match response {
-                    a2a::StreamResponse::Task(task) => a2a::SendMessageResponse::Task(task),
+                match response {
+                    a2a::StreamResponse::Task(task) => {
+                        A2AResponse::Send(a2a::SendMessageResponse::Task(task))
+                    }
                     a2a::StreamResponse::Message(message) => {
-                        a2a::SendMessageResponse::Message(message)
+                        A2AResponse::Send(a2a::SendMessageResponse::Message(message))
                     }
-                    _ => {
-                        return Err(ClientError::invalid_response(
-                            "unary send returned a stream delta",
-                        ));
-                    }
-                })
+                    // Preserve typed peer content even when it belongs to the wrong SDK
+                    // operation. Core journals that evidence before refusing its projection.
+                    other => A2AResponse::Stream(other),
+                }
             };
             self.apply(RemoteInput::Response {
                 request_id: self.request_id.clone(),

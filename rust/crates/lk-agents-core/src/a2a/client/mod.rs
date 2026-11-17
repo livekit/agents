@@ -86,6 +86,21 @@ pub struct Request {
 }
 
 impl Request {
+    /// A streaming event is not a unary SendMessage result. Validate independently of any
+    /// conversation observer so low-level clients enforce the same SDK operation contract.
+    pub fn validate_response(&self, response: &StreamResponse) -> Result<(), ClientError> {
+        if self.task_response && !matches!(response, StreamResponse::Task(_)) {
+            return Err(ClientError::invalid_response("a task method returned another response"));
+        }
+        if !self.streaming
+            && !self.task_response
+            && !matches!(response, StreamResponse::Task(_) | StreamResponse::Message(_))
+        {
+            return Err(ClientError::invalid_response("unary send returned a stream delta"));
+        }
+        Ok(())
+    }
+
     /// The request carrying the caller's span as its W3C `traceparent`, so the endpoint's work
     /// continues the caller's trace.
     pub fn traced(mut self, caller: Option<lk_agents_abi::telemetry::record::SpanContext>) -> Self {

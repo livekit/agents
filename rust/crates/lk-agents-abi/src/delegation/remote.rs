@@ -59,7 +59,7 @@ pub enum RemoteFailure {
 pub enum A2AJournalKind {
     /// Outgoing SDK request content; dispatch progress is stored on its request state.
     RequestRecorded,
-    /// A successful SDK response or stream item was observed, before presentation.
+    /// Typed peer content was received. Protocol validation may still refuse its projection.
     ResponseReceived,
     /// Communication failed; remote business work may nevertheless have happened.
     RequestError,

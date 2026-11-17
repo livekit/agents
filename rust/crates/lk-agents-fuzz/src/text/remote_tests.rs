@@ -40,6 +40,7 @@ struct Service {
     bookings: Mutex<Vec<String>>,
     lose_initial: bool,
     direct_reply: bool,
+    invalid_unary_delta: bool,
     cancel_reply: CancelReply,
     cancellations: Mutex<u32>,
     canceled: Mutex<bool>,
@@ -60,11 +61,11 @@ impl HttpExchangePort for Service {
             let payload = if method == Method::GET {
                 json!({"name":"booking","description":"Book a seat","version":"1",
                     "supportedInterfaces":[{"url":format!("{ENDPOINT}/rpc"),"protocolBinding":"JSONRPC","protocolVersion":"1.0"}],
-                    "capabilities":{"streaming":true},"defaultInputModes":["text/plain"],"defaultOutputModes":["text/plain"],"skills":[]})
+                    "capabilities":{"streaming":!self.invalid_unary_delta},"defaultInputModes":["text/plain"],"defaultOutputModes":["text/plain"],"skills":[]})
             } else {
                 let rpc: a2a::JsonRpcRequest = serde_json::from_slice(&request.body).unwrap();
                 match rpc.method.as_str() {
-                    a2a::methods::SEND_STREAMING_MESSAGE => {
+                    a2a::methods::SEND_MESSAGE | a2a::methods::SEND_STREAMING_MESSAGE => {
                         let send: a2a::SendMessageRequest =
                             serde_json::from_value(rpc.params.unwrap()).unwrap();
                         let responding = send.message.task_id.is_some();
@@ -81,7 +82,11 @@ impl HttpExchangePort for Service {
                             self.bookings.lock().push(date);
                         }
                         self.messages.lock().push(send.message);
-                        if self.direct_reply {
+                        if self.invalid_unary_delta {
+                            json!({"jsonrpc":"2.0","id":rpc.id,"result":{"statusUpdate":{
+                                "taskId":"booking","contextId":"trip","status":{"state":"TASK_STATE_COMPLETED"}
+                            }}})
+                        } else if self.direct_reply {
                             json!({"jsonrpc":"2.0","id":rpc.id,"result":{"message":{
                                 "messageId":"receipt","role":"ROLE_AGENT","parts":[{"text":"Booked"}]
                             }}})
@@ -281,6 +286,68 @@ async fn a_fresh_owner_returns_an_observed_message_reply_without_another_busines
         before,
         "reading an accepted reply does not journal a second exchange"
     );
+    assert_eq!(
+        Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,
+        Closed::Clean
+    );
+    binding.close();
+    store.finish_session(false).await.unwrap();
+    assert!(!database.held(PARTITION_KEY).await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_unary_send_cannot_accept_a_stream_delta_without_a_conversation_observer() {
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_runtime::net::clock::SimClock::new());
+    let env = environment(clock.clone());
+    let service = Arc::new(Service { invalid_unary_delta: true, ..Default::default() });
+    let client = AgentClient::with_transport(
+        ENDPOINT.into(),
+        None,
+        Default::default(),
+        service.clone(),
+        (env.process.spawner)().unwrap(),
+        clock.clone(),
+    )
+    .unwrap();
+    let sent = client
+        .send(message("start", "Book a seat", false), None, None, None, &env.tracer.root())
+        .await;
+    assert!(
+        sent.is_err(),
+        "SendMessage accepts an SDK Task or Message, not a streaming status event"
+    );
+    client.aclose().await;
+    assert_eq!(service.messages.lock().len(), 1, "a protocol error cannot repeat business work");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_wrong_operation_response_remains_in_the_journal_without_becoming_task_state() {
+    use lk_agents_abi::delegation::remote::{A2AJournalPayload, A2AResponse};
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_runtime::net::clock::SimClock::new());
+    let env = environment(clock.clone());
+    let database = Store::open(79, false, clock.clone()).await;
+    let service = Arc::new(Service { invalid_unary_delta: true, ..Default::default() });
+    let store = ContextStore::bound(
+        database.backend.clone(),
+        database.thread_id.clone(),
+        PARTITION_KEY.into(),
+        env.tracer.root(),
+    )
+    .await
+    .unwrap();
+    let (runner, updates, binding, view) = owner(&env, store.clone()).await;
+    assert!(resume(&env, service.clone(), runner.clone()).await.is_err());
+    let snapshot = view._snapshot_data().unwrap().unwrap();
+    let remote = &snapshot.remote_agents[ENDPOINT];
+    assert!(remote.tasks.is_empty(), "a rejected response cannot fabricate a completed booking");
+    assert!(
+        remote.events.iter().any(|entry| matches!(&entry.payload,
+        A2AJournalPayload::Response(response) if matches!(response.as_ref(),
+            A2AResponse::Stream(a2a::StreamResponse::StatusUpdate(_))))),
+        "the original typed protocol content remains available for diagnosis"
+    );
+    assert_eq!(remote.events.len(), 3, "one request, its refused response and its observed error");
+    assert_eq!(service.messages.lock().len(), 1);
     assert_eq!(
         Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,
         Closed::Clean
