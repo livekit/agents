@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterable
 
 from dotenv import load_dotenv
 
@@ -15,12 +14,10 @@ from livekit.agents import (
     AMDCategory,
     AMDMenuObservedEvent,
     AMDPredictionEvent,
-    FlushSentinel,
+    AMDReason,
     JobContext,
-    ModelSettings,
     cli,
     inference,
-    llm,
     room_io,
 )
 from livekit.agents.beta.tools import EndCallTool
@@ -51,16 +48,6 @@ class MyAgent(Agent):
             ],
         )
 
-    def llm_node(
-        self,
-        chat_ctx: llm.ChatContext,
-        tools: list[llm.Tool],
-        model_settings: ModelSettings,
-    ) -> AsyncIterable[llm.ChatChunk | str | FlushSentinel]:
-        if self.session.amd is not None:
-            tools[:] = [tool for tool in tools if tool.id != "end_call"]
-        return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
-
 
 server = AgentServer()
 
@@ -72,7 +59,7 @@ async def entrypoint(ctx: JobContext) -> None:
     }
     session = AgentSession(
         stt=inference.STT("deepgram/nova-3", language="multi"),
-        llm=inference.LLM("openai/gpt-4.1-mini"),
+        llm=inference.LLM("google/gemma-4-31b-it"),
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
     )
 
@@ -139,7 +126,11 @@ async def entrypoint(ctx: JobContext) -> None:
         result = await detector.execute()
         logger.info("amd completed", extra={"lk.pii.amd.result": result.model_dump_json()})
 
-    if result.voicemail_message_played and result.category != AMDCategory.HUMAN:
+    if result.is_error or result.reason == AMDReason.PARTICIPANT_DISCONNECTED:
+        # the callee hung up, or AMD stopped without detecting the call, such as when
+        # end_call closed the session (cancelled)
+        ctx.shutdown(result.reason.value)
+    elif result.voicemail_message_played and result.category != AMDCategory.HUMAN:
         ctx.shutdown("voicemail completed")
     elif result.category == AMDCategory.MACHINE_UNAVAILABLE:
         # nobody can take the call, such as a full mailbox; hang up

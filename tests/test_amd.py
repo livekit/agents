@@ -6770,6 +6770,9 @@ async def test_customer_stop_response_prevents_realtime_generation() -> None:
         "voicemail_failed",
         "human_after_voicemail",
         "unavailable",
+        "hung_up",
+        "agent_ended",
+        "amd_failed",
         "disconnected",
         "missing",
         "timeout",
@@ -6797,12 +6800,24 @@ async def test_outbound_call_setup(monkeypatch: pytest.MonkeyPatch, outcome: str
         "voicemail_menu": AMDCategory.MACHINE_IVR,
         "voicemail_failed": AMDCategory.MACHINE_VM,
         "unavailable": AMDCategory.MACHINE_UNAVAILABLE,
+        "hung_up": AMDCategory.UNCERTAIN,
+        "agent_ended": AMDCategory.MACHINE_VM,
+        "amd_failed": AMDCategory.UNCERTAIN,
     }.get(outcome, AMDCategory.HUMAN)
+    reason = {
+        "hung_up": AMDReason.PARTICIPANT_DISCONNECTED,
+        # end_call closes the session, which cancels AMD
+        "agent_ended": AMDReason.CANCELLED,
+        "amd_failed": AMDReason.INTERNAL_ERROR,
+    }.get(
+        outcome,
+        AMDReason.FINISHED if category == AMDCategory.HUMAN else AMDReason.IDLE_TIMEOUT,
+    )
     result = AMDCompletedEvent(
         category=category,
-        reason=AMDReason.FINISHED if category == AMDCategory.HUMAN else AMDReason.IDLE_TIMEOUT,
+        reason=reason,
         voicemail_message_played=outcome
-        in {"voicemail", "voicemail_menu", "human_after_voicemail"},
+        in {"voicemail", "voicemail_menu", "human_after_voicemail", "agent_ended"},
     )
     detector = MagicMock(execute=AsyncMock(return_value=result))
     monkeypatch.setattr(agents, "AMD", Mock(return_value=detector))
@@ -6861,9 +6876,15 @@ async def test_outbound_call_setup(monkeypatch: pytest.MonkeyPatch, outcome: str
         "voicemail_failed",
         "human_after_voicemail",
         "unavailable",
+        "hung_up",
+        "agent_ended",
+        "amd_failed",
     }:
         detector.execute.assert_awaited_once()
-        if outcome in {"voicemail", "voicemail_menu"}:
+        if outcome in {"hung_up", "agent_ended", "amd_failed"}:
+            # the call ended or AMD stopped first, even after a played voicemail message
+            ctx.shutdown.assert_called_once_with(result.reason.value)
+        elif outcome in {"voicemail", "voicemail_menu"}:
             ctx.shutdown.assert_called_once_with("voicemail completed")
         elif outcome == "unavailable":
             ctx.shutdown.assert_called_once_with("machine unavailable")
@@ -6877,6 +6898,112 @@ async def test_outbound_call_setup(monkeypatch: pytest.MonkeyPatch, outcome: str
             ctx.shutdown.assert_called_once_with(
                 "call not answered" if outcome == "timeout" else "participant missing"
             )
+
+
+# region: examples/telephony/amd_twilio_connector.py
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome", ["answered", "voicemail", "hung_up", "unanswered", "unconfigured"]
+)
+async def test_twilio_connector_call_enters_amd_after_the_answer(
+    monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    for name, value in {
+        "TWILIO_ACCOUNT_SID": "AC123",
+        "TWILIO_AUTH_TOKEN": "token",
+        "TWILIO_FROM_NUMBER": "+15555550199",
+        "TWILIO_TO_NUMBER": "+15555550100",
+    }.items():
+        if outcome == "unconfigured" and name == "TWILIO_TO_NUMBER":
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    monkeypatch.setattr("dotenv.load_dotenv", Mock())
+    for name in ("STT", "LLM", "TTS"):
+        monkeypatch.setattr(agents.inference, name, Mock())
+    monkeypatch.setattr(agents, "AgentSession", Mock(return_value=Mock(start=AsyncMock())))
+    result = AMDCompletedEvent(
+        category={
+            "voicemail": AMDCategory.MACHINE_VM,
+            "hung_up": AMDCategory.UNCERTAIN,
+        }.get(outcome, AMDCategory.HUMAN),
+        reason={
+            "voicemail": AMDReason.IDLE_TIMEOUT,
+            "hung_up": AMDReason.PARTICIPANT_DISCONNECTED,
+        }.get(outcome, AMDReason.FINISHED),
+        voicemail_message_played=outcome == "voicemail",
+    )
+    detector = MagicMock(execute=AsyncMock(return_value=result))
+    amd_factory = Mock(return_value=detector)
+    monkeypatch.setattr(agents, "AMD", amd_factory)
+
+    async def wait_for_answer(*args: Any, **kwargs: Any) -> Any:
+        assert kwargs["identity"] == "callee"
+        # the connector publishes audio only after the answer, so AMD is not entered yet
+        detector.__aenter__.assert_not_awaited()
+        if outcome == "unanswered":
+            await asyncio.Event().wait()
+        return SimpleNamespace(sid="track")
+
+    monkeypatch.setattr(agents.utils, "wait_for_track_publication", wait_for_answer)
+    example = runpy.run_path(
+        str(
+            Path(__file__).resolve().parents[1]
+            / "examples"
+            / "telephony"
+            / "amd_twilio_connector.py"
+        )
+    )
+    twilio = AsyncMock(return_value={"sid": "CA123"})
+    example["entrypoint"].__globals__["twilio_request"] = twilio
+    connect = AsyncMock(return_value=SimpleNamespace(connect_url="wss://connector/stream?a=1&b=2"))
+    ctx = SimpleNamespace(
+        room=SimpleNamespace(name="test-room"),
+        api=SimpleNamespace(connector=SimpleNamespace(connect_twilio_call=connect)),
+        shutdown=Mock(),
+        add_shutdown_callback=Mock(),
+        delete_room=AsyncMock(),
+    )
+    await example["entrypoint"](ctx)
+
+    # an outbound call skips the AEC warmup, as AgentSession does for outbound SIP
+    assert agents.AgentSession.call_args.kwargs["aec_warmup_duration"] is None
+    [hangup] = ctx.add_shutdown_callback.call_args.args
+    if outcome == "unconfigured":
+        ctx.shutdown.assert_called_once_with("missing Twilio configuration")
+        connect.assert_not_awaited()
+        await hangup()
+        twilio.assert_not_awaited()
+        ctx.delete_room.assert_awaited_once_with()
+        return
+
+    request = connect.call_args.args[0]
+    assert (request.room_name, request.participant_identity) == ("test-room", "callee")
+    path, data = twilio.call_args.args
+    assert path == "/Calls.json"
+    assert (data["To"], data["From"]) == ("+15555550100", "+15555550199")
+    assert 'url="wss://connector/stream?a=1&amp;b=2"' in data["Twiml"]
+    if outcome == "unanswered":
+        ctx.shutdown.assert_called_once_with("call not answered")
+        amd_factory.assert_not_called()
+    else:
+        amd_factory.assert_called_once()
+        assert amd_factory.call_args.kwargs["participant_identity"] == "callee"
+        detector.execute.assert_awaited_once()
+        if outcome == "voicemail":
+            ctx.shutdown.assert_called_once_with("voicemail completed")
+        elif outcome == "hung_up":
+            ctx.shutdown.assert_called_once_with("participant_disconnected")
+        else:
+            ctx.shutdown.assert_not_called()
+
+    # every exit ends the Twilio call, even one still ringing, and deletes the room
+    twilio.reset_mock()
+    await hangup()
+    twilio.assert_awaited_once_with("/Calls/CA123.json", {"Status": "canceled"})
+    ctx.delete_room.assert_awaited_once_with()
 
 
 @pytest.fixture
@@ -6910,13 +7037,9 @@ async def test_voicemail_keeps_call_open_until_amd_finishes(
         model,
     ):
         activity = session._activity
-        model.fake_response_map[_DEFAULT_VOICEMAIL_INSTRUCTIONS].tool_calls = [
-            llm.FunctionToolCall(name="end_call", arguments="{}", call_id="too-early")
-        ]
         await commit(detector, session, classifier, reply=True)
         classifier.prediction(1, AMDCategory.MACHINE_VM)
-        call = await asyncio.wait_for(model.calls.get(), 2)
-        assert "end_call" not in {tool.id for tool in call["tools"]}
+        await asyncio.wait_for(model.calls.get(), 2)
         await eventually(lambda: detector._voicemail_message_played and activity._no_pending_speech)
         assert next_deadline(detector) - asyncio.get_running_loop().time() == pytest.approx(
             10, abs=0.1
@@ -6932,11 +7055,6 @@ async def test_voicemail_keeps_call_open_until_amd_finishes(
             assert result.voicemail_message_played
             job.shutdown.assert_not_called()
             return
-
-        # The rejected tool call can produce an error follow-up before the next menu.
-        while not model.calls.empty():
-            call = model.calls.get_nowait()
-            assert "end_call" not in {tool.id for tool in call["tools"]}
 
         instructions = detector._get_instructions(AMDCategory.MACHINE_IVR)
         model.fake_response_map[instructions] = FakeLLMResponse(
@@ -6956,7 +7074,7 @@ async def test_voicemail_keeps_call_open_until_amd_finishes(
         await classifier.request()
         classifier.prediction(2, AMDCategory.MACHINE_IVR)
         call = await asyncio.wait_for(model.calls.get(), 2)
-        assert {tool.id for tool in call["tools"]} == {"send_dtmf_events"}
+        assert "send_dtmf_events" in {tool.id for tool in call["tools"]}
         result = await asyncio.wait_for(detector.execute(), 12)
         publish.assert_awaited_once_with(code=1, digit="1")
         assert result.reason == AMDReason.IDLE_TIMEOUT

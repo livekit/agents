@@ -227,6 +227,13 @@ is audio that the SIP provider sends before the callee answers. With
 `wait_until_answered=False`, AMD and the Agent hear subscribed early media. This flag
 does not make the SIP provider send early media.
 
+A Twilio Connector participant publishes audio only after the callee answers, and
+answer gating applies only to SIP participants. So enter AMD after the connector's
+audio track appears, not before the call is placed: the 5 s track wait would end
+AMD while the phone rings. AgentSession cannot tell an outbound connector call from
+an inbound one, so it keeps the AEC warmup; set `aec_warmup_duration=None` for outbound
+calls. `examples/telephony/amd_twilio_connector.py` shows both.
+
 ### 5.3 Session integration while active
 
 - AMD classifies every committed turn. So AgentSession skips its `min_words` filter
@@ -695,11 +702,12 @@ deadlines, and cleanup. They do not prove model accuracy.
 
 `examples/telephony/amd.py` places an outbound call with AMD:
 
-- It hides `end_call` while AMD runs.
 - It uses ai-coustics Voice Focus (`QUAIL_VF_S`) on the input audio, so session STT
   and AMD STT hear less noise and fewer background voices. Keep SIP `krisp_enabled`
   off to avoid filtering twice. Voice isolation is not echo cancellation.
-- If the result reports a played voicemail message and no human, or the category is
+- If the callee hung up (`participant_disconnected`) or `is_error` is true, such as
+  `cancelled` after `end_call` closed the session, it shuts down the job. Otherwise,
+  if the result reports a played voicemail message and no human, or the category is
   `machine-unavailable`, it shuts down the job. The shutdown callback deletes the room.
 
 Set `SIP_PHONE_NUMBER`, `SIP_PARTICIPANT_IDENTITY`, and `SIP_OUTBOUND_TRUNK_ID`.
