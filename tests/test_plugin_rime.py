@@ -6140,6 +6140,23 @@ class TestRealtime:
 
         assert [item.id for item in projected.items] == ["call-item", "message-item", "result-item"]
 
+    @pytest.mark.parametrize("role", ["user", "system"])
+    async def test_shared_history_rejects_non_assistant_message_reorders(self, role):
+        history = PrismHistory(cast(Any, object()))
+        call = llm.FunctionCall(
+            id="call-item",
+            call_id="call-id",
+            name="lookup",
+            arguments="{}",
+        )
+        message = llm.ChatMessage(id="message-item", role=role, content=["text"])
+        history._chat = llm.ChatContext([call, message])
+
+        with pytest.raises(PrismHistoryUpdateError, match="append order"):
+            history._shared_target(
+                llm.ChatContext([message.model_copy(deep=True), call.model_copy(deep=True)])
+            )
+
     @pytest.mark.parametrize("operation", ["replace", "clear", "reconcile"])
     async def test_inactive_agent_cannot_claim_helper_success(self, operation):
         async with peer_model() as (_, model, _):

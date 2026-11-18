@@ -360,10 +360,12 @@ class PrismHistory:
                 previous_item = self._chat.items[last]
                 exchange = (
                     isinstance(previous_item, llm.ChatMessage)
+                    and previous_item.role == "assistant"
                     and isinstance(item, llm.FunctionCall)
                 ) or (
                     isinstance(previous_item, llm.FunctionCall)
                     and isinstance(item, llm.ChatMessage)
+                    and item.role == "assistant"
                 )
                 if abs(position - last) != 1 or not exchange:
                     raise HistoryUpdateError(
