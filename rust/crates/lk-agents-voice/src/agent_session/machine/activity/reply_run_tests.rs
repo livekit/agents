@@ -90,11 +90,11 @@ fn ending_an_admitted_call_does_not_remove_a_sibling_with_the_same_model_id() {
     let mut sibling = running("reply", 12);
     sibling.run_call = Some(CallId(2));
     driver.activity.tools.running.extend([first, sibling]);
-    assert!(driver.activity.tools.end(speech, Some(CallId(2)), false));
+    assert!(driver.activity.tools.end(speech, Some(CallId(2)), false).is_some());
     let remaining = &driver.activity.tools.running;
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].hosted.invocation.operation, 11);
-    assert!(!driver.activity.tools.end(speech, None, false));
+    assert!(driver.activity.tools.end(speech, None, false).is_none());
     assert_eq!(driver.activity.tools.running.len(), 1);
 }
 

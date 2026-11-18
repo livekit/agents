@@ -114,6 +114,27 @@ mod tool_reply_renders_its_template {
             .collect();
         assert!(!told.is_empty(), "the update's reply was scheduled");
         assert!(told.iter().all(|t| t.starts_with(TEMPLATED_REPLY)), "told {told:?}");
+        let wire_call_id = run
+            .record
+            .journal()
+            .iter()
+            .rev()
+            .find_map(|(_, step)| match step {
+                Step::Emitted(lk_agents_voice::events::SessionEvent::ConversationItemAdded {
+                    item,
+                    source: lk_agents_voice::agent::Source::ToolUpdate { .. },
+                    ..
+                }) => match &**item {
+                    lk_agents_abi::ChatItem::FunctionCall(call) => Some(&call.call_id),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("the background update never reached the model's history");
+        assert!(
+            told.last().unwrap().contains(wire_call_id),
+            "the reply template named a lifecycle entry the model cannot identify"
+        );
     }
 }
 

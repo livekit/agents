@@ -313,13 +313,8 @@ impl Session {
                 _ => None,
             })
             .ok_or_else(|| RoutingError::InvalidState("parent call is missing".into()))?;
-        let mut output = FunctionCallOutput::new(
-            format!("{}_out", call.id),
-            &call.call_id,
-            text,
-            is_error,
-            stamp,
-        );
+        let mut output =
+            FunctionCallOutput::new(call.output_id(), &call.call_id, text, is_error, stamp);
         output.name = call.name.clone();
         let event = lk_agents_abi::agent::run::StreamEvent::ToolResult {
             call_id: call.call_id.clone(),

@@ -872,6 +872,8 @@ a public Python export or an additional SDK constructor.
 | Run.start_with and ObservedLlm, DST only | Configure the existing simulation runner and observe its fake model boundary. | Exercise ordinary native session arguments, the production binding and real executors. The observer records model requests; it does not implement routing or persistence. No SDK export. |
 | RoutingCase, RoutingModel and _RoutingStream, tests only | Labeled recognition cases, a provider observer and its stream adapter. | routing_cases/evaluate_routing/routing_summary run and report the production TextSession classifier, schema, parser and reservations with a scripted frontend. Optional prompt replacement is for experiments; there is no second routing implementation or SDK export. |
 | FakeTools.expert_answers and Registry.session, DST only | Extend the existing fake and expose its existing native session port to authored stories. | Observe exact local handoffs and exercise real command receipts, including a lost receipt. No replacement executor or SDK API. |
+| FunctionCall.output_id and Batch.call_ids, native only | Computed identities on existing records. | Use one output item identity rule for live-body lookup and final replacement. Reply templates reference model-visible wire calls; delivery events retain their unique framework entry IDs. |
+| FakeLlm.reusing_call_ids and Detail::Tool.item_id, DST only | Extend the existing model fake and tool observation. | Repeat provider call IDs between replies while tracking each admitted framework call independently. |
 | SessionBinding.memory() | Private factory on the existing storage binding type. | A default voice session uses the same native state, command admission and checkpoint implementation in memory. A supplied binding adds persistence; there is no separate public conversation controller. |
 | SessionCommand and CommandPort | Shared native runtime command queue in session/. | Text and voice use bounded command admission and producer-owned receipts. Voice checkpoints run on owned tasks alongside audio and interruption events. Ending the receiver settles received, queued and capacity-waiting requests; a client retains no execution authority after owner loss. No Python export. |
 | voice::conversation::{Work, ConversationWrite}, private runtime records | A voice command's acquisition/write phase and typed write receipt. | Retain the original command, outcome, ScopedTask and matching caller while media/events continue. A retry re-admits the original input; one command kind cannot resolve another kind's receipt. No second conversation snapshot or Python API. |
@@ -957,8 +959,8 @@ proof. The voice proof includes a slow remote operation, progress, an input-requ
 a spoken response, interruption of frontend speech and the eventual result. Confirm actual
 receiver audio as well as transcripts and service effects. Realtime parity follows that proof.
 
-The voice DST remains a release gate. The 1,024-seed survey and eight-call soak pass. The
-latest 32,768-seed campaign completed with 16 contract/subject findings; the gate is still red.
+The voice DST remains a release gate. The 1,024-seed survey and eight-call soak pass. Recorded
+32,768-seed campaigns still report contract/subject findings; the gate remains red.
 An unchanged checkout also fails its initial survey, so each finding needs a focused
 reproduction before attribution. Seed numbers alone do not identify equivalent cases across
 revisions. Saved storage replays and authored regressions cover snapshot baselines, canonical
@@ -1033,6 +1035,10 @@ their activation/noise assertions. One v1-to-2.0 avatar case missed received vid
 suite and passed unchanged in isolation. Keep these results separate from the seven passing
 Gemma journeys; investigate the route, provider and avatar baselines before attributing those
 failures to this slice. Do not add legacy grants or weaken assertions to make this gate pass.
+
+An SDK interruption check also observed a pending Toolset.aclose task at teardown after its
+behavioral assertions passed. The full Python suites, isolated case and targeted rerun passed;
+the intermittent cleanup observation remains open and needs a deterministic regression.
 
 ## Questions retained during implementation
 
@@ -1314,9 +1320,14 @@ passes deterministic stock-peer transport and failure tests.
   Proposed-call continuation/new-work classification when there is no reserved human response,
   explicit references and complete recovery remain separate work; a no-match human verdict
   must not silently authorize a new task for a later clarification call.
-  Audit correlation against reused provider call IDs: presentation must retain the unique
-  originating call/output item identities and the admitted invocation, rather than searching
-  history by a provider's raw call ID. Extend the model fake to reproduce that case first.
+  A DST story now reproduces reuse of a provider tool-call ID across frontend replies. Remote
+  presentation, held-response lookup and final history replacement retain the originating
+  output item ID and exact admitted invocation. Lifecycle entry IDs and the DST's observations
+  also use unique framework item IDs; provider call IDs remain available as protocol metadata.
+  Synthetic deferred-update calls mint provider-safe wire IDs separately from their item paths.
+  The shared native output identity rule adds no Python API or saved state record.
+  Continue this identity audit for retained turn telemetry and fillers, which still use raw
+  provider call IDs internally.
   Decision-model comparison and the remaining voice stories are not yet verified.
 - [ ] Route same-partition text into a call, preserving task/outcome and answered-by-voice attribution.
 - [ ] Cover agent/tool replacement, VoiceTasks, close, reconnect and independent room bindings.

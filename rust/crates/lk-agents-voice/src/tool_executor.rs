@@ -153,19 +153,21 @@ impl Tools {
 
     /// This speech's admitted call ended: detached, it stays with its first update counted;
     /// otherwise it leaves the set. Model IDs never select the execution that is removed.
-    pub(crate) fn end(&mut self, speech: SpeechId, call: Option<CallId>, detached: bool) -> bool {
-        let Some(call) = call else { return false };
-        let Some(i) =
-            self.running.iter().position(|r| r.speech == speech && r.run_call == Some(call))
-        else {
-            return false;
-        };
+    pub(crate) fn end(
+        &mut self,
+        speech: SpeechId,
+        call: Option<CallId>,
+        detached: bool,
+    ) -> Option<String> {
+        let call = call?;
+        let i = self.running.iter().position(|r| r.speech == speech && r.run_call == Some(call))?;
+        let item_id = self.running[i].call.id.clone();
         if detached {
             self.running[i].updates = 1;
         } else {
             self.running.remove(i);
         }
-        true
+        Some(item_id)
     }
 
     pub(crate) fn fillers_of(&self, pick: impl Fn(&FillerRun) -> bool) -> Vec<FillerId> {
@@ -246,7 +248,7 @@ pub(crate) struct Running {
     pub(crate) identity: Option<lk_agents_abi::agent::ArgumentIdentity>,
     /// The shared policy admitted the body, rather than only preparing arguments/read-back.
     pub(crate) executing: bool,
-    /// The placeholder output id, minted once so it keeps one identity across plans.
+    /// The canonical output item ID, retained across progress and final outcomes.
     pub(crate) output_id: String,
     pub(crate) speech: SpeechId,
     pub(crate) step: u32,
@@ -312,9 +314,21 @@ pub(crate) struct Pending {
 pub(crate) struct Batch(pub(crate) Vec<Pending>);
 
 impl Batch {
-    /// Every update's id, in order (the reply's `{call_ids}`).
+    /// Every lifecycle entry's ID, in order, for the reply's delivery events.
     pub(crate) fn update_ids(&self) -> Vec<String> {
         self.0.iter().map(|p| p.update_id.clone()).collect()
+    }
+
+    /// Model-visible call IDs for instruction templates; item paths never become wire IDs.
+    pub(crate) fn call_ids(&self) -> Vec<String> {
+        self.0
+            .iter()
+            .flat_map(|pending| &pending.items)
+            .filter_map(|item| match item {
+                ChatItem::FunctionCall(call) => Some(call.call_id.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The id of the last item the batch committed.
@@ -431,7 +445,8 @@ pub fn default_reply_instructions(call_ids: &[String], at_tail: bool) -> String 
     template.replace("{call_ids}", &python_list(call_ids))
 }
 
-/// `_make_update_pair`: a `FunctionCall` under `id` copied from the running call, and its output.
+/// A deferred update's unique item and canonical output. Its provider call ID is minted
+/// separately: framework item paths may contain characters a provider refuses in call IDs.
 pub(crate) fn pair_for(
     running: &Running,
     id: &str,
@@ -440,17 +455,15 @@ pub(crate) fn pair_for(
     mut mint: impl FnMut() -> String,
 ) -> ToolExecution {
     let call = FunctionCall {
-        id: mint(),
-        call_id: id.to_owned(),
+        id: id.to_owned(),
+        call_id: mint(),
         name: running.call.name.clone(),
         arguments: running.call.arguments.clone(),
         created_at: wall,
         extra: running.call.extra.clone(),
         group_id: None,
     };
-    let mut execution = answer(&call, report, wall);
-    execution.output.id = mint();
-    execution
+    answer(&call, report, wall)
 }
 
 pub use lk_agents_abi::llm::tool_executor::{ToolOutcome, ToolReport};
@@ -695,7 +708,7 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
     let shape =
         lk_agents_core::tool_outcome::shape(&outcome, lk_agents_core::tool_outcome::Mode::Voice);
     let mut output = FunctionCallOutput::new(
-        format!("{}_out", call.id),
+        call.output_id(),
         call.call_id.clone(),
         lk_agents_core::tool_outcome::delivered(&outcome).unwrap_or(shape.text),
         shape.is_error,

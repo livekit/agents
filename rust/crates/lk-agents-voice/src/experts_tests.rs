@@ -16,7 +16,7 @@ fn opened() -> Experts {
 
 fn question(request_id: &str) -> Presentation {
     Presentation::Question {
-        call_id: "call_1".into(),
+        output_id: "call_1".into(),
         request_id: request_id.into(),
         question: "What email should receive the receipt?".into(),
         verbatim: false,
@@ -28,7 +28,7 @@ fn ask(experts: &mut Experts, request_id: &str) -> bool {
 }
 
 fn pending(request_id: &str) -> PendingRequest {
-    PendingRequest { call_id: "call_1".into(), request_id: request_id.into() }
+    PendingRequest { output_id: "call_1".into(), request_id: request_id.into() }
 }
 
 #[test]
@@ -61,7 +61,7 @@ fn an_answered_queued_question_is_withdrawn_without_losing_another_question() {
     assert_eq!(
         experts.next(floor(&tools)),
         Some(Presentation::Question {
-            call_id: "call_2".into(),
+            output_id: "call_2".into(),
             request_id: "r2".into(),
             question: "Which seat?".into(),
             verbatim: false,
@@ -146,7 +146,7 @@ fn progress_waits_for_the_floor_and_superseded_progress_is_coalesced() {
     assert_eq!(
         experts.next(floor(&tools)),
         Some(Presentation::Progress {
-            call_id: "call_1".into(),
+            output_id: "call_1".into(),
             text: "Refund approved, issuing it".into()
         })
     );
@@ -197,7 +197,7 @@ fn only_one_expert_question_owns_the_reply_destination_at_a_time() {
     assert_eq!(
         experts.next(floor(&tools)),
         Some(Presentation::Question {
-            call_id: "call_2".into(),
+            output_id: "call_2".into(),
             request_id: "b1".into(),
             question: "Which bag?".into(),
             verbatim: true
@@ -257,7 +257,7 @@ fn duplicate_events_are_never_presented_twice_nor_resolve_the_call_twice() {
     experts.recorded("call_1");
     assert_eq!(
         experts.next(floor(&tools)),
-        Some(Presentation::Outcome { call_id: "call_1".into(), outcome: done })
+        Some(Presentation::Outcome { output_id: "call_1".into(), outcome: done })
     );
     assert_eq!(experts.next(floor(&tools)), None);
 }
@@ -305,7 +305,7 @@ fn an_outcome_resolves_the_originating_call_only_once_its_pending_output_is_reco
     assert_eq!(
         experts.next(floor(&tools)),
         Some(Presentation::Outcome {
-            call_id: "call_1".into(),
+            output_id: "call_1".into(),
             outcome: ToolOutcome::Failed("Refund declined".into())
         })
     );

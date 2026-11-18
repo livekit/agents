@@ -611,7 +611,7 @@ impl VoiceDriver {
         self.reply_recorded(&item, &source);
         // A delegated call's pending output: its expert's outcome may now replace it.
         if let ChatItem::FunctionCallOutput(output) = &item {
-            self.session.experts.recorded(&output.call_id);
+            self.session.experts.recorded(&output.id);
         }
         let user_turn = match (&item, &source) {
             (ChatItem::Message(message), Source::UserTurn { turn }) => {

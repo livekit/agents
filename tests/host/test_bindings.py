@@ -181,8 +181,12 @@ async def test_tool_progress_and_completion_reach_session_listeners() -> None:
         if isinstance(u.update, ToolCallStarted | ToolCallUpdated | ToolCallEnded)
     ]
     assert [type(update) for update in calls] == [ToolCallStarted, ToolCallUpdated, ToolCallEnded]
-    progress, ended = calls[1], calls[2]
+    started, progress, ended = calls
+    assert isinstance(started, ToolCallStarted)
     assert isinstance(progress, ToolCallUpdated) and isinstance(ended, ToolCallEnded)
+    item_id = started.function_call.id
+    assert progress.id == item_id
+    assert ended.id in {item_id, f"{item_id}_final"}
     assert (progress.call_id, progress.message) == ("booking-1", "Checking the booking system.")
     assert (ended.call_id, ended.message, ended.status) == ("booking-1", "Confirmed.", "done")
 

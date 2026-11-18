@@ -480,7 +480,7 @@ impl ToolCalls {
             if let Phase::Settled(settled) = &call.phase {
                 let shape = tool_outcome::shape(&settled.outcome, mode);
                 let mut output = lk_agents_abi::FunctionCallOutput::new(
-                    format!("{}_out", call.item.id),
+                    call.item.output_id(),
                     &call.item.call_id,
                     shape.text,
                     shape.is_error,
@@ -523,7 +523,7 @@ impl ToolCalls {
                     let outcome = &settled.outcome;
                     let shape = tool_outcome::shape(outcome, mode);
                     let mut output = lk_agents_abi::FunctionCallOutput::new(
-                        format!("{}_out", call.item.id),
+                        call.item.output_id(),
                         &call.item.call_id,
                         shape.text,
                         shape.is_error,

@@ -15,7 +15,7 @@ use crate::{
 
 // Mirrors the reference's executor and `_apply_transition`. A cut step's outputs and calls the
 // close settles as errors are not held to the reply flag. A `VoiceTask`'s `Completed` ends the
-// task, so its agent asks for no reply. A detached body's final is recorded as `<call_id>_final`.
+// task, so its agent asks for no reply. A detached body's final uses its unique item ID.
 
 pub struct ToolOutputFollowsOutcome;
 
@@ -110,19 +110,23 @@ impl Rule for ToolOutputFollowsOutcome {
                 }
                 _ => continue,
             };
-            let Some(Detail::Tool { call_id, speech, .. }) =
+            let Some(Detail::Tool { item_id, call_id, speech, .. }) =
                 r.resource(Kind::Tool, tool.nth).map(|t| t.detail().clone())
             else {
                 continue;
             };
-            let recorded = if detached.contains(&tool.nth) {
-                format!("{call_id}_final")
+            let detached = detached.contains(&tool.nth);
+            let recorded = if detached {
+                format!("{item_id}_final_out")
             } else {
-                call_id.clone()
+                format!("{item_id}_out")
             };
-            let Some((at, ChatItem::FunctionCallOutput(output), _)) = announced.iter().find(
-                |(_, i, _)| matches!(i, ChatItem::FunctionCallOutput(o) if o.call_id == recorded),
-            ) else {
+            let Some((at, ChatItem::FunctionCallOutput(output), _)) =
+                announced.iter().find(|(_, item, _)| match item {
+                    ChatItem::FunctionCallOutput(output) => output.id == recorded,
+                    _ => false,
+                })
+            else {
                 continue;
             };
             // The close settles a call it cut as an error of its own, a cut speech as cancelled.
@@ -134,9 +138,7 @@ impl Rule for ToolOutputFollowsOutcome {
                 lk_agents_core::tool_outcome::Mode::Voice,
             );
             let over = done.get(&speech).is_some_and(|done| done < at);
-            if *answer == ToolAnswer::Completed && in_task(speech)
-                || over && !detached.contains(&tool.nth)
-            {
+            if *answer == ToolAnswer::Completed && in_task(speech) || over && !detached {
                 shape.reply_required = false;
             }
             let want = lk_agents_core::tool_outcome::delivered(&outcome).unwrap_or(shape.text);
@@ -161,7 +163,7 @@ impl Rule for ToolOutputFollowsOutcome {
             });
         }
         let mut selected = BTreeSet::new();
-        let mut waiting: Vec<(String, String)> = Vec::new();
+        let mut waiting = Vec::new();
         for (i, (at, item, speech)) in announced.iter().enumerate() {
             match item {
                 ChatItem::FunctionCall(call) => {
@@ -170,9 +172,9 @@ impl Rule for ToolOutputFollowsOutcome {
                     if flag.is_some_and(|flag| {
                         flag.as_bool() == Some(true) || flag.as_str() == Some("true")
                     }) {
-                        selected.insert(call.call_id.clone());
+                        selected.insert(call.output_id());
                     } else {
-                        selected.remove(&call.call_id);
+                        selected.remove(&call.output_id());
                     }
                 }
                 // A step cut before its tools were awaited asks nothing; one cut after it put
@@ -181,22 +183,19 @@ impl Rule for ToolOutputFollowsOutcome {
                     let cut = speech.is_some_and(|s| {
                         internal.speech(s.0).interrupted_at().is_some_and(|cut| cut <= *at)
                     });
-                    if !cut {
-                        match waiting.iter_mut().find(|(call, _)| *call == o.call_id) {
-                            Some((_, id)) => *id = o.id.clone(),
-                            None => waiting.push((o.call_id.clone(), o.id.clone())),
-                        }
+                    if !cut && !waiting.contains(&o.id) {
+                        waiting.push(o.id.clone());
                     }
                 }
                 ChatItem::Message(m) if m.role == Role::User => {
                     if closing.is_some_and(|c| c <= *at) {
                         continue;
                     }
-                    let Some(index) = waiting.iter().position(|(call, _)| selected.contains(call))
+                    let Some(index) = waiting.iter().position(|id| selected.contains(id))
                     else {
                         continue;
                     };
-                    let (_, id) = waiting.remove(index);
+                    let id = waiting.remove(index);
                     let said = m.text_content().unwrap_or_default();
                     let answered = announced[..i]
                         .iter()
@@ -222,7 +221,7 @@ impl Rule for ToolOutputFollowsOutcome {
 fn output(call_id: &str, text: &str, is_error: bool, reply_required: bool) -> Step {
     use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     let mut out = lk_agents_abi::FunctionCallOutput::new(
-        format!("{call_id}_out"),
+        format!("item_{call_id}_out"),
         call_id,
         text,
         is_error,
@@ -258,7 +257,7 @@ fn answered(answer: ToolAnswer, text: &str) -> Authored {
 
 fn selected_question(call_id: &str) -> Step {
     let mut call = FunctionCall {
-        id: call_id.into(),
+        id: format!("item_{call_id}"),
         call_id: call_id.into(),
         name: "lookup".into(),
         arguments: "{}".into(),

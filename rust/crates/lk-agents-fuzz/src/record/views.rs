@@ -626,6 +626,14 @@ impl<'a> ToolRunView<'a> {
         }
     }
 
+    /// The framework's unique call item, independent of a reused provider call ID.
+    pub fn item_id(&self) -> &'a str {
+        match &self.opened.detail {
+            Detail::Tool { item_id, .. } => item_id,
+            _ => "",
+        }
+    }
+
     /// The speech the call was made for.
     pub fn speech(&self) -> u64 {
         match &self.opened.detail {
@@ -645,10 +653,12 @@ impl<'a> ToolRunView<'a> {
     }
 
     fn told(&self, pick: impl Fn(&ToolLifecycle) -> bool) -> Vec<Observed> {
-        let positions =
-            self.r.index.host_by_tool.get(self.call_id()).map_or(&[][..], Vec::as_slice);
+        let final_id = format!("{}_final", self.item_id());
+        let positions = [self.item_id(), final_id.as_str()]
+            .into_iter()
+            .filter_map(|id| self.r.index.host_by_tool.get(id));
         positions
-            .iter()
+            .flatten()
             .filter_map(|p| match &self.r.host[*p] {
                 (at, Host::Session(SessionEvent::ToolExecutionUpdated(update))) if pick(update) => {
                     Some(*at)

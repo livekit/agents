@@ -430,6 +430,13 @@ pub struct FunctionCall {
     pub group_id: Option<String>,
 }
 
+impl FunctionCall {
+    /// The canonical output item identity, independent of a provider's reusable call ID.
+    pub fn output_id(&self) -> String {
+        format!("{}_out", self.id)
+    }
+}
+
 #[crate::host(record(
     module = "chat_items",
     pydantic,

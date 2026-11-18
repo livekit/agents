@@ -288,6 +288,15 @@ fn a_corrected_turn_is_classified_again_before_the_frontend_answers_it() {
 
 #[test]
 fn recognition_retains_the_response_until_the_remote_tool_claims_it() {
+    response_handoff(false);
+}
+
+#[test]
+fn a_reused_provider_call_id_does_not_steal_the_original_remote_result() {
+    response_handoff(true);
+}
+
+fn response_handoff(reused_call_ids: bool) {
     let host = Arc::new(Mutex::new(None));
     let requests = Arc::new(Mutex::new(Vec::new()));
     let binding = waiting_for_date();
@@ -300,7 +309,14 @@ fn recognition_retains_the_response_until_the_remote_tool_claims_it() {
                 args.session_sink = Some(binding.clone());
                 args.delegation =
                     Some(DelegationOptions { routing_model: FakeLlm::new(registry.clone()) });
-                args.llm = Some(frontend(registry, requests.clone()));
+                args.llm = Some(Arc::new(ObservedLlm {
+                    inner: if reused_call_ids {
+                        FakeLlm::reusing_call_ids(registry.clone())
+                    } else {
+                        FakeLlm::new(registry.clone())
+                    },
+                    requests: requests.clone(),
+                }));
                 let frame = args.voice_agent.as_ref().unwrap();
                 let mut definition = frame.definition().clone();
                 definition.tools[0].remote = Some(REMOTE.into());
@@ -392,6 +408,25 @@ fn recognition_retains_the_response_until_the_remote_tool_claims_it() {
             "recognition dispatched before the tool invocation, allowing a second send"
         );
         let held = binding.restore().unwrap().unwrap();
+        let original_history = &held.frames[&held.root_frame_id].history;
+        let original_call = original_history
+            .iter()
+            .find_map(|item| match item {
+                lk_agents_abi::ChatItem::FunctionCall(call) => Some(call.clone()),
+                _ => None,
+            })
+            .expect("the originating remote call was not recorded");
+        let original_output_id = original_history
+            .iter()
+            .find_map(|item| match item {
+                lk_agents_abi::ChatItem::FunctionCallOutput(output)
+                    if output.call_id == original_call.call_id =>
+                {
+                    Some(output.id.clone())
+                }
+                _ => None,
+            })
+            .expect("the originating call has no pending output");
         assert_eq!(
             held.remote_agents[REMOTE].tasks["booking"].input_requests["date-request"].state,
             InputRequestState::Responding
@@ -412,12 +447,21 @@ fn recognition_retains_the_response_until_the_remote_tool_claims_it() {
         let lk_agents_fuzz::record::Detail::Tool {
             invocation_id,
             operation,
+            item_id: continuation_item,
             call_id: continuation,
             ..
         } = run.record.resource(lk_agents_fuzz::record::Kind::Tool, 1).unwrap().detail()
         else {
             panic!("the continuation tool did not run");
         };
+        let continuation_item = continuation_item.clone();
+        assert_ne!(continuation_item, original_call.id);
+        if reused_call_ids {
+            assert_eq!(
+                continuation, &original_call.call_id,
+                "the fake did not reuse the provider ID"
+            );
+        }
         let origin = lk_agents_abi::voice::session::VoiceCommandOrigin::Tool {
             invocation_id: invocation_id.clone(),
             operation: *operation,
@@ -452,6 +496,7 @@ fn recognition_retains_the_response_until_the_remote_tool_claims_it() {
             "the pending foreground tool already owns a planning turn; do not wake another"
         );
         assert_eq!(answers.len(), 1, "two invocations sent the same human response twice");
+        assert_eq!(answers[0].0, original_call.id, "the response reached a different invocation");
         assert_eq!(answers[0].1, "Friday", "model arguments replaced the person's actual words");
         // As the real host callback does, return its handoff report and let the frontend finish.
         for input in [
@@ -491,6 +536,36 @@ fn recognition_retains_the_response_until_the_remote_tool_claims_it() {
             ),
             "the presentation lost the result behind a newer handoff acknowledgement"
         );
+        let accepted = binding.restore().unwrap().unwrap();
+        let original_output = accepted.frames[&accepted.root_frame_id]
+            .history
+            .iter()
+            .find_map(|item| match item {
+                lk_agents_abi::ChatItem::FunctionCallOutput(output)
+                    if output.id == original_output_id =>
+                {
+                    Some(output)
+                }
+                _ => None,
+            })
+            .expect("the original tool output disappeared");
+        assert_eq!(
+            original_output.output, "Booked for Friday.",
+            "the remote result replaced a later call instead of its own pending output"
+        );
+        let continuation_output = accepted.frames[&accepted.root_frame_id]
+            .history
+            .iter()
+            .find_map(|item| match item {
+                lk_agents_abi::ChatItem::FunctionCallOutput(output)
+                    if output.id == format!("{continuation_item}_out") =>
+                {
+                    Some(output)
+                }
+                _ => None,
+            })
+            .expect("the continuation tool output disappeared");
+        assert_eq!(continuation_output.output, "The response is with the existing task.");
         run.apply(&Input::Close { drain: false }).await;
         run.apply(&Input::Advance { ms: Millis(5_000) }).await;
         run.apply(&Input::AwaitExit {}).await;

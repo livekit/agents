@@ -93,7 +93,7 @@ impl AgentRun {
             }
             replies |= reply_required;
             let mut output = FunctionCallOutput::new(
-                format!("{}_out", item.id),
+                item.output_id(),
                 item.call_id.clone(),
                 text,
                 shape.is_error,

@@ -1,7 +1,7 @@
 use crate::agent::{Source, Visibility};
 use crate::agent_session::effects::VoiceEffect;
 use crate::agent_session::machine::activity::scheduling::{
-    PreemptiveDiscard, SpeechKind, VoiceRunParticipation,
+    PreemptiveDiscard, SpeechId, SpeechKind, VoiceRunParticipation,
 };
 use crate::agent_session::machine::activity::speech::SpeechSpec;
 use crate::agent_session::{ToolUpdate, VoiceDriver};
@@ -9,7 +9,7 @@ use crate::audio_recognition::EndOfTurnInfo;
 use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle};
 use crate::experts::{ExpertTool, Floor, Presentation};
 use crate::generation::ReplySource;
-use crate::tool_executor::{Delivery, HostedTool, ToolOutcome, ToolReport, answer};
+use crate::tool_executor::{CallId, Delivery, HostedTool, ToolOutcome, ToolReport, answer};
 use lk_agents_abi::llm::tool_executor::ASK_IN_OWN_WORDS;
 use lk_agents_abi::{ChatItem, ChatMessage, Role, Ts};
 use lk_agents_core::markup::ChatMessageExt;
@@ -27,12 +27,17 @@ const RESUME_RESPONSES: &str = "Continue the recognized human responses reserved
      remaining human intent. Do not repeat a reserved response as new work.";
 
 impl VoiceDriver {
-    /// `call_id` detached: a configured remote tool's call becomes an expert delegation.
-    pub(crate) fn open_expert(&mut self, call_id: &str) {
-        let running = self.activity.tools.running.iter().find(|r| r.call.call_id == call_id);
-        let Some(name) = running.map(|r| r.call.name.clone()) else { return };
+    /// This admitted call detached: its output item identifies its expert delegation.
+    pub(crate) fn open_expert(&mut self, speech: SpeechId, call: Option<CallId>, call_id: &str) {
+        let running = self.activity.tools.running.iter().find(|running| {
+            running.speech == speech && running.run_call == call && running.call.call_id == call_id
+        });
+        let Some((name, output_id)) = running.map(|r| (r.call.name.clone(), r.output_id.clone()))
+        else {
+            return;
+        };
         if let Some(tool) = self.activity.expert_tools().into_iter().find(|t| t.name == name) {
-            self.session.experts.open(call_id, tool);
+            self.session.experts.open(&output_id, tool);
         }
     }
 
@@ -45,25 +50,25 @@ impl VoiceDriver {
         call_id: &str,
         update: &ToolUpdate,
     ) -> bool {
-        if !self.session.experts.owns(call_id) {
+        let Some(running) = self.activity.tools.update_owner(invocation_id, operation, call_id)
+        else {
+            return false;
+        };
+        let output_id = running.output_id.clone();
+        if !self.session.experts.owns(&output_id) {
             return false;
         }
         match update {
             ToolUpdate::Progress { raw, .. } => {
-                let Some(running) =
-                    self.activity.tools.update_owner(invocation_id, operation, call_id)
-                else {
-                    return true;
-                };
                 running.updates += 1;
                 let occurrence = running.updates.into();
-                self.session.experts.progress(call_id, occurrence, raw.clone());
+                self.session.experts.progress(&output_id, occurrence, raw.clone());
             }
             ToolUpdate::Final { report } => match &report.outcome {
                 ToolOutcome::InputRequired { question, verbatim, .. } => {
                     let request_id = self.session.ids.mint("ask");
                     self.session.experts.ask(
-                        call_id,
+                        &output_id,
                         &request_id,
                         question.clone(),
                         *verbatim,
@@ -81,7 +86,7 @@ impl VoiceDriver {
                         let updates = self.session.states.on_tool_call_ended(now, closing);
                         self.apply_user_state_updates(updates);
                     };
-                    self.session.experts.outcome(call_id, outcome.clone());
+                    self.session.experts.outcome(&output_id, outcome.clone());
                 }
             },
         }
@@ -118,7 +123,7 @@ impl VoiceDriver {
                     let instructions = format!("{PRESENT_PROGRESS}{text}");
                     self.reply_with_instructions(now, instructions, None, outside);
                 }
-                Presentation::Question { call_id, request_id, question, verbatim } => {
+                Presentation::Question { output_id, request_id, question, verbatim } => {
                     let speech = if verbatim {
                         self.say_text(now, question, outside)
                     } else {
@@ -128,12 +133,12 @@ impl VoiceDriver {
                     if let Some(speech) = speech {
                         self.session.experts.presenting(
                             speech,
-                            crate::experts::PendingRequest { call_id, request_id },
+                            crate::experts::PendingRequest { output_id, request_id },
                         );
                     }
                 }
-                Presentation::Outcome { call_id, outcome } => {
-                    self.resolve_expert_call(now, &call_id, outcome)
+                Presentation::Outcome { output_id, outcome } => {
+                    self.resolve_expert_output(now, &output_id, outcome)
                 }
             }
         }
@@ -141,12 +146,12 @@ impl VoiceDriver {
 
     /// The outcome becomes the originating call's output in place of its pending one, and the
     /// caller's next model invocation presents it with the full history.
-    fn resolve_expert_call(&mut self, now: Ts, call_id: &str, outcome: ToolOutcome) {
+    fn resolve_expert_output(&mut self, now: Ts, output_id: &str, outcome: ToolOutcome) {
         let (mut call, mut pending) = (None, None);
         for item in self.session.chat_ctx.items() {
             match item {
-                ChatItem::FunctionCall(c) if c.call_id == call_id => call = Some(c.clone()),
-                ChatItem::FunctionCallOutput(o) if o.call_id == call_id => {
+                ChatItem::FunctionCall(c) if c.output_id() == output_id => call = Some(c.clone()),
+                ChatItem::FunctionCallOutput(o) if o.id == output_id => {
                     pending = Some(o.id.clone())
                 }
                 _ => {}
@@ -156,10 +161,10 @@ impl VoiceDriver {
         let (Some(call), Some(pending)) = (call, pending) else { return };
         let mut execution = answer(&call, outcome.into(), self.step.wall());
         let status = execution.end.unwrap_or(ToolEndStatus::Done);
-        self.agent_turn_tool_ended(call_id);
+        self.agent_turn_tool_ended(&call.call_id);
         self.publish_event(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Ended {
-            id: call_id.to_owned(),
-            call_id: call_id.to_owned(),
+            id: format!("{}_final", call.id),
+            call_id: call.call_id.clone(),
             message: Some(execution.output.output.clone()),
             status,
         }));
@@ -234,8 +239,7 @@ impl VoiceDriver {
         if self.session.experts.reference(&request).is_some() {
             return None;
         }
-        let running =
-            self.activity.tools.running.iter().find(|r| r.call.call_id == request.call_id);
+        let running = self.activity.tools.running.iter().find(|r| r.output_id == request.output_id);
         // The body no longer runs: the reply is an ordinary one.
         let hosted = running.map(|r| r.hosted.clone())?;
         self.session.experts.answer(&request).ok()?;
@@ -333,7 +337,7 @@ impl VoiceDriver {
                 .tools
                 .running
                 .iter()
-                .find(|running| running.call.call_id == request.call_id)
+                .find(|running| running.output_id == request.output_id)
                 .map(|running| running.hosted.clone());
             let Some(hosted) = hosted.filter(|_| sources.insert(reference)) else {
                 return report(ToolOutcome::ToolError(

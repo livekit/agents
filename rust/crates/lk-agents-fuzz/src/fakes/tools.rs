@@ -49,7 +49,7 @@ pub fn tool_spec(name: &str) -> ToolSpec {
 }
 
 pub struct FakeTools {
-    /// Replies delivered to a live remote body, in order, including their original call id.
+    /// Replies delivered to a live remote body, in order, including its unique call item id.
     pub expert_answers: Mutex<Vec<(String, String)>>,
     registry: Arc<Registry>,
     /// Prepared calls' speeches until the body takes them or the preparation drops.
@@ -163,7 +163,7 @@ pub enum Body {
 
 impl AgentCallbacks for FakeTools {
     fn answer_expert(&self, invocation: &Invocation, answer: String) {
-        self.expert_answers.lock().unwrap().push((call_of(invocation).call_id.clone(), answer));
+        self.expert_answers.lock().unwrap().push((call_of(invocation).id.clone(), answer));
     }
 
     fn render_instructions<'a>(
@@ -285,16 +285,16 @@ impl AgentCallbacks for FakeTools {
     }
 
     fn cancel(&self, invocation: &Invocation) {
-        let call_id = call_of(invocation).call_id.clone();
-        self.cancelled.lock().unwrap().insert(call_id.clone());
-        if let Some(cancel) = self.running.lock().unwrap().remove(&call_id) {
+        let call = call_of(invocation);
+        self.cancelled.lock().unwrap().insert(call.id.clone());
+        if let Some(cancel) = self.running.lock().unwrap().remove(&call.id) {
             if self.registry.refuses_cancel() {
-                self.registry.record_cancel_refused(call_id.clone());
+                self.registry.record_cancel_refused(call.call_id.clone());
             } else {
                 let _ = cancel.send(());
             }
         }
-        if let Some(slot) = self.detached.lock().unwrap().remove(&call_id) {
+        if let Some(slot) = self.detached.lock().unwrap().remove(&call.id) {
             self.registry.mark_closed(slot);
         }
     }
@@ -315,6 +315,7 @@ impl FakeTools {
             Detail::Tool {
                 invocation_id: invocation.invocation_id.clone(),
                 operation: invocation.operation,
+                item_id: call.id.clone(),
                 call_id: call.call_id.clone(),
                 name: call.name.clone(),
                 speech,
@@ -322,7 +323,7 @@ impl FakeTools {
             Control::Tool(sender),
         );
         let (cancel, cancelled) = oneshot::channel();
-        self.running.lock().unwrap().insert(call.call_id.clone(), cancel);
+        self.running.lock().unwrap().insert(call.id.clone(), cancel);
         // A hung body still honours its cancellation, as an awaiting Python body does.
         let hazard = self.registry.hazard(Site::ToolBody);
         let body = async {
@@ -336,7 +337,7 @@ impl FakeTools {
             Ok(()) = cancelled => None,
             outcome = body => Some(outcome),
         };
-        self.running.lock().unwrap().remove(&call.call_id);
+        self.running.lock().unwrap().remove(&call.id);
         outcome.unwrap_or_else(|| {
             self.registry.mark_closed(slot);
             ToolOutcome::Cancelled
@@ -355,11 +356,11 @@ impl FakeTools {
             Ok(Body::Answer(answer)) => {
                 if let ToolOutcome::Update { .. } = answer {
                     // The task was cancelled first: the cancellation, not the detach, ends it.
-                    if self.cancelled.lock().unwrap().contains(&call.call_id) {
+                    if self.cancelled.lock().unwrap().contains(&call.id) {
                         self.registry.mark_closed(slot);
                         return ToolOutcome::Cancelled;
                     }
-                    self.detached.lock().unwrap().insert(call.call_id.clone(), slot);
+                    self.detached.lock().unwrap().insert(call.id.clone(), slot);
                 }
                 answer
             }
@@ -503,7 +504,8 @@ mod tests {
             &first_invocation,
             &first.prepared,
         ));
-        let second_call = FunctionCall { call_id: "second".into(), ..call };
+        let second_call =
+            FunctionCall { id: "item_second".into(), call_id: "second".into(), ..call };
         let second_invocation = invocation(&second_call);
         let second = tools
             .prepare_tool(

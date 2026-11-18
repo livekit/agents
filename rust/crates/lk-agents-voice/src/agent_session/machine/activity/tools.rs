@@ -164,7 +164,7 @@ impl VoiceDriver {
             let updates = self.session.states.on_tool_call_started(now, closing);
             self.apply_user_state_updates(updates);
         };
-        let output_id = self.session.ids.mint("item");
+        let output_id = call.output_id();
         let call_id = call.call_id.as_str();
         if let Some(turn) = self.agent_turn(speech) {
             turn.tool_started(call_id);
@@ -250,16 +250,16 @@ impl VoiceDriver {
         }
         self.record_trace(TraceToolStep::CallEnded { speech, call_id: call_id.clone(), end });
         // Ending the wrong call leaves one the close would answer twice.
-        if !self.activity.tools.end(speech, call, end.is_none()) {
+        let Some(item_id) = self.activity.tools.end(speech, call, end.is_none()) else {
             return;
-        }
+        };
         let status = match end {
             Some(status) => status,
             None => {
-                self.open_expert(&call_id);
+                self.open_expert(speech, call, &call_id);
                 self.fillers_reset_dwell(now, &call_id);
                 self.publish_event(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Updated {
-                    id: call_id.clone(),
+                    id: item_id,
                     call_id: call_id.clone(),
                     message: message.unwrap_or_default(),
                 }));
@@ -268,7 +268,11 @@ impl VoiceDriver {
                     .tools
                     .running
                     .iter_mut()
-                    .find(|running| running.speech == speech && running.call.call_id == call_id)
+                    .find(|running| {
+                        running.speech == speech
+                            && running.run_call == call
+                            && running.call.call_id == call_id
+                    })
                     .map(|running| {
                         (
                             running.hosted.invocation.invocation_id.clone(),
@@ -290,7 +294,7 @@ impl VoiceDriver {
                 return;
             }
         };
-        self.publish_tool_end(now, call_id, message, status);
+        self.publish_tool_end(now, item_id, call_id, message, status);
         let interrupted = self.activity.outliving_tools.contains(&speech)
             || self
                 .activity
@@ -307,6 +311,7 @@ impl VoiceDriver {
     fn publish_tool_end(
         &mut self,
         now: Ts,
+        id: String,
         call_id: String,
         message: Option<String>,
         status: ToolEndStatus,
@@ -319,7 +324,7 @@ impl VoiceDriver {
         };
         self.agent_turn_tool_ended(&call_id);
         self.publish_event(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Ended {
-            id: call_id.clone(),
+            id,
             call_id,
             message,
             status,
@@ -362,6 +367,7 @@ impl VoiceDriver {
             {
                 self.publish_tool_end(
                     now,
+                    r.call.id.clone(),
                     r.call.call_id.clone(),
                     (!execution.output.output.is_empty()).then(|| execution.output.output.clone()),
                     status,
@@ -392,7 +398,7 @@ impl VoiceDriver {
         }
         for r in running {
             let call_id = r.call.call_id.clone();
-            let id = if r.detached() { format!("{call_id}_final") } else { call_id.clone() };
+            let id = if r.detached() { format!("{}_final", r.call.id) } else { r.call.id.clone() };
             self.record_effect(VoiceEffect::CancelTool {
                 call_id: call_id.clone(),
                 hosted: r.hosted,
@@ -438,7 +444,7 @@ impl VoiceDriver {
                     .tools
                     .update_owner(&invocation_id, operation, &call_id)
                     .expect("exact owner checked above");
-                let id = format!("{call_id}_update_{}", r.updates);
+                let id = format!("{}_update_{}", r.call.id, r.updates);
                 r.updates += 1;
                 let running = r.clone();
                 let progress = ToolOutcome::Value {
@@ -463,12 +469,12 @@ impl VoiceDriver {
                 self.commit_pair(&running, id, pair);
             }
             ToolUpdate::Final { report } => {
-                let id = format!("{call_id}_final");
                 let running = self
                     .activity
                     .tools
                     .take_update_owner(&invocation_id, operation, &call_id)
                     .expect("exact owner checked above");
+                let id = format!("{}_final", running.call.id);
                 // The end is journalled before the away window moves.
                 self.record_trace(TraceToolStep::Updated {
                     call_id: call_id.clone(),
@@ -668,7 +674,7 @@ impl VoiceDriver {
         let Some(mut hosted) = batch.0.last().map(|p| p.hosted.clone()) else { return };
         let render = self.activity.tools.mint_operation();
         hosted.invocation.operation = render;
-        let call_ids = batch.update_ids();
+        let call_ids = batch.call_ids();
         let template = if at_tail {
             ToolTemplate::ReplyAtTail { call_ids }
         } else {
@@ -699,7 +705,7 @@ impl VoiceDriver {
             self.activity.tools.pending.splice(0..0, batch.0);
             return;
         }
-        let text = text.unwrap_or_else(|| default_reply_instructions(&batch.update_ids(), at_tail));
+        let text = text.unwrap_or_else(|| default_reply_instructions(&batch.call_ids(), at_tail));
         self.schedule_tool_reply(now, batch, at_tail, text);
     }
 

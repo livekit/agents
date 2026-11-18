@@ -118,8 +118,9 @@ class ToolCallUpdated:
     """A progress update emitted via ``ctx.update()`` while a tool call runs."""
 
     id: str
-    """Entry id: ``call_id`` inline, ``{call_id}_update_N`` when deferred."""
+    """Entry ID: the originating FunctionCall.id inline, ``{item_id}_update_N`` when deferred."""
     call_id: str
+    """Provider call ID; may repeat in another model reply."""
     message: str
     type: Literal["tool_call_updated"] = "tool_call_updated"
 
@@ -129,8 +130,9 @@ class ToolCallEnded:
     """A tool call's single terminal entry."""
 
     id: str
-    """Entry id: ``call_id`` inline, ``{call_id}_final`` when deferred."""
+    """Entry ID: the originating FunctionCall.id inline, ``{item_id}_final`` when deferred."""
     call_id: str
+    """Provider call ID; may repeat in another model reply."""
     message: str | None = None
     """Result or error text; None when there is nothing to voice."""
     status: ToolEndStatus

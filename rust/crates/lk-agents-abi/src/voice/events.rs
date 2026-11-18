@@ -244,8 +244,9 @@ pub struct ToolCallStarted {
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCallUpdated {
-    /// Entry id: ``call_id`` inline, ``{call_id}_update_N`` when deferred.
+    /// Entry ID: the originating FunctionCall.id inline, ``{item_id}_update_N`` when deferred.
     pub id: String,
+    /// Provider call ID; may repeat in another model reply.
     pub call_id: String,
     pub message: String,
 }
@@ -259,8 +260,9 @@ pub struct ToolCallUpdated {
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCallEnded {
-    /// Entry id: ``call_id`` inline, ``{call_id}_final`` when deferred.
+    /// Entry ID: the originating FunctionCall.id inline, ``{item_id}_final`` when deferred.
     pub id: String,
+    /// Provider call ID; may repeat in another model reply.
     pub call_id: String,
     /// Result or error text; None when there is nothing to voice.
     #[host(default = None)]

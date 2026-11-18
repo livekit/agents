@@ -144,6 +144,7 @@ impl Authored {
             Detail::Tool {
                 invocation_id: "authored".into(),
                 operation: 0,
+                item_id: format!("item_{call_id}"),
                 call_id: call_id.into(),
                 name: "lookup".into(),
                 speech,

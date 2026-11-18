@@ -220,13 +220,14 @@ pub enum ToolLifecycle {
     Started {
         call: lk_agents_abi::FunctionCall,
     },
-    /// `ctx.update(message)`: `id` is the call's own first, then `{call_id}_update_N`.
+    /// `ctx.update(message)`: `id` is the unique call item ID first, then `{item_id}_update_N`.
+    /// `call_id` retains the provider's ID, which may be reused by a later invocation.
     Updated {
         id: String,
         call_id: String,
         message: String,
     },
-    /// The call's single terminal entry (`{call_id}_final` once detached); `message` is `None`
+    /// The call's single terminal entry (`{item_id}_final` once detached); `message` is `None`
     /// when there is nothing to voice.
     Ended {
         id: String,

@@ -21,11 +21,17 @@ use crate::{
 
 pub struct FakeLlm {
     registry: Arc<Registry>,
+    reused_call_ids: bool,
 }
 
 impl FakeLlm {
     pub fn new(registry: Arc<Registry>) -> Arc<Self> {
-        Arc::new(FakeLlm { registry })
+        Arc::new(FakeLlm { registry, reused_call_ids: false })
+    }
+
+    /// A provider whose call IDs are unique within each reply, rather than the conversation.
+    pub fn reusing_call_ids(registry: Arc<Registry>) -> Arc<Self> {
+        Arc::new(FakeLlm { registry, reused_call_ids: true })
     }
 }
 
@@ -35,6 +41,8 @@ struct Response {
     registry: Arc<Registry>,
     closed: AtomicBool,
     hazard: super::hazard::StreamHazard,
+    reused_call_ids: bool,
+    next_call: u32,
 }
 
 impl Llm for FakeLlm {
@@ -71,6 +79,8 @@ impl Llm for FakeLlm {
                 registry: self.registry.clone(),
                 closed: AtomicBool::new(false),
                 hazard: self.registry.stream_hazard(Site::ChatNext, Site::ChatClose),
+                reused_call_ids: self.reused_call_ids,
+                next_call: 0,
             }) as LlmStream)
         })
     }
@@ -83,7 +93,17 @@ impl StreamOutput<LlmChunk> for Response {
             if let Some(fault) = fault {
                 return strike(fault, Site::ChatNext).await;
             }
-            self.receiver.recv().await.transpose()
+            let mut chunk = self.receiver.recv().await.transpose()?;
+            if self.reused_call_ids
+                && let Some(delta) = chunk.as_mut().and_then(|chunk| chunk.delta.as_mut())
+            {
+                for call in &mut delta.tool_calls {
+                    call.call_id = format!("reused-{}", self.next_call);
+                    self.next_call =
+                        self.next_call.checked_add(1).expect("fixture call IDs exhausted");
+                }
+            }
+            Ok(chunk)
         })
     }
 

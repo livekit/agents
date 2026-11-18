@@ -198,6 +198,8 @@ pub enum Detail {
     Tool {
         invocation_id: String,
         operation: u64,
+        /// Framework call item identity; provider call IDs can repeat between replies.
+        item_id: String,
         call_id: String,
         name: String,
         speech: u64,
@@ -947,10 +949,10 @@ impl Recording {
                     self.index.host_by_speech.entry(speech.0).or_default().push(position)
                 }
                 SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started { call }) => {
-                    self.index.host_by_tool.entry(call.call_id.clone()).or_default().push(position)
+                    self.index.host_by_tool.entry(call.id.clone()).or_default().push(position)
                 }
-                SessionEvent::ToolExecutionUpdated(ToolLifecycle::Ended { call_id, .. }) => {
-                    self.index.host_by_tool.entry(call_id.clone()).or_default().push(position)
+                SessionEvent::ToolExecutionUpdated(ToolLifecycle::Ended { id, .. }) => {
+                    self.index.host_by_tool.entry(id.clone()).or_default().push(position)
                 }
                 _ => {}
             }

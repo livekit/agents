@@ -977,7 +977,17 @@ mod left_at_close {
             unreachable!()
         };
         assert_eq!(*status, ToolEndStatus::Cancelled);
-        assert_eq!(*id, format!("{call_id}_final"), "the end of a call that detached");
+        let started = host
+            .iter()
+            .find_map(|(_, event)| match event {
+                Host::Session(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started {
+                    call,
+                })) => Some(call),
+                _ => None,
+            })
+            .expect("the call's start was not announced");
+        assert_eq!(call_id, &started.call_id, "provider call metadata is preserved");
+        assert_eq!(*id, format!("{}_final", started.id), "the unique call's terminal entry");
         let close = host
             .iter()
             .position(|(_, e)| matches!(e, Host::Session(SessionEvent::Close { .. })))

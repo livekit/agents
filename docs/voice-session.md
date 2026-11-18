@@ -105,6 +105,12 @@ Every event type is exported from `livekit.agents.voice.events`, the common ones
 `livekit.agents`, with `AgentEvent` (their union), `EventTypes` (the event names) and the
 `AgentState` and `UserState` literals.
 
+For tool lifecycle events, `ToolCallStarted.function_call.id` identifies the unique call item.
+The inline update and terminal entry use that ID; deferred updates use `{item_id}_update_N`
+and a detached terminal entry uses `{item_id}_final`. The separate `call_id` is the provider's
+ID and may repeat in later model replies. Use the framework item identity when correlating
+several live calls or retaining their results.
+
 ### Reading the session from a callback
 
 The session's history and states are held by the native session and read,

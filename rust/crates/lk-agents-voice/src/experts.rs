@@ -42,18 +42,18 @@ impl Floor<'_> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Presentation {
     /// The delegation's latest progress; older progress was superseded.
-    Progress { call_id: String, text: String },
+    Progress { output_id: String, text: String },
     /// A question selected for presentation. Native response admission supplies its answers;
     /// presentation priority alone never selects a remote reply destination.
-    Question { call_id: String, request_id: String, question: String, verbatim: bool },
+    Question { output_id: String, request_id: String, question: String, verbatim: bool },
     /// The originating call's result.
-    Outcome { call_id: String, outcome: ToolOutcome },
+    Outcome { output_id: String, outcome: ToolOutcome },
 }
 
 /// The pending input request a person's reply is collected for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingRequest {
-    pub call_id: String,
+    pub output_id: String,
     pub request_id: String,
 }
 
@@ -85,13 +85,13 @@ enum ExpertInboxEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Queued {
-    call_id: String,
+    output_id: String,
     event: ExpertInboxEvent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Foreground {
-    call_id: String,
+    output_id: String,
     request_id: String,
     question: String,
     verbatim: bool,
@@ -105,7 +105,7 @@ struct Foreground {
 /// persists frontend delivery; never a live await.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Experts {
-    /// By the originating call's id.
+    /// By the originating call's canonical output item ID, never its provider call ID.
     delegations: BTreeMap<String, Delegation>,
     queue: VecDeque<Queued>,
     foreground: Option<Foreground>,
@@ -125,9 +125,9 @@ pub struct Experts {
 }
 
 impl Experts {
-    /// The call `call_id` delegated to its expert: a delegation is known by its originating call.
-    pub fn open(&mut self, call_id: &str, tool: ExpertTool) -> bool {
-        if self.delegations.contains_key(call_id) {
+    /// A detached call delegates through its canonical output item ID.
+    pub fn open(&mut self, output_id: &str, tool: ExpertTool) -> bool {
+        if self.delegations.contains_key(output_id) {
             return false;
         }
         let delegation = Delegation {
@@ -138,37 +138,37 @@ impl Experts {
             recorded: false,
             settled: false,
         };
-        self.delegations.insert(call_id.to_owned(), delegation);
+        self.delegations.insert(output_id.to_owned(), delegation);
         true
     }
 
     /// The originating call's pending output was committed to the record.
-    pub fn recorded(&mut self, call_id: &str) {
-        if let Some(d) = self.delegations.get_mut(call_id) {
+    pub fn recorded(&mut self, output_id: &str) {
+        if let Some(d) = self.delegations.get_mut(output_id) {
             d.recorded = true;
         }
     }
 
     /// The call's delegation is open and unresolved.
-    pub fn owns(&self, call_id: &str) -> bool {
-        self.delegations.get(call_id).is_some_and(|d| !d.settled)
+    pub fn owns(&self, output_id: &str) -> bool {
+        self.delegations.get(output_id).is_some_and(|d| !d.settled)
     }
 
     /// Progress `occurrence` (from 1, increasing per delegation). Queued progress of the same
     /// delegation is superseded in place.
-    pub fn progress(&mut self, call_id: &str, occurrence: u64, text: String) -> bool {
-        let Some(d) = self.delegations.get_mut(call_id).filter(|d| !d.settled) else {
+    pub fn progress(&mut self, output_id: &str, occurrence: u64, text: String) -> bool {
+        let Some(d) = self.delegations.get_mut(output_id).filter(|d| !d.settled) else {
             return false;
         };
         if occurrence <= d.progress_seen {
             return false;
         }
         d.progress_seen = occurrence;
-        let queued = self.queue.iter_mut().find(|q| q.call_id == call_id);
+        let queued = self.queue.iter_mut().find(|q| q.output_id == output_id);
         match queued {
             Some(Queued { event: ExpertInboxEvent::Progress(old), .. }) => *old = text,
             Some(_) | None => self.queue.push_back(Queued {
-                call_id: call_id.into(),
+                output_id: output_id.into(),
                 event: ExpertInboxEvent::Progress(text),
             }),
         }
@@ -179,13 +179,13 @@ impl Experts {
     /// question of a delegation can be answered. A repeated request is not asked twice.
     pub fn ask(
         &mut self,
-        call_id: &str,
+        output_id: &str,
         request_id: &str,
         question: String,
         verbatim: bool,
         input_request: Option<InputRequestRef>,
     ) -> bool {
-        let Some(d) = self.delegations.get_mut(call_id).filter(|d| !d.settled) else {
+        let Some(d) = self.delegations.get_mut(output_id).filter(|d| !d.settled) else {
             return false;
         };
         if d.requests.contains_key(request_id) {
@@ -193,24 +193,24 @@ impl Experts {
         }
         d.requests.insert(request_id.to_owned(), input_request);
         d.waiting = Some(request_id.to_owned());
-        self.withdraw(call_id);
+        self.withdraw(output_id);
         let event =
             ExpertInboxEvent::Question { request_id: request_id.into(), question, verbatim };
-        self.queue.push_back(Queued { call_id: call_id.into(), event });
+        self.queue.push_back(Queued { output_id: output_id.into(), event });
         true
     }
 
     /// The delegation ended with `outcome`, which resolves its originating call once presented;
     /// never twice.
-    pub fn outcome(&mut self, call_id: &str, outcome: ToolOutcome) -> bool {
-        let Some(d) = self.delegations.get_mut(call_id).filter(|d| !d.settled) else {
+    pub fn outcome(&mut self, output_id: &str, outcome: ToolOutcome) -> bool {
+        let Some(d) = self.delegations.get_mut(output_id).filter(|d| !d.settled) else {
             return false;
         };
         d.settled = true;
         d.waiting = None;
-        self.withdraw(call_id);
+        self.withdraw(output_id);
         self.queue.push_back(Queued {
-            call_id: call_id.into(),
+            output_id: output_id.into(),
             event: ExpertInboxEvent::Outcome(outcome),
         });
         true
@@ -218,20 +218,20 @@ impl Experts {
 
     /// The application settled or cancelled the interaction: nothing of it is presented, and its
     /// pending request can no longer be answered.
-    pub fn cancel(&mut self, call_id: &str) -> bool {
-        let Some(d) = self.delegations.get_mut(call_id).filter(|d| !d.settled) else {
+    pub fn cancel(&mut self, output_id: &str) -> bool {
+        let Some(d) = self.delegations.get_mut(output_id).filter(|d| !d.settled) else {
             return false;
         };
         d.settled = true;
         d.waiting = None;
-        self.withdraw(call_id);
-        self.queue.retain(|q| q.call_id != call_id);
+        self.withdraw(output_id);
+        self.queue.retain(|q| q.output_id != output_id);
         true
     }
 
     /// Drop the call's queued progress and its question, queued or in the foreground.
-    fn withdraw(&mut self, call_id: &str) {
-        if let Some(delegation) = self.delegations.get(call_id) {
+    fn withdraw(&mut self, output_id: &str) {
+        if let Some(delegation) = self.delegations.get(output_id) {
             let current = delegation
                 .waiting
                 .as_ref()
@@ -243,15 +243,16 @@ impl Experts {
             });
             self.prompted_responses.retain(|reference| self.responses.contains_key(reference));
         }
-        self.foreground.take_if(|f| f.call_id == call_id);
-        self.queue
-            .retain(|q| q.call_id != call_id || matches!(q.event, ExpertInboxEvent::Outcome(_)));
+        self.foreground.take_if(|f| f.output_id == output_id);
+        self.queue.retain(|q| {
+            q.output_id != output_id || matches!(q.event, ExpertInboxEvent::Outcome(_))
+        });
     }
 
     /// Suspend a presented question the active agent can no longer interact with.
     pub fn observe(&mut self, floor: Floor<'_>) {
         let Some(fg) = &mut self.foreground else { return };
-        let tool = &self.delegations[&fg.call_id].tool;
+        let tool = &self.delegations[&fg.output_id].tool;
         if !floor.reaches(tool) {
             fg.suspended = true;
         }
@@ -266,18 +267,18 @@ impl Experts {
             return None;
         }
         if let Some(fg) = self.foreground.as_mut().filter(|f| f.suspended)
-            && floor.reaches(&self.delegations[&fg.call_id].tool)
+            && floor.reaches(&self.delegations[&fg.output_id].tool)
         {
             fg.suspended = false;
             return Some(Presentation::Question {
-                call_id: fg.call_id.clone(),
+                output_id: fg.output_id.clone(),
                 request_id: fg.request_id.clone(),
                 question: fg.question.clone(),
                 verbatim: fg.verbatim,
             });
         }
         let at = self.queue.iter().position(|q| {
-            let d = &self.delegations[&q.call_id];
+            let d = &self.delegations[&q.output_id];
             floor.reaches(&d.tool)
                 && match q.event {
                     ExpertInboxEvent::Question { .. } => self.foreground.is_none(),
@@ -285,20 +286,20 @@ impl Experts {
                     ExpertInboxEvent::Progress(_) => true,
                 }
         })?;
-        let Queued { call_id, event } = self.queue.remove(at)?;
+        let Queued { output_id, event } = self.queue.remove(at)?;
         Some(match event {
-            ExpertInboxEvent::Progress(text) => Presentation::Progress { call_id, text },
+            ExpertInboxEvent::Progress(text) => Presentation::Progress { output_id, text },
             ExpertInboxEvent::Question { request_id, question, verbatim } => {
                 self.foreground = Some(Foreground {
-                    call_id: call_id.clone(),
+                    output_id: output_id.clone(),
                     request_id: request_id.clone(),
                     question: question.clone(),
                     verbatim,
                     suspended: false,
                 });
-                Presentation::Question { call_id, request_id, question, verbatim }
+                Presentation::Question { output_id, request_id, question, verbatim }
             }
-            ExpertInboxEvent::Outcome(outcome) => Presentation::Outcome { call_id, outcome },
+            ExpertInboxEvent::Outcome(outcome) => Presentation::Outcome { output_id, outcome },
         })
     }
 
@@ -307,7 +308,7 @@ impl Experts {
     pub fn collect(&mut self, floor: Floor<'_>) -> Option<PendingRequest> {
         self.observe(floor);
         let fg = self.foreground.as_ref().filter(|f| !f.suspended)?;
-        Some(PendingRequest { call_id: fg.call_id.clone(), request_id: fg.request_id.clone() })
+        Some(PendingRequest { output_id: fg.output_id.clone(), request_id: fg.request_id.clone() })
     }
 
     /// Delivery to exactly this live continuation, which it consumes. It need not be the
@@ -315,7 +316,7 @@ impl Experts {
     pub fn answer(&mut self, request: &PendingRequest) -> Result<(), Stale> {
         let delegation = self
             .delegations
-            .get_mut(&request.call_id)
+            .get_mut(&request.output_id)
             .filter(|delegation| !delegation.settled)
             .ok_or(Stale)?;
         if delegation.waiting.as_deref() != Some(request.request_id.as_str()) {
@@ -327,17 +328,17 @@ impl Experts {
             self.prompted_responses.remove(reference);
         }
         self.queue.retain(|queued| {
-            queued.call_id != request.call_id
+            queued.output_id != request.output_id
                 || !matches!(&queued.event, ExpertInboxEvent::Question { request_id, .. }
                     if request_id == &request.request_id)
         });
         self.foreground
-            .take_if(|f| f.call_id == request.call_id && f.request_id == request.request_id);
+            .take_if(|f| f.output_id == request.output_id && f.request_id == request.request_id);
         Ok(())
     }
 
     pub fn reference(&self, request: &PendingRequest) -> Option<&InputRequestRef> {
-        self.delegations.get(&request.call_id)?.requests.get(&request.request_id)?.as_ref()
+        self.delegations.get(&request.output_id)?.requests.get(&request.request_id)?.as_ref()
     }
 
     pub fn reserve(&mut self, reference: InputRequestRef, message: lk_agents_abi::ChatMessage) {
@@ -362,7 +363,7 @@ impl Experts {
 
     /// A live request belongs to this exact endpoint/tool pair, including across agent changes.
     pub fn matches_tool(&self, request: &PendingRequest, tool: &ExpertTool) -> bool {
-        self.delegations.get(&request.call_id).is_some_and(|delegation| delegation.tool == *tool)
+        self.delegations.get(&request.output_id).is_some_and(|delegation| delegation.tool == *tool)
     }
 
     /// Claim before handing the response to its one live body. Reentrant tool calls in the
@@ -372,7 +373,7 @@ impl Experts {
         request: &PendingRequest,
         human_id: String,
     ) -> Result<(), Stale> {
-        let tool = self.delegations.get(&request.call_id).ok_or(Stale)?.tool.clone();
+        let tool = self.delegations.get(&request.output_id).ok_or(Stale)?.tool.clone();
         self.answer(request)?;
         self.forwarded_responses.insert(tool, human_id);
         Ok(())
@@ -396,7 +397,7 @@ impl Experts {
     pub fn responses(&self, floor: Floor<'_>) -> Vec<(PendingRequest, lk_agents_abi::ChatMessage)> {
         self.delegations
             .iter()
-            .filter_map(|(call_id, delegation)| {
+            .filter_map(|(output_id, delegation)| {
                 if delegation.settled || !floor.reaches(&delegation.tool) {
                     return None;
                 }
@@ -404,7 +405,7 @@ impl Experts {
                 let reference = delegation.requests.get(request_id)?.as_ref()?;
                 let message = self.responses.get(reference)?.clone();
                 Some((
-                    PendingRequest { call_id: call_id.clone(), request_id: request_id.clone() },
+                    PendingRequest { output_id: output_id.clone(), request_id: request_id.clone() },
                     message,
                 ))
             })
@@ -432,14 +433,14 @@ impl Experts {
         let request = self.presentations.remove(&speech)?;
         // A late receipt belongs to the words actually delivered, even if a newer input has
         // superseded that occurrence. Shared input state decides response eligibility.
-        self.delegations.get(&request.call_id)?.requests.get(&request.request_id)?.clone()
+        self.delegations.get(&request.output_id)?.requests.get(&request.request_id)?.clone()
     }
 
     /// An unspoken scheduled question is offered again when the floor permits.
     pub fn presentation_ended(&mut self, speech: SpeechId) {
         if let Some(request) = self.presentations.remove(&speech)
             && let Some(foreground) = self.foreground.as_mut()
-            && foreground.call_id == request.call_id
+            && foreground.output_id == request.output_id
             && foreground.request_id == request.request_id
         {
             foreground.suspended = true;

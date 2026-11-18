@@ -79,7 +79,7 @@ impl AgentRun {
         for item in &mut self.history {
             let ChatItem::FunctionCallOutput(output) = item else { continue };
             if !calls.iter().any(|call| {
-                call.item.call_id == output.call_id && output.id == format!("{}_out", call.item.id)
+                call.item.call_id == output.call_id && output.id == call.item.output_id()
             }) {
                 continue;
             }

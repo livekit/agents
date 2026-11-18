@@ -14,7 +14,7 @@ use crate::{
 
 // `ctx.update()` reaches the driver directly while the detach is heard in the model's order, so an
 // update can arrive first and must wait for it, not be dropped. Updates are told as
-// `<call_id>_update_<n>`, the final as `<call_id>_final`.
+// `<item_id>_update_<n>`, the final as `<item_id>_final`; provider IDs can repeat.
 
 pub struct ToolUpdatesAreTold;
 
@@ -48,12 +48,12 @@ impl Rule for ToolUpdatesAreTold {
             if reported.insert(tool.nth) {
                 continue;
             }
-            let Some(Detail::Tool { call_id, .. }) =
+            let Some(Detail::Tool { item_id, .. }) =
                 r.resource(Kind::Tool, tool.nth).map(|t| t.detail().clone())
             else {
                 continue;
             };
-            let entry = sent.entry(call_id).or_insert((tool.nth, 0, 0));
+            let entry = sent.entry(item_id).or_insert((tool.nth, 0, 0));
             match (progress, end) {
                 // A body that has returned sends nothing more; the case may still draw one.
                 (Some(_), _) if entry.2 > 0 => {}
@@ -67,17 +67,26 @@ impl Rule for ToolUpdatesAreTold {
         for (_, step) in r.journal() {
             let Step::Emitted(SessionEvent::ToolExecutionUpdated(update)) = step else { continue };
             match update {
-                ToolLifecycle::Updated { id, call_id, .. } if id != call_id => {
-                    told.entry(call_id.clone()).or_default().0 += 1;
+                ToolLifecycle::Updated { id, .. } => {
+                    if sent.contains_key(id) {
+                        told.entry(id.clone()).or_default().3 = true;
+                    } else if let Some((item_id, occurrence)) = id.rsplit_once("_update_")
+                        && occurrence.parse::<u32>().is_ok()
+                        && sent.contains_key(item_id)
+                    {
+                        told.entry(item_id.into()).or_default().0 += 1;
+                    }
                 }
-                ToolLifecycle::Updated { call_id, .. } => {
-                    told.entry(call_id.clone()).or_default().3 = true;
-                }
-                ToolLifecycle::Ended { id, call_id, status, .. } => {
-                    let entry = told.entry(call_id.clone()).or_default();
+                ToolLifecycle::Ended { id, status, .. } => {
+                    let (item_id, final_update) = match id.strip_suffix("_final") {
+                        Some(item_id) if sent.contains_key(item_id) => (item_id, true),
+                        _ if sent.contains_key(id) => (id.as_str(), false),
+                        _ => continue,
+                    };
+                    let entry = told.entry(item_id.into()).or_default();
                     if *status == ToolEndStatus::Cancelled {
                         entry.2 = true;
-                    } else if *id == format!("{call_id}_final") {
+                    } else if final_update {
                         entry.1 += 1;
                     }
                 }
@@ -128,7 +137,7 @@ fn sent() -> Authored {
 
 /// The update arrives before the detach is heard, and is told after it.
 fn an_update_told() -> Recording {
-    sent().journal(update("c1")).journal(update("c1_update_1")).done()
+    sent().journal(update("item_c1")).journal(update("item_c1_update_1")).done()
 }
 
 /// The body's first `ctx.update()` is its detach, told under the call's own id; its second is
@@ -143,12 +152,12 @@ fn a_first_update_detaches() -> Recording {
         .tool_call("c1", 1)
         .sent(progress("started"))
         .sent(progress("half way"))
-        .journal(update("c1"))
-        .journal(update("c1_update_1"))
+        .journal(update("item_c1"))
+        .journal(update("item_c1_update_1"))
         .done()
 }
 
 /// The update arrives before the detach is heard, and is lost.
 fn an_update_dropped() -> Recording {
-    sent().journal(update("c1")).done()
+    sent().journal(update("item_c1")).done()
 }

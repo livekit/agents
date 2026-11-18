@@ -150,11 +150,11 @@ pub(in crate::agent_session::machine::activity) fn running(
         host_context: None,
     };
     Running {
+        output_id: call.output_id(),
         call,
         run_call: None,
         identity: None,
         executing: true,
-        output_id: "new-output".into(),
         speech,
         step: 1,
         updates: 0,
@@ -169,6 +169,8 @@ pub(in crate::agent_session::machine::activity) fn running(
 fn detached_tool_updates_get_distinct_provider_safe_call_ids() {
     let mut driver = crate::agent_session::tests::driver();
     let mut tool = running("run", 1);
+    tool.call.id.push_str("/fnc_0");
+    tool.output_id = tool.call.output_id();
     tool.updates = 1;
     driver.activity.tools.running.push(tool);
     let done = ToolOutcome::Value {
@@ -270,8 +272,8 @@ fn an_experts_question_keeps_the_exact_body_live_for_answer_progress_and_outcome
     body.updates = 1;
     driver.activity.tools.running.push(body);
     let tools = [ExpertTool::new("https://expert.invalid/agent", "lookup")];
-    driver.session.experts.open("reused", tools[0].clone());
-    driver.session.experts.recorded("reused");
+    driver.session.experts.open("new-call-item_out", tools[0].clone());
+    driver.session.experts.recorded("new-call-item_out");
     driver.on_tool_update(
         Ts::ZERO,
         "expert-run".into(),
