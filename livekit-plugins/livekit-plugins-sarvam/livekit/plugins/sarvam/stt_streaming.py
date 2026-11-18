@@ -39,7 +39,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
@@ -156,6 +156,7 @@ class RealtimeSTTOptions:
     base_url: str = SARVAM_STT_REALTIME_URL
     prompt: str | None = None
     return_timestamps: bool = False
+    with_diarization: bool = False
     vad_sot_threshold: float | None = None
     vad_min_speech_ms: int | None = None
     vad_min_silence_ms: int | None = None
@@ -204,6 +205,8 @@ def _build_realtime_ws_url(base_url: str, opts: RealtimeSTTOptions) -> str:
 
     params["mode"] = opts.mode
     params["return_timestamps"] = str(opts.return_timestamps).lower()
+    if opts.with_diarization:
+        params["with_diarization"] = "true"
     if opts.prompt is not None:
         params["prompt"] = opts.prompt
 
@@ -218,6 +221,26 @@ def _build_realtime_ws_url(base_url: str, opts: RealtimeSTTOptions) -> str:
             params["prefix_padding_ms"] = str(opts.vad_prefix_padding_ms)
 
     return f"{base_url}?{urlencode(params)}"
+
+
+def _seconds(value: object) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return max(float(value), 0.0)
+    return None
+
+
+def _single_speaker(turns: object, words: list[TimedString] | None) -> str | None:
+    """Return the speaker label when one speaker said the whole utterance."""
+    speakers: set[str] = set()
+    if isinstance(turns, list):
+        speakers = {
+            turn["speaker"]
+            for turn in turns
+            if isinstance(turn, dict) and isinstance(turn.get("speaker"), str)
+        }
+    if not speakers and words:
+        speakers = {word.speaker_id for word in words if word.speaker_id is not None}
+    return speakers.pop() if len(speakers) == 1 else None
 
 
 class STTRealtime(stt.STT):
@@ -242,6 +265,7 @@ class STTRealtime(stt.STT):
         sample_rate: int = 16000,
         prompt: str | None = None,
         return_timestamps: bool = False,
+        with_diarization: bool = False,
         api_key: str | None = None,
         base_url: str = SARVAM_STT_REALTIME_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -264,7 +288,13 @@ class STTRealtime(stt.STT):
             encoding: Wire encoding: ``linear16``, ``linear32``, ``mulaw``, or ``alaw``.
             sample_rate: Audio sample rate in Hz; ``8000`` or ``16000``.
             prompt: Optional context or terminology hint used to bias decoding.
-            return_timestamps: Whether finals should carry segment-level start and end times.
+            return_timestamps: Whether finals should carry the utterance's start and end times.
+                Word-level times need ``with_diarization``.
+            with_diarization: Speaker diarization with word-level timestamps (beta, ``saaras:v4``
+                only, not in ``translate`` mode). Partials and finals then carry
+                ``SpeechData.words`` with per-word times and speaker labels. Sarvam enables
+                the beta per account; without access the session is rejected. Fixed for
+                the lifetime of this instance.
             api_key: Sarvam API key. Falls back to the ``SARVAM_API_KEY`` environment variable.
             base_url: WebSocket URL of the realtime endpoint.
             http_session: Optional aiohttp session to reuse for the connection.
@@ -282,7 +312,8 @@ class STTRealtime(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
-                aligned_transcript=False,
+                diarization=with_diarization,
+                aligned_transcript="word" if with_diarization else False,
                 offline_recognize=False,
             )
         )
@@ -306,6 +337,7 @@ class STTRealtime(stt.STT):
             base_url=base_url,
             prompt=prompt,
             return_timestamps=return_timestamps,
+            with_diarization=with_diarization,
             vad_sot_threshold=vad_sot_threshold,
             vad_min_speech_ms=vad_min_speech_ms,
             vad_min_silence_ms=vad_min_silence_ms,
@@ -378,7 +410,7 @@ class STTRealtime(stt.STT):
             endpointing: ``vad`` for server-side turn detection, or ``manual``.
             sample_rate: Audio sample rate in Hz; applies to new streams only.
             prompt: Context or terminology hint; ``None`` clears it.
-            return_timestamps: Segment-level timestamps; applies to new streams only.
+            return_timestamps: Utterance start and end times on finals; applies to new streams only.
             vad_sot_threshold: VAD activation threshold (``vad`` endpointing only).
             vad_min_speech_ms: Minimum speech duration in ms (``vad`` endpointing only).
             vad_min_silence_ms: End-of-turn silence in ms (``vad`` endpointing only).
@@ -401,6 +433,7 @@ class STTRealtime(stt.STT):
             return_timestamps=return_timestamps
             if is_given(return_timestamps)
             else self._opts.return_timestamps,
+            with_diarization=self._opts.with_diarization,
             vad_sot_threshold=vad_sot_threshold
             if is_given(vad_sot_threshold)
             else self._opts.vad_sot_threshold,
@@ -461,6 +494,7 @@ class STTRealtime(stt.STT):
             base_url=self._opts.base_url,
             prompt=self._opts.prompt,
             return_timestamps=self._opts.return_timestamps,
+            with_diarization=self._opts.with_diarization,
             vad_sot_threshold=self._opts.vad_sot_threshold,
             vad_min_speech_ms=self._opts.vad_min_speech_ms,
             vad_min_silence_ms=self._opts.vad_min_silence_ms,
@@ -579,7 +613,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
             endpointing: ``vad`` for server-side turn detection, or ``manual``.
             sample_rate: Audio sample rate in Hz; retained on a live stream.
             prompt: Context or terminology hint; ``None`` clears it.
-            return_timestamps: Segment-level timestamps; retained on a live stream.
+            return_timestamps: Utterance start and end times on finals; retained on a live stream.
             vad_sot_threshold: VAD activation threshold (``vad`` endpointing only).
             vad_min_speech_ms: Minimum speech duration in ms (``vad`` endpointing only).
             vad_min_silence_ms: End-of-turn silence in ms (``vad`` endpointing only).
@@ -1256,6 +1290,37 @@ class RealtimeSpeechStream(stt.SpeechStream):
         )
         self._eos_emitted_for_utterance = True
 
+    def _parse_words(self, raw_words: object) -> list[TimedString] | None:
+        """Map the ``words`` array of a diarized partial or final to timed strings.
+
+        Sarvam sends word times in seconds from the start of the stream, so they are
+        shifted by ``start_time_offset`` like the utterance times. A word the model
+        could not time keeps its text with no times.
+        """
+        if not isinstance(raw_words, list):
+            return None
+        offset = self.start_time_offset
+        words: list[TimedString] = []
+        for item in raw_words:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("word")
+            if not isinstance(text, str) or not text:
+                continue
+            start = _seconds(item.get("start_s"))
+            end = _seconds(item.get("end_s"))
+            speaker = item.get("speaker")
+            words.append(
+                TimedString(
+                    text,
+                    start_time=start + offset if start is not None else NOT_GIVEN,
+                    end_time=end + offset if end is not None else NOT_GIVEN,
+                    start_time_offset=offset,
+                    speaker_id=speaker if isinstance(speaker, str) else None,
+                )
+            )
+        return words or None
+
     def _send_transcript_event(self, event_type: stt.SpeechEventType, data: dict[str, Any]) -> bool:
         text = data.get("text")
         if not isinstance(text, str) or not text.strip():
@@ -1303,12 +1368,22 @@ class RealtimeSpeechStream(stt.SpeechStream):
         ):
             end_time = self._audio_position
 
+        words = self._parse_words(data.get("words"))
+        speaker_id: str | None = None
+        if self._opts.with_diarization:
+            for key in ("speaker_attribution", "source", "fallback", "turns"):
+                if data.get(key) is not None:
+                    metadata[key] = data[key]
+            speaker_id = _single_speaker(data.get("turns"), words)
+
         speech_data = stt.SpeechData(
             language=LanguageCode(language),
             text=text,
             start_time=start_time + self.start_time_offset if end_time > 0 else 0.0,
             end_time=end_time + self.start_time_offset if end_time > 0 else 0.0,
             confidence=float(confidence),
+            speaker_id=speaker_id,
+            words=words,
             metadata=metadata or None,
         )
         self._event_ch.send_nowait(
