@@ -1,0 +1,171 @@
+.oss-scanner/threat_model.md
+  s_1a6176064eede6::t_2e7b3592f315f8 113
+examples/homepage/livekit-expert/agent.py
+  s_1a6176064eede6::t_d55d7227fae262 66-68,92-95
+examples/homepage/livekit-expert/knowledge_base/products/livekit-inference.md
+  s_1a6176064eede6::t_ddfc5171de825d 25
+livekit-agents/livekit/agents/inference/_utils.py
+  s_1a6176064eede6::t_d3beddf5f00816 9-10,13-16,38-69
+livekit-agents/livekit/agents/inference/llm.py
+  s_1a6176064eede6::t_29f77259b2668e 42,412,423-425,449
+livekit-agents/livekit/agents/inference/realtime/gpt_live.py
+  s_1a6176064eede6::t_0fa1438cba8360 12,15,17,103,120,136,149-151,185,209-212
+livekit-agents/livekit/agents/inference/realtime/openai.py
+  s_1a6176064eede6::t_ceb4fdc4186ed8 3-6,35,58-63,90,113-115,132,168-171,173,200-201,211-212,214-215,222-224,227,232-305,313-315,400
+livekit-agents/livekit/agents/inference/responses.py
+  s_1a6176064eede6::t_bec7eed2be2c08 6,48-49,51,158,168-173,179,550
+livekit-agents/livekit/agents/inference/stt.py
+  s_1a6176064eede6::t_1cb474cd835ed4 9-12,40,50-52,77,341,370,1005-1053,1080-1197,1286-1290,1292-1293,1318,1333-1334,1357,1359-1361,1364,1367,1369,1375,1377,1379,1382-1396,1402-1405,1407-1408,1410-1419,1423-1424,1426-1427,1432,1434-1435,1463-1500,1504,1507,1509,1511,1513,1515-1516,1524,1526,1530,1533,1542-1545,1547-1554,1556-1557,1559,1561-1577,1579-1582,1584-1597,1602-1607,1610-1611,1614-1618,1620,1622-1623,1629,1631-1633,1640-1641,1643-1644,1646-1647,1649,1651,1655,1657-1658,1661,1667,1670-1671,1675,1682,1685,1687,1692-1696
+livekit-agents/livekit/agents/inference/tts.py
+  s_1a6176064eede6::t_196737373d5bde 8,37,322,331-340,676,693-695,698-699,702-743,872,877,887-891,978,982,988,992-993,999
+livekit-agents/livekit/agents/llm/_realtime/gpt_live.py
+  s_1a6176064eede6::t_aebe95c9e0ce63 7,54-55,146,499-504,698,710-711,747-748,754-760,944-977,983,988-993,1005-1014,1016-1021,1046-1050,1055-1057,1085-1089,1164-1173,1345-1346,1349
+livekit-agents/livekit/agents/llm/_realtime/gpt_live_types.py
+  s_1a6176064eede6::t_67d0cfecc52c13 262-263
+livekit-agents/livekit/agents/llm/_realtime/openai.py
+  s_1a6176064eede6::t_d9bc833781ff55 936-937,1299,1310-1311,1313-1319,1321-1335,1337-1339,1343-1346
+livekit-agents/livekit/agents/telemetry/trace_types.py
+  s_1a6176064eede6::t_74e6b3e1a920e5 150-151
+livekit-agents/livekit/agents/utils/aio/channel.py
+  s_1a6176064eede6::t_498536feb14602 132-138
+livekit-agents/livekit/agents/utils/deprecation.py
+  s_1a6176064eede6::t_fe1acadc318d8e 22,28-29,44-47
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_1a6176064eede6::t_2cf82dc217e586 1687-1690,1695-1697,1785
+livekit-agents/livekit/agents/voice/avatar/_datastream_io.py
+  s_1a6176064eede6::t_c2e48aa85e0fcb 401,450,452-458,563,566,640-643
+livekit-agents/livekit/agents/voice/avatar/_queue_io.py
+  s_1a6176064eede6::t_a2d137cf6346b5 41,59-60,71-72
+livekit-agents/livekit/agents/voice/avatar/_types.py
+  s_1a6176064eede6::t_fbdf0788d82cd3 7,23,25-31
+livekit-agents/pyproject.toml
+  s_1a6176064eede6::t_959ca87054fcfb 11,26,86,150
+livekit-plugins/livekit-plugins-anthropic/livekit/plugins/anthropic/llm.py
+  s_1a6176064eede6::t_ca72c47b6a7e7d 181,188-192
+livekit-plugins/livekit-plugins-aws/pyproject.toml
+  s_1a6176064eede6::t_a2087d1a5049c4 30-31
+livekit-plugins/livekit-plugins-bithuman/pyproject.toml
+  s_1a6176064eede6::t_6f601d902222c8 11
+livekit-plugins/livekit-plugins-boson-ai/README.md
+  s_1a6176064eede6::t_8aadd0abe31a45 15,25,28,37
+livekit-plugins/livekit-plugins-boson-ai/livekit/plugins/boson_ai/log.py
+  s_1a6176064eede6::t_dea7e6444ac382 1-3
+livekit-plugins/livekit-plugins-boson-ai/livekit/plugins/boson_ai/realtime/realtime_model.py
+  s_1a6176064eede6::t_67dd7ce701f4da 169,173
+livekit-plugins/livekit-plugins-boson-ai/pyproject.toml
+  s_1a6176064eede6::t_d0911c2b23e4d5 6,34
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/log.py
+  s_1a6176064eede6::t_29a34fc12c6b86 2,5-18
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/models.py
+  s_1a6176064eede6::t_68724dc2c79256 5-6
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/stt.py
+  s_1a6176064eede6::t_411935dfa665ad 43-45,56-70,92-93,115,117-125,169,317-318,320-321,349,382-395,406-434,440-443,452-453,467-491,493,539-540,542,547,556-557,622-623
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/tts.py
+  s_1a6176064eede6::t_2a0797a6dd873a 40-41,107,123,137-140,182,298-299,336-337,432-433,477-478
+livekit-plugins/livekit-plugins-lokutor/livekit/plugins/lokutor/stt.py
+  s_1a6176064eede6::t_0da19fbb7e6a59 251-253,292-294,296,299,322,324,356,358,394
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/decision_model.py
+  s_1a6176064eede6::t_bee4731f54d8a6 66
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/models.py
+  s_1a6176064eede6::t_e668c2dc850f01 71
+livekit-plugins/livekit-plugins-phonic/README.md
+  s_1a6176064eede6::t_3c05e9f63f00a4 150,153-157,163-179
+livekit-plugins/livekit-plugins-phonic/livekit/plugins/phonic/realtime/realtime_model.py
+  s_1a6176064eede6::t_b60b6c8839a4d6 76-80,111-125,417-418,631,654,656,658-662,698,709-713,727-728,994
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/llm/client.py
+  s_1a6176064eede6::t_438b15223960fa 193-194,275-276,284
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  s_1a6176064eede6::t_67b50487d655f1 272,282,466-467,480,519,652-653,841
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt_streaming.py
+  s_1a6176064eede6::t_991b48855e8dd5 24,55,61,155,165-166,224-226,237,257-258,300,321,352,366,375,393,455
+livekit-plugins/livekit-plugins-silero/pyproject.toml
+  s_1a6176064eede6::t_029475848f6e65 11
+livekit-plugins/livekit-plugins-turn-detector/pyproject.toml
+  s_1a6176064eede6::t_9fd30f874e94d6 11
+livekit-plugins/livekit-plugins-vlmrun/README.md
+  s_1a6176064eede6::t_a72d3678202d4a 1-69
+livekit-plugins/livekit-plugins-vlmrun/livekit/plugins/vlmrun/__init__.py
+  s_1a6176064eede6::t_373897d2be7eb3 1-53
+livekit-plugins/livekit-plugins-vlmrun/livekit/plugins/vlmrun/_common.py
+  s_1a6176064eede6::t_0707b404de7669 1-66
+livekit-plugins/livekit-plugins-vlmrun/livekit/plugins/vlmrun/decision_model.py
+  s_1a6176064eede6::t_2286a34467dc9b 1-173
+livekit-plugins/livekit-plugins-vlmrun/livekit/plugins/vlmrun/llm.py
+  s_1a6176064eede6::t_c5b58a2064790f 1-182
+livekit-plugins/livekit-plugins-vlmrun/livekit/plugins/vlmrun/log.py
+  s_1a6176064eede6::t_138b003ab97427 3
+livekit-plugins/livekit-plugins-vlmrun/livekit/plugins/vlmrun/models.py
+  s_1a6176064eede6::t_cd79e4fa877ea2 1-67
+livekit-plugins/livekit-plugins-vlmrun/livekit/plugins/vlmrun/version.py
+  s_1a6176064eede6::t_1cd319f4164ec1 1-15
+livekit-plugins/livekit-plugins-vlmrun/pyproject.toml
+  s_1a6176064eede6::t_e5fe3e8aed6464 1-45
+pyproject.toml
+  s_1a6176064eede6::t_ea43bd880e1efa 28,95
+tests/conftest.py
+  s_1a6176064eede6::t_c130b011962d52 9,12,14-15,257-282
+tests/test_aio.py
+  s_1a6176064eede6::t_e875b9e25e4cd7 2-3,70-106
+tests/test_audio_recognition_turn_detection.py
+  s_1a6176064eede6::t_8766677dd18860 14,549-551,556-561,563-570
+tests/test_gpt_live_model.py
+  s_1a6176064eede6::t_50d395cb78790a 21-28,150-152,158,162-168,1637-1638,1673-1678,1701,1703,1705-1710,1717,1725,1728-1729,1739-1742,1749,1752-2096,2101-2108,2467-2481,2546-2569,2787
+tests/test_inference_llm.py
+  s_1a6176064eede6::t_cf9346cb8831d9 36-52
+tests/test_inference_responses.py
+  s_1a6176064eede6::t_c0c3f7a88f4a43 9,38-55,980-998
+tests/test_inference_stt.py
+  s_1a6176064eede6::t_b135e78b7e2f3e 26,244,777-793,1457-1908
+tests/test_inference_tts.py
+  s_1a6176064eede6::t_b3354b86c3211c 3,14,135-141,207-224,263,393-553
+tests/test_inference_utils.py
+  s_1a6176064eede6::t_6fc02a136ae9ce 8,12-13,20,30-62
+tests/test_plugin_anthropic_request.py
+  s_1a6176064eede6::t_214bf904b36103 143-160
+tests/test_plugin_boson_ai_realtime.py
+  s_1a6176064eede6::t_9a9eec3e459aa2 28,1312,1341,1366
+tests/test_plugin_gradium.py
+  s_1a6176064eede6::t_a4a25357f0a2ab 497-525
+tests/test_plugin_gradium_stt.py
+  s_1a6176064eede6::t_78caf3968fd54f 7-8,11,14-156,178,181,207-268,294-296,313,316,334,608-609,670-671,699-833
+tests/test_plugin_lokutor.py
+  s_1a6176064eede6::t_fea4c4f60430c2 15,314-387
+tests/test_plugin_openai_decisions.py
+  s_1a6176064eede6::t_a01fba6c58a35a 26,90,154
+tests/test_plugin_sarvam_llm.py
+  s_1a6176064eede6::t_a1596432754ef0 104-113
+tests/test_plugin_sarvam_stt.py
+  s_1a6176064eede6::t_7199531326737c 393-442
+tests/test_plugin_sarvam_stt_streaming.py
+  s_1a6176064eede6::t_56540638bd5ede 158-189,520-545
+tests/test_plugin_vlmrun.py
+  s_1a6176064eede6::t_dc30c8ac5e6b12 1-460
+tests/test_realtime/test_openai_inference_realtime_model.py
+  s_1a6176064eede6::t_260ec1911fd944 11,34-48,477-489,722-1112
+tests/test_realtime/test_openai_realtime_model.py
+  s_1a6176064eede6::t_a04c600492b52b 1222-1226
+tests/test_realtime/test_realtime.py
+  s_1a6176064eede6::t_3cd6731296bb7e 419,441
+tests/test_telemetry_redaction.py
+  s_1a6176064eede6::t_c2a3440a3da8d4 275-277
+tests/test_utils/test_deprecation.py
+  s_1a6176064eede6::t_6eb90d463672b5 1-65
+uv.lock
+  s_1a6176064eede6::t_0a20a4f59e72dd 45,115,2196-2197,2406-2408,2445,2512,2538,2950,3040-3041,4020-4035
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7289863092237731d4acc513f38c622e53aaf9b9",
+  "prompts": {},
+  "sessions": {
+    "s_1a6176064eede6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ea50-b503-71c0-a323-750834adcd15",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
