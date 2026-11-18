@@ -3,7 +3,7 @@ use lk_agents_abi::agent::run::RunError;
 use lk_agents_abi::llm::tool_executor::{
     CompletedReturn, EXACT_OUTPUT_PREFIX, INTERNAL_ERROR_OUTPUT, INVALID_OUTPUT,
     InputRequiredReturn, ToolOutcome, ToolReport, ToolResultReturn, ToolReturn, ToolText,
-    WAITING_PREFIX,
+    UNAVAILABLE_OUTPUT, WAITING_PREFIX,
 };
 use std::collections::BTreeMap;
 
@@ -47,13 +47,15 @@ impl lk_agents_abi::llm::tool_executor::ToolReports for ToolReports {
     }
 }
 
-/// A callback failure still settles its admitted body. Cancellation stays typed; other
-/// host diagnostics never become user-visible tool output.
+/// A callback failure still settles its admitted body. Cancellation stays typed; local
+/// pressure tells the model it may retry; other host diagnostics never become tool output.
 pub fn host_failure(error: &lk_agents_abi::errors::HostError) -> ToolOutcome {
-    if error.kind == lk_agents_abi::errors::HostErrorKind::Cancelled {
-        ToolOutcome::Cancelled
-    } else {
-        ToolOutcome::Internal
+    match error.kind {
+        lk_agents_abi::errors::HostErrorKind::Cancelled => ToolOutcome::Cancelled,
+        lk_agents_abi::errors::HostErrorKind::Unavailable => {
+            ToolOutcome::ToolError(UNAVAILABLE_OUTPUT.into())
+        }
+        _ => ToolOutcome::Internal,
     }
 }
 

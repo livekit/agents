@@ -122,6 +122,13 @@ impl Store {
         *forced = Some(Plan { answer_lost: true, ..Plan::default() });
     }
 
+    /// The database is unreachable for `duration` from now, faults or not: longer than the
+    /// lease's TTL, every holder loses its partition.
+    #[cfg(test)]
+    pub fn outage(&self, duration: Duration) {
+        *self.faults.down_until.lock() = self.clock.now().saturating_add(duration);
+    }
+
     /// Apply the selected write, then hold its receipt until the story releases it.
     #[cfg(test)]
     pub fn hold_next_receipt(
@@ -163,10 +170,15 @@ impl Faults {
             return plan;
         }
         let mut plan = Plan::default();
+        let now = self.clock.now();
         if !self.enabled.load(Ordering::Acquire) {
+            if now < *self.down_until.lock() {
+                plan.refused =
+                    Some(StorageError::Unavailable("the database is unreachable".into()));
+                self.faulted.store(true, Ordering::Release);
+            }
             return plan;
         }
-        let now = self.clock.now();
         let mut rng = self.rng.lock();
         let ms = Duration::from_millis;
         (plan.before, plan.after) = if rng.u32(0..32) == 0 {

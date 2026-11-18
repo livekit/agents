@@ -4,12 +4,39 @@ use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::TaskReason;
 
 use super::{
-    Access, Completion, Finish, LeaseAfterCommit, Operation, Path, Phase, RunStep, TaskMachine,
-    TaskPickup, WhenHeld,
+    Access, Completion, Finish, LeaseAfterCommit, Operation, Path, Phase, Policy, RunStep,
+    TaskMachine, TaskPickup, WhenHeld,
 };
 use crate::a2a::Message;
 
 impl TaskMachine {
+    /// The rows of the next turn, from the head of the inbox, in arrival order: the drain cursor
+    /// only moves forward. One endpoint's rows share a turn. A live owner serves a live-channel
+    /// row alone, its own task and result source, and a burst of other channels' rows as one
+    /// merged turn, as `batch` would; any other run merges every row.
+    pub(super) fn next_drain(
+        &mut self,
+        routed: Vec<lk_agents_abi::storage::thread::RoutedInbox>,
+    ) -> Vec<lk_agents_abi::storage::thread::InboxRow> {
+        self.drain_endpoint = routed.first().and_then(|entry| entry.endpoint.clone());
+        let live = |row: &lk_agents_abi::storage::thread::InboxRow| {
+            crate::a2a::resolve_policy(&self.policies, &crate::a2a::channel_of(&row.message))
+                == Policy::Live
+        };
+        let head_live = self.policy == Policy::Live && routed.first().is_some_and(|e| live(&e.row));
+        let mut rows = Vec::new();
+        for entry in routed {
+            if entry.endpoint != self.drain_endpoint
+                || (head_live && !rows.is_empty())
+                || (self.policy == Policy::Live && !head_live && live(&entry.row))
+            {
+                break;
+            }
+            rows.push(entry.row);
+        }
+        rows
+    }
+
     pub(super) fn read_inbox(&mut self) -> Operation {
         self.phase = Phase::Inbox;
         Operation::ReadInbox
@@ -25,15 +52,7 @@ impl TaskMachine {
             Completion::Inbox(rows) => rows,
             other => return Err(self.unexpected(other)),
         };
-        self.drain_endpoint = routed.first().and_then(|entry| entry.endpoint.clone());
-        let rows: Vec<_> = routed
-            .into_iter()
-            .take_while(|entry| entry.endpoint == self.drain_endpoint)
-            // Live begins with one received message per turn. It must not inherit Batch's
-            // mergedInto behavior simply because both use the durable inbox.
-            .take(if self.policy == crate::a2a::Policy::Live { 1 } else { usize::MAX })
-            .map(|entry| entry.row)
-            .collect();
+        let rows = self.next_drain(routed);
         if rows.is_empty() && !self.leased {
             return Ok(self.poll(now));
         }

@@ -250,7 +250,8 @@ impl TaskMachine {
         &mut self,
         rows: Vec<lk_agents_abi::storage::thread::RoutedInbox>,
     ) -> Result<Option<Operation>, Finish> {
-        let Some(first) = rows.into_iter().next() else {
+        let rows = self.next_drain(rows);
+        if rows.is_empty() {
             if self.live.turns.is_empty() {
                 self.phase = Phase::Live(LiveStep::Close);
                 return Ok(Some(Operation::Commit {
@@ -260,9 +261,8 @@ impl TaskMachine {
                 }));
             }
             return Ok(Some(self.wait_live()));
-        };
-        self.drain_endpoint = first.endpoint;
-        self.rows = vec![first.row];
+        }
+        self.rows = rows;
         self.index = 0;
         self.batch.clear();
         self.task_ids.clear();

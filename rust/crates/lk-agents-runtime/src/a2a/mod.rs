@@ -606,10 +606,7 @@ impl Turn {
             lease.check()?;
         }
         let cx = telemetry::Cx::NONE.continuing(self.span);
-        let policy = resolve_policy(
-            &self.opts.policy,
-            host_ctx.batch.last().and_then(|message| message.channel.as_deref()).unwrap_or("a2a"),
-        );
+        let policy = handle.policy;
         let id = host_ctx.message.id().to_owned();
         call.handlers.insert(
             id.clone(),

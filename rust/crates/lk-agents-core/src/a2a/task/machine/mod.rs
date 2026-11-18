@@ -8,6 +8,7 @@ mod turn;
 use super::effects::A2aTaskEffect;
 use std::time::Duration;
 
+use lk_agents_abi::a2a::metadata::MERGED_INTO_KEY;
 use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::TaskState;
@@ -17,8 +18,8 @@ use lk_agents_abi::storage::thread::{
 use serde_json::Value;
 
 use crate::a2a::{
-    HandlerOutput, HistoryEdit, Message, Policy, TaskTransition, TurnOptions, TurnResult,
-    failed_message, python_reason, resolve_debounce, resolve_policy, result_for,
+    HandlerOutput, HistoryEdit, Message, Policy, PolicySpec, TaskTransition, TurnOptions,
+    TurnResult, failed_message, python_reason, resolve_debounce, resolve_policy, result_for,
     unpersisted_failed,
 };
 use live::{LiveSchedule, LiveStep};
@@ -186,6 +187,9 @@ pub struct Handle {
     pub read_only: bool,
     /// How many of the partition's newest task rows the handler's context carries.
     pub recent_tasks: i64,
+    /// The mode of the run serving this turn, whatever the drained rows' own channels: under a
+    /// live owner every turn is managed by that one owner.
+    pub policy: Policy,
 }
 
 /// How many task rows the handler's context carries.
@@ -403,6 +407,8 @@ pub struct TaskMachine {
     /// Unix seconds at `now` zero.
     epoch: f64,
     policy: Policy,
+    /// The endpoint's policy by channel, for the inbox rows this run drains.
+    policies: PolicySpec,
     debounce: Duration,
     wait_timeout: Duration,
     phase: Phase,
@@ -472,6 +478,7 @@ impl TaskMachine {
             epoch,
             task_id,
             policy,
+            policies: options.policy.clone(),
             wait_timeout: options.wait_timeout(),
             phase: Phase::New,
             sequence: 0,
@@ -628,6 +635,15 @@ impl TaskMachine {
             self.phase = Phase::Debounce { at: now + self.debounce, next };
             None
         }
+    }
+
+    /// Whether `row` is this live message's receipt, merged into the task the message names.
+    fn continued_elsewhere(&self, row: &TaskRow) -> bool {
+        self.policy == Policy::Live
+            && row.task_id == self.task_id
+            && self.message.task_id.is_some()
+            && row.data.metadata.get(MERGED_INTO_KEY).and_then(Value::as_str)
+                == self.message.task_id.as_deref()
     }
 
     fn observe(&mut self) -> Operation {
@@ -1069,6 +1085,15 @@ impl TaskMachine {
         now: Duration,
     ) -> Result<Option<Operation>, Finish> {
         let row = match completion {
+            Completion::Task(Some(row)) if self.continued_elsewhere(&row) => {
+                // Under live the response to a continuation is the task it names, once that
+                // task settles; its own receipt only points there.
+                self.task_id = row.data.metadata[MERGED_INTO_KEY]
+                    .as_str()
+                    .expect("a checked continuation target")
+                    .to_owned();
+                return Ok(Some(self.observe()));
+            }
             Completion::Task(Some(row)) if answered(&row) => {
                 let answer =
                     Answer::row(row.task_id.clone(), Some(row), Some(TaskReason::NotWritten));

@@ -8,12 +8,13 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
+from typing import Unpack
 
 import httpx
 import pytest
 
 from livekit.agents import AgentServer, _core
-from livekit.agents.a2a import A2ASessionContext
+from livekit.agents.a2a import A2ASessionContext, A2ASessionOptions
 from livekit.agents.storage import SQLiteStorage, Storage
 from livekit.protocol import agent
 
@@ -54,22 +55,27 @@ def no_livekit_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def a2a_door(
     thread_storage: Storage, no_project_env: None
-) -> Callable[[A2AHandler], AbstractAsyncContextManager[httpx.AsyncClient]]:
-    """Serves a handler as the ``desk`` endpoint; the client's base URL is the endpoint's.
+) -> Callable[..., AbstractAsyncContextManager[httpx.AsyncClient]]:
+    """Serves a handler as the ``desk`` endpoint, with its endpoint ``options``; the client's
+    base URL is the endpoint's.
 
-    async with a2a_door(handler) as door:
+    async with a2a_door(handler, inbox="live") as door:
         response = await door.post("/v1", json=message_send("hello"))
     """
 
     @asynccontextmanager
-    async def serve(handler: A2AHandler) -> AsyncIterator[httpx.AsyncClient]:
+    async def serve(
+        handler: A2AHandler, **options: Unpack[A2ASessionOptions]
+    ) -> AsyncIterator[httpx.AsyncClient]:
         server = AgentServer(
             storage=thread_storage,
             agent_name="front-desk",
             api_key="APItest",
             api_secret="secret-secret-secret-secret-secret",
         )
-        server.a2a_session(endpoint="desk", description="Answers front desk questions.")(handler)
+        server.a2a_session(endpoint="desk", description="Answers front desk questions.", **options)(
+            handler
+        )
         async with serving(server) as base_url:
             async with httpx.AsyncClient(base_url=f"{base_url}/desk", timeout=30.0) as client:
                 yield client

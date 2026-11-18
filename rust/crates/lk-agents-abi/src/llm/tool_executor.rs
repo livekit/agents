@@ -18,6 +18,11 @@ pub enum RemoteReport {
 /// `make_function_call_output`'s text for an unexpected exception; says nothing about it.
 pub const INTERNAL_ERROR_OUTPUT: &str = "An internal error occurred";
 
+/// The text for a tool the framework could not start under local pressure; the model may call
+/// it again once running work settles.
+pub const UNAVAILABLE_OUTPUT: &str =
+    "the tool could not start because too much work is already running; try again later";
+
 /// `make_function_call_output`'s text for a return value the model cannot be told about.
 pub const INVALID_OUTPUT: &str = "the tool returned an invalid output";
 

@@ -53,7 +53,9 @@ pub(super) struct Turning {
 
 impl TaskMachine {
     /// Starts the turn over `batch`. A `concurrent` run answers no pending question: it holds no
-    /// lease to claim one and may only append to the history.
+    /// lease to claim one and may only append to the history. Under `live` only an explicit
+    /// `taskId` continues a task: an unaddressed message is new work with its own task, and a
+    /// waiting question stays pending.
     pub(super) fn start_turn(
         &mut self,
         batch: Vec<Message>,
@@ -80,7 +82,7 @@ impl TaskMachine {
             stop: None,
             output: None,
         });
-        if self.policy == Policy::Concurrent {
+        if self.policy == Policy::Concurrent || (self.policy == Policy::Live && named.is_none()) {
             return self.prepare(None);
         }
         self.phase = Phase::Turn(Step::Pending { named: named.is_some() });
@@ -102,6 +104,12 @@ impl TaskMachine {
                 if self.policy == Policy::Live =>
             {
                 return self.managed_turn(*report, now);
+            }
+            // under live a message continues only the task it names, never another question
+            (Step::Pending { named: true }, Completion::Task(None))
+                if self.policy == Policy::Live =>
+            {
+                self.prepare(None)
             }
             // the named question was answered meanwhile: the message answers the one waiting now
             (Step::Pending { named: true }, Completion::Task(None)) => {
@@ -248,6 +256,7 @@ impl TaskMachine {
             message,
             batch: turn.batch.clone(),
             task_id: turn.answer_task.clone(),
+            policy: self.policy,
         };
         if let Some((id, turn)) = saved {
             self.live.turns.insert(id, turn);
@@ -292,7 +301,12 @@ impl TaskMachine {
             Ok(settled) => settled,
             Err(error) => return self.fail(error, now),
         };
-        if !turn.drain {
+        // A live continuation answers with the task it continues, even when this request
+        // drained its own message: the receipt only points there.
+        let own_continuation = live
+            && turn.continued.is_some()
+            && turn.task_ids.iter().any(|task| *task == self.task_id);
+        if !turn.drain || own_continuation {
             self.answer = Some((turn.answer_task.clone(), settled.output));
         }
         let HandlerOutput { state, mut scope_writes, mut app_writes, usage, error, .. } = out;

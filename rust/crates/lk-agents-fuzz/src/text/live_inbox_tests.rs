@@ -267,7 +267,7 @@ impl TurnHost for ManagedHandler {
             let booking = human == "Reserve a room.";
             assert!(
                 booking || human == "When is check-in?",
-                "the story admits only its two human messages"
+                "the story admits only its booking and its side questions"
             );
             if !booking && self.opaque_side {
                 return Ok(HandlerOutput {
@@ -518,20 +518,25 @@ async fn progress(receiver: &mut mpsc::Receiver<Result<DoorFrame, DoorError>>) -
 
 #[tokio::test(start_paused = true)]
 async fn a_live_a2a_owner_answers_an_independent_task_before_its_held_tool_finishes() {
-    live_story(false, false).await;
+    live_story(false, false, 1).await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn an_opaque_side_reply_reaches_the_same_owner_before_original_result_delivery() {
-    live_story(true, false).await;
+    live_story(true, false, 1).await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn explicit_task_cancellation_stops_only_its_held_body_after_an_independent_reply() {
-    live_story(false, true).await;
+    live_story(false, true, 1).await;
 }
 
-async fn live_story(opaque_side: bool, cancel_original: bool) {
+#[tokio::test(start_paused = true)]
+async fn a_held_tool_does_not_block_a_second_side_question_after_the_first_completes() {
+    live_story(false, false, 2).await;
+}
+
+async fn live_story(opaque_side: bool, cancel_original: bool, sides: usize) {
     let clock: Arc<dyn Clock> = Arc::new(SimClock::new());
     let env = environment(clock.clone(), Vec::new());
     let database = Arc::new(Store::open(91, false, clock.clone()).await);
@@ -581,32 +586,40 @@ async fn live_story(opaque_side: bool, cancel_original: bool) {
     assert_eq!(started.task_id, original_task);
     drop(observer); // A real response observer can leave after durable admission and progress.
 
-    let second_thread = database.thread().await.unwrap();
-    let second = Turn::new(
-        second_thread.clone(),
-        "worker-B",
-        PARTITION_KEY,
-        host,
-        clock.clone(),
-        env.process.spawner,
-        options,
-    );
-    let (side_done, side_result) = signal::once();
-    let side_context = database.thread_id.clone();
-    let _side = callers.scoped(&*spawner, "independent check-in arrival", async move {
-        side_done.resolve(second.run(json!({"messageId":"side", "contextId":side_context, "role":"ROLE_USER", "parts":[{"text":"When is check-in?"}]}), None).await);
-    });
-    let side = boundary(
-        &*clock,
-        "independent task completion while original service is held",
-        side_result.wait(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(side.task.status, TaskState::Completed);
-    assert_eq!(side.output, Some(json!("Check-in is at 3pm.")));
-    assert_ne!(side.task.task_id, original_task);
+    let mut side_threads = Vec::new();
+    let mut side_tasks = Vec::new();
+    for n in 0..sides {
+        let side_thread = database.thread().await.unwrap();
+        let arrival = Turn::new(
+            side_thread.clone(),
+            "worker-B",
+            PARTITION_KEY,
+            host.clone(),
+            clock.clone(),
+            env.process.spawner,
+            options.clone(),
+        );
+        side_threads.push(side_thread);
+        let (side_done, side_result) = signal::once();
+        let side_context = database.thread_id.clone();
+        let message_id = format!("side-{n}");
+        let _side = callers.scoped(&*spawner, "independent check-in arrival", async move {
+            side_done.resolve(arrival.run(json!({"messageId":message_id, "contextId":side_context, "role":"ROLE_USER", "parts":[{"text":"When is check-in?"}]}), None).await);
+        });
+        let side = boundary(
+            &*clock,
+            "independent task completion while original service is held",
+            side_result.wait(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(side.task.status, TaskState::Completed);
+        assert_eq!(side.output, Some(json!("Check-in is at 3pm.")));
+        assert_ne!(side.task.task_id, original_task);
+        assert!(!side_tasks.contains(&side.task.task_id), "each side message has its own task");
+        side_tasks.push(side.task.task_id);
+    }
     assert!(
         original_result.get().is_none(),
         "the acknowledgement did not complete the original task"
@@ -618,10 +631,10 @@ async fn live_story(opaque_side: bool, cancel_original: bool) {
     assert_eq!(service.starts.lock().len(), 1);
     {
         let owners = service.owners.lock();
-        assert_eq!(owners.len(), if opaque_side { 1 } else { 2 });
+        assert_eq!(owners.len(), if opaque_side { 1 } else { 1 + sides });
         if !opaque_side {
             assert!(
-                Weak::ptr_eq(&owners[0], &owners[1]),
+                owners.iter().all(|owner| Weak::ptr_eq(&owners[0], owner)),
                 "both managed turns attach to the same native CommandPort"
             );
         }
@@ -676,17 +689,20 @@ async fn live_story(opaque_side: bool, cancel_original: bool) {
             message.raw_text_content().as_deref() == Some("Check-in is at 3pm.")
         })));
     }
-    assert_eq!(*models.opened.lock(), 3 + usize::from(!opaque_side) - usize::from(cancel_original));
+    assert_eq!(
+        *models.opened.lock(),
+        3 + if opaque_side { 0 } else { sides } - usize::from(cancel_original)
+    );
     assert_eq!(
         *models.opened.lock(),
         *models.closed.lock(),
         "every actual provider stream is closed"
     );
     let tasks = partition.tasks(None, 100).await.unwrap();
-    assert_eq!(tasks.len(), 2, "independent no-taskId messages retain their two task identities");
+    assert_eq!(tasks.len(), 1 + sides, "each no-taskId message retains its own task identity");
     assert_eq!(
         tasks.iter().filter(|task| task.status == TaskState::Completed).count(),
-        if cancel_original { 1 } else { 2 }
+        if cancel_original { sides } else { 1 + sides }
     );
     assert_eq!(
         tasks.iter().filter(|task| task.status == TaskState::Canceled).count(),
@@ -703,7 +719,125 @@ async fn live_story(opaque_side: bool, cancel_original: bool) {
     assert!(partition.runs(100).await.unwrap().iter().all(|run| !run.interrupted()));
     assert!(!database.held(PARTITION_KEY).await);
     observed.close().await;
-    second_thread.close().await;
+    for thread in side_threads {
+        thread.close().await;
+    }
+    first_thread.close().await;
+    database.close().await;
+}
+
+/// The owner loses its partition while a body is held at the business service: the outage
+/// outlasts the lease. Every resource the owner acquired is joined, its waiter settles, and the
+/// next owner fails the orphaned task without running its tool again.
+#[tokio::test(start_paused = true)]
+#[ignore = "known hang: after its A2A call fails, the canceled live owner's driver never ends; \
+            its invocation keeps a host call in flight after the body was canceled"]
+async fn a_lost_lease_joins_the_held_body_and_the_next_owner_never_reruns_it() {
+    let clock: Arc<dyn Clock> = Arc::new(SimClock::new());
+    let env = environment(clock.clone(), Vec::new());
+    let database = Arc::new(Store::open(92, false, clock.clone()).await);
+    let (release, released) = signal::once();
+    let (entered, started) = signal::once();
+    let (closed, body_closed) = signal::once();
+    let service = Arc::new(Service {
+        release: released,
+        entered: Mutex::new(Some(entered)),
+        closed: Mutex::new(Some(closed)),
+        starts: Mutex::default(),
+        effects: Mutex::default(),
+        cancellations: Mutex::default(),
+        owners: Mutex::default(),
+    });
+    let models = Arc::<Models>::default();
+    let host: Arc<dyn TurnHost> = Arc::new(ManagedHandler {
+        opaque_side: false,
+        env: env.clone(),
+        database: database.clone(),
+        service: service.clone(),
+        models: models.clone(),
+    });
+    let options = TurnOptions { policy: PolicySpec::All(Policy::Live), ..Default::default() };
+    let callers = Arc::<TaskSet>::default();
+    let spawner = (env.process.spawner)().unwrap();
+    let first_thread = database.thread().await.unwrap();
+    let (sender, mut observer) = outbox::outbox(16);
+    let first = Turn::new(
+        first_thread.clone(),
+        "worker-A",
+        PARTITION_KEY,
+        host.clone(),
+        clock.clone(),
+        env.process.spawner,
+        options.clone(),
+    )
+    .with_stream_observer(lk_agents_abi::a2a_protocol::JsonRpcId::Number(1), sender);
+    let (done, original_result) = signal::once();
+    let context = database.thread_id.clone();
+    let _original = callers.scoped(&*spawner, "original booking arrival", async move {
+        done.resolve(first.run(json!({"messageId":"booking", "contextId":context, "role":"ROLE_USER", "parts":[{"text":"Reserve a room."}]}), None).await);
+    });
+    let original_task =
+        boundary(&*clock, "native Working progress publication", progress(&mut observer)).await;
+    let started = boundary(&*clock, "held service start", started.wait()).await.unwrap();
+    drop(observer);
+
+    database.outage(Duration::from_secs(25));
+    let lost = lk_agents_abi::timeout(&*clock, Duration::from_secs(60), original_result.wait())
+        .await
+        .expect("the owner's waiter settles once its lease is lost")
+        .unwrap();
+    assert!(
+        lost.as_ref().is_err()
+            || lost.as_ref().is_ok_and(|r| r.task.status != TaskState::Completed),
+        "a lost owner cannot complete its task: {lost:?}"
+    );
+    boundary(&*clock, "the held body is joined", body_closed.wait()).await.unwrap();
+    assert_eq!(&*service.cancellations.lock(), std::slice::from_ref(&started.call_id));
+    assert!(service.effects.lock().is_empty(), "the held business call never answered");
+    assert_eq!(*models.opened.lock(), *models.closed.lock(), "every provider stream closed");
+    assert!(
+        callers.wait_empty(&*clock, Some(clock.now().saturating_add(Duration::from_secs(5)))).await,
+        "the arrival owner did not settle"
+    );
+    assert!(
+        service.owners.lock().iter().all(|owner| owner.upgrade().is_none()),
+        "the lost owner's command capability is dropped"
+    );
+    // The gate opening after the loss reaches no body.
+    release.resolve(());
+
+    database.heal();
+    clock.wait_until(clock.now().saturating_add(Duration::from_secs(30))).await;
+    let later_thread = database.thread().await.unwrap();
+    let later = Turn::new(
+        later_thread.clone(),
+        "worker-B",
+        PARTITION_KEY,
+        host,
+        clock.clone(),
+        env.process.spawner,
+        options,
+    );
+    let side_context = database.thread_id.clone();
+    let side = boundary(
+        &*clock,
+        "the next owner's own answer",
+        later.run(json!({"messageId":"after", "contextId":side_context, "role":"ROLE_USER", "parts":[{"text":"When is check-in?"}]}), None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(side.task.status, TaskState::Completed);
+    let observed = database.clean_thread().await;
+    let partition = observed.partition(PARTITION_KEY);
+    let orphan = partition.task(&original_task).await.unwrap().unwrap();
+    assert_eq!(orphan.status, TaskState::Failed, "the next owner fails the lost owner's task");
+    assert_eq!(service.starts.lock().len(), 1, "the lost body is never run again");
+    assert!(service.effects.lock().is_empty());
+    let history = partition.history().await.unwrap();
+    assert!(history.iter().filter(|item| item.id == started.call_id).count() <= 1);
+    assert!(!database.held(PARTITION_KEY).await);
+    observed.close().await;
+    later_thread.close().await;
     first_thread.close().await;
     database.close().await;
 }

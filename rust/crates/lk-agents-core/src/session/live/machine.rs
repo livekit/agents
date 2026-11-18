@@ -1,5 +1,6 @@
 use super::*;
 use crate::tool_calls::RunningToolExecution;
+use lk_agents_abi::errors::{HostError, HostErrorKind};
 use lk_agents_abi::storage::StorageError;
 
 impl Live {
@@ -59,26 +60,30 @@ impl Live {
         self.identities.insert(key, identity);
     }
 
+    /// Admits an identified body. The owned-body limit is retryable local pressure.
     pub(in crate::session) fn start_body(
         &mut self,
         key: BodyKey,
         frame_id: FrameId,
         call: FunctionCall,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), HostError> {
         if self.bodies.contains_key(&key) {
             return Ok(());
         }
         if self.bodies.len() >= MAX_LIVE_BODIES {
-            return Err(StorageError::Unavailable(
-                "the live conversation owns too many tools".into(),
-            ));
+            return Err(HostError {
+                kind: HostErrorKind::Unavailable,
+                ..HostError::new("the live conversation owns too many tools")
+            });
         }
-        let origin = self.origin().cloned().ok_or_else(|| {
-            StorageError::Invalid("a body has no admitted foreground turn".into())
-        })?;
-        let identity = self.identities.remove(&key).ok_or_else(|| {
-            StorageError::Invalid("a body has no validated argument identity".into())
-        })?;
+        let origin = self
+            .origin()
+            .cloned()
+            .ok_or_else(|| HostError::new("a body has no admitted foreground turn"))?;
+        let identity = self
+            .identities
+            .remove(&key)
+            .ok_or_else(|| HostError::new("a body has no validated argument identity"))?;
         self.next_id += 1;
         self.bodies.insert(
             key,
@@ -122,6 +127,11 @@ impl Live {
     }
 
     fn completed(&mut self, key: &BodyKey, report: Option<ToolReport>) -> bool {
+        if matches!(self.foreground, Foreground::Closed) {
+            // A closed owner has nobody to deliver to: the body is joined, nothing more.
+            self.bodies.remove(key);
+            return false;
+        }
         let Some(body) = self.bodies.get_mut(key) else {
             return false;
         };
@@ -345,8 +355,9 @@ impl Live {
         self.bodies.keys().cloned().collect()
     }
 
+    /// No turn runs or waits and no body is owned; a closed owner is idle once its bodies end.
     pub(in crate::session) fn idle(&self) -> bool {
-        matches!(self.foreground, Foreground::Idle)
+        matches!(self.foreground, Foreground::Idle | Foreground::Closed)
             && self.queue.is_empty()
             && self.bodies.is_empty()
     }
