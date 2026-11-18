@@ -208,7 +208,7 @@ pub(super) async fn run(
     call: &FunctionCall,
 ) -> (ToolOutcome, Map<String, Value>) {
     let session = registry.session().expect("a tool runs in a started session").clone();
-    registry.record_remote(RemoteStep::BodyStarted { call: call.id.clone() });
+    registry.record_remote(RemoteStep::BodyStarted { call: call.id.clone(), call_id: call.call_id.clone() });
     let interaction = match RemoteInteraction::new(
         ENDPOINT.into(),
         ChatItem::FunctionCall(call.clone()),

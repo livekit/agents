@@ -17,8 +17,8 @@ pub enum RemoteStep {
     CancelReceived { task: String },
     StreamOpened { stream: u32 },
     StreamClosed { stream: u32 },
-    /// A remote tool body started for the call item `call`.
-    BodyStarted { call: String },
+    /// A remote tool body started for the call item `call`, the provider's call `call_id`.
+    BodyStarted { call: String, call_id: String },
     /// The body's delegation handed the session a question (`DelegationHost::question`).
     Presented { call: String, text: String },
     /// The body returned this outcome to the session; `None` when it was cancelled first.

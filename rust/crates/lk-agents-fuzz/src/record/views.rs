@@ -406,6 +406,9 @@ impl<'a> HostView<'a> {
     /// Whether the runner ran a body for this call.
     pub fn tool_ran(&self, call_id: &str) -> bool {
         self.tools_run().iter().any(|tool| tool.call_id() == call_id)
+            || self.0.remote().iter().any(|(_, step)| {
+                matches!(step, super::RemoteStep::BodyStarted { call_id: ran, .. } if ran == call_id)
+            })
     }
 
     /// The output instances the host attached, in order.

@@ -45,7 +45,7 @@ impl Rule for RemoteWaitersSettle {
         }
         for (_, step) in r.remote() {
             match step {
-                RemoteStep::BodyStarted { call } => {
+                RemoteStep::BodyStarted { call, .. } => {
                     let call = call.as_str();
                     check.expect_with(Subject::Session, returned.contains(call), || {
                         format!("the remote body of {call} never returned")
@@ -67,7 +67,7 @@ impl Rule for RemoteWaitersSettle {
 
 fn started() -> Authored {
     Authored::new()
-        .remote(RemoteStep::BodyStarted { call: "item_a".into() })
+        .remote(RemoteStep::BodyStarted { call: "item_a".into(), call_id: "a".into() })
         .remote(RemoteStep::StreamOpened { stream: 0 })
 }
 

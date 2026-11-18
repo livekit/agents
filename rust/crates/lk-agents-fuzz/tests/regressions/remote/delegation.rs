@@ -40,6 +40,7 @@ fn each_remote_question_is_presented_once_through_progress_bursts() {
         let failures = call.hang_up(&mut run).await;
         let steps = steps(&run);
         print(&steps);
+        assert!(remote_failures(&failures).is_empty(), "{failures:?}");
         for k in 1..=2 {
             let asked = question("task-1", k);
             assert_eq!(
@@ -48,7 +49,6 @@ fn each_remote_question_is_presented_once_through_progress_bursts() {
                 "question {k} was not presented exactly once"
             );
         }
-        assert!(remote_failures(&failures).is_empty(), "{failures:?}");
     });
 }
 
@@ -69,13 +69,13 @@ fn a_reply_whose_acknowledgement_was_lost_reaches_the_peer_once() {
         let failures = call.hang_up(&mut run).await;
         let steps = steps(&run);
         print(&steps);
+        assert!(remote_failures(&failures).is_empty(), "{failures:?}");
         assert!(steps.iter().any(|s| matches!(s, RemoteStep::AckLost { .. })));
         assert_eq!(
             count(&steps, |s| matches!(s, RemoteStep::Received { text, .. } if text == "Friday")),
             1,
             "the person's reply reached the peer more than once"
         );
-        assert!(remote_failures(&failures).is_empty(), "{failures:?}");
     });
 }
 
@@ -92,10 +92,11 @@ fn the_result_resolves_its_original_call_once() {
         let failures = call.hang_up(&mut run).await;
         let steps = steps(&run);
         print(&steps);
+        assert!(remote_failures(&failures).is_empty(), "{failures:?}");
         let original = steps
             .iter()
             .find_map(|s| match s {
-                RemoteStep::BodyStarted { call } => Some(call.clone()),
+                RemoteStep::BodyStarted { call, .. } => Some(call.clone()),
                 _ => None,
             })
             .unwrap();
@@ -110,7 +111,6 @@ fn the_result_resolves_its_original_call_once() {
             })
             .collect();
         assert_eq!(returned, [original], "the result did not return once, to its own call");
-        assert!(remote_failures(&failures).is_empty(), "{failures:?}");
     });
 }
 
@@ -126,9 +126,9 @@ fn hanging_up_leaves_the_remote_task_running() {
         let failures = call.hang_up(&mut run).await;
         let steps = steps(&run);
         print(&steps);
+        assert!(remote_failures(&failures).is_empty(), "{failures:?}");
         assert!(steps.iter().any(|s| matches!(s, RemoteStep::Returned { outcome: None, .. })));
         assert_eq!(count(&steps, |s| matches!(s, RemoteStep::CancelReceived { .. })), 0);
-        assert!(remote_failures(&failures).is_empty(), "{failures:?}");
     });
 }
 
@@ -144,6 +144,7 @@ fn hanging_up_settles_the_delegation_and_closes_its_stream() {
         let failures = call.hang_up(&mut run).await;
         let steps = steps(&run);
         print(&steps);
+        assert!(remote_failures(&failures).is_empty(), "{failures:?}");
         let opened = count(&steps, |s| matches!(s, RemoteStep::StreamOpened { .. }));
         assert!(opened > 0);
         assert_eq!(count(&steps, |s| matches!(s, RemoteStep::StreamClosed { .. })), opened);
@@ -151,6 +152,5 @@ fn hanging_up_settles_the_delegation_and_closes_its_stream() {
             count(&steps, |s| matches!(s, RemoteStep::BodySettled { .. })),
             count(&steps, |s| matches!(s, RemoteStep::BodyStarted { .. }))
         );
-        assert!(remote_failures(&failures).is_empty(), "{failures:?}");
     });
 }
