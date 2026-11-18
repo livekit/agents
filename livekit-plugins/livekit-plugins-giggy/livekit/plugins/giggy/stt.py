@@ -152,7 +152,13 @@ class STT(stt.STT):
                     sock_read=conn_options.timeout,
                 ),
             ) as resp:
-                resp.raise_for_status()
+                if resp.status >= 400:
+                    raise APIStatusError(
+                        message=resp.reason or "Giggy STT request failed",
+                        status_code=resp.status,
+                        request_id=resp.headers.get("x-request-id"),
+                        body=await resp.text(),
+                    )
                 event = ""
                 async for raw in resp.content:
                     line = raw.decode("utf-8").rstrip("\r\n")
@@ -186,11 +192,7 @@ class STT(stt.STT):
             raise APIConnectionError("Giggy STT ended without a final transcript")
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
-        except APIConnectionError:
+        except (APIStatusError, APIConnectionError):
             raise
         except Exception as e:
             raise APIConnectionError() from e
