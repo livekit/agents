@@ -47,6 +47,7 @@ fn waiting_for_a_day() -> Arc<SessionBinding> {
             cancel_requested: false,
             next_input: 1,
             terminal_event: None,
+            artifact_sources: BTreeMap::new(),
         },
     );
     state.remote_agents.insert(ENDPOINT.into(), remote);

@@ -157,3 +157,64 @@ fn hanging_up_settles_the_delegation_and_closes_its_stream() {
         );
     });
 }
+
+// Catches: a remote task that works for a minute without a word failing its call with the
+// stream's read timeout while the task keeps running, so its result is lost.
+#[test]
+fn a_silent_minute_of_remote_work_still_delivers_its_result_once() {
+    simulate(async {
+        let script = PeerScript { asks: 0, progress: 0, work_ms: 60_000, ..PeerScript::default() };
+        let mut run = Run::start(&frontend(script, false), 0, Default::default()).await;
+        let mut call = Call::new();
+        delegate(&mut run, &mut call, "Book a table for two", 70_000).await;
+        let failures = call.hang_up(&mut run).await;
+        let steps = steps(&run);
+        print(&steps);
+        assert!(remote_failures(&failures).is_empty(), "{failures:?}");
+        assert_eq!(count(&steps, |s| matches!(s, RemoteStep::Received { .. })), 1, "one send");
+        let returned: Vec<_> = steps
+            .iter()
+            .filter_map(|s| match s {
+                RemoteStep::Returned { outcome, .. } => Some(outcome.clone()),
+                _ => None,
+            })
+            .collect();
+        let booked = result("task-1");
+        assert!(
+            matches!(returned.as_slice(), [Some(outcome)] if outcome.contains(&booked)),
+            "the result did not return once and alone: {returned:?}"
+        );
+    });
+}
+
+// Catches: a silent remote task whose session ends failing, cancelling or leaving its
+// delegation waiting: the call stops waiting, the task is left running, every stream closes.
+#[test]
+fn hanging_up_on_a_silent_remote_task_leaves_it_running_and_settles() {
+    simulate(async {
+        let script = PeerScript { asks: 0, progress: 0, work_ms: 60_000, ..PeerScript::default() };
+        let mut run = Run::start(&frontend(script, false), 0, Default::default()).await;
+        let mut call = Call::new();
+        delegate(&mut run, &mut call, "Book a table for two", 50_000).await;
+        let failures = call.hang_up(&mut run).await;
+        let steps = steps(&run);
+        print(&steps);
+        assert!(remote_failures(&failures).is_empty(), "{failures:?}");
+        assert_eq!(count(&steps, |s| matches!(s, RemoteStep::Received { .. })), 1, "one send");
+        assert_eq!(count(&steps, |s| matches!(s, RemoteStep::CancelReceived { .. })), 0);
+        let returned: Vec<_> = steps
+            .iter()
+            .filter_map(|s| match s {
+                RemoteStep::Returned { outcome, .. } => Some(outcome.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(returned, [None], "the silent task's call did not just stop waiting");
+        let opened = count(&steps, |s| matches!(s, RemoteStep::StreamOpened { .. }));
+        assert_eq!(count(&steps, |s| matches!(s, RemoteStep::StreamClosed { .. })), opened);
+        assert_eq!(
+            count(&steps, |s| matches!(s, RemoteStep::BodySettled { .. })),
+            count(&steps, |s| matches!(s, RemoteStep::BodyStarted { .. }))
+        );
+    });
+}
