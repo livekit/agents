@@ -969,6 +969,19 @@ class RealtimeSpeechStream(stt.SpeechStream):
             samples_per_channel=samples_per_channel,
         )
 
+        async def send_frames(frames: list[rtc.AudioFrame]) -> None:
+            for frame in frames:
+                if self._active_endpointing == "manual" and not self._manual_speech_started:
+                    await self._safe_send_str(ws, {"event": "speech_start"})
+                    self._manual_speech_started = True
+                    self._begin_manual_utterance()
+
+                self._audio_duration_collector.push(frame.duration)
+                self._audio_position += frame.duration
+                await self._safe_send_bytes(
+                    ws, _encode_pcm_for_wire(self._opts.encoding, frame.data.tobytes())
+                )
+
         input_frames = aiter(self._input_ch)
         while True:
             idle = time.monotonic() - self._last_audio_sent_at
@@ -982,6 +995,9 @@ class RealtimeSpeechStream(stt.SpeechStream):
             except asyncio.TimeoutError:
                 if self._session_ended or ws.closed:
                     break
+                # what's pending goes out first, so the silence follows the last audio
+                await self._send_pending_config_update(ws)
+                await send_frames(audio_bstream.flush())
                 await self._send_keepalive_silence(ws, samples_per_channel)
                 continue
 
@@ -998,17 +1014,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 self._flush_observed = True
                 frames.extend(audio_bstream.flush())
 
-            for frame in frames:
-                if self._active_endpointing == "manual" and not self._manual_speech_started:
-                    await self._safe_send_str(ws, {"event": "speech_start"})
-                    self._manual_speech_started = True
-                    self._begin_manual_utterance()
-
-                self._audio_duration_collector.push(frame.duration)
-                self._audio_position += frame.duration
-                await self._safe_send_bytes(
-                    ws, _encode_pcm_for_wire(self._opts.encoding, frame.data.tobytes())
-                )
+            await send_frames(frames)
 
             if isinstance(data, self._FlushSentinel):
                 self._audio_duration_collector.flush()
