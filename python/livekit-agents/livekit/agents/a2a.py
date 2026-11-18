@@ -241,9 +241,6 @@ def _owner(ctx: RunContext) -> _core.TextSessionRunner | _core.VoiceSession | No
     return None
 
 
-_DELEGATED = "The remote request is running. Its progress, questions and result arrive separately."
-
-
 class _Delegation:
     def __init__(self, ctx: RunContext) -> None:
         self._ctx = ctx
@@ -261,10 +258,10 @@ class _Delegation:
         # owner retains its exact delivery; stock A2A provides no end-to-end audio receipt.
         self._ctx.say(text)
 
-    async def _core_delegated(self) -> None:
+    async def _core_delegated(self, fact: str) -> None:
         # Release the tool's step with a fact for normal planning, without queuing an
         # announcement. The frontend model decides whether and how to acknowledge it.
-        self._ctx._tool_update(ToolReport(outcome=ToolOutcomeUpdate(message=_DELEGATED, raw="")))
+        self._ctx._tool_update(ToolReport(outcome=ToolOutcomeUpdate(message=fact, raw="")))
 
     async def _core_question(
         self, question: str, verbatim: bool, input_request: InputRequestRef | None

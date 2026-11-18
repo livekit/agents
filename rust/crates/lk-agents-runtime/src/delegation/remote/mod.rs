@@ -667,9 +667,20 @@ impl Delegation {
             }
         };
         if self.request.live && accepted {
+            // The peer's acknowledgement names the task; a recovered observation may only
+            // have reached the interaction's own record of it.
+            let task_id = reply
+                .as_ref()
+                .map(|reply| reply.task_id.clone())
+                .filter(|id| !id.is_empty())
+                .or_else(|| self.interaction.0.lock().policy.snapshot().pending_task_id);
+            let request =
+                lk_agents_core::delegation::remote::facts::request_summary(&self.request.arguments);
+            let fact =
+                lk_agents_core::delegation::remote::facts::running(task_id.as_deref(), &request);
             self.request
                 .host
-                .delegated(&self.request.cx, &self.request.context)
+                .delegated(&self.request.cx, &self.request.context, fact)
                 .await
                 .map_err(host_error)?;
         }

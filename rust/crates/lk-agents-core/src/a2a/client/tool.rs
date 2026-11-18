@@ -79,7 +79,7 @@ fn add_task_argument(schema: &mut serde_json::Map<String, Value>) -> Result<(), 
         "task_id".into(),
         json!({
             "type": ["string", "null"],
-            "description": "Continue a known task on this remote agent, for an answer, clarification or correction. Omit or use null to let the conversation route this request."
+            "description": "The ID of a running task on this remote agent, exactly as this tool's earlier results gave it, to answer, clarify or correct that task. Omit or use null for new work or to let the conversation route this request."
         }),
     );
     Ok(())
@@ -92,14 +92,18 @@ pub fn cancel_tool(remote: &str) -> ToolCard {
     ToolCard {
         name: format!("cancel_{remote}"),
         description: format!(
-            "Cancel a running {remote} task in this conversation, when the person asks to stop \
-             it. Cancelling stops the work; it does not undo anything already done."
+            "Cancel a running {remote} task in this conversation, named by the task ID the \
+             {remote} tool's results gave, when the person asks to stop it. Cancelling stops the \
+             work; it does not undo anything already done."
         ),
         extensions: Vec::new(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "task_id": {"type": "string", "description": "The task to cancel."}
+                "task_id": {
+                    "type": "string",
+                    "description": "The ID of the task to cancel, exactly as the remote tool's results gave it."
+                }
             },
             "required": ["task_id"],
             "additionalProperties": false

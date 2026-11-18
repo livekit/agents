@@ -898,3 +898,21 @@ fn a_passed_question_stays_open_is_not_repeated_at_once_and_newer_tasks_do_not_s
     experts.outcome("flight", value("Done"));
     assert_eq!(experts.collect(open), []);
 }
+
+#[test]
+fn a_remote_question_names_the_task_that_asked_it() {
+    let mut experts = opened();
+    let reference = InputRequestRef::RemoteTask {
+        remote_id: "refunds".into(),
+        task: lk_agents_abi::delegation::remote::RemoteTaskRef {
+            context_id: "conversation".into(),
+            task_id: "AT_refund-9".into(),
+        },
+        request_id: "input_1".into(),
+    };
+    experts.ask("call_1", "r1", "Which day?".into(), false, Some(reference));
+    experts.open("call_2", refunds());
+    experts.ask("call_2", "r2", "Which seat?".into(), false, None);
+    assert_eq!(experts.asking_task("call_1", "r1"), Some("AT_refund-9"));
+    assert_eq!(experts.asking_task("call_2", "r2"), None, "a local question has no remote task");
+}

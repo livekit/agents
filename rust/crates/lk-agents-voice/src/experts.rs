@@ -235,6 +235,12 @@ impl Experts {
         self.delegations.get(output_id).is_some_and(|d| !d.settled)
     }
 
+    /// The remote task that asked this question, as its native occurrence names it.
+    pub fn asking_task(&self, output_id: &str, request_id: &str) -> Option<&str> {
+        let reference = self.delegations.get(output_id)?.requests.get(request_id)?.as_ref()?;
+        reference.remote().map(|(_, task, _)| task.task_id.as_str())
+    }
+
     /// Progress `occurrence` (from 1, increasing per delegation). Queued progress of the same
     /// delegation is superseded in place.
     pub fn progress(&mut self, output_id: &str, occurrence: u64, text: String) -> bool {

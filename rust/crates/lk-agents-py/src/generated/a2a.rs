@@ -1250,9 +1250,11 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
         &'a self,
         cx: &::lk_agents_abi::telemetry::Cx,
         context: &::lk_agents_abi::invoke::CallContext,
+        fact: ::std::string::String,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::clone::Clone::clone(&self.host);
+        let fact_arg = fact;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "DelegationHost._core_delegated",
@@ -1260,7 +1262,8 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [::pyo3::IntoPyObjectExt::into_bound_py_any(fact_arg, py)?];
                 Ok((
                     host.bind(py)?.getattr("_core_delegated")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
