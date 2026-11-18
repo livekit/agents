@@ -2352,7 +2352,7 @@ requires-dist = [
     { name = "docstring-parser", specifier = ">=0.16" },
     { name = "httpx2", specifier = ">=2.12,<3" },
     { name = "livekit", specifier = "==1.1.20" },
-    { name = "livekit-api", editable = "../python-sdks/livekit-api" },
+    { name = "livekit-api", git = "https://github.com/livekit/python-sdks?subdirectory=livekit-api&rev=b52d4b9598063ba315eeac9c92a4f7c02acc2123" },
     { name = "livekit-local-inference", specifier = ">=0.2.7" },
     { name = "livekit-plugins-anam", marker = "extra == 'anam'", editable = "python/livekit-plugins/livekit-plugins-anam" },
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "python/livekit-plugins/livekit-plugins-anthropic" },
@@ -2426,7 +2426,7 @@ requires-dist = [
     { name = "livekit-plugins-upliftai", marker = "extra == 'upliftai'", editable = "python/livekit-plugins/livekit-plugins-upliftai" },
     { name = "livekit-plugins-vakyam", marker = "extra == 'vakyam'", editable = "python/livekit-plugins/livekit-plugins-vakyam" },
     { name = "livekit-plugins-xai", marker = "extra == 'xai'", editable = "python/livekit-plugins/livekit-plugins-xai" },
-    { name = "livekit-protocol", editable = "../python-sdks/livekit-protocol" },
+    { name = "livekit-protocol", git = "https://github.com/livekit/python-sdks?subdirectory=livekit-protocol&rev=b52d4b9598063ba315eeac9c92a4f7c02acc2123" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "opentelemetry-api", specifier = ">=1.45,<1.46" },
     { name = "protobuf", specifier = ">=3" },
@@ -2439,29 +2439,16 @@ provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "av
 
 [[package]]
 name = "livekit-api"
-source = { editable = "../python-sdks/livekit-api" }
+version = "2.0.0"
+source = { git = "https://github.com/livekit/python-sdks?subdirectory=livekit-api&rev=b52d4b9598063ba315eeac9c92a4f7c02acc2123#b52d4b9598063ba315eeac9c92a4f7c02acc2123" }
 dependencies = [
     { name = "aiohttp" },
-    { name = "googleapis-common-protos" },
     { name = "idna" },
     { name = "livekit-protocol" },
     { name = "multidict" },
     { name = "protobuf" },
     { name = "pyjwt" },
     { name = "types-protobuf" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", marker = "python_full_version < '3.10'", specifier = ">=3.13.5" },
-    { name = "aiohttp", marker = "python_full_version >= '3.10'", specifier = ">=3.14.3" },
-    { name = "googleapis-common-protos", specifier = ">=1.56.0" },
-    { name = "idna", specifier = ">=3.15" },
-    { name = "livekit-protocol", editable = "../python-sdks/livekit-protocol" },
-    { name = "multidict", marker = "python_full_version >= '3.10'", specifier = ">=6.9.1" },
-    { name = "protobuf", specifier = ">=4" },
-    { name = "pyjwt", specifier = ">=2.15.1" },
-    { name = "types-protobuf", specifier = ">=4" },
 ]
 
 [[package]]
@@ -3459,7 +3446,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "python/livekit-agents" },
-    { name = "livekit-api", editable = "../python-sdks/livekit-api" },
+    { name = "livekit-api", git = "https://github.com/livekit/python-sdks?subdirectory=livekit-api&rev=b52d4b9598063ba315eeac9c92a4f7c02acc2123" },
 ]
 
 [[package]]
@@ -3518,16 +3505,11 @@ requires-dist = [
 
 [[package]]
 name = "livekit-protocol"
-source = { editable = "../python-sdks/livekit-protocol" }
+version = "2.0.0"
+source = { git = "https://github.com/livekit/python-sdks?subdirectory=livekit-protocol&rev=b52d4b9598063ba315eeac9c92a4f7c02acc2123#b52d4b9598063ba315eeac9c92a4f7c02acc2123" }
 dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "protobuf", specifier = ">=5" },
-    { name = "types-protobuf", specifier = ">=5" },
 ]
 
 [[package]]
