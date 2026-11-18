@@ -22,7 +22,7 @@ from livekit.plugins.thunderphone.realtime.realtime_model import (
     RealtimeSession,
 )
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 KEY = "sk_live_test"
 

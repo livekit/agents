@@ -14,7 +14,7 @@ from livekit.agents import APIConnectOptions, APIError, APIStatusError, stt
 from livekit.plugins import meta
 from livekit.plugins.meta import stt as meta_stt
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 _TEST_OPTIONS = APIConnectOptions(max_retry=0, retry_interval=0.0, timeout=1.0)
 _CLOSE_AFTER_END = object()
@@ -145,7 +145,7 @@ def _frame(data: bytes, *, sample_rate: int = 24_000, num_channels: int = 1) -> 
 async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 1.0) -> None:
     async with asyncio.timeout(timeout):
         while not predicate():
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.001)
 
 
 async def _collect(
@@ -972,22 +972,6 @@ async def test_pre_audio_connection_failure_retries_without_losing_input() -> No
     await provider.aclose()
 
 
-async def test_normal_close_during_handshake_retries() -> None:
-    first = _FakeWebSocket([_close_message(1000)])
-    second = _websocket()
-    session = _FakeSession([first, second])
-    provider = meta.STT(api_key="test-key", http_session=cast(aiohttp.ClientSession, session))
-
-    events, _ = await _collect(
-        provider,
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0),
-    )
-
-    assert events == []
-    assert len(session.connect_calls) == 2
-    await provider.aclose()
-
-
 async def test_invalid_request_close_during_handshake_is_not_retried() -> None:
     first = _FakeWebSocket([_close_message(1008, "unsafe close reason")])
     session = _FakeSession([first, _websocket()])
@@ -1009,8 +993,8 @@ async def test_invalid_request_close_during_handshake_is_not_retried() -> None:
     await provider.aclose()
 
 
-@pytest.mark.parametrize("close_code", [1011, 1013])
-async def test_transient_close_during_handshake_retries(close_code: int) -> None:
+@pytest.mark.parametrize("close_code", [1000, 1011, 1013])
+async def test_close_during_handshake_retries(close_code: int) -> None:
     first = _FakeWebSocket([_close_message(close_code, "unsafe close reason")])
     second = _websocket()
     session = _FakeSession([first, second])
@@ -1044,17 +1028,6 @@ async def test_empty_input_retry_sends_end_stream_on_every_attempt() -> None:
             "endStream"
         ) == 1
     await provider.aclose()
-
-
-async def test_normal_close_before_audio_is_retryable() -> None:
-    error = meta_stt._close_error(
-        1000,
-        phase="stream",
-        retryable_on_normal_close=True,
-    )
-
-    assert error.status_code == 1000
-    assert error.retryable is True
 
 
 @pytest.mark.parametrize("close_code", [1000, 1011, 1013])
