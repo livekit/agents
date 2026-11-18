@@ -18,6 +18,7 @@ from livekit.agents import (
     SessionState,
     TextSession,
     VoiceSession,
+    _core,
     persisted,
 )
 from livekit.agents.a2a import RemoteAgent
@@ -1772,3 +1773,99 @@ async def test_the_model_cannot_cancel_unknown_or_finished_work(
     assert outputs[-1].is_error
     assert feedback in outputs[-1].output
     assert "CancelTask" not in peer.methods, "invalid targets fail before any control is sent"
+
+
+async def test_a_silent_answered_task_holds_other_questions_only_for_its_follow_up_window(
+    peer: Peer,
+) -> None:
+    """Flights acknowledges the answer silently and keeps working: the hotel question waits a
+    moment for a possible follow-up, then goes ahead instead of leaving dead air."""
+    peer.response_gate = asyncio.Event()
+
+    def events(message: dict[str, Any]) -> list[dict[str, Any]]:
+        text = message["parts"][0]["text"]
+        context = message.get("contextId", "trip")
+        working = {
+            "task": {
+                "id": "flight" if text in ("Book a flight", "Friday") else "hotel",
+                "contextId": context,
+                "status": {"state": "TASK_STATE_WORKING"},
+            }
+        }
+        if text == "Book a flight":
+            return travel_task(message, "flight", "What date would you like to fly?")
+        if text == "Book a hotel":
+            return [working, *travel_task(message, "hotel", "What is your nightly budget?")]
+        # The answer is acknowledged without a word; the booking result is held.
+        return [working, *travel_task(message, "flight", "Flight booked", completed=True)]
+
+    peer.events = events
+
+    def route(history: ChatContext) -> FunctionToolCall:
+        proposal = routing_input(history)
+        if "proposed_call" in proposal:
+            if proposal["proposed_call"]["request"].startswith("Book"):
+                return call_route(proposal, "new")
+            return call_route(proposal, "respond", "flight")
+        selected = [
+            c["index"]
+            for c in proposal["candidates"]
+            if c["question"] == "What date would you like to fly?"
+        ]
+        return tool_call("route_input_response", candidates=selected, unclear=False)
+
+    def desk(history: ChatContext) -> str | list[FunctionToolCall]:
+        head, data = instruction(history)
+        if (asked := asked_question(head, data)) is not None:
+            return asked
+        if head.startswith("Present "):
+            return "Your flight is booked."
+        if not any(item.type == "function_call" for item in history.items):
+            return [
+                tool_call("flights", request="Book a flight"),
+                tool_call("hotels", request="Book a hotel"),
+            ]
+        human = latest_human(history)
+        if human == "Friday" and not any(
+            item.type == "function_call" and "task_id" in json.loads(item.arguments)
+            for item in history.items
+        ):
+            return tool_call("flights", request="Friday", task_id="flight")
+        return "Noted."
+
+    async with VoiceSession(
+        vad=None, delegation=DelegationOptions(routing_model=FakeLLM(route))
+    ) as session:
+        await session.start(
+            Agent(
+                name="desk",
+                instructions="Plan the trip.",
+                tools=[
+                    RemoteAgent(peer.url, id=name, name=name).as_tool()
+                    for name in ("flights", "hotels")
+                ],
+                llm=FakeLLM(desk),
+            )
+        )
+        session.generate_reply(user_input="Book a flight and a hotel")
+        await until(
+            lambda: said(session, "What date would you like to fly?"),
+            "the flight question was not asked",
+        )
+        # The hotel question arrives while the flight question waits for the person.
+        peer.response_gate.set()
+        await until(lambda: len(peer.messages) == 2, "the hotel task did not start")
+        await session.wait_for_idle()
+        peer.response_gate = asyncio.Event()
+        await session.generate_reply(user_input="Friday")
+        await until(lambda: len(peer.messages) == 3, "the answer was not forwarded")
+        await session.wait_for_idle()
+        assert not said(session, "What is your nightly budget?"), (
+            "the hotel question did not wait for the flight's possible follow-up"
+        )
+        _core.skip_host_time(3)
+        await until(
+            lambda: said(session, "What is your nightly budget?"),
+            "a silent answered task held the other question past its window",
+        )
+        peer.response_gate.set()

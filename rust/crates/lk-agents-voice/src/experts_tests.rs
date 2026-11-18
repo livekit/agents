@@ -898,3 +898,33 @@ fn a_passed_question_stays_open_is_not_repeated_at_once_and_newer_tasks_do_not_s
     experts.outcome("flight", value("Done"));
     assert_eq!(experts.collect(open), []);
 }
+
+#[test]
+fn a_silent_answered_task_holds_other_questions_only_until_its_window_passes() {
+    let tools = [expert("flights"), expert("hotels")];
+    let open = floor(&tools);
+    let mut experts = Experts::default();
+    experts.open("flight", expert("flights"));
+    experts.open("hotel", expert("hotels"));
+    experts.ask("flight", "f1", "What date?".into(), false, None);
+    experts.ask("hotel", "h1", "What budget?".into(), false, None);
+    experts.next(open);
+    experts.person_turn();
+    experts.answer(&exports_pending("flight", "f1")).unwrap();
+    assert_eq!(experts.next(open), None, "the hotel waits for the flight's follow-up");
+    // The flight task stays silent past the window: the hotel question goes ahead.
+    experts.follow_up_window_closed();
+    assert_eq!(
+        experts.next(open),
+        Some(Presentation::Questions(vec![export_question("hotel", "h1", "What budget?")]))
+    );
+    // A late follow-up takes its place in line instead of jumping ahead.
+    experts.person_turn();
+    experts.open("car", expert("hotels"));
+    experts.ask("car", "c1", "Which car?".into(), false, None);
+    experts.ask("flight", "f2", "Morning or evening?".into(), false, None);
+    let Some(Presentation::Questions(next)) = experts.next(open) else {
+        panic!("a question is asked");
+    };
+    assert_eq!(next[0].output_id, "car", "the late follow-up did not keep its head start");
+}
