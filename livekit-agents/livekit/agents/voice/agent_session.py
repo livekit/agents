@@ -121,8 +121,10 @@ class RecordingOptions(TypedDict, total=False):
     """Granular control over which recording features are active.
 
     Recording keys default to ``True`` when not specified, so ``{"logs": False}``
-    means "record everything except logs." Redaction defaults to the project setting;
-    ``False`` is ignored when redaction is enabled globally for the project.
+    means "record everything except logs." Outside simulations, redaction defaults to
+    the project setting; ``False`` is ignored when redaction is enabled globally for
+    the project. Simulations ignore the project setting and enable redaction only
+    with ``record={"redaction": True}``.
 
     Can be passed directly to :pymethod:`AgentSession.start(record=...)`:
 
@@ -987,7 +989,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._redaction_enabled = bool(
                 self._opts.recording_options["redaction"]
-                or (job_ctx and job_ctx.job.enable_redaction)
+                or (job_ctx and job_ctx._redaction_enabled)
             )
 
             # hosting needs the primary designation as before, and the caller's consent
