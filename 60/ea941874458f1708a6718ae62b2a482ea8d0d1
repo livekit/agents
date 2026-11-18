@@ -1,0 +1,25 @@
+tests/test_plugin_speechmatics_stt.py
+  s_88c6dc6a126478::t_aa22a21d203bf4 39,359-361,377,382
+  s_88c6dc6a126478::t_a703c51ca90e98 48-49,163,167,169,174-182,406-438
+  s_88c6dc6a126478::t_1073526781d86f 439-440
+livekit-plugins/livekit-plugins-speechmatics/livekit/plugins/speechmatics/stt.py
+  s_88c6dc6a126478::t_1f87ea68d8053f 750
+  s_88c6dc6a126478::t_3a53b65ab90116 713-715
+  s_88c6dc6a126478::t_ca2a75da82069f 97-98,205-209,264-266,278,284-286,289-290,328,716,746-749,751-756,1062
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "60ea941874458f1708a6718ae62b2a482ea8d0d1",
+  "prompts": {},
+  "sessions": {
+    "s_88c6dc6a126478": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1f044-4522-7783-b6fb-7e851f180e0f",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
