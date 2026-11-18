@@ -3,8 +3,9 @@
 Agent Framework plugin for [ConvoZen](https://convozen.ai/) voice models:
 **Akshara** for speech-to-text and **Ragini** for text-to-speech.
 
-Both cover nine Indian languages — Bengali, English, Gujarati, Hindi, Kannada,
-Malayalam, Marathi, Tamil, Telugu — including code-mixed speech.
+Akshara covers nine Indian languages — Bengali, English, Gujarati, Hindi, Kannada,
+Malayalam, Marathi, Tamil, Telugu — including code-mixed speech. Ragini 2.0 covers
+English, Hindi, Kannada, Tamil and Telugu.
 
 ConvoZen's research write-ups describe the models themselves:
 [Akshara](https://convozen.ai/research/article/akshara) for recognition and
@@ -40,7 +41,7 @@ from livekit.plugins import convozen, openai, silero
 session = AgentSession(
     stt=convozen.STT(language="hi"),
     llm=openai.LLM(model="gpt-5.6-luna"),
-    tts=convozen.TTS(voice="roohi", language="hi"),
+    tts=convozen.TTS(voice="sherin", language="hi"),
     vad=silero.VAD.load(),  # required — see above
 )
 
@@ -81,21 +82,32 @@ not.
 
 ```python
 convozen.TTS(
-    voice="roohi",  # any voice id the account has access to
-    model="ragini-v1",  # or the lighter "ragini-lite"
-    language="hi",
-    speed=1.0,
-    # sample_rate defaults to the model's native rate:
-    # 24000 for ragini-v1, 22050 for ragini-lite
+    voice="sherin",  # defaults to the language group's default voice
+    model="ragini-v2",
+    language="hi",  # en, hi, kn, ta or te
+    # sample_rate defaults to 48000, the rate ragini-v2 returns
 )
 ```
 
-Voices: `roohi`, `amaya`, `kiyansh`, `neeraj`, `manya`, `nidhi`, `ira`, `trisha`,
-`charvi`. Any voice id the account has access to is accepted, so voices added
-server-side work without a plugin upgrade.
+Ragini 2.0 runs a separate model for each language group, and each has its own
+voices:
+
+| Languages | Voices | Default |
+|-----------|--------|---------|
+| `en`, `hi` | `shrajay`, `siddharth`, `parmi`, `sherin`, `bhavya`, `shreya` | `shrajay` |
+| `kn`, `ta`, `te` | `amaya`, `parmi`, `roohi`, `bhavya`/`bhagya`, `shrajay`, `siddharth` | `amaya` |
+
+Pick a voice from the group that matches `language`. The server does not reject
+a voice from the other group, or a misspelled one — it returns an arbitrary voice
+instead. If you don't pass `voice`, the group's default is used, and it follows
+`language` when that changes through `update_options`. Any voice id is accepted,
+so voices added server-side work without a plugin upgrade.
+
+`speed` is accepted but currently ignored by `ragini-v2`, which always speaks at
+the natural pace.
 
 Audio is streamed back as it is generated, which is what keeps time-to-first-audio
 down. Pass `stream_response=False` to receive one complete WAV instead.
 
-Sample rates of 22050 and 24000 Hz are supported; the default is
-the model's native rate.
+`ragini-v2` produces 48 kHz audio, and the plugin always requests that rate.
+Passing a different `sample_rate` resamples it on the client.

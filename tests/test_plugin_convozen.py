@@ -424,9 +424,57 @@ def test_tts_is_not_streaming() -> None:
 def test_tts_sample_rate_defaults_per_model() -> None:
     from livekit.plugins.convozen import TTS
 
-    assert TTS(api_key="k").sample_rate == 24000
-    assert TTS(api_key="k", model="ragini-lite").sample_rate == 22050
+    tts = TTS(api_key="k")
+    assert tts.model == "ragini-v2"
+    assert tts.sample_rate == 48000  # ragini-v2 always returns 48 kHz
     assert TTS(api_key="k", sample_rate=8000).sample_rate == 8000
+
+
+def test_tts_rejects_languages_ragini_v2_does_not_serve() -> None:
+    from livekit.plugins.convozen import TTS
+
+    for language in ("bn", "gu", "ml", "mr"):
+        with pytest.raises(ValueError, match="unsupported language"):
+            TTS(api_key="k", language=language)
+
+
+def test_tts_default_voice_follows_language_group() -> None:
+    from livekit.plugins.convozen import TTS
+
+    assert TTS(api_key="k")._opts.voice == "shrajay"
+    assert TTS(api_key="k", language="hi")._opts.voice == "shrajay"
+    assert TTS(api_key="k", language="ta")._opts.voice == "amaya"
+
+    tts = TTS(api_key="k", language="en")
+    tts.update_options(language="te")
+    assert tts._opts.voice == "amaya"
+
+
+def test_tts_explicit_voice_survives_language_change() -> None:
+    from livekit.plugins.convozen import TTS
+
+    tts = TTS(api_key="k", voice="sherin", language="hi")
+    tts.update_options(language="en")
+    assert tts._opts.voice == "sherin"
+
+    tts = TTS(api_key="k", language="hi")
+    tts.update_options(voice="parmi")
+    tts.update_options(language="kn")
+    assert tts._opts.voice == "parmi"
+
+
+def test_tts_rejected_update_options_changes_nothing() -> None:
+    from livekit.plugins.convozen import TTS
+
+    tts = TTS(api_key="k", language="hi")
+    before = tts._opts
+
+    with pytest.raises(ValueError, match="unsupported language"):
+        tts.update_options(voice="sherin", speed=1.5, language="mr")
+
+    assert tts._opts is before
+    assert tts._opts.voice == "shrajay"
+    assert tts._opts.speed == 1.0
 
 
 def test_tts_rejects_unknown_language() -> None:
@@ -453,17 +501,17 @@ def test_tts_accepts_unknown_voice() -> None:
 def test_tts_form_uses_speaker_and_omits_format() -> None:
     from livekit.plugins.convozen import TTS
 
-    form = TTS(api_key="k", voice="roohi", language="hi", speed=1.2)._opts.to_form("hello")
+    form = TTS(api_key="k", voice="sherin", language="hi", speed=1.2)._opts.to_form("hello")
 
-    assert form["speaker"] == "roohi"  # wire name is `speaker`, not `voice`
+    assert form["speaker"] == "sherin"  # wire name is `speaker`, not `voice`
     assert "voice" not in form
     assert "format" not in form  # server has no format field; output is always WAV
     assert form == {
         "text": "hello",
         "language": "hi",
-        "speaker": "roohi",
-        "model": "ragini-v1",
-        "sample_rate": "24000",
+        "speaker": "sherin",
+        "model": "ragini-v2",
+        "sample_rate": "48000",
         "speed": "1.2",
         "stream": "true",
     }
@@ -473,7 +521,7 @@ def test_tts_form_uses_speaker_and_omits_format() -> None:
 async def test_tts_synthesizes_audio_from_wav() -> None:
     from livekit.plugins.convozen import TTS
 
-    wav = _wav_bytes(duration=0.2, sample_rate=24000)
+    wav = _wav_bytes(duration=0.2, sample_rate=48000)
     # split across chunks, the way a chunked response arrives
     session = _FakeSession(_FakeResponse(chunks=[wav[:100], wav[100:]]))
     tts = TTS(api_key="test-key", http_session=session)  # type: ignore[arg-type]
@@ -488,6 +536,27 @@ async def test_tts_synthesizes_audio_from_wav() -> None:
     assert session.calls[0]["headers"] == {"x-api-key": "test-key"}
     assert session.calls[0]["url"].endswith("/v1/ragini/tts")
 
+    total_samples = sum(f.samples_per_channel for f in frames)
+    assert total_samples / 48000 == pytest.approx(0.2, abs=0.05)
+
+
+@pytest.mark.asyncio
+async def test_tts_custom_sample_rate_requests_native_and_resamples() -> None:
+    """ragini-v2 rejects most non-native rates, so the plugin resamples locally."""
+    from livekit.plugins.convozen import TTS
+
+    wav = _wav_bytes(duration=0.2, sample_rate=48000)
+    session = _FakeSession(_FakeResponse(chunks=[wav]))
+    tts = TTS(api_key="k", sample_rate=24000, http_session=session)  # type: ignore[arg-type]
+
+    frames = []
+    stream = tts.synthesize("hello")
+    async for ev in stream:
+        frames.append(ev.frame)
+    await stream.aclose()
+
+    assert session.calls[0]["data"]["sample_rate"] == "48000"
+    assert {f.sample_rate for f in frames} == {24000}
     total_samples = sum(f.samples_per_channel for f in frames)
     assert total_samples / 24000 == pytest.approx(0.2, abs=0.05)
 

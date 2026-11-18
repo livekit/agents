@@ -43,6 +43,7 @@ from livekit.agents.utils import is_given
 from .models import (
     DEFAULT_BASE_URL,
     TTS_DEFAULT_SAMPLE_RATES,
+    TTS_DEFAULT_VOICES,
     TTS_FALLBACK_SAMPLE_RATE,
     TTS_LANGUAGES,
     TTSLanguages,
@@ -67,6 +68,9 @@ class _TTSOptions:
     sample_rate: int
     speed: float
     stream_response: bool
+    # Whether `voice` was set by the caller rather than defaulted from `language`.
+    # A defaulted voice follows a later language change into the right voice group.
+    voice_explicit: bool = False
 
     def tts_url(self) -> str:
         return f"{self.base_url.rstrip('/')}{_TTS_PATH}"
@@ -76,13 +80,20 @@ class _TTSOptions:
 
         Note the wire name for the voice is ``speaker``. There is no ``format``
         field — the server always returns WAV.
+
+        The model's native rate is always requested, whatever ``sample_rate`` the
+        caller chose: ragini-v2 answers any other rate except 16000 with a 400.
+        The WAV header carries the real rate, and the audio emitter resamples to
+        ``sample_rate`` on the client.
         """
         return {
             "text": text,
             "language": self.language,
             "speaker": self.voice,
             "model": str(self.model),
-            "sample_rate": str(self.sample_rate),
+            "sample_rate": str(
+                TTS_DEFAULT_SAMPLE_RATES.get(str(self.model), TTS_FALLBACK_SAMPLE_RATE)
+            ),
             "speed": str(self.speed),
             "stream": "true" if self.stream_response else "false",
         }
@@ -91,14 +102,14 @@ class _TTSOptions:
 class TTS(tts.TTS):
     """ConvoZen Ragini text-to-speech.
 
-    Ragini covers nine Indian languages.
+    Ragini 2.0 covers English, Hindi, Kannada, Tamil and Telugu.
     """
 
     def __init__(
         self,
         *,
-        voice: TTSVoices | str = "roohi",
-        model: TTSModels | str = "ragini-v1",
+        voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
+        model: TTSModels | str = "ragini-v2",
         language: TTSLanguages | str = "en",
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         speed: float = 1.0,
@@ -110,13 +121,18 @@ class TTS(tts.TTS):
         """Create a new instance of ConvoZen Ragini TTS.
 
         Args:
-            voice: Voice (``speaker``) id. Any non-empty string is accepted so that
-                voices added server-side work without a plugin upgrade.
-            model: ``"ragini-v1"`` (default) or the lighter ``"ragini-lite"``.
+            voice: Voice (``speaker``) id. Voice sets differ by language group:
+                ``en``/``hi`` default to ``"shrajay"`` and ``kn``/``ta``/``te`` to
+                ``"amaya"``. Any non-empty string is accepted so that voices added
+                server-side work without a plugin upgrade, but note the server does
+                not reject a voice from the wrong group — it returns an arbitrary one.
+            model: Ragini model id. ``"ragini-v2"`` (default) is the only model
+                currently served.
             language: Language of the text to synthesize.
-            sample_rate: Output rate in Hz. Defaults to the model's native rate —
-                24000 for ``ragini-v1``, 22050 for ``ragini-lite``.
-            speed: Speaking rate multiplier; 1.0 is the natural pace.
+            sample_rate: Output rate in Hz. Defaults to 48000, the rate ``ragini-v2``
+                always returns; any other rate is resampled on the client.
+            speed: Speaking rate multiplier; 1.0 is the natural pace. Currently
+                ignored by ``ragini-v2``, which always speaks at the natural pace.
             stream_response: Ask the server to stream the audio back as it is
                 generated, which cuts time-to-first-byte. Set to ``False`` to receive
                 one complete WAV instead.
@@ -135,7 +151,7 @@ class TTS(tts.TTS):
             raise ValueError(
                 f"unsupported language: {language!r}. supported: {sorted(TTS_LANGUAGES)}"
             )
-        if not voice or not str(voice).strip():
+        if is_given(voice) and not str(voice).strip():
             raise ValueError("voice cannot be empty")
 
         resolved_sample_rate = (
@@ -161,11 +177,12 @@ class TTS(tts.TTS):
             api_key=convozen_api_key,
             base_url=base_url or os.environ.get("CONVOZEN_BASE_URL") or DEFAULT_BASE_URL,
             model=model,
-            voice=str(voice).strip(),
+            voice=str(voice).strip() if is_given(voice) else TTS_DEFAULT_VOICES[language],
             language=language,
             sample_rate=resolved_sample_rate,
             speed=speed,
             stream_response=stream_response,
+            voice_explicit=is_given(voice),
         )
         self._session = http_session
 
@@ -194,21 +211,33 @@ class TTS(tts.TTS):
 
         ``sample_rate`` is deliberately absent: it is fixed for the lifetime of the
         instance because the audio pipeline is built around it at construction.
+
+        Changing ``language`` alone also moves a defaulted voice to the new language
+        group's default, but leaves an explicitly chosen voice in place.
+
+        Raises:
+            ValueError: If ``voice`` is empty or ``language`` is not one Ragini
+                accepts. No option is changed in that case.
         """
+        opts = replace(self._opts)
         if is_given(voice):
             if not str(voice).strip():
                 raise ValueError("voice cannot be empty")
-            self._opts.voice = str(voice).strip()
+            opts.voice = str(voice).strip()
+            opts.voice_explicit = True
         if is_given(model):
-            self._opts.model = model
+            opts.model = model
         if is_given(language):
             if language not in TTS_LANGUAGES:
                 raise ValueError(
                     f"unsupported language: {language!r}. supported: {sorted(TTS_LANGUAGES)}"
                 )
-            self._opts.language = language
+            opts.language = language
+            if not opts.voice_explicit:
+                opts.voice = TTS_DEFAULT_VOICES[language]
         if is_given(speed):
-            self._opts.speed = speed
+            opts.speed = speed
+        self._opts = opts
 
     def synthesize(
         self,

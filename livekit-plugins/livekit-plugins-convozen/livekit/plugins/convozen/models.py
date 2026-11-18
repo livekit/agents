@@ -28,18 +28,16 @@ STTModels = Literal[
 ]
 
 TTSModels = Literal[
-    "ragini-v1",  # 24 kHz
-    "ragini-lite",  # 22.05 kHz
+    "ragini-v2",  # 48 kHz
 ]
 
-# Native output rate per TTS model. Ragini resamples on request, but asking for
-# the model's own rate avoids a resampling pass on the server.
+# Native output rate per TTS model, which is the rate always requested on the wire.
+# Any other output rate is produced by resampling on the client.
 TTS_DEFAULT_SAMPLE_RATES: dict[str, int] = {
-    "ragini-v1": 24000,
-    "ragini-lite": 22050,
+    "ragini-v2": 48000,
 }
 
-TTS_FALLBACK_SAMPLE_RATE = 24000
+TTS_FALLBACK_SAMPLE_RATE = 48000
 
 # Language hints accepted by Akshara's `lang_tags`. The server rejects anything
 # outside this set, so `STT` only forwards a tag that appears here.
@@ -47,18 +45,33 @@ STT_LANGUAGES = frozenset({"bn", "en", "gu", "hi", "kn", "ml", "mr", "ta", "te"}
 
 STTLanguages = Literal["bn", "en", "gu", "hi", "kn", "ml", "mr", "ta", "te"]
 
-TTSLanguages = Literal["bn", "en", "gu", "hi", "kn", "ml", "mr", "ta", "te"]
+# ragini-v2 is deployed for these languages only; anything else is a 400.
+TTSLanguages = Literal["en", "hi", "kn", "ta", "te"]
 
-TTS_LANGUAGES = frozenset({"bn", "en", "gu", "hi", "kn", "ml", "mr", "ta", "te"})
+TTS_LANGUAGES = frozenset({"en", "hi", "kn", "ta", "te"})
 
+# ragini-v2 runs one checkpoint for en/hi and another for kn/ta/te, each with its
+# own voice set. A voice from the other group is not rejected — the server treats
+# it as a raw speaker tag and returns an arbitrary voice.
 TTSVoices = Literal[
-    "roohi",
+    # en, hi
+    "shrajay",
+    "siddharth",
+    "parmi",
+    "sherin",
+    "bhavya",
+    "shreya",
+    # kn, ta, te (also: parmi, bhavya, shrajay, siddharth)
     "amaya",
-    "kiyansh",
-    "neeraj",
-    "manya",
-    "nidhi",
-    "ira",
-    "trisha",
-    "charvi",
+    "roohi",
+    "bhagya",
 ]
+
+# Default voice per language, matching the server's own default for each group.
+TTS_DEFAULT_VOICES: dict[str, str] = {
+    "en": "shrajay",
+    "hi": "shrajay",
+    "kn": "amaya",
+    "ta": "amaya",
+    "te": "amaya",
+}

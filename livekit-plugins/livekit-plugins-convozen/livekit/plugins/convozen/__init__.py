@@ -16,7 +16,8 @@
 
 Support for speech-to-text and text-to-speech with
 [ConvoZen's voice platform](https://convozen.ai/): **Akshara** for recognition and
-**Ragini** for synthesis, covering nine Indian languages plus code-mixed speech.
+**Ragini** for synthesis. Akshara covers nine Indian languages plus code-mixed
+speech; Ragini 2.0 covers English, Hindi, Kannada, Tamil and Telugu.
 
 Both models are batch (whole-utterance) rather than incremental, so a VAD is
 required on the `AgentSession` — LiveKit then wraps the STT in a `StreamAdapter`
@@ -26,7 +27,7 @@ automatically:
 session = AgentSession(
     stt=convozen.STT(language="hi"),
     llm=...,
-    tts=convozen.TTS(voice="roohi", language="hi"),
+    tts=convozen.TTS(voice="sherin", language="hi"),
     vad=silero.VAD.load(),
 )
 ```
