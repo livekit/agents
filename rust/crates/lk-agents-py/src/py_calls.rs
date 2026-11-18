@@ -70,11 +70,53 @@ use tokio::sync::oneshot;
 /// Whether this thread holds the GIL. `PyGILState_Check` (CPython 3.4+) is outside the limited
 /// API pyo3 exposes under abi3, but every interpreter the wheel supports exports it.
 pub fn holds_gil() -> bool {
-    unsafe extern "C" {
-        fn PyGILState_Check() -> std::ffi::c_int;
-    }
     // SAFETY: callable from any thread, initialized interpreter or not.
-    unsafe { PyGILState_Check() == 1 }
+    unsafe { gil_state_check() == 1 }
+}
+
+#[cfg(not(windows))]
+unsafe extern "C" {
+    #[link_name = "PyGILState_Check"]
+    fn gil_state_check() -> std::ffi::c_int;
+}
+
+/// abi3 links Windows' `python3.dll`, which does not forward `PyGILState_Check`: it is looked up
+/// in the interpreter's `python3XY.dll`, the module a function `python3.dll` forwards lives in.
+#[cfg(windows)]
+unsafe fn gil_state_check() -> std::ffi::c_int {
+    use std::ffi::c_void;
+    type Check = unsafe extern "C" fn() -> std::ffi::c_int;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetModuleHandleW(name: *const u16) -> *mut c_void;
+        fn GetModuleHandleExW(flags: u32, address: *const c_void, module: *mut *mut c_void) -> i32;
+        fn GetProcAddress(module: *mut c_void, name: *const std::ffi::c_char) -> *mut c_void;
+    }
+    const FROM_ADDRESS: u32 = 0x4;
+    const UNCHANGED_REFCOUNT: u32 = 0x2;
+    static CHECK: std::sync::OnceLock<Check> = std::sync::OnceLock::new();
+    let check = CHECK.get_or_init(|| {
+        let python3: Vec<u16> = "python3.dll\0".encode_utf16().collect();
+        // SAFETY: the extension links python3.dll, so it is loaded for the process's lifetime,
+        // and so is the interpreter DLL its exports resolve into; the names are NUL-terminated.
+        unsafe {
+            let forwarded =
+                GetProcAddress(GetModuleHandleW(python3.as_ptr()), c"PyGILState_Ensure".as_ptr());
+            assert!(!forwarded.is_null(), "python3.dll forwards PyGILState_Ensure");
+            let mut interpreter = std::ptr::null_mut();
+            let found = GetModuleHandleExW(
+                FROM_ADDRESS | UNCHANGED_REFCOUNT,
+                forwarded.cast_const(),
+                &raw mut interpreter,
+            );
+            assert!(found != 0, "the interpreter's DLL is loaded");
+            let check = GetProcAddress(interpreter, c"PyGILState_Check".as_ptr());
+            assert!(!check.is_null(), "every supported interpreter exports PyGILState_Check");
+            std::mem::transmute::<*mut c_void, Check>(check)
+        }
+    });
+    // SAFETY: the caller's contract; `check` is the interpreter's own PyGILState_Check.
+    unsafe { check() }
 }
 
 /// The dispatch a generated proxy's call takes, in `context`, requiring no scope.
