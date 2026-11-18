@@ -48,7 +48,11 @@ async def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None
         speech = sess.current_speech
         if speech is None or speech.allow_interruptions:
             await sess.interrupt()
-        # otherwise the reply queues behind the speech that can't be interrupted
+        else:
+            # the reply would queue behind the speech that can't be interrupted, but its LLM
+            # request starts right away: wait for that speech to play out, so the reply is
+            # generated with what it said
+            await speech._wait_for_current_generation()
 
         # during a handoff or an AgentTask switch, the agent taking over answers once started
         await sess._wait_for_activity_switch()

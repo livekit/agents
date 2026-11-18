@@ -20,7 +20,7 @@ from livekit.agents import (
     function_tool,
     utils,
 )
-from livekit.agents.llm import FunctionToolCall
+from livekit.agents.llm import ChatContext, FunctionToolCall, LLMStream
 from livekit.agents.types import TOPIC_CHAT
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.io import PlaybackFinishedEvent
@@ -1754,11 +1754,29 @@ def _errors(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
 
 
+class _RecordingLLM(FakeLLM):
+    """Keeps the messages of every request: FakeLLM picks its answer from the last one only."""
+
+    def __init__(self, *, fake_responses: list[FakeLLMResponse]) -> None:
+        super().__init__(fake_responses=fake_responses)
+        self.requests: list[list[tuple[str, str]]] = []
+
+    def chat(self, *, chat_ctx: ChatContext, **kwargs: Any) -> LLMStream:
+        self.requests.append(
+            [(i.role, i.text_content or "") for i in chat_ctx.items if i.type == "message"]
+        )
+        return super().chat(chat_ctx=chat_ctx, **kwargs)
+
+    def request_for(self, text: str) -> list[tuple[str, str]]:
+        """The request that answers ``text``."""
+        return next(r for r in self.requests if r and r[-1][1] == text)
+
+
 @pytest.mark.parametrize("disabled_on", ["speech", "session"])
 async def test_text_during_uninterruptible_speech_is_answered_after_it(
     disabled_on: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    fake_llm = FakeLLM(
+    fake_llm = _RecordingLLM(
         fake_responses=[
             FakeLLMResponse(
                 input="read the notice", content="our hours change", ttft=0.1, duration=1.0
@@ -1791,7 +1809,97 @@ async def test_text_during_uninterruptible_speech_is_answered_after_it(
             ("user", "hello?"),
             ("assistant", "got hello?"),
         ]
+        # the reply is generated with the notice it was queued behind
+        assert fake_llm.request_for("hello?")[-2:] == [
+            ("assistant", "our hours change"),
+            ("user", "hello?"),
+        ]
         assert not _errors(caplog)
+
+
+async def test_text_before_uninterruptible_speech_starts_is_answered_after_it() -> None:
+    fake_llm = _RecordingLLM(
+        fake_responses=[
+            FakeLLMResponse(input="greet", content="hi there", ttft=0.1, duration=0.1),
+            FakeLLMResponse(
+                input="read the notice", content="our hours change", ttft=0.1, duration=0.1
+            ),
+            FakeLLMResponse(input="hello?", content="got hello?", ttft=0.1, duration=0.1),
+        ]
+    )
+
+    async with AgentSession(llm=fake_llm, min_consecutive_speech_delay=1.0) as sess:
+        await sess.start(Agent(instructions="front desk"))
+        await sess.generate_reply(instructions="greet")
+        notice = sess.generate_reply(instructions="read the notice", allow_interruptions=False)
+        await asyncio.sleep(0.5)
+        # next in line, held back by min_consecutive_speech_delay
+        assert sess.current_speech is notice
+        assert not notice._generations
+
+        await _send_text(sess, "hello?")
+        await asyncio.sleep(2.0)  # the reply is held by the delay too
+
+        assert _messages(sess)[-3:] == [
+            ("assistant", "our hours change"),
+            ("user", "hello?"),
+            ("assistant", "got hello?"),
+        ]
+        assert fake_llm.request_for("hello?")[-2:] == [
+            ("assistant", "our hours change"),
+            ("user", "hello?"),
+        ]
+
+
+class _Clinic(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="clinic")
+
+    @function_tool
+    async def lookup_hours(self) -> str:
+        """Look up the opening hours."""
+        return "open 9 to 5"
+
+
+async def test_text_during_uninterruptible_tool_reply_is_answered_after_it() -> None:
+    fake_llm = _RecordingLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="hours?",
+                content="",
+                ttft=0.1,
+                duration=0.1,
+                tool_calls=_tool_call("lookup_hours"),
+            ),
+            FakeLLMResponse(input="open 9 to 5", content="we open at 9", ttft=0.1, duration=1.0),
+            FakeLLMResponse(input="and friday?", content="friday too", ttft=0.1, duration=0.1),
+        ]
+    )
+    tools_executed = asyncio.Event()
+
+    async with AgentSession(
+        llm=fake_llm, turn_handling=TurnHandlingOptions(interruption={"enabled": False})
+    ) as sess:
+        sess.on("function_tools_executed", lambda _: tools_executed.set())
+        await sess.start(_Clinic())
+        await _send_text(sess, "hours?")
+        await asyncio.wait_for(tools_executed.wait(), timeout=5.0)
+        await asyncio.sleep(0.5)
+        # the second step of the speech, the reply to the tool output, is playing
+        assert (speech := sess.current_speech) is not None and speech.num_steps == 2
+
+        await _send_text(sess, "and friday?")
+        await asyncio.sleep(1.0)
+
+        assert _messages(sess)[-3:] == [
+            ("assistant", "we open at 9"),
+            ("user", "and friday?"),
+            ("assistant", "friday too"),
+        ]
+        assert fake_llm.request_for("and friday?")[-2:] == [
+            ("assistant", "we open at 9"),
+            ("user", "and friday?"),
+        ]
 
 
 class _Billing(Agent):
