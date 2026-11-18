@@ -1353,10 +1353,12 @@ hermetic correctness tests do not wait sixty real seconds.
 
 **Build**
 
-- [ ] Pace independent questions and allow natural groups such as first/last name. Retain
+- [x] Pace independent questions and allow natural groups such as first/last name. Retain
   every source independently when a person answers part of a group or clearly answers several
-  tasks; clarify ambiguous yes/no instead of choosing an arbitrary destination.
-- [ ] Batch ordinary progress/results already available at a presentation opportunity.
+  tasks; clarify ambiguous yes/no instead of choosing an arbitrary destination. Voice groups
+  one expert's questions, at most two before the person's turn (deterministic, so no model
+  round trip delays speech).
+- [x] Batch ordinary progress/results already available at a presentation opportunity.
   Remove superseded queued progress and handle an in-flight announcement overtaken by a
   question/result. Keep exact output ordered and preserve the communication log.
 - [ ] Retain recognized responses while the current agent lacks the relevant remote tool.
@@ -1364,6 +1366,8 @@ hermetic correctness tests do not wait sixty real seconds.
   original Agent object's identity or a model-visible name alone, controls access.
 - [ ] Implement fairness, passing, nested delegation and ordinary wording without duplicate
   acknowledgements, questions, results or invented claims about work that has not completed.
+  Voice fairness, passing, the bounded follow-up and presentation wording are done; nested
+  delegation remains.
 - [ ] Finish correction behavior before/after dispatch and after speech becomes audible.
   A late Friday result cannot satisfy a Saturday request; if business work already happened,
   explain the observed state and continue through the supported correction path.

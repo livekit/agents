@@ -76,8 +76,9 @@ pub struct Resolution {
     pub outcome: ToolOutcome,
 }
 
-/// The most questions one prompt asks. Five waiting questions are not one five-part utterance.
-const MAX_ASKED_TOGETHER: usize = 3;
+/// The most questions the person hears before their next turn: five waiting questions are not
+/// one five-part utterance.
+const MAX_ASKED_TOGETHER: usize = 2;
 
 /// One presentation opportunity, chosen when the floor permits.
 #[derive(Debug, Clone, PartialEq)]
@@ -185,6 +186,14 @@ pub struct Experts {
     /// Progress announcements scheduled and not ended, by speech.
     #[serde(skip)]
     announcing: BTreeMap<SpeechId, Vec<Update>>,
+    /// Delegations answered and not heard from since: other tasks' questions wait for their
+    /// next event, and a follow-up question of theirs goes ahead, once per answer.
+    #[serde(skip)]
+    answered: BTreeSet<String>,
+    /// The follow-up queued ahead, and the delegation whose follow-up led the last prompt: it
+    /// does not get a second head start in a row.
+    #[serde(skip)]
+    follow_up: (Option<String>, Option<String>),
     /// Live output receipts have no meaning after a call ends; communication owns recovery.
     #[serde(skip)]
     presentations: BTreeMap<SpeechId, Vec<PendingRequest>>,
@@ -236,6 +245,7 @@ impl Experts {
             return false;
         }
         d.progress_seen = occurrence;
+        self.answered.remove(output_id);
         if text.trim().is_empty() {
             return false;
         }
@@ -266,6 +276,7 @@ impl Experts {
             return false;
         }
         d.progress_seen = occurrence;
+        self.answered.remove(output_id);
         self.queue.push_back(Queued {
             output_id: output_id.into(),
             event: ExpertInboxEvent::Exact { text, call },
@@ -298,7 +309,14 @@ impl Experts {
             verbatim,
             passed: None,
         };
-        self.queue.push_back(Queued { output_id: output_id.into(), event });
+        let queued = Queued { output_id: output_id.into(), event };
+        let (ahead, led) = &mut self.follow_up;
+        if self.answered.remove(output_id) && led.as_deref() != Some(output_id) {
+            *ahead = Some(output_id.into());
+            self.queue.push_front(queued);
+        } else {
+            self.queue.push_back(queued);
+        }
         true
     }
 
@@ -310,6 +328,7 @@ impl Experts {
         };
         d.settled = true;
         d.waiting = None;
+        self.answered.remove(output_id);
         self.withdraw(output_id);
         self.queue.push_back(Queued {
             output_id: output_id.into(),
@@ -326,6 +345,7 @@ impl Experts {
         };
         d.settled = true;
         d.waiting = None;
+        self.answered.remove(output_id);
         self.withdraw(output_id);
         self.queue.retain(|q| {
             q.output_id != output_id || matches!(q.event, ExpertInboxEvent::Exact { .. })
@@ -366,6 +386,7 @@ impl Experts {
     /// The person took a turn: whatever was asked before it has had its chance.
     pub fn person_turn(&mut self) {
         self.turns += 1;
+        self.answered.clear();
     }
 
     /// The next presentation among events the active agent's tools reach.
@@ -377,8 +398,12 @@ impl Experts {
     /// and routine progress wait, results and exact output do not. Questions come first when a
     /// suspended one is reachable again or one leads the queue.
     ///
+    /// A prompt only asks: progress and results are always presentations of their own.
+    ///
     /// Fairness: waiting questions are asked in arrival order, so a newer task never overtakes
-    /// an older one. A question the person passed (a turn without answering it) stays open and
+    /// an older one, except a bounded follow-up: until a task the person just answered is heard
+    /// from again (or the person speaks again), other questions wait, and if it asks a
+    /// follow-up that goes first, once per answer and never twice in a row. A question the person passed (a turn without answering it) stays open and
     /// goes back in line behind the questions already waiting; it is asked once more only after
     /// another prompt, never in the prompt right after it was passed.
     ///
@@ -400,12 +425,15 @@ impl Experts {
                         self.delegations[&q.output_id].recorded
                     }
                     ExpertInboxEvent::Question { passed, .. } => {
-                        self.due(*passed) && Self::room(&awaiting, self.expert(&q.output_id)) > 0
+                        self.due(*passed)
+                            && Self::room(&awaiting, self.expert(&q.output_id)) > 0
+                            && self.follows_up(&q.output_id)
                     }
                     ExpertInboxEvent::Progress(_) => awaiting.is_empty(),
                 }
         };
         let reoffer = awaiting.is_empty()
+            && self.answered.is_empty()
             && self.asked.iter().any(|(id, asked)| asked.suspended && reaches(id));
         let at = self.queue.iter().position(eligible);
         let leads =
@@ -449,13 +477,21 @@ impl Experts {
         &self.delegations[output_id].tool.key
     }
 
-    /// How many more of `expert`'s questions the current prompt can still take.
+    /// How many more of `expert`'s questions the person can hear before their next turn.
     fn room(awaiting: &BTreeMap<ExpertKey, usize>, expert: &ExpertKey) -> usize {
-        match awaiting.get(expert) {
-            Some(asked) => MAX_ASKED_TOGETHER.saturating_sub(*asked),
-            None if awaiting.is_empty() => MAX_ASKED_TOGETHER,
-            None => 0,
+        if awaiting.is_empty() {
+            return MAX_ASKED_TOGETHER;
         }
+        if !awaiting.contains_key(expert) {
+            return 0;
+        }
+        MAX_ASKED_TOGETHER.saturating_sub(awaiting.values().sum())
+    }
+
+    /// Until each task the person just answered was heard from again, only its own follow-up
+    /// can be asked: the follow-up is not overtaken by a question that merely arrived first.
+    fn follows_up(&self, output_id: &str) -> bool {
+        self.answered.is_empty() || self.follow_up.0.as_deref() == Some(output_id)
     }
 
     /// A passed question is due again once another prompt was asked after its pass.
@@ -523,6 +559,7 @@ impl Experts {
         let mut sources = BTreeSet::new();
         let candidates: Vec<_> = suspended
             .chain(queued)
+            .filter(|(q, _)| self.follows_up(&q.output_id))
             .filter(|(q, _)| awaiting.is_empty() || !q.verbatim)
             .filter(|(q, _)| Self::room(awaiting, self.expert(&q.output_id)) > 0)
             .filter(|(q, _)| sources.insert(q.output_id.clone()))
@@ -530,7 +567,8 @@ impl Experts {
         let Some((first, _)) = candidates.first() else {
             return Vec::new();
         };
-        let expert = self.expert(&first.output_id);
+        let leader = first.output_id.clone();
+        let expert = self.expert(&leader);
         let chosen: Vec<_> = if first.verbatim {
             candidates.into_iter().take(1).collect()
         } else {
@@ -542,6 +580,10 @@ impl Experts {
                 .collect()
         };
         self.prompts += 1;
+        // A follow-up's head start lasts until the next prompt.
+        self.answered.clear();
+        let ahead = self.follow_up.0.take();
+        self.follow_up.1 = ahead.filter(|id| *id == leader);
         let mut questions = Vec::with_capacity(chosen.len());
         for (q, repeated) in chosen {
             self.queue.retain(|queued| {
@@ -691,6 +733,7 @@ impl Experts {
                     if request_id == &request.request_id)
         });
         self.asked.remove(&request.output_id);
+        self.answered.insert(request.output_id.clone());
         Ok(())
     }
 
