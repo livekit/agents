@@ -907,12 +907,8 @@ class RealtimeSession(llm.RealtimeSession):
             "external_id": self._opts.external_id,
         }
         if not self._realtime_model.capabilities.audio_output:
-            # Sent through additional_params until the SDK's config payload has these fields.
-            options["additional_params"] = {
-                **(self._opts.additional_params if is_given(self._opts.additional_params) else {}),
-                "input_modality": "text",
-                "output_modality": "text",
-            }
+            options["input_modality"] = "text"
+            options["output_modality"] = "text"
         # Filter out NOT_GIVEN values
         return {k: v for k, v in options.items() if v is not NOT_GIVEN}
 

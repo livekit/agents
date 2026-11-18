@@ -37,16 +37,13 @@ async def test_session_reconnects_on_abnormal_disconnect() -> None:
         await session.aclose()
 
 
-async def test_text_modality_is_sent_in_additional_params() -> None:
-    model = RealtimeModel(api_key="test", modalities=["text"], additional_params={"foo": 1})
+async def test_text_modality_is_sent_in_config() -> None:
+    model = RealtimeModel(api_key="test", modalities=["text"])
     session = model.session()
     try:
         options = session._build_config_options(system_prompt="", tools_payload=[])
-        assert options["additional_params"] == {
-            "foo": 1,
-            "input_modality": "text",
-            "output_modality": "text",
-        }
+        assert options["input_modality"] == "text"
+        assert options["output_modality"] == "text"
         assert not model.capabilities.audio_output
     finally:
         await session.aclose()
@@ -57,7 +54,8 @@ async def test_audio_modality_sends_no_modality_params() -> None:
     session = model.session()
     try:
         options = session._build_config_options(system_prompt="", tools_payload=[])
-        assert "additional_params" not in options
+        assert "input_modality" not in options
+        assert "output_modality" not in options
         assert model.capabilities.audio_output
     finally:
         await session.aclose()
