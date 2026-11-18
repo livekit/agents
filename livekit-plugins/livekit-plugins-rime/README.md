@@ -7,7 +7,7 @@ See [https://docs.livekit.io/agents/integrations/tts/rime/](https://docs.livekit
 ## Installation
 
 TTS supports Python 3.10 or newer. STT requires Python 3.11 or newer, LiveKit Agents
-1.8.10 or newer, and the optional `stt` extra.
+1.8.11 or newer, and the optional `stt` extra.
 
 ```bash
 pip install livekit-plugins-rime
@@ -25,10 +25,9 @@ STT uses the Rime Python SDK and requires Python 3.11 or newer. Install the `stt
 pip install 'livekit-plugins-rime[stt]'
 ```
 
-The extra installs `livekit-agents>=1.8.10` and `rimelabs-sdk>=0.1.0a29`, which provides
+The extra installs `livekit-agents>=1.8.11` and `rimelabs-sdk>=0.1.0a30`, which provides
 unary transcription, revised-hypothesis streaming, and append-fragment streaming.
-STT requires core fixes for non-retryable recognition errors. This minimum does not
-apply to the `realtime` extra, which supports LiveKit Agents 1.7.1 or newer.
+STT requires core fixes for non-retryable recognition errors.
 On Python 3.10, the SDK dependency is skipped even when the extra is requested;
 upgrade Python to use STT. TTS does not require the SDK.
 
@@ -87,8 +86,8 @@ session = AgentSession(
 )
 ```
 
-Append-fragment support is available in the published `rimelabs-sdk>=0.1.0a29`
-installed by the `stt` extra; no SDK source checkout is required.
+Append-fragment support is included in the published SDK that the `stt` extra
+installs (`rimelabs-sdk>=0.1.0a30`); no SDK source checkout is required.
 
 The plugin concatenates deltas exactly, preserving spaces and newlines, and sends
 cumulative `INTERIM_TRANSCRIPT` snapshots to LiveKit. Revised hypotheses replace
@@ -237,7 +236,7 @@ Python Rime SDK. Use Python 3.11 or later. TTS still supports Python 3.10.
 uv pip install 'livekit-plugins-rime[realtime]'
 ```
 
-The realtime extra requires `rimelabs-sdk>=0.1.0a29`. For source development:
+The realtime extra requires `rimelabs-sdk>=0.1.0a30`. For source development:
 
 ```sh
 uv sync --package livekit-plugins-rime --extra realtime --inexact
@@ -278,7 +277,7 @@ session = AgentSession(llm=model)
 
 ### LiveKit compatibility
 
-The plugin package requires `livekit-agents>=1.7.1`. Prism requires Python 3.11
+The plugin package requires `livekit-agents>=1.8.11`. Prism requires Python 3.11
 or later and the `realtime` extra. Earlier installation checks covered LiveKit
 1.7.1 and 1.8.0 through 1.8.10 with `rimelabs-sdk==0.1.0a28`.
 These checks apply to the PR build. Future package releases can raise the minimum
@@ -289,7 +288,7 @@ Install the plugin from the PR commit into a Python 3.11+ virtual
 environment. Replace `<commit>` with its full commit ID:
 
 ```sh
-uv pip install --no-sources 'livekit-agents==1.7.1' \
+uv pip install --no-sources 'livekit-agents==1.8.11' \
   'livekit-plugins-rime[realtime] @ git+https://github.com/naszzz/agents.git@<commit>#subdirectory=livekit-plugins/livekit-plugins-rime'
 ```
 
@@ -309,6 +308,18 @@ Microphone input uses Prism's server turn detection. The adapter forwards
 speech events and uses LiveKit's standard cancellation and message truncation.
 It requests interruption on caller speech. Early speech hints do not change
 playback volume. There is no custom per-response interruption policy.
+
+LiveKit's echo-cancellation warmup replaces caller audio with silence during
+the first three seconds of agent speech, except for outbound SIP calls and
+simulations. During that window Prism cannot hear the caller, so an early stop
+phrase does not interrupt the opening greeting. Keep the default when the
+caller may be on a speakerphone or a SIP trunk without reliable echo
+cancellation: the greeting's echo would otherwise reach Prism as caller speech.
+Set `aec_warmup_duration=None` on `AgentSession` only when the client cancels
+echo reliably, such as a headset or browser client, and early interruption
+matters. Because outbound SIP calls skip the warmup by default, set
+`aec_warmup_duration=3.0` explicitly for outbound calls with echo risk. The same
+setting applies when using `RealtimeModelFallbackAdapter`.
 
 Choose playback behavior when you create the model:
 
@@ -394,7 +405,8 @@ filler. Replace the map with `model.update_options(tool_fillers=...)`, or pass
 ### History and recovery
 
 `agent.update_chat_ctx()` supports user, assistant, and system text messages and
-completed tool calls/results. Each imported message has at most 4000 characters.
+completed tool calls/results. Prism enforces its context limit; the plugin does
+not impose a 4,000-character cap on imported messages or typed input.
 An imported result must immediately follow its call. Images, video, developer
 messages are unsupported. LiveKit configuration and handoff
 records stay local. Importing history does not execute tools or start a reply.
@@ -473,8 +485,7 @@ uncertain writes still stop dependent replies. The application can submit missin
 results or request a later independent continuation for an accepted result.
 Provider-initiated speech remains under Prism's control.
 
-The realtime extra requires SDK alpha29 or later. The plugin uses `hold_response`
-for long tasks and delayed playback beyond 128 responses.
+The plugin uses `hold_response` for long tasks and delayed playback beyond 128 responses.
 The SDK retains up to 128 ordinary and 128 protected responses. Active generation,
 unresolved calls, and holds count toward the protected bound. Limit exhaustion
 raises an error instead of evicting a pending owner. No audio is retained by holds.
@@ -596,3 +607,24 @@ The tests include response settings revisions, completed tool history rebuilds,
 history snapshot isolation, and cancellation during acknowledged updates.
 Validate typed replies and audio playback against the target Prism deployment
 separately. Caller-interruption checks require a speech fixture with nonzero audio.
+
+### Prism speech and interruption settings
+
+Set `speed` through `RealtimeModel` or `update_options`. Values range from
+0.85 through 1.3; out-of-range values raise `RimeInputError` immediately and leave
+the current speed unchanged. The model also accepts SDK
+`TurnDetection` settings at connect time and `TurnDetectionUpdate` for live
+changes to interruption word counts and phrase lists. The silence floor is
+connect-only. An empty phrase list clears it; omitted settings stay unchanged.
+Live updates change stored options after the server confirms them.
+
+Pass an SDK `Review` to the model's `review` option to check proposed speech.
+The SDK runs and cancels callbacks. They can run before a LiveKit generation
+exists and must support async cancellation. The adapter forwards SDK faults
+and server timestamps through `rime_server_event_received`. Partial captions
+use the cumulative transcript when present, including an empty correction;
+older events still append their delta.
+
+These options require `rimelabs-sdk>=0.1.0a30` and a Prism deployment that supports
+them, such as build `20261111`. Default requests omit the new settings and retain
+support for older images. Full end-to-end validation remains pending.

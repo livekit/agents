@@ -15,7 +15,7 @@ from collections import OrderedDict
 from collections.abc import Coroutine, Mapping
 from contextlib import AbstractAsyncContextManager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, cast
 
 import numpy as np
@@ -68,6 +68,14 @@ class _Edit:
 _edit: ContextVar[_Edit | None] = ContextVar("rime_history_edit", default=None)
 
 
+def _validate_speed(value: float) -> float:
+    """Reject speeds Prism refuses, before they can fail a session at connect."""
+    # Mirrors the SDK's private range check, which only runs when settings are sent.
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.85 <= value <= 1.3:
+        raise RimeInputError("Speed must be a number from 0.85 to 1.3")
+    return value
+
+
 def _startup_retryable(error: Exception) -> bool:
     # Older SDKs have no structured status. Unknown failures must not be replayed.
     return isinstance(error, (RimeUnavailableError, RimeResourceLimitError)) and getattr(
@@ -100,7 +108,8 @@ class RealtimeModel(llm.RealtimeModel):
     Omit endpoint to use public Prism. An injected Rime client stays caller-owned.
     Otherwise Rime reads RIME_API_KEY. update_options() queues live settings updates
     and returns immediately. Stored settings change after provider acknowledgment;
-    refusals are reported through error events.
+    refusals are reported through error events. An out-of-range speed raises
+    RimeInputError immediately.
     Context updates preserve omitted history by default. Use context_mode="strict"
     for replacement semantics through Agent.update_chat_ctx().
     A closed session may be replaced with a fresh conversation, such as an
@@ -116,6 +125,8 @@ class RealtimeModel(llm.RealtimeModel):
         client: Rime | None = None,
         voice: str | None = None,
         turn_detection: r.TurnDetection | None = None,
+        speed: float | None = None,
+        review: r.Review | None = None,
         truncation: r.Truncation | None = None,
         timeouts: r.RealtimeTimeouts | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -154,6 +165,8 @@ class RealtimeModel(llm.RealtimeModel):
         self._endpoint = endpoint
         self._voice = voice
         self._turn_detection = turn_detection
+        self._speed = _validate_speed(speed) if speed is not None else None
+        self._review = review
         self._truncation = truncation
         self._timeouts = timeouts or r.RealtimeTimeouts()
         self._request_id = request_id
@@ -240,12 +253,17 @@ class RealtimeModel(llm.RealtimeModel):
         response_metadata: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
         tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]] = NOT_GIVEN,
         truncation: NotGivenOr[r.Truncation] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[r.TurnDetectionUpdate] = NOT_GIVEN,
     ) -> None:
         """Queue settings on the live session, or configure the next initial session.
 
         Live updates return immediately. Refusals are reported through error events;
         stored settings change only after the provider acknowledges the update.
+        An out-of-range speed raises RimeInputError immediately and changes nothing.
         """
+        if is_given(speed):
+            _validate_speed(speed)
         if self._session is None:
             if is_given(voice):
                 self._voice = voice
@@ -255,13 +273,30 @@ class RealtimeModel(llm.RealtimeModel):
                 self._tool_fillers = dict(tool_fillers)
             if is_given(truncation):
                 self._truncation = cast(r.Truncation, truncation)
+            if is_given(speed):
+                self._speed = speed
+            if is_given(turn_detection):
+                self._merge_turn_update(turn_detection)
             return
         self._session.update_options(
             voice=voice,
             response_metadata=response_metadata,
             tool_fillers=tool_fillers,
             truncation=truncation,
+            speed=speed,
+            turn_detection=turn_detection,
         )
+
+    def _merge_turn_update(self, update: r.TurnDetectionUpdate) -> None:
+        """Merge mutable interruption settings into the next session's configuration."""
+        if not isinstance(update, r.TurnDetectionUpdate) or isinstance(update, r.TurnDetection):
+            raise RimeInputError("Use TurnDetectionUpdate for mutable interruption settings")
+        values = {
+            name: getattr(update, name)
+            for name in ("interrupt_min_words", "interrupt_phrases", "acknowledgment_phrases")
+            if getattr(update, name) is not None
+        }
+        self._turn_detection = replace(self._turn_detection or r.TurnDetection(), **values)
 
     async def _get_history(self) -> tuple[r.HistoryItem, ...]:
         """Read completed server history. Running replies are not included."""
@@ -439,7 +474,13 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                 raise asyncio.CancelledError
             if self._failure:
                 raise self._failure
+            extra: dict[str, Any] = {}
+            if self._model._speed is not None:
+                extra["speed"] = self._model._speed
+            if self._model._review is not None:
+                extra["review"] = self._model._review
             self._connection = self._model._client.realtime.connect(
+                **extra,
                 endpoint=self._model._endpoint,
                 voice=self._model._voice,
                 turn_detection=self._model._turn_detection,
@@ -505,6 +546,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         response_metadata: NotGivenOr[Mapping[str, str]],
         tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]],
         truncation: NotGivenOr[r.Truncation],
+        speed: NotGivenOr[float],
+        turn_detection: NotGivenOr[r.TurnDetectionUpdate],
     ) -> None:
         """Apply queued options in order and report recoverable refusals as events."""
         if previous is not None:
@@ -518,6 +561,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                     response_metadata=response_metadata,
                     tool_fillers=tool_fillers,
                     truncation=truncation,
+                    speed=speed,
+                    turn_detection=turn_detection,
                 )
             )
         except (PrismError, RimeInputError, RimeResourceLimitError) as error:
@@ -543,6 +588,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         response_metadata: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
         tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]] = NOT_GIVEN,
         truncation: NotGivenOr[r.Truncation] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[r.TurnDetectionUpdate] = NOT_GIVEN,
     ) -> None:
         # A cancelled caller still waits for acknowledgment so local settings cannot
         # contradict an update the server accepted. No update is replayed.
@@ -558,6 +605,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                 response_metadata=response_metadata,
                 tool_fillers=tool_fillers,
                 truncation=truncation,
+                speed=speed,
+                turn_detection=turn_detection,
             )
         )
 
@@ -570,6 +619,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         response_metadata: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
         tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]] = NOT_GIVEN,
         truncation: NotGivenOr[r.Truncation] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[r.TurnDetectionUpdate] = NOT_GIVEN,
     ) -> None:
         """Send settings and retain local state only after acknowledgment."""
         async with self._settings_lock:
@@ -590,9 +641,17 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                         voice,
                         tool_fillers,
                         truncation,
+                        speed,
+                        turn_detection,
                     )
                 ):
+                    extra: dict[str, Any] = {}
+                    if is_given(speed):
+                        extra["speed"] = speed
+                    if is_given(turn_detection):
+                        extra["turn_detection"] = turn_detection
                     await sdk.update(
+                        **extra,
                         truncation=cast(r.Truncation, truncation) if is_given(truncation) else None,
                         instructions=instructions if is_given(instructions) else None,
                         tools=definitions if is_given(tools) or is_given(tool_fillers) else None,
@@ -601,6 +660,10 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                     self._tool_list = new_tools
                     self._tool_fillers = fillers
                     self._model._tool_fillers = dict(fillers)
+                    if is_given(speed):
+                        self._model._speed = speed
+                    if is_given(turn_detection):
+                        self._model._merge_turn_update(turn_detection)
                     if is_given(voice):
                         self._model._voice = voice
                     if is_given(truncation):
@@ -619,15 +682,25 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         response_metadata: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
         tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]] = NOT_GIVEN,
         truncation: NotGivenOr[r.Truncation] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        turn_detection: NotGivenOr[r.TurnDetectionUpdate] = NOT_GIVEN,
     ) -> None:
-        """Set tool choice and queue provider options without waiting for acknowledgment."""
+        """Set tool choice and queue provider options without waiting for acknowledgment.
+
+        An out-of-range speed raises RimeInputError immediately and queues nothing.
+        """
         if self._failure is not None or self._closed:
             self._require()
+        if is_given(speed):
+            _validate_speed(speed)
         if is_given(tool_choice):
             if tool_choice not in (None, "auto", "none"):
                 raise llm.RealtimeError("Prism supports only tool_choice='auto' or 'none'")
             self._tool_choice = "none" if tool_choice == "none" else "auto"
-        if any(is_given(value) for value in (voice, response_metadata, tool_fillers, truncation)):
+        if any(
+            is_given(value)
+            for value in (voice, response_metadata, tool_fillers, truncation, speed, turn_detection)
+        ):
             # Copy caller-owned maps before scheduling an asynchronous operation.
             self._options_task = self._spawn(
                 self._update_model_options(
@@ -638,6 +711,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                     else NOT_GIVEN,
                     tool_fillers=dict(tool_fillers) if is_given(tool_fillers) else NOT_GIVEN,
                     truncation=truncation,
+                    speed=speed,
+                    turn_detection=turn_detection,
                 )
             )
 
@@ -1092,7 +1167,12 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
             stopped = llm.InputSpeechStoppedEvent(user_transcription_enabled=True)
             self.emit("input_speech_stopped", stopped)
         elif isinstance(payload, r.TranscriptDelta):
-            text = self._transcript_deltas.get(payload.item_id, "") + payload.delta
+            cumulative = payload.transcript
+            text = (
+                cumulative
+                if cumulative is not None
+                else self._transcript_deltas.get(payload.item_id, "") + payload.delta
+            )
             if len(text) > 65536 or (
                 payload.item_id not in self._transcript_deltas
                 and len(self._transcript_deltas) >= 128

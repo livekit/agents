@@ -70,15 +70,13 @@ def _items(ctx: llm.ChatContext) -> list[llm.ChatItem]:
     return projected.items
 
 
-def _wire(item: llm.ChatItem, *, validate_text: bool = True) -> r.HistoryItem:
+def _wire(item: llm.ChatItem) -> r.HistoryItem:
     if isinstance(item, llm.ChatMessage):
         if item.role not in ("user", "assistant", "system") or any(
             not isinstance(c, str) for c in item.content
         ):
             raise HistoryUpdateError("Prism history requires user, assistant, or system text")
         text = item.text_content or ""
-        if validate_text and len(text) > 4000:
-            raise HistoryUpdateError("Prism history text must contain at most 4000 characters")
         result: r.HistoryItem = r.HistoryMessage(role=item.role, text=text)
     elif isinstance(item, llm.FunctionCall):
         if not item.call_id or not item.name:
@@ -248,9 +246,7 @@ class PrismHistory:
         )
 
     @staticmethod
-    def validate(
-        ctx: llm.ChatContext, *, existing: set[str] | None = None, unchanged: set[str] | None = None
-    ) -> None:
+    def validate(ctx: llm.ChatContext, *, existing: set[str] | None = None) -> None:
         items = _items(ctx)
         ids: set[str] = set()
         calls: dict[str, str] = {}
@@ -260,7 +256,7 @@ class PrismHistory:
             if item.id in ids:
                 raise HistoryUpdateError("Prism history item IDs must be unique")
             ids.add(item.id)
-            _wire(item, validate_text=item.id not in (unchanged or set()))
+            _wire(item)
             if isinstance(item, llm.FunctionCall):
                 if item.call_id in calls:
                     raise HistoryUpdateError("Prism history call IDs must be unique")
@@ -356,7 +352,7 @@ class PrismHistory:
                     "Shared history requires append order; use replace_chat_ctx"
                 )
             last = positions[item.id]
-            if _wire(previous, validate_text=False) == _wire(item, validate_text=False):
+            if _wire(previous) == _wire(item):
                 continue
             if (
                 isinstance(previous, llm.ChatMessage)
@@ -575,8 +571,7 @@ class PrismHistory:
         unchanged = {
             key
             for key in old_by_id.keys() & new_by_id.keys()
-            if _wire(old_by_id[key], validate_text=False)
-            == _wire(new_by_id[key], validate_text=False)
+            if _wire(old_by_id[key]) == _wire(new_by_id[key])
         }
         completed = {i.call_id for i in old if isinstance(i, llm.FunctionCallOutput)}
         pending = {
@@ -585,7 +580,7 @@ class PrismHistory:
         pending_ids = {
             i.id for i in old if isinstance(i, llm.FunctionCall) and i.call_id in pending
         }
-        self.validate(llm.ChatContext(desired), existing=pending_ids, unchanged=unchanged)
+        self.validate(llm.ChatContext(desired), existing=pending_ids)
         removed = [i for i in old if i.id not in new_by_id]
         added = [i for i in desired if i.id not in old_by_id]
         retained = [i.id for i in old if i.id in new_by_id]
