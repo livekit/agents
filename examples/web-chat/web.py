@@ -1,4 +1,4 @@
-"""The chat page and its tokens, on http://localhost:8000; run it beside the agent."""
+"""The chat page, its tokens and its threads, on http://localhost:8000; run it beside the agent."""
 
 import os
 import re
@@ -13,7 +13,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from livekit.agents.a2a import AgentThreadGrant, Credentials
-from livekit.agents.storage import AgentDBStorage
+from livekit.agents.storage import AgentDBStorage, Thread
 
 load_dotenv()
 
@@ -22,31 +22,68 @@ AGENT = os.environ["LIVEKIT_URL"].replace("ws", "http", 1) + "/agents/web-chat/_
 GRANT_TTL = 15 * 60  # seconds; the page asks again once a token expires
 
 credentials = Credentials(KEY, SECRET)
-threads = AgentDBStorage(api_key=KEY, api_secret=SECRET).threads
+storage = AgentDBStorage(api_key=KEY, api_secret=SECRET)
 
 
-# tokens for one browser, whose id is random and stays in its localStorage: without `thread`,
-# to list and start the browser's threads; with it, to read and continue that one thread, once
-# it is checked to be the browser's
-async def token(request: Request) -> Response:
+# the browser's scope, from the random id the page keeps in its localStorage
+def scope_of(request: Request) -> str | None:
     browser = request.query_params.get("browser", "")
-    if not re.fullmatch(r"[0-9a-f-]{36}", browser):
-        return JSONResponse({"error": "browser must be a UUID"}, status_code=400)
-    scope = f"browser:{browser}"
-    thread = request.query_params.get("thread")
+    return f"browser:{browser}" if re.fullmatch(r"[0-9a-f-]{36}", browser) else None
+
+
+# whether `thread` is one of the browser's threads
+async def owns(scope: str, thread: str) -> bool:
+    if not re.fullmatch(r"AT_\w+", thread):
+        return False
+    return (await storage.threads.get_thread(thread)).scope == scope
+
+
+# a token to send: without `thread`, to start a thread in the browser's scope; with it, to
+# continue that thread
+async def token(request: Request) -> Response:
+    scope, thread = scope_of(request), request.query_params.get("thread")
+    if scope is None:
+        return Response(status_code=400)
     if thread is None:
-        grant = AgentThreadGrant(scope=scope, list=True, create=True, write=True)
-    elif re.fullmatch(r"AT_\w+", thread) and (await threads.get_thread(thread)).scope == scope:
+        grant = AgentThreadGrant(scope=scope, create=True, write=True)
+    elif await owns(scope, thread):
         grant = AgentThreadGrant(thread_ids=[thread], read=True, write=True)
     else:
-        return JSONResponse({"error": "not this browser's thread"}, status_code=403)
+        return Response(status_code=403)
     token = credentials.thread_grant_token(grant, ttl_seconds=GRANT_TTL)
-    return JSONResponse({"token": token, "ttl": GRANT_TTL, "scope": scope, "agent": AGENT})
+    return JSONResponse({"token": token, "ttl": GRANT_TTL, "agent": AGENT})
+
+
+# the browser's threads, newest first
+async def list_threads(request: Request) -> Response:
+    scope = scope_of(request)
+    if scope is None:
+        return Response(status_code=400)
+    page = await storage.threads.list_threads(scope=scope, limit=50)
+    return JSONResponse([{"id": t.thread_id, "created_at": t.created_at} for t in page.threads])
+
+
+# one thread's user and assistant messages, in order
+async def thread_messages(request: Request) -> Response:
+    scope, thread = scope_of(request), request.path_params["thread"]
+    if scope is None or not await owns(scope, thread):
+        return Response(status_code=403)
+    messages, after = [], None
+    while after != "":
+        page = await Thread(storage, thread).list_items(after=after)
+        for entry in page.items:
+            item = entry.item
+            if item.type == "message" and item.role in ("user", "assistant"):
+                messages.append({"role": item.role, "text": item.text_content or ""})
+        after = page.after
+    return JSONResponse(messages)
 
 
 app = Starlette(
     routes=[
         Route("/token", token),
+        Route("/threads", list_threads),
+        Route("/threads/{thread}", thread_messages),
         Mount("/", StaticFiles(directory=Path(__file__).parent / "web", html=True)),
     ]
 )

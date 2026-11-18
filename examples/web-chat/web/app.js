@@ -3,62 +3,43 @@ const $ = (id) => document.getElementById(id);
 const grants = {};
 let thread = null;
 
-// A token from web.py, renewed once it expires: for one thread of this browser, or with
-// no thread, for listing and starting the browser's threads.
+// A token to send, from web.py and renewed once it expires: for one thread of this browser,
+// or with no thread, to start a new one.
 async function auth(id = "") {
   const grant = grants[id];
   if (grant && Date.now() < grant.expires) return grant;
-  const res = await fetch(`token?browser=${browser}${id && `&thread=${id}`}`);
-  if (!res.ok) throw new Error(`token: ${res.status}`);
-  const fresh = await res.json();
+  const fresh = await get(`token?browser=${browser}${id && `&thread=${id}`}`);
   fresh.expires = Date.now() + (fresh.ttl - 30) * 1000;
   return (grants[id] = fresh);
 }
 
-// The threads REST of LiveKit's public API; `p_` is the grant's own project.
-const API = "https://api.livekit.cloud";
-
-async function threadsApi(path, id = "") {
-  const { token } = await auth(id);
-  const res = await fetch(`${API}/v0/projects/p_/threads${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) throw new Error(`threads API: ${res.status}`);
+// web.py reads the threads for the page, from the threads API.
+async function get(path) {
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`${path.split("?")[0]}: ${res.status}`);
   return res.json();
 }
 
 async function listThreads() {
-  const { scope } = await auth();
-  const { items = [] } = await threadsApi(`?scope=${encodeURIComponent(scope)}&page.pageSize=50`);
-  $("threads").replaceChildren(...items.map((t) => {
+  const threads = await get(`threads?browser=${browser}`);
+  $("threads").replaceChildren(...threads.map((t) => {
     const li = document.createElement("li");
-    li.textContent = new Date(t.createdAt).toLocaleString([], {
+    li.textContent = new Date(t.created_at * 1000).toLocaleString([], {
       dateStyle: "medium",
       timeStyle: "short",
     });
-    li.classList.toggle("open", t.threadId === thread);
-    li.onclick = () => open(t.threadId).catch(showError);
+    li.classList.toggle("open", t.id === thread);
+    li.onclick = () => open(t.id).catch(showError);
     return li;
   }));
 }
 
-// Renders a thread from its items, the source of truth: user and assistant messages only.
+// Renders a thread from its messages, the source of truth.
 async function open(id) {
   thread = id;
-  const items = [];
-  let cursor = "";
-  do {
-    const page = await threadsApi(`/${id}/items?page.pageSize=100&page.cursor=${cursor}`, id);
-    items.push(...(page.items ?? []));
-    cursor = page.pageInfo?.nextCursor ?? "";
-  } while (cursor);
+  const messages = await get(`threads/${id}?browser=${browser}`);
   $("messages").replaceChildren();
-  for (const { item } of items) {
-    const message = item?.message;
-    if (message?.role === "USER" || message?.role === "ASSISTANT") {
-      bubble(message.role.toLowerCase(), message.content.map((c) => c.text ?? "").join(""));
-    }
-  }
+  for (const { role, text } of messages) bubble(role, text);
   await listThreads();
 }
 
