@@ -708,7 +708,7 @@ impl Conn {
                 }
                 let notice = WsdbError::server(e.clone());
                 match ErrorCode(e.code) {
-                    ErrorCode::NOT_FOUND => self.gone(generation, &resp, &notice),
+                    ErrorCode::NOT_FOUND => self.gone(generation, &notice),
                     _ => self.drain(generation, None),
                 }
                 Err(notice)
@@ -779,20 +779,26 @@ impl Conn {
     }
 
     /// The server's `not_found` notice on socket `generation`: the database was deleted. Each
-    /// request still unanswered there applied nothing and fails with the notice; every later call
-    /// fails with it too, and the connection closes without a redial.
-    fn gone(&self, generation: u64, frame: &pb::ServerMessage, notice: &WsdbError) {
-        {
+    /// request still unanswered there applied nothing: it is drained, and its resend fails unsent
+    /// with the notice, as does every later call; the connection closes without a redial.
+    fn gone(&self, generation: u64, notice: &WsdbError) {
+        let unanswered: Vec<_> = {
             let mut st = self.0.state.lock();
             st.fatal = Some(notice.clone());
-            for pending in st.pending.values().filter(|p| p.socket == Some(generation)) {
-                if pending.answers.try_send(Answer::Frame(frame.clone())).is_err() {
-                    log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb request dropped meanwhile");
-                }
+            st.pending
+                .values()
+                .filter(|p| p.socket == Some(generation))
+                .map(|p| p.answers.clone())
+                .collect()
+        };
+        log::info!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb database deleted: connection closed");
+        // closed first, so a drained request's resend finds the notice
+        self.close();
+        for answers in unanswered {
+            if answers.try_send(Answer::Drained).is_err() {
+                log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb request dropped meanwhile");
             }
         }
-        log::info!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb database deleted: connection closed");
-        self.close();
     }
 
     /// A retiring socket with nothing in flight on it is settled: its read ends.
@@ -1204,9 +1210,13 @@ struct Request<'a> {
 }
 
 impl Request<'_> {
-    /// The next answer; `Drained` only before the first, when the request is sent again.
+    /// The next answer; `Drained` only before the first, when the request is sent again. After
+    /// one, a drain fails it with what closed the connection, else `Disconnected`.
     async fn next(&mut self) -> Result<pb::ServerMessage, WsdbError> {
         match self.conn.wait(&mut self.rx, self.deadline).await {
+            Err(WsdbError::Drained) if self.heard && self.conn.is_closed() => {
+                Err(self.conn.closed_error())
+            }
             Err(WsdbError::Drained) if self.heard => Err(WsdbError::Disconnected),
             answer => {
                 self.heard |= answer.is_ok();
