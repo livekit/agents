@@ -121,8 +121,10 @@ class RecordingOptions(TypedDict, total=False):
     """Granular control over which recording features are active.
 
     Recording keys default to ``True`` when not specified, so ``{"logs": False}``
-    means "record everything except logs." Redaction defaults to the project setting;
-    ``False`` is ignored when redaction is enabled globally for the project.
+    means "record everything except logs." Outside simulations, redaction defaults to
+    the project setting; ``False`` is ignored when redaction is enabled globally for
+    the project. Simulations ignore the project setting and enable redaction only
+    with ``record={"redaction": True}``.
 
     Can be passed directly to :pymethod:`AgentSession.start(record=...)`:
 
