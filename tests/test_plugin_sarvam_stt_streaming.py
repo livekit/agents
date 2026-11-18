@@ -2015,3 +2015,181 @@ async def test_process_audio_forwards_small_frames_regardless_of_stream_type(
     assert stt_streaming.AUDIO_CHUNK_MS <= 100
     assert len(sent) == 1000 // stt_streaming.AUDIO_CHUNK_MS
     assert {len(payload) for payload in sent} == {expected_bytes}
+
+
+def _make_diarized_stream(start_time_offset: float = 0.0) -> stt_streaming.RealtimeSpeechStream:
+    stream = _make_stream()
+    stream._opts = stt_streaming.replace(stream._opts, model="saaras:v4", with_diarization=True)
+    stream._input_ch = SimpleNamespace(start_time_offset=start_time_offset)
+    return stream
+
+
+# Captured from a live saaras:v4 session with `with_diarization=true` (trimmed).
+_DIARIZED_PARTIAL = {
+    "event": "transcript.partial",
+    "utterance_idx": 1,
+    "language": "en-IN",
+    "text": "And I am",
+    "words": [
+        {"word": "And", "start_s": 4.164, "end_s": 4.244, "stable": True, "speaker": "spk_0",
+         "speaker_prob": 0.996, "speaker_status": "ok"},
+        {"word": "I", "start_s": 4.48, "end_s": 4.56, "stable": True, "speaker": "spk_0",
+         "speaker_prob": 0.998, "speaker_status": "ok"},
+        {"word": "am", "start_s": 4.88, "end_s": 4.96, "stable": False, "speaker": "spk_0",
+         "speaker_prob": 0.995, "speaker_status": "ok"},
+    ],
+}  # fmt: skip
+
+_DIARIZED_FINAL = {
+    "event": "transcript.final",
+    "utterance_idx": 0,
+    "text": "Namaskar.",
+    "language": "en-IN",
+    "start_s": 1.716,
+    "end_s": 4.0,
+    "speech_start_s": 2.016,
+    "speech_end_s": 4.0,
+    "source": "offline",
+    "speaker_attribution": "word",
+    "words": [
+        {"word": "Namaskar.", "start_s": 1.986, "end_s": 2.766, "speaker": "spk_0",
+         "speaker_prob": 0.973, "speaker_status": "ok"},
+    ],
+    "turns": [{"speaker": "spk_0", "start_s": 1.986, "end_s": 2.766, "text": "Namaskar."}],
+}  # fmt: skip
+
+
+def test_realtime_ws_url_sends_with_diarization_only_when_enabled() -> None:
+    base = stt_streaming.SARVAM_STT_REALTIME_URL
+    off = stt_streaming.RealtimeSTTOptions(language="hi-IN", api_key="sk_test", model="saaras:v4")
+    on = stt_streaming.replace(off, with_diarization=True)
+
+    assert "with_diarization" not in _parse_ws_url(stt_streaming._build_realtime_ws_url(base, off))
+    assert (
+        _parse_ws_url(stt_streaming._build_realtime_ws_url(base, on))["with_diarization"] == "true"
+    )
+
+
+def test_with_diarization_sets_word_aligned_capabilities() -> None:
+    plain = stt_streaming.STTRealtime(api_key="sk_test", model="saaras:v4")
+    diarized = stt_streaming.STTRealtime(
+        api_key="sk_test", model="saaras:v4", with_diarization=True
+    )
+
+    assert plain.capabilities.diarization is False
+    assert plain.capabilities.aligned_transcript is False
+    assert diarized.capabilities.diarization is True
+    assert diarized.capabilities.aligned_transcript == "word"
+
+
+def test_with_diarization_survives_instance_option_updates() -> None:
+    diarized = stt_streaming.STTRealtime(
+        api_key="sk_test", model="saaras:v4", with_diarization=True
+    )
+
+    diarized.update_options(language="en-IN", return_timestamps=True)
+
+    assert diarized._opts.with_diarization is True
+
+
+def test_diarized_partial_carries_word_times_offset_to_the_session() -> None:
+    stream = _make_diarized_stream(start_time_offset=10.0)
+
+    assert stream._send_transcript_event(
+        stt_streaming.stt.SpeechEventType.INTERIM_TRANSCRIPT, _DIARIZED_PARTIAL
+    )
+
+    speech = stream._event_ch.events[-1].alternatives[0]
+    assert speech.words == ["And", "I", "am"]
+    assert [w.start_time for w in speech.words] == pytest.approx([14.164, 14.48, 14.88])
+    assert [w.end_time for w in speech.words] == pytest.approx([14.244, 14.56, 14.96])
+    assert {w.start_time_offset for w in speech.words} == {10.0}
+    assert {w.speaker_id for w in speech.words} == {"spk_0"}
+    assert speech.speaker_id == "spk_0"
+
+
+def test_diarized_final_sets_speaker_words_and_metadata() -> None:
+    stream = _make_diarized_stream()
+
+    assert stream._send_transcript_event(
+        stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT, _DIARIZED_FINAL
+    )
+
+    speech = stream._event_ch.events[-1].alternatives[0]
+    assert speech.start_time == pytest.approx(1.716)
+    assert speech.end_time == pytest.approx(4.0)
+    assert speech.speaker_id == "spk_0"
+    assert speech.words == ["Namaskar."]
+    assert speech.words[0].start_time == pytest.approx(1.986)
+    assert speech.words[0].end_time == pytest.approx(2.766)
+    assert speech.metadata["speaker_attribution"] == "word"
+    assert speech.metadata["source"] == "offline"
+    assert speech.metadata["turns"] == _DIARIZED_FINAL["turns"]
+
+
+def test_diarized_final_with_two_speakers_and_an_untimed_word() -> None:
+    stream = _make_diarized_stream()
+    data = {
+        "event": "transcript.final",
+        "utterance_idx": 3,
+        "text": "For the record.",
+        "start_s": 12.48,
+        "end_s": 14.032,
+        "source": "streaming",
+        "fallback": True,
+        "speaker_attribution": "word",
+        "words": [
+            {"word": "For", "start_s": 12.9, "end_s": 12.98, "speaker": "spk_0"},
+            {"word": "the", "start_s": None, "end_s": None, "speaker": "spk_0"},
+            {"word": "record.", "start_s": 13.2, "end_s": 13.52, "speaker": "spk_1"},
+        ],
+        "turns": [
+            {"speaker": "spk_0", "start_s": 12.9, "end_s": 13.14, "text": "For the"},
+            {"speaker": "spk_1", "start_s": 13.2, "end_s": 13.52, "text": "record."},
+        ],
+    }
+
+    assert stream._send_transcript_event(stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT, data)
+
+    speech = stream._event_ch.events[-1].alternatives[0]
+    assert speech.speaker_id is None
+    assert speech.words == ["For", "the", "record."]
+    assert not stt_streaming.is_given(speech.words[1].start_time)
+    assert not stt_streaming.is_given(speech.words[1].end_time)
+    assert [w.speaker_id for w in speech.words] == ["spk_0", "spk_0", "spk_1"]
+    assert speech.metadata["fallback"] is True
+
+
+def test_diarized_final_without_speaker_attribution_has_no_words() -> None:
+    stream = _make_diarized_stream()
+    data = {
+        "event": "transcript.final",
+        "utterance_idx": 0,
+        "text": "Hello.",
+        "start_s": 0.4,
+        "end_s": 1.2,
+        "speaker_attribution": "none",
+        "turns": [{"speaker": None, "start_s": 0.4, "end_s": 1.2, "text": "Hello."}],
+    }
+
+    assert stream._send_transcript_event(stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT, data)
+
+    speech = stream._event_ch.events[-1].alternatives[0]
+    assert speech.words is None
+    assert speech.speaker_id is None
+    assert speech.metadata["speaker_attribution"] == "none"
+
+
+def test_undiarized_final_keeps_its_shape() -> None:
+    stream = _make_stream()
+
+    assert stream._send_transcript_event(
+        stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT,
+        {"event": "transcript.final", "utterance_idx": 0, "text": "Namaskar.",
+         "start_s": 1.716, "end_s": 4.0},
+    )  # fmt: skip
+
+    speech = stream._event_ch.events[-1].alternatives[0]
+    assert speech.words is None
+    assert speech.speaker_id is None
+    assert speech.metadata == {"utterance_idx": 0}
