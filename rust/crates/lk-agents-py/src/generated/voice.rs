@@ -3410,7 +3410,7 @@ impl VoiceSession {
         crate::py_calls::check_pid()?;
         let frame =
             crate::generated::records::voice_session::update_agent_args_from_py(frame.as_any())?;
-        let call = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::update_agent(&self.0, frame)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        let call = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::update_agent(&self.0, frame)).map_err(|e: ::lk_agents_abi::voice::session::AgentRefused| <::lk_agents_abi::voice::session::AgentRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         crate::py_calls::future_into_py(py, async move {
             let out = call.await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -4642,7 +4642,7 @@ impl CoreSessionOwner {
                 })
             })
             .transpose()?;
-        py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::update_agent(&self.0, agent, frame, chat_ctx)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::update_agent(&self.0, agent, frame, chat_ctx)).map_err(|e: ::lk_agents_abi::voice::session::AgentRefused| <::lk_agents_abi::voice::session::AgentRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
@@ -14006,6 +14006,21 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::Sessio
             _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
                 self,
             )),
+        }
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::ModelSwapRefused {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::AgentRefused {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        match self {
+            Self::Session(inner) => crate::py_errors::HostException::to_py_err(inner),
+            Self::Model(inner) => crate::py_errors::HostException::to_py_err(inner),
         }
     }
 }

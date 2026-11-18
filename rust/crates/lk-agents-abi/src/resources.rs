@@ -47,6 +47,16 @@ pub struct RealtimeRef {
     pub capabilities: RealtimeCapabilities,
 }
 
+/// A realtime model an agent runs on, registered each time a frame names it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RealtimeModelRef {
+    pub id: ResourceId,
+    pub provider: ProviderId,
+    pub capabilities: RealtimeCapabilities,
+    /// The model object: an agent naming the model the session runs keeps its connection.
+    pub instance: usize,
+}
+
 /// A video input, registered under a new id each time it is handed over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoInputRef {

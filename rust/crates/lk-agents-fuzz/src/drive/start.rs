@@ -849,6 +849,7 @@ fn plain_frame(
         voice_agent: fakes::frame(registry, agent, tools),
         chat_ctx: None,
         llm: Maybe::NotGiven,
+        realtime: None,
         tts: Maybe::NotGiven,
         stt: Maybe::NotGiven,
         vad: Maybe::NotGiven,

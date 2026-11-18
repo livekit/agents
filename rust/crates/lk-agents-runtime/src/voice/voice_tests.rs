@@ -625,9 +625,10 @@ impl lk_agents_abi::RealtimeSession for RealtimeProbe {
 async fn abandoned_realtime_connection_and_its_pending_pump_close() {
     let (mut runtime, _, _) = session("abandoned-realtime").await;
     let probe = Arc::new(RealtimeProbe::default());
-    runtime.realtime =
-        Some(legs::RealtimeConnection::new(probe.clone(), &runtime.shared.background()));
-    runtime.pump_realtime(probe.clone());
+    let id = lk_agents_abi::resources::ResourceId(1);
+    let connection = legs::RealtimeConnection::new(probe.clone(), &runtime.shared.background());
+    runtime.realtime.insert(id, connection);
+    runtime.pump_realtime(id, probe.clone());
     tokio::task::yield_now().await;
     assert!(probe.reading.load(std::sync::atomic::Ordering::SeqCst));
     drop(runtime);
@@ -659,8 +660,8 @@ async fn realtime_close_is_owned_once_even_when_task_admission_is_refused() {
     tasks.close();
     let mut connection = legs::RealtimeConnection::new(probe.clone(), &on(&builder, &tasks));
     let tx = crate::voice::session::Tx::disconnected();
-    connection.close(tx.clone());
-    connection.close(tx);
+    connection.close(tx.clone(), lk_agents_abi::resources::ResourceId(1));
+    connection.close(tx, lk_agents_abi::resources::ResourceId(1));
     drop(connection);
     tokio::time::timeout(lk_agents_abi::HOST_TEARDOWN_TIMEOUT, probe.settled.notified())
         .await
@@ -718,7 +719,8 @@ async fn cancelling_a_polled_realtime_close_continues_the_same_operation() {
     let probe = Arc::new(RealtimeProbe { release: Some(release.clone()), ..Default::default() });
     let tasks = Arc::<lk_agents_net::task::TaskSet>::default();
     let mut connection = legs::RealtimeConnection::new(probe.clone(), &on(&builder, &tasks));
-    connection.close(crate::voice::session::Tx::disconnected());
+    connection
+        .close(crate::voice::session::Tx::disconnected(), lk_agents_abi::resources::ResourceId(1));
     probe.closing.notified().await;
     tasks.close();
     tokio::task::yield_now().await;

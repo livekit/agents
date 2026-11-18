@@ -47,6 +47,17 @@ impl RealtimeSessionState {
     pub fn new(caps: RealtimeCapabilities) -> Self {
         RealtimeSessionState { caps, ..RealtimeSessionState::default() }
     }
+
+    /// Another session replaces this one, its requests settled: the keys still under a timer are
+    /// returned to be cleared, and the key sequence carries on, so no old timer names a request
+    /// of the new session.
+    pub(super) fn replace(&mut self, caps: RealtimeCapabilities) -> Vec<RequestKey> {
+        let mut timed: Vec<RequestKey> = self.cancelled_requests.values().copied().collect();
+        timed.extend(self.pending.values().map(|pending| pending.key));
+        timed.extend(self.auto_follow_up.map(|(_, key)| key));
+        *self = RealtimeSessionState { caps, next_key: self.next_key, ..Self::default() };
+        timed
+    }
 }
 
 /// The user's audio as replies answer it: a reply's `e2e_latency` runs from the last speech no

@@ -34,7 +34,7 @@ use lk_agents_abi::voice::events::{CloseReason, HostWire};
 use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::room_owner::RoomIo;
 use lk_agents_abi::voice::session::{
-    CommandRefused, OpenRefused, SessionRefused, StartFailed, UpdateAgentArgs,
+    CommandRefused, ModelSwapRefused, OpenRefused, SessionRefused, StartFailed, UpdateAgentArgs,
 };
 use lk_agents_abi::voice::session_effects::{FillerReply, SessionEvents, SessionHooks};
 use lk_agents_abi::voice::session_options::SessionConnOptions;
@@ -96,6 +96,9 @@ pub struct VoiceSession {
     report: FinalReport,
     /// What the host's events have delivered so far.
     delivered: delivered::Delivered,
+    /// The capabilities of the realtime model the session opened on, `None` on a pipeline: what
+    /// every agent's model keeps.
+    realtime: Option<lk_agents_abi::llm::realtime::RealtimeCapabilities>,
 }
 
 /// What a deterministic simulation needs from a session it drives, installed before `start()`.
@@ -762,7 +765,18 @@ impl VoiceSession {
     }
 
     /// The agent `frame` describes, its providers registered, as `update_agent` installs it.
-    pub fn frame(&self, frame: UpdateAgentArgs) -> AgentUpdate {
+    /// Refused when its model would change the kind of model or the pipeline the session opened
+    /// on.
+    pub fn frame(&self, frame: UpdateAgentArgs) -> Result<AgentUpdate, ModelSwapRefused> {
+        let realtime = frame
+            .realtime
+            .clone()
+            .map(|leg| class::realtime_model(leg, self.anchor, Arc::clone(&self.spawner)));
+        let caps = realtime.as_ref().map(|model| model.capabilities());
+        lk_agents_voice::agent_session::machine::activity::realtime::model_swap_allowed(
+            self.realtime.as_ref(),
+            caps.as_ref(),
+        )?;
         let UpdateAgentArgs {
             instructions,
             dynamic_instructions,
@@ -773,6 +787,7 @@ impl VoiceSession {
             voice_agent,
             chat_ctx,
             llm,
+            realtime: _,
             tts,
             stt,
             vad,
@@ -791,7 +806,7 @@ impl VoiceSession {
         );
         let nodes = self.nodes(llm_node, tts_node, stt_node);
         let ModelRefs { llm, tts, stt, vad } = self.swap(llm, tts, stt, vad, &nodes);
-        AgentUpdate {
+        Ok(AgentUpdate {
             agent,
             instructions: Instructions::plain(instructions),
             dynamic_instructions: dynamic_instructions
@@ -803,6 +818,7 @@ impl VoiceSession {
             },
             chat_ctx,
             llm,
+            realtime: realtime.map(|model| self.resources.register_realtime_model(model)),
             tts,
             stt,
             vad,
@@ -814,7 +830,7 @@ impl VoiceSession {
             },
             call: None,
             activation: None,
-        }
+        })
     }
 
     /// `update`'s toolsets set up first, in call order: the turn is taken now. Then the command

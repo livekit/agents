@@ -59,13 +59,27 @@ impl RealtimeConnection {
         Self { session, background: background.clone() }
     }
 
-    pub(super) fn close(&mut self, tx: crate::voice::session::Tx) {
+    /// `aclose()` off the loop; a clean close comes back as the session's `RealtimeWake::Closed`.
+    pub(super) fn close(&mut self, tx: crate::voice::session::Tx, id: ResourceId) {
         let Some(session) = self.session.take() else { return };
         self.background.cleanup("realtime close", async move {
             if session.close().await == Closed::Clean {
-                let _ = tx.send(lk_agents_voice::agent_session::machine::activity::realtime::RealtimeWake::Closed);
+                let wake = lk_agents_voice::agent_session::machine::activity::realtime::RealtimeWake::Closed;
+                let _ = tx.send(VoiceEvent::RealtimeSession { session: id, wake });
             }
         });
+    }
+}
+
+/// A session a switch's model opened, owned from its open: dropped unadopted, it closes.
+pub struct OpenedRealtime {
+    connection: RealtimeConnection,
+    session: Arc<dyn RealtimeSession>,
+}
+
+impl OpenedRealtime {
+    pub(super) fn into_parts(self) -> (RealtimeConnection, Arc<dyn RealtimeSession>) {
+        (self.connection, self.session)
     }
 }
 
@@ -253,7 +267,12 @@ pub(super) enum PendingLeg {
 
 impl VoiceRuntime {
     /// Preserve the provider's event order, including failures and its final end notification.
-    pub(super) fn pump_realtime(&self, session: Arc<dyn lk_agents_abi::RealtimeSession>) {
+    /// The socket's events, each tagged with the session `id` they came from.
+    pub(super) fn pump_realtime(
+        &self,
+        id: ResourceId,
+        session: Arc<dyn lk_agents_abi::RealtimeSession>,
+    ) {
         let tx = self.reports.clone();
         let closing = self.shared.closing.clone();
         self.spawn("realtime events", async move {
@@ -266,14 +285,81 @@ impl VoiceRuntime {
                     event = session.next_event() => event,
                 };
                 let Some(event) = event else {
-                    let _ = tx.send(RealtimeWake::Ended);
+                    let wake = RealtimeWake::Ended;
+                    let _ = tx.send(VoiceEvent::RealtimeSession { session: id, wake });
                     return;
                 };
-                if tx.send(RealtimeWake::Event(event)).is_err() {
+                let wake = RealtimeWake::Event(event);
+                if tx.send(VoiceEvent::RealtimeSession { session: id, wake }).is_err() {
                     return;
                 }
             }
         });
+    }
+
+    /// Opens `model`'s session off the loop under `span`, with the session's turn-detection
+    /// choice and tools, and reports it as `RealtimeOpened`. A close abandons an open still in
+    /// flight; a session it opened is closed.
+    pub(super) fn open_realtime(
+        &mut self,
+        open: u64,
+        model: ResourceId,
+        turn_detection_disabled: bool,
+        span: Option<lk_agents_abi::telemetry::record::SpanContext>,
+    ) {
+        let tx = self.reports.clone();
+        let Some(model) = self.shared.resources.realtime_model(model) else {
+            let error = ProviderError::Local(lk_agents_abi::errors::ApiError::new(
+                lk_agents_abi::errors::ErrorKind::InvalidRequest,
+                "the realtime model is no longer available",
+            ));
+            let provider = lk_agents_abi::ProviderId::of_label("realtime");
+            let _ = tx.send(crate::voice::events::RealtimeOpened {
+                open,
+                provider,
+                outcome: Err(error),
+            });
+            return;
+        };
+        let cx = self.shared.trace.clone().continuing(span);
+        let tools = self.shared.realtime_tools.clone();
+        let background = self.shared.background();
+        let closing = self.shared.closing.clone();
+        self.spawn("realtime open", async move {
+            // Abandoning the open is safe: a host open dropped unsettled is cancelled.
+            let outcome = tokio::select! {
+                biased;
+                () = closing.cancelled() => return,
+                outcome = model.session(cx, turn_detection_disabled, tools) => outcome,
+            };
+            let outcome = outcome.map(|session| OpenedRealtime {
+                connection: RealtimeConnection::new(session.clone(), &background),
+                session,
+            });
+            let provider = model.id();
+            // A refused send drops the opened session, which closes it, joined by the session.
+            let _ = tx.send(crate::voice::events::RealtimeOpened { open, provider, outcome });
+        });
+    }
+
+    /// An opened session joins the table and is read; the core decides whether it is used.
+    pub(super) fn adopt_realtime(
+        &mut self,
+        opened: crate::voice::events::RealtimeOpened,
+    ) -> VoiceEvent {
+        let crate::voice::events::RealtimeOpened { open, provider, outcome } = opened;
+        let outcome = outcome.map(|opened| {
+            let (connection, session) = opened.into_parts();
+            let resources = &self.shared.resources;
+            let reference = resources.register_realtime(session.clone(), provider.clone());
+            let sink = resources
+                .register_audio_sink(Arc::new(RealtimeAudioSink { session: session.clone() }));
+            self.realtime.insert(reference.id, connection);
+            self.shared.realtime_spans.set_model(Some(provider));
+            self.pump_realtime(reference.id, session);
+            (reference, sink)
+        });
+        VoiceEvent::RealtimeOpened { open, outcome }
     }
 
     /// The legs the session opens with: the opening streams' drains and the interruption

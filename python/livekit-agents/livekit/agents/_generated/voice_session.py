@@ -106,8 +106,10 @@ class DtmfTaskOptions:
 class UpdateAgentArgs:
     """The agent a host `Agent` describes (`AgentActivity._frame_kwargs`), as `update_agent` and
     `run_voice_task` install it. Each provider is three-state: absent keeps the leg, `None` removes
-    it, an object replaces it. `chat_ctx` replaces when present. The tools are one toolset,
-    replaced together because the runner is per-agent. `turn_handling` is the agent layer.
+    it, an object replaces it. `realtime` is the realtime model the agent runs on, on a session
+    opened on one; `None` on a pipeline session. `chat_ctx` replaces when present. The tools are
+    one toolset, replaced together because the runner is per-agent. `turn_handling` is the agent
+    layer.
     `llm_node`, `tts_node` and `stt_node` are the agent's overrides, each over the leg given beside
     it: a leg kept from the previous agent keeps that agent's node. `transcription_node`
     replaces the previous agent's.
@@ -125,6 +127,7 @@ class UpdateAgentArgs:
     """The agent as its tools are hosted: its definition (retry budgets) and its callbacks."""
     chat_ctx: list[ChatItem] | None = None
     llm: NotGivenOr[LLM | None] = NOT_GIVEN
+    realtime: RealtimeLeg | None = None
     tts: NotGivenOr[TTS | None] = NOT_GIVEN
     stt: NotGivenOr[STT | None] = NOT_GIVEN
     vad: NotGivenOr[VAD | None] = NOT_GIVEN

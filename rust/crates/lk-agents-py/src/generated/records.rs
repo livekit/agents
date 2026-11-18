@@ -29361,6 +29361,13 @@ pub mod voice_session {
                     .map(::lk_agents_abi::Maybe::Given)
                 }
             })?,
+            realtime: crate::py_values::attr_with(obj, "UpdateAgentArgs", "realtime", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::llm_fallback::realtime_leg_from_py(v)).map(Some)
+                }
+            })?,
             tts: crate::py_values::attr_with(obj, "UpdateAgentArgs", "tts", |v| {
                 if crate::py_values::is_not_given(v)? {
                     Ok(::lk_agents_abi::Maybe::NotGiven)

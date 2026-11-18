@@ -35,8 +35,10 @@ pub struct SessionCores {
     /// The interruption detector, whose verdicts the executor pumps into the queue.
     pub interruption:
         Option<Arc<dyn lk_agents_voice::agent_session::machine::activity::false_interruption::InterruptionPort>>,
-    /// The opened realtime session whose events are read after the executor adopts the cores.
-    pub realtime_events: Option<Arc<dyn lk_agents_abi::RealtimeSession>>,
+    /// The opened realtime session, by its id, whose events are read after the executor adopts
+    /// the cores.
+    pub realtime_events:
+        Option<(lk_agents_abi::resources::ResourceId, Arc<dyn lk_agents_abi::RealtimeSession>)>,
     /// The room's events and the room IO's, forwarded into the queue until `Closing`.
     pub room_events:
         (Option<Rx<RoomEvent>>, Option<Arc<dyn lk_agents_abi::voice::room_owner::RoomIo>>),
@@ -362,7 +364,6 @@ impl DriverBuilder {
             .await?;
         self.install_legs(&mut sinks, opened);
         let realtime = self.open_realtime(executor, &mut sinks, cx).await?;
-        let realtime_events = realtime.as_ref().map(|realtime| Arc::clone(&realtime.session));
         let Sinks { by_channel: sinks, forwarder } = sinks;
 
         let audio_in =
@@ -386,16 +387,19 @@ impl DriverBuilder {
         let time = self.time.clone();
         let interruption = self.interruption.take();
         let eot = self.eot.take();
-        let rt_model = self.realtime.as_ref().map(|model| model.id());
-        shared.realtime_spans.set_model(rt_model.clone());
-        let (rt_session, rt_caps, rt_disabled, rt_resolved) = match realtime.zip(rt_model) {
-            Some((realtime, model)) => (
-                Some(self.resources.register_realtime(realtime.session, model)),
-                realtime.caps,
-                realtime.disabled,
-                realtime.resolved,
-            ),
-            None => (None, Default::default(), false, self.config.effective().turn.owner()),
+        let rt_model =
+            self.realtime.clone().map(|model| self.resources.register_realtime_model(model));
+        shared.realtime_spans.set_model(rt_model.as_ref().map(|model| model.provider.clone()));
+        let mut realtime_events = None;
+        let (rt_session, rt_caps, rt_disabled, rt_resolved) = match (realtime, &rt_model) {
+            (Some(realtime), Some(model)) => {
+                let session = self
+                    .resources
+                    .register_realtime(realtime.session.clone(), model.provider.clone());
+                realtime_events = Some((session.id, realtime.session));
+                (Some(session), realtime.caps, realtime.disabled, realtime.resolved)
+            }
+            _ => (None, Default::default(), false, self.config.effective().turn.owner()),
         };
         let driver = VoiceDriver::new(InitialSession {
             config: self.config.clone(),
@@ -451,6 +455,7 @@ impl DriverBuilder {
             eot_thresholds: eot.as_ref().map(|detector| detector.thresholds()),
             eot_provider: eot.as_ref().map(|detector| detector.id()),
             rt_session,
+            rt_model,
             rt_caps,
             rt_disabled,
             rt_resolved,
@@ -570,6 +575,7 @@ impl DriverBuilder {
             journal: self.journal.clone(),
             trace,
             realtime_spans: Default::default(),
+            realtime_tools: self.realtime_tools.clone(),
             tracer: self.tracer.clone(),
             report: self.report.clone(),
         });

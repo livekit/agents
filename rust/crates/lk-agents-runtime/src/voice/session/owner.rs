@@ -657,7 +657,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         agent: lk_agents_abi::HostRef,
         frame: Option<lk_agents_abi::voice::session::UpdateAgentArgs>,
         chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
-    ) -> Result<(), SessionRefused> {
+    ) -> Result<(), lk_agents_abi::voice::session::AgentRefused> {
         let Some(session) = self.0.session.get() else {
             if chat_ctx.is_some() {
                 *self.0.start_history.lock() = chat_ctx;

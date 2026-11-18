@@ -24,8 +24,10 @@ pub use realtime_state::response_id_of;
 use realtime_state::{Pending, Phase, Reuse, Route, Swap, bare_reply};
 pub use realtime_state::{RealtimeSessionState, Request, RequestKey, Settled};
 
+mod model_swap;
 pub(crate) mod realtime_state;
 mod turn_detection;
+pub use model_swap::{OpenedSession, model_swap_allowed};
 pub use turn_detection::{
     SessionSide, realtime_turn_detection_mode, server_turn_detection_enabled,
     turn_detection_disabled,

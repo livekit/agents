@@ -40,6 +40,7 @@ fn select(runtime: &mut VoiceRuntime, agent: &str, history: Option<Vec<ChatItem>
         toolset: Default::default(),
         chat_ctx: history,
         llm: Maybe::NotGiven,
+        realtime: None,
         tts: Maybe::NotGiven,
         stt: Maybe::NotGiven,
         vad: Maybe::NotGiven,

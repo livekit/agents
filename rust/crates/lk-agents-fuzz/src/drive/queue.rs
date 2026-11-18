@@ -148,6 +148,7 @@ fn label(event: &VoiceRuntimeEvent) -> &'static str {
         VoiceRuntimeEvent::Report(_) => "Report",
         VoiceRuntimeEvent::AudioInputRouting(_) => "AudioInputRouting",
         VoiceRuntimeEvent::LegOpened(_) => "StreamOpened",
+        VoiceRuntimeEvent::RealtimeOpened(_) => "RealtimeOpened",
         VoiceRuntimeEvent::Input(input) | VoiceRuntimeEvent::Awaited(input, _) => match input {
             VoiceEvent::Host(_) => "Host",
             VoiceEvent::Stt(..) => "Stt",
@@ -155,7 +156,8 @@ fn label(event: &VoiceRuntimeEvent) -> &'static str {
             VoiceEvent::Room(_) => "Room",
             VoiceEvent::RoomIo(_) => "RoomIo",
             VoiceEvent::Gen(_) => "Gen",
-            VoiceEvent::Realtime(_) => "Realtime",
+            VoiceEvent::Realtime(_) | VoiceEvent::RealtimeSession { .. } => "Realtime",
+            VoiceEvent::RealtimeOpened { .. } => "RealtimeOpened",
             VoiceEvent::Eot(..) => "Eot",
             VoiceEvent::Overlap(_) => "Overlap",
             VoiceEvent::ChannelEnded(_) => "ChannelEnded",

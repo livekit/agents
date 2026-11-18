@@ -266,12 +266,10 @@ class SessionAdapter:
             tools_host=self._pool(agent),
             voice_agent=self._voice_agent(agent, task=task),
             stt=binding.stt,
-            llm=(
-                NOT_GIVEN
-                if isinstance(model, llm.RealtimeModel) and not is_given(agent._llm)
-                # an agent's own model reaches the core as it is, whatever its kind
-                else cast("llm.LLM | None", model)
-            ),
+            # the model the agent runs on, its own or the session's: an agent on another
+            # realtime model than the connected one replaces the connection
+            llm=NOT_GIVEN if isinstance(model, llm.RealtimeModel) else model,
+            realtime=model if isinstance(model, llm.RealtimeModel) else None,
             tts=binding.tts,
             **self._nodes(agent),
         )
@@ -427,7 +425,7 @@ class SessionHost:
 
         hooks = session._hooks = _AgentHooks(session)
         frame = session._frame(agent)
-        model = frame.llm if is_given(frame.llm) else session._llm
+        model = _VoiceBinding(session, agent).llm
         realtime = model if isinstance(model, llm.RealtimeModel) else None
         keyterm_llm = _detection_llm(session._stt_context)
         session._room = room

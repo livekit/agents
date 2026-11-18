@@ -658,9 +658,9 @@ class FakeRealtime(llm.RealtimeModel):
     session's chat context and the request's instructions returns: a text it speaks or a tool
     call it makes. Keeps each request's ``(chat context, instructions)`` in ``requests``, each
     tool call the framework read in ``calls_read``, and its sessions, each ``configured`` once
-    the session sent it its tools (the end of its frame). With ``dies="at_open"`` each session it
-    opens fails at once with an unrecoverable error; with ``dies="at_reply"`` it fails instead of
-    answering its first reply request."""
+    the session sent it its tools (the end of its frame) and ``closed`` once closed. With
+    ``dies="at_open"`` each session it opens fails at once with an unrecoverable error; with
+    ``dies="at_reply"`` it fails instead of answering its first reply request."""
 
     def __init__(
         self,
@@ -710,6 +710,7 @@ class FakeRealtimeSession(llm.RealtimeSession):
         self._dies = model.dies
         self._chat_ctx = llm.ChatContext.empty()
         self.configured = False
+        self.closed = False
         self._unanswered: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         if self._dies == "at_open":
             self._die()
@@ -803,6 +804,7 @@ class FakeRealtimeSession(llm.RealtimeSession):
         pass
 
     async def aclose(self) -> None:
+        self.closed = True
         if self._unanswered is not None and not self._unanswered.done():
             self._unanswered.set_exception(llm.RealtimeError("the session closed"))
 

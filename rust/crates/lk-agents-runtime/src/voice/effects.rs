@@ -326,6 +326,9 @@ impl VoiceRuntime {
             E::ProviderPrewarm(id) => self.shared.resources.prewarm(id, &self.shared.trace),
             E::ProviderRelease(id) => self.shared.resources.release(id),
             E::CloseRealtimeSession(id) => self.close_realtime_session(id),
+            E::OpenRealtime { open, model, turn_detection_disabled, span } => {
+                self.open_realtime(open, model, turn_detection_disabled, span)
+            }
             E::EotClose => self.predictions.clear(),
             E::Audio(AudioOp::Gate { speech: _, op, cause: _, output }) => {
                 self.gate_audio(op, output)
@@ -582,14 +585,15 @@ impl VoiceRuntime {
     }
 
     fn close_realtime_session(&mut self, id: ResourceId) {
-        if self.realtime.is_none() {
-            let Some(session) = self.shared.resources.realtime(id) else { return };
-            self.realtime =
-                Some(super::legs::RealtimeConnection::new(session, &self.shared.background()));
-        }
-        if let Some(connection) = &mut self.realtime {
-            connection.close(self.reports.clone());
-        }
+        let connection = match self.realtime.remove(&id) {
+            Some(connection) => connection,
+            None => {
+                let Some(session) = self.shared.resources.realtime(id) else { return };
+                super::legs::RealtimeConnection::new(session, &self.shared.background())
+            }
+        };
+        let mut connection = connection;
+        connection.close(self.reports.clone(), id);
     }
 
     fn gate_audio(&self, op: lk_agents_voice::agent_session::effects::GateOp, output: ResourceId) {

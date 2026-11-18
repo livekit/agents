@@ -109,7 +109,8 @@ pub struct VoiceRuntime {
     video_in: Option<Arc<dyn lk_agents_abi::voice::io::VideoInput>>,
     /// Opened STT and VAD streams the core has neither activated nor discarded yet.
     pending_legs: std::collections::BTreeMap<ResourceId, legs::OpeningLeg>,
-    realtime: Option<legs::RealtimeConnection>,
+    /// Every realtime session the runtime holds, by id, until its close.
+    realtime: std::collections::BTreeMap<ResourceId, legs::RealtimeConnection>,
     /// The turn and interruption detectors, addressed by the core's effects.
     eot: Option<Arc<dyn lk_agents_abi::EotDetector>>,
     /// The turn detector's predictions in flight, aborted at its close.
@@ -288,7 +289,7 @@ impl VoiceRuntime {
             frames_tx,
             source: None,
             pending_legs: Default::default(),
-            realtime,
+            realtime: Default::default(),
             calls: Calls::default(),
             speech_signals: Default::default(),
             keyterms: None,
@@ -302,11 +303,12 @@ impl VoiceRuntime {
             speeches,
             _events_end: events_end,
         };
-        if let Some(session) = realtime_events {
-            runtime.realtime.get_or_insert_with(|| {
+        if let Some((id, session)) = realtime_events {
+            let connection = realtime.unwrap_or_else(|| {
                 legs::RealtimeConnection::new(session.clone(), &runtime.shared.background())
             });
-            runtime.pump_realtime(session);
+            runtime.realtime.insert(id, connection);
+            runtime.pump_realtime(id, session);
         }
         let ivr_detection = runtime.shared.view.with(|v| v.config.effective().turn.ivr_detection());
         ivr::start(runtime.peer.clone(), ivr_detection, &runtime.shared.tasks);
@@ -459,6 +461,10 @@ impl VoiceRuntime {
                 let input = self.prepare_leg(opened);
                 self.step(Some(input), now);
             }
+            VoiceRuntimeEvent::RealtimeOpened(opened) => {
+                let input = self.adopt_realtime(opened);
+                self.step(Some(input), now);
+            }
             VoiceRuntimeEvent::AudioInputRouting(command) => self.command(command),
             VoiceRuntimeEvent::HostRequests => self.step_host_requests(now),
             VoiceRuntimeEvent::Report(reply) => {
@@ -551,6 +557,7 @@ impl VoiceRuntime {
                 inputs.push(input);
             }
             VoiceRuntimeEvent::LegOpened(opened) => inputs.push(self.prepare_leg(opened)),
+            VoiceRuntimeEvent::RealtimeOpened(opened) => inputs.push(self.adopt_realtime(opened)),
             // A microphone attached too late to be read is let go, not left in the table.
             VoiceRuntimeEvent::AudioInputRouting(AudioInputRouterCommand::SetSource(Some(
                 source,

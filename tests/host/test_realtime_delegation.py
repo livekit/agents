@@ -222,6 +222,54 @@ async def test_replacing_the_realtime_agent_keeps_the_pending_remote_question(
         assert peer.messages[1]["parts"] == [{"text": "Friday"}]
 
 
+# Catches: switching to an agent on another realtime model, and back, dropping the expert's
+# pending question with the replaced connection, so the answer is lost or opens new work.
+async def test_switching_realtime_models_keeps_the_pending_remote_question(peer: Peer) -> None:
+    peer.question = "Which date?"
+    desk = Desk(peer)
+    helper_model = FakeRealtime("Helper here.")
+    helper = Agent(name="helper", instructions="Help.", llm=helper_model)
+    desk_entered, helper_entered = asyncio.Event(), asyncio.Event()
+
+    @desk.agent.on_enter
+    async def returned_to_desk(session: VoiceSession) -> None:
+        desk_entered.set()
+
+    @helper.on_enter
+    async def entered_helper(session: VoiceSession) -> None:
+        helper_entered.set()
+
+    store = ContextStore()
+    async with VoiceSession(
+        llm=desk.model,
+        context=store.bind(),
+        vad=None,
+        delegation=DelegationOptions(routing_model=FakeLLM(route)),
+    ) as session:
+        await session.start(desk.agent)
+        session.generate_reply(user_input="Check coverage")
+        await until(lambda: said(session, "Which date?"), "the remote question was not presented")
+
+        session.update_agent(helper)
+        await until(helper_entered.is_set, "the helper never took over")
+        await session.wait_for_idle()
+        assert desk.model.sessions[0].closed
+        assert await open_requests(store, peer) == ["open"]
+        desk_entered.clear()
+        session.update_agent(desk.agent)
+        await until(desk_entered.is_set, "the desk never returned")
+        await session.wait_for_idle()
+        assert helper_model.sessions[0].closed
+        assert len(desk.model.sessions) == 2
+        assert await open_requests(store, peer) == ["open"]
+
+        session.generate_reply(user_input="Friday")
+        await until(lambda: said(session, "Result: Confirmed"), "the result was not presented")
+        assert len(peer.messages) == 2
+        assert peer.messages[1]["taskId"] == "remote-task"
+        assert peer.messages[1]["parts"] == [{"text": "Friday"}]
+
+
 # Catches: closing a realtime call leaving a host awaiting a reply forever, or cancelling the
 # remote business task the call only observed.
 async def test_closing_a_realtime_call_settles_its_receipts_and_leaves_the_remote_task(
