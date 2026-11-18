@@ -1,10 +1,10 @@
 name: Set up the repository
 description: >-
-  The SDK sources beside the checkout, the Rust toolchain with the core's system libraries,
+  The Rust toolchain with the core's system libraries,
   cargo-nextest, uv, Python and the cargo cache. Each part is optional.
 inputs:
   python-sdk:
-    description: Checkout the Python SDK sources and set up uv and Python.
+    description: Set up uv and Python.
     default: 'true'
   rust:
     description: Install the Rust toolchain, the core's system libraries and cargo-nextest.
@@ -15,21 +15,9 @@ inputs:
   cache-key:
     description: The cargo cache's key prefix; empty for no cargo cache.
     default: ''
-  python-ref:
-    description: Compatible livekit/python-sdks source revision.
-  rust-ref:
-    description: Compatible livekit/rust-sdks source revision.
 runs:
   using: composite
   steps:
-    - name: Checkout compatible SDK sources
-      uses: ./.github/actions/checkout-sdks
-      with:
-        python-sdk: ${{ inputs.python-sdk }}
-        rust-sdk: ${{ inputs.rust }}
-        python-ref: ${{ inputs.python-ref }}
-        rust-ref: ${{ inputs.rust-ref }}
-
     - name: Install native build prerequisites
       if: inputs.rust == 'true'
       uses: ./.github/actions/native-build

@@ -515,7 +515,7 @@ checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 [[package]]
 name = "device-info"
 version = "0.1.1"
-source = "git+https://github.com/livekit/rust-sdks?rev=805fdf24d53b9fb4878b7f72021a68ba1b4b46c2#805fdf24d53b9fb4878b7f72021a68ba1b4b46c2"
+source = "git+https://github.com/livekit/rust-sdks?rev=53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396#53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396"
 dependencies = [
  "core-foundation",
  "jni 0.21.1",
@@ -1448,7 +1448,7 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 [[package]]
 name = "livekit-api"
 version = "0.10.2"
-source = "git+https://github.com/livekit/rust-sdks?rev=805fdf24d53b9fb4878b7f72021a68ba1b4b46c2#805fdf24d53b9fb4878b7f72021a68ba1b4b46c2"
+source = "git+https://github.com/livekit/rust-sdks?rev=53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396#53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396"
 dependencies = [
  "chrono",
  "http",
@@ -1475,7 +1475,7 @@ dependencies = [
 [[package]]
 name = "livekit-common"
 version = "0.1.7"
-source = "git+https://github.com/livekit/rust-sdks?rev=805fdf24d53b9fb4878b7f72021a68ba1b4b46c2#805fdf24d53b9fb4878b7f72021a68ba1b4b46c2"
+source = "git+https://github.com/livekit/rust-sdks?rev=53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396#53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396"
 dependencies = [
  "livekit-protocol",
 ]
@@ -1483,7 +1483,7 @@ dependencies = [
 [[package]]
 name = "livekit-net"
 version = "0.2.0"
-source = "git+https://github.com/livekit/rust-sdks?rev=805fdf24d53b9fb4878b7f72021a68ba1b4b46c2#805fdf24d53b9fb4878b7f72021a68ba1b4b46c2"
+source = "git+https://github.com/livekit/rust-sdks?rev=53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396#53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396"
 dependencies = [
  "async-trait",
  "flate2",
@@ -1499,7 +1499,7 @@ dependencies = [
 [[package]]
 name = "livekit-protocol"
 version = "0.8.3"
-source = "git+https://github.com/livekit/rust-sdks?rev=805fdf24d53b9fb4878b7f72021a68ba1b4b46c2#805fdf24d53b9fb4878b7f72021a68ba1b4b46c2"
+source = "git+https://github.com/livekit/rust-sdks?rev=53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396#53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396"
 dependencies = [
  "pbjson",
  "pbjson-types",
@@ -1510,7 +1510,7 @@ dependencies = [
 [[package]]
 name = "livekit-region"
 version = "0.1.1"
-source = "git+https://github.com/livekit/rust-sdks?rev=805fdf24d53b9fb4878b7f72021a68ba1b4b46c2#805fdf24d53b9fb4878b7f72021a68ba1b4b46c2"
+source = "git+https://github.com/livekit/rust-sdks?rev=53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396#53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396"
 dependencies = [
  "serde",
 ]
@@ -1518,7 +1518,7 @@ dependencies = [
 [[package]]
 name = "livekit-signaling"
 version = "0.2.0"
-source = "git+https://github.com/livekit/rust-sdks?rev=805fdf24d53b9fb4878b7f72021a68ba1b4b46c2#805fdf24d53b9fb4878b7f72021a68ba1b4b46c2"
+source = "git+https://github.com/livekit/rust-sdks?rev=53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396#53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396"
 dependencies = [
  "base64 0.21.7",
  "device-info",
@@ -1542,7 +1542,7 @@ dependencies = [
 [[package]]
 name = "livekit-token"
 version = "0.4.1"
-source = "git+https://github.com/livekit/rust-sdks?rev=805fdf24d53b9fb4878b7f72021a68ba1b4b46c2#805fdf24d53b9fb4878b7f72021a68ba1b4b46c2"
+source = "git+https://github.com/livekit/rust-sdks?rev=53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396#53effd0ff3b5f2fb28aa91ba77bd9d6de1cb5396"
 dependencies = [
  "hmac",
  "jsonwebtoken",
@@ -2639,7 +2639,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
  "heck",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph",
@@ -2658,7 +2658,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

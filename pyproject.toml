@@ -12,10 +12,6 @@ required-environments = [
 
 [tool.uv.sources]
 livekit-agents = { workspace = true }
-# Match the protocol schema consumed by the local Rust SDK.
-livekit-protocol = { path = "../python-sdks/livekit-protocol", editable = true }
-# The local SDK supplies the matching thread APIs and agent grants.
-livekit-api = { path = "../python-sdks/livekit-api", editable = true }
 livekit-plugins-anam = { workspace = true }
 livekit-plugins-anthropic = { workspace = true }
 livekit-plugins-assemblyai = { workspace = true }

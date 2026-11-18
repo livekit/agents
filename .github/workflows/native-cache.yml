@@ -22,11 +22,6 @@ jobs:
       LK_AGENTS_NATIVE_CACHE_DIR: ${{ runner.temp }}/agents native artifacts
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-      - name: Checkout compatible Rust SDK sources
-        uses: ./.github/actions/checkout-sdks
-        with:
-          python-sdk: 'false'
-          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
       - name: Install Rust
         shell: bash
         run: |

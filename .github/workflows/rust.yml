@@ -28,8 +28,6 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           cache-key: rust-rules
-          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
-          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
       - run: rustup component add rustfmt clippy
       - run: make -C rust check test-checks
 
@@ -41,7 +39,6 @@ jobs:
         with:
           python-sdk: 'false'
           cache-key: rust-tests
-          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
       - run: make -C rust test
 
   # Against the repository's venv: the generated Python facades over the Rust bindings.
@@ -53,8 +50,6 @@ jobs:
         with:
           python-version: '3.11'
           cache-key: rust-bindings
-          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
-          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
       - run: make install
       - run: make -C rust test-bindings
 
@@ -67,7 +62,6 @@ jobs:
         with:
           python-sdk: 'false'
           cache-key: rust-dst
-          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
       - name: DST
         env:
           DST_SEEDS: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '32768' || '4096' }}

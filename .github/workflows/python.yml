@@ -23,7 +23,6 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           rust: 'false'
-          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
       - run: uv sync --locked --only-group lint
       - run: uv run --no-sync ruff check --output-format=github .
       - run: uv run --no-sync ruff format --check .
@@ -36,8 +35,6 @@ jobs:
         with:
           python-version: '3.11'
           cache-key: python
-          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
-          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
       - run: uv sync --all-extras --dev
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -57,8 +54,6 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           cache-key: python
-          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
-          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
       - run: uv sync --all-extras --dev
       - run: uv run --no-sync pytest tests/${{ matrix.suite }}
 

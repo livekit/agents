@@ -70,12 +70,6 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
 
-      - name: Check out compatible SDK sources
-        uses: ./.github/actions/checkout-sdks
-        with:
-          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
-          rust-sdk: 'false'
-
       - name: Bump versions
         env:
           VERSION: ${{ inputs.version }}

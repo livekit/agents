@@ -24,8 +24,6 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           cache-key: python
-          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
-          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
       - run: uv sync --all-extras --dev
       - name: Prepare the isolated ADK peer
         run: |

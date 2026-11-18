@@ -15,12 +15,6 @@ jobs:
         with:
           lfs: true
 
-      - name: Checkout compatible SDK sources
-        uses: ./.github/actions/checkout-sdks
-        with:
-          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
-          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
-
       - name: Install native build prerequisites
         uses: ./.github/actions/native-build
 

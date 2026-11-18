@@ -37,12 +37,6 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           lfs: true
 
-      - name: Check out compatible SDK sources
-        uses: ./.github/actions/checkout-sdks
-        with:
-          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
-          rust-sdk: 'false'
-
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
@@ -87,12 +81,6 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           lfs: true
 
-      - name: Check out compatible SDK sources
-        uses: ./.github/actions/checkout-sdks
-        with:
-          python-ref: ${{ vars.AGENTS_PYTHON_SDKS_REF }}
-          rust-ref: ${{ vars.AGENTS_RUST_SDKS_REF }}
-
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
@@ -118,10 +106,6 @@ jobs:
             elif command -v yum >/dev/null; then
               yum install -y cmake nasm pkgconfig opus-devel
             fi
-          # maturin-action mounts the workspace at its host path. Cargo also needs
-          # the sibling SDK at that same relative location inside Linux containers.
-          docker-options: >-
-            -v "${{ github.workspace }}/../rust-sdks:${{ github.workspace }}/../rust-sdks"
           sccache: true
 
       - name: Bundle macOS codec libraries
@@ -146,7 +130,7 @@ jobs:
           fi
           for v in 3.11 3.14; do
             uv venv -p "$v" "venv-$v"
-            VIRTUAL_ENV="$PWD/venv-$v" uv pip install ../python-sdks/livekit-protocol ../python-sdks/livekit-api "$wheel"
+            VIRTUAL_ENV="$PWD/venv-$v" uv pip install "$wheel"
             py="venv-$v/bin/python"; [ -f "venv-$v/Scripts/python.exe" ] && py="venv-$v/Scripts/python.exe"
             "$py" -I .github/check_wheel.py "$wheel"
           done
