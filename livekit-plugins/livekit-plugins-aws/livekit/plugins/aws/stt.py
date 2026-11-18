@@ -334,6 +334,8 @@ class SpeechStream(stt.SpeechStream):
                     filtered_config[k] = v
 
             tasks: list[asyncio.Task[Any]] = []
+            stream = None
+            gather_future: asyncio.Future[Any] | None = None
 
             try:
                 stream = await client.start_stream_transcription(
@@ -426,9 +428,15 @@ class SpeechStream(stt.SpeechStream):
                         # Already handled above; preserve the retryable timeout error.
                         pass
 
+                # Close input stream even if await_output() failed before tasks were created
+                if stream is not None:
+                    with contextlib.suppress(Exception):
+                        await stream.input_stream.close()
+
                 # Ensure gather future is retrieved to avoid "exception never retrieved"
-                with contextlib.suppress(Exception):
-                    await gather_future
+                if gather_future is not None:
+                    with contextlib.suppress(Exception):
+                        await gather_future
 
     def _maybe_emit_recognition_usage(self) -> None:
         if time.monotonic() - self._last_audio_duration_report_time >= 5.0:

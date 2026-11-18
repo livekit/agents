@@ -317,3 +317,21 @@ async def test_idle_timeouts_obey_retry_limit(monkeypatch, processing):
     finally:
         await stream.aclose()
         await provider.aclose()
+
+
+async def test_input_stream_closed_when_await_output_fails(monkeypatch):
+    provider, stream, transport = _make_stream(monkeypatch, max_retry=0)
+
+    async def failing_await_output():
+        raise aws_stt.BadRequestException(
+            "Your request timed out because no new audio was received for 15 seconds."
+        )
+
+    monkeypatch.setattr(transport, "await_output", failing_await_output)
+    try:
+        with pytest.raises(APIConnectionError):
+            await asyncio.wait_for(stream._task, 1)
+        assert transport.input_stream.closed.is_set()
+    finally:
+        await stream.aclose()
+        await provider.aclose()
