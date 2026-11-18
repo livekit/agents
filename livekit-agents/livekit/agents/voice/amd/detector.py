@@ -1289,8 +1289,12 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         finally:
             result = self._completion()
             self._resources.completion.set_result(result)
-            self.emit("amd_completed", result)
             self._session._on_amd_completed(result)
+            try:
+                self.emit("amd_completed", result)
+            except Exception:
+                # the run is over; a failing listener must not fail cleanup or session close
+                logger.exception("amd_completed listener failed")
 
     # endregion
 

@@ -2185,6 +2185,27 @@ async def test_empty_turn_does_not_cancel_a_pending_terminal_prediction() -> Non
 
 
 @pytest.mark.asyncio
+async def test_failing_completion_listener_does_not_block_session_close() -> None:
+    async with running() as (detector, session, _, _):
+        host = Mock()
+        session._session_host = host
+
+        def broken(event: AMDCompletedEvent) -> None:
+            raise TypeError("listener bug")
+
+        detector.on("amd_completed", broken)
+        try:
+            await asyncio.wait_for(session.aclose(), 2)
+            result = await detector.execute()
+            assert result.reason == AMDReason.CANCELLED
+            host._on_amd_completed.assert_called_once_with(result)
+            assert session.amd is None
+            assert session._activity is None
+        finally:
+            session._session_host = None
+
+
+@pytest.mark.asyncio
 async def test_completion_is_forwarded_to_session_observability() -> None:
     async with running() as (detector, session, classifier, _):
         host = Mock()

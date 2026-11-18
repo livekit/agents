@@ -665,7 +665,9 @@ Completion is synchronous:
 5. Resume reply authorization.
 
 Background cleanup then cancels AMD's tasks and closes its STT stream and owned
-models. `execute()` returns after cleanup, and `amd_completed` fires then.
+models. `execute()` returns after cleanup, and `amd_completed` fires then. The
+remote session host gets the result first. An `amd_completed` listener error is
+logged, so it cannot fail cleanup or session close.
 
 ## 13. Remote sessions
 
