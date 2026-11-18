@@ -8,6 +8,7 @@ use lk_agents_abi::delegation::remote::{
 };
 use lk_agents_abi::session::{InputRequestRef, SessionRecovery, ToolCallRef};
 use lk_agents_abi::storage::StorageError;
+use std::collections::BTreeSet;
 
 /// Ending a frontend stops new transport operations, while receipts already in flight settle.
 pub fn admit(
@@ -67,19 +68,16 @@ pub fn apply(
             }
             (None, Some(request)) if !request.dispatch_started => {
                 let remote = remote.expect("the request belongs to this saved remote");
-                let addressed = match remote
-                    .events
-                    .get(request.request_event as usize)
-                    .map(|event| &event.payload)
-                {
-                    Some(A2AJournalPayload::Request(A2ARequest::Cancel(cancel))) => {
-                        Some(cancel.id.as_str())
-                    }
-                    Some(A2AJournalPayload::Request(A2ARequest::Send(send))) => {
-                        send.message.task_id.as_deref()
-                    }
-                    _ => None,
-                };
+                let addressed =
+                    match remote.event(request.request_event).map(|event| &event.payload) {
+                        Some(A2AJournalPayload::Request(A2ARequest::Cancel(cancel))) => {
+                            Some(cancel.id.as_str())
+                        }
+                        Some(A2AJournalPayload::Request(A2ARequest::Send(send))) => {
+                            send.message.task_id.as_deref()
+                        }
+                        _ => None,
+                    };
                 if let Some(task_id) = addressed {
                     let target = task(remote, task_id)?;
                     if request.task.as_ref() != Some(&target) {
@@ -93,6 +91,9 @@ pub fn apply(
         }
     }
     super::input::validate_dispatch(snapshot, &command)?;
+    // Retention can only advance when an operation settles.
+    let settles = matches!(command.input, RemoteInput::Ended { .. } | RemoteInput::Error { .. });
+    let unresolved = if settles { unresolved_calls(&snapshot.frames) } else { BTreeSet::new() };
     let remote_id = command.remote_id;
     let remote = snapshot
         .remote_agents
@@ -101,8 +102,52 @@ pub fn apply(
     if remote.endpoint != command.endpoint {
         return Err(StorageError::Invalid("the saved remote endpoint changed".into()));
     }
-    crate::delegation::remote::journal::apply(&remote_id, remote, command.input)
-        .map_err(|error| StorageError::Invalid(error.to_string()))
+    let input_request =
+        crate::delegation::remote::journal::apply(&remote_id, remote, command.input)
+            .map_err(|error| StorageError::Invalid(error.to_string()))?;
+    if settles {
+        crate::delegation::remote::journal::compact(
+            remote,
+            crate::delegation::remote::journal::RETAINED_SETTLED_EVENTS,
+            |origin| unresolved.contains(&(origin.agent_id.as_str(), origin.call_id.as_str())),
+        );
+    }
+    Ok(input_request)
+}
+
+/// Calls whose remote outcome a recovery may still need: no output yet, or a report that is
+/// not final. Their originating requests stay in the journal.
+fn unresolved_calls(
+    frames: &std::collections::BTreeMap<
+        lk_agents_abi::session::snapshot::FrameId,
+        lk_agents_abi::session::snapshot::SessionFrame,
+    >,
+) -> BTreeSet<(&str, &str)> {
+    use lk_agents_abi::ChatItem;
+    use lk_agents_abi::llm::tool_executor::RemoteReport;
+    let mut calls = BTreeSet::new();
+    for frame in frames.values() {
+        let outputs: BTreeSet<&str> = frame
+            .history
+            .iter()
+            .filter_map(|item| match item {
+                ChatItem::FunctionCallOutput(output) => Some(output.id.as_str()),
+                _ => None,
+            })
+            .collect();
+        for item in &frame.history {
+            let ChatItem::FunctionCall(call) = item else { continue };
+            let report = crate::tool_calls::remote_report(call);
+            let settled = matches!(
+                report,
+                Some(RemoteReport::Completed | RemoteReport::Failed | RemoteReport::Cancelled)
+            );
+            if !settled || !outputs.contains(call.output_id().as_str()) {
+                calls.insert((frame.id.value.as_str(), call.id.as_str()));
+            }
+        }
+    }
+    calls
 }
 
 /// A tool can address only work observed on its configured remote in this conversation.
@@ -176,7 +221,7 @@ pub fn recovery(
         .iter()
         .filter(|(_, request)| {
             request.origin.as_ref() == Some(origin)
-                && remote.events.get(request.request_event as usize).is_some_and(|event| {
+                && remote.event(request.request_event).is_some_and(|event| {
                     matches!(event.payload, A2AJournalPayload::Request(A2ARequest::Send(_)))
                 })
         })
@@ -219,7 +264,7 @@ pub fn recover(
     }
     let previous = remote.requests.iter().filter(|(_, request)| {
         request.task.as_ref() == Some(target)
-            && remote.events.get(request.request_event as usize).is_some_and(|event| {
+            && remote.event(request.request_event).is_some_and(|event| {
                 matches!(&event.payload,
                     A2AJournalPayload::Request(A2ARequest::Cancel(cancel)) if cancel.id == target.task_id)
             })

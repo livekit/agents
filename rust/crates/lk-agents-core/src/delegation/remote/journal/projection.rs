@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) fn response(
     state: &mut RemoteAgentState,
+    request_id: &str,
     request: &RemoteRequestState,
     response: A2AResponse,
 ) -> Result<Option<RemoteTaskRef>, RemoteError> {
@@ -26,7 +27,7 @@ pub(super) fn response(
         }
         (methods::LIST_TASKS, A2AResponse::List(list)) => {
             for observed in list.tasks {
-                task(state, observed, true)?;
+                task(state, observed, true, Some(request_id))?;
             }
             return Ok(None);
         }
@@ -59,10 +60,8 @@ pub(super) fn response(
             context_id: update.context_id.clone(),
         }),
     };
-    let entry = state
-        .events
-        .get(request.request_event as usize)
-        .ok_or_else(|| invalid("missing request content"))?;
+    let entry =
+        state.event(request.request_event).ok_or_else(|| invalid("missing request content"))?;
     if let A2AJournalPayload::Request(A2ARequest::Send(body)) = &entry.payload
         && let Some(expected) = &body.message.context_id
     {
@@ -84,10 +83,8 @@ pub(super) fn response(
             return Err(conflict(&reference.task_id));
         }
         // A direct task lookup still has addressing before its context is known locally.
-        let entry = state
-            .events
-            .get(request.request_event as usize)
-            .ok_or_else(|| invalid("missing request content"))?;
+        let entry =
+            state.event(request.request_event).ok_or_else(|| invalid("missing request content"))?;
         if let A2AJournalPayload::Request(body) = &entry.payload {
             let id = match body {
                 A2ARequest::Get(body) => Some(&body.id),
@@ -108,28 +105,59 @@ pub(super) fn response(
             }
             message(&mut state.messages, observed)?;
         }
-        a2a::StreamResponse::Task(observed) => task(state, observed, true)?,
+        a2a::StreamResponse::Task(observed) => task(state, observed, true, Some(request_id))?,
         a2a::StreamResponse::StatusUpdate(update) => {
             let mut observed = current_task(state, &update.task_id, &update.context_id)?;
             observed.status = update.status;
-            task(state, observed, true)?;
+            task(state, observed, true, None)?;
         }
         a2a::StreamResponse::ArtifactUpdate(update) => {
             let mut observed = current_task(state, &update.task_id, &update.context_id)?;
+            let artifact_id = update.artifact.artifact_id.clone();
+            let foreign = update.append == Some(true)
+                && state.tasks.get(&update.task_id).is_some_and(|saved| {
+                    saved
+                        .artifact_sources
+                        .get(&artifact_id)
+                        .is_some_and(|source| source != request_id)
+                });
             let artifacts = observed.artifacts.get_or_insert_default();
-            if let Some(existing) = artifacts
-                .iter_mut()
-                .find(|artifact| artifact.artifact_id == update.artifact.artifact_id)
-            {
-                if update.append == Some(true) {
-                    crate::a2a::client::append_artifact(existing, update.artifact);
-                } else {
-                    *existing = update.artifact;
+            match artifacts.iter().position(|artifact| artifact.artifact_id == artifact_id) {
+                Some(position) if foreign => {
+                    // Another observation (a poll, resubscription or overlapping stream)
+                    // replaced this artifact and may already contain the chunk. Continue only
+                    // when this request's own content extends that snapshot; otherwise the
+                    // chunk stays journal evidence and is never appended twice.
+                    let target = RemoteTaskRef {
+                        task_id: update.task_id.clone(),
+                        context_id: update.context_id.clone(),
+                    };
+                    let current = state.events.last().expect("projection follows its response");
+                    let Some(mut own) =
+                        super::terminal::assembled(state, request_id, current.sequence, &target)
+                            .and_then(|own| {
+                                own.into_iter().find(|artifact| artifact.artifact_id == artifact_id)
+                            })
+                    else {
+                        return Ok(reference);
+                    };
+                    crate::a2a::client::append_artifact(&mut own, update.artifact);
+                    let projected = &artifacts[position].parts;
+                    if projected.starts_with(&own.parts) || !own.parts.starts_with(projected) {
+                        return Ok(reference);
+                    }
+                    artifacts[position] = own;
                 }
-            } else {
-                artifacts.push(update.artifact);
+                Some(position) if update.append == Some(true) => {
+                    crate::a2a::client::append_artifact(&mut artifacts[position], update.artifact);
+                }
+                Some(position) => artifacts[position] = update.artifact,
+                None => artifacts.push(update.artifact),
             }
-            task(state, observed, false)?;
+            task(state, observed, false, None)?;
+            if let Some(saved) = state.tasks.get_mut(&update.task_id) {
+                saved.artifact_sources.insert(artifact_id, request_id.into());
+            }
         }
     }
     if state.default_context_id.is_none() {
@@ -169,10 +197,13 @@ fn current_task(
     })
 }
 
+/// `source` names the request whose observation is a full task snapshot; its artifacts
+/// replace the projected ones and become that request's content.
 fn task(
     state: &mut RemoteAgentState,
     observed: a2a::Task,
     status_event: bool,
+    source: Option<&str>,
 ) -> Result<(), RemoteError> {
     if observed.id.is_empty() || observed.context_id.is_empty() {
         return Err(invalid("a task needs its task and context IDs"));
@@ -220,6 +251,7 @@ fn task(
         cancel_requested: false,
         next_input: 0,
         terminal_event: None,
+        artifact_sources: BTreeMap::new(),
     });
     if saved.terminal_event.is_none() {
         saved.terminal_event = terminal_event;
@@ -284,6 +316,12 @@ fn task(
     }
     // A limited getTask response may omit optional history/artifacts. Omission does not erase
     // earlier observations; original response appearances remain unchanged in the journal.
+    if let (Some(source), Some(artifacts)) = (source, &observed.artifacts) {
+        saved.artifact_sources = artifacts
+            .iter()
+            .map(|artifact| (artifact.artifact_id.clone(), source.to_owned()))
+            .collect();
+    }
     let mut observed = observed;
     if observed.history.is_none() {
         observed.history = saved.task.history.clone();

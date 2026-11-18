@@ -245,3 +245,87 @@ fn observed_cancellation_blocks_a_prepared_task_message_before_its_first_dispatc
     );
     assert_eq!(state, before, "terminal work cannot cross a prepared message's I/O boundary");
 }
+
+#[test]
+fn settling_compacts_old_replies_but_keeps_the_send_of_an_unresolved_call() {
+    use lk_agents_abi::llm::tool_executor::{REMOTE_REPORT_KEY, RemoteReport};
+    use lk_agents_abi::{ChatItem, FunctionCall, FunctionCallOutput};
+    let mut snapshot = SessionSnapshot::new("session".into(), "execution".into(), "front".into());
+    let root = snapshot.root_frame_id.clone();
+    let call = |id: &str, report: RemoteReport| FunctionCall {
+        id: id.into(),
+        call_id: id.into(),
+        name: "remote_booking".into(),
+        arguments: "{}".into(),
+        created_at: std::time::UNIX_EPOCH,
+        extra: [(REMOTE_REPORT_KEY.into(), serde_json::to_value(report).unwrap())]
+            .into_iter()
+            .collect(),
+        group_id: None,
+    };
+    let resolved = call("resolved", RemoteReport::Completed);
+    let history = &mut snapshot.frames.get_mut(&root).unwrap().history;
+    history.push(ChatItem::FunctionCall(call("pending", RemoteReport::Pending)));
+    history.push(ChatItem::FunctionCallOutput(FunctionCallOutput::new(
+        resolved.output_id(),
+        "resolved",
+        "Booked",
+        false,
+        std::time::UNIX_EPOCH,
+    )));
+    history.push(ChatItem::FunctionCall(resolved));
+    let command = |input| RemoteCommand {
+        remote_id: "booking".into(),
+        endpoint: "https://booking.test".into(),
+        input,
+    };
+    let exchanges = crate::delegation::remote::journal::RETAINED_SETTLED_EVENTS;
+    for n in 0..exchanges {
+        let id = format!("send_{n}");
+        let call_id = match n {
+            0 => "pending",
+            1 => "resolved",
+            _ => "other",
+        };
+        let origin = ToolCallRef { agent_id: root.value.clone(), call_id: call_id.into() };
+        super::apply(
+            &mut snapshot,
+            command(RemoteInput::Prepare {
+                request_id: id.clone(),
+                request: A2ARequest::Send(
+                    serde_json::from_value(json!({
+                        "message":{"messageId":id, "role":"ROLE_USER", "parts":[{"text":"Book"}]}
+                    }))
+                    .unwrap(),
+                ),
+                streaming: false,
+                origin: Some(origin),
+                input_request: None,
+                control_scope: None,
+            }),
+        )
+        .unwrap();
+        super::apply(
+            &mut snapshot,
+            command(RemoteInput::DispatchStarted { request_id: id.clone() }),
+        )
+        .unwrap();
+        super::apply(&mut snapshot, command(RemoteInput::Response {
+            request_id: id.clone(),
+            response: Box::new(A2AResponse::Send(serde_json::from_value(json!({"message":{
+                "messageId":format!("reply_{n}"), "role":"ROLE_AGENT", "parts":[{"text":"Done"}]
+            }})).unwrap())),
+        }))
+        .unwrap();
+        super::apply(&mut snapshot, command(RemoteInput::Ended { request_id: id })).unwrap();
+    }
+    let remote = &snapshot.remote_agents["booking"];
+    let settled = remote.events.iter().filter(|event| event.request_id != "send_0").count();
+    assert!(settled <= exchanges, "settled history is bounded");
+    assert!(!remote.requests.contains_key("send_1"), "a resolved call's send can go");
+    let pending = ToolCallRef { agent_id: root.value.clone(), call_id: "pending".into() };
+    assert!(
+        matches!(recovery(remote, &pending).unwrap(), Some(RemoteRecovery::Observed(_))),
+        "the unresolved call still recovers its original reply"
+    );
+}

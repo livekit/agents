@@ -38,14 +38,12 @@ impl Session {
                 .filter(|(_, remote)| {
                     remote.requests.values().any(|request| {
                         request.origin.as_ref() == Some(&origin)
-                            && remote.events.get(request.request_event as usize).is_some_and(
-                                |event| {
-                                    matches!(
-                                        &event.payload,
-                                        A2AJournalPayload::Request(A2ARequest::Send(_))
-                                    )
-                                },
-                            )
+                            && remote.event(request.request_event).is_some_and(|event| {
+                                matches!(
+                                    &event.payload,
+                                    A2AJournalPayload::Request(A2ARequest::Send(_))
+                                )
+                            })
                     })
                 })
                 .collect();

@@ -146,7 +146,7 @@ pub struct RemoteControlScope {
 pub struct RemoteRequestState {
     /// SDK method constant, fixed when the request is prepared.
     pub method: String,
-    /// Journal position containing the immutable SDK request; not a second payload copy.
+    /// Journal sequence of the immutable SDK request; not a second payload copy.
     pub request_event: u64,
     /// Persisted before I/O: an attempt may have happened, not proof of admission.
     pub dispatch_started: bool,
@@ -179,6 +179,12 @@ pub struct RemoteTaskState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[host(skip)]
     pub terminal_event: Option<u64>,
+    /// Artifact ID -> request whose observation last set its projected content. A chunk from
+    /// another request cannot know whether that snapshot already contains it, so it is not
+    /// appended a second time.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[host(skip)]
+    pub artifact_sources: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -197,6 +203,13 @@ pub struct RemoteAgentState {
 }
 
 impl RemoteAgentState {
+    /// The journal entry at a local sequence. Compaction removes settled entries, so a
+    /// sequence is an ordered key rather than a position.
+    pub fn event(&self, sequence: u64) -> Option<&A2AJournalEntry> {
+        let position = self.events.binary_search_by_key(&sequence, |event| event.sequence).ok()?;
+        self.events.get(position)
+    }
+
     /// Read only the latest cancellation's recorded facts. The core decides whether its
     /// typed failure proves refusal; callers never infer that from error wording.
     pub fn cancellation_evidence(
@@ -208,7 +221,7 @@ impl RemoteAgentState {
             .iter()
             .filter(|(_, request)| {
                 request.task.as_ref() == Some(target)
-                && self.events.get(request.request_event as usize).is_some_and(|event| {
+                && self.event(request.request_event).is_some_and(|event| {
                     matches!(&event.payload, A2AJournalPayload::Request(A2ARequest::Cancel(cancel))
                         if cancel.id == target.task_id)
                 })
