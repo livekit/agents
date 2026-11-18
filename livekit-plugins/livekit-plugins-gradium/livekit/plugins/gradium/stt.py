@@ -379,7 +379,11 @@ class SpeechStream(stt.SpeechStream):
                         "type": "audio",
                         "audio": audio_data,
                     }
-                    await ws.send_str(json.dumps(audio_msg))
+                    try:
+                        await ws.send_str(json.dumps(audio_msg))
+                    except (aiohttp.ClientError, ConnectionError):
+                        # the server closed first; recv_task raises the retryable error
+                        return
 
             # Input ended: tell the server, then let recv_task drain the model's last
             # words until the server replies with its own end_of_stream.

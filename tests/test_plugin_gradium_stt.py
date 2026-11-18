@@ -801,6 +801,20 @@ async def test_server_ending_the_session_mid_input_finalizes_then_reconnects():
         await stream.aclose()
 
 
+async def test_audio_send_on_a_closed_socket_raises_the_retryable_close_error():
+    """An audio write racing the server's close reports the close, not a raw send error."""
+    stt, _, _ = _make_stt([READY], after_eos=["close"], fail_send_on="audio")
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIStatusError, match="closed unexpectedly") as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.retryable is True
+    finally:
+        await stream.aclose()
+
+
 async def test_final_end_of_stream_send_on_a_closed_socket_is_not_an_error():
     stt, _, _ = _make_stt(
         [READY, _text("hello", 0.1)], after_eos=["close"], fail_send_on="end_of_stream"
