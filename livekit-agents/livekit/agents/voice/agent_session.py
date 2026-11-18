@@ -987,7 +987,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._redaction_enabled = bool(
                 self._opts.recording_options["redaction"]
-                or (job_ctx and job_ctx.job.enable_redaction)
+                or (job_ctx and job_ctx._redaction_enabled)
             )
 
             # hosting needs the primary designation as before, and the caller's consent
