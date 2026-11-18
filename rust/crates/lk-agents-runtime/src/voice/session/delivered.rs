@@ -39,6 +39,8 @@ impl SessionState {
     /// answered question's) replaces its earlier telling in place.
     fn add(&mut self, item: &ChatItem, host: HostRef) {
         let id = item.id().to_owned();
+        // TODO: corrected user words are told again too (`replace_items`) and land twice: give a
+        // re-told item its own event instead of a repeated `ItemAdded` or replace it here.
         if matches!(item, ChatItem::FunctionCallOutput(_))
             && let Some(told) = self.history.iter_mut().find(|told| told.id == id)
         {

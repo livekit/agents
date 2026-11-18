@@ -2,10 +2,11 @@
 //! last commit stay as the call has them.
 
 use lk_agents_abi::ChatItem;
+use lk_agents_abi::Role;
 use lk_agents_abi::llm::tool_executor::WAITING_PREFIX;
-use lk_agents_fuzz::drive::{Run, Setup, StorageSetup, simulate};
+use lk_agents_fuzz::drive::{RealtimeSetup, Run, Setup, StorageSetup, simulate};
 use lk_agents_fuzz::input::{
-    AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs, TurnMode, UserText,
+    AgentText, Count, Input, Millis, Ref, RtEvent, ToolAnswer, ToolArgs, TurnMode, UserText,
 };
 use lk_agents_voice::events::SessionEvent;
 
@@ -119,4 +120,54 @@ fn an_answered_question_stays_answered_across_a_reload() {
     }
     assert!(exercised >= 4, "both questions were put in only {exercised} of 8 runs");
     assert!(reloaded > 0, "no reload came after the first answer");
+}
+
+// Catches: a reload published every item of the record, the realtime server's placeholder for the
+// person's words among them, so their transcript told the same id again and the host's history
+// held it twice ("item IDs must be nonempty and unique" on the next delegation).
+#[test]
+fn a_reload_leaves_the_realtime_placeholder_out_of_the_history() {
+    let setup = Setup {
+        realtime: Some(RealtimeSetup { turn_detection: true, ..RealtimeSetup::default() }),
+        storage: Some(StorageSetup::default()),
+        ..Setup::default()
+    };
+    let rt = |event| Input::RealtimeEvent { socket: Ref::new(0), event };
+    let mut inputs = vec![
+        Input::GenerateReply { user_input: None, instructions: None, allow: None },
+        Input::Advance { ms: Millis(3_000) },
+    ];
+    for _ in 0..3 {
+        inputs.extend([
+            Input::Advance { ms: Millis(4_000) },
+            Input::MicFrames { mic: Ref::new(0), chunks: Count(20) },
+            rt(RtEvent::SpeechStarted),
+            Input::Advance { ms: Millis(1_000) },
+            Input::MicFrames { mic: Ref::new(0), chunks: Count(20) },
+            rt(RtEvent::SpeechStopped),
+            Input::Advance { ms: Millis(8_000) },
+        ]);
+    }
+    let run = simulate(async {
+        let mut run = Run::start(&setup, 0, Default::default()).await;
+        for input in &inputs {
+            run.apply(input).await;
+        }
+        run
+    });
+    let reloads: Vec<Vec<ChatItem>> = (run.record.host_view().events().into_iter())
+        .filter_map(|(_, event)| match event {
+            SessionEvent::HistoryReloaded { items } => Some(items.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(!reloads.is_empty(), "no reload came");
+    for items in reloads {
+        let placeholder = items.iter().find(|item| {
+            item.as_message().is_some_and(|m| {
+                m.role == Role::User && m.raw_text_content().is_none_or(|text| text.is_empty())
+            })
+        });
+        assert!(placeholder.is_none(), "a reload carried the placeholder: {placeholder:#?}");
+    }
 }
