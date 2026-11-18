@@ -366,7 +366,8 @@ def test_a_missing_silero_still_constructs(monkeypatch, caplog) -> None:
         instance = _stt()
 
     assert instance._vad is None
-    assert "EXTERNAL turn-detection mode with no `vad`" in caplog.text
+    assert instance.capabilities.manual_flush
+    assert "could not load the optional Silero VAD" in caplog.text
 
 
 def test_explicit_none_vad_opts_out(caplog) -> None:
@@ -376,7 +377,7 @@ def test_explicit_none_vad_opts_out(caplog) -> None:
 
     assert instance._vad is None
     assert instance.capabilities.manual_flush
-    assert "EXTERNAL turn-detection mode with no `vad`" in caplog.text
+    assert not any(record.name == speechmatics_stt.logger.name for record in caplog.records)
 
 
 async def test_finalize_and_vad_only_act_in_external() -> None:

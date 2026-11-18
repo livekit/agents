@@ -273,23 +273,20 @@ class STT(stt.STT):
         # Normalize the deprecated modes away before anything reads the mode.
         turn_detection_mode = _resolve_turn_detection_mode(turn_detection_mode)
 
-        # `EXTERNAL` is the default and the service does not endpoint in it, so a bare
-        # `STT()` has nothing to close a turn with. Load a local VAD to drive `finalize()`,
-        # as the plugin did before Agent STT, so zero-config still transcribes. An explicit
-        # `vad=None` opts out and enables manual stream flushing.
+        # Load the plugin's local VAD by default so standalone streams can close turns.
         if turn_detection_mode == TurnDetectionMode.EXTERNAL and not is_given(vad):
             vad = _load_default_vad()
+            if vad is None:
+                logger.warning(
+                    "Speechmatics STT could not load the optional Silero VAD in EXTERNAL mode. "
+                    "Use AgentSession turn handling, stream.flush(), or STT.finalize() "
+                    "to close turns."
+                )
 
         self._vad = vad if is_given(vad) else None
 
         # Enable stream flushing when the session or caller owns turn detection.
         manual_flush = turn_detection_mode == TurnDetectionMode.EXTERNAL and self._vad is None
-        if manual_flush:
-            logger.warning(
-                "Speechmatics STT is in EXTERNAL turn-detection mode with no `vad`: the service "
-                "needs a turn boundary from AgentSession turn handling, stream.flush(), "
-                "or STT.finalize()."
-            )
 
         # Set STT options
         def _set(value: Any) -> Any:
