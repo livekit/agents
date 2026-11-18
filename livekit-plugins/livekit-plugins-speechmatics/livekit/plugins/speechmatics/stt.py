@@ -277,16 +277,13 @@ class STT(stt.STT):
         if turn_detection_mode == TurnDetectionMode.EXTERNAL and not is_given(vad):
             vad = _load_default_vad()
             if vad is None:
-                logger.warning(
+                logger.debug(
                     "Speechmatics STT could not load the optional Silero VAD in EXTERNAL mode. "
                     "Use AgentSession turn handling, stream.flush(), or STT.finalize() "
                     "to close turns."
                 )
 
         self._vad = vad if is_given(vad) else None
-
-        # Enable stream flushing when the session or caller owns turn detection.
-        manual_flush = turn_detection_mode == TurnDetectionMode.EXTERNAL and self._vad is None
 
         # Set STT options
         def _set(value: Any) -> Any:
@@ -323,7 +320,7 @@ class STT(stt.STT):
                 diarization=opts.enable_diarization is not False,
                 aligned_transcript="chunk",
                 offline_recognize=False,
-                manual_flush=manual_flush,
+                manual_flush=_supports_stream_flush(turn_detection_mode, self._vad),
             ),
         )
 
@@ -718,9 +715,8 @@ class SpeechStream(stt.RecognizeStream):
                 sample_rate=self._stt._sample_rate,
                 num_channels=1,
             )
-            can_finalize = (
-                self._turn_detection_mode == TurnDetectionMode.EXTERNAL and self._vad is None
-            )
+            # Custom STT nodes can disable framework flushes and still call stream.flush().
+            can_finalize = _supports_stream_flush(self._turn_detection_mode, self._vad)
             audio_since_flush = False
 
             # Process input audio
@@ -971,6 +967,12 @@ _DEPRECATED_TURN_DETECTION_MODES = frozenset(
         TurnDetectionMode.SMART_TURN,
     }
 )
+
+
+def _supports_stream_flush(
+    turn_detection_mode: TurnDetectionMode, local_vad: vad.VAD | None
+) -> bool:
+    return turn_detection_mode == TurnDetectionMode.EXTERNAL and local_vad is None
 
 
 def _load_default_vad() -> vad.VAD | None:

@@ -362,17 +362,21 @@ def test_a_missing_silero_still_constructs(monkeypatch, caplog) -> None:
     wherever the optional package was absent."""
     monkeypatch.setitem(sys.modules, "livekit.plugins.silero", None)
 
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("DEBUG", logger=speechmatics_stt.logger.name):
         instance = _stt()
 
     assert instance._vad is None
     assert instance.capabilities.manual_flush
-    assert "could not load the optional Silero VAD" in caplog.text
+    assert [
+        record.levelname
+        for record in caplog.records
+        if "could not load the optional Silero VAD" in record.getMessage()
+    ] == ["DEBUG"]
 
 
 def test_explicit_none_vad_opts_out(caplog) -> None:
     """`vad=None` allows the session or caller to close turns."""
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("DEBUG", logger=speechmatics_stt.logger.name):
         instance = _stt(vad=None)
 
     assert instance._vad is None
@@ -431,6 +435,30 @@ async def test_stream_flush_sends_buffered_audio_before_finalizing(
             expected.append("ForceEndOfUtterance")
         assert client.audio_calls == expected
         assert stream._stt.capabilities.manual_flush is manual_flush
+    finally:
+        await stream.aclose()
+
+
+async def test_explicit_stream_flush_with_framework_flushing_disabled(monkeypatch) -> None:
+    stream = _stream(vad=None)
+    stream._stt.capabilities.manual_flush = False
+    client = _StubClient()
+    monkeypatch.setattr(stream, "_client", client)
+    frame = silence_frame(0.01, 16000)
+    try:
+        stream.push_frame(frame)
+        stream.flush()
+        stream.push_frame(frame)
+        stream.end_input()
+        await stream._process_audio()
+
+        payload = frame.data.tobytes()
+        assert client.audio_calls == [
+            payload,
+            "ForceEndOfUtterance",
+            payload,
+            "ForceEndOfUtterance",
+        ]
     finally:
         await stream.aclose()
 
