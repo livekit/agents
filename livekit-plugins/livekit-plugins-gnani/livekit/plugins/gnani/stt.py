@@ -419,7 +419,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        language: GnaniSTTLanguages | str | Sequence[str] = "en-IN",
+        language: GnaniSTTLanguages | str | list[str] = "en-IN",
         model: GnaniSTTModels | None = None,
         api_key: str | None = None,
         sample_rate: int = SAMPLE_RATE_16K,
@@ -517,7 +517,7 @@ class STT(stt.STT):
     def update_options(
         self,
         *,
-        language: NotGivenOr[GnaniSTTLanguages | str | Sequence[str]] = NOT_GIVEN,
+        language: NotGivenOr[GnaniSTTLanguages | str | list[str]] = NOT_GIVEN,
         format: NotGivenOr[GnaniSTTFormat] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -568,7 +568,7 @@ class STT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: NotGivenOr[str | Sequence[str]] = NOT_GIVEN,
+        language: NotGivenOr[str | list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         return await super().recognize(
@@ -581,7 +581,7 @@ class STT(stt.STT):
         self,
         buffer: AudioBuffer,
         *,
-        language: NotGivenOr[str | Sequence[str]] = NOT_GIVEN,
+        language: NotGivenOr[str | list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         opts = replace(self._opts)
@@ -653,7 +653,7 @@ class STT(stt.STT):
     def stream(
         self,
         *,
-        language: NotGivenOr[str | Sequence[str]] = NOT_GIVEN,
+        language: NotGivenOr[str | list[str]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         if not self._opts.use_streaming:
