@@ -31,6 +31,7 @@ pub(super) fn agent_update(agent: &str, instructions: Instructions) -> AgentUpda
         toolset: lk_agents_voice::tool_executor::Toolset::default(),
         chat_ctx: None,
         llm: Maybe::NotGiven,
+        realtime: None,
         tts: Maybe::NotGiven,
         stt: Maybe::NotGiven,
         vad: Maybe::NotGiven,

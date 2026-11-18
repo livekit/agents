@@ -41,6 +41,7 @@ mod tests {
             toolset: Default::default(),
             chat_ctx: None,
             llm: Maybe::NotGiven,
+            realtime: None,
             tts: Maybe::NotGiven,
             stt: Maybe::NotGiven,
             vad: Maybe::NotGiven,
@@ -245,6 +246,8 @@ impl VoiceDriver {
             Some(VoiceTaskEnded::AgentChanging)
         } else if awaiting.is_none() {
             Some(VoiceTaskEnded::NotInTool)
+        } else if self.realtime_model_changes(update.realtime.as_ref()) {
+            Some(VoiceTaskEnded::ModelChanged)
         } else {
             None
         };
@@ -327,6 +330,7 @@ impl VoiceDriver {
             toolset: (*a.toolset).clone(),
             chat_ctx: None,
             llm: kept(update.llm.is_given(), s.llm.clone()),
+            realtime: None,
             tts: kept(update.tts.is_given(), s.tts.clone()),
             stt: kept(update.stt.is_given(), s.stt.clone()),
             vad: kept(update.vad.is_given(), s.vad.clone()),

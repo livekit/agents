@@ -157,7 +157,7 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
         agent: crate::HostRef,
         frame: Option<super::session::UpdateAgentArgs>,
         #[host(kw, default = None)] chat_ctx: Option<Vec<crate::ChatItem>>,
-    ) -> Result<(), super::session::SessionRefused>;
+    ) -> Result<(), super::session::AgentRefused>;
     /// `update_options(..)`: change only the supplied settings. A replaced `stt`, `tts` or `vad`
     /// is installed in place on a running session, without restarting the call or interrupting
     /// speech; a setting an `override_options` layer holds takes the new value once the layer is

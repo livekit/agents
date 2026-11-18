@@ -563,6 +563,9 @@ pub struct AgentUpdate {
     /// `NotGiven` keeps, `Given(x)` installs, `Given(None)` is `Agent(llm=None)`. The host picks
     /// `NotGiven` on identity, so warm state is preserved.
     pub llm: Maybe<Option<lk_agents_abi::resources::LlmRef>>,
+    /// The realtime model the agent runs on, on a session opened on one; `None` keeps the
+    /// session's. Another model than the one connected replaces the connection.
+    pub realtime: Option<lk_agents_abi::resources::RealtimeModelRef>,
     pub tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
     /// `Given` closes the leg and reopens it.
     pub stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
@@ -668,6 +671,7 @@ impl AgentUpdate {
             toolset: _,
             chat_ctx: _,
             llm,
+            realtime,
             tts,
             stt,
             vad,
@@ -680,6 +684,7 @@ impl AgentUpdate {
         let crate::agent_session::OutputNodes { transcription } = output_nodes;
         [
             handed(llm, |r| r.id),
+            realtime.as_ref().map(|r| r.id),
             handed(tts, |r| r.id),
             handed(stt, |r| r.id),
             handed(vad, |r| r.id),
@@ -700,6 +705,7 @@ impl std::fmt::Debug for AgentUpdate {
             .field("tools", &self.toolset.specs.len())
             .field("chat_ctx_replaced", &self.chat_ctx.is_some())
             .field("llm", &self.llm)
+            .field("realtime", &self.realtime)
             .field("tts", &self.tts)
             .field("stt", &self.stt)
             .field("vad", &self.vad)

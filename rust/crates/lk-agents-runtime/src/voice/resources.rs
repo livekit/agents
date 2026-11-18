@@ -21,6 +21,7 @@ enum Resource {
     Llm(Arc<dyn Llm>),
     Tts(Arc<dyn Tts>),
     Realtime(Arc<dyn RealtimeSession>),
+    RealtimeModel(Arc<dyn lk_agents_abi::Realtime>),
     AudioOutput(Arc<dyn AudioOutput>),
     TranscriptionOutput(Arc<dyn TranscriptionOutput>),
     AudioInput(Arc<dyn AudioInput>),
@@ -161,6 +162,27 @@ impl Resources {
         RealtimeRef { id: self.insert(Resource::Realtime(session)), provider, capabilities }
     }
 
+    /// The model a frame names: a host model's identity is its host object's, whatever wraps it.
+    pub fn register_realtime_model(
+        &self,
+        model: Arc<dyn lk_agents_abi::Realtime>,
+    ) -> lk_agents_abi::resources::RealtimeModelRef {
+        let (provider, capabilities) = (model.id(), model.capabilities());
+        let instance =
+            model.instance_id().unwrap_or_else(|| Arc::as_ptr(&model).cast::<()>() as usize);
+        let id = self.insert(Resource::RealtimeModel(model));
+        lk_agents_abi::resources::RealtimeModelRef { id, provider, capabilities, instance }
+    }
+
+    pub fn realtime_model(&self, id: ResourceId) -> Option<Arc<dyn lk_agents_abi::Realtime>> {
+        self.get(
+            id,
+            |r| {
+                if let Resource::RealtimeModel(m) = r { Some(Arc::clone(m)) } else { None }
+            },
+        )
+    }
+
     pub fn realtime(&self, id: ResourceId) -> Option<Arc<dyn RealtimeSession>> {
         self.get(id, |r| if let Resource::Realtime(s) = r { Some(Arc::clone(s)) } else { None })
     }
@@ -245,6 +267,7 @@ impl Resources {
                 | Resource::Instructions(_)
                 | Resource::TranscriptionNode(_)
                 | Resource::Realtime(_)
+                | Resource::RealtimeModel(_)
                 | Resource::AudioOutput(_)
                 | Resource::TranscriptionOutput(_)
                 | Resource::AudioInput(_)
@@ -267,6 +290,7 @@ impl Resources {
             Resource::Llm(_) => "llm",
             Resource::Tts(_) => "tts",
             Resource::Realtime(_) => "realtime",
+            Resource::RealtimeModel(_) => "realtime model",
             Resource::AudioOutput(_) => "audio output",
             Resource::TranscriptionOutput(_) => "transcription output",
             Resource::AudioInput(_) => "audio input",

@@ -36,6 +36,9 @@ enum Phase {
     Exiting { hook: HookId },
     /// Scheduling paused: the swap lands once every speech has finished.
     Draining,
+    /// Drained, and the arriving agent's realtime model opens its session (`open`): the leaving
+    /// agent stays connected until the swap lands on the new one.
+    Opening { open: u64 },
 }
 
 /// A turn kept for the arriving agent. `edits: None`: the arriving agent runs its own
@@ -126,7 +129,25 @@ impl Handoff {
 
     /// The leaving agent drains: its scheduling is paused until the swap.
     pub(crate) fn draining(&self) -> bool {
-        matches!(self.in_progress, Some(InProgress { phase: Phase::Draining, .. }))
+        matches!(
+            self.in_progress,
+            Some(InProgress { phase: Phase::Draining | Phase::Opening { .. }, .. })
+        )
+    }
+
+    /// The switch opening its model's session as `open`.
+    pub(crate) fn opening(&self, open: u64) -> bool {
+        matches!(self.in_progress, Some(InProgress { phase: Phase::Opening { open: o }, .. }) if o == open)
+    }
+
+    /// The drained switch waits for its model's session, opened as `open`.
+    fn wait_for_model(
+        &mut self,
+        update: Box<AgentUpdate>,
+        run: Option<crate::events::RunId>,
+        open: u64,
+    ) {
+        self.in_progress = Some(InProgress { update, phase: Phase::Opening { open }, run });
     }
 
     pub(crate) fn in_progress(&self) -> Option<&AgentUpdate> {
@@ -210,21 +231,55 @@ impl VoiceDriver {
         self.answer(update.call.take(), Answer::Handoff(Err(cause)));
     }
 
-    /// The swap: the closing re-check, the agent installed with its two records, the caller
-    /// answered, `on_enter` issued, the held turn delivered, the next queued switch begun.
+    /// The drained switch: the closing re-check, then, for an agent on another realtime model,
+    /// its session opened first; the swap lands once it is.
     pub(crate) fn perform_handoff(&mut self, now: Ts) {
-        let Some(mut update) = self.activity.handoff.take_in_progress() else {
+        let Some(InProgress { update, run, .. }) = self.activity.handoff.in_progress.take() else {
             return;
         };
         if self.session.closing.is_some() {
-            self.replay_held_speech(now);
-            self.refuse_handoff(update, HandoffRefused::Closing);
+            return self.refuse_drained_handoff(now, update, HandoffRefused::Closing);
+        }
+        match self.model_swap_open(update.realtime.as_ref()) {
+            Some(open) => self.activity.handoff.wait_for_model(update, run, open),
+            None => self.land_handoff(now, update, None),
+        }
+    }
+
+    /// The drained switch refused: what was asked of it meanwhile goes to the agent that stays.
+    pub(crate) fn refuse_drained_handoff(
+        &mut self,
+        now: Ts,
+        update: Box<AgentUpdate>,
+        cause: HandoffRefused,
+    ) {
+        self.replay_held_speech(now);
+        self.refuse_handoff(update, cause);
+        if cause == HandoffRefused::Closing {
             for callback in self.activity.handoff.refuse_queued() {
                 self.defer_callback(callback);
             }
             return;
         }
+        self.resume_scheduling(now);
+        self.defer_callback(VoiceCallback::DeliverHeldTurn);
+        self.defer_callback(VoiceCallback::AgentStays);
+        self.defer_callback(VoiceCallback::StartNextHandoff);
+    }
+
+    /// The swap: the agent installed with its two records (on `opened`, the session its model
+    /// opened), the caller answered, `on_enter` issued, the held turn delivered, the next queued
+    /// switch begun.
+    pub(crate) fn land_handoff(
+        &mut self,
+        now: Ts,
+        mut update: Box<AgentUpdate>,
+        opened: Option<crate::agent_session::machine::activity::realtime::OpenedSession>,
+    ) {
         let call = update.call.take();
+        if let Some(opened) = opened {
+            self.swap_realtime_session(opened);
+        }
         self.update_agent(now, *update);
         self.drain_step(DrainEvent::Leaving);
         self.activity.on_exit.swapped();
@@ -387,7 +442,12 @@ impl VoiceDriver {
 
         // Ungated by the `mutable_*` capabilities: a refusal on the wire is visible, a skipped
         // push is not.
-        let ctx = replaced_ctx.then(|| self.session.chat_ctx.for_realtime());
+        // A session a switch opened holds nothing: it is given the whole conversation.
+        let owes_frame = self
+            .activity
+            .realtime_activity_mut()
+            .is_some_and(|rt| std::mem::take(&mut rt.owes_frame));
+        let ctx = (replaced_ctx || owes_frame).then(|| self.session.chat_ctx.for_realtime());
         self.push_activity(ctx);
 
         self.resume_scheduling(now);

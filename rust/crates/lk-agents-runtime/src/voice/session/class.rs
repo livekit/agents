@@ -5,7 +5,7 @@ use lk_agents_abi::voice::events::UserTurnResult;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TranscriptionOutput, VideoInput};
 use lk_agents_abi::voice::nodes::NodeFactory;
 use lk_agents_abi::voice::session::{
-    CommitSuperseded, IdleRefused, NotAnImage, NotInterruptible, UnknownCloseReason,
+    AgentRefused, CommitSuperseded, IdleRefused, NotAnImage, NotInterruptible, UnknownCloseReason,
     UserTurnFailed, UserTurnRefused, VoiceSessionArgs, VoiceTaskEnded,
 };
 use lk_agents_abi::voice::session_options::{ResolvedSessionOptions, UpdateKwargs};
@@ -193,17 +193,8 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         builder.eot = args.turn_detector.clone();
         builder.llm = llm;
         builder.delegation = args.delegation;
-        // A host provider is driven through the core's own model over it.
-        builder.realtime = args.realtime.map(|leg| match leg {
-            RealtimeLeg::Native(model) => model,
-            RealtimeLeg::Host(host) => {
-                Arc::new(lk_agents_inference::realtime::host::HostRealtimeModel::new(
-                    host,
-                    anchor,
-                    spawner.clone(),
-                ))
-            }
-        });
+        builder.realtime = args.realtime.map(|leg| realtime_model(leg, anchor, spawner.clone()));
+        let realtime = builder.realtime.as_ref().map(|model| model.capabilities());
         builder.realtime_tools = args.realtime_tools;
         builder.tts = args.tts;
         builder.stt = args.stt;
@@ -262,6 +253,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             resources,
             conn,
             delivered: Default::default(),
+            realtime,
         })
     }
 
@@ -310,10 +302,10 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     fn update_agent(
         &self,
         frame: UpdateAgentArgs,
-    ) -> Result<BoxFuture<'static, bool>, SessionRefused> {
+    ) -> Result<BoxFuture<'static, bool>, AgentRefused> {
         // The answer first: a refused handoff registers no provider it would never release.
         let (call, rx) = self.call(Answer::handoff)?;
-        let mut update = self.frame(frame);
+        let mut update = self.frame(frame)?;
         update.call = Some(call.id);
         self.send_frame(
             VoiceCommandOrigin::Host,
@@ -352,7 +344,8 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let (awaited, rx) = self.call(Answer::voice_task)?;
         let call = awaited.id;
         let tx = self.api()?;
-        let update = self.frame(frame);
+        let update =
+            self.frame(frame).map_err(|refused| CommandRefused::Invalid(refused.to_string()))?;
         self.send_frame(
             origin,
             update,
@@ -1039,5 +1032,20 @@ impl lk_agents_abi::voice::session::UserTurn for UserTurn {
         let _ =
             super::calls::send_command(&self.api, VoiceCommandOrigin::Host, command.into(), None);
         self.held.release(self.id);
+    }
+}
+
+/// The model a `RealtimeLeg` names: a host provider is driven through the core's own model over
+/// it.
+pub(super) fn realtime_model(
+    leg: RealtimeLeg,
+    anchor: lk_agents_abi::WallAnchor,
+    spawner: Arc<dyn lk_agents_abi::Spawner>,
+) -> Arc<dyn lk_agents_abi::Realtime> {
+    match leg {
+        RealtimeLeg::Native(model) => model,
+        RealtimeLeg::Host(host) => Arc::new(
+            lk_agents_inference::realtime::host::HostRealtimeModel::new(host, anchor, spawner),
+        ),
     }
 }

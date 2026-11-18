@@ -197,11 +197,43 @@ takes no `mode`, not even `None`: the interruption mode is set with
 `VoiceSession(turn_handling=)` and refused with a `ValueError` anywhere else. An
 update refused for its arguments changes nothing.
 
-`update_agent` changes the agent's instructions, tools, and reasoning behavior.
+`update_agent` changes the agent's instructions, tools, model and reasoning behavior.
 It preserves the session's audio settings. VoiceTask activation and restoration also
 preserve those settings. The application calls `update_options` when a routing
 change should alter presentation. Multiple sessions using the same agent can have
 different voices and listening policies.
+
+### Switching realtime models
+
+Each agent runs on its own model, `Agent(llm=)`, else the session's. In a realtime call,
+`update_agent(agent)` switches the realtime model with the agent:
+
+```python
+front_desk = Agent(name="front_desk", instructions="...", llm=openai.realtime.RealtimeModel())
+billing = Agent(name="billing", instructions="...", llm=google.realtime.RealtimeModel())
+
+session.update_agent(billing)  # billing replies on its model, with the conversation so far
+```
+
+- An agent on the model the call is connected to (the same instance) keeps the connection.
+- An agent on another model: once the leaving agent has drained, the arriving agent's model
+  opens its session with the session's current options. The swap then cuts what the old
+  session still had open, settles every request and speech handle it owed (interrupted, never
+  left pending), closes its connection, and hands the new session the arriving agent's
+  instructions and tools and the whole conversation, rebuilt from the session's history. The
+  old connection's frames are never replayed.
+- Until the new session opens the leaving agent stays connected; speech asked meanwhile is
+  held for the arriving agent. A model that fails to open refuses the switch: the leaving
+  agent stays, on its connection, and the session reports the error.
+- What the conversation owns survives the switch: open expert questions stay answerable,
+  running remote tasks keep running and the expert queue keeps its events.
+- The kind of model is fixed for the call, and so are the realtime capabilities that shape its
+  audio pipeline (`audio_output`, `turn_detection`, `can_disable_turn_detection`): the turn
+  owner and interruption detection are resolved when the session starts. A switch between a
+  realtime model and a pipeline LLM, or to a realtime model that disagrees on those
+  capabilities, raises `ValueError` from `update_agent` and changes nothing.
+- A `VoiceTask` runs on the model of the agent it interrupts; a task agent on another realtime
+  model fails `run()` with a `RuntimeError`.
 
 ### Temporary overrides
 

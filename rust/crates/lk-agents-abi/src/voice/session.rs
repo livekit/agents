@@ -45,6 +45,36 @@ pub enum SessionRefused {
     LoopEnded,
 }
 
+/// An agent whose model the running session cannot switch to. The model's kind, and the
+/// realtime capabilities that decide who ends the turn and how the agent is heard, shape the
+/// session's audio pipeline when it starts, so every agent's model keeps them.
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ModelSwapRefused {
+    #[error(
+        "the session runs a realtime model and this agent's model is a pipeline LLM (or the \
+         reverse): an agent switch keeps the kind of model the session started with"
+    )]
+    KindChanged,
+    #[error(
+        "this agent's realtime model differs from the session's on `audio_output`, \
+         `turn_detection` or `can_disable_turn_detection`, which an agent switch keeps"
+    )]
+    PipelineChanged,
+}
+
+/// `update_agent(agent)` refused before it was sent: by the session, or for the agent's model.
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AgentRefused {
+    #[error(transparent)]
+    #[host(delegate)]
+    Session(#[from] SessionRefused),
+    #[error(transparent)]
+    #[host(delegate)]
+    Model(#[from] ModelSwapRefused),
+}
+
 /// `start()` on a session that is not waiting to be started.
 #[crate::host(error(kind = "RuntimeError"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -158,6 +188,13 @@ pub enum VoiceTaskEnded {
     NotInTool,
     #[error("VoiceTask.run() cannot start while the session's agent is changing or draining")]
     AgentChanging,
+    /// The task's agent runs another realtime model: a task borrows the floor of the agent it
+    /// interrupts, connection included.
+    #[error(
+        "VoiceTask.run() runs on the realtime model of the agent it interrupts; switch agents \
+         with update_agent to change the model"
+    )]
+    ModelChanged,
     #[error("the session closed before the VoiceTask completed")]
     #[host(kind = "asyncio.CancelledError")]
     Closing,
@@ -233,8 +270,10 @@ pub struct CommitSuperseded;
 
 /// The agent a host `Agent` describes (`AgentActivity._frame_kwargs`), as `update_agent` and
 /// `run_voice_task` install it. Each provider is three-state: absent keeps the leg, `None` removes
-/// it, an object replaces it. `chat_ctx` replaces when present. The tools are one toolset,
-/// replaced together because the runner is per-agent. `turn_handling` is the agent layer.
+/// it, an object replaces it. `realtime` is the realtime model the agent runs on, on a session
+/// opened on one; `None` on a pipeline session. `chat_ctx` replaces when present. The tools are
+/// one toolset, replaced together because the runner is per-agent. `turn_handling` is the agent
+/// layer.
 /// `llm_node`, `tts_node` and `stt_node` are the agent's overrides, each over the leg given beside
 /// it: a leg kept from the previous agent keeps that agent's node. `transcription_node`
 /// replaces the previous agent's.
@@ -258,6 +297,8 @@ pub struct UpdateAgentArgs {
     #[host(default = None)]
     pub chat_ctx: Option<Vec<ChatItem>>,
     pub llm: Maybe<Option<Arc<dyn Llm>>>,
+    #[host(default = None)]
+    pub realtime: Option<crate::llm::fallback::RealtimeLeg>,
     pub tts: Maybe<Option<Arc<dyn Tts>>>,
     pub stt: Maybe<Option<Arc<dyn Stt>>>,
     pub vad: Maybe<Option<Arc<dyn Vad>>>,
@@ -613,7 +654,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     fn update_agent(
         &self,
         frame: UpdateAgentArgs,
-    ) -> Result<BoxFuture<'static, bool>, SessionRefused>;
+    ) -> Result<BoxFuture<'static, bool>, AgentRefused>;
 
     /// `VoiceTask.run()`: the task's agent, sent from inside a tool (`origin` is its
     /// captured tool identity). The agent holds the floor until one of its tools completes with a

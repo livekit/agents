@@ -319,6 +319,9 @@ pub struct SessionShared {
     pub(in crate::voice) trace: telemetry::Cx,
     pub(in crate::voice) realtime_spans:
         crate::voice::generation::realtime_generation::RealtimeSpans,
+    /// The host callable answering the current agent's tools, which every realtime session the
+    /// session opens offers.
+    pub(in crate::voice) realtime_tools: Option<lk_agents_abi::HostRef>,
     pub(in crate::voice) time: Timebase,
     pub(in crate::voice) view: lk_agents_net::signal::Cell<Arc<SessionView>>,
     /// `conn_options=`: the budgets the engine retries the LLM and the TTS on.

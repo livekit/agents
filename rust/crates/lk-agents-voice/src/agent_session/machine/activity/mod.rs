@@ -164,6 +164,12 @@ enum ActivityModel {
 
 struct RealtimeActivity {
     session: lk_agents_abi::resources::RealtimeRef,
+    /// The model `session` was opened on: an agent on another one replaces the session.
+    model: Option<lk_agents_abi::resources::RealtimeModelRef>,
+    /// The sessions a switch has asked its model to open.
+    opens: u64,
+    /// Opened by a switch and given no conversation yet.
+    owes_frame: bool,
     state: realtime::RealtimeSessionState,
     players: BTreeSet<SpeechId>,
     heard: realtime::HeardInput,
@@ -791,6 +797,9 @@ impl AgentActivity {
             model: match initial.rt_session.take() {
                 Some(session) => ActivityModel::Realtime(Box::new(RealtimeActivity {
                     session,
+                    model: initial.rt_model.take(),
+                    opens: 0,
+                    owes_frame: false,
                     state: realtime::RealtimeSessionState::new(initial.rt_caps),
                     players: Default::default(),
                     heard: Default::default(),
@@ -840,15 +849,16 @@ impl AgentActivity {
     pub(crate) fn retained_resources(
         &self,
     ) -> impl Iterator<Item = lk_agents_abi::resources::ResourceId> + '_ {
-        [self.realtime().map(|r| r.id), self.dynamic_instructions, self.output_nodes.transcription]
-            .into_iter()
-            .flatten()
-            .chain(
-                self.handoff
-                    .updates()
-                    .chain(self.voice_tasks.parents())
-                    .flat_map(|u| u.resources()),
-            )
+        let model = self.realtime_activity().and_then(|rt| rt.model.as_ref()).map(|m| m.id);
+        [
+            self.realtime().map(|r| r.id),
+            model,
+            self.dynamic_instructions,
+            self.output_nodes.transcription,
+        ]
+        .into_iter()
+        .flatten()
+        .chain(self.handoff.updates().chain(self.voice_tasks.parents()).flat_map(|u| u.resources()))
     }
     pub(crate) fn finish_step(&mut self) {
         self.live_speech_at_final = false;

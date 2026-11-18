@@ -120,6 +120,21 @@ pub enum VoiceEvent {
     },
     ConversationStateFailed(lk_agents_abi::storage::StorageError),
     Realtime(crate::agent_session::machine::activity::realtime::RealtimeWake),
+    /// A wake from the socket of the realtime session `session`: dropped once another session
+    /// replaced it, so a closing socket's late events never reach its successor.
+    RealtimeSession {
+        session: lk_agents_abi::resources::ResourceId,
+        wake: crate::agent_session::machine::activity::realtime::RealtimeWake,
+    },
+    /// A switch's realtime model opened its session (`VoiceEffect::OpenRealtime{open}`): the
+    /// session and the audio sink that feeds it, both registered.
+    RealtimeOpened {
+        open: u64,
+        outcome: Result<
+            (lk_agents_abi::resources::RealtimeRef, lk_agents_abi::resources::ResourceId),
+            ProviderError,
+        >,
+    },
     Eot(
         lk_agents_abi::turn::detector::ReqId,
         Result<lk_agents_abi::EotPrediction, lk_agents_abi::errors::ProviderError>,
@@ -379,6 +394,9 @@ impl VoiceDriver {
                         crate::agent_session::effects::VoiceEffect::DiscardOpenedInput(sink),
                     );
                 }
+                VoiceEvent::RealtimeOpened { outcome: Ok((session, sink)), .. } => {
+                    self.discard_realtime(session.id, sink);
+                }
                 _ => {}
             }
         }
@@ -516,6 +534,14 @@ impl VoiceDriver {
                 self.conversation_state_failed(now, error);
             }
             Some(VoiceEvent::Realtime(ev)) => self.on_realtime(now, ev),
+            Some(VoiceEvent::RealtimeSession { session, wake }) => {
+                if self.activity.realtime().is_some_and(|rt| rt.id == session) {
+                    self.on_realtime(now, wake);
+                }
+            }
+            Some(VoiceEvent::RealtimeOpened { open, outcome }) => {
+                self.on_realtime_opened(now, open, outcome);
+            }
             Some(VoiceEvent::Eot(req, p, thresholds)) => {
                 let (observations, effects) = self.activity.on_eot(now, req, p, thresholds);
                 for observation in observations {
@@ -864,6 +890,8 @@ pub struct InitialSession {
     pub eot_thresholds: Option<lk_agents_abi::tokenize::language::ThresholdOptions>,
     pub eot_provider: Option<lk_agents_abi::ProviderId>,
     pub rt_session: Option<RealtimeRef>,
+    /// The model `rt_session` was opened on.
+    pub rt_model: Option<lk_agents_abi::resources::RealtimeModelRef>,
     pub rt_caps: lk_agents_abi::llm::realtime::RealtimeCapabilities,
     pub rt_disabled: bool,
     pub rt_resolved: TurnDetectionMode,

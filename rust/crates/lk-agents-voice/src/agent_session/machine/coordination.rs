@@ -28,6 +28,9 @@ fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
         VoiceEffect::ProviderPrewarm(id) => ProviderCall::Prewarm(*id).into(),
         VoiceEffect::ProviderRelease(id) => ProviderCall::Release(*id).into(),
         VoiceEffect::CloseRealtimeSession(id) => ProviderCall::CloseRealtime(*id).into(),
+        VoiceEffect::OpenRealtime { open, model, .. } => {
+            ProviderCall::OpenRealtime { open: *open, model: *model }.into()
+        }
         VoiceEffect::EotPredict { req, .. } => DetectorCall::RequestEot { req: *req }.into(),
         VoiceEffect::EotCancel { req, timed_out } => {
             DetectorCall::CancelEot { req: *req, timed_out: *timed_out }.into()

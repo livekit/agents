@@ -16,6 +16,15 @@ pub struct StreamOpened {
 /// Opaque runtime ownership: dropping even an unread/refused result closes its stream.
 pub use super::legs::OpeningLeg as Opened;
 
+/// A switch's realtime session, opened off the loop (`VoiceEffect::OpenRealtime{open}`) by the
+/// model `provider` names.
+pub struct RealtimeOpened {
+    pub open: u64,
+    pub provider: lk_agents_abi::ProviderId,
+    pub outcome:
+        std::result::Result<super::legs::OpenedRealtime, lk_agents_abi::errors::ProviderError>,
+}
+
 /// What the runtime queue owner handles: an event in arrival order, or time reaching
 /// [`lk_agents_voice::agent_session::VoiceDriver::wake_at`].
 pub enum VoiceRuntimeEvent {
@@ -26,6 +35,8 @@ pub enum VoiceRuntimeEvent {
     Awaited(VoiceEvent, super::session::calls::Call),
     /// A provider completion, adopted into runtime resources before entering the core.
     LegOpened(StreamOpened),
+    /// A provider completion, adopted into runtime resources before entering the core.
+    RealtimeOpened(RealtimeOpened),
     /// For the data plane, from the decision core.
     AudioInputRouting(lk_agents_voice::data_plane::AudioInputRouterCommand),
     Wake,
@@ -60,6 +71,7 @@ queue_events! {
         |ev| VoiceRuntimeEvent::Input(VoiceEvent::Overlap(ev));
     ChannelEnd => |end| VoiceRuntimeEvent::Input(VoiceEvent::ChannelEnded(end));
     StreamOpened => |opened| VoiceRuntimeEvent::LegOpened(opened);
+    RealtimeOpened => |opened| VoiceRuntimeEvent::RealtimeOpened(opened);
     lk_agents_abi::voice::rtc::VideoFrameRef => |frame| VoiceRuntimeEvent::Input(VoiceEvent::Video(frame));
 }
 

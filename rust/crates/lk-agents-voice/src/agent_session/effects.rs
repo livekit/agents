@@ -72,6 +72,15 @@ pub enum VoiceEffect {
     ProviderRelease(ResourceId),
     /// The realtime session's `aclose()`, off the loop; comes back as `RealtimeWake::Closed`.
     CloseRealtimeSession(ResourceId),
+    /// A switch's realtime model opens its session with the session's turn-detection choice;
+    /// comes back as `VoiceEvent::RealtimeOpened{open}`: the loop never awaits `session()`.
+    OpenRealtime {
+        open: u64,
+        model: ResourceId,
+        turn_detection_disabled: bool,
+        /// The activity the session runs under.
+        span: Option<lk_agents_abi::telemetry::record::SpanContext>,
+    },
     Emit(SessionEvent),
     Journal(Box<Step>),
     Answer(RequestId, Answer),
@@ -292,6 +301,11 @@ pub enum ProviderCall {
     Release(ResourceId),
     /// The realtime session's `aclose()`, off the loop; comes back as `RealtimeWake::Closed`.
     CloseRealtime(ResourceId),
+    /// Comes back as `VoiceEvent::RealtimeOpened{open}`.
+    OpenRealtime {
+        open: u64,
+        model: ResourceId,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
