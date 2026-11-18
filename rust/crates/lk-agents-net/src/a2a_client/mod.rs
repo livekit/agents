@@ -741,6 +741,10 @@ impl<'a> ReplyReader<'a> {
         for event in std::mem::take(&mut self.events) {
             let update = self.decode(event.data.as_bytes(), false, exchange, updates).await?;
             updates.forward(exchange, update).await?;
+            // The peer answered with its task: the stream now follows work that may stay
+            // silent while it runs, so silence is not a read timeout. A dead connection still
+            // fails the read (TCP keep-alive), and the caller follows the task again.
+            exchange.expect_response(false);
             if self.state.settled() {
                 return Ok(ControlFlow::Break(()));
             }

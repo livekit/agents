@@ -17,7 +17,7 @@ use crate::source::Pulled;
 use a2a::{JsonRpcRequest, JsonRpcResponse, Message, Part, PartContent, Role};
 use lk_agents_abi::a2a::metadata::REASON_KEY;
 use lk_agents_abi::a2a_protocol::TaskState;
-use lk_agents_abi::errors::{ApiErrorKind, ProviderError, Timeout};
+use lk_agents_abi::errors::{ApiErrorKind, Timeout};
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed};
 use lk_agents_core::a2a::client::{ClientError, TaskUpdate};
 use lk_agents_core::a2a::rpc::TaskRef;
@@ -894,29 +894,36 @@ async fn discovery_rpc_and_cancel_stalls_name_their_timeout() {
     }
 }
 
+// Catches: a task stream the peer acknowledged failing with a read timeout while its task works
+// in silence, so the caller reports an error for work that keeps running. Before the task is
+// acknowledged a silent peer still fails the read (`discovery_rpc_and_cancel_stalls_...`).
 #[tokio::test]
-async fn stalled_acknowledged_stream_retains_read_timeout_through_the_reply_source() {
+async fn an_acknowledged_task_stream_waits_through_silence_past_the_read_timeout() {
     let peer = Peer::start(Scenario::Waiting).await;
     let clock = Arc::new(RealClock::new());
     let client = AgentClient::new(
         &env(clock),
         peer.url.clone(),
         Some("test-token".into()),
-        ApiConnectOptions { max_retry: 3, read_timeout: Some(0.05), ..Default::default() },
+        ApiConnectOptions { max_retry: 3, read_timeout: Some(0.02), ..Default::default() },
     )
     .unwrap();
     let reply = client.send(message("work", "Work"), None, None, None, &Cx::NONE).await.unwrap();
+    let mut received = 0;
     loop {
-        match reply.try_pull().unwrap().await {
-            Ok(Pulled::Item(update)) => assert!(!update.state.is_terminal()),
-            Err(ProviderError::Local(error)) => {
-                assert_eq!(error.kind, ApiErrorKind::Timeout);
-                assert_eq!(error.timeout, Some(Timeout::Read));
-                break;
+        // real wait: fifteen read timeouts of silence must not fail the stream
+        let pulled =
+            tokio::time::timeout(Duration::from_millis(300), reply.try_pull().unwrap()).await;
+        match pulled {
+            Ok(Ok(Pulled::Item(update))) => {
+                assert!(!update.state.is_terminal());
+                received += 1;
             }
-            other => panic!("stalled stream lost the typed timeout: {other:?}"),
+            Err(_) => break,
+            Ok(other) => panic!("a silent acknowledged task stream failed: {other:?}"),
         }
     }
+    assert!(received > 0, "the task was acknowledged before the silence");
     client.aclose().await;
     let requests = peer.finish().await;
     assert_eq!(
