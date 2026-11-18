@@ -649,6 +649,7 @@ async def test_realtime_audio_redaction_warns_only_for_redacted_audio_recording(
     job_ctx = MagicMock()
     job_ctx.job.enable_recording = True
     job_ctx.job.enable_redaction = project_redaction
+    job_ctx._redaction_enabled = project_redaction or session_redaction
     job_ctx.job.id = "test-job-id"
     job_ctx.job.room.sid = "test-room-sid"
     job_ctx.job.agent_name = "test-agent"

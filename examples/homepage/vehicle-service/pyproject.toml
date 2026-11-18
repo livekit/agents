@@ -9,7 +9,7 @@ description = "Bayside BMW service desk voice agent: books visits and calls back
 requires-python = ">=3.10, <3.15"
 
 dependencies = [
-    "livekit-agents~=1.8",
+    "livekit-agents~=1.8.11",
     "livekit-plugins-ai-coustics~=0.3",
     "python-dotenv",
 ]
@@ -20,11 +20,6 @@ dev = [
     "pytest-asyncio",
     "ruff",
 ]
-
-[tool.uv]
-# yarl 1.24.1 was published with only a cp310 wheel and no sdist, so it can't
-# install on Python 3.11+. Remove this once upstream uploads the remaining wheels.
-constraint-dependencies = ["yarl<1.24"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

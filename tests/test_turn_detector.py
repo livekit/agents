@@ -1,4 +1,5 @@
-"""TurnDetector request lifecycle, auto-select, cloud-to-local fallback and thresholds."""
+"""TurnDetector request lifecycle, auto-select, cloud-to-local fallback, thresholds, and what
+the local transport hands the native model."""
 
 from __future__ import annotations
 
@@ -8,8 +9,10 @@ import logging
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
+from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
 from livekit.agents.inference.eot import TurnDetector
 from livekit.agents.inference.eot.base import (
@@ -22,9 +25,11 @@ from livekit.agents.inference.eot.languages import (
     ThresholdOptions,
     _normalize_overrides,
 )
-from livekit.agents.inference.eot.transports import _LocalTransport
+from livekit.agents.inference.eot.transports import EOT_MAX_SAMPLES, _LocalTransport
 from livekit.agents.language import LanguageCode
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
+
+from .fake_turn_detector_ws import drain_audio_queue
 
 pytestmark = pytest.mark.audio_eot
 
@@ -62,7 +67,7 @@ class _ScriptedTransport:
         run_behavior: str = "idle",
         run_exc: BaseException | None = None,
     ) -> None:
-        self.run_behavior = run_behavior  # "idle" | "raise" | "return"
+        self.run_behavior = run_behavior  # "idle" | "raise" | "return" | "drain"
         self.run_exc = run_exc
         self.session_id: str | None = None
         self.run_calls = 0
@@ -79,14 +84,21 @@ class _ScriptedTransport:
             raise self.run_exc
         if self.run_behavior == "return":
             return
+        if self.run_behavior == "drain":
+            # hand the queued audio and requests to this transport, as the real ones do
+            await self.stream_ref._drain_audio_channel()
+            return
         # idle — sleep until cancelled
         await asyncio.Future()
 
-    def run_inference(self, request_id: str) -> None:
+    def run_inference(self, request_id: str, *, chat_ctx: Any = None) -> None:
         self.events.append(("run_inference", request_id))
 
     def push_frame(self, frame: Any) -> None:
         self.events.append(("push_frame", frame))
+
+    def on_start_of_turn(self, elapsed: float) -> None:
+        self.events.append(("on_start_of_turn", elapsed))
 
     def flush(self) -> None:
         self.events.append(("flush", None))
@@ -132,24 +144,76 @@ def _inferences(transport: _ScriptedTransport) -> list[tuple[str, Any]]:
     return [e for e in transport.events if e[0] == "run_inference"]
 
 
+def _audio_events(transport: _ScriptedTransport) -> list[tuple[str, Any]]:
+    """What the drain loop handed the transport, in order; a frame shows as its length."""
+    return [
+        (name, value.samples_per_channel if name == "push_frame" else value)
+        for name, value in transport.events
+        if name != "detach"
+    ]
+
+
+def _frame(num_samples: int = 160, *, value: int = 0) -> rtc.AudioFrame:
+    return rtc.AudioFrame(
+        data=np.full(num_samples, value, dtype=np.int16).tobytes(),
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=num_samples,
+    )
+
+
 _Stream = tuple[_BaseStreamingTurnDetectorStream, _ScriptedTransport]
 
 
 @pytest.fixture
 async def stream() -> Any:
-    transport = _ScriptedTransport()
+    transport = _ScriptedTransport(run_behavior="drain")
     s = _make_stream_with_transport(transport, model="turn-detector-v1-mini")
     yield s, transport
     await s.aclose()
 
 
 class TestStreamRequests:
+    async def test_start_of_turn_reaches_transport_in_audio_order(self, stream: _Stream) -> None:
+        """The turn length is measured when the start is queued, and it lands between the
+        frames pushed before and after the call, however late the transport drains it."""
+        s, transport = stream
+        s.push_audio(_frame())
+        with patch("livekit.agents.inference.eot.base.time.time", return_value=1000.25):
+            s.on_start_of_turn(1000.0)
+        s.push_audio(_frame())
+        s.end_input()
+        await s._task
+        assert _audio_events(transport) == [
+            ("push_frame", 160),
+            ("on_start_of_turn", 0.25),
+            ("push_frame", 160),
+            ("flush", None),
+        ]
+
     async def test_predict_starts_inference(self, stream: _Stream) -> None:
         s, transport = stream
         fut = s.predict()
         assert s._request_id is not None
         assert not fut.done()
+        await drain_audio_queue(s)
         assert _inferences(transport) == [("run_inference", s._request_id)]
+
+    async def test_predict_runs_after_the_audio_pushed_before_it(self, stream: _Stream) -> None:
+        """predict queues behind the audio, so the transport sees every frame captured before
+        the call first and counts it in the turn length."""
+        s, transport = stream
+        s.push_audio(_frame())
+        s.push_audio(_frame())
+        s.predict()
+        s.push_audio(_frame())
+        await drain_audio_queue(s)
+        assert _audio_events(transport) == [
+            ("push_frame", 160),
+            ("push_frame", 160),
+            ("run_inference", s._request_id),
+            ("push_frame", 160),
+        ]
 
     async def test_predict_links_request_to_inference_session(self, stream: _Stream) -> None:
         s, transport = stream
@@ -169,7 +233,9 @@ class TestStreamRequests:
         assert s._request_id != old_id
         assert old_fut.done()
         assert old_fut.result().end_of_turn_probability == 0.0
-        assert len(_inferences(transport)) == 2
+        # the old request closed before the transport reached it, so only the new one runs
+        await drain_audio_queue(s)
+        assert _inferences(transport) == [("run_inference", s._request_id)]
 
     async def test_cancel_inference_closes_request(self, stream: _Stream) -> None:
         s, transport = stream
@@ -199,7 +265,8 @@ class TestStreamRequests:
         next_fut = s.predict()
         assert next_fut is not fut
         assert not next_fut.done()
-        assert len(_inferences(transport)) == 2
+        await drain_audio_queue(s)
+        assert _inferences(transport) == [("run_inference", s._request_id)]
 
     async def test_prediction_completes_request(self, stream: _Stream) -> None:
         """A prediction resolves the future and completes the request."""
@@ -387,9 +454,34 @@ class TestLocalFailureRetry:
         assert stream._transport is transport
         await stream.aclose()
 
+    async def test_run_loop_failure_keeps_serving_later_requests(self) -> None:
+        """One failing call ends the transport's run loop. The stream starts it again, so the
+        next request still reaches the transport instead of waiting in the queue."""
+
+        class _FlakyTransport(_ScriptedTransport):
+            def push_frame(self, frame: Any) -> None:
+                super().push_frame(frame)
+                if len([e for e in self.events if e[0] == "push_frame"]) == 1:
+                    raise RuntimeError("local boom")
+
+        transport = _FlakyTransport(run_behavior="drain")
+        stream = _make_stream_with_transport(transport, model="turn-detector-v1-mini")
+        try:
+            stream.push_audio(_frame())
+            await _wait_for(lambda: stream._warned_local_failure)
+
+            stream.push_audio(_frame())
+            stream.predict()
+            await drain_audio_queue(stream)
+
+            assert _inferences(transport) == [("run_inference", stream._request_id)]
+            assert transport.run_calls == 2
+        finally:
+            await stream.aclose()
+
     async def test_failed_prediction_resolves_the_positive_default(self) -> None:
         class _FailingEOT:
-            def predict(self, pcm: Any) -> float:
+            def predict(self, pcm: Any, turn_samples: int | None = None) -> float:
                 raise RuntimeError("native boom")
 
         with patch("livekit.agents.inference.eot.transports._EOT", _FailingEOT):
@@ -400,6 +492,81 @@ class TestLocalFailureRetry:
         await asyncio.gather(*transport._tasks)
 
         assert stream._resolve_prediction.call_args.args == ("request", 1.0)
+
+
+class _RecordingEOT:
+    def __init__(self) -> None:
+        self.calls: list[tuple[np.ndarray, int | None]] = []
+
+    def predict(self, pcm: np.ndarray, turn_samples: int | None = None) -> float:
+        self.calls.append((pcm, turn_samples))
+        return 0.5
+
+
+class TestLocalTransportInput:
+    """``_LocalTransport`` hands the native model the last ``EOT_MAX_SAMPLES`` of the user turn
+    and the turn length in samples; both start at the turn start, or at the last flush."""
+
+    @pytest.fixture
+    def transport(self) -> _LocalTransport:
+        with patch("livekit.agents.inference.eot.transports._EOT", _RecordingEOT):
+            return _LocalTransport(opts=_make_opts(model="turn-detector-v1-mini"))
+
+    async def _predict(self, transport: _LocalTransport) -> tuple[np.ndarray, int | None]:
+        stream = MagicMock()
+        transport.attach(stream)
+        transport.run_inference("request")
+        await asyncio.gather(*transport._tasks)
+        stream._resolve_prediction.assert_called_once()
+        calls: list[tuple[np.ndarray, int | None]] = transport._eot.calls  # type: ignore[attr-defined]
+        return calls[-1]
+
+    async def test_turn_samples_count_from_the_turn_start_past_the_window(
+        self, transport: _LocalTransport
+    ) -> None:
+        transport.push_frame(_frame(8000))  # silence before the user speaks
+        transport.push_frame(_frame(4000))
+        transport.on_start_of_turn(0.25)
+        for _ in range(2 * EOT_MAX_SAMPLES // 1600):
+            transport.push_frame(_frame(1600))
+
+        pcm, turn_samples = await self._predict(transport)
+
+        assert len(pcm) == EOT_MAX_SAMPLES
+        assert turn_samples == 4000 + 2 * EOT_MAX_SAMPLES // 1600 * 1600
+
+    async def test_turn_start_drops_the_audio_before_it(self, transport: _LocalTransport) -> None:
+        """A turn shorter than the window: the model reads the turn only, not the audio that
+        filled the buffer before the user spoke."""
+        transport.push_frame(_frame(EOT_MAX_SAMPLES, value=1))  # the agent speaks
+        transport.push_frame(_frame(4000, value=2))
+        transport.on_start_of_turn(0.25)
+        transport.push_frame(_frame(1600, value=2))
+
+        pcm, turn_samples = await self._predict(transport)
+
+        assert len(pcm) == turn_samples == 5600
+        assert (pcm == 2).all()
+
+    async def test_flush_forgets_the_turn_start(self, transport: _LocalTransport) -> None:
+        transport.push_frame(_frame(16000))
+        transport.on_start_of_turn(0.1)
+        transport.flush()
+        transport.push_frame(_frame(6000))
+
+        pcm, turn_samples = await self._predict(transport)
+
+        assert len(pcm) == turn_samples == 6000
+
+    async def test_turn_longer_than_the_audio_clamps_to_flush(
+        self, transport: _LocalTransport
+    ) -> None:
+        transport.push_frame(_frame(1600))
+        transport.on_start_of_turn(1.0)
+
+        pcm, turn_samples = await self._predict(transport)
+
+        assert len(pcm) == turn_samples == 1600
 
 
 class TestWarningDedupe:
