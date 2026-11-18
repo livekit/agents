@@ -89,7 +89,24 @@ jobs:
 
       - name: Install macOS codec build prerequisites
         if: runner.os == 'macOS'
-        run: brew install opus nasm pkg-config cmake
+        run: brew install nasm pkg-config cmake
+
+      # The wheel supports macOS 11+: Homebrew's libopus targets the runner's own macOS, so a
+      # static libopus is built for 11.0 and FFmpeg links it in (nothing newer gets bundled).
+      - name: Build a static libopus for macOS 11
+        if: runner.os == 'macOS'
+        run: |
+          prefix="$RUNNER_TEMP/opus"
+          curl -sSfL https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz | tar xz -C "$RUNNER_TEMP"
+          cmake -S "$RUNNER_TEMP/opus-1.5.2" -B "$RUNNER_TEMP/opus-build" -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF -DOPUS_BUILD_PROGRAMS=OFF -DOPUS_BUILD_TESTING=OFF \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DCMAKE_INSTALL_PREFIX="$prefix"
+          cmake --build "$RUNNER_TEMP/opus-build" --target install --parallel
+          {
+            echo "MACOSX_DEPLOYMENT_TARGET=11.0"
+            echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig"
+            echo "PKG_CONFIG_ALL_STATIC=1"
+          } >> "$GITHUB_ENV"
 
       - name: Build wheel
         env:
