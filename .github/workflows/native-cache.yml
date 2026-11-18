@@ -17,11 +17,13 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    env:
-      # Exercise spaces in the cache path, including MSVC's archive tools.
-      LK_AGENTS_NATIVE_CACHE_DIR: ${{ runner.temp }}/agents native artifacts
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      # Exercise spaces in the cache path, including MSVC's archive tools. A job's `env` cannot
+      # read the `runner` context, so a step exports it.
+      - name: Set the native cache directory
+        shell: bash
+        run: echo "LK_AGENTS_NATIVE_CACHE_DIR=$RUNNER_TEMP/agents native artifacts" >> "$GITHUB_ENV"
       - name: Install Rust
         shell: bash
         run: |
