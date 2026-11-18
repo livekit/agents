@@ -2,6 +2,7 @@
 //! exchange executors over the scripted peer at the socket boundary.
 
 mod delegation;
+mod realtime;
 
 use std::collections::BTreeSet;
 
@@ -51,7 +52,8 @@ impl Call {
                 if !self.answered.insert(chat) {
                     continue;
                 }
-                let tools = match run.record.resource(Kind::Chat, chat).map(|r| r.detail().clone()) {
+                let tools = match run.record.resource(Kind::Chat, chat).map(|r| r.detail().clone())
+                {
                     Some(Detail::Chat { tools, .. }) => tools,
                     _ => continue,
                 };

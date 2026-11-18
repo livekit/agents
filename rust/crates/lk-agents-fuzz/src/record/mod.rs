@@ -23,8 +23,8 @@ mod probes;
 pub use probes::{Fault, Probe, Site, Wait};
 mod recognition;
 mod remote;
-pub use remote::RemoteStep;
 pub use recognition::{Recognised, Recognition, SttReport};
+pub use remote::RemoteStep;
 mod resources;
 mod storage;
 pub use storage::{

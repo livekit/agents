@@ -120,7 +120,12 @@ impl DelegationHost for Delegation {
         // Admission at this hop is enough; the say owner keeps its own delivery.
         let said = origin
             .session
-            .tool_say(origin.invocation_id.clone(), origin.operation, origin.call.call_id.clone(), text)
+            .tool_say(
+                origin.invocation_id.clone(),
+                origin.operation,
+                origin.call.call_id.clone(),
+                text,
+            )
             .map(drop)
             .map_err(|refused| HostError::new(refused.to_string()));
         Box::pin(async move { said })
@@ -131,8 +136,11 @@ impl DelegationHost for Delegation {
         _cx: &Cx,
         _context: &'a CallContext,
     ) -> BoxFuture<'a, Result<(), HostError>> {
-        let outcome =
-            ToolOutcome::Update { message: DELEGATED.into(), raw: String::new(), reply_required: true };
+        let outcome = ToolOutcome::Update {
+            message: DELEGATED.into(),
+            raw: String::new(),
+            reply_required: true,
+        };
         let reported = self.origin.report(outcome.into());
         Box::pin(async move { reported })
     }
@@ -208,7 +216,10 @@ pub(super) async fn run(
     call: &FunctionCall,
 ) -> (ToolOutcome, Map<String, Value>) {
     let session = registry.session().expect("a tool runs in a started session").clone();
-    registry.record_remote(RemoteStep::BodyStarted { call: call.id.clone(), call_id: call.call_id.clone() });
+    registry.record_remote(RemoteStep::BodyStarted {
+        call: call.id.clone(),
+        call_id: call.call_id.clone(),
+    });
     let interaction = match RemoteInteraction::new(
         ENDPOINT.into(),
         ChatItem::FunctionCall(call.clone()),

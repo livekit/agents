@@ -179,7 +179,10 @@ impl RemotePeer {
         for step in 1..=script.progress {
             let text = format!("Working on {task_id}, step {step}.");
             let message = agent_message(&format!("{task_id}-p{}-{step}", task.asked), &text);
-            events.push((next(), Event::Status { state: "TASK_STATE_WORKING", message: Some(message) }));
+            events.push((
+                next(),
+                Event::Status { state: "TASK_STATE_WORKING", message: Some(message) },
+            ));
         }
         if task.asked < script.asks {
             task.asked += 1;
@@ -200,17 +203,22 @@ impl RemotePeer {
             match script.end {
                 PeerEnd::Completed => {
                     let text = result(task_id);
-                    (self.observe)(RemoteStep::Finished { task: task_id.into(), result: text.clone() });
+                    (self.observe)(RemoteStep::Finished {
+                        task: task_id.into(),
+                        result: text.clone(),
+                    });
                     let at = next();
                     events.push((
                         at,
                         Event::Artifact(json!({"artifactId": format!("{task_id}-result"),
                             "parts": [{"text": text}]})),
                     ));
-                    events.push((at, Event::Status { state: "TASK_STATE_COMPLETED", message: None }));
+                    events
+                        .push((at, Event::Status { state: "TASK_STATE_COMPLETED", message: None }));
                 }
                 PeerEnd::Failed => {
-                    let message = agent_message(&format!("{task_id}-failed"), "The desk is closed.");
+                    let message =
+                        agent_message(&format!("{task_id}-failed"), "The desk is closed.");
                     events.push((
                         next(),
                         Event::Status { state: "TASK_STATE_FAILED", message: Some(message) },
@@ -253,7 +261,11 @@ impl RemotePeer {
             }
             Some(id) => {
                 let Some(task) = state.tasks.get_mut(&id) else {
-                    return Reply::Error(rpc_error(rpc_id, a2a::error_code::TASK_NOT_FOUND, "no task"));
+                    return Reply::Error(rpc_error(
+                        rpc_id,
+                        a2a::error_code::TASK_NOT_FOUND,
+                        "no task",
+                    ));
                 };
                 let visible_waiting = task.visible(now).last().is_some_and(|event| {
                     matches!(event, Event::Status { state: "TASK_STATE_INPUT_REQUIRED", .. })
@@ -361,7 +373,9 @@ impl RemotePeer {
                     Some(task) => Reply::Json(
                         json!({"jsonrpc": "2.0", "id": id, "result": task.snapshot(task_id, now)}),
                     ),
-                    None => Reply::Error(rpc_error(&id, a2a::error_code::TASK_NOT_FOUND, "no task")),
+                    None => {
+                        Reply::Error(rpc_error(&id, a2a::error_code::TASK_NOT_FOUND, "no task"))
+                    }
                 }
             }
             other => Reply::Error(rpc_error(&id, -32601, &format!("no method {other}"))),
@@ -375,7 +389,11 @@ enum Reply {
     /// The work was applied; the connection died before any acknowledgement.
     Lost,
     /// Server-sent events, each written when due; `drop_after` cuts the connection after that many.
-    Stream { rpc_id: Value, frames: Vec<(Ts, Value)>, drop_after: Option<usize> },
+    Stream {
+        rpc_id: Value,
+        frames: Vec<(Ts, Value)>,
+        drop_after: Option<usize>,
+    },
 }
 
 fn agent_message(id: &str, text: &str) -> Value {

@@ -44,7 +44,10 @@ fn each_remote_question_is_presented_once_through_progress_bursts() {
         for k in 1..=2 {
             let asked = question("task-1", k);
             assert_eq!(
-                count(&steps, |s| matches!(s, RemoteStep::Presented { text, .. } if *text == asked)),
+                count(
+                    &steps,
+                    |s| matches!(s, RemoteStep::Presented { text, .. } if *text == asked)
+                ),
                 1,
                 "question {k} was not presented exactly once"
             );

@@ -66,7 +66,10 @@ impl Talk {
             // The remote call's router: new work, a continuation or a held response of one of
             // the first candidates, unclear, or indices the owner must refuse.
             let verdict = REMOTE_VERDICTS[self.rng.usize(0..REMOTE_VERDICTS.len())];
-            Some((lk_agents_core::delegation::remote::routing::TOOL.into(), ToolArgs(verdict.into())))
+            Some((
+                lk_agents_core::delegation::remote::routing::TOOL.into(),
+                ToolArgs(verdict.into()),
+            ))
         } else if offered(&self.run, RECORD_KEYTERMS_TOOL) {
             // Terms to track, to apply and to drop, drawn from the call's names, or an answer
             // that changes nothing.

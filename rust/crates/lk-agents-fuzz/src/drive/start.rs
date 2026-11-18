@@ -957,7 +957,9 @@ fn scheduled(
 
 /// The case's process environment on `clock`, as a host lends it to work it starts beside the
 /// session (a remote tool's delegation): the session's scheduler, set once the session exists.
-pub fn case_process(clock: Arc<dyn lk_agents_abi::Clock>) -> lk_agents_runtime::net::env::ProcessEnv {
+pub fn case_process(
+    clock: Arc<dyn lk_agents_abi::Clock>,
+) -> lk_agents_runtime::net::env::ProcessEnv {
     lk_agents_runtime::net::env::ProcessEnv {
         spawner: || {
             SCHEDULER.with(|slot| slot.borrow().clone()).ok_or_else(|| {
