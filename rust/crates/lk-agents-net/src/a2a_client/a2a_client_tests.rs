@@ -43,6 +43,8 @@ enum Scenario {
     StalledRpcHeaders,
     StalledCancelBody,
     RetryOnce,
+    /// The first request of each kind (discovery, each RPC method) is answered 503.
+    UnavailableOnce,
 }
 
 #[derive(Default)]
@@ -51,6 +53,7 @@ struct AckGate {
     release: Notify,
     finished: Notify,
     retries: AtomicUsize,
+    unavailable: std::sync::Mutex<std::collections::BTreeSet<String>>,
 }
 
 #[derive(Debug)]
@@ -202,6 +205,12 @@ async fn serve(
     let rpc = request.rpc.clone();
     let is_get = request.method == "GET";
     requests.send(request).await.map_err(io::Error::other)?;
+    if matches!(scenario, Scenario::UnavailableOnce) {
+        let kind = rpc.as_ref().map_or("card", |rpc| rpc.method.as_str()).to_owned();
+        if ack_gate.unavailable.lock().unwrap().insert(kind) {
+            return socket.get_mut().write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+        }
+    }
     if (is_get && matches!(scenario, Scenario::StalledCardHeaders | Scenario::StalledCardBody))
         || (!is_get && matches!(scenario, Scenario::StalledRpcHeaders))
     {
@@ -244,6 +253,13 @@ async fn serve(
         let body = serde_json::to_vec(&JsonRpcResponse::success(rpc.id, result)).unwrap();
         return respond(socket.get_mut(), "application/json", &body).await;
     }
+    if rpc.method == "GetTask" {
+        // GetTask carries no contextId; the test reads its one known task.
+        let result = json!({"id": params["id"], "contextId": "known-context",
+            "status": {"state": "TASK_STATE_WORKING"}});
+        let body = serde_json::to_vec(&JsonRpcResponse::success(rpc.id, result)).unwrap();
+        return respond(socket.get_mut(), "application/json", &body).await;
+    }
     if matches!(scenario, Scenario::ResetBeforeAck) {
         return socket.get_mut().shutdown().await;
     }
@@ -273,9 +289,9 @@ async fn serve(
     events.push(json!({"statusUpdate": {"taskId": task, "contextId": context,
         "status": {"state": "TASK_STATE_WORKING", "message": {"messageId": "progress", "role": "ROLE_AGENT", "parts": [{"text": "Checking café"}]}}}}));
     match scenario {
-        Scenario::Question | Scenario::FastQuestion | Scenario::RetryOnce if !answer => events.push(json!({"statusUpdate": {"taskId": task, "contextId": context,
+        Scenario::Question | Scenario::FastQuestion | Scenario::RetryOnce | Scenario::UnavailableOnce if !answer => events.push(json!({"statusUpdate": {"taskId": task, "contextId": context,
             "status": {"state": "TASK_STATE_INPUT_REQUIRED", "message": {"messageId": "question", "role": "ROLE_AGENT", "parts": [{"text": "Which account?"}]}}}})),
-        Scenario::Question | Scenario::FastQuestion | Scenario::RetryOnce => {
+        Scenario::Question | Scenario::FastQuestion | Scenario::RetryOnce | Scenario::UnavailableOnce => {
             events.push(json!({"artifactUpdate": {"taskId": task, "contextId": context,
                 "artifact": {"artifactId": "answer", "name": "answer", "parts": [{"text": "Confirmed "}]}}}));
             events.push(json!({"artifactUpdate": {"taskId": task, "contextId": context,
@@ -616,6 +632,37 @@ async fn a_lost_acknowledgement_does_not_repeat_a_potentially_accepted_request()
             requests.iter().filter_map(|r| r.rpc.as_ref()).map(|r| r.method.as_str()).collect();
         assert_eq!(methods, ["SendStreamingMessage"]);
     }
+}
+
+#[tokio::test]
+async fn unavailable_discovery_and_task_reads_retry_but_an_unavailable_send_is_never_resent() {
+    let peer = Peer::start(Scenario::UnavailableOnce).await;
+    let clock = Arc::new(RealClock::new());
+    let options = ApiConnectOptions { max_retry: 2, retry_interval: 0.01, ..Default::default() };
+    let client =
+        AgentClient::new(&env(clock), peer.url.clone(), Some("test-token".into()), options)
+            .unwrap();
+    tokio::time::timeout(LIMIT, async {
+        client.connect().await.expect("a 503 card fetch is retried within the policy");
+        let task = TaskRef { id: "known-task".into(), context_id: "known-context".into() };
+        let read = client.get_task(task, &Cx::NONE, None).await.expect("GetTask is replay-safe");
+        assert_eq!(read.id, "known-task");
+        let sent = client.send(message("maybe-applied", "Book once"), None, None, None, &Cx::NONE);
+        let ClientError::Transport(error) = sent.await.err().expect("a 503 send stays failed")
+        else {
+            panic!("the 503 lost its transport error");
+        };
+        assert_eq!(error.status_code, Some(503));
+    })
+    .await
+    .unwrap();
+    client.aclose().await;
+    let requests = peer.finish().await;
+    let kinds: Vec<_> = requests
+        .iter()
+        .map(|r| r.rpc.as_ref().map_or("card", |rpc| rpc.method.as_str()))
+        .collect();
+    assert_eq!(kinds, ["card", "card", "GetTask", "GetTask", "SendStreamingMessage"]);
 }
 
 #[tokio::test]
