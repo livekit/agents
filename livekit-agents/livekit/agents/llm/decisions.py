@@ -8,10 +8,11 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Annotated, Any, Generic, Literal, TypeVar
+from typing import Annotated, Any, Generic, Literal
 
 from opentelemetry import trace
 from pydantic import BaseModel, Field
+from typing_extensions import Never, TypeVar
 
 from livekit import rtc
 
@@ -195,7 +196,8 @@ def _validate_result(result: DecisionResult, decision: Decision) -> None:
             raise APIError("score is outside the defined scale", retryable=False)
 
 
-TEvent = TypeVar("TEvent")
+# an adapter names its extra events here; a model that names none keeps strict event names
+TEvent = TypeVar("TEvent", contravariant=True, default=Never)
 
 
 class DecisionModel(

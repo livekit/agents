@@ -440,6 +440,16 @@ async def test_fallback_applies_its_own_timeout_to_each_model() -> None:
     await adapter.aclose()
 
 
+async def test_fallback_default_timeout_leaves_room_in_a_one_second_deadline() -> None:
+    primary = SwitchModel("primary", "hang")
+    adapter, events = fallback(primary, SwitchModel("secondary"))
+    for _ in range(2):
+        response = await asyncio.wait_for(evaluate(adapter, decisions=CHECK), timeout=1.0)
+        assert response.model == "secondary"
+    assert events == [("primary", False)]
+    await adapter.aclose()
+
+
 async def test_fallback_caller_deadline_does_not_mark_a_model_unavailable() -> None:
     secondary = SwitchModel("secondary")
     adapter, events = fallback(SwitchModel("primary", "hang"), secondary, attempt_timeout=1.0)
@@ -447,6 +457,18 @@ async def test_fallback_caller_deadline_does_not_mark_a_model_unavailable() -> N
         await asyncio.wait_for(evaluate(adapter, decisions=CHECK), timeout=0.5)
     assert events == []
     assert secondary.requests == []
+
+
+async def test_fallback_starts_no_background_check_after_aclose() -> None:
+    primary = SwitchModel("primary", "hang")
+    adapter, _ = fallback(primary, SwitchModel("secondary"), attempt_timeout=0.5)
+    request = asyncio.create_task(evaluate(adapter, decisions=CHECK))
+    await asyncio.sleep(0.1)  # the request is waiting on the primary
+    await adapter.aclose()
+
+    assert (await request).model == "secondary"
+    await asyncio.sleep(1)
+    assert len(primary.requests) == 1
 
 
 async def test_fallback_retries_every_model_once_all_are_unavailable() -> None:

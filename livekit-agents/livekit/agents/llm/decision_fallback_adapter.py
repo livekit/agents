@@ -70,16 +70,17 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
         self,
         models: list[DecisionModel],
         *,
-        attempt_timeout: float = 1.0,
+        attempt_timeout: float = 0.5,
         max_retry_per_model: int = 0,
         retry_interval: float = 0.5,
     ) -> None:
         """
         Args:
             models: Decision models in priority order.
-            attempt_timeout: Timeout for each request to a model, in seconds. Keep it below
-                any deadline the caller sets on ``evaluate``. A model is only marked
-                unavailable when its request fails, not when the caller cancels first.
+            attempt_timeout: Timeout for each request to a model, in seconds. It applies to
+                every model and replaces a model's own default, so raise it for a slow model.
+                Keep it below any deadline the caller sets on ``evaluate``: a model is only
+                marked unavailable when its request fails, not when the caller cancels first.
             max_retry_per_model: Retries on the same model before moving on. Defaults to 0,
                 which moves on after the first failure.
             retry_interval: Seconds between retries on the same model.
@@ -100,11 +101,12 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
             raise ValueError("the decision models share no decision kind")
         super().__init__(capabilities=DecisionCapabilities(decision_kinds=kinds))
 
-        self._models = models
+        self._models = list(models)
         self._attempt_timeout = attempt_timeout
         self._max_retry_per_model = max_retry_per_model
         self._retry_interval = retry_interval
         self._status = [_ModelStatus() for _ in models]
+        self._closed = False
 
         for model in models:
             model.on("metrics_collected", self._on_metrics_collected)
@@ -232,6 +234,9 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
     ) -> None:
+        # a request still running at aclose must not start a check that outlives the adapter
+        if self._closed:
+            return
         if status.recovering_task is not None and not status.recovering_task.done():
             return
 
@@ -254,6 +259,7 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
         status.recovering_task = asyncio.create_task(_recover())
 
     async def aclose(self) -> None:
+        self._closed = True
         await aio.cancel_and_wait(
             *(s.recovering_task for s in self._status if s.recovering_task is not None)
         )
