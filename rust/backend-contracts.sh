@@ -6,4 +6,4 @@ for name in LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET; do
 done
 cd "$(dirname "$0")"
 exec cargo nextest run --locked -p lk-agents-storage -p lk-agents-runtime --lib \
-    --test storage --test runtime --no-tests fail --run-ignored only -E 'test(agentdb::)'
+    --no-tests fail --run-ignored only -E 'test(agentdb::)'
