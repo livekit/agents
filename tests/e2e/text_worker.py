@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 from datetime import timedelta
@@ -16,7 +17,7 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
-from livekit.agents import Agent, AgentServer, InputRequired, RunContext
+from livekit.agents import Agent, AgentServer, DelegationOptions, InputRequired, RunContext
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import ChatContext
 from livekit.agents.storage import AgentDBStorage
@@ -49,6 +50,16 @@ def answer(chat_ctx: ChatContext) -> Reply:
     return replies.get(text, "reply: " + text)
 
 
+ANSWERS = {"yes", "no", "alice@example.com"}
+
+
+def route(chat_ctx: ChatContext) -> Reply:
+    """The routing model: the scripted answers respond to the open question; nothing else does."""
+    prompt = json.loads(last_input(chat_ctx) or "{}")
+    answers = prompt.get("latest_message") in ANSWERS and prompt.get("candidates")
+    return tool_call("route_input_response", candidates=[0] if answers else [], unclear=False)
+
+
 def make_app(worker: str, service_url: str, port: int) -> AgentServer:
     storage = AgentDBStorage(
         holder=worker, lease_ttl=timedelta(seconds=2), renew_interval=timedelta(seconds=0.5)
@@ -78,7 +89,7 @@ def make_app(worker: str, service_url: str, port: int) -> AgentServer:
         """Wait for the external lookup service."""
         return await service(ctx.context.model_copy(update={"operation": "wait"}))
 
-    @agent.tool(needs_approval=lambda terms: f"Book {terms}? Yes or no?")
+    @agent.tool(needs_approval=lambda ctx, terms: f"Book {terms}? Yes or no?")
     async def book(ctx: RunContext[ServiceCall], terms: str) -> str:
         """Book the exact quoted terms."""
         return await service(ctx.context.model_copy(update={"operation": "book", "terms": terms}))
@@ -101,10 +112,13 @@ def make_app(worker: str, service_url: str, port: int) -> AgentServer:
                 terms=ctx.message.text_content or "",
             )
         )
+        # The binding continues the thread's conversation, its pending question and approval
+        # included; supplied history alone can neither answer nor approve.
+        app = ServiceCall(worker=worker, thread=ctx.thread.id, operation="")
         return await agent.run(
             ctx.message,
-            message_history=ctx.message_history,
-            context=ServiceCall(worker=worker, thread=ctx.thread.id, operation=""),
+            context=ctx.store.bind(app),
+            delegation=DelegationOptions(routing_model=FakeLLM(route)),
         )
 
     server.a2a_session(endpoint="desk", description="E2E scripted desk")(handler)

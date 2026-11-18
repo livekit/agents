@@ -7,6 +7,15 @@ use super::{ChildCallStatus, SessionSnapshot};
 
 pub use lk_agents_abi::text_session::{ChatHistory, LocalAgentTool, RoutingError};
 
+/// A tool a restored conversation settled as an internal error: it was running when its
+/// process stopped, so its outcome is unknown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LostTool {
+    pub agent_name: String,
+    pub tool_name: String,
+    pub call_id: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionAgent {
     pub definition: AgentDefinition,
@@ -73,6 +82,77 @@ impl SessionConfig {
             }
         }
         Ok(())
+    }
+
+    /// An admitted local tool whose result was never recorded and that nothing else settles:
+    /// its process stopped while it ran (the partition was taken over), so it never will be.
+    fn lost(
+        &self,
+        state: &SessionSnapshot,
+        frame: &super::SessionFrame,
+        call: &lk_agents_abi::FunctionCall,
+    ) -> bool {
+        let completed = frame.history.iter().any(|item| {
+            matches!(item,
+            lk_agents_abi::ChatItem::FunctionCallOutput(output) if output.id == call.output_id())
+        });
+        let local_child = self.agents[&frame.agent_name].agent_tools.contains_key(&call.name);
+        let remote_origin = frame.completed
+            && frame.parent.is_some()
+            && state.remote_agents.values().any(|remote| {
+                remote.requests.values().any(|request| {
+                    request.origin.as_ref().is_some_and(|origin| {
+                        origin.agent_id == frame.id.value && origin.call_id == call.id
+                    })
+                })
+            });
+        !crate::tool_calls::provisional(call) && !completed && !local_child && !remote_origin
+    }
+
+    /// Settles each lost tool of a restored conversation as an internal error, right after its
+    /// call, so the conversation can continue. Its outcome is unknown (it may have taken
+    /// effect); the framework never runs it again. Returns them for the host to report.
+    pub(super) fn settle_lost_tools(&self, state: &mut SessionSnapshot) -> Vec<LostTool> {
+        let mut lost = Vec::new();
+        let ids: Vec<_> = state.frames.keys().cloned().collect();
+        for id in ids {
+            let frame = &state.frames[&id];
+            if !self.agents.contains_key(&frame.agent_name) {
+                continue; // validate_state reports the unknown agent
+            }
+            let calls: Vec<_> = frame
+                .history
+                .iter()
+                .enumerate()
+                .filter_map(|(at, item)| match item {
+                    lk_agents_abi::ChatItem::FunctionCall(call)
+                        if self.lost(state, frame, call) =>
+                    {
+                        Some((at, call.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let agent_name = frame.agent_name.clone();
+            let history = &mut state.frames.get_mut(&id).expect("listed above").history;
+            for (at, call) in calls.into_iter().rev() {
+                let mut output = lk_agents_abi::FunctionCallOutput::new(
+                    call.output_id(),
+                    call.call_id.clone(),
+                    lk_agents_abi::llm::tool_executor::INTERNAL_ERROR_OUTPUT,
+                    true,
+                    call.created_at,
+                );
+                output.name = call.name.clone();
+                history.insert(at + 1, output.into());
+                lost.push(LostTool {
+                    agent_name: agent_name.clone(),
+                    tool_name: call.name,
+                    call_id: call.call_id,
+                });
+            }
+        }
+        lost
     }
 
     pub(super) fn validate_state(&self, state: &SessionSnapshot) -> Result<(), RoutingError> {
@@ -164,20 +244,7 @@ impl SessionConfig {
                             "a live local tool has no final outcome; its progress cannot be resumed",
                         ));
                     }
-                    let completed = frame.history.iter().any(|item| matches!(item,
-                        lk_agents_abi::ChatItem::FunctionCallOutput(output) if output.id == call.output_id()));
-                    let local_child =
-                        self.agents[&frame.agent_name].agent_tools.contains_key(&call.name);
-                    let remote_origin = frame.completed
-                        && frame.parent.is_some()
-                        && state.remote_agents.values().any(|remote| {
-                            remote.requests.values().any(|request| {
-                                request.origin.as_ref().is_some_and(|origin| {
-                                    origin.agent_id == frame.id.value && origin.call_id == call.id
-                                })
-                            })
-                        });
-                    if !completed && !local_child && !remote_origin {
+                    if self.lost(state, frame, call) {
                         return Err(invalid(
                             "an admitted tool has no recorded result; reconcile its outcome before resuming",
                         ));

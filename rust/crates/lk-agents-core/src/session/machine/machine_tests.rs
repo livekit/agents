@@ -1194,3 +1194,46 @@ fn late_prepared_arguments_are_released_even_after_the_session_settles() {
 
 #[path = "remote_resume_tests.rs"]
 mod remote_resume;
+
+// Catches: a worker that died inside a local tool leaving the conversation unusable, every
+// later request refused with "an admitted tool has no recorded result".
+#[test]
+fn a_tool_lost_with_its_worker_settles_as_an_internal_error_and_the_conversation_continues() {
+    let mut cfg = config(false, ChatHistory::Fresh, false);
+    cfg.agents.get_mut("desk").unwrap().agent_tools.clear(); // `book` is a plain local tool
+    let mut first = Driver::new(cfg.clone(), None, "hello");
+    first.reply("Hi.", &[]);
+    let mut state = first.turn().state;
+    // What the killed worker checkpointed: the admitted call, never its result.
+    let call = lk_agents_abi::FunctionCall {
+        id: "item_book".into(),
+        call_id: "call_book".into(),
+        name: "book".into(),
+        arguments: json!({"nights": 2}).to_string(),
+        created_at: std::time::UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    };
+    let root = state.root_frame_id.clone();
+    state.frames.get_mut(&root).unwrap().history.push(call.clone().into());
+
+    let next = Driver::new(cfg, Some(state), "are you there?");
+
+    assert_eq!(
+        next.session.lost_tools,
+        [LostTool {
+            agent_name: "desk".into(),
+            tool_name: "book".into(),
+            call_id: "call_book".into()
+        }]
+    );
+    let (_, chat_ctx) = next.request();
+    let at = chat_ctx.items.iter().position(|item| item.id() == call.id).unwrap();
+    let ChatItem::FunctionCallOutput(output) = &chat_ctx.items[at + 1] else {
+        panic!("the lost call is settled right after itself: {:?}", chat_ctx.items)
+    };
+    assert_eq!(
+        (output.call_id.as_str(), output.output.as_str(), output.is_error),
+        ("call_book", lk_agents_abi::llm::tool_executor::INTERNAL_ERROR_OUTPUT, true)
+    );
+}

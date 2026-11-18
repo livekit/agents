@@ -13,7 +13,7 @@ pub(super) mod tool_output;
 impl Session {
     pub fn new(config: SessionConfig, input: SessionInput) -> Result<Self, RoutingError> {
         config.validate()?;
-        let state = match input.state {
+        let mut state = match input.state {
             Some(mut state) => {
                 if state.session_id != input.session_id {
                     return Err(RoutingError::InvalidState("session identity changed".into()));
@@ -58,8 +58,10 @@ impl Session {
                 config.root_agent.clone(),
             ),
         };
+        let lost_tools = config.settle_lost_tools(&mut state);
         config.validate_state(&state)?;
         Ok(Self {
+            lost_tools,
             failure_input_requirements: Vec::new(),
             tool_outputs: BTreeMap::new(),
             config,

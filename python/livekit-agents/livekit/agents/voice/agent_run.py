@@ -373,9 +373,17 @@ def prepare_arguments(
 
 async def render_read_back(prepared: _Prepared) -> ReadBackAnswer:
     assert isinstance(prepared.tool, FunctionTool) and prepared.tool.info.read_back
-    question = prepared.tool.info.read_back(*prepared.args, **prepared.kwargs)
-    if inspect.isawaitable(question):
-        question = await question
+    try:
+        question = prepared.tool.info.read_back(*prepared.args, **prepared.kwargs)
+        if inspect.isawaitable(question):
+            question = await question
+    except Exception:
+        # the call settles as an internal error; the cause is only visible here
+        logger.exception(
+            "exception occurred while rendering a tool's read-back",
+            extra={"function": prepared.tool.info.name},
+        )
+        raise
     if isinstance(question, InputRequired):
         return ReadBackAnswerInputRequired(question=question.question, verbatim=question.verbatim)
     return ReadBackAnswerQuestion(question=str(question))

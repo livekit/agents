@@ -33,7 +33,9 @@ pub use lk_agents_abi::text_session::{
     ChildCallStatus, FrameId, ParentCall, PendingChildCall, SessionFrame, SessionSnapshot,
     TextSessionError, TextSessionTurn,
 };
-pub use routing::{ChatHistory, LocalAgentTool, RoutingError, SessionAgent, SessionConfig};
+pub use routing::{
+    ChatHistory, LocalAgentTool, LostTool, RoutingError, SessionAgent, SessionConfig,
+};
 
 // Checkpoints describe accepted progress; running invocation resources are never serialized.
 
@@ -176,6 +178,8 @@ impl Phase {
 }
 
 pub struct Session {
+    /// Tools the restored conversation settled as internal errors; the host reports them.
+    pub lost_tools: Vec<routing::LostTool>,
     failure_input_requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
     tool_outputs: BTreeMap<(String, crate::agent_run::ToolOutputId), machine::tool_output::Pending>,
     config: SessionConfig,

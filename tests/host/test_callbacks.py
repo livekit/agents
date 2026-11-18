@@ -320,6 +320,30 @@ async def test_a_read_back_function_asks_for_a_missing_detail_then_reads_back() 
     assert asked.status == "input_required" and asked.question == "Book monday to jo@example.com?"
 
 
+# Catches: a read-back that raises settling its call as an internal error with no trace of why
+# (a read-back missing the tool's `ctx` parameter was invisible end to end).
+async def test_a_read_back_that_raises_is_logged_and_settles_as_an_internal_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def read_back(terms: str) -> str:  # missing the tool's `ctx` parameter
+        return f"Book {terms}?"
+
+    desk = Agent(instructions="Help.", llm=FakeLLM([tool_call("book", terms="slot-9"), "done"]))
+
+    @desk.tool(needs_approval=read_back)
+    async def book(ctx: RunContext, terms: str) -> str:
+        """Book."""
+        return "booked"
+
+    result = await desk.run("book slot-9")
+
+    assert result.status == "completed"
+    outputs = [i.output for i in result.new_messages() if i.type == "function_call_output"]
+    assert outputs == ["An internal error occurred"]
+    assert "exception occurred while rendering a tool's read-back" in caplog.text
+    assert "TypeError" in caplog.text
+
+
 async def test_a_python_judge_gets_the_conversation_reference_and_model() -> None:
     """A judge group hands each Python judge the very conversation, reference and model."""
     seen: list[tuple[ChatContext, ChatContext | None, LLM | None]] = []

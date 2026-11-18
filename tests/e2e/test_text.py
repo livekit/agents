@@ -39,7 +39,7 @@ INPUT_REQUIRED = pb.TaskState.TASK_STATE_INPUT_REQUIRED
 
 async def said(thread: str) -> list[str | None]:
     """The thread's persisted message texts."""
-    history = await Thread(AgentDBStorage(), thread, partition_key="e2e").chat_history()
+    history = await Thread(AgentDBStorage(), thread).chat_history()
     return [item.text_content for item in history.items if item.type == "message"]
 
 
@@ -75,7 +75,8 @@ async def test_a_resent_message_returns_its_task_without_running_again(
 async def test_an_answer_to_a_question_asked_on_one_worker_is_delivered_on_another(
     workers: Workers, thread: str
 ) -> None:
-    """A asks for an email; B delivers the reply as the pending tool's output, once."""
+    """A asks for an email; B recognizes the reply as its answer and the agent continues, once.
+    The asking tool already finished: its output records the question, the reply follows it."""
     asked = await workers.a.send(workers.a.message("need-email", thread))
 
     replied = await workers.b.send(workers.b.message("alice@example.com", thread))
@@ -85,9 +86,15 @@ async def test_an_answer_to_a_question_asked_on_one_worker_is_delivered_on_anoth
         "Which email?",
     )
     assert answer(replied) == "completed: alice@example.com"
-    history = await Thread(AgentDBStorage(), thread, partition_key="e2e").chat_history()
+    history = await Thread(AgentDBStorage(), thread).chat_history()
     outputs = [item.output for item in history.items if item.type == "function_call_output"]
-    assert outputs == ["alice@example.com"]
+    assert outputs == ["waiting for the person's answer to: Which email?"]
+    assert await said(thread) == [
+        "need-email",
+        "Which email?",
+        "alice@example.com",
+        "completed: alice@example.com",
+    ]
 
 
 async def test_yes_on_another_worker_books_the_read_back_terms_exactly_once(
@@ -141,7 +148,8 @@ async def test_a_worker_killed_mid_turn_leaves_a_failed_task_and_the_thread_usab
         pb.Task(),
     )
     assert orphan.status.state == pb.TaskState.TASK_STATE_FAILED
-    assert orphan.metadata[REASON] == "worker-lost"
+    # A failed task carries its reason on its status message.
+    assert orphan.status.message.metadata[REASON] == "worker-lost"
     assert [call for call in service.calls if call.operation == "book"] == []
 
 

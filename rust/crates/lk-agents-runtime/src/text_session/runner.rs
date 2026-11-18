@@ -416,6 +416,17 @@ fn start(
     )
     .map_err(|e| Invalid(e.to_string()))?
     .with_checkpoints();
+    for lost in std::mem::take(&mut session.lost_tools) {
+        log::warn!(
+            target: lk_agents_abi::LOG_TARGET,
+            "tool `{}` (call {}) of agent `{}` was running when its worker stopped; its outcome \
+             is unknown (it may have taken effect), it is recorded as an internal error and is \
+             not run again",
+            lost.tool_name,
+            lost.call_id,
+            lost.agent_name,
+        );
+    }
     if request.session_sink.is_some() {
         session = session.with_persistence();
     }
