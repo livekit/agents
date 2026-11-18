@@ -15,6 +15,60 @@ pub struct DelegationPartition {
     pub partition_key: String,
 }
 
+/// Internal handoff to a live delegate. Local interactions receive text in `request`;
+/// remote task messages can carry business input without claiming a response reservation.
+#[derive(Debug, Clone, PartialEq)]
+#[crate::host(record(module = "a2a_remote", emit, extract))]
+pub struct DelegationInput {
+    pub arguments: Value,
+    pub structured: bool,
+    pub input_request: Option<crate::session::InputRequestRef>,
+}
+
+/// Transient ownership of one exact canonical response before its journal Prepare. Only
+/// native admission receipts and concrete queued/running submissions retain this token.
+pub struct RemoteResponseClaim;
+
+/// Native resources accompany pure routing data without entering snapshots or host APIs.
+#[derive(Clone)]
+pub struct RemoteCallAdmission {
+    pub admission: crate::delegation::routing::CallAdmission,
+    pub driver: Option<std::sync::Arc<dyn RemoteTaskDriver>>,
+    pub response_claim: Option<std::sync::Arc<RemoteResponseClaim>>,
+}
+
+/// The one live native owner of a task's messages and observations. A conversation retains
+/// weak handles only; a restored task reference is never authority to revive an old driver.
+pub trait RemoteTaskDriver: Send + Sync {
+    /// A sender retained by another caller cannot keep a dead command consumer eligible.
+    fn is_live(&self) -> bool;
+
+    /// Resolves after the peer acknowledges the message. Dropping this waiter does not
+    /// retract a message already admitted by the driver.
+    fn input<'a>(
+        &'a self,
+        input: DelegationInput,
+        response_claim: Option<std::sync::Arc<RemoteResponseClaim>>,
+        origin: Option<crate::session::ToolCallRef>,
+    ) -> crate::BoxFuture<'a, Result<(), AgentClientError>>;
+
+    /// Dispatch the immutable operation an owner proved was prepared but never attempted.
+    /// It uses the same observation owner and retains the saved message/request identities.
+    fn resume<'a>(
+        &'a self,
+        request_id: String,
+        request: Box<crate::a2a::protocol::SendMessageRequest>,
+        streaming: bool,
+        input_request: Option<crate::session::InputRequestRef>,
+        origin: Option<crate::session::ToolCallRef>,
+    ) -> crate::BoxFuture<'a, Result<(), AgentClientError>>;
+
+    /// Reconcile already-admitted work through this task's original observer. Observation
+    /// failure is delivered to its original call; the accepted duplicate must not fail or
+    /// suggest retrying business work. The wait also ends when the observer dies.
+    fn reconcile(&self) -> crate::BoxFuture<'_, ()>;
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[crate::host(record(module = "a2a_remote", emit))]
 pub enum RemoteEvent {
@@ -59,7 +113,17 @@ pub trait DelegationHost: Send + Sync {
         cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a crate::invoke::CallContext,
     ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
-    /// On a call, the expert's question for the person; the person's answer.
+    /// Present a remote question; its response returns through the task's native driver.
+    #[host(await, name = "_core_question")]
+    fn question<'a>(
+        &'a self,
+        cx: &crate::telemetry::Cx,
+        #[host(context)] context: &'a crate::invoke::CallContext,
+        question: String,
+        verbatim: bool,
+        input_request: Option<crate::session::InputRequestRef>,
+    ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
+    /// A transient local interaction's question and its in-memory answer.
     #[host(await, name = "_core_ask")]
     fn ask<'a>(
         &'a self,
@@ -68,7 +132,7 @@ pub trait DelegationHost: Send + Sync {
         question: String,
         verbatim: bool,
         input_request: Option<crate::session::InputRequestRef>,
-    ) -> crate::BoxFuture<'a, Result<String, crate::errors::HostError>>;
+    ) -> crate::BoxFuture<'a, Result<DelegationInput, crate::errors::HostError>>;
 }
 
 /// One delegation of a tool call to a remote agent.
@@ -109,9 +173,9 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
     /// Run the delegation on the endpoint: connect with `token`, send the call's message
     /// (`thread_id` shares the caller's thread under `token`'s grant), then follow its updates:
     /// each reaches `host.progress`, a moved task is followed, and on a call (`live`) the
-    /// request is announced through `host.delegated` and each question answered through
-    /// `host.ask`. Returns the outcome, or, off a call, the expert's question. The client and
-    /// its reply are closed before it returns.
+    /// request releases the frontend through `host.delegated` and each question is presented
+    /// through `host.question`. Task messages reach the same native driver. Returns the outcome,
+    /// or, off a call, the expert's question. The client and its reply close before it returns.
     #[host(await)]
     #[allow(clippy::too_many_arguments, reason = "Mirrors the host call's arguments")]
     async fn run(

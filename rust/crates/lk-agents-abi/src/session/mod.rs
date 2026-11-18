@@ -58,6 +58,7 @@ pub enum InputRoute {
 }
 
 /// Ephemeral detector input, resolved from canonical content and actual presentation evidence.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct InputCandidate {
     pub reference: InputRequestRef,
@@ -83,12 +84,69 @@ pub struct InputAdmission {
     pub observation: String,
     /// Atomically reserved occurrences; delivery still requires a checkpoint and eligibility.
     pub requests: Vec<InputRequestRef>,
+    /// Frozen post-admission occurrences for the frontend model turn this response releases.
+    pub offered: Vec<InputCandidate>,
 }
 
 /// Serialized conversation authority. No host policy callback or saved command capability.
 #[crate::host(native(refused = "expected the active native conversation owner"))]
 pub trait SessionCommands: Send + Sync {
     fn checkpoint(&self) -> crate::BoxFuture<'_, Result<Value, crate::storage::StorageError>>;
+
+    /// Read the proposed call against this owner's state; input occurrences were frozen when
+    /// the frontend model turn began, rather than looked up when its tool finally runs.
+    fn routing_context<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        proposed: Value,
+        selected_task: Option<&'a str>,
+        offered: &'a [InputCandidate],
+    ) -> crate::BoxFuture<
+        'a,
+        Result<crate::delegation::routing::CallRoutingRequest, crate::storage::StorageError>,
+    >;
+
+    /// Recheck the classifier's offered task and occurrence immediately before dispatch.
+    fn admit_call<'a>(
+        &'a self,
+        request: &'a crate::delegation::routing::CallRoutingRequest,
+        verdict: Option<
+            Result<crate::delegation::routing::CallRoute, crate::errors::ProviderError>,
+        >,
+        usage: crate::usage::Usage,
+        candidate: std::sync::Weak<dyn crate::a2a::remote::RemoteTaskDriver>,
+    ) -> crate::BoxFuture<
+        'a,
+        Result<crate::a2a::remote::RemoteCallAdmission, crate::storage::StorageError>,
+    >;
+
+    /// The owner's separate classifier; `None` deliberately disables automatic routing.
+    fn routing_model(&self) -> Option<std::sync::Arc<dyn crate::Llm>>;
+
+    /// Weak runtime resources never enter the saved state. Register before preparing the
+    /// operation so a concurrent observer cannot claim a task without being discoverable.
+    fn register_remote_driver(
+        &self,
+        remote_id: &str,
+        endpoint: &str,
+        request_id: &str,
+        driver: std::sync::Weak<dyn crate::a2a::remote::RemoteTaskDriver>,
+    );
+
+    /// Resolve through the saved operation-to-task association under the conversation owner.
+    fn remote_driver<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        task: &'a crate::delegation::remote::RemoteTaskRef,
+    ) -> crate::BoxFuture<
+        'a,
+        Result<
+            Option<std::sync::Arc<dyn crate::a2a::remote::RemoteTaskDriver>>,
+            crate::storage::StorageError,
+        >,
+    >;
 
     /// Validate the offered occurrences and checkpoint their reservations before continuation.
     fn admit_input(
@@ -113,7 +171,19 @@ pub trait SessionCommands: Send + Sync {
         &'a self,
         remote_id: &'a str,
         endpoint: &'a str,
+        task_id: Option<&'a str>,
     ) -> crate::BoxFuture<'a, Result<Option<InputRequestRef>, crate::storage::StorageError>>;
+
+    /// Resolve a known, nonterminal task on this destination without answering its input.
+    fn task<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        task_id: &'a str,
+    ) -> crate::BoxFuture<
+        'a,
+        Result<crate::delegation::remote::RemoteTaskRef, crate::storage::StorageError>,
+    >;
 
     fn recover<'a>(
         &'a self,
@@ -152,7 +222,7 @@ pub trait SessionCommands: Send + Sync {
 pub struct ToolCallRef {
     /// Agent context containing the originating tool call.
     pub agent_id: String,
-    /// Tool-call ID within that context, not the configured tool's name.
+    /// Canonical FunctionCall.id within that context; provider call_id values may repeat.
     pub call_id: String,
 }
 

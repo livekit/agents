@@ -212,7 +212,7 @@ async def test_failed_stream_keeps_correlated_input_metadata_on_the_original_fai
 
     requirement = records.RunInputRequirement(
         invocation_id="run-1",
-        call=PendingCall(name="ask", call_id="call-1", answer_tool="answer_city"),
+        call=PendingCall(id="call-item", name="ask", call_id="call-1", answer_tool="answer_city"),
         question="Which city?",
         verbatim=True,
     )

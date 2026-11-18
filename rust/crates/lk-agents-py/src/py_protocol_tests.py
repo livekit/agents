@@ -265,7 +265,14 @@ async def test_bound_remote_work_journals_protocol_before_returning_the_tool_res
     assert observed.tasks["remote-task"].task.artifacts[0].parts[0].text == "Confirmed"
     request = next(iter(observed.requests.values()))
     assert request.dispatch_started and request.ended
-    assert request.origin is not None and request.origin.call_id == "check_coverage"
+    root = saved.frames[saved.root_frame_id]
+    call = next(
+        item
+        for item in root.history
+        if item.type == "function_call" and item.call_id == "check_coverage"
+    )
+    assert request.origin is not None and request.origin.call_id == call.id
+    assert request.origin.agent_id == saved.root_frame_id.value
     bound = app.session.remote_agents[peer.url]
     detached = app.session.snapshot().remote_agents[peer.url]
     assert isinstance(bound, RemoteAgentState)

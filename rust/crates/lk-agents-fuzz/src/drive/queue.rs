@@ -173,6 +173,8 @@ fn label(event: &VoiceRuntimeEvent) -> &'static str {
             VoiceEvent::ConversationStateFailed(_) => "ConversationStateFailed",
             VoiceEvent::InputRouted { .. } => "InputRouted",
             VoiceEvent::InputReserved { .. } => "InputReserved",
+            VoiceEvent::InputOffers { .. } => "InputOffers",
+            VoiceEvent::RemoteResponseQueued { .. } => "RemoteResponseQueued",
         },
     }
 }

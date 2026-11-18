@@ -35,9 +35,18 @@ pub fn routing_request(
 pub fn held_remote_input(
     remote_id: &str,
     remote: &lk_agents_abi::delegation::remote::RemoteAgentState,
+    selected_task: Option<&str>,
 ) -> Result<Option<InputRequestRef>, StorageError> {
+    if let Some(task_id) = selected_task {
+        super::remote::task(remote, task_id)?;
+    }
     let mut selected = None;
     for (task_id, task) in &remote.tasks {
+        if selected_task.is_some_and(|selected| selected != task_id)
+            || task.task.status.state.is_terminal()
+        {
+            continue;
+        }
         for (request_id, input) in &task.input_requests {
             if input.state != InputRequestState::Responding || input.human_response_id.is_none() {
                 continue;
@@ -49,7 +58,7 @@ pub fn held_remote_input(
             }
             if selected.is_some() {
                 return Err(invalid(
-                    "several held responses address this remote; select an explicit input request",
+                    "several held responses address this remote; select an explicit task_id",
                 ));
             }
             selected = Some(InputRequestRef::RemoteTask {
@@ -198,7 +207,11 @@ pub fn route(
             not guess an answer destination."
             .into(),
     };
-    Ok(InputAdmission { observation, requests: accepted })
+    Ok(InputAdmission {
+        observation,
+        requests: accepted,
+        offered: crate::delegation::remote::routing::refresh_offered(state, candidates),
+    })
 }
 
 /// Validate the entire group against one snapshot, then publish it together. A stale member

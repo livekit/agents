@@ -215,6 +215,12 @@ impl Delegate {
                         Ok(answer) => answer,
                         Err(error) => return ToolOutcome::Failed(error.to_string()),
                     };
+                    let Some(answer) = answer.arguments.get("request").and_then(Value::as_str)
+                    else {
+                        return ToolOutcome::Failed(
+                            "a local delegate expects a text response".into(),
+                        );
+                    };
                     history = all_messages;
                     message =
                         ChatMessage::text(self.id("answer"), Role::User, answer, self.stamp());

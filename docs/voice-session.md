@@ -29,7 +29,7 @@ again when left empty.
 | `stt`, `tts`, `vad` | Session-owned recognition, synthesis, and voice activity models |
 | `turn_handling` | a `TurnHandlingOptions`: `turn_detection`, `endpointing` (`EndpointingOptions`), `interruption` (`InterruptionOptions`), `preemptive_generation` (`PreemptiveGenerationOptions`) and `user_turn_limit` (`UserTurnLimitOptions`) in one dict |
 | `conn_options` | a `SessionConnectOptions`: each leg's [connection policy](models.md#connection-options) (`stt_conn_options`, `llm_conn_options`, `tts_conn_options`) and `max_unrecoverable_errors` |
-| `delegation` | `DelegationOptions(routing_model=...)`: a separate response-routing model shared by the session's remote tools |
+| `delegation` | `DelegationOptions(routing_model=...)`: a separate routing model shared by the session's remote tools; `None` disables automatic routing. The frontend model decides whether to acknowledge delegation. |
 | `video_sampler` | a `VoiceActivityVideoSampler(speaking_fps=, silent_fps=)`: how often camera frames reach the model; `None` sends every frame |
 | `stt_context_options` | an `STTContextOptions`: static `keyterms` the STT is biased toward, `keyterm_detection` (`KeytermDetectionOptions`) to add terms heard in the conversation, `forward_chat_context`. `session.keyterms` reads the current terms; `update_options(keyterms=)` replaces the static ones |
 | `aec_warmup_duration` | seconds after the agent first speaks during which the person cannot interrupt, while echo cancellation adapts; 3 by default, none on an outbound SIP call the agent dialed |
@@ -777,9 +777,11 @@ Without a binding, the same native communication state and admission path run in
 A recognized human response reserves its original input occurrence before frontend planning.
 The frontend calls the matching remote tool to forward that response through the existing
 live interaction. That handoff uses the person's exact words, rather than rewritten tool
-arguments. Repeating the tool call in the same human turn observes the handoff instead of
-starting another remote task. Progress, the next question and the final result still arrive
-through the original interaction.
+arguments. A second routing check distinguishes that response from clarification, correction
+or independent new work. Repeating the admitted response observes its existing operation;
+requesting a hotel in that same turn can still start a separate task. Further messages to a
+working task reuse its native observer. Progress, the next question and the final result
+still arrive through the original interaction.
 
 If the speaking agent lacks that remote tool, recognition retains the response. When an
 eligible agent returns, the session gives it a normal planning turn to continue the request.
@@ -884,9 +886,9 @@ routing model.
 The native owner validates the exact classified message and selected occurrences, then
 checkpoints their responses before forwarding to eligible live continuations. It can recognize
 an earlier presented request; foreground presentation priority is not answer authority. The
-person's exact reserved words reach the original remote task without another model-selected
-delegation call. The fast brain still receives the whole message and can handle an additional
-topic naturally. Recognition does not approve a business operation or prove remote delivery.
+frontend invokes the remote tool to send the person's exact reserved words through the
+original task. The fast brain receives the whole message and can handle an additional topic
+naturally; its tool arguments cannot rewrite an admitted human response. Recognition does not approve a business operation or prove remote delivery.
 
 Input classification belongs to its speech. An interruption closes its model stream and
 releases the waiting frontend plan. A reservation already acknowledged by storage remains

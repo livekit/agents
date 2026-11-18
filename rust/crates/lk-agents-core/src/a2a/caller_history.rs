@@ -121,31 +121,18 @@ impl Item {
     }
 }
 
-/// The call ids whose output follows the call, without the unresolved invoking call. A call id
-/// seen twice is an error.
-fn finished_calls<'a>(
+/// Complete tool item pairs, excluding the exact invoking call item even when the provider
+/// reused another exchange's wire ID. Imported output IDs need not follow a naming convention.
+fn finished_tool_items<'a>(
     items: &'a [ChatItem],
-    unresolved_call_id: Option<&str>,
-) -> Result<BTreeSet<&'a str>, HistoryError> {
-    let mut calls = BTreeMap::new();
-    let mut complete = BTreeSet::new();
-    for (index, item) in items.iter().enumerate() {
-        match item {
-            ChatItem::FunctionCall(call) => {
-                if calls.insert(call.call_id.as_str(), index).is_some() {
-                    return Err(HistoryError(format!("duplicate call {}", call.call_id)));
-                }
-            }
-            ChatItem::FunctionCallOutput(output) if calls.contains_key(output.call_id.as_str()) => {
-                complete.insert(output.call_id.as_str());
-            }
-            _ => {}
-        }
-    }
-    if let Some(call_id) = unresolved_call_id {
-        complete.remove(call_id);
-    }
-    Ok(complete)
+    unresolved_item_id: Option<&str>,
+) -> BTreeSet<&'a str> {
+    let facts: Vec<_> = items.iter().map(crate::llm::history::ItemFacts::of).collect();
+    crate::llm::history::tool_pairs(&facts)
+        .into_iter()
+        .filter(|(call, _)| Some(items[*call].id()) != unresolved_item_id)
+        .flat_map(|(call, output)| [items[call].id(), items[output].id()])
+        .collect()
 }
 
 mod role {
@@ -203,10 +190,10 @@ impl CallerHistory {
     /// The invoking delegation is excluded even if its history contains a waiting placeholder.
     pub fn from_chat_items(
         items: &[ChatItem],
-        unresolved_call_id: Option<&str>,
+        unresolved_item_id: Option<&str>,
         sharing: &HistorySharing,
     ) -> Result<Self, HistoryError> {
-        let complete = finished_calls(items, unresolved_call_id)?;
+        let complete = finished_tool_items(items, unresolved_item_id);
         let selected = items
             .iter()
             .filter_map(|item| match item {
@@ -216,12 +203,10 @@ impl CallerHistory {
                 {
                     Some(Item::shared_message(message, sharing))
                 }
-                ChatItem::FunctionCall(call) if complete.contains(call.call_id.as_str()) => {
+                ChatItem::FunctionCall(call) if complete.contains(call.id.as_str()) => {
                     Some(Item::shared_call(call, sharing))
                 }
-                ChatItem::FunctionCallOutput(output)
-                    if complete.contains(output.call_id.as_str()) =>
-                {
+                ChatItem::FunctionCallOutput(output) if complete.contains(output.id.as_str()) => {
                     Some(Item::shared_output(output))
                 }
                 _ => None,
@@ -326,9 +311,10 @@ impl CallerHistory {
                             "call arguments must contain a JSON object".into(),
                         ));
                     }
-                    if calls.insert(call_id.as_str(), name.as_str()).is_some() {
-                        return Err(HistoryError(format!("duplicate call {call_id}")));
+                    if pending.contains(call_id.as_str()) {
+                        return Err(HistoryError(format!("duplicate pending call {call_id}")));
                     }
+                    calls.insert(call_id.as_str(), name.as_str());
                     pending.insert(call_id.as_str());
                     (id, *created_at)
                 }

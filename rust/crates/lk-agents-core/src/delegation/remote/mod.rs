@@ -1,6 +1,7 @@
 use lk_agents_abi::a2a_protocol as a2a;
 pub mod journal;
 pub mod retained;
+pub mod routing;
 
 use a2a::{Message, Part, Role, TaskState};
 use lk_agents_abi::a2a::metadata::KIND_KEY;
@@ -61,6 +62,7 @@ pub enum DelegationError {
 pub struct InteractionId {
     pub delegation_id: String,
     pub tool_id: String,
+    /// Canonical originating FunctionCall.id; provider wire IDs can repeat.
     pub parent_call_id: String,
     pub endpoint: String,
 }
@@ -159,6 +161,24 @@ impl RemoteInteraction {
         self.state.clone()
     }
 
+    /// Task addressing also supports clarification and correction without an input request.
+    /// The conversation owner validates this reference against its saved remote observations.
+    pub fn target_task(
+        &mut self,
+        task: lk_agents_abi::delegation::remote::RemoteTaskRef,
+    ) -> Result<(), DelegationError> {
+        if self.state.phase != InteractionPhase::Ready
+            || task.task_id.is_empty()
+            || task.context_id.is_empty()
+        {
+            return Err(DelegationError::InvalidState);
+        }
+        self.state.context_id = Some(task.context_id);
+        self.state.pending_task_id = Some(task.task_id);
+        self.state.input_request = None;
+        Ok(())
+    }
+
     /// The conversation owner selected this held response. A replacement agent need not inherit
     /// the original agent's tool history to continue the exact same task and input occurrence.
     pub fn respond_to(
@@ -168,18 +188,40 @@ impl RemoteInteraction {
         let Some((remote_id, task, request_id)) = reference.remote() else {
             return Err(DelegationError::InvalidState);
         };
-        if self.state.phase != InteractionPhase::Ready
-            || remote_id.is_empty()
-            || request_id.is_empty()
-            || task.task_id.is_empty()
-            || task.context_id.is_empty()
+        if remote_id.is_empty() || request_id.is_empty() {
+            return Err(DelegationError::InvalidState);
+        }
+        self.target_task(task.clone())?;
+        self.state.input_request = Some(reference);
+        Ok(())
+    }
+
+    /// Build another message for this live task without replacing its observer or parent call.
+    /// Clarifications leave a pending question intact; an answer must carry the exact retained
+    /// occurrence. The peer's next observation, rather than this send, changes task status.
+    pub fn task_message(
+        &self,
+        text: String,
+        message_id: String,
+        input_request: Option<lk_agents_abi::session::InputRequestRef>,
+        offers_extension: bool,
+    ) -> Result<Message, DelegationError> {
+        if self.state.phase == InteractionPhase::Settled {
+            return Err(DelegationError::Settled);
+        }
+        if input_request
+            .as_ref()
+            .is_some_and(|request| self.state.input_request.as_ref() != Some(request))
         {
             return Err(DelegationError::InvalidState);
         }
-        self.state.context_id = Some(task.context_id.clone());
-        self.state.pending_task_id = Some(task.task_id.clone());
-        self.state.input_request = Some(reference);
-        Ok(())
+        let task = lk_agents_abi::delegation::remote::RemoteTaskRef {
+            task_id: self.state.pending_task_id.clone().ok_or(DelegationError::WrongTask)?,
+            context_id: self.state.context_id.clone().ok_or(DelegationError::WrongTask)?,
+        };
+        let mut sender = Self::new(self.state.id.clone())?;
+        sender.target_task(task)?;
+        sender.message(text, message_id, None, "", None, offers_extension, None, None)
     }
 
     /// Builds every initial/subsequent/answer message through the same policy. Caller history
@@ -257,6 +299,24 @@ impl RemoteInteraction {
         {
             return Err(DelegationError::NotWaiting);
         }
+        Ok(())
+    }
+
+    /// A clarification continues the task without consuming its question. An admitted answer
+    /// must retain the exact occurrence captured by this waiter, never the task's latest one.
+    pub fn continue_input(
+        &mut self,
+        request_id: &str,
+        reference: Option<lk_agents_abi::session::InputRequestRef>,
+    ) -> Result<(), DelegationError> {
+        self.accepts_reply(request_id)?;
+        if reference
+            .as_ref()
+            .is_some_and(|reference| self.state.input_request.as_ref() != Some(reference))
+        {
+            return Err(DelegationError::InvalidState);
+        }
+        self.state.input_request = reference;
         Ok(())
     }
 

@@ -34,6 +34,10 @@ mod presentation;
 mod step_outcome;
 mod text_session;
 
+#[cfg(test)]
+#[path = "input_offers_tests.rs"]
+mod input_offers_tests;
+
 pub use coordinated::{AgentRunContinuation, Opening};
 pub use text_session::DelegationCheckpoint;
 
@@ -243,12 +247,19 @@ pub struct AgentRun {
     /// A conversation owner already admitted these response origins. None is a direct run,
     /// whose caller still supplies history without a shared input owner.
     input_answers: Option<BTreeSet<String>>,
+    /// Only these owner-captured occurrences were offered to this frontend invocation.
+    input_offers: FrozenInputOffers,
     checkpoints: bool,
     /// Coordinated: the history up to here was handed to the coordinator's planner.
     planned: usize,
     /// Coordinated: the coordinator forbade calls on the next step.
     tools_forbidden: bool,
     phase: Phase,
+}
+
+enum FrozenInputOffers {
+    Captured(Vec<lk_agents_abi::session::InputCandidate>),
+    Unavailable,
 }
 
 enum Phase {
@@ -363,6 +374,7 @@ impl AgentRun {
             dynamic: None,
             approval_answers: BTreeSet::new(),
             input_answers: None,
+            input_offers: FrozenInputOffers::Captured(Vec::new()),
             checkpoints: false,
             planned: 0,
             tools_forbidden: false,
@@ -382,6 +394,33 @@ impl AgentRun {
     pub fn with_input_answers(mut self, answered: BTreeSet<String>) -> Self {
         self.input_answers = Some(answered);
         self
+    }
+
+    pub fn with_input_offers(
+        mut self,
+        offered: Vec<lk_agents_abi::session::InputCandidate>,
+    ) -> Self {
+        self.input_offers = FrozenInputOffers::Captured(offered);
+        self
+    }
+
+    /// Voice opens its run before the first frontend request is planned. Response admission
+    /// fills its frozen offers before releasing that request to the provider.
+    pub fn set_input_offers(&mut self, offered: Vec<lk_agents_abi::session::InputCandidate>) {
+        self.input_offers = FrozenInputOffers::Captured(offered);
+    }
+
+    pub fn input_offers(&self) -> &[lk_agents_abi::session::InputCandidate] {
+        match &self.input_offers {
+            FrozenInputOffers::Captured(offered) => offered,
+            FrozenInputOffers::Unavailable => &[],
+        }
+    }
+
+    /// A provider ended without the human words needed for native response correlation.
+    /// Remote calls receive feedback rather than guessing a response or waiting forever.
+    pub fn input_offers_unavailable(&mut self) {
+        self.input_offers = FrozenInputOffers::Unavailable;
     }
 
     pub fn handle(&mut self, event: AgentRunEvent, now: Ts) -> Vec<AgentRunEffect> {
@@ -784,9 +823,13 @@ impl AgentRun {
     /// Starts one call of the step: a `final_result` candidate goes to output validation.
     fn admit(&mut self, call: FunctionCall, fx: &mut Vec<AgentRunEffect>) {
         let id = CallId(self.mint());
+        let offered = match &self.input_offers {
+            FrozenInputOffers::Captured(offered) => Some(offered.as_slice()),
+            FrozenInputOffers::Unavailable => None,
+        };
         let Some(acting) = self.phase.acting() else { return };
         let Some(FinalCandidate { call, value }) =
-            acting.calls.add_step_call(id, call, &self.agent, fx)
+            acting.calls.add_step_call(id, call, &self.agent, offered, fx)
         else {
             return;
         };
@@ -995,7 +1038,7 @@ impl AgentRun {
         let id = message_id.unwrap_or_else(|| self.item_id());
         if let Some(call) = &self.pending_call {
             for requirement in &mut self.input_requirements {
-                if (requirement.call == *call || members.contains(&requirement.call.call_id))
+                if (requirement.call == *call || members.contains(&requirement.call.id))
                     && requirement.presentation_message_id.is_none()
                 {
                     requirement.presentation_message_id = Some(id.clone());

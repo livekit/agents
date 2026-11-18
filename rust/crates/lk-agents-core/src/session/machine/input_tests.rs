@@ -104,15 +104,91 @@ fn held_responses_can_cross_agent_contexts_but_never_guess_between_two_tasks() {
     present(&mut driver, vec![first.clone(), second.clone()]);
     answer(&mut driver.session, vec![second.clone()], "Friday");
     assert_eq!(
-        driver.session.held_remote_input("flights", "https://flights.test").unwrap(),
+        driver.session.held_remote_input("flights", "https://flights.test", None).unwrap(),
         Some(second),
         "an unanswered earlier task does not override the selected response"
     );
-    assert!(driver.session.held_remote_input("flights", "https://another.test").is_err());
-    answer(&mut driver.session, vec![first], "Friday");
+    assert!(driver.session.held_remote_input("flights", "https://another.test", None).is_err());
+    answer(&mut driver.session, vec![first.clone()], "Friday");
     let before = driver.session.snapshot();
-    assert!(driver.session.held_remote_input("flights", "https://flights.test").is_err());
+    assert!(driver.session.held_remote_input("flights", "https://flights.test", None).is_err());
     assert_eq!(driver.session.snapshot(), before, "ambiguous selection cannot reserve either task");
+    assert_eq!(
+        driver
+            .session
+            .held_remote_input("flights", "https://flights.test", Some("flight"))
+            .unwrap(),
+        Some(first),
+        "the public task ID selects its held response without exposing an occurrence ID"
+    );
+    assert!(
+        driver
+            .session
+            .held_remote_input("flights", "https://flights.test", Some("unknown"))
+            .is_err()
+    );
+}
+
+#[test]
+fn task_continuation_uses_saved_context_without_consuming_a_question() {
+    let mut driver = Driver::new(config(false, ChatHistory::Fresh, false), None, "Find flights");
+    let reference = question(&mut driver.session);
+    let before = driver.session.snapshot();
+    let target = driver.session.remote_task("flights", "https://flights.test", "flight").unwrap();
+    assert_eq!(target.context_id, "trip");
+    assert_eq!(target.task_id, "flight");
+    assert_eq!(driver.session.snapshot(), before, "addressing work does not answer its question");
+    assert!(driver.session.remote_task("flights", "https://another.test", "flight").is_err());
+    assert!(driver.session.remote_task("hotels", "https://hotels.test", "flight").is_err());
+    assert!(driver.session.remote_task("flights", "https://flights.test", "missing").is_err());
+    let InputRequestRef::RemoteTask { remote_id, task, .. } = reference else { unreachable!() };
+    let saved = driver
+        .session
+        .state
+        .remote_agents
+        .get_mut(&remote_id)
+        .unwrap()
+        .tasks
+        .get_mut(&task.task_id)
+        .unwrap();
+    saved.task.status.state = lk_agents_abi::a2a_protocol::TaskState::Working;
+    saved.input_requests.clear();
+    assert_eq!(
+        driver.session.remote_task("flights", "https://flights.test", "flight").unwrap(),
+        target,
+        "corrections can address working tasks without any pending question"
+    );
+    driver
+        .session
+        .state
+        .remote_agents
+        .get_mut(&remote_id)
+        .unwrap()
+        .tasks
+        .get_mut(&task.task_id)
+        .unwrap()
+        .task
+        .status
+        .state = lk_agents_abi::a2a_protocol::TaskState::Completed;
+    let before = driver.session.snapshot();
+    assert!(driver.session.remote_task("flights", "https://flights.test", "flight").is_err());
+    let command = RemoteCommand {
+        remote_id,
+        endpoint: "https://flights.test".into(),
+        input: RemoteInput::Prepare {
+            request_id: "late-correction".into(),
+            request: A2ARequest::Send(serde_json::from_value(json!({
+                "message": {"messageId": "correction", "role": "ROLE_USER",
+                    "parts": [{"text": "Actually Saturday"}], "taskId": "flight", "contextId": "trip"}
+            })).unwrap()),
+            streaming: true, origin: None, input_request: None,
+        },
+    };
+    assert!(
+        driver.session.remote(command).is_err(),
+        "admission must revalidate before preparing I/O"
+    );
+    assert_eq!(driver.session.snapshot(), before);
 }
 
 #[test]
@@ -632,11 +708,15 @@ fn a_revised_transcript_is_classified_again_before_it_can_answer_a_question() {
     assert!(
         session
             .handle(
-                SessionEvent::InputRoutingUnavailable { request_id: original_request },
+                SessionEvent::InputRouted {
+                    request_id: original_request,
+                    result: None,
+                    usage: Default::default()
+                },
                 Ts::ZERO,
             )
             .is_empty(),
-        "an old configuration failure cannot end the revised classification"
+        "an old routing task's death cannot end the revised classification"
     );
 
     let input = &session.state.remote_agents["flights"].tasks["flight"].input_requests

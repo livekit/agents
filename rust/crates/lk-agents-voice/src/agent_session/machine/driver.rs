@@ -70,15 +70,25 @@ pub enum VoiceEvent {
     Gen(GenEvent),
     InputRouted {
         speech: crate::agent_session::machine::activity::scheduling::SpeechId,
+        request_id: String,
         result: Option<
             Result<lk_agents_abi::session::InputAdmission, lk_agents_abi::storage::StorageError>,
         >,
         usage: lk_agents_abi::usage::Usage,
     },
+    InputOffers {
+        speech: crate::agent_session::machine::activity::scheduling::SpeechId,
+        request: lk_agents_core::agent_run::RequestId,
+        offered: Vec<lk_agents_abi::session::InputCandidate>,
+    },
     /// Durable admission survives the loss of the assistant reply awaiting its detector.
     InputReserved {
         message: lk_agents_abi::ChatMessage,
         admission: lk_agents_abi::session::InputAdmission,
+    },
+    /// A checkpointed outgoing response owns this exact occurrence; stop prompting it.
+    RemoteResponseQueued {
+        request: lk_agents_abi::session::InputRequestRef,
     },
     /// The partition storage gave back for a speech, and the request items it was read with.
     StorageReloaded {
@@ -177,6 +187,9 @@ pub struct VoiceDriver {
         crate::agent_session::machine::activity::scheduling::SpeechId,
         (crate::agent_session::RequestId, crate::generation::ReplyPlan),
     >,
+    /// A final transcript can precede the server's generation; its next unique human reply
+    /// takes it. Replies already waiting on another transcript never inherit this value.
+    pub(crate) realtime_input: Option<lk_agents_abi::ChatMessage>,
     /// Revised deadlines become fireable at the next atomic boundary, not recursively
     /// inside the transition that set them (including zero-duration deadlines).
     pub(super) revised_deadlines: std::collections::BTreeSet<Timer>,
@@ -459,11 +472,17 @@ impl VoiceDriver {
             }
             Some(VoiceEvent::RoomIo(ev)) => self.on_room_io(now, ev),
             Some(VoiceEvent::Gen(ev)) => self.on_generation(now, ev),
-            Some(VoiceEvent::InputRouted { speech, result, usage }) => {
-                self.input_routed(speech, result, usage)
+            Some(VoiceEvent::InputRouted { speech, request_id, result, usage }) => {
+                self.input_routed(speech, request_id, result, usage)
+            }
+            Some(VoiceEvent::InputOffers { speech, request, offered }) => {
+                self.input_offers(speech, request, offered)
             }
             Some(VoiceEvent::InputReserved { message, admission }) => {
                 self.input_reserved(message, admission)
+            }
+            Some(VoiceEvent::RemoteResponseQueued { request }) => {
+                self.session.experts.response_queued(&request);
             }
             Some(VoiceEvent::StorageReloaded { read, history }) => {
                 self.storage_reloaded(read, history)
@@ -753,6 +772,14 @@ pub(crate) fn unqueued_speech(
 }
 
 impl VoiceDriver {
+    /// Routing cost belongs to the conversation even when the proposed call was refused.
+    pub fn routing_usage(&mut self, usage: &lk_agents_abi::usage::Usage) {
+        self.session.usage.add(usage);
+        if let Some(run) = self.session.runs.usage() {
+            run.add(usage);
+        }
+    }
+
     pub(crate) fn attach_recorder(
         &mut self,
         now: Ts,
@@ -872,6 +899,7 @@ impl VoiceDriver {
         }
         let mut driver = VoiceDriver {
             input_plans: Default::default(),
+            realtime_input: None,
             published_chat_revision: None,
             outbox,
             callbacks: Default::default(),

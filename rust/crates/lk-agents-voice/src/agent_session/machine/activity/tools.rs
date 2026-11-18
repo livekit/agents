@@ -82,6 +82,7 @@ impl VoiceDriver {
             }
         }
         self.activity.tools.deferred = waiting;
+        self.settle_input_blocked_replies();
         settled
     }
 
@@ -101,6 +102,9 @@ impl VoiceDriver {
 
     /// An authorized call starts once its run decided its first move.
     fn start_authorized(&mut self, now: Ts, mut d: Deferred) -> Option<Deferred> {
+        if !self.remote_inputs_ready(d.speech, &d.call.name) {
+            return Some(d);
+        }
         // Stamped with its start: history is ordered by `created_at`, and it was made before the
         // step was authorized.
         if d.id.is_none() {
@@ -588,7 +592,16 @@ impl VoiceDriver {
         let mut history: Vec<ChatItem> = self.session.chat_ctx.items().cloned().collect();
         let approval_answers =
             lk_agents_core::agent_run::planning::answer_pending_input(&mut history, text);
-        history.retain(|item| matches!(item, ChatItem::FunctionCallOutput(output) if approval_answers.contains(&output.call_id)));
+        let output_ids: std::collections::BTreeSet<_> = history
+            .iter()
+            .filter_map(|item| match item {
+                ChatItem::FunctionCall(call) if approval_answers.contains(&call.id) => {
+                    Some(call.output_id())
+                }
+                _ => None,
+            })
+            .collect();
+        history.retain(|item| matches!(item, ChatItem::FunctionCallOutput(output) if output_ids.contains(&output.id)));
         self.replies_answered(&approval_answers);
         self.activity.tools.approval_answers = approval_answers;
         self.replace_items(history);

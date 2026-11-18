@@ -192,7 +192,7 @@ impl Session {
                     origin: result.pending_call.as_ref().map(|call| {
                         lk_agents_abi::session::ToolCallRef {
                             agent_id: active_id.value.clone(),
-                            call_id: call.call_id.clone(),
+                            call_id: call.id.clone(),
                         }
                     }),
                     presented_message_id: None,
@@ -299,20 +299,21 @@ impl Session {
             self.state.frames.get_mut(&pending.parent.frame_id).ok_or_else(|| {
                 RoutingError::InvalidState("pending call has no parent frame".into())
             })?;
-        if parent.history.iter().any(|item| {
-            matches!(item,
-            ChatItem::FunctionCallOutput(o) if o.call_id == pending.parent.call_id)
-        }) {
-            return Err(RoutingError::InvalidState("parent call already resolved".into()));
-        }
         let call = parent
             .history
             .iter()
             .find_map(|item| match item {
-                ChatItem::FunctionCall(c) if c.call_id == pending.parent.call_id => Some(c),
+                ChatItem::FunctionCall(c) if c.id == pending.parent.call_id => Some(c),
                 _ => None,
             })
             .ok_or_else(|| RoutingError::InvalidState("parent call is missing".into()))?;
+        if parent
+            .history
+            .iter()
+            .any(|item| matches!(item, ChatItem::FunctionCallOutput(o) if o.id == call.output_id()))
+        {
+            return Err(RoutingError::InvalidState("parent call already resolved".into()));
+        }
         let mut output =
             FunctionCallOutput::new(call.output_id(), &call.call_id, text, is_error, stamp);
         output.name = call.name.clone();
@@ -354,7 +355,7 @@ pub(super) fn retain_input(
 ) -> lk_agents_abi::session::InputRequestRef {
     let remote = frame.history.iter().find_map(|item| {
         let ChatItem::FunctionCall(call) = item else { return None };
-        if call.call_id != requirement.call.call_id {
+        if call.id != requirement.call.id {
             return None;
         }
         let value = call.extra.get(crate::delegation::remote::retained::STATE_KEY)?;
@@ -363,7 +364,7 @@ pub(super) fn retain_input(
         state.input_request
     });
     remote.unwrap_or_else(|| {
-        let id = format!("{}/input/{}", requirement.invocation_id, requirement.call.call_id);
+        let id = format!("{}/input/{}", requirement.invocation_id, requirement.call.id);
         frame.input_requests.entry(id.clone()).or_insert_with(|| {
             lk_agents_abi::session::AgentInputRequest {
                 state: lk_agents_abi::session::InputRequestState::Open,
@@ -376,7 +377,7 @@ pub(super) fn retain_input(
                 response_message: None,
                 origin: Some(lk_agents_abi::session::ToolCallRef {
                     agent_id: frame.id.value.clone(),
-                    call_id: requirement.call.call_id.clone(),
+                    call_id: requirement.call.id.clone(),
                 }),
                 presented_message_id: None,
             }

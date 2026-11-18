@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import pytest_asyncio
@@ -27,8 +27,12 @@ class Peer:
         self.auth_required = False
         self.question: str | None = None
         self.direct_reply: Json | None = None
+        self.task_snapshot: Json | None = None
+        self.events: Callable[[Json], list[Json]] | None = None
+        self.input_schema: dict[str, Json] | None = None
         self.messages: list[Json] = []
         """Each message a ``SendStreamingMessage`` carried."""
+        self.methods: list[str] = []
         self.cancelled: list[str] = []
         """The id of each task a ``CancelTask`` named."""
         self.received = asyncio.Event()
@@ -76,6 +80,7 @@ class Peer:
             await self._respond(writer, "application/json", json.dumps(self._card()).encode())
             return
         rpc: Json = json.loads(body)
+        self.methods.append(rpc["method"])
         params = rpc["params"]
         if rpc["method"] == "CancelTask":
             self.cancelled.append(params["id"])
@@ -83,9 +88,31 @@ class Peer:
             result["status"] = {"state": "TASK_STATE_CANCELED"}
             await self._respond(writer, "application/json", _envelope(rpc, result))
             return
+        if rpc["method"] == "GetTask" and self.task_snapshot is not None:
+            await self._respond(writer, "application/json", _envelope(rpc, self.task_snapshot))
+            return
+        if rpc["method"] not in ("SendStreamingMessage", "SendMessage"):
+            await self._respond(
+                writer,
+                "application/json",
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": rpc["id"],
+                        "error": {"code": -32601, "message": "Method not supported by this peer"},
+                    }
+                ).encode(),
+            )
+            return
         message = params["message"]
         self.messages.append(message)
         self.received.set()
+        if self.events is not None:
+            stream = b"".join(
+                b"data: " + _envelope(rpc, event) + b"\n\n" for event in self.events(message)
+            )
+            await self._respond(writer, "text/event-stream", stream)
+            return
         if self.direct_reply is not None:
             await self._respond(
                 writer, "application/json", _envelope(rpc, {"message": self.direct_reply})
@@ -130,6 +157,9 @@ class Peer:
         await self._respond(writer, "text/event-stream", stream)
 
     def _card(self) -> Json:
+        extension: Json = {"uri": URI}
+        if self.input_schema is not None:
+            extension["params"] = {"inputSchema": self.input_schema}
         return {
             "name": "coverage_expert",
             "description": "Checks account coverage.",
@@ -137,7 +167,7 @@ class Peer:
             "supportedInterfaces": [
                 {"url": self.url + "/rpc", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}
             ],
-            "capabilities": {"streaming": True, "extensions": [{"uri": URI}]},
+            "capabilities": {"streaming": True, "extensions": [extension]},
             "defaultInputModes": ["text/plain"],
             "defaultOutputModes": ["text/plain"],
             "skills": [],

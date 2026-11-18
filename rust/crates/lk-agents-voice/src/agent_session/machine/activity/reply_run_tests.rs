@@ -234,6 +234,7 @@ fn failed_reply_keeps_correlated_input_requirements_in_the_voice_run_failure() {
     let requirement = RunInputRequirement {
         invocation_id: "failed-reply".into(),
         call: lk_agents_abi::a2a::turn::PendingCall {
+            id: "item-1".into(),
             name: "ask".into(),
             call_id: "call-1".into(),
             answer_tool: Some("answer_city".into()),

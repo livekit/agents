@@ -1492,7 +1492,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
     fn answer_expert(
         &self,
         invocation: &::lk_agents_abi::agent::Invocation,
-        answer: ::std::string::String,
+        answer: ::lk_agents_abi::a2a::remote::DelegationInput,
     ) {
         if self.host.gone() {
             return;
@@ -1509,7 +1509,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
                     crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(answer_arg, py)?,
+                    crate::generated::records::a2a_remote::delegation_input_to_py(py, answer_arg)?,
                 ];
                 Ok((
                     host.bind(py)?.getattr("answer_expert")?,

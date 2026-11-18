@@ -814,7 +814,9 @@ async def test_voice_failure_keeps_input_requirements_on_the_raised_exception(
     requirements = [
         RunInputRequirement(
             invocation_id="voice-run",
-            call=PendingCall(name="flight", call_id="flight-call", answer_tool=None),
+            call=PendingCall(
+                id="flight-item", name="flight", call_id="flight-call", answer_tool=None
+            ),
             question="Which date?",
             verbatim=True,
         )

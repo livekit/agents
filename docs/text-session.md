@@ -110,6 +110,11 @@ or pass the same options as `delegation=` to a bound Agent.run or Agent.run_stre
 conversation-wide configuration shared by every remote tool and local agent. The framework
 does not reuse the frontend model or select a provider implicitly.
 
+Set `routing_model=None` to disable automatic routing. The current agent handles incoming
+messages normally; remote tools can continue known work with `task_id`, and calls without it
+start new work. Task selection supports clarification and correction as well as responses;
+it does not itself consume a pending input occurrence. See [remote task routing](protocol/a2a.md#selecting-work-through-a-remote-tool).
+
 Before the current agent handles a new message, the routing model checks unresolved input
 requests that were actually presented. This includes a single question and earlier presented
 questions from inactive agents. A side question such as "Why do you need the date?" leaves the
@@ -138,6 +143,13 @@ or create a second outgoing operation for a response whose dispatch is already b
 While a response is held, the routing model can recognize a clear correction such as "Actually
 Saturday". The owner checks that the original response is still current before replacing it.
 Once dispatch may have started, it preserves the sent message and reconciles that operation.
+
+The same routing model separately checks proposed remote tool calls against known tasks.
+A side question need not become a new task, and an existing held response cannot redirect an
+unrelated hotel request. Each model turn retains the input occurrences it was offered;
+admission rechecks those occurrences before sending. A response whose outgoing operation is
+already tracked is acknowledged locally without another send. This deduplication applies to
+that response, so the same human turn can also start independent work.
 
 Text consumed from run_stream establishes delivery at that output boundary. Verbatim tool
 questions use the same stream and receipts as model text. Reading only a result without

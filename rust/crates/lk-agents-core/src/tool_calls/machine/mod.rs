@@ -164,17 +164,19 @@ impl ToolCalls {
     pub(crate) fn add_step_call<E: From<ToolCallEffect>>(
         &mut self,
         id: CallId,
-        item: FunctionCall,
+        mut item: FunctionCall,
         agent: &AgentDefinition,
+        offered: Option<&[lk_agents_abi::session::InputCandidate]>,
         fx: &mut Vec<E>,
     ) -> Option<FinalCandidate> {
         if item.name == FINAL_RESULT_TOOL && matches!(agent.output, OutputSpec::Structured { .. }) {
+            item.extra.remove(crate::delegation::remote::routing::INPUT_OFFERS_KEY);
             let candidate = FinalCandidate { call: id, value: final_value(agent, &item.arguments) };
             let phase = Phase::Validating;
             self.calls.push(Call { id, item, phase, cancellation_requested: false });
             return Some(candidate);
         }
-        self.add(id, item, &agent.tools, fx);
+        self.add_with_offers(id, item, &agent.tools, offered, fx);
         None
     }
 
@@ -201,7 +203,18 @@ impl ToolCalls {
         tools: &[FunctionToolInfo],
         fx: &mut Vec<E>,
     ) {
-        let phase = start(id, &item, tools, fx);
+        self.add_with_offers(id, item, tools, Some(&[]), fx);
+    }
+
+    fn add_with_offers<E: From<ToolCallEffect>>(
+        &mut self,
+        id: CallId,
+        mut item: FunctionCall,
+        tools: &[FunctionToolInfo],
+        offered: Option<&[lk_agents_abi::session::InputCandidate]>,
+        fx: &mut Vec<E>,
+    ) {
+        let phase = start(id, &mut item, tools, offered, fx);
         self.calls.push(Call { id, item, phase, cancellation_requested: false });
     }
 
@@ -769,16 +782,28 @@ pub enum PrepareFailure {
 /// that are not a JSON object settle at once as feedback.
 fn start<E: From<ToolCallEffect>>(
     id: CallId,
-    item: &FunctionCall,
+    item: &mut FunctionCall,
     tools: &[FunctionToolInfo],
+    offered: Option<&[lk_agents_abi::session::InputCandidate]>,
     fx: &mut Vec<E>,
 ) -> Phase {
+    use crate::delegation::remote::routing;
+    item.extra.remove(routing::INPUT_OFFERS_KEY);
+    let tool = find(tools, &item.name);
+    if tool.is_some_and(|tool| tool.remote.is_some()) {
+        match offered {
+            Some(offered) => routing::capture_offers(item, offered),
+            None => {
+                item.extra.insert(routing::INPUT_OFFERS_KEY.into(), Value::Null);
+            }
+        }
+    }
     let failed = |text: String, fx: &mut Vec<E>| {
         let outcome = ToolOutcome::ToolError(text);
         fx.push(result_event(item, &outcome).into());
         Phase::Settled(Settled { outcome, retry: true })
     };
-    let Some(tool) = find(tools, &item.name) else {
+    let Some(tool) = tool else {
         return failed(format!("unknown tool `{}`", item.name), fx);
     };
     let parsed = match tool_arguments::parse(&item.arguments) {

@@ -3943,36 +3943,6 @@ impl VoiceSession {
         })
     }
 
-    /// A RemoteAgent host callback claims its admitted response through an existing live body.
-    /// `None` leaves the normal remote invocation path available. An admitted repeat returns
-    /// the same local handoff report, never authority to start a second remote request.
-    #[pyo3(signature = (endpoint, name, *, origin))]
-    fn continue_remote_tool<'py>(
-        &self,
-        py: Python<'py>,
-        endpoint: ::std::string::String,
-        name: ::std::string::String,
-        origin: Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let origin = crate::generated::records::voice_session::voice_command_origin_from_py(
-            origin.as_any(),
-        )?;
-        let call = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::continue_remote_tool(&self.0, endpoint, name, origin)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
-        crate::py_calls::future_into_py(py, async move {
-            let out = call.await.map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
-            Python::attach(|py| {
-                ::pyo3::IntoPyObjectExt::into_py_any(
-                    out.map(|value| {
-                        crate::generated::records::tool_report::tool_report_to_py(py, value)
-                    })
-                    .transpose()?,
-                    py,
-                )
-            })
-        })
-    }
-
     /// `VoiceSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`).
     #[pyo3(signature = (*, hold = None))]
     fn wait_for_idle<'py>(

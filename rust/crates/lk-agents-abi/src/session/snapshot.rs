@@ -18,6 +18,7 @@ pub struct FrameId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParentCall {
     pub frame_id: FrameId,
+    /// Canonical call item ID; the output retains the provider's separate wire call_id.
     pub call_id: String,
 }
 

@@ -357,7 +357,12 @@ pub trait AgentCallbacks: Send + Sync {
     /// The person's reply to the question the expert of `invocation`'s delegated call asked,
     /// forwarded to the call's body by its voice session.
     #[host(notify, requires(tool_call))]
-    fn answer_expert(&self, #[host(context)] _invocation: &Invocation, _answer: String) {}
+    fn answer_expert(
+        &self,
+        #[host(context)] _invocation: &Invocation,
+        _answer: crate::a2a::remote::DelegationInput,
+    ) {
+    }
 }
 
 /// The shared agent definition (agents.md "Agent"): reusable configuration every invocation reads

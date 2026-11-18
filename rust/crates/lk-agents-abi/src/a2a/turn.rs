@@ -37,7 +37,10 @@ pub struct TurnContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PendingCall {
+    /// Canonical originating call item; provider IDs may repeat across model requests.
+    pub id: String,
     pub name: String,
+    /// Provider wire ID, retained for model-facing call/result pairing.
     pub call_id: String,
     /// The tool that takes the answer, when the `InputRequired` named one.
     #[host(default = None)]

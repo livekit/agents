@@ -216,6 +216,61 @@ async fn refused_activation_does_not_release_an_older_use_of_the_same_agent() {
     assert_eq!(rejected.closes.load(Ordering::SeqCst), 1);
 }
 
+// Catches: an activation removed before its close settled, so cancelling its release waiter
+// lets session shutdown return with the authored close still running.
+#[tokio::test]
+async fn session_shutdown_joins_an_activation_close_after_its_waiter_is_cancelled() {
+    let hooks = Arc::new(Hooks { hold_close: true, ..Hooks::new() });
+    let scopes = Arc::new(Scopes::new(&ProcessEnv::current_runtime()));
+    scopes.acquire(9, vec![hooks.clone()]).await.unwrap();
+    let releasing = scopes.clone();
+    let activation = TokioSpawner::current().spawn(async move { releasing.release(Some(9)).await });
+    hooks.close_entered.notified().await;
+    activation.cancel();
+    assert!(activation.await.is_err());
+
+    let mut closing = Box::pin(scopes.release(None));
+    assert!(
+        std::future::poll_fn(|cx| std::task::Poll::Ready(closing.as_mut().poll(cx).is_pending()))
+            .await,
+        "session shutdown returned while the activation's close was held"
+    );
+    hooks.close_release.notify_one();
+    closing.await.unwrap();
+    assert_eq!(hooks.closes.load(Ordering::SeqCst), 1);
+}
+
+// Catches: cancelling an activation during setup removes the group while rollback is still
+// closing a child, leaving session shutdown unable to join that cleanup.
+#[tokio::test]
+async fn session_shutdown_joins_a_cancelled_activation_setup_rollback() {
+    let child = Arc::new(Hooks { hold_close: true, ..Hooks::new() });
+    let parent = Arc::new(Hooks {
+        hold_setup: true,
+        children: Some(group(vec![child.clone()])),
+        ..Hooks::new()
+    });
+    let scopes = Arc::new(Scopes::new(&ProcessEnv::current_runtime()));
+    let acquiring = scopes.clone();
+    let tools = vec![parent.clone() as Arc<dyn toolsets::ToolsetHooks>];
+    let opening = TokioSpawner::current().spawn(async move { acquiring.acquire(9, tools).await });
+    parent.setup_entered.notified().await;
+    opening.cancel();
+    assert!(opening.await.is_err());
+    child.close_entered.notified().await;
+
+    let mut closing = Box::pin(scopes.release(None));
+    assert!(
+        std::future::poll_fn(|cx| std::task::Poll::Ready(closing.as_mut().poll(cx).is_pending()))
+            .await,
+        "session shutdown returned while the cancelled setup's rollback was held"
+    );
+    child.close_release.notify_one();
+    closing.await.unwrap();
+    assert_eq!(child.closes.load(Ordering::SeqCst), 1);
+    assert_eq!(parent.closes.load(Ordering::SeqCst), 0);
+}
+
 #[tokio::test]
 async fn failed_admission_does_not_leave_a_slot_before_the_next_activation() {
     let failed = Arc::new(Hooks { fail_setup: true, ..Hooks::new() });

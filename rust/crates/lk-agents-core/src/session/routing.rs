@@ -128,7 +128,7 @@ impl SessionConfig {
                 if let Some(origin) = &input.origin
                     && (origin.agent_id != id.value
                         || !frame.history.iter().any(|item| matches!(item,
-                            lk_agents_abi::ChatItem::FunctionCall(call) if call.call_id == origin.call_id)))
+                            lk_agents_abi::ChatItem::FunctionCall(call) if call.id == origin.call_id)))
                 {
                     return Err(invalid("local input origin has no owning tool call"));
                 }
@@ -145,7 +145,7 @@ impl SessionConfig {
                     .ok_or_else(|| invalid("missing parent frame"))?;
                 let call_exists = parent_frame.history.iter().any(|item| {
                     matches!(item,
-                    lk_agents_abi::ChatItem::FunctionCall(c) if c.call_id == parent.call_id)
+                    lk_agents_abi::ChatItem::FunctionCall(c) if c.id == parent.call_id)
                 });
                 if !call_exists {
                     return Err(invalid("missing originating call"));
@@ -162,7 +162,7 @@ impl SessionConfig {
             for item in &frame.history {
                 if let lk_agents_abi::ChatItem::FunctionCall(call) = item {
                     let completed = frame.history.iter().any(|item| matches!(item,
-                        lk_agents_abi::ChatItem::FunctionCallOutput(output) if output.call_id == call.call_id));
+                        lk_agents_abi::ChatItem::FunctionCallOutput(output) if output.id == call.output_id()));
                     let local_child =
                         self.agents[&frame.agent_name].agent_tools.contains_key(&call.name);
                     if !completed && !local_child {
@@ -196,7 +196,7 @@ impl SessionConfig {
                     .iter()
                     .filter_map(|item| match item {
                         lk_agents_abi::ChatItem::FunctionCall(call)
-                            if call.call_id == pending.parent.call_id =>
+                            if call.id == pending.parent.call_id =>
                         {
                             Some(call)
                         }
@@ -207,7 +207,7 @@ impl SessionConfig {
                     return Err(invalid("pending child has no unique originating call"));
                 }
                 let answered = frame.history.iter().any(|item| matches!(item,
-                    lk_agents_abi::ChatItem::FunctionCallOutput(output) if output.call_id == pending.parent.call_id));
+                    lk_agents_abi::ChatItem::FunctionCallOutput(output) if output.id == calls[0].output_id()));
                 if answered != (pending.status == ChildCallStatus::Approval) {
                     return Err(invalid("pending child call has an inconsistent result"));
                 }

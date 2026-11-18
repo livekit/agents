@@ -127,6 +127,21 @@ impl Session {
             .and_then(|state| state.default_context_id.clone()))
     }
 
+    pub fn remote_task(
+        &self,
+        remote_id: &str,
+        endpoint: &str,
+        task_id: &str,
+    ) -> Result<
+        lk_agents_abi::delegation::remote::RemoteTaskRef,
+        lk_agents_abi::storage::StorageError,
+    > {
+        let remote = self.remote_state(remote_id, endpoint)?.ok_or_else(|| {
+            lk_agents_abi::storage::StorageError::Invalid("this remote has no known tasks".into())
+        })?;
+        crate::session::remote::task(remote, task_id)
+    }
+
     /// Only the initiating local call can recover its previous send. Controls such as GetTask
     /// observe that send; they never replace it as the operation whose outcome is recovered.
     pub fn remote_recovery(
@@ -188,16 +203,6 @@ impl Session {
             }
             SessionEvent::InputRouted { request_id, result, usage } => {
                 self.input_routed(request_id, result, usage, now, &mut effects);
-            }
-            SessionEvent::InputRoutingUnavailable { request_id } if matches!(&self.phase, Phase::Routing { request_id: current, .. } if *current == request_id) =>
-            {
-                self.finish(
-                    Err(TextSessionError::Routing(RoutingError::InvalidState(
-                        "presented input requests require DelegationOptions(routing_model=...)"
-                            .into(),
-                    ))),
-                    &mut effects,
-                );
             }
             SessionEvent::Run { invocation_id, event } if self.is_current(&invocation_id) => {
                 self.run_event(event, now, &mut effects);
@@ -324,6 +329,16 @@ impl Session {
     }
 
     fn invoke(&mut self, message: Option<ChatMessage>, now: Ts, effects: &mut Vec<SessionEffect>) {
+        self.invoke_offered(message, None, now, effects);
+    }
+
+    fn invoke_offered(
+        &mut self,
+        message: Option<ChatMessage>,
+        offered: Option<Vec<super::InputCandidate>>,
+        now: Ts,
+        effects: &mut Vec<SessionEffect>,
+    ) {
         let invocation_id = self.mint("invocation");
         let mut answered = BTreeSet::new();
         let stamp = self.stamp(now);
@@ -341,7 +356,7 @@ impl Session {
                 answered.insert(origin.call_id.clone());
                 if let Some(call) = frame.history.iter().find_map(|item| match item {
                     ChatItem::FunctionCall(call)
-                        if call.call_id == origin.call_id
+                        if call.id == origin.call_id
                             && approval::mark(call)
                                 == Some(lk_agents_abi::llm::tool_executor::Approval::Asked) =>
                     {
@@ -411,7 +426,10 @@ impl Session {
         };
         let mut run = match AgentRun::new(agent.definition.clone(), input) {
             Ok(run) => {
-                let run = run.with_input_answers(answered);
+                let run =
+                    run.with_input_answers(answered).with_input_offers(offered.unwrap_or_else(
+                        || crate::delegation::remote::routing::offered(&self.state),
+                    ));
                 if self.checkpoints { run.with_checkpoints() } else { run }
             }
             Err(error) => {
@@ -640,7 +658,7 @@ impl Session {
         PendingChildCall {
             parent: ParentCall {
                 frame_id: frame_id.clone(),
-                call_id: child.function_call.call_id.clone(),
+                call_id: child.function_call.id.clone(),
             },
             invocation_id: invocation_id.into(),
             execution_id: self.state.execution_id.clone(),
@@ -663,7 +681,7 @@ impl Session {
             .filter_map(|child| {
                 history.iter().find_map(|item| match item {
                     ChatItem::FunctionCall(call)
-                        if call.call_id == child.function_call.call_id
+                        if call.id == child.function_call.id
                             && approval::mark(call)
                                 == Some(lk_agents_abi::llm::tool_executor::Approval::Asked) =>
                     {
@@ -739,7 +757,7 @@ impl Session {
                 .iter()
                 .position(|i| {
                     matches!(i,
-            ChatItem::FunctionCall(c) if c.call_id == p.parent.call_id)
+            ChatItem::FunctionCall(c) if c.id == p.parent.call_id)
                 })
                 .unwrap_or(usize::MAX)
         });
@@ -794,6 +812,10 @@ impl Session {
     }
 
     /// The latest snapshot of the turn's usage: every local invocation it ran, once.
+    pub fn routing_usage(&mut self, usage: &Usage) {
+        self.usage.add(usage);
+    }
+
     pub fn usage(&self) -> Usage {
         match self.phase.invocation() {
             Some(invocation) => {

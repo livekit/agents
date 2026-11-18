@@ -286,6 +286,37 @@ fn an_undispatched_request_can_resume_after_its_local_observer_failed() {
 }
 
 #[test]
+fn prepared_response_recovery_retains_its_exact_question_occurrence() {
+    let mut state = RemoteAgentState::new("https://booking.test".into());
+    dispatched(&mut state, "start", send("start", "Book a seat", None));
+    let reference = apply(
+        &mut state,
+        RemoteInput::Response {
+            request_id: "start".into(),
+            response: Box::new(A2AResponse::Stream(serde_json::from_value(input_task()).unwrap())),
+        },
+    )
+    .unwrap()
+    .unwrap();
+    let mut prepared = send("answer", "Friday", Some(("trip", "booking")));
+    let RemoteInput::Prepare { input_request, .. } = &mut prepared else { unreachable!() };
+    *input_request = Some(reference.clone());
+    apply(&mut state, prepared).unwrap();
+    let restored: RemoteAgentState =
+        serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+    let RemoteRecovery::Dispatch { request_id, request, input_request, .. } =
+        recovery(&restored, "answer").unwrap()
+    else {
+        panic!("an undispatched answer retains its original operation")
+    };
+    assert_eq!(request_id, "answer");
+    assert_eq!(input_request, Some(reference));
+    let A2ARequest::Send(send) = *request else { panic!("the prepared response is a send") };
+    assert_eq!(send.message.message_id, "message_answer");
+    assert_eq!(send.message.task_id.as_deref(), Some("booking"));
+}
+
+#[test]
 fn a_lost_input_response_is_reconciled_from_the_same_task_without_another_send() {
     let mut state = RemoteAgentState::new("https://booking.test".into());
     dispatched(&mut state, "start", send("start", "Book a seat", None));

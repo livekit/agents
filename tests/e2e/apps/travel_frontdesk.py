@@ -30,9 +30,25 @@ def route_response(history: ChatContext) -> FunctionToolCall:
     message = history.items[-1]
     assert message.type == "message" and message.text_content is not None
     prompt = json.loads(message.text_content)
+    if "proposed_call" in prompt:
+        assert prompt["proposed_call"] == {"request": "Friday"}
+        assert prompt["selected_task"] is None
+        [candidate] = prompt["candidates"]
+        [response] = candidate["responses"]
+        assert response["question"] == "Which day?"
+        assert response["held_response"] == "Friday"
+        return tool_call(
+            "route_remote_call",
+            action="respond",
+            candidate=candidate["index"],
+            response=response["index"],
+        )
+    assert prompt["latest_message"] in ("Why do you need the date?", "Friday")
+    [candidate] = prompt["candidates"]
+    assert candidate["question"] == "Which day?"
     return tool_call(
         "route_input_response",
-        candidates=[0] if prompt["latest_message"] == "Friday" else [],
+        candidates=[candidate["index"]] if prompt["latest_message"] == "Friday" else [],
         unclear=False,
     )
 

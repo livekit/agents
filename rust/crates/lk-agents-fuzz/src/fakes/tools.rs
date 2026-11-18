@@ -49,6 +49,8 @@ pub fn tool_spec(name: &str) -> ToolSpec {
 }
 
 pub struct FakeTools {
+    /// Canonical calls actually admitted to this host's bodies, including native private metadata.
+    pub calls: Mutex<Vec<FunctionCall>>,
     /// Replies delivered to a live remote body, in order, including its unique call item id.
     pub expert_answers: Mutex<Vec<(String, String)>>,
     registry: Arc<Registry>,
@@ -71,6 +73,7 @@ impl FakeTools {
         let refs: Arc<dyn lk_agents_abi::RefRegistry> =
             Arc::new(PreparedRefs(Arc::clone(&prepared)));
         Arc::new(FakeTools {
+            calls: Mutex::default(),
             expert_answers: Mutex::default(),
             registry,
             prepared,
@@ -162,8 +165,15 @@ pub enum Body {
 }
 
 impl AgentCallbacks for FakeTools {
-    fn answer_expert(&self, invocation: &Invocation, answer: String) {
-        self.expert_answers.lock().unwrap().push((call_of(invocation).id.clone(), answer));
+    fn answer_expert(
+        &self,
+        invocation: &Invocation,
+        answer: lk_agents_abi::a2a::remote::DelegationInput,
+    ) {
+        self.expert_answers.lock().unwrap().push((
+            call_of(invocation).id.clone(),
+            answer.arguments["request"].as_str().unwrap().into(),
+        ));
     }
 
     fn render_instructions<'a>(
@@ -237,6 +247,7 @@ impl AgentCallbacks for FakeTools {
             .remove(&prepared.id())
             .expect("a body runs on prepared arguments");
         let call = call_of(invocation).clone();
+        self.calls.lock().unwrap().push(call.clone());
         Box::pin(async move {
             let mut outcome = self.answer(invocation, &call, &handle).await;
             // A verbatim question names its own tool to take the answer.

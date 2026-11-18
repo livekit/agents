@@ -117,7 +117,7 @@ The tool works wherever its parent runs:
 | --- | --- | --- |
 | `TextSession` or bound `agent.run()` | a local agent context with private history, retained through the binding | the turn ends on it; the next bound request resumes that child. See [text-session execution](text-session.md#local-agents-as-tools) |
 | `agent.run()` | a delegate of the call, run in process | ends the call as `InputRequired`, passed up as asked; the turn ends `input_required`. The child's own history is kept on the call's `extra`, and the tool's next call in the supplied history resumes it |
-| `VoiceSession` | a delegate of the call, run in process, as a remote expert is: the request is announced and the conversation goes on while it works | put to the person, verbatim when the child asked verbatim; their reply resumes the same child, and the call settles when the child does |
+| `VoiceSession` | a delegate of the call, run in process, as a remote expert is: the frontend can acknowledge it and the conversation goes on while it works | put to the person, verbatim when the child asked verbatim; their reply resumes the same child, and the call settles when the child does |
 
 A child's own approvals work on all three: its read-back passes up verbatim and
 the answer reaches the child that asked. Cancelling the tool call cancels the
@@ -212,10 +212,10 @@ and delegation metadata. Applications configure the endpoint and attach its
 tool; protocol calls and metadata recording are internal. One call of the tool
 connects, sends the request and follows the remote task to its outcome, a task
 the endpoint moved included; each update is recorded on the function call's
-`extra` before its progress text reaches `ctx.update()`. On a call the request
-is announced to the person once sent, and each question the expert asks is put
-to the person, whose reply answers it; off a call the question ends the tool call
-as `InputRequired`. Canceling the local tool wait closes its observation resources and
+`extra` before its progress text reaches `ctx.update()`. On a call the frontend decides whether
+and how to acknowledge dispatch. Remote questions enter the session's presentation queue;
+recognized responses reach their original task through the same remote tool. Off a call the
+question ends the tool call as `InputRequired`. Canceling the local tool wait closes its observation resources and
 retains its remote references. Remote business work continues; stopping the frontend does
 not send a task cancellation. Explicit cancellation is a separate task operation, described
 in [endpoint clients](clients.md#a-client-for-an-endpoint).

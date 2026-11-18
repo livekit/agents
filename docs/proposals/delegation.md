@@ -7,7 +7,9 @@ reasoning model, specialist instructions and tools independently of the frontend
 
 The document first explains the behavior and public API, then the native implementation and
 work required. It describes the target system. Existing SDK guides remain the current contract
-until implementation lands. The implementation checklist records work still to do.
+until implementation lands. The implementation checklist is the ordered completion roadmap.
+Each milestone names its remaining changes, implementation owners and observable exit;
+the acceptance matrix below supplies the detailed cases.
 
 ## Product direction
 
@@ -129,6 +131,7 @@ coroutine: the expert server decides how to reconstruct or continue its executio
 | Area | Contract |
 | --- | --- |
 | Entry point | `RemoteAgent(...).as_tool()` |
+| Explicit continuation | Optional `task_id` argument on the existing remote tool; the framework retains input-occurrence correlation |
 | Configuration | Connection/auth on `RemoteAgent`; caller behavior on the conversation execution owner |
 | Routing | Detector enabled by default, including one eligible pending question |
 | Routing model | Configure a separate routing model explicitly; frontend-model reuse is a later optimization |
@@ -231,19 +234,60 @@ session = VoiceSession(
 await session.start(front_desk, room=ctx.room)
 ```
 
-Answer routing and dispatch acknowledgement are conversation-wide behavior. Configure them
-on the execution owner (VoiceSession, TextSession or the run/endpoint execution), so one policy
+Answer routing is conversation-wide behavior. Configure it on the execution owner
+(VoiceSession, TextSession or the run/endpoint execution), so one policy
 coordinates all exposed remote tools. Automatic detection requires an explicitly configured
 separate routing model for every frontend type, including pipeline and realtime voice. There
 is no fallback to the frontend model or implicit provider credentials. A decision model or
 Gemma can be an application choice; no model family is hardcoded by the framework. Reusing a
 frontend model is a later optimization. DelegationOptions/delegation are the common configuration;
-these controls do not belong on individual as_tool calls.
+this configuration does not belong on individual as_tool calls. `routing_model=None` disables
+automatic routing; an explicit task_id continues known work and an omitted task_id starts new
+work. The frontend model decides whether and how to acknowledge delegation. The framework
+provides a dispatch fact and releases the conversational floor, without queuing an automatic
+spoken acknowledgement. There is no announce option.
+
+### Targeting a remote task
+
+The existing delegation tool accepts an optional `task_id`. For the default text schema, the
+frontend model's tool arguments can be:
+
+```json
+{
+  "request": "Friday",
+  "task_id": "booking-42"
+}
+```
+
+The task belongs to the remote configured by that tool. Its saved state supplies the A2A
+context. An explicit task selects that work for an answer, clarification or correction; the
+remote agent interprets the message and decides what information is still missing. Several
+required answers can belong to one task, such as first and last name. A2A supplies task-level
+continuation rather than independently addressable input-request objects.
+
+With `task_id` omitted or null, the conversation's routing policy decides whether the proposed
+call continues existing work or starts new work. With detection disabled, an explicit task ID
+continues work and no task ID starts new work. A turn may both answer an existing task and
+start new work through the same tool; an earlier handoff must not blanket-block later calls.
+An unknown, foreign or terminal task produces feedback instead of silently starting new work.
+
+The framework consumes `task_id` before passing the remote's own input payload. Custom card
+schemas retain their business arguments; a collision with the reserved `task_id` field must
+fail tool setup.
+
+Input-occurrence IDs remain in framework state for response reservation, stale-decision checks
+and recovery. A model turn retains the occurrences it was offered. Before consuming a human
+response, validate that captured occurrence rather than resolving the task to whatever question
+is newest when the tool call arrives. Selecting a task alone does not mark its latest question
+answered; task messages also support clarification and corrections without a pending question.
+
+### Conversation APIs
 
 | Surface | Meaning |
 | --- | --- |
 | `.as_tool()` | Expose the expert as a tool; conversational policy belongs to the execution owner |
-| Conversation policy | Default detector and dispatch acknowledgement; acknowledgement suppression does not suppress progress/questions/results |
+| Tool argument `task_id` | Select a known remote task on that same tool; input-occurrence correlation stays with the framework |
+| Conversation policy | One routing model on the owner; the frontend model decides acknowledgement and wording |
 | `ctx.update(text, silent=False)` | Progress the frontend may word; silent updates inform only the model |
 | `ctx.say(text)` | Ordered exact text, including through nested delegation |
 | `InputRequired(question, verbatim=False)` | Finish this invocation waiting for input; a later invocation resumes the task |
@@ -274,20 +318,20 @@ The framework owns update delivery, but cannot make an arbitrary booking API ide
 Omitting an await allows the tool to proceed while owned delivery continues; it does not discard
 the message. Exact output still follows the interaction's delivery order.
 
-With detection disabled, the tool schema has a fixed optional input-reference field. Its
-spelling remains an open question below; `<reference-field>` is a placeholder in this draft.
-The framework supplies eligible references in model context:
+The tool schema keeps the same optional `task_id` whether automatic routing is enabled or
+disabled. No input-request identifier appears in the model's arguments:
 
 ```json
 {"request": "Find flights from Paris to Rome"}
 ```
 
 ```json
-{"request": "Next Friday", "<reference-field>": "<task-and-input-occurrence>"}
+{"request": "Next Friday", "task_id": "booking-42"}
 ```
 
-Validate references against the conversation, expert, task, question incarnation and access.
-Schema enums do not change during a realtime call. Before a remote task ID is known, the
+Validate task references against the conversation, configured remote and access. When routing
+selects a held human response, also revalidate the captured input occurrence and its canonical
+words. Schema enums do not change during a realtime call. Before a remote task ID is known, the
 request and dispatch facts remain inspectable. Stopping local waiting does not prove remote
 work stopped; an uncertain dispatch must be reconciled before a task can be targeted.
 
@@ -427,20 +471,12 @@ become a hidden live endpoint.
 
 ### Decisions to finish
 
-- [ ] Finalize the common owner-level configuration signature and retry settings. A separate
-  explicitly configured routing model is agreed for all automatic-detection frontends.
-- [ ] Integrate Agent.run binding and shared SessionState, including transitions between
-  executors, current-agent input handling and removal of detached continuation entry points.
-  Bound Agent.run activation and removal of detached continuation inputs are implemented;
-  the shared voice/current-agent execution path remains to be integrated.
-- [ ] Finalize reference spelling, custom card-schema collisions and explicit overrides in detector mode.
-- [ ] Decide inbound messages without `taskId`: continue a local waiting task or retain new-task/`mergedInto` behavior.
-- [ ] Finalize RemoteTask.cancel() failure/uncertainty outcomes and bound control-activation
-  lifetime; retain the agreed task-instance command instead of an owner-level method.
-- [ ] Finalize read-only snapshot/retention behavior and generated protocol types for public
-  messages/tasks/contexts/events, including partial observations and optional task history.
-- [ ] Decide the bounded protected-step API and shutdown contract before its implementation;
-  the compatibility comparison is deferred in the TODO below.
+The task_id tool contract is agreed. Remaining public decisions are collected under
+[questions retained during implementation](#questions-retained-during-implementation),
+including cancellation/control activation, delivery errors and protocol error inspection.
+The [completion roadmap](#implementation-checklist) tracks implementation and acceptance;
+private layout or generator work does not authorize another public primitive.
+The protected-step/interruption-policy comparison stays deferred in the TODO below.
 
 ## Inbox policies
 
@@ -566,8 +602,10 @@ reservation rather than consuming the response again. Both input admission and t
 routing use the same native validation/reservation/dispatch path, with no duplicate send.
 
 An invalid verdict, provider failure or ambiguous match uses bounded retry/clarification and
-keeps unresolved requests pending. Explicit references skip model-based matching but retain
-native validation. With detection disabled, continuation requires an explicit reference.
+keeps unresolved requests pending. An explicit tool `task_id` skips task selection by the
+detector and retains native task/response validation. The framework carries the offered input
+occurrence when consuming a human response; the model does not supply its ID. With detection
+disabled, continuation requires an explicit task ID.
 Recognition never delays local voice interruption handling. Use the separately configured
 routing model; automatic frontend-model reuse is outside the initial scope. The common
 configuration spelling and exact retry settings remain design decisions; no new detector
@@ -826,8 +864,9 @@ AgentClientError, RunResult, InputRequired, ToolResult, ChatContext and SpeechHa
 | Surface | Change or remaining contract |
 | --- | --- |
 | RemoteAgent(...).as_tool() | Existing entry point; no per-tool answer-detector/announcement options. |
+| Remote-tool argument task_id | Optional known-task selection on the same tool. Omitted/null uses owner routing, or starts new work when detection is disabled. The framework strips this field from business input and rejects schema collisions. |
 | RemoteAgent(..., id=...), proposed | Optional stable configured remote identity, separate from a model-visible name. Exact spelling/default identity is unresolved; current RemoteAgent has name/description but no separate identity option. |
-| DelegationOptions, proposed spelling | Common owner-level configuration for routing mode/model and dispatch acknowledgement. Automatic detection requires a separate explicitly configured model. Reuse existing connection/retry settings; no detector/provider class tree or automatic model reuse in the initial integration. |
+| DelegationOptions | Existing generated owner-level configuration with nullable routing_model. A separate configured model enables automatic routing; None disables it. No announce flag: acknowledgement is frontend model behavior. Reuse existing connection/retry settings. |
 | VoiceSession/TextSession and Agent.run/run_stream owner policy | Accept the same delegation configuration. An execution that performs automatic input detection must be given its separate routing model. Exact keyword placement remains open. |
 | Agent.run(..., context=store.bind(...)) and run_stream | Extend existing methods to activate shared state. No new state input/result path; reject competing explicit history while bound. |
 | SessionState.root_agent/current_agent/chat_history/remote_agents | Generated inspection properties. The remote properties messages/tasks/contexts/events expose the records above. snapshot() keeps its existing detached-read role. |
@@ -838,7 +877,7 @@ AgentClientError, RunResult, InputRequired, ToolResult, ChatContext and SpeechHa
 | Agent.as_tool(..., merge_chat_ctx=...) | Rename the existing merge_chat_history option without a compatibility alias. needs_approval and fresh/fork remain existing capabilities. |
 | inbox="live" | Add a value to the existing endpoint policy; no public LiveSession/LiveLane class. |
 | InputRequired(question, verbatim=False) | Remove tool= and the associated blind direct-answer path. Match input first, then continue the owning local agent or the recorded remote task. |
-| ctx.uninterruptible(), proposed | Long's protected business-step context manager needs a compatibility decision. It is separate from speech interruption and cannot promise process-crash survival. |
+| ctx.uninterruptible(), deferred | Long's protected business-step context manager and interruption-policy comparison stay outside the initial delivery. Retain the TODO below. |
 
 <!-- TODO: Revisit Long's protected-step API and its relationship to IGNORE_ON_ENTER and
 RunContext.disallow_interruptions() in a later compatibility pass. Keep business-step lifetime
@@ -862,17 +901,26 @@ a public Python export or an additional SDK constructor.
 | RemoteTaskState, internal data | Persisted data underlying the public RemoteTask view. | SDK Task observation, task-owned input state and cancellation intent; no serialized command capability. |
 | RemoteAgentView, RemoteContextView and RemoteTaskView, internal ABI traits | Generated bindings for the three public inspection types. | Native storage handles retain the enclosing SessionState's bound or detached owner. Getter results copy SDK values; grouping adds no duplicate histories or network calls. |
 | SessionCommands, SessionInputCommand, RemoteCommand and RemoteInput, internal ABI port/data | One serialized owner for input admission and remote observations. | Presentation receipts, response reservations, preparation, dispatch markers, responses and errors receive their checkpoint before acknowledgement. An accepted remote input observation returns its existing InputRequestRef; no new controller or stored command capability. |
+| DelegationInput, internal host record | Replaces the live continuation's bare response string. | Business arguments plus their structured-input flag and optional exact input reservation. A clarification can reach the same live task without consuming its question; local live delegates receive text. Generated from ABI; applications do not construct it. |
 | ConversationHistory and ConversationStateFailed | Internal voice effect/input; no Python types. | Publish core-accepted history through the native binding before host callbacks; preserve pending recognition and refreshed remote state. The core closes voice on a refused state publication. |
 | InputPresented and ToolReport.input_request | Reuse the shared InputRequestRef in a private voice effect and the existing host report. | A checkpointed A2A occurrence follows rephrasing into actual output delivery. The existing voice inbox holds transient speech correlation; a failed/unspoken presentation can be retried without creating another input occurrence. No new question or presentation class. |
 | RouteInput, InputRouted and InputReserved | Private voice effect/inputs extending the current driver. | The first frontend plan waits for classification and checkpoint admission. Saved reservations reach the conversation independently of the assistant waiter, including after interruption. No host export or new saved record. |
-| ContinueRemoteTool, Answer::RemoteTool and the native continue_remote_tool method | Private command/receipt variants and generated host adapter on the existing voice session. | A RemoteAgent invocation claims a reserved response through the original live body. Same-turn repeats observe the handoff; no second RemoteInteraction or result waiter is created. Closing settles the command's existing receipt. No public Python SDK method or task-argument requirement. |
-| Experts.prompted_responses and forwarded_responses | Transient fields on the existing frontend inbox. | Wake an eligible frontend once per held occurrence and remember a tool's handoff for the current human-message ID. These are local scheduling/admission facts, never wire acknowledgement or persisted command authority. |
+| RemoteTaskDriver and its Driver/Command/Message/Completion, internal ABI/runtime | One bounded native message inbox for a live remote task. | New business input, immutable prepared-request recovery and task reconciliation share the original observer. A new tool call awaits admission, while the originating call receives the final result. Producer-owned receipts settle on task death or owner loss; no suspended Python response future. |
+| Drivers and Registry, private runtime records | Weak operation handles and transient task occupancy in the existing command port. | Saved operations establish task association. A late reply that merges requests cannot replace an existing observer; it wakes that observer to reconcile accepted work. No second durable task index or saved authority. |
+| RemoteCallAdmission and RemoteResponseClaim, private native receipt/lifetime token | Wrap the validated call admission and existing driver handle. | The owner atomically reserves an exact response before connection or preparation. Dropping an unsent admission releases its claim; an admitted command retains it independently of its caller. Weak registry entries carry no serialized state or host authority. |
+| CallAction, CallCandidate, CallRoutingRequest, CallRoute and CallAdmission, internal ABI | Ephemeral proposed-call input, model verdict and validated admission. | Classify new work, continuation or a captured response independently of human-response recognition. Invalid/unavailable decisions produce feedback; admission rechecks the current task and exact reserved words before preparation. |
+| AgentRun.input_offers, FrozenInputOffers and capture_offers/captured_offers, native only | Model-turn metadata on the existing run and FunctionCall.extra. | Freeze offered occurrences before model tool execution and overwrite provider-supplied metadata. Later questions cannot substitute for an older offer; private metadata is excluded from exported caller history. |
+| CaptureInputOffers, InputOffers and RemoteResponseQueued, private voice effect/inputs | Extend the current voice driver without a host API. | Capture the owner's offers before remote tool admission; successful response preparation retires only its exact presented occurrence, without claiming delivery. |
+| Experts.prompted_responses | Transient field on the existing frontend inbox. | Wake an eligible frontend once per held occurrence. Duplicate admission follows the durable response operation, rather than suppressing every call to that tool in one human turn. |
+| ReplyInputGate and AfterCapture, private voice enums | One gate on the existing ReplyRun for capture, transcript and response admission. | Remote tool calls wait for the matching model/request identity while realtime audio continues. A stale verdict or lost producer cannot release a newer turn. |
 | VoiceDriver.input_plans and Experts.responses | Private maps on existing native owners. | Settle first-plan waiters across agent replacement; retain admitted responses for eligible live remote continuations. Source occurrence and current waiting request must still match. These maps never enter SessionState or the communication journal. |
 | Source::InputRouting | One private provenance variant on the existing voice chat record. | Retain the admitted destination in later model requests without adding human-facing dialogue or another state class. A revised verdict replaces the same message's private observation. |
 | Run.start_with and ObservedLlm, DST only | Configure the existing simulation runner and observe its fake model boundary. | Exercise ordinary native session arguments, the production binding and real executors. The observer records model requests; it does not implement routing or persistence. No SDK export. |
 | RoutingCase, RoutingModel and _RoutingStream, tests only | Labeled recognition cases, a provider observer and its stream adapter. | routing_cases/evaluate_routing/routing_summary run and report the production TextSession classifier, schema, parser and reservations with a scripted frontend. Optional prompt replacement is for experiments; there is no second routing implementation or SDK export. |
 | FakeTools.expert_answers and Registry.session, DST only | Extend the existing fake and expose its existing native session port to authored stories. | Observe exact local handoffs and exercise real command receipts, including a lost receipt. No replacement executor or SDK API. |
 | FunctionCall.output_id and Batch.call_ids, native only | Computed identities on existing records. | Use one output item identity rule for live-body lookup and final replacement. Reply templates reference model-visible wire calls; delivery events retain their unique framework entry IDs. |
+| tool_pairs, native history helper | Ordered call/result pairing for imported and generated history. | Sequentially reused provider IDs remain distinct; opaque imported output IDs survive and overlapping ambiguous calls cannot consume an arbitrary result. |
+| PendingCall.id and ToolCallRef.call_id | Canonical call-item identity on existing records. | Recovery, input provenance, local result propagation and approval admission use FunctionCall.id. Repeated provider call_id values remain wire labels and cannot alias an earlier invocation. |
 | FakeLlm.reusing_call_ids and Detail::Tool.item_id, DST only | Extend the existing model fake and tool observation. | Repeat provider call IDs between replies while tracking each admitted framework call independently. |
 | SessionBinding.memory() | Private factory on the existing storage binding type. | A default voice session uses the same native state, command admission and checkpoint implementation in memory. A supplied binding adds persistence; there is no separate public conversation controller. |
 | SessionCommand and CommandPort | Shared native runtime command queue in session/. | Text and voice use bounded command admission and producer-owned receipts. Voice checkpoints run on owned tasks alongside audio and interruption events. Ending the receiver settles received, queued and capacity-waiting requests; a client retains no execution authority after owner loss. No Python export. |
@@ -935,21 +983,33 @@ designed, or conceal an additional domain concept as a mechanical helper.
 
 The product direction and local/remote layout are aligned. The general E2E foundation,
 bound-state continuation, generated remote inspection and native communication journal are
-implemented. Automatic text input routing uses the separate configured model and shared native
-admission path, including held responses, corrections and a SQLite reconstruction story.
-Voice input routing, task controls, live scheduling and complete voice delegation remain
-implementation work. Several public signatures and native lifetime
-contracts above remain open.
+implemented. The agreed task_id schema, separate human-response/proposed-call classification,
+owner-level model configuration and frozen-occurrence validation are implemented. Text and
+voice use the same native admission and live-task driver. Stories cover held responses,
+clarifications, working-task corrections, independent new work, agent replacement, canonical
+human words and SQLite reconstruction. Remote results retain their originating item identity
+when provider call IDs repeat; a peer merge wakes the existing observer instead of creating
+another result owner.
+
+Concurrent calls for the same reserved response now share one native owner before connection
+or preparation. The duplicate receives a neutral tracked fact while the original progresses;
+an unsent abandoned admission releases its claim. The public regression holds the original
+at card discovery and verifies successful duplicate feedback before any response is prepared,
+then checks one outgoing response and one business effect. Native cases cover lost admission
+receipts, canceled callers, corrections and existing live observers.
+Public task controls, removal of legacy named/history-only continuation, complete recovery,
+live backend execution, conversation pacing and delivery parity remain implementation work.
+Several public signatures and lifetime contracts above remain open.
 Do not treat the architecture agreement as approval of every provisional type name.
 
-| Before this slice | Resolve |
+| Remaining area | Resolve |
 | --- | --- |
 | Shared native state/codegen/storage | Review this inventory; finalize agent/remote identity and initialization, options/view visibility, one snapshot encoding, bound-history editing and retention of referenced content. Prove the generated protocol/view representation. |
-| Input routing | Connect the same owner-level delegation configuration to voice; finalize explicit reference spelling/occurrence validation and custom-card schema collisions. |
-| Live/exact delivery | Finalize update/say receipt return and interruption/close outcomes, protected-step behavior and RemoteTask.cancel() error/control-activation lifetime. |
+| Input routing | Retain exact correction/version checks, remove unused predecessor command readers, and expand the proposed-call evaluation corpus. |
+| Live/exact delivery | Finalize update/say receipt return and interruption/close outcomes, plus RemoteTask.cancel() error/control-activation lifetime. The protected-step comparison is deferred. |
 | Cross-channel release | Finalize no-taskId inbound continuation versus merged task behavior and UI commands without an active owner. |
 
-The first milestone includes native state and recovery in text **and pipeline voice end to
+The recovery milestone includes native state and recovery in text **and pipeline voice end to
 end**. Build state/storage first, then connect the same owner to voice; the milestone is not
 complete at the text boundary. The recovery proof must include the real
 remote request/observation path needed for one known-task, peer-accepted-response/lost-reply
@@ -990,8 +1050,14 @@ Provider errors now carry their opaque request identity, correcting the harness 
 in replay 6,569 after a different request's open hung. Smaller passing windows do not close
 the full gate.
 
-Local real-process E2E and all v1 client compatibility stories pass. Cloud AgentDB conformance
-remains unverified. The cross-server storage journey was attempted against staging: its two
+The selected real-process run passes all 74 cases: seven Gemma delegation journeys, two stock
+A2A cases, one ADK case and 64 v1 client compatibility cases. The current native checkpoint
+also passes the authored DST regressions, 152 Python binding contracts and focused task-driver,
+registry and recording tests. The retained 32,768-seed campaign reports 15 distinct findings;
+its source snapshot and executable are preserved for focused reproduction. These results do
+not close the broader project gate described below. Cloud
+AgentDB conformance remains unverified. The cross-server storage journey was attempted against
+staging: its two
 SQLite cases passed, but both AgentDB cases were refused with `token lacks the agent
 databaseAdmin grant`. The pinned SDK issues the new `agentThread` grants, so this run exposes
 an authentication-contract mismatch with that deployment. Keep the single agreed grant path;
@@ -1058,312 +1124,324 @@ Routine private type layout and generator work do not require another public pri
   should expose that error as its JSON mapping or through the existing typed client exception;
   neither choice should introduce a second wire schema or discard protocol error details.
 
-- What exact explicit input-reference spelling should a custom RemoteAgent tool expose? The
-  current recommendation is `response_to`, with `input_request_id` as the alternative. It must
-  identify an input occurrence as well as its task, and reject schema-name collisions.
 - Which existing typed error should a task cancellation expose when a peer refuses cancellation
   or its outcome remains unknown after reconciliation? Successful cancellation still requires
   a persisted observed canceled state.
 - Should `RemoteTask.cancel()` work between agent runs by opening a short native operation
   under the conversation lease with current application credentials? The recommendation is
   yes; detached snapshots stay read-only, and restoring state does not restore authority.
+- Which binding action installs the current configured remotes for task control between runs?
+  A loaded view has storage coordinates and observed task addresses, but no RemoteAgent token,
+  connection options or active owner. The existing bind object is inert until execution. The
+  recommendation is explicit current-configuration registration through that binding, valid
+  until its store closes; loading or inspecting a snapshot must not install authority.
+- For inbound A2A messages without taskId, which endpoint policies continue waiting work versus
+  create/merge transport tasks? Current-agent handling of unaddressed human input is agreed;
+  the transport-task behavior needs to remain explicit when live execution is added.
+- How should a deliberate history edit based on an older read handle a conflicting edit
+  committed by another frontend during lease acquisition? Retained replay 32,820 exposes a
+  mismatch: the live history protects the unsaved local edit, while the persistence contract
+  requires the unread foreign revision to survive. Recommend reporting a version conflict and
+  retaining the stored revision until the application reloads and explicitly reapplies its edit.
+  Resolve the bound-history editing contract before changing either rule to make the gate pass.
+- Which interruption and frontend-response latency budgets should gate the recorded voice
+  journeys? Measure the normal and held-remote baselines before choosing numerical limits.
 - The bounded protected-business-step API is deferred with the existing interruption-policy
   TODO; no implicit protected section is introduced by this work.
 
 ## Implementation checklist
 
-Work in order. Each phase builds the mechanism needed by the next and includes its public
-and internal documentation updates. The checkboxes are implementation actions; each exit
-criterion states what must be observable before proceeding.
+This is the remaining path to completion, in execution order. It builds on the native state,
+checkpoint, routing, E2E and interoperability foundations already described above. An agreed
+API, a passing small seed window or a single live conversation does not complete a milestone.
+Its exit needs the implementation, generated host surface, maintained documentation and the
+named acceptance evidence.
 
-Start internally with native state and recovery: generated inspection views,
-atomic framework-only checkpoints and a readable text crash/restart story. Prove that boundary
-before connecting live scheduling and voice in the same milestone. The session checkpoint
-commits related framework state/events together without implicitly saving application mutations.
-Reuse the existing text DST over
-production SQLite with injected connection faults; add remote exchange/restart coverage rather
-than another simulation framework. Stock-peer HTTP and AgentDB conformance remain separate gates.
+| Order | Remaining milestone | Exit visible to a person or application |
+| --- | --- | --- |
+| 1 | Task routing | The same remote tool can answer, clarify or correct known work, and start independent work without a mistaken fork or duplicate response. |
+| 2 | State and A2A completeness | Public state and protocol observations remain faithful across every supported reply shape, local continuation and storage boundary. |
+| 3 | Task controls and recovery | A bound task can be canceled; a fresh frontend recovers known work and reports unknown outcomes honestly. |
+| 4 | Live backend execution | New turns and independent tasks progress while earlier business work is held, under one serialized conversation owner. |
+| 5 | Conversation scheduling | Questions, progress and results enter a natural conversation at the right time and survive agent changes without losing their destination. |
+| 6 | Delivery and channel parity | Awaited exact output has a defined local delivery boundary; pipeline voice, realtime voice and text uphold the same delegation contracts. |
+| 7 | Full acceptance | Readable deterministic journeys, crash campaigns, external peers and recorded model conversations prove the whole product. |
+| 8 | Documentation and release | Finished guides replace the plans, required gates pass, and the branch is ready for review with complete evidence. |
 
-### 1. Contracts and baseline
+### 1. Task routing
 
-- [ ] Resolve the API decisions above; map Long's final scenarios to owning tests.
-- [x] Build the general E2E foundation over existing public APIs: one ordinary app process,
-  an owned text client and a passing roundtrip/cleanup story, using scripted inference.
-  This groundwork does not claim the new delegation recovery behavior is implemented.
-- [ ] Preserve separate local-call and remote agent/context/task owners; evolve existing Rust
-  InteractionState at per-request/task scope rather than adding a parallel lifecycle machine.
-- [ ] Align public inspection with messages/tasks/contexts/events; finalize task-scoped
-  cancellation and pre-task-ID uncertainty without a single-task delegation abstraction.
-- [x] Record baseline failures/replay seeds and current SDK compatibility requirements.
-  The unchanged initial survey fails five contract/subject categories. The current extended
-  campaign remains a separate failing gate; retained journals and focused regressions drive fixes.
-- [x] Use an isolated branch/worktree; preserve unrelated edits.
-- [x] Consolidate local/remote delegation into their owning folders without behavior changes;
-  retain public imports and regenerate affected bindings.
-- [ ] Prove the first state/recovery slice with generated views and atomic storage before live/voice.
+**Build**
 
-**Exit:** agreed API contracts and a traceable acceptance inventory.
+- [x] Apply the agreed owner-level DelegationOptions(routing_model=...) configuration, with
+  None disabling automatic routing. Keep acknowledgement with the frontend model and retry
+  with existing connection settings; no per-tool policy or announce flag.
+- [x] Implement the agreed optional task_id on default and custom remote tool schemas. Strip
+  it before business input reaches the peer, and reject reserved-field collisions at setup.
+- [x] Validate the task against the configured remote and authorized conversation; obtain its
+  context from saved observations. Reject unknown, foreign and terminal targets with useful
+  feedback instead of silently creating new work.
+- [x] Route proposed tool calls as continuation, new work or unclear when no explicit task is
+  given. Reuse the separately configured routing model and native admission path. Human-input
+  recognition and tool-call routing have different purposes; a no-match human verdict alone
+  does not authorize a later tool call to start fresh work.
+- [x] Reuse an admitted human response and its canonical words exactly once. Capture offered
+  input occurrences with the model turn and revalidate them before consuming a response.
+  Task selection also supports clarification and correction without an input-required state.
+- [x] Allow one human turn to answer existing work and request new work through the same tool.
+  Replace the current endpoint/turn shortcut where it would suppress that new intent.
+- [x] Apply the same contract to VoiceSession, TextSession and bound Agent.run/run_stream.
+  Detection-disabled execution continues an explicit task and starts new work without one.
 
-### 2. Shared state, A2A and first recovery proof
+- [x] Coalesce concurrent calls for the same reserved response before connection/preparation.
+  Return a neutral tracked fact for duplicates while the original owner progresses; release
+  an unsent failed owner without losing the held response. Different corrections and new work
+  remain independently admissible. Prove the race with both bodies held at card discovery.
 
-- [ ] Replace split text/voice state with the agreed shared snapshot, one encoding,
-  canonical history membership and generated inspection views. Reuse the existing local-call
-  lifecycle and preserve accepted child output through propagation and cleanup.
-- [x] Extend framework-only checkpoints to commit related state, canonical content, tasks and
-  communication entries atomically under the existing fence/idempotent-write contract.
-- [x] Prove SDK protocol-value conversion and generated Python views before multiplying
-  hand-written adapters. Keep declaration and storage dependencies within the existing graph.
-- [ ] Expose existing A2A Message/Task/StreamResponse and request/response models through
-  generated bindings; preserve direct Message replies before presentation normalization.
-  Reuse SDK method constants and generate any internal discriminator's host representation.
-- [ ] Preserve SDK SendMessageResponse/StreamResponse unions and A2AError codes/details;
-  validate response shapes per operation while retaining structured parts and extensions.
-- [ ] Record SDK requests, responses and observed errors before lossy normalization for every
-  supported conversation client operation. Require stable request_id on every event, including
-  the outgoing request; journal sequence and message IDs do not identify the operation.
-- [ ] Persist mutable dispatch/lifetime and caller/input correlation in existing request machinery;
-  store the SDK method on that request record. Commit related request/task/input state and
-  communication events together under the fence; retain method/identity while events reference it.
-- [ ] Build public read-only messages/tasks/contexts/events views with consistent checkpoints,
-  optional-history handling, observed-state semantics and bounded retention. Preserve the
-  supported protocol's complete task-state set when aligning existing TaskState bindings.
-  TaskUpdate.state now reuses the SDK TaskState, including auth-required and unspecified.
-  Authentication interrupts observation; the remote task remains paused while the local tool
-  reports that it cannot continue. It does not manufacture a human input request or task failure.
-- [ ] Normalize status, flagged progress, exact text, input requests, artifacts and outcomes
-  for presentation without overwriting the original protocol observations.
-  Flagged working progress is implemented through `TaskUpdate.progress`; unflagged status
-  stays observable without requesting an announcement. Exact-text delivery remains separate work.
-- [ ] Assemble append/replacement/interleaved artifacts; define answer selection and typed-output validation.
-- [ ] Support existing/new verbatim metadata without required LiveKit negotiation. Unflagged working text remains status.
-- [ ] Add bounded card/503/stream recovery and reconciliation of potentially accepted sends.
-  Restored bound text tool calls now query the native owner by their original ToolCallRef.
-  The real delegation executor dispatches an unsent original intent, reads a known task,
-  returns an accepted direct message, or reports unknown outcome without resending work.
-  Invalid journaled responses do not count as accepted replies. Recovery preserves the SDK
-  body and method and refuses a response that changes an explicitly addressed context.
-- [ ] Define the stock-peer snapshot/resubscribe fallback without assuming replay, repeated
-  message-id execution is safe, or unknown task identity can always be recovered.
-  New tool calls resolve the saved default remote context through the serialized native owner.
-  This read appends no communication or dispatch facts. A task continuation keeps its original
-  context, and verified caller-thread sharing takes precedence over the saved default.
-- [ ] Preserve cancellation intent versus observed outcome; handle refused/lost cancel responses,
-  stale snapshots and overlapping subscriptions without duplicate artifact appends.
-  Native client cancellation now uses the same journal/checkpoint seam as sends and task reads.
-  Authored DST stories cover a persisted canceled receipt, a refused request with its SDK error
-  details, and an applied cancellation whose lost reply is reconciled by a fresh owner without
-  issuing a second cancel. The bound public task command remains to be connected.
-- [x] Add the native exchange seam and a readable text DST story: a known task accepts a
-  response, the reply is lost, the owner crashes and a fresh owner reconciles it. Check stored
-  state and remote/service observations. A companion unprovable outcome remains unknown.
-- [x] Cover pre-dispatch failure and a database commit whose acknowledgement was lost;
-  framework writes remain atomic and application-field mutations remain unsaved until explicit save.
-  A fresh-owner DST story now covers an observer ending before dispatch: the original intent
-  is sent once with unchanged identities. A separate case loses the committed intent's write
-  acknowledgement and the remote response, then recovers with one booking in the service ledger.
-  These restart stories now invoke the production remote delegation executor over its injected
-  endpoint client rather than manually choosing the recovery action in the test. A direct-message
-  restart story verifies that consuming a retained reply appends no second exchange.
+**Owners:** core delegation/session decisions and tool schemas; ABI declarations/generated
+bindings; runtime command execution; the Python adapter supplies host-specific inputs only.
 
-**Exit:** generated views and atomic checkpoints pass; fresh-owner text recovery uses the real
-client/executors/storage without blind resend or duplicated accepted outcomes. The client
-passes deterministic stock-peer transport and failure tests.
+**Exit story:** a flight task asks for a date. A side question can stay local or explicitly
+reach that task. Friday reaches the original task once, a hotel request starts separate work,
+and a late decision about an older question cannot answer a newer question. Run with detection
+on/off, custom schemas and agent replacement. No model-supplied input-request ID is needed.
 
-### 3. Question routing
+### 2. State and A2A completeness
 
-- [x] Add detector port/provider, usage accounting, cancellation and bounded retries.
-  The separate configured model runs through the existing LLM provider and retry interfaces.
-  Native text admission validates its offered candidate indices; invalid/unclear/failed
-  classification leaves requests open for clarification. The model's task and stream cleanup
-  are owned and cancelable, and its consumption is included in the turn's usage.
-  A scripted DST story runs the production text executor and routing provider across three
-  fresh SQLite activations: ask, handle a side question, then accept the response despite a
-  lost checkpoint acknowledgement. It checks the original input occurrence, exact visible
-  dialogue and lease release together; the fakes choose model/tool outputs rather than routing.
-- [ ] Recognize responses to previously presented requests at input admission, including when
-  the current agent lacks the matching remote tool. Persist held responses, revalidate before
-  dispatch and deduplicate against later tool calls using the same shared reservation path.
-  TextSession and bound Agent.run now gate input through that native admission path. The
-  current agent receives the complete human message once and a private routing observation.
-  A2A task correlation no longer rewrites a tool outcome or forces a tool invocation; managed
-  AgentRun startup uses the owner's admitted origins instead of claiming the latest question.
-  Delivery receipts cover verbatim and empty-phrasing fallback questions as well as model text.
-  Remote questions retain one owner rather than a duplicate local question. Voice admission,
-  dispatch when an eligible agent returns and multiple-task explicit selection remain open.
-  A later tool invocation now resolves a held response from the shared owner. A different
-  eligible agent with fresh private history can continue its original remote task/context,
-  without the model rewriting the human response. Multiple held responses require explicit
-  selection; an existing outgoing response must be reconciled rather than prepared again.
-  Binding stories also prove that a side question or another child call cannot discard a
-  waiting agent approval. A phrasing failure saves the tool's source request but does not
-  make that unheard question a detector candidate; a later validated repeat still owns approval.
-  A response to a parent's approval can be held during a child and consumed on parent
-  continuation, without a synthetic human turn or a second approval grant.
-- [ ] Allow corrections to held responses before dispatch begins; invalidate stale detector
-  decisions by reservation revision. After dispatch may have begun, preserve the original
-  message/operation and reconcile it; a correction is a separate continuation, not an overwrite.
-  The native command path supports atomic grouped responses and held-response correction.
-  It retires unsent older intents without editing their journal bodies. Preparation checks
-  the current canonical response, covering correction after a transport read but before
-  preparation; a possibly dispatched response cannot be overwritten. Automatic text
-  classification includes held responses before dispatch. It validates the offered
-  response's identity before atomically applying new answers and corrections, so a late verdict
-  cannot replace a newer response or partly admit a group. Voice/public explicit selection
-  still needs the same shared owner integration.
-  Transcript revisions also invalidate the classification of the earlier words. The native
-  owner reclassifies the current message with a fresh attempt ID; a delayed old verdict or
-  configuration failure cannot authorize the revision or end its new classification.
-- [ ] Implement explicit references and the shared validation/reservation/dispatch path.
-- [ ] Implement eligibility, incarnations, passing, fairness and nested references.
-- [ ] Use source_message_id/response_message_id for remote input occurrences and canonical
-  message lookup. Retain references through task-status changes/history compaction, including
-  message-less input and uncertain response delivery; align local source/response field names.
+**Build**
 
-**Exit:** side questions/new work cannot silently become answers, including with one pending question.
+- [ ] Finalize configured remote identity and initialization without conflating a tool name,
+  endpoint or restored authority. Settle any public configuration change before adding it.
+- [ ] Finish the shared SessionState contract: root/current agent properties, private agent
+  histories, human-perceived chat_history, accepted local output/error and bounded child cleanup.
+  Preserve validated-argument approval and merge only the child's conversation with the person.
+- [ ] Complete generated public message/task/context/event views, detached snapshot behavior,
+  retained-reference rules and compaction. Keep one unreleased storage encoding and binding
+  continuation path; application saves remain explicit and services remain application-owned.
+- [ ] Preserve SDK Message/Task/SendMessageResponse/StreamResponse unions, status states,
+  structured/file parts, extensions, optional history and protocol error code/message/data.
+  Journal every supported request, response and observed error before presentation normalization.
+- [ ] Complete interleaved artifact append/replacement handling, direct Message results,
+  result selection and typed-output validation. Duplicate observations must not append content
+  twice; unflagged working text remains status rather than an announcement.
+- [ ] Keep request dispatch facts and task/input state mutable beside the append-only
+  communication log. Commit related state/log/history atomically with the existing fencing
+  and idempotent write machinery. Fix any remaining canonical-item/order preservation gaps.
+- [ ] Validate peer/task/context identity, shared-thread authority, nesting and cross-user
+  isolation at the native boundary. Keep local agent calls and remote communication distinct.
 
-### 4. Live execution and recovery
+**Owners:** ABI and codegen; core local/remote/session machines; storage; thin runtime adapters.
 
-- [ ] Add opt-in live policy using existing AgentRun/TextSession/tools under one partition owner.
-- [ ] Implement progress yielding, ordered delivery turns, task streams, sender-aware batching,
-  local stream fast paths, explicit cancellation and protected steps.
-- [ ] Use in-process events and cross-worker notification/storage boundaries; recover fenced
-  records, executed outcomes and explicitly saved state after owner loss.
-- [ ] Integrate bound-state inspection, task-scoped cancellation and durable-reference recovery.
-- [ ] Restore durable request/task/input state and reconcile uncertain work; replay communication
-  content only for indexes/debugging. Do not redispatch requests, repeat artifact appends or
-  replay speech; retain references needed by unresolved input and delivery.
-- [ ] Test crashes around intent, dispatch, peer response and atomic state/log persistence,
-  including committed-then-lost database writes and history compaction with unfinished work.
-- [ ] Correlate human history, private model contexts, remote communication and delivery for
-  debugging, without duplicating histories or recording received content as heard.
+**Exit story:** the same frontend reaches stock peers returning direct text, structured/file
+results, artifacts and tasks with partial history. Its inspected state retains the original
+protocol content and accepted outcome after reconstruction. A typed local child completes,
+resolves its exact parent call and is cleaned up without losing the person's dialogue or
+spending an approval twice. State writes never implicitly save application mutations.
 
-**Exit:** real executors safely interleave turns, results, cancellation and owner loss.
+### 3. Task controls and recovery
 
-### 5. Voice and shared text/voice
+**Build**
 
-- [x] Keep voice handoffs/VoiceTasks transient and preserve the durable root. Refuse unresolved
-  text-local agent trees without changing them; release the voice binding without closing an
-  application-supplied store. Cover subsequent text execution in memory and SQLite.
-  A pending root-local text input is also a continuation, even without a child agent; refuse
-  it at startup and on a later lease reload before voice inference or history projection.
-- [x] Publish accepted voice history through native effects before host callbacks. Rebase from
-  the current binding, preserve pending recognition, and use the production binding in the
-  SQLite-backed voice DST. Remove Python-driven voice state updates and startup validation.
-- [x] Share the bounded native conversation command port with text. Acquire a checkpoint scope
-  before reading or applying transitions, retain it through writes on owned tasks, keep the voice
-  loop serving media/events, and stop queued callers when the owner ends. Gate real SQLite
-  receipts to prove that delayed writes preserve
-  newer live input and remote metadata; acknowledge the actual written snapshot. Keep an
-  admitted write in storage's task set so canceling its waiter cannot leave the native
-  acknowledgement behind an applied database write. Cover idle writes, scope promotion,
-  abandoned runs and final-commit refusal with readable SQLite stories. A DST story reuses
-  the shared applied-write/held-receipt fault and the production checkpoint writer; it
-  reproduces lost remote state when run against the previous writer implementation.
-- [x] Route pipeline voice input through a separately configured model and shared native
-  admission. Save reservations before live delivery, keep the whole human message available
-  to the frontend, and settle detector/plan waits on interruption. Cover memory and bound
-  sessions, a side question followed by a date, and a response retained across an agent
-  without the remote tool. Reuse the same memory binding implementation by default.
-- [ ] Reproduce late-final/combined voice turns in the DST: a detector races a transcript
-  revision or a cut frontend reply. Reclassify the current words, preserve admitted request
-  identity and prevent accidental fresh remote work. The first live RTC evaluation exposed
-  a combined "Why do you need the date? Friday" turn followed by an unintended second task;
-  retain that run as a regression target alongside the ordinary completed-utterance baseline.
-  Two production-executor DST regressions now reproduce and fix lost routing context in a
-  later frontend reply, and a corrected unheard turn bypassing recognition. Both check held
-  native input state and cleanup; private observations stay out of perceived dialogue.
-  Corrections after a reply is already audible still need their own admission story.
-- [ ] Connect question/exact-text presentation to pipeline/realtime delivery receipts.
-  Remote questions carry their checkpointed InputRequestRef through rephrasing into actual
-  speech delivery. Failed output retries preserve that occurrence; exact ctx.say delivery and
-  the complete realtime acceptance stories remain separate work.
-- [ ] Implement immediate update/say receipts, request-view notes and interruption handling.
-  Awaited progress admission is now bounded and lossless for direct runs, TextSession and local
-  agent delegates. A public streaming regression covers a burst of one thousand updates before
-  the tool result. Immediate unawaited enqueue and exact-output receipts remain separate work.
-- [ ] Prove that slow/stalled remote reasoning, tools and reads do not hold the frontend's
-  conversational floor or delay interruption handling. Record foreground responsiveness
-  separately from remote task duration; preserve existing false-interruption behavior.
-- [ ] Implement the [conversation expectations](#conversation-expectations): paced questions,
-  natural grouping of related questions, fair follow-up, grouped ordinary progress/results and
-  removal of obsolete progress from pending presentation, while preserving exact output and
-  durable communication records.
-  The live voice run also exposed a progress presentation already generating when its task
-  asked for input; it spoke a redundant availability update after the question. Superseding
-  queued progress alone does not cover this in-flight presentation. Add a DST story before
-  changing its speech cancellation and delivery rules.
-- [ ] Add the shared E2E voice client and receiver observations; exercise the same ordinary
-  application modules with deterministic speech and inference before real-model evaluation.
-  The shared client, room/process fixtures and received-audio evidence are implemented. A live
-  pipeline voice journey now uses separate Gemma frontend/routing instances, alongside six text
-  cases for date responses, side questions, new topics, ambiguity and full/partial name grouping.
-  All seven passed together on 2026-11-17. This is sampled model evidence, not the complete
-  conversation acceptance gate; the earlier combined-turn failure remains retained above.
-  Later runs passed the six text cases but exposed a repeat remote-tool invocation after the
-  voice session had already forwarded Friday and completed the original task. Retaining the
-  admission observation in the model context did not reliably prevent a second task.
-  Live response dispatch now occurs inside the matching remote-tool invocation, using the
-  original body and canonical human words. Repeated calls in the same human turn observe the
-  local handoff instead of creating another interaction. The DST covers a lost local receipt,
-  repeated handoff commands, foreground ownership and the final result's presentation purpose;
-  SDK tests also repeat the frontend tool call across agent replacement and in-memory/bound use.
-  A subsequent real run kept one task and one response but failed to announce its completed
-  result. Result presentations now receive that exact outcome with tools disabled; ordinary
-  planning and held-response wake-ups retain tool access. All seven Gemma journeys then passed
-  together, with received audio confirming Friday and the original task completed. Keep the
-  failed runs: this remains sampled evidence, not a reliability or naturalness guarantee.
-  That trace still had redundant acknowledgements. A further DST regression caught an extra
-  planning wake-up while the foreground handoff tool was pending; the tool now keeps the
-  floor until its callback returns. Broader acknowledgement/pacing work remains open.
-  A native reservation also withdraws its exact queued question when handed off, preserving
-  other waiting questions; it need not wait for that occurrence to regain the foreground.
-  Proposed-call continuation/new-work classification when there is no reserved human response,
-  explicit references and complete recovery remain separate work; a no-match human verdict
-  must not silently authorize a new task for a later clarification call.
-  A DST story now reproduces reuse of a provider tool-call ID across frontend replies. Remote
-  presentation, held-response lookup and final history replacement retain the originating
-  output item ID and exact admitted invocation. Lifecycle entry IDs and the DST's observations
-  also use unique framework item IDs; provider call IDs remain available as protocol metadata.
-  Synthetic deferred-update calls mint provider-safe wire IDs separately from their item paths.
-  The shared native output identity rule adds no Python API or saved state record.
-  Continue this identity audit for retained turn telemetry and fillers, which still use raw
-  provider call IDs internally.
-  Decision-model comparison and the remaining voice stories are not yet verified.
-- [ ] Route same-partition text into a call, preserving task/outcome and answered-by-voice attribution.
-- [ ] Cover agent/tool replacement, VoiceTasks, close, reconnect and independent room bindings.
+- [ ] Connect await remote.tasks[task_id].cancel() to the existing native cancellation and
+  journal path for an active owner. Settle the between-run control lifetime before implementing
+  it; the recommended path is a short bound operation using current application credentials.
+  Detached snapshots remain inspection-only.
+- [ ] Preserve cancellation intent separately from observed cancellation. Reconcile an applied
+  cancel with a lost receipt, expose refusal/unknown outcomes through existing typed errors,
+  handle late success and settle every caller on close or owner loss.
+- [ ] Complete recovery from a fresh frontend for saved task/context/input references, held
+  human responses, accepted outcomes and uncertain dispatch. Reconstruct from current state;
+  replaying the journal for inspection never resends work, repeats artifacts or replays speech.
+- [ ] Implement bounded card/503/read/stream recovery and known-task snapshot/resubscribe
+  fallback. A lost connection never restarts a business operation; without a recoverable task
+  identity or peer proof, retain an unknown outcome rather than guessing success or retrying it.
+- [ ] Exercise text, voice and text-to-voice-to-text continuation across independent owners.
+  VoiceTask/handoff awaits remain transient. Refuse unresolved durable text-local work when
+  entering voice, preserving it for later text execution.
+- [ ] Finish SQLite and AgentDB cross-worker proofs: lost write acknowledgements, lease loss,
+  overlapping checkpoints, worker death, stale snapshots and compaction with unfinished work.
+  Resolve the staging grant mismatch through a compatible environment, preserving the agreed
+  agentThread/agentDatabase authorization contract.
 
-**Exit:** shared remote lifecycle semantics on text, pipeline voice and realtime voice, with
-durable local agent continuations restricted to text and live voice roles remaining transient.
+**Owners:** core task/request recovery decisions; runtime delegation/session commands;
+storage leases and writes; net's existing client operations; generated bound task commands.
 
-### 6. E2E applications and third-party acceptance
+**Exit story:** the peer accepts Friday, its response is lost, and the frontend crashes. A new
+frontend recovers the original task and outcome without another booking or another response
+send. A second story proves that genuinely unprovable work remains unknown. Cancellation works
+before/after restart, including refusal and lost acknowledgement. Ending the call alone leaves
+remote business work running. Inspect both framework state and the business-service ledger.
 
-- [x] Run a real HTTP/SSE stock A2A SDK server in another process without LiveKit dependencies,
-  custom metadata, shared storage or required extension negotiation.
-- [x] Run ADK's real A2A server in an isolated environment with a deterministic model stub.
-  The ordinary frontend reaches its agent and executes a tool through the same RemoteAgent path.
-- [ ] Define failure for unsupported vendor-private input protocols; decide adapters separately.
-- [ ] Author ordinary SDK applications under tests/e2e/apps/ and exercise them through the
-  E2E framework below. Cover frontend -> flights/hotels -> payments, overlapping requests,
-  interrupted receipts and idempotent application booking/payment operations.
-- [ ] Update maintained clients/console for references, offsets, restoration and voice attribution;
-  confirm where their source lives before applying upstream UI changes.
+### 4. Live backend execution
 
-**Exit:** the E2E applications, stock A2A and ADK pass through the same RemoteAgent execution path.
+**Build**
+
+- [ ] Add opt-in inbox="live" to the existing backend endpoint policy, preserving queue/batch
+  defaults. This controls slow-brain request execution; frontend voice responsiveness is a
+  separate obligation and does not require applications to opt into this inbox policy.
+- [ ] Let long work yield progress and conversational ownership while independent turns/tasks
+  continue. One native owner serializes state, result delivery and storage checkpoints.
+- [ ] Complete ordered delivery turns, sender-aware batching, in-process notifications and
+  cross-worker notification/storage boundaries. Preserve request/operation attribution when
+  another local agent is current or a result arrives after newer input.
+- [ ] Handle new input without taskId consistently with endpoint policy/current-agent routing;
+  keep explicit task continuation separate from new-task/mergedInto behavior. Resolve the
+  remaining inbound-policy decision before changing that wire behavior.
+- [ ] Bound queues and owned work, make pressure retryable where appropriate, and join all
+  acquired resources on owner loss. A slow observer or dropped reader does not cancel business
+  work. Standalone runs settle their owned work rather than becoming hidden live endpoints.
+
+**Owners:** core A2A/session scheduling; runtime text/delegation drivers and notifications;
+worker/storage boundaries; existing TaskSet, signal, Spawner and Clock primitives.
+
+**Exit story:** a backend tool is held at a fake business service while the person sends a
+side question and starts another independent task. Both receive useful responses before the
+service is released. Release it and verify one final effect, correct attribution and complete
+cleanup, locally and across workers. Controlled gates represent the sixty-second operation;
+hermetic correctness tests do not wait sixty real seconds.
+
+### 5. Conversation scheduling
+
+**Build**
+
+- [ ] Pace independent questions and allow natural groups such as first/last name. Retain
+  every source independently when a person answers part of a group or clearly answers several
+  tasks; clarify ambiguous yes/no instead of choosing an arbitrary destination.
+- [ ] Batch ordinary progress/results already available at a presentation opportunity.
+  Remove superseded queued progress and handle an in-flight announcement overtaken by a
+  question/result. Keep exact output ordered and preserve the communication log.
+- [ ] Retain recognized responses while the current agent lacks the relevant remote tool.
+  Revalidate and dispatch when an eligible agent returns. Tool/endpoint identity, not the
+  original Agent object's identity or a model-visible name alone, controls access.
+- [ ] Implement fairness, passing, nested delegation and ordinary wording without duplicate
+  acknowledgements, questions, results or invented claims about work that has not completed.
+- [ ] Finish correction behavior before/after dispatch and after speech becomes audible.
+  A late Friday result cannot satisfy a Saturday request; if business work already happened,
+  explain the observed state and continue through the supported correction path.
+- [ ] Keep remote work off the conversational floor. Preserve interruption/backchannel/false-
+  interruption behavior, VoiceTask scope and separate room bindings. Complete the unique-item
+  audit of retained turn telemetry and fillers as well as presentation and result ownership.
+
+**Owners:** core/voice presentation and input machines; frontend model wording under native
+eligibility/delivery rules; runtime executes the decided effects.
+
+**Exit stories:** five independent questions are paced; first/last name can be asked together;
+a first-name-only answer keeps missing information pending; ten updates are summarized; a
+result overtakes obsolete progress; the person interrupts while remote work is held; an agent
+switch retains an earlier answer. Assert the delivered conversation, pending state and business
+effects separately. No fixed batching delay or blanket one-question-per-utterance limit is added.
+
+### 6. Delivery and channel parity
+
+**Build**
+
+- [ ] Finish immediate enqueue and optional-await update/say receipts. Awaited progress means
+  admission. Awaited exact text means its local output boundary: backend A2A/text handoff or
+  frontend audio playout. Finalize interruption/close outcomes using existing error types.
+- [ ] Carry source references through rephrasing and actual delivery for pipeline and realtime
+  voice. Unheard or interrupted output cannot mark an entire prompt delivered; partial/grouped
+  presentation needs its own admission evidence and readable regression.
+- [ ] Preserve exact-output ordering across nested remote hops, output failure and speech
+  interruption. Persisted remote receipt evidence does not prove the person heard audio across
+  all hops; speech delivery may remain uncertain after a crash.
+- [ ] Finish same-partition text arriving during a call and results delivered through another
+  channel, with task/outcome identity and answered-by-voice attribution preserved.
+- [ ] Complete realtime voice parity, agent/tool replacement, VoiceTask isolation, room-binding
+  independence, reconnect and close. Every host-awaitable receipt resolves and every stream,
+  task and lease is closed or released through its owner.
+- [ ] Reproduce the observed interruption teardown leak with a held toolset-close boundary,
+  then fix it in the owning cleanup path. Do not add sleeps or relax the leak assertion.
+
+**Owners:** core delivery contracts; voice scheduling/generation/recognition machines;
+runtime output/room/delegation/cleanup adapters; ABI-generated receipts and host forwarding.
+
+**Exit story:** exact text crosses two remote hops, reaches the frontend output and produces
+received audio. Interrupt it, close it and fail its output at controlled points; each waiter
+settles truthfully. Repeat applicable stories through text, pipeline and realtime voice, with
+real received output and no leaked host tasks. A busy remote never delays local playback stop.
+
+### 7. Full acceptance
+
+**Prove**
+
+- [ ] Map every final behavior in the reviewed source stack to a named test/story, an existing
+  equivalent contract, or an explicitly deferred scope item. Later replacements in Long's stack
+  remain the target; do not restore abandoned forced-forwarding or duplicate execution paths.
+- [ ] Extend ordinary applications in the shared E2E framework to flights/hotels/payments,
+  overlapping questions, agent switches, nested calls, approval, corrections, cancellation,
+  reconnect and frontend/backend restart. Verify effects at the service, not from LLM wording.
+- [ ] Keep correctness inference/routing/speech scripted, with unexpected requests failing.
+  Run real core/runtime/storage code, fake only declared boundaries, and inject both partial
+  delivery and committed-then-lost responses. Every production cancellation bug gains a DST case.
+- [ ] Complete stock A2A and pinned ADK coverage for direct Messages, tasks, error details,
+  flagged/unflagged progress, artifacts, malformed/unsupported protocol and recovery. Define
+  explicit failure for unsupported vendor-private input protocols rather than guessing them.
+- [ ] Complete voice live evaluations with Gemma and an explicitly selected Decision model,
+  using separate frontend/routing instances. Include related/independent questions, partial
+  answers, ambiguity, simultaneous new work, side questions and corrections. Add real speech
+  providers to the received-audio runs; tone speech proves the framework boundary separately.
+- [ ] Keep response-recognition and proposed-call-routing evals separate. Freeze prompts and
+  development labels before held-out evaluation, retain every failure and preserve the known
+  held-out miss. Further tuning requires a fresh held-out check, not relabeling a failure.
+- [ ] Record delivered audio/transcripts, canonical state, communication journal, service ledger,
+  model IDs/prompts and foreground timings. Compare normal/held-remote responsiveness; agree
+  concrete latency budgets before claiming the conversational performance gate is complete.
+- [ ] Run the full authored DST, survey/campaign/soak and acceptance matrix below. Minimize and
+  fix remaining findings, checking the same case/configuration against baseline before
+  attribution. Small passing windows and passing reruns do not erase a retained failure.
+
+**Owners:** shared tests/fakes and E2E framework; DST port fakes and authored regressions;
+provider/stock-peer conformance; model evaluation artifacts. No second test-only controller.
+
+**Exit:** deterministic journeys prove routing, business effects, storage/recovery and cleanup;
+recorded model conversations demonstrate the intended wording, grouping and responsiveness.
+Evidence covers the complete scenario, including voice, rather than just the text boundary.
+
+### 8. Documentation and release
+
+**Finish**
+
+- [ ] Update each owning feature guide alongside its implementation: product expectations,
+  public examples, await guarantees, persistence, errors and recovery. Complete both plans'
+  SessionState/local-agent and remote-delegation contracts, then retire their duplicated
+  proposal content from the active documentation index.
+- [ ] Update tools, A2A, server, session, persistence and testing guides plus maintained clients,
+  console and example APIs where needed. Keep the four internal guides' distinct ownership:
+  architecture maps, components' responsibilities, runtime lifetimes and host bindings.
+- [ ] Audit the final public/native primitive inventory. Reuse SDK A2A models and existing
+  owners; generate Rust-owned host views/forwarders from ABI. Remove stale APIs and unreleased
+  storage aliases instead of maintaining parallel implementations. Keep deferred APIs deferred.
+- [ ] Run make fix/check; Rust check/test-checks/tests/bindings; hermetic host/plugins/smoke;
+  the full DST survey/campaign/soak; configured project E2E, v1 compatibility and stock-peer/ADK
+  suites. Retain seeds and failure artifacts. Resolve AgentDB grants, endpoint startup, provider
+  compatibility and avatar failures through diagnosis; no legacy grant shim or weakened tests.
+- [ ] Review cancellation/ownership, authority, duplicate effects, resource bounds, telemetry and
+  content retention against the acceptance matrix. Settle remaining API/error and latency
+  decisions with explicit evidence. Produce the final reviewable branch and verification report.
+
+**100% completion means:** every initial-delivery milestone above is closed, its public and
+native contracts agree, the maintained guides describe that implementation, and required
+verification is complete. No unexplained task/waiter/lease leak, invalid response dispatch,
+duplicate business action or failing required gate is counted as success. An unresolved external
+blocker stays visible and keeps its acceptance gate open; changing that scope needs a separate
+decision. Passing the selected Gemma/v1 set does not close the broader project gate.
 
 ### Follow-up: durable stream replay
 
-This extends the initial integration; it is not required for the first delegation delivery.
-Task/reference recovery and truthful snapshot/resubscribe fallback remain in that delivery.
+This remains outside the agreed initial delegation delivery. Initial recovery must restore
+known task references, reconcile snapshots and resubscribe where supported; it must explicitly
+report gaps it cannot recover. The follow-up supplies retained event-by-event resume across
+both backend-to-frontend and frontend-to-client links:
 
-- [ ] Persist outgoing stream events before publication; resume retained task streams from
-  durable consumer cursors, including replay-to-live handoff, slow observers and expired cursors.
-- [ ] Persist received event/state/cursor together and deduplicate supported replay without
-  applying artifact appends or creating input occurrences twice. Cover both client links.
-- [ ] Exercise the stream-replay acceptance stories below, including receiver/sender restart
-  and a reconnect after the task completed while the observer was offline.
+- [ ] Persist outgoing events before publication, expose a stable cursor and replay retained
+  events before joining live delivery. Bound retention and slow observers.
+- [ ] Atomically checkpoint received event/state/cursor and deduplicate supported replay,
+  including artifact appends and input occurrences. Never resend business work to restore a stream.
+- [ ] Prove connection loss during a sixty-second operation with several updates, completion
+  while offline, sender/receiver crashes, replay-to-live races and expired cursor/retention gaps.
 
-**Exit:** peers supporting durable replay recover retained updates without restarting work;
-unsupported replay and expired cursors have explicit outcomes.
+Frontend-model reuse for routing, the protected-step/IGNORE_ON_ENTER/disallow_interruptions
+comparison, and automatic remote-question VoiceTask collection also remain outside this
+initial delivery. Preserve their TODOs and the durable references needed for later extension.
 
 ## Acceptance tests
 
@@ -1385,7 +1463,7 @@ ordinary progress.
 | Tasks/streams | Same-task continuation, concurrent tasks in one context, contextless/direct messages, repeated questions, duplicate messages, terminal follow-up, context mismatch, merged tasks; drops before/after ack, mid-artifact or post-commit; duplicate/stale events, poll/stream races, resubscribe/get fallback, unsupported replay; stream closure without task completion |
 | Stream replay follow-up | Sixty-second tool with several updates; detach/reconnect and completion while offline; sender/receiver crash around event/state/cursor commit; duplicate chunks, replay-to-live races, expired cursor/retention gaps, slow observer detach, no task cancellation or request resend to restore a stream |
 | Journal/views | Supported-operation request correlation, native responses/errors, no dispatch/stream-state marker entries; atomic state/log writes, restart from current state, content replay without I/O/speech or repeated artifact appends; message IDs echoed in task history/status, conflicting payloads, optional/truncated history, partial list observations, context grouping, read-only snapshots and compaction of pinned references |
-| Cancellation/storage | Barge-in versus cancel, protected steps, queued-question cancel, late success, reader close, dropped executor/acquire, refused save, committed-then-lost writes, lease loss, worker death during an answer, stale status, saved state/outcomes |
+| Cancellation/storage | Barge-in versus cancel, queued-question cancel, late success, reader close, dropped executor/acquire, refused save, committed-then-lost writes, lease loss, worker death during an answer, stale status, saved state/outcomes |
 | Public APIs | Both schemas, custom card schemas/overrides, bindings/types; awaited/unawaited update/say, dropped receipts, observer failure; inspect before task ID exists, task-scoped cancel after reconciliation/terminal state/reconnect, unauthorized scopes |
 | Channels/recovery | Text during calls, results after newer input, question handoff, overlapping senders, reconnect, agent/tool replacement, VoiceTasks, multiple bindings, restored/expired references, uncertain speech |
 | Third party | Stock SDK/ADK, direct Message versus Task on the same send path, unflagged status, input-required, interleaved/appended/replaced artifacts, empty/structured/file output, metadata/extensions, failed/rejected/canceled/auth-required, SDK error codes/details, missing IDs, wrong-operation response shapes, unsupported versions/required extensions and malformed frames |
@@ -1432,7 +1510,7 @@ routing tests, and real conversation trials; its comparative routing benchmark r
 
 Use a small set of concierge app modules with configurable remote endpoints and controlled
 business services. Reuse them across journeys; keep individual regressions focused on one
-outcome. The first implementation proof remains text state/storage recovery, followed by live
+outcome. The existing text state/storage recovery proof is the foundation for the remaining live
 voice stories. These are acceptance tests, rather than new product demos under examples/.
 
 | Journey | What the person does | Evidence |
@@ -1451,15 +1529,17 @@ foreground timings as reviewable evidence. Exact latency budgets remain to be ag
 
 ## Documentation and release gate
 
-- [ ] Lead each maintained feature guide with the expected person/application experience,
-  concrete examples and limits, then explain the native mechanism and API. Link each product
-  expectation to its implementation owner and a readable acceptance story.
-- [ ] Update `tools.md` and `protocol/a2a.md` for public API and wire/task contracts.
-- [ ] Update `server.md`, session guides and `persistence.md` for policy, delivery and recovery.
-- [ ] Document machine/effect ownership and task/close behavior in internal guides.
-- [ ] Publish third-party setup, E2E app authoring, journeys and replay instructions in testing guides.
-- [ ] Run codegen/architecture checks, bindings, lint/types, Rust and hermetic Python suites,
-  full DST survey/campaign/soak and real-process E2E. Compare baseline failures and retain seeds.
+[Milestone 8](#8-documentation-and-release) owns the release checklist; the acceptance matrix
+owns detailed coverage. Documentation moves to these owners as each implementation slice lands:
+
+| Contract | Owning guide |
+| --- | --- |
+| Conversation state, private/human history, bindings and recovery | SessionState guide converted from the companion plan; persistence guide owns storage/save mechanics. |
+| Remote communication, task routing and conversational coordination | Delegation guide converted from this plan. |
+| A2A wire fields, methods, errors and interoperability | protocol/a2a.md. |
+| Agent/tools/session use and transient VoiceTasks | Their existing feature guides, linking shared contracts rather than restating them. |
+| Native ownership and lifetimes | The four existing internal architecture/components/runtime/bindings guides. |
+| Test authoring, peer setup, journeys and replay | Internal testing guide and the shared E2E README. |
 
 Give each exhaustive contract one owning guide. SessionState owns state/history/binding/recovery;
 delegation owns conversational coordination, routing and remote communication. Update the

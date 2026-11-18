@@ -58,6 +58,17 @@ impl<M, E> Core<M, E> {
         self.items.len()
     }
 
+    /// Detaches the pending items, keeping the producer's drop total monotone.
+    pub(super) fn take_pending(&mut self) -> Self {
+        Self {
+            items: std::mem::take(&mut self.items),
+            floor: std::mem::take(&mut self.floor),
+            frames: std::mem::take(&mut self.frames),
+            events: std::mem::take(&mut self.events),
+            dropped: self.dropped,
+        }
+    }
+
     /// The media past the floor, which the bound may drop.
     pub(super) fn frames(&self) -> usize {
         self.frames
@@ -184,13 +195,20 @@ impl<Q> Drop for Producer<Q> {
 pub(super) struct Consumer<Q>(Arc<Mutex<Slot<Q>>>);
 
 impl<Q> Consumer<Q> {
+    /// Changes the queue without waiting. The caller owns anything it takes before the lock ends.
+    pub(super) fn apply<R>(&self, op: impl FnOnce(&mut Q) -> R) -> R {
+        op(lock(&self.0).queue.as_mut().expect("a live consumer owns its queue"))
+    }
+
     /// The next item `pop` takes. `None` once the producer is gone and the queue is drained.
     /// Cancel-safe.
     pub(super) async fn recv<T>(&self, mut pop: impl FnMut(&mut Q) -> Option<T>) -> Option<T> {
         std::future::poll_fn(|cx| {
             let mut slot = lock(&self.0);
             let slot = &mut *slot;
-            let Some(queue) = slot.queue.as_mut() else { return Poll::Ready(None) };
+            let Some(queue) = slot.queue.as_mut() else {
+                return Poll::Ready(None);
+            };
             if let Some(item) = pop(queue) {
                 Poll::Ready(Some(item))
             } else if !slot.sender {

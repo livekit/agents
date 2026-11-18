@@ -38,10 +38,14 @@ impl Group {
             tasks: Arc::default(),
         }))
     }
+
+    pub(super) fn request_close(&self) {
+        self.0.closing.cancel();
+    }
 }
 impl Drop for Group {
     fn drop(&mut self) {
-        self.0.closing.cancel();
+        self.request_close();
     }
 }
 

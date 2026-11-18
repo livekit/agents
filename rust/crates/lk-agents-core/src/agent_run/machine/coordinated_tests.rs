@@ -507,7 +507,7 @@ fn a_step_that_has_not_called_reads_the_latest_answers() {
     let mut input = coordinated_input();
     input.history.push(asked("asked_1", "billing"));
     let mut d = Driver::with_input(text_agent(vec![approval_tool()]), input);
-    d.send(AgentRunEvent::Answered { approval_answers: ["asked_1".to_owned()].into() });
+    d.send(AgentRunEvent::Answered { approval_answers: ["item_asked_1".to_owned()].into() });
     assert!(repeat_runs(&mut d, "billing"));
 }
 
@@ -517,7 +517,7 @@ fn a_step_that_has_not_called_reads_the_latest_answers() {
 fn a_read_back_recorded_by_another_reply_is_the_latest_question() {
     let mut input = coordinated_input();
     input.history.push(asked("asked_1", "billing"));
-    input.opening = Opening::Coordinated { approval_answers: ["asked_1".to_owned()].into() };
+    input.opening = Opening::Coordinated { approval_answers: ["item_asked_1".to_owned()].into() };
     let mut d = Driver::with_input(text_agent(vec![approval_tool()]), input);
     d.send(AgentRunEvent::Recorded { item: Box::new(asked("asked_2", "sales")) });
     assert!(!repeat_runs(&mut d, "billing"));
@@ -529,7 +529,7 @@ fn a_read_back_recorded_by_another_reply_is_the_latest_question() {
 fn speaking_again_revokes_the_answers_a_calling_step_read() {
     let mut input = coordinated_input();
     input.history.push(asked("asked_1", "billing"));
-    input.opening = Opening::Coordinated { approval_answers: ["asked_1".to_owned()].into() };
+    input.opening = Opening::Coordinated { approval_answers: ["item_asked_1".to_owned()].into() };
     let mut d =
         Driver::with_input(text_agent(vec![approval_tool(), string_tool("lookup", "q")]), input);
     let request = d.plans()[0].request;

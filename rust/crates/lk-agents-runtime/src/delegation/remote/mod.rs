@@ -5,7 +5,10 @@ use parking_lot::Mutex;
 use lk_agents_abi::a2a::client::{
     self as port, AgentClientError, Message, MessageInput, MessagePart, TaskUpdate,
 };
-use lk_agents_abi::a2a::remote::{DelegationHost, RemoteEvent, RemoteInteraction as Port};
+use lk_agents_abi::a2a::remote::{
+    DelegationHost, DelegationInput, RemoteEvent, RemoteInteraction as Port, RemoteResponseClaim,
+    RemoteTaskDriver,
+};
 use lk_agents_abi::delegation::remote::{A2ARequest, RemoteRecovery};
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::invoke::{CallContext, Cancellation as _};
@@ -21,9 +24,12 @@ use serde_json::{Map, Value};
 use lk_agents_core::a2a::client::message_from_wire;
 use lk_agents_net::a2a_client::{AgentClient, Reply};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::owned::{Background, Owned};
 use lk_agents_net::signal;
 use lk_agents_net::task::Cancellation;
 use lk_agents_telemetry as telemetry;
+mod driver;
+mod exchange;
 pub mod journal;
 
 #[cfg(test)]
@@ -83,7 +89,7 @@ impl Port for RemoteInteraction {
             delegation_id: lk_agents_net::strings::shortuuid("dlg_"),
             endpoint: endpoint.trim_end_matches('/').into(),
             tool_id,
-            parent_call_id: function_call.call_id.clone(),
+            parent_call_id: function_call.id.clone(),
         };
         let policy = Policy::new(id).map_err(protocol)?;
         let project = Project { url: project_url, api_key, api_secret };
@@ -149,25 +155,33 @@ impl Port for RemoteInteraction {
         cx: telemetry::Cx,
     ) -> Result<RemoteEvent, AgentClientError> {
         let endpoint = self.inner.0.lock().policy.snapshot().id.endpoint;
-        let client =
-            AgentClient::new(env, endpoint, token.clone(), conn_options.unwrap_or_default())?;
-        self.run_with_client(
-            env,
-            client,
-            RemoteInvocation {
-                arguments,
-                structured,
-                history,
-                shared: thread_id.map(|thread| (thread, token)),
-                live,
-                host,
-                context,
-                cx,
-                owner,
-                origin,
-            },
-        )
-        .await
+        let conn_options = conn_options.unwrap_or_default();
+        let client = AgentClient::new(env, endpoint, token.clone(), conn_options)?;
+        let result = self
+            .run_with_client(
+                env,
+                client,
+                RemoteInvocation {
+                    arguments,
+                    structured,
+                    history,
+                    shared: thread_id.map(|thread| (thread, token)),
+                    live,
+                    host,
+                    context,
+                    cx,
+                    owner,
+                    origin,
+                    conn_options,
+                },
+            )
+            .await;
+        match result {
+            Err(AgentClientError::InvalidInput(message)) => {
+                Ok(RemoteEvent::Outcome { outcome: ToolOutcome::ToolError(message) })
+            }
+            result => result,
+        }
     }
 
     fn cancelled(&self) -> Result<(), AgentClientError> {
@@ -206,6 +220,7 @@ pub struct RemoteInvocation {
     pub cx: telemetry::Cx,
     pub owner: Option<Arc<dyn lk_agents_abi::session::SessionCommands>>,
     pub origin: Option<lk_agents_abi::session::ToolCallRef>,
+    pub conn_options: ApiConnectOptions,
 }
 
 impl RemoteInteraction {
@@ -222,8 +237,30 @@ impl RemoteInteraction {
         let (done, settled) = signal::once::<()>();
         *self.running.lock() =
             Some(Running { stop: stop.clone(), settled, clock: Arc::clone(&background.clock) });
-        let delegation =
-            Delegation { interaction: self.inner.clone(), client, request, journal: None };
+        let (driver, commands) = driver::Driver::channel();
+        let close_clock = background.clock.clone();
+        let client = Owned::new(
+            &background,
+            Arc::new(client),
+            Box::new(move |client, deadline| {
+                Box::pin(async move {
+                    lk_agents_abi::Closed::bounded(&*close_clock, deadline, async move {
+                        client.aclose().await;
+                    })
+                    .await
+                })
+            }),
+        );
+        let delegation = Delegation {
+            interaction: self.inner.clone(),
+            client,
+            request,
+            journal: None,
+            background: background.clone(),
+            driver,
+            commands,
+            response_claim: None,
+        };
         // The process's task: a dropped `run` leaves it to the host, which stops it in the same
         // turn (`cancelled()`), and `settled()` waits for its cleanup.
         let (outcome, result) = tokio::sync::oneshot::channel();
@@ -240,34 +277,164 @@ impl RemoteInteraction {
 /// One running delegation over its own endpoint client.
 struct Delegation {
     interaction: Interaction,
-    client: AgentClient,
+    client: Owned<Arc<AgentClient>>,
     request: RemoteInvocation,
     /// The active exchange's durable input receipt, never a lookup of a later task status.
     journal: Option<Arc<journal::Journal>>,
+    background: Background,
+    driver: Arc<driver::Driver>,
+    commands: tokio::sync::mpsc::Receiver<driver::Command>,
+    response_claim: Option<Arc<RemoteResponseClaim>>,
+}
+
+enum Prepared {
+    Forwarded,
+    Message { arguments: Value, structured: bool },
+}
+
+enum Next {
+    Update(Result<Option<TaskUpdate>, AgentClientError>),
+    Command(Option<driver::Command>),
+    Stop,
+}
+
+fn cancelled() -> RemoteEvent {
+    RemoteEvent::Outcome { outcome: ToolOutcome::Cancelled }
+}
+
+fn forwarded() -> RemoteEvent {
+    RemoteEvent::Outcome {
+        outcome: ToolOutcome::Value {
+            text: "This request is already tracked by the existing remote task; progress, questions and result arrive through its original call.".into(),
+            reply_required: true,
+            verbatim: false,
+            more: None,
+        },
+    }
 }
 
 impl Delegation {
+    /// Resolve addressing before connecting a second transport. An active task always keeps
+    /// its original observer and result owner, including while it is waiting for input.
+    async fn prepare(&mut self) -> Result<Option<Prepared>, AgentClientError> {
+        let mut arguments = self.request.arguments.clone();
+        let task_id = lk_agents_core::a2a::client::take_task_id(&mut arguments)
+            .map_err(AgentClientError::from)?;
+        let Some(owner) = self.request.owner.clone() else {
+            if task_id.is_some() {
+                return Err(AgentClientError::InvalidInput(
+                    "task_id needs an active conversation with saved remote tasks".into(),
+                ));
+            }
+            return Ok(Some(Prepared::Message { arguments, structured: self.request.structured }));
+        };
+        let endpoint = self.interaction.0.lock().policy.snapshot().id.endpoint;
+        let offered = {
+            let state = self.interaction.0.lock();
+            lk_agents_core::delegation::remote::routing::captured_offers(&state.call)
+                .map_err(input_error)?
+        };
+        let routing = owner
+            .routing_context(&endpoint, &endpoint, arguments.clone(), task_id.as_deref(), &offered)
+            .await
+            .map_err(input_error)?;
+        let (verdict, usage) = match owner.routing_model() {
+            Some(model) if !routing.candidates.is_empty() => {
+                let (verdict, usage) = lk_agents_inference::delegation::call::classify(
+                    model,
+                    &self.background,
+                    &self.request.cx,
+                    routing.clone(),
+                    self.request.conn_options,
+                )
+                .await;
+                (Some(verdict), usage)
+            }
+            _ => (
+                Some(Ok(lk_agents_core::delegation::remote::routing::without_classifier(&routing))),
+                Default::default(),
+            ),
+        };
+        use lk_agents_abi::delegation::routing::CallAdmission;
+        let candidate: Arc<dyn RemoteTaskDriver> = self.driver.clone();
+        let admitted = owner
+            .admit_call(&routing, verdict, usage, Arc::downgrade(&candidate))
+            .await
+            .map_err(input_error)?;
+        let (task, selected, structured) = match admitted.admission {
+            CallAdmission::New => (None, None, self.request.structured),
+            CallAdmission::Continue(task) => (Some(task), None, self.request.structured),
+            CallAdmission::Respond { request, message } => {
+                let (_, target, _) = request
+                    .remote()
+                    .ok_or_else(|| protocol("a remote response needs its captured task"))?;
+                let target = target.clone();
+                // The admitted canonical human words, never the frontend model's rewrite.
+                arguments =
+                    serde_json::json!({"request": message.raw_text_content().unwrap_or_default()});
+                (Some(target), Some(request), false)
+            }
+            CallAdmission::AlreadyForwarded { .. } => return Ok(Some(Prepared::Forwarded)),
+        };
+        if let Some(driver) = admitted.driver
+            && !Arc::ptr_eq(&driver, &candidate)
+        {
+            driver
+                .input(
+                    DelegationInput { arguments, structured, input_request: selected },
+                    admitted.response_claim,
+                    self.request.origin.clone(),
+                )
+                .await?;
+            return Ok(Some(Prepared::Forwarded));
+        }
+        self.response_claim = admitted.response_claim;
+        let mut state = self.interaction.0.lock();
+        if let Some(reference) = selected {
+            state.policy.respond_to(reference).map_err(protocol)?;
+        } else if let Some(task) = task {
+            state.policy.target_task(task).map_err(protocol)?;
+        }
+        Ok(Some(Prepared::Message { arguments, structured }))
+    }
+
     /// The delegation until its outcome or `stop`; its reply and client are closed either way.
     async fn run(mut self, stop: &Cancellation) -> Result<RemoteEvent, AgentClientError> {
         let mut reply = None;
-        let result = tokio::select! {
-            biased;
-            () = stop.cancelled() => Ok(RemoteEvent::Outcome { outcome: ToolOutcome::Cancelled }),
-            result = self.drive(&mut reply) => result,
+        let client = Arc::clone(&self.client);
+        let result = {
+            let driving = self.drive(&mut reply, stop);
+            tokio::pin!(driving);
+            tokio::select! {
+                biased;
+                result = &mut driving => result,
+                () = stop.cancelled() => {
+                    // Close the socket boundary to settle an in-flight exchange, then let the
+                    // pinned driver finish any consumed update or checkpoint of its own.
+                    client.aclose().await;
+                    driving.await
+                }
+            }
         };
-        if let Some(reply) = reply {
-            port::Reply::aclose(&reply).await;
+        if let Some(reply) = reply
+            && close_observation(reply).await.is_err()
+        {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "delegation response cleanup incomplete");
         }
-        port::AgentClient::aclose(&self.client).await;
+        if self.client.close().await != lk_agents_abi::Closed::Clean {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "delegation client cleanup incomplete");
+        }
         result
     }
 
-    async fn drive(&mut self, reply: &mut Option<Reply>) -> Result<RemoteEvent, AgentClientError> {
+    async fn drive(
+        &mut self,
+        reply: &mut Option<Owned<Reply>>,
+        stop: &Cancellation,
+    ) -> Result<RemoteEvent, AgentClientError> {
         if self.request.owner.is_none() {
             self.interaction.restore_unbound(&self.request.history)?;
         }
-        port::AgentClient::connect(&self.client).await?;
-        self.interaction.0.lock().livekit = self.client.offers_extension();
         let recovery = match (&self.request.owner, &self.request.origin) {
             (Some(owner), Some(origin)) => {
                 let endpoint = self.interaction.0.lock().policy.snapshot().id.endpoint;
@@ -275,19 +442,56 @@ impl Delegation {
             }
             _ => None,
         };
+        if let Some(recovery) = &recovery {
+            let restoring = self.recover_live(recovery);
+            tokio::pin!(restoring);
+            let forwarded = tokio::select! {
+                biased;
+                restored = &mut restoring => restored?,
+                () = stop.cancelled() => return Ok(cancelled()),
+            };
+            if forwarded {
+                return Ok(self::forwarded());
+            }
+        }
+        let prepared = if recovery.is_none() {
+            // Before observation starts, cancellation may release classifier reads or a
+            // message-admission waiter. Any admitted message stays with its owning driver.
+            let preparing = self.prepare();
+            tokio::pin!(preparing);
+            tokio::select! {
+                biased;
+                prepared = &mut preparing => prepared?,
+                () = stop.cancelled() => return Ok(cancelled()),
+            }
+        } else {
+            None
+        };
+        if let Some(Prepared::Forwarded) = prepared {
+            return Ok(forwarded());
+        }
+        if stop.is_cancelled() {
+            return Ok(cancelled());
+        }
+        port::AgentClient::connect(self.client.as_ref()).await?;
+        self.interaction.0.lock().livekit = self.client.offers_extension();
+        let mut accepted = true;
         let mut initial = match recovery {
-            Some(RemoteRecovery::Dispatch { request_id, request, streaming }) => {
+            Some(RemoteRecovery::Dispatch { request_id, request, streaming, input_request }) => {
                 let A2ARequest::Send(request) = *request else {
                     return Err(protocol("a recovered tool call does not contain a send"));
                 };
                 let observer = self
-                    .observer_for(request_id)
+                    .observer_for_input(request_id, None, input_request)
                     .ok_or_else(|| protocol("recovery needs its native owner"))?;
-                *reply = Some(
-                    self.client
-                        .resume_send(*request, streaming, &self.request.cx, observer)
-                        .await?,
-                );
+                let resumed = self
+                    .client
+                    .resume_send(*request, streaming, &self.request.cx, observer)
+                    .await?;
+                *reply = self.claim_reply(resumed).await?;
+                if reply.is_none() {
+                    return Ok(forwarded());
+                }
                 None
             }
             Some(RemoteRecovery::GetTask(task)) => {
@@ -314,34 +518,8 @@ impl Delegation {
                 ));
             }
             None => {
-                let selected = match &self.request.owner {
-                    Some(owner) => {
-                        let endpoint = self.interaction.0.lock().policy.snapshot().id.endpoint;
-                        let selected =
-                            owner.held_input(&endpoint, &endpoint).await.map_err(protocol)?;
-                        if let Some(reference) = &selected {
-                            self.interaction
-                                .0
-                                .lock()
-                                .policy
-                                .respond_to(reference.clone())
-                                .map_err(protocol)?;
-                        }
-                        selected
-                    }
-                    None => None,
-                };
-                let (arguments, structured) = match (&self.request.owner, selected) {
-                    (Some(owner), Some(reference)) => {
-                        let response = owner.response(&reference).await.map_err(protocol)?;
-                        // Classification reserved this exact human message. A model's rewritten
-                        // tool arguments cannot change it or turn a side question into an answer.
-                        (
-                            serde_json::json!({"request": response.raw_text_content().unwrap_or_default()}),
-                            false,
-                        )
-                    }
-                    _ => (self.request.arguments.clone(), self.request.structured),
+                let Some(Prepared::Message { arguments, structured }) = prepared else {
+                    return Err(protocol("a new delegation needs prepared business input"));
                 };
                 let default_context = match &self.request.owner {
                     Some(owner) => {
@@ -361,11 +539,27 @@ impl Delegation {
                     self.request.shared.clone(),
                     default_context,
                 )?;
-                *reply = Some(self.send(message).await?);
+                let input = self.interaction.0.lock().policy.snapshot().input_request;
+                let sent = self.send(message, None, input).await;
+                drop(self.response_claim.take());
+                match sent {
+                    Ok(observed) => *reply = observed,
+                    Err(error) => {
+                        if self.commands.is_empty() {
+                            return Err(error);
+                        }
+                        // A different admitted input may supersede a stale initial response.
+                        // Keep its concrete queued work; never retry this failed message.
+                        accepted = false;
+                    }
+                }
+                if reply.is_none() && accepted {
+                    return Ok(forwarded());
+                }
                 None
             }
         };
-        if self.request.live {
+        if self.request.live && accepted {
             self.request
                 .host
                 .delegated(&self.request.cx, &self.request.context)
@@ -373,102 +567,92 @@ impl Delegation {
                 .map_err(host_error)?;
         }
         loop {
-            let event = match initial.take() {
-                Some(event) => {
-                    self.progress(&event).await?;
-                    Some(event)
+            let event = if let Some(event) = initial.take() {
+                event
+            } else {
+                // Only reads race here. A consumed update's host delivery and journal write
+                // finish outside the race; a queued terminal result wins over a correction.
+                let next = match reply.as_ref().map(|current| &**current) {
+                    Some(current) => tokio::select! {
+                        biased;
+                        update = port::Reply::next(current) => Next::Update(update),
+                        command = self.commands.recv() => Next::Command(command),
+                        () = stop.cancelled() => Next::Stop,
+                    },
+                    None => tokio::select! {
+                        biased;
+                        command = self.commands.recv() => Next::Command(command),
+                        () = stop.cancelled() => Next::Stop,
+                    },
+                };
+                match next {
+                    Next::Update(Ok(Some(update))) => self.interaction.update(update)?,
+                    Next::Update(Ok(None)) => {
+                        return Err(protocol("the remote interaction ended without an outcome"));
+                    }
+                    Next::Update(Err(error)) => return Err(error),
+                    Next::Command(Some(command)) => {
+                        initial = self.message_command(command, reply).await?;
+                        continue;
+                    }
+                    Next::Command(None) => return Err(protocol("the remote driver ended")),
+                    Next::Stop => return Ok(cancelled()),
                 }
-                None => match reply.as_ref() {
-                    Some(current) => self.follow(current).await?,
-                    None => None,
-                },
             };
-            if let Some(done) = reply.take() {
-                port::Reply::aclose(&done).await;
-            }
-            *reply = Some(match event {
-                Some(RemoteEvent::Follow { task_id, thread_id }) => {
+            self.progress(&event).await?;
+            match event {
+                RemoteEvent::Pending | RemoteEvent::Progress { .. } => {}
+                RemoteEvent::Follow { task_id, thread_id } => {
+                    if let Some(done) = reply.take() {
+                        close_observation(done).await?;
+                    }
+                    if let Some(driver) = self
+                        .driver_elsewhere(&lk_agents_abi::delegation::remote::RemoteTaskRef {
+                            task_id: task_id.clone(),
+                            context_id: thread_id.clone(),
+                        })
+                        .await?
+                    {
+                        driver.reconcile().await;
+                        return Ok(forwarded());
+                    }
                     let task =
                         lk_agents_core::a2a::rpc::TaskRef { id: task_id, context_id: thread_id };
                     let observer = self.observer();
-                    self.client
+                    let followed = self
+                        .client
                         .subscribe_observed(task, None, &self.request.cx, observer)
                         .await
-                        .map_err(AgentClientError::from)?
+                        .map_err(AgentClientError::from)?;
+                    *reply = self.claim_reply(followed).await?;
+                    if reply.is_none() {
+                        return Ok(forwarded());
+                    }
                 }
-                Some(RemoteEvent::InputRequired {
-                    request_id, question, verbatim_full, ..
-                }) if self.request.live => {
-                    let answer = self.request.host.ask(
-                        &self.request.cx,
-                        &self.request.context,
-                        question,
-                        verbatim_full,
-                        self.journal.as_ref().and_then(|journal| journal.observed_input()),
-                    );
-                    let answer = answer.await.map_err(host_error)?;
-                    self.send(self.interaction.answer(&request_id, answer)?).await?
+                RemoteEvent::InputRequired { question, verbatim_full, .. } if self.request.live => {
+                    if let Some(done) = reply.take() {
+                        close_observation(done).await?;
+                    }
+                    self.request
+                        .host
+                        .question(
+                            &self.request.cx,
+                            &self.request.context,
+                            question,
+                            verbatim_full,
+                            self.journal.as_ref().and_then(|journal| journal.observed_input()),
+                        )
+                        .await
+                        .map_err(host_error)?;
                 }
-                Some(event @ (RemoteEvent::InputRequired { .. } | RemoteEvent::Outcome { .. })) => {
+                event @ (RemoteEvent::InputRequired { .. } | RemoteEvent::Outcome { .. }) => {
                     return Ok(event);
                 }
-                _ => {
-                    return Err(AgentClientError::Protocol(
-                        "the remote interaction ended without an outcome".into(),
-                    ));
-                }
-            });
-        }
-    }
-
-    async fn send(&mut self, message: Message) -> Result<Reply, AgentClientError> {
-        let message = MessageInput::Message(Box::new(message));
-        let message = lk_agents_net::a2a_client::host::message_to_wire(message)?;
-        let observer = self.observer();
-        self.client
-            .send_observed(message, None, None, None, &self.request.cx, observer)
-            .await
-            .map_err(AgentClientError::from)
-    }
-
-    fn observer(
-        &mut self,
-    ) -> Option<Arc<dyn lk_agents_net::a2a_client::observer::RequestObserver>> {
-        self.observer_for(lk_agents_net::strings::shortuuid("request_"))
-    }
-
-    fn observer_for(
-        &mut self,
-        request_id: String,
-    ) -> Option<Arc<dyn lk_agents_net::a2a_client::observer::RequestObserver>> {
-        let owner = self.request.owner.clone()?;
-        let state = self.interaction.0.lock().policy.snapshot();
-        let endpoint = state.id.endpoint;
-        let journal = Arc::new(journal::Journal::new(
-            owner,
-            endpoint.clone(),
-            endpoint,
-            request_id,
-            self.request.origin.clone(),
-            state.input_request,
-        ));
-        self.journal = Some(journal.clone());
-        Some(journal)
-    }
-
-    /// The reply's updates, each reported to the host, until one ends it.
-    async fn follow(&self, reply: &Reply) -> Result<Option<RemoteEvent>, AgentClientError> {
-        while let Some(update) = port::Reply::next(reply).await? {
-            let event = self.interaction.update(update)?;
-            self.progress(&event).await?;
-            if !matches!(event, RemoteEvent::Pending | RemoteEvent::Progress { .. }) {
-                return Ok(Some(event));
             }
         }
-        Ok(None)
     }
 
-    async fn progress(&self, event: &RemoteEvent) -> Result<(), AgentClientError> {
+    async fn progress(&mut self, event: &RemoteEvent) -> Result<(), AgentClientError> {
         if matches!(event, RemoteEvent::InputRequired { .. }) {
             let reference = self.journal.as_ref().and_then(|journal| journal.observed_input());
             if self.request.owner.is_some() && reference.is_none() {
@@ -488,6 +672,15 @@ impl Delegation {
             .progress(&self.request.cx, &self.request.context, text, extra)
             .await
             .map_err(host_error)
+    }
+}
+
+async fn close_observation(reply: Owned<Reply>) -> Result<(), AgentClientError> {
+    match reply.close().await {
+        lk_agents_abi::Closed::Clean => Ok(()),
+        lk_agents_abi::Closed::Failed | lk_agents_abi::Closed::TimedOut => {
+            Err(protocol("the previous remote observation did not finish cleanup"))
+        }
     }
 }
 
@@ -588,26 +781,33 @@ impl Interaction {
         Ok(message_from_wire(message))
     }
 
-    /// The person's answer to the retained input request `request_id`, on its task; refused
-    /// once that request was settled or superseded.
-    fn answer(&self, request_id: &str, text: String) -> Result<Message, AgentClientError> {
-        let mut state = self.0.lock();
-        state.policy.accepts_reply(request_id).map_err(protocol)?;
-        let livekit = state.livekit;
+    fn task_message(&self, input: &DelegationInput) -> Result<Message, AgentClientError> {
+        if !input.arguments.is_object() {
+            return Err(AgentClientError::InvalidInput(
+                "remote tool arguments must be an object".into(),
+            ));
+        }
+        let text = if input.structured {
+            String::new()
+        } else {
+            serde_json::from_value::<TextRequest>(input.arguments.clone())
+                .map_err(|error| AgentClientError::InvalidInput(error.to_string()))?
+                .request
+        };
+        let state = self.0.lock();
         let mut message = state
             .policy
-            .message(
+            .task_message(
                 text,
                 lk_agents_net::strings::shortuuid("msg_"),
-                None,
-                "",
-                None,
-                livekit,
-                None,
-                None,
+                input.input_request.clone(),
+                state.livekit,
             )
-            .map_err(protocol)?;
-        if livekit && !state.partition_chain.is_empty() {
+            .map_err(|error| AgentClientError::InvalidInput(error.to_string()))?;
+        if input.structured {
+            message.parts[0] = a2a::Part::data(input.arguments.clone());
+        }
+        if state.livekit && !state.partition_chain.is_empty() {
             message.metadata.get_or_insert_default().insert(
                 lk_agents_abi::a2a::metadata::PARTITION_CHAIN_KEY.into(),
                 serde_json::to_value(&state.partition_chain)
@@ -678,6 +878,16 @@ fn unavailable(error: lk_agents_net::env::ProcessError) -> AgentClientError {
 
 fn protocol(error: impl std::fmt::Display) -> AgentClientError {
     AgentClientError::Protocol(error.to_string())
+}
+
+/// Invalid selection is model-facing feedback; storage failures retain their diagnostic kind.
+fn input_error(error: lk_agents_abi::storage::StorageError) -> AgentClientError {
+    match error {
+        lk_agents_abi::storage::StorageError::Invalid(message) => {
+            AgentClientError::InvalidInput(message)
+        }
+        error => protocol(error),
+    }
 }
 
 impl lk_agents_abi::a2a::client::MessageContent for RemoteInteraction {

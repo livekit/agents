@@ -199,6 +199,18 @@ impl VoiceRuntime {
                         now,
                     );
                 }
+                if saved.is_ok()
+                    && let ConversationWrite::Remote { command, outcome: Ok(_), .. } = &write
+                    && let lk_agents_abi::delegation::remote::RemoteInput::Prepare {
+                        input_request: Some(request),
+                        ..
+                    } = &command.input
+                {
+                    self.handle(
+                        VoiceEvent::RemoteResponseQueued { request: request.clone() }.into(),
+                        now,
+                    );
+                }
                 write.resolve(saved);
                 if let Some(error) = failed {
                     self.handle(VoiceEvent::ConversationStateFailed(error).into(), now);
@@ -222,12 +234,64 @@ impl VoiceRuntime {
             }
         };
         let write = match command {
-            SessionCommand::HeldInput { remote_id, endpoint, done } => {
+            SessionCommand::RoutingContext {
+                remote_id,
+                endpoint,
+                proposed,
+                selected_task,
+                offered,
+                done,
+            } => {
+                done.resolve(lk_agents_core::delegation::remote::routing::request(
+                    &state,
+                    &remote_id,
+                    &endpoint,
+                    proposed,
+                    selected_task.as_deref(),
+                    &offered,
+                ));
+                return;
+            }
+            SessionCommand::AdmitCall { request, verdict, usage, candidate, drivers, done } => {
+                self.driver.routing_usage(&usage);
+                done.resolve(
+                    lk_agents_core::delegation::remote::routing::admit(&state, &request, verdict)
+                        .and_then(|admission| {
+                            drivers.admit(
+                                &state,
+                                &request.remote_id,
+                                &request.endpoint,
+                                admission,
+                                candidate,
+                            )
+                        }),
+                );
+                return;
+            }
+            SessionCommand::RemoteDriver { remote_id, endpoint, task, drivers, done } => {
+                done.resolve(drivers.get(&state, &remote_id, &endpoint, &task));
+                return;
+            }
+            SessionCommand::HeldInput { remote_id, endpoint, task_id, done } => {
                 let result = remote::state(&state, &remote_id, &endpoint).and_then(|remote| {
                     remote
-                        .map(|remote| input::held_remote_input(&remote_id, remote))
+                        .map(|remote| {
+                            input::held_remote_input(&remote_id, remote, task_id.as_deref())
+                        })
                         .transpose()
                         .map(Option::flatten)
+                });
+                done.resolve(result);
+                return;
+            }
+            SessionCommand::Task { remote_id, endpoint, task_id, done } => {
+                let result = remote::state(&state, &remote_id, &endpoint).and_then(|saved| {
+                    let saved = saved.ok_or_else(|| {
+                        lk_agents_abi::storage::StorageError::Invalid(
+                            "this remote has no known tasks".into(),
+                        )
+                    })?;
+                    remote::task(saved, &task_id)
                 });
                 done.resolve(result);
                 return;

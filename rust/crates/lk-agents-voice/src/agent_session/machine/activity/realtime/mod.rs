@@ -625,6 +625,7 @@ impl VoiceDriver {
         add_to_chat_ctx: bool,
         voice_run: VoiceRunParticipation,
     ) -> SpeechId {
+        let human = asked.is_none();
         // `allow_interruptions=false` holds only when the client owns replies; a self-replying
         // server interrupts on onset, so the caller is told once.
         let server_replies = self.activity.realtime().is_some_and(|s| {
@@ -651,6 +652,9 @@ impl VoiceDriver {
             ..SpeechSpec::new(SpeechKind::Realtime, source, allow)
         };
         let speech = self.start_speech(now, spec);
+        if human {
+            self.expect_realtime_input(speech);
+        }
         if let Some(rt) = self.activity.realtime_activity_mut() {
             rt.players.insert(speech);
             // A host request answers no speech; the server's own turn and a committed user turn
@@ -693,6 +697,7 @@ impl VoiceDriver {
             return;
         };
         if let Some(speech) = speech {
+            self.realtime_input_ended(speech);
             let status = format!("{:?}", done.status);
             self.play_realtime(speech, Event::GenerationDone(done));
             // The generation ended on the server; the speech finishes by its own playout.
@@ -979,9 +984,11 @@ impl VoiceDriver {
             }
             RealtimeReplyRole::Internal => VoiceRunParticipation::Outside,
         };
+        let mut human = None;
         if let Some(text) = user_input {
             let wall = self.step.wall();
             let item = ChatMessage::text(self.session.ids.mint("item"), Role::User, &text, wall);
+            human = Some(item.clone());
             let push = rt::PushItem { item: Box::new(item.clone().into()), reply_required: true };
             self.rt_send(RealtimeCommand::PushItem(push));
             let item = lk_agents_abi::ChatItem::from(item);
@@ -992,7 +999,11 @@ impl VoiceDriver {
             self.commit_item(item, Source::UserTyped, Visibility::Both);
         }
         let request = Request::GenerateReply { instructions, tool_choice, read_back };
-        self.realtime_request(now, request, call, allow_interruptions, voice_run)
+        let speech = self.realtime_request(now, request, call, allow_interruptions, voice_run);
+        if let (Some(speech), Some(message)) = (speech, human) {
+            self.route_realtime_input_for(speech, message);
+        }
+        speech
     }
 
     /// A realtime session's context and tools live in its session config, not per response:
@@ -1081,7 +1092,8 @@ impl VoiceDriver {
             self.session.chat_ctx.entry(&t.item_id).is_some_and(|entry| entry.visibility.history());
         let id = t.item_id.clone();
         let source = Source::Remote { item_id: t.item_id };
-        self.commit_item(item.into(), source, Visibility::Both);
+        self.commit_item(item.clone().into(), source, Visibility::Both);
+        self.route_realtime_input(item);
         if replaces_history {
             // A restored placeholder already belongs to history. Tell observers its accepted
             // final revision under that identity, as with an ordinary transcript correction.

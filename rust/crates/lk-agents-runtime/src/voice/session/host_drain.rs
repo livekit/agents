@@ -233,6 +233,7 @@ pub(super) async fn answer_hook(
 }
 
 /// An exited agent's toolsets close after the answer, and outlive the hook's cancellation.
+/// The scope registry retains their close until it settles, so session shutdown joins it.
 fn close_toolsets_later(
     hooks: &dyn SessionHooks,
     scope: u64,

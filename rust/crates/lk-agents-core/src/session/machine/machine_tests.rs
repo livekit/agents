@@ -63,7 +63,7 @@ mod checkpoints {
         assert!(parent.pending_calls.iter().any(|pending| pending.parent == *parent_call
             && pending.status == ChildCallStatus::Running { frame_id: active.id.clone() }));
         assert!(!parent.history.iter().any(|item| matches!(item,
-            ChatItem::FunctionCallOutput(output) if output.call_id == parent_call.call_id
+            ChatItem::FunctionCallOutput(output) if output.id == format!("{}_out", parent_call.call_id)
         )));
         assert_eq!(
             driver
@@ -450,7 +450,7 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
     }));
     third.accepted(json!({"reference":"R-1"}));
     let parent_request = third.request().1;
-    assert_eq!(parent_request.items.iter().filter(|i| matches!(i, ChatItem::FunctionCallOutput(o) if o.call_id == call.call_id && o.output == "{\"reference\":\"R-1\"}")).count(), 1);
+    assert_eq!(parent_request.items.iter().filter(|i| matches!(i, ChatItem::FunctionCallOutput(o) if o.id == format!("{}_out", call.call_id) && o.output == "{\"reference\":\"R-1\"}")).count(), 1);
     assert!(!third.session.state.frames.contains_key(&child_id));
     assert!(
         third.session.state.chat_history.iter().any(|message| message.id == question_message.id)
@@ -534,7 +534,7 @@ fn an_answer_without_a_repeated_call_consumes_the_child_approval() {
             let root = &later.session.state.frames[&root_id];
             assert!(root.pending_calls.is_empty());
             assert!(root.history.iter().any(|i| matches!(i,
-                ChatItem::FunctionCallOutput(o) if o.call_id == asked
+                ChatItem::FunctionCallOutput(o) if o.id == format!("{asked}_out")
                     && o.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX))));
             let frames = later.session.state.frames.len();
             later.reply("", &[("book", json!({"nights":2}))]);

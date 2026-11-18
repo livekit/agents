@@ -290,12 +290,33 @@ async def test_a_remote_date_response_keeps_its_task_and_the_persons_exact_words
     peer.question = "Which date?"
     store = ContextStore()
     app = await store.load_context(App())
-    routing = FakeLLM(
-        [
-            tool_call("route_input_response", candidates=[], unclear=False),
-            tool_call("route_input_response", candidates=[0], unclear=False),
-        ]
-    )
+
+    def route(history: ChatContext) -> FunctionToolCall:
+        prompt = json.loads(history.items[-1].text_content)
+        if "proposed_call" in prompt:
+            assert prompt["proposed_call"] == {"request": "Saturday"}
+            assert prompt["selected_task"] is None
+            assert len(prompt["candidates"]) == 1
+            task = prompt["candidates"][0]
+            assert task["task_id"] == "remote-task"
+            assert len(task["responses"]) == 1
+            response = task["responses"][0]
+            assert response["question"] == "Which date?"
+            assert response["held_response"] == "Friday"
+            return tool_call(
+                "route_remote_call",
+                action="respond",
+                candidate=task["index"],
+                response=response["index"],
+            )
+        answers = {"Why do you need the date?": [], "Friday": [0]}
+        assert prompt["latest_message"] in answers
+        assert [candidate["question"] for candidate in prompt["candidates"]] == ["Which date?"]
+        return tool_call(
+            "route_input_response", candidates=answers[prompt["latest_message"]], unclear=False
+        )
+
+    routing = FakeLLM(route)
     frontend = FakeLLM(
         [
             tool_call("coverage_expert", request="Check coverage"),
@@ -331,7 +352,9 @@ async def test_a_remote_date_response_keeps_its_task_and_the_persons_exact_words
         "model arguments cannot rewrite the selected human response"
     )
     assert next(iter(observed.input_requests.values())).state == "responded"
-    assert len(routing.requests) == 2
+    prompts = [json.loads(request.items[-1].text_content) for request in routing.requests]
+    assert sum("latest_message" in prompt for prompt in prompts) == 2
+    assert sum("proposed_call" in prompt for prompt in prompts) == 1
 
 
 @pytest.mark.parametrize("correct_before_return", [False, True])
@@ -397,6 +420,27 @@ async def test_a_response_held_during_a_local_child_can_be_sent_by_another_eligi
 
     def route(history: ChatContext) -> FunctionToolCall:
         prompt = json.loads(history.items[-1].text_content)
+        if "proposed_call" in prompt:
+            assert prompt["proposed_call"] == {"request": "Saturday"}
+            assert prompt["selected_task"] is None
+            assert len(prompt["candidates"]) == 1
+            task = prompt["candidates"][0]
+            assert task["task_id"] == "remote-task"
+            assert len(task["responses"]) == 1
+            response = task["responses"][0]
+            assert response["question"] == "Which date?"
+            assert response["held_response"] == (
+                "Actually Saturday" if correct_before_return else "Friday"
+            )
+            return tool_call(
+                "route_remote_call",
+                action="respond",
+                candidate=task["index"],
+                response=response["index"],
+            )
+        assert prompt["latest_message"] in {"Explain the hotel policy", "Friday"} | (
+            {"Actually Saturday"} if correct_before_return else set()
+        )
         selected = []
         if prompt["latest_message"] in {"Friday", "Actually Saturday"}:
             selected = [
@@ -424,8 +468,12 @@ async def test_a_response_held_during_a_local_child_can_be_sent_by_another_eligi
     assert peer.messages[1]["parts"][0] == {
         "text": "Actually Saturday" if correct_before_return else "Friday"
     }
+    prompts = [json.loads(request.items[-1].text_content) for request in routing.requests]
+    human_prompts = [prompt for prompt in prompts if "latest_message" in prompt]
+    assert len(human_prompts) == (3 if correct_before_return else 2)
+    assert sum("proposed_call" in prompt for prompt in prompts) == 1
     if correct_before_return:
-        prompt = json.loads(routing.requests[-1].items[-1].text_content)
+        prompt = human_prompts[-1]
         date = next(
             candidate
             for candidate in prompt["candidates"]

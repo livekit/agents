@@ -44,8 +44,11 @@ class TurnContext:
 class PendingCall:
     """A conversation tool's pending call, the one an `InputRequired` came from."""
 
+    id: str
+    """Canonical originating call item; provider IDs may repeat across model requests."""
     name: str
     call_id: str
+    """Provider wire ID, retained for model-facing call/result pairing."""
     answer_tool: str | None = None
     """The tool that takes the answer, when the `InputRequired` named one."""
 

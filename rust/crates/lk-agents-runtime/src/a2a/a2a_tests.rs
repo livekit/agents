@@ -308,13 +308,14 @@ impl Fake {
             }
             Behavior::Ask => {
                 let t = lk_agents_net::clock::unix_now();
+                let asked = call_item("request_photo", "p1", t + 1e-6);
+                let Some(chat_item::Item::FunctionCall(call)) = &asked.item else { unreachable!() };
+                let item_id = call.id.clone();
                 Ok(HandlerOutput {
-                    new_items: vec![
-                        user_item(&message_text, t),
-                        call_item("request_photo", "p1", t + 1e-6),
-                    ],
+                    new_items: vec![user_item(&message_text, t), asked],
                     input_required: Some("Could you send a photo?".into()),
                     pending_call: Some(PendingCall {
+                        id: item_id,
                         name: "request_photo".into(),
                         call_id: "p1".into(),
                         answer_tool: None,

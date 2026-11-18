@@ -94,7 +94,7 @@ pub fn granted<'a>(
         let decided = call.extra.get(APPROVAL_IDENTITY_KEY).map(decided_identity);
         match mark(call) {
             Some(Approval::Granted) if decided.is_some() && decided == open => open = None,
-            Some(Approval::Asked) => open = decided.filter(|_| answered.contains(&call.call_id)),
+            Some(Approval::Asked) => open = decided.filter(|_| answered.contains(&call.id)),
             _ => {}
         }
     }
@@ -227,8 +227,16 @@ mod tests {
         };
         // Asked later, committed earlier in the history than the other reply's read-back.
         let history = [asked("answered", 2_000), asked("earlier", 1_000)];
-        let answered = BTreeSet::from(["answered".to_owned()]);
+        let answered = BTreeSet::from(["item_answered".to_owned()]);
         assert!(granted(&history, &answered, "transfer", &identity));
+        let mut later = asked("answered", 3_000);
+        let ChatItem::FunctionCall(call) = &mut later else { unreachable!() };
+        call.id = "new-item-with-reused-wire-id".into();
+        let history = [history[0].clone(), history[1].clone(), later];
+        assert!(
+            !granted(&history, &answered, "transfer", &identity),
+            "answering the earlier item cannot approve a new read-back with its provider ID"
+        );
     }
 
     // Catches: the read-back losing its first-sentence form or showing JSON instead of the

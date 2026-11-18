@@ -104,6 +104,68 @@ fn a_backlog_comes_out_as_frames_of_at_most_50ms_in_order() {
     assert_eq!(samples(&items), expected, "every sample, in order");
 }
 
+// Catches: a drain including later producer input, merging across head/live boundaries, or
+// resetting the queue's drop count when it detaches the pending audio.
+#[test]
+fn a_pending_audio_snapshot_preserves_head_merging_and_drop_totals() {
+    struct HeadOnRead {
+        clock: lk_agents_abi::VirtualClock,
+        producer: std::sync::Mutex<Option<Arc<AudioSender<&'static str>>>>,
+    }
+    impl Clock for HeadOnRead {
+        fn now(&self) -> lk_agents_abi::Ts {
+            let producer = self.producer.lock().unwrap().take();
+            if let Some(producer) = producer {
+                producer.head(frame(10, 9));
+            }
+            self.clock.now()
+        }
+        fn wait_until(&self, at: lk_agents_abi::Ts) -> lk_agents_abi::BoxFuture<'_, ()> {
+            self.clock.wait_until(at)
+        }
+        fn wall(&self) -> std::time::SystemTime {
+            self.clock.wall()
+        }
+    }
+    let clock = Arc::new(HeadOnRead {
+        clock: lk_agents_abi::VirtualClock::new(),
+        producer: std::sync::Mutex::new(None),
+    });
+    let (tx, mut rx) =
+        audio(Policy::CatchUp(ms(20)), lk_agents_telemetry::AudioConsumer::Vad, clock.clone());
+    let tx = Arc::new(tx);
+    tx.head(frame(10, 1));
+    tx.head(frame(10, 2));
+    tx.event("live").unwrap();
+    for tag in 3..=5 {
+        tx.push(frame(10, tag));
+    }
+    assert_eq!(rx.dropped(), 1);
+
+    // The meter reads its injected clock after detaching the batch. The producer puts another
+    // head on the live queue before merging and final progress publication finish.
+    *clock.producer.lock().unwrap() = Some(tx.clone());
+    let pending = rx.drain_pending();
+    assert_eq!(rx.head(), Head { received: ms(20), pending: true });
+    assert_eq!(rx.dropped(), 1, "taking pending items keeps the drop total");
+    for tag in 6..=8 {
+        tx.push(frame(10, tag));
+    }
+
+    let (items, head): (Vec<_>, Vec<_>) = pending.into_iter().unzip();
+    assert_eq!(
+        timeline(&items),
+        [("audio", 20, 1), ("event", 0, 0), ("gap", 10, 0), ("audio", 20, 4)]
+    );
+    assert_eq!(head, [true, false, false, false]);
+    assert_eq!(rx.dropped(), 2, "later drops extend the same total");
+    assert_eq!(timeline(&drain(&mut rx)), [("audio", 10, 9), ("gap", 10, 0), ("audio", 20, 7)]);
+    assert_eq!(rx.head(), Head { received: ms(30), pending: false });
+    assert!(rx.drain_pending().is_empty());
+    drop(tx);
+    assert_eq!(now(rx.recv()), Some(None));
+}
+
 // Catches: merging that waits for a frame to fill, delivering a sample later than unmerged.
 #[test]
 fn a_merged_frame_is_never_later_than_the_frames_unmerged() {

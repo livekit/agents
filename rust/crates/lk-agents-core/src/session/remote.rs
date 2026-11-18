@@ -3,7 +3,8 @@
 
 use super::SessionSnapshot;
 use lk_agents_abi::delegation::remote::{
-    A2AJournalPayload, A2ARequest, RemoteAgentState, RemoteCommand, RemoteRecovery,
+    A2AJournalPayload, A2ARequest, RemoteAgentState, RemoteCommand, RemoteInput, RemoteRecovery,
+    RemoteTaskRef,
 };
 use lk_agents_abi::session::{InputRequestRef, ToolCallRef};
 use lk_agents_abi::storage::StorageError;
@@ -34,6 +35,20 @@ pub fn apply(
     if command.remote_id.is_empty() || command.endpoint.is_empty() {
         return Err(StorageError::Invalid("remote identity and endpoint are required".into()));
     }
+    if let RemoteInput::Prepare { request_id, request: A2ARequest::Send(send), .. } = &command.input
+        && let Some(task_id) = &send.message.task_id
+    {
+        let remote = state(snapshot, &command.remote_id, &command.endpoint)?
+            .ok_or_else(|| StorageError::Invalid("this remote has no known tasks".into()))?;
+        // Recovery reuses an immutable prepared request; its peer may already have completed.
+        // A new request cannot continue a terminal task or guess an unobserved destination.
+        if !remote.requests.contains_key(request_id) {
+            let target = task(remote, task_id)?;
+            if send.message.context_id.as_ref() != Some(&target.context_id) {
+                return Err(StorageError::Invalid("the task belongs to another context".into()));
+            }
+        }
+    }
     super::input::validate_dispatch(snapshot, &command)?;
     let remote_id = command.remote_id;
     let remote = snapshot
@@ -45,6 +60,23 @@ pub fn apply(
     }
     crate::delegation::remote::journal::apply(&remote_id, remote, command.input)
         .map_err(|error| StorageError::Invalid(error.to_string()))
+}
+
+/// A tool can address only work observed on its configured remote in this conversation.
+/// Selecting a task grants no permission to consume an input occurrence or a human response.
+pub fn task(remote: &RemoteAgentState, task_id: &str) -> Result<RemoteTaskRef, StorageError> {
+    let saved = remote.tasks.get(task_id).ok_or_else(|| {
+        StorageError::Invalid("the task is unknown on this remote in this conversation".into())
+    })?;
+    if task_id.is_empty() || saved.task.id != task_id || saved.task.context_id.is_empty() {
+        return Err(StorageError::Invalid("the saved task identity is invalid".into()));
+    }
+    if saved.task.status.state.is_terminal() {
+        return Err(StorageError::Invalid(
+            "the task has ended; start new work without task_id".into(),
+        ));
+    }
+    Ok(RemoteTaskRef { task_id: task_id.into(), context_id: saved.task.context_id.clone() })
 }
 
 /// Saved addresses are pinned to their configured destination; they carry no credentials.

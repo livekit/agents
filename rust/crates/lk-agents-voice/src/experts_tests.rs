@@ -49,7 +49,7 @@ fn an_answered_queued_question_is_withdrawn_without_losing_another_question() {
     // Shared admission can recognize an earlier presented occurrence before its live
     // question regains the foreground. It must not be asked again after the handoff.
     experts.reserve(
-        reference,
+        reference.clone(),
         lk_agents_abi::ChatMessage::text(
             "human",
             lk_agents_abi::Role::User,
@@ -57,7 +57,7 @@ fn an_answered_queued_question_is_withdrawn_without_losing_another_question() {
             std::time::UNIX_EPOCH,
         ),
     );
-    experts.forward_response(&pending("r1"), "human".into()).unwrap();
+    assert!(experts.response_queued(&reference));
     assert_eq!(
         experts.next(floor(&tools)),
         Some(Presentation::Question {
@@ -277,6 +277,47 @@ fn a_settled_or_superseded_question_cannot_receive_a_late_answer() {
     assert_eq!(experts.answer(&pending("r2")), Err(Stale));
     assert!(!experts.outcome("call_1", ToolOutcome::Cancelled));
     assert_eq!(experts.next(floor(&tools)), None);
+}
+
+#[test]
+fn a_checkpointed_response_retires_only_its_exact_question_even_after_agent_switches() {
+    use lk_agents_abi::delegation::remote::RemoteTaskRef;
+    use lk_agents_abi::session::InputRequestRef;
+    let tools = [refunds()];
+    let mut experts = opened();
+    let reference = InputRequestRef::RemoteTask {
+        remote_id: "refunds".into(),
+        task: RemoteTaskRef { context_id: "trip".into(), task_id: "refund".into() },
+        request_id: "refund/input_1".into(),
+    };
+    assert!(experts.ask("call_1", "r1", "Which booking?".into(), false, Some(reference.clone())));
+    experts.next(floor(&tools));
+    let mut stale = reference.clone();
+    let InputRequestRef::RemoteTask { request_id, .. } = &mut stale else { unreachable!() };
+    *request_id = "refund/input_0".into();
+    assert!(!experts.response_queued(&stale));
+    assert_eq!(experts.collect(floor(&tools)), Some(pending("r1")));
+    assert!(experts.response_queued(&reference));
+    experts.observe(floor(&[]));
+    assert_eq!(
+        experts.next(floor(&tools)),
+        None,
+        "an admitted response cannot prompt its old question again"
+    );
+    assert!(experts.ask("call_1", "r2", "What budget?".into(), false, Some(stale)));
+    assert!(
+        !experts.response_queued(&reference),
+        "a late admission cannot retire a replacement question"
+    );
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Question {
+            output_id: "call_1".into(),
+            request_id: "r2".into(),
+            question: "What budget?".into(),
+            verbatim: false,
+        })
+    );
 }
 
 #[test]

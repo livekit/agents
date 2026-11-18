@@ -1376,6 +1376,72 @@ pub mod a2a_remote {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/a2a/remote.rs.
+    static DELEGATION_INPUT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn delegation_input_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::a2a::remote::DelegationInput> {
+        let py = obj.py();
+        if !obj.is_instance(DELEGATION_INPUT.import(
+            py,
+            "livekit.agents._generated.a2a_remote",
+            "DelegationInput",
+        )?)? {
+            return Err(super::not_a(obj, "DelegationInput"));
+        }
+        Ok(::lk_agents_abi::a2a::remote::DelegationInput {
+            arguments: crate::py_values::attr_with(obj, "DelegationInput", "arguments", |v| {
+                crate::py_values::value_from_py(v, "DelegationInput.arguments")
+            })?,
+            structured: crate::py_values::attr_with(obj, "DelegationInput", "structured", |v| {
+                v.extract::<bool>()
+            })?,
+            input_request: crate::py_values::attr_with(
+                obj,
+                "DelegationInput",
+                "input_request",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (crate::generated::records::session_input::input_request_ref_from_py(v))
+                            .map(Some)
+                    }
+                },
+            )?,
+        })
+    }
+
+    pub fn delegation_input_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::a2a::remote::DelegationInput,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::a2a::remote::DelegationInput { arguments, structured, input_request } =
+            value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("arguments", crate::py_values::value_to_py(py, &arguments)?)?;
+        kwargs
+            .set_item("structured", ::pyo3::IntoPyObjectExt::into_bound_py_any(structured, py)?)?;
+        kwargs.set_item(
+            "input_request",
+            match input_request {
+                None => py.None().into_bound(py),
+                Some(x) => {
+                    crate::generated::records::session_input::input_request_ref_to_py(py, x)?
+                }
+            },
+        )?;
+        crate::py_calls::call(
+            DELEGATION_INPUT
+                .import(py, "livekit.agents._generated.a2a_remote", "DelegationInput")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/a2a/remote.rs.
     static REMOTE_EVENT_PENDING: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
     static REMOTE_EVENT_PROGRESS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -5932,7 +5998,13 @@ pub mod delegation {
                 obj,
                 "DelegationOptions",
                 "routing_model",
-                |v| crate::generated::llm::LlmProxy::from_host(v.as_any()),
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (crate::generated::llm::LlmProxy::from_host(v.as_any())).map(Some)
+                    }
+                },
             )?,
         })
     }
@@ -21589,6 +21661,9 @@ pub mod storage_turn {
             return Err(super::not_a(obj, "PendingCall"));
         }
         Ok(::lk_agents_abi::a2a::turn::PendingCall {
+            id: crate::py_values::attr_with(obj, "PendingCall", "id", |v| {
+                v.extract::<::std::string::String>()
+            })?,
             name: crate::py_values::attr_with(obj, "PendingCall", "name", |v| {
                 v.extract::<::std::string::String>()
             })?,
@@ -21609,8 +21684,9 @@ pub mod storage_turn {
         py: Python<'py>,
         value: ::lk_agents_abi::a2a::turn::PendingCall,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::a2a::turn::PendingCall { name, call_id, answer_tool } = value;
+        let ::lk_agents_abi::a2a::turn::PendingCall { id, name, call_id, answer_tool } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("id", ::pyo3::IntoPyObjectExt::into_bound_py_any(id, py)?)?;
         kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
         kwargs.set_item("call_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(call_id, py)?)?;
         kwargs.set_item(

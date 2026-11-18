@@ -59,7 +59,7 @@ async fn turn(
     let delegation = verdict.map(|verdict| {
         let router = RunFakes::new(env.clone(), env.add_run(RunKind::Direct), None);
         router.script(vec![verdict], vec![]);
-        DelegationOptions { routing_model: Arc::new(FakeLlm(router)) }
+        DelegationOptions { routing_model: Some(Arc::new(FakeLlm(router))) }
     });
     let agent = TextSessionAgent {
         definition: Env::agent(),

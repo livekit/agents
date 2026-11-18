@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
@@ -50,6 +51,12 @@ def _results(session: VoiceSession) -> list[object]:
     return [json.loads(o) for o in outputs if o.startswith("{")]
 
 
+def _routing_prompt(history: ChatContext) -> dict[str, Any]:
+    message = history.items[-1]
+    assert message.type == "message" and message.text_content is not None
+    return dict(json.loads(message.text_content))
+
+
 # Catches: a child agent's accepted output lost on a call, or not handed back as the tool result.
 async def test_on_a_call_a_child_agents_typed_result_reaches_the_call() -> None:
     child = Agent(
@@ -69,6 +76,51 @@ async def test_on_a_call_a_child_agents_typed_result_reaches_the_call() -> None:
         await until(lambda: _results(session), "the child's result never reached the call")
 
         assert _results(session) == [{"reference": "B-9"}]
+
+
+async def test_reused_provider_call_ids_do_not_resolve_a_later_child_with_the_earlier_output() -> (
+    None
+):
+    child = Agent(
+        name="booking",
+        instructions="Book.",
+        output_type=Booking,
+        llm=FakeLLM(
+            [
+                tool_call("final_result", reference="B-1"),
+                tool_call("final_result", reference="B-2"),
+            ]
+        ),
+    )
+    desk = Agent(
+        name="desk",
+        instructions="Help.",
+        tools=[child.as_tool(parameters=Request)],
+        llm=FakeLLM(
+            [
+                tool_call("booking", nights=1, call_id="reused"),
+                "First booked.",
+                tool_call("booking", nights=2, call_id="reused"),
+                "Second booked.",
+            ]
+        ),
+    )
+    store = ContextStore()
+    first = await desk.run("One night", context=store.bind())
+    second = await desk.run("Two nights", context=store.bind())
+    assert first.output == "First booked." and second.output == "Second booked."
+    saved = await store.load_session()
+    assert saved.root_agent is not None
+    outputs = [
+        item
+        for item in saved.root_agent.chat_ctx.items
+        if item.type == "function_call_output" and item.call_id == "reused"
+    ]
+    assert [json.loads(output.output) for output in outputs] == [
+        {"reference": "B-1"},
+        {"reference": "B-2"},
+    ]
+    assert outputs[0].id != outputs[1].id
 
 
 # Catches: the person's answer on a call not forwarded to the child waiting on it.
@@ -210,17 +262,35 @@ async def test_a_voice_side_question_leaves_the_remote_input_open_until_the_pers
             for item in session.history.items
         )
 
+    def route(history: ChatContext) -> FunctionToolCall:
+        prompt = _routing_prompt(history)
+        if "proposed_call" in prompt:
+            assert prompt["proposed_call"] == {"request": "Friday, please."}
+            assert prompt["selected_task"] is None
+            [candidate] = prompt["candidates"]
+            assert candidate["task_id"] == "remote-task"
+            [response] = candidate["responses"]
+            assert response["question"] == "Which date?"
+            assert response["held_response"] == "Friday"
+            return tool_call(
+                "route_remote_call",
+                action="respond",
+                candidate=candidate["index"],
+                response=response["index"],
+            )
+        assert prompt["latest_message"] in ("Why do you need the date?", "Friday")
+        [candidate] = prompt["candidates"]
+        assert candidate["question"] == "Which date?"
+        return tool_call(
+            "route_input_response",
+            candidates=[candidate["index"]] if prompt["latest_message"] == "Friday" else [],
+            unclear=False,
+        )
+
     microphone = FakeAudioInput()
     async with VoiceSession(
         context=store.bind() if bound else None,
-        delegation=DelegationOptions(
-            routing_model=FakeLLM(
-                [
-                    tool_call("route_input_response", candidates=[], unclear=False),
-                    tool_call("route_input_response", candidates=[0], unclear=False),
-                ]
-            )
-        ),
+        delegation=DelegationOptions(routing_model=FakeLLM(route)),
         vad=FakeVAD(),
         stt=FakeSTT(["Check coverage", "Why do you need the date?", "Friday"]),
         turn_handling={"turn_detection": None, "endpointing": {"min_delay": 0.1}},
@@ -294,6 +364,15 @@ async def test_interrupting_voice_input_routing_keeps_the_remote_request_open(pe
         return tool_call("travel", request="Book a flight")
 
     frontend = FakeLLM(reply)
+
+    def route(history: ChatContext) -> Hang:
+        prompt = _routing_prompt(history)
+        assert "proposed_call" not in prompt
+        assert prompt["latest_message"] == "Friday"
+        [candidate] = prompt["candidates"]
+        assert candidate["question"] == "Which date?"
+        return detector
+
     agent = Agent(
         name="desk",
         instructions="Help.",
@@ -304,7 +383,7 @@ async def test_interrupting_voice_input_routing_keeps_the_remote_request_open(pe
     async with VoiceSession(
         context=store.bind(),
         vad=None,
-        delegation=DelegationOptions(routing_model=FakeLLM([detector])),
+        delegation=DelegationOptions(routing_model=FakeLLM(route)),
     ) as session:
         await session.start(agent)
         session.generate_reply(user_input="Book a flight")
@@ -384,7 +463,16 @@ async def test_a_voice_task_keeps_its_answer_out_of_an_earlier_remote_question(p
         return await VoiceTask(agent=collector).run()
 
     store = ContextStore()
-    routing = FakeLLM([tool_call("route_input_response", candidates=[], unclear=False)])
+
+    def route(history: ChatContext) -> FunctionToolCall:
+        prompt = _routing_prompt(history)
+        assert "proposed_call" not in prompt
+        assert prompt["latest_message"] == "Call me"
+        [candidate] = prompt["candidates"]
+        assert candidate["question"] == "Which date?"
+        return tool_call("route_input_response", candidates=[], unclear=False)
+
+    routing = FakeLLM(route)
     async with VoiceSession(
         context=store.bind(), vad=None, delegation=DelegationOptions(routing_model=routing)
     ) as session:

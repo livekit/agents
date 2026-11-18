@@ -529,6 +529,158 @@ async fn pre_connect_audio_survives_a_flush_before_the_live_audio() {
     assert_eq!(input_channel(&bytes.lock()), [1, 2, 3, 4, 5, 6, 7]);
 }
 
+// Catches: control becomes ready after select observed empty microphone ingress. Audio accepted
+// before that command executes must still precede its flush or finish, independent of polling order.
+#[tokio::test]
+async fn audio_queued_after_control_selection_precedes_the_flush_or_finish() {
+    for finish in [false, true] {
+        let (sink, _, _) = Sink::new(false, false);
+        let bytes = sink.bytes;
+        let mut file =
+            RecordingFile::new(Encoder(sink.trace), sink.writer, 10, None, limits().file());
+        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+        let (audio, input) =
+            media_queue::audio(INPUT_POLICY, telemetry::AudioConsumer::Recording, clock);
+        let mut input = Some(input);
+        let mut timeline = Timeline::default();
+        let (_ready, ready) = signal::once();
+        let (_terminal, terminal) = signal::once();
+        let shared = Shared {
+            admission: RwLock::new(()),
+            finishing: AtomicBool::new(finish),
+            commands: AtomicUsize::new(usize::from(!finish)),
+            queued_bytes: AtomicUsize::new(0),
+            retained_bytes: AtomicUsize::new(0),
+            failure: OnceLock::new(),
+            status: Mutex::new(RecordingStatus::Open),
+            terminal,
+            ready,
+            summary: Mutex::new(RecordingSummary::default()),
+            limits: limits(),
+        };
+        let (commands, mut rx) = mpsc::channel(1);
+        let command = if finish {
+            Command::Record(RecordingCommand::FinishRecording(Some(1.2)))
+        } else {
+            Command::Flush(1.0, None)
+        };
+        assert!(commands.try_send(Queued { command, bytes: 0, data: !finish }).is_ok());
+        // Hold the selected command at the dispatch boundary, then publish the microphone burst
+        // that a concurrent producer can queue between the select branches' readiness polls.
+        let selected = next(&mut input, &mut rx).await;
+        assert!(matches!(&selected, Next::Command(Some(_))));
+        audio.event(0.9).unwrap();
+        for sample in 1..=5 {
+            audio.head(frame(&[sample]));
+        }
+        if finish {
+            audio.event(1.0).unwrap();
+            audio.push(frame(&[6]));
+            audio.push(frame(&[7]));
+        }
+        let summary =
+            dispatch(&mut file, &mut timeline, &mut input, &shared, selected, &mut || Ok(()))
+                .unwrap();
+        let summary = if finish {
+            summary.expect("finish settles the recording")
+        } else {
+            assert!(summary.is_none());
+            assert_eq!(file.summary().started_at, None, "flush anchored ahead of held audio");
+            audio.event(1.0).unwrap();
+            audio.push(frame(&[6]));
+            audio.push(frame(&[7]));
+            let finish = Next::Command(Some(Queued {
+                command: Command::Record(RecordingCommand::FinishRecording(Some(1.2))),
+                bytes: 0,
+                data: false,
+            }));
+            dispatch(&mut file, &mut timeline, &mut input, &shared, finish, &mut || Ok(()))
+                .unwrap()
+                .expect("finish settles the recording")
+        };
+        assert_eq!(summary.started_at, Some(0.5));
+        assert_eq!(summary.dropped_input_samples, 0);
+        assert_eq!(input_channel(&bytes.lock()), [1, 2, 3, 4, 5, 6, 7]);
+    }
+}
+
+// Catches: a live producer extending a selected flush's drain with later microphone frames,
+// preventing the command from completing while more input arrives.
+#[test]
+fn flush_does_not_drain_input_accepted_while_processing_its_snapshot() {
+    use futures_util::FutureExt as _;
+
+    let (sink, _, _) = Sink::new(false, false);
+    let bytes = sink.bytes;
+    let mut file = RecordingFile::new(Encoder(sink.trace), sink.writer, 10, None, limits().file());
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let (audio, input) =
+        media_queue::audio(INPUT_POLICY, telemetry::AudioConsumer::Recording, clock);
+    let mut input = Some(input);
+    let mut timeline = Timeline::default();
+    let (_ready, ready) = signal::once();
+    let (_terminal, terminal) = signal::once();
+    let shared = Shared {
+        admission: RwLock::new(()),
+        finishing: AtomicBool::new(false),
+        commands: AtomicUsize::new(1),
+        queued_bytes: AtomicUsize::new(0),
+        retained_bytes: AtomicUsize::new(0),
+        failure: OnceLock::new(),
+        status: Mutex::new(RecordingStatus::Open),
+        terminal,
+        ready,
+        summary: Mutex::new(RecordingSummary::default()),
+        limits: limits(),
+    };
+    audio.event(0.0).unwrap();
+    audio.push(frame(&[1]));
+    let (reply, mut flushed) = oneshot::channel();
+    let selected = Next::Command(Some(Queued {
+        command: Command::Flush(0.1, Some(reply)),
+        bytes: 0,
+        data: true,
+    }));
+    let mut accepted_later = false;
+    let summary = dispatch(&mut file, &mut timeline, &mut input, &shared, selected, &mut || {
+        if !accepted_later {
+            // This is the file's first input block, after the command's snapshot was taken.
+            audio.push(frame(&[2]));
+            accepted_later = true;
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert!(summary.is_none() && accepted_later);
+    assert_eq!(flushed.try_recv().unwrap().unwrap().last_flushed, Some(0.1));
+    assert_eq!(*bytes.lock(), lk_agents_media::pcm_bytes(&[1, 0]));
+    let later = input
+        .as_mut()
+        .unwrap()
+        .recv()
+        .now_or_never()
+        .flatten()
+        .expect("input accepted while processing the snapshot stays queued");
+    dispatch(
+        &mut file,
+        &mut timeline,
+        &mut input,
+        &shared,
+        Next::Input(Some(later), Duration::ZERO),
+        &mut || Ok(()),
+    )
+    .unwrap();
+    let finish = Next::Command(Some(Queued {
+        command: Command::Record(RecordingCommand::FinishRecording(Some(0.2))),
+        bytes: 0,
+        data: false,
+    }));
+    dispatch(&mut file, &mut timeline, &mut input, &shared, finish, &mut || Ok(()))
+        .unwrap()
+        .expect("finish settles the remaining input");
+    assert_eq!(input_channel(&bytes.lock()), [1, 2]);
+}
+
 #[cfg(all(feature = "media-images", feature = "media-ffmpeg", unix))]
 mod never_block {
     use std::future::Future;

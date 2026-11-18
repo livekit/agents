@@ -3,6 +3,7 @@ use std::time::SystemTime;
 use lk_agents_abi::{ChatContext, ChatItem, ChatMessage, Role, ToolSpec};
 
 use crate::approval;
+use crate::llm::history::{ItemFacts, tool_pairs};
 
 /// The instructions message's id; rendered per request, never part of the history.
 pub const INSTRUCTIONS_MESSAGE_ID: &str = "lk.agent_task.instructions";
@@ -71,33 +72,35 @@ pub fn answer_pending_input(
     if answer.trim().is_empty() {
         return std::collections::BTreeSet::new();
     }
-    let marked: std::collections::BTreeSet<_> = history
-        .iter()
-        .filter_map(|item| match item {
-            ChatItem::FunctionCall(call) if selected(call) => Some(call.call_id.clone()),
-            _ => None,
-        })
-        .collect();
-    let waiting: Vec<_> = history
-        .iter()
-        .filter_map(|item| match item {
-            ChatItem::FunctionCallOutput(output)
-                if output.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX) =>
+    let facts: Vec<_> = history.iter().map(ItemFacts::of).collect();
+    let marked: std::collections::BTreeMap<_, _> = tool_pairs(&facts)
+        .into_iter()
+        .filter_map(|(call, output)| match (&history[call], &history[output]) {
+            (ChatItem::FunctionCall(call), ChatItem::FunctionCallOutput(output))
+                if selected(call) =>
             {
-                Some(output.call_id.clone())
+                Some((output.id.clone(), call.id.clone()))
             }
             _ => None,
         })
         .collect();
-    let selected = waiting.iter().find(|call| marked.contains(*call)).cloned();
+    let selected = history.iter().find_map(|item| match item {
+        ChatItem::FunctionCallOutput(output)
+            if output.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX)
+                && marked.contains_key(&output.id) =>
+        {
+            Some(output.id.clone())
+        }
+        _ => None,
+    });
     let mut answered = std::collections::BTreeSet::new();
     for item in history {
         if let ChatItem::FunctionCallOutput(output) = item
-            && Some(&output.call_id) == selected.as_ref()
+            && Some(&output.id) == selected.as_ref()
             && output.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX)
         {
             output.output = answer.to_owned();
-            answered.insert(output.call_id.clone());
+            answered.insert(marked[&output.id].clone());
         }
     }
     answered
@@ -113,30 +116,29 @@ fn selected(call: &lk_agents_abi::FunctionCall) -> bool {
 /// left out (a request cannot carry it); an answered read-back says the call has not run and how
 /// to run it, while the stored output stays the person's words.
 pub fn model_view(history: &[ChatItem]) -> Vec<ChatItem> {
-    let answered = |call_id: &str| {
-        history.iter().any(|i| matches!(i, ChatItem::FunctionCallOutput(o) if o.call_id == call_id))
-    };
-    let asked = |call_id: &str| {
-        history.iter().find_map(|i| match i {
-            ChatItem::FunctionCall(c)
-                if c.call_id == call_id
-                    && approval::mark(c)
-                        == Some(lk_agents_abi::llm::tool_executor::Approval::Asked) =>
-            {
-                Some(c.name.as_str())
-            }
-            _ => None,
+    let facts: Vec<_> = history.iter().map(ItemFacts::of).collect();
+    let pairs = tool_pairs(&facts);
+    let answered: std::collections::BTreeSet<_> =
+        pairs.iter().map(|(call, _)| facts[*call].id).collect();
+    let asked: std::collections::BTreeMap<_, _> = pairs
+        .into_iter()
+        .filter_map(|(call, output)| {
+            let ChatItem::FunctionCall(call) = &history[call] else { return None };
+            (approval::mark(call) == Some(lk_agents_abi::llm::tool_executor::Approval::Asked))
+                .then_some((facts[output].id, call.name.as_str()))
         })
-    };
+        .collect();
     history
         .iter()
         .filter(|item| item.id() != INSTRUCTIONS_MESSAGE_ID)
-        .filter(|item| !matches!(item, ChatItem::FunctionCall(c) if !answered(&c.call_id)))
+        .filter(
+            |item| !matches!(item, ChatItem::FunctionCall(c) if !answered.contains(c.id.as_str())),
+        )
         .map(|item| match item {
             ChatItem::FunctionCallOutput(o)
                 if !o.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX) =>
             {
-                match asked(&o.call_id) {
+                match asked.get(o.id.as_str()) {
                     Some(tool) => {
                         let mut read = o.clone();
                         read.output = approval::answered_text(tool, &o.output);

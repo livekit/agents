@@ -19,8 +19,8 @@ from livekit.agents.llm import LLM
 class DelegationOptions:
     """Conversation-wide delegation behavior, shared by every remote tool on an execution owner."""
 
-    routing_model: LLM
-    """Separate model for recognizing responses to presented input requests."""
+    routing_model: LLM | None = None
+    """Separate routing model; None disables automatic routing and requires explicit task selection."""
 
 
 DelegationOptions.__annotations__ = get_annotations(DelegationOptions, eval_str=True)

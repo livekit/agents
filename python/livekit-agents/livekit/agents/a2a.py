@@ -17,11 +17,16 @@ from ._generated.a2a_card import EndpointDescriptor
 from ._generated.a2a_client import AgentCard
 from ._generated.a2a_door import DoorConfig
 from ._generated.a2a_metadata import RPC_PATH
-from ._generated.a2a_remote import DelegationPartition, RemoteEventInputRequired, RemoteEventOutcome
+from ._generated.a2a_remote import (
+    DelegationInput,
+    DelegationPartition,
+    RemoteEventInputRequired,
+    RemoteEventOutcome,
+)
 from ._generated.public_a2a import *  # noqa: F403
 from ._generated.session_input import InputRequestRef
 from ._generated.storage_options import TurnOptions, TurnOptionsKwargs
-from ._generated.tool_report import ToolOutcomeInputRequired, ToolReport
+from ._generated.tool_report import ToolOutcomeInputRequired, ToolOutcomeUpdate, ToolReport
 from .job import _server_credentials
 from .llm.tool_context import InputRequired, RawFunctionTool, Tool, Toolset, function_tool
 from .storage import DEFAULT_PARTITION_KEY, Storage, Thread
@@ -131,13 +136,6 @@ class _RemoteTool(Toolset):
         assert agent._card is not None and self._tool is not None
         url = agent._url()
         if ctx._session is not None:
-            origin = ctx._origin
-            assert origin is not None
-            report = await ctx._session._running.continue_remote_tool(
-                url, ctx.function_call.name, origin=origin
-            )
-            if report is not None:
-                return report
             history = ctx._session.history
         else:
             assert ctx._run is not None
@@ -183,7 +181,7 @@ class _RemoteTool(Toolset):
                 else ctx._run.runner
                 if ctx._run is not None and isinstance(ctx._run.runner, _core.TextSessionRunner)
                 else None,
-                ToolCallRef(agent_id=ctx._run.frame_id.value, call_id=ctx.function_call.call_id)
+                ToolCallRef(agent_id=ctx._run.frame_id.value, call_id=ctx.function_call.id)
                 if ctx._run is not None and ctx._run.frame_id is not None
                 else None,
             )
@@ -202,7 +200,7 @@ class _RemoteTool(Toolset):
         return ToolReport(outcome=event.outcome)
 
 
-_DELEGATED = "The request is with the expert: its progress, questions and result reach the person."
+_DELEGATED = "The remote request is running. Its progress, questions and result arrive separately."
 
 
 class _Delegation:
@@ -215,11 +213,23 @@ class _Delegation:
             await self._ctx.update(text)
 
     async def _core_delegated(self) -> None:
-        await self._ctx.update(_DELEGATED)
+        # Release the tool's step with a fact for normal planning, without queuing an
+        # announcement. The frontend model decides whether and how to acknowledge it.
+        self._ctx._tool_update(ToolReport(outcome=ToolOutcomeUpdate(message=_DELEGATED, raw="")))
+
+    async def _core_question(
+        self, question: str, verbatim: bool, input_request: InputRequestRef | None
+    ) -> None:
+        self._ctx._tool_update(
+            ToolReport(
+                outcome=ToolOutcomeInputRequired(question=question, verbatim=verbatim),
+                input_request=input_request,
+            )
+        )
 
     async def _core_ask(
         self, question: str, verbatim: bool, input_request: InputRequestRef | None
-    ) -> str:
+    ) -> DelegationInput:
         ctx = self._ctx
         assert ctx._session is not None
         ctx._expert_answer = asyncio.get_running_loop().create_future()

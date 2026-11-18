@@ -93,6 +93,7 @@ fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
         | VoiceEffect::RenderToolHandlingTemplate { .. }
         | VoiceEffect::CancelToolRefusal { .. }
         | VoiceEffect::AnswerExpert { .. }
+        | VoiceEffect::CaptureInputOffers { .. }
         | VoiceEffect::RouteInput { .. } => return None,
     };
     Some(step)

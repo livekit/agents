@@ -258,6 +258,7 @@ fn retained_requirements_survive_result_precedence_and_close() {
     let requirement = RunInputRequirement {
         invocation_id: "speech-1".into(),
         call: lk_agents_abi::a2a::turn::PendingCall {
+            id: "item-1".into(),
             name: "flight".into(),
             call_id: "call-1".into(),
             answer_tool: Some("answer".into()),
@@ -267,12 +268,16 @@ fn retained_requirements_survive_result_precedence_and_close() {
         presentation_message_id: None,
     };
     runs.retain_input_requirements(std::slice::from_ref(&requirement));
+    let mut later = requirement.clone();
+    later.call.id = "item-2".into();
+    later.question = "Which seat?".into();
+    runs.retain_input_requirements(std::slice::from_ref(&later));
     // A coordinated step and its terminal envelope report the same request. Keep one
     // correlated obligation even when success/failure projections overlap.
     runs.retain_input_requirements(std::slice::from_ref(&requirement));
     runs.speech_ended(SpeechId(1), None);
     runs.speech_ended(SpeechId(2), None);
-    assert_eq!(runs.close().unwrap().input_requirements, [requirement]);
+    assert_eq!(runs.close().unwrap().input_requirements, [requirement, later]);
 }
 
 #[test]

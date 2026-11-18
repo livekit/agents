@@ -56,14 +56,14 @@ impl AgentRun {
             Err(error) => return self.finish(Err(error), effects),
         };
         self.pending_call = Some(members[0].call.clone());
-        let call_ids: Vec<_> = members.iter().map(|request| request.call.call_id.clone()).collect();
+        let call_ids: Vec<_> = members.iter().map(|request| request.call.id.clone()).collect();
         for item in &mut self.history {
             if let ChatItem::FunctionCall(call) = item
-                && candidates.iter().any(|request| request.call.call_id == call.call_id)
+                && candidates.iter().any(|request| request.call.id == call.id)
             {
                 call.extra.insert(
                     crate::agent_run::planning::INPUT_REQUESTED_KEY.into(),
-                    json!(call_ids.contains(&call.call_id)),
+                    json!(call_ids.contains(&call.id)),
                 );
             }
         }

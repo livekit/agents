@@ -30,7 +30,13 @@ pub enum VoiceEffect {
     /// Classify committed human input before planning its frontend reply.
     RouteInput {
         speech: SpeechId,
+        request_id: String,
         message: lk_agents_abi::ChatMessage,
+    },
+    /// Freeze native occurrences before the frontend model turn can admit a remote call.
+    CaptureInputOffers {
+        speech: SpeechId,
+        request: lk_agents_core::agent_run::RequestId,
     },
     /// Canonical assistant words reached the output boundary for these native occurrences.
     InputPresented {
@@ -165,7 +171,7 @@ pub enum VoiceEffect {
     /// The person's reply, forwarded to the delegated call's body for its expert.
     AnswerExpert {
         hosted: crate::tool_executor::HostedTool,
-        answer: String,
+        answer: lk_agents_abi::a2a::remote::DelegationInput,
     },
     /// The reply's agent validates an output candidate of `speech`'s run, reported as
     /// [`GenEvent::OutputValidated`](crate::generation::GenEvent::OutputValidated).

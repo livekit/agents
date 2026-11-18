@@ -765,24 +765,6 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         Ok(Box::pin(async move { rx.await.unwrap_or(Err(IdleRefused::Closing)) }))
     }
 
-    fn continue_remote_tool(
-        &self,
-        endpoint: String,
-        name: String,
-        origin: VoiceCommandOrigin,
-    ) -> Result<
-        BoxFuture<
-            'static,
-            Result<Option<lk_agents_abi::llm::tool_executor::ToolReport>, SessionRefused>,
-        >,
-        SessionRefused,
-    > {
-        let rx = self.ask(origin, Answer::remote_tool, |call| {
-            SpeechCommand::ContinueRemoteTool { endpoint, name, call }
-        })?;
-        Ok(Box::pin(async move { rx.await.unwrap_or(Err(SessionRefused::LoopEnded)) }))
-    }
-
     fn wait_for_idle_and_hold(
         &self,
         origin: Option<VoiceCommandOrigin>,

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
+    from .session_input import InputRequestRef
     from .tool_report import ToolOutcome
 
 
@@ -24,6 +25,17 @@ class DelegationPartition:
     storage_project: str
     thread_id: str
     partition_key: str
+
+
+@dataclass(kw_only=True, slots=True)
+class DelegationInput:
+    """Internal handoff to a live delegate. Local interactions receive text in `request`;
+    remote task messages can carry business input without claiming a response reservation.
+    """
+
+    arguments: object
+    structured: bool
+    input_request: InputRequestRef | None
 
 
 @dataclass(kw_only=True, slots=True)

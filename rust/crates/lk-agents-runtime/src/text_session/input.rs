@@ -22,19 +22,24 @@ impl Driver {
             &*self.spawner,
             "input response routing",
             async move {
-                let event = if let Some(delegation) = delegation {
-                    let (result, usage) = lk_agents_inference::delegation::input::classify(
-                        delegation.routing_model,
-                        &background,
-                        &cx,
-                        input,
-                        options,
-                    )
-                    .await;
-                    SessionEvent::InputRouted { request_id, result: Some(result), usage }
-                } else {
-                    SessionEvent::InputRoutingUnavailable { request_id }
-                };
+                let event =
+                    if let Some(model) = delegation.and_then(|options| options.routing_model) {
+                        let (result, usage) = lk_agents_inference::delegation::input::classify(
+                            model,
+                            &background,
+                            &cx,
+                            input,
+                            options,
+                        )
+                        .await;
+                        SessionEvent::InputRouted { request_id, result: Some(result), usage }
+                    } else {
+                        SessionEvent::InputRouted {
+                            request_id,
+                            result: Some(Ok(lk_agents_abi::session::InputRoute::NoMatch)),
+                            usage: Default::default(),
+                        }
+                    };
                 done.resolve(event);
             },
         );

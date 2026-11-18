@@ -480,7 +480,10 @@ impl DriverBuilder {
             session: session_cx,
         };
 
-        let (conversation, commands) = crate::session::CommandPort::channel(32);
+        let (conversation, commands) = crate::session::CommandPort::channel(
+            32,
+            self.delegation.as_ref().and_then(|options| options.routing_model.clone()),
+        );
         if let Some(storage) = &self.storage {
             storage.bind_session_commands(Arc::new(conversation.clone()));
         }

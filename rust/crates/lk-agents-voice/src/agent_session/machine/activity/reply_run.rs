@@ -27,13 +27,15 @@ use std::sync::Arc;
 
 /// A model reply's run, and what the floor and the reply task wait on from it.
 pub struct ReplyRun {
-    run: AgentRun,
+    pub(super) run: AgentRun,
+    pub(super) input_gate: super::input::ReplyInputGate,
+    deferred_spoken: Option<Option<String>>,
     /// The agent hosting the reply's callbacks.
     agent: Option<Arc<dyn AgentFrame>>,
     /// What the reply's next steps are planned with.
     plan: PlanSpec,
     /// A realtime reply: its server plans each step.
-    realtime: bool,
+    pub(super) realtime: bool,
     /// The model request of the step in flight, until its words are in.
     request: Option<lk_agents_core::agent_run::RequestId>,
     /// The step's calls whose task still awaits a move.
@@ -61,6 +63,10 @@ impl std::fmt::Debug for ReplyRun {
 }
 
 impl ReplyRun {
+    pub(crate) fn input_offers(&mut self, offered: Vec<lk_agents_abi::session::InputCandidate>) {
+        self.run.set_input_offers(offered);
+    }
+
     pub(super) fn new(
         run: AgentRun,
         agent: Option<Arc<dyn AgentFrame>>,
@@ -70,6 +76,8 @@ impl ReplyRun {
     ) -> Self {
         ReplyRun {
             run,
+            input_gate: super::input::ReplyInputGate::Ready,
+            deferred_spoken: None,
             agent,
             plan,
             realtime,
@@ -242,6 +250,7 @@ impl VoiceDriver {
             wall: self.step.anchor(),
             cleanup_timeout: lk_agents_abi::HOST_TEARDOWN_TIMEOUT,
         };
+        let captures_remote = definition.tools.iter().any(|tool| tool.remote.is_some());
         let mut run = match AgentRun::new(definition, input) {
             Ok(run) => run,
             // The host validated the agent: an invalid one only reaches here from a handwritten
@@ -278,7 +287,14 @@ impl VoiceDriver {
         plan.turn_instructions = None;
         plan.on_enter = false;
         plan.running_tool_calls = Vec::new();
-        let reply = ReplyRun::new(run, toolset.agent.clone(), plan, realtime, request);
+        let mut reply = ReplyRun::new(run, toolset.agent.clone(), plan, realtime, request);
+        if let Some(request) = request.filter(|_| captures_remote) {
+            reply.input_gate = super::input::ReplyInputGate::Capturing {
+                request,
+                after: super::input::AfterCapture::Ready,
+            };
+            self.record_effect(VoiceEffect::CaptureInputOffers { speech, request });
+        }
         self.activity.tools.replies.insert(speech, reply);
         self.reply_effects(speech, startup);
         message_id.map(|message_id| (message_id, offered))
@@ -557,6 +573,20 @@ impl VoiceDriver {
 
     /// The words of `speech`'s step are in: the run reads them as the model's response.
     pub(crate) fn reply_spoken(&mut self, speech: SpeechId, text: Option<String>) {
+        if self
+            .activity
+            .tools
+            .deferred
+            .iter()
+            .any(|call| call.speech == speech && call.id.is_none())
+        {
+            if let Some(reply) = self.activity.tools.replies.get_mut(&speech)
+                && (reply.deferred_spoken.is_none() || text.is_some())
+            {
+                reply.deferred_spoken = Some(text);
+            }
+            return;
+        }
         let Some(request) =
             self.activity.tools.replies.get_mut(&speech).and_then(|r| r.request.take())
         else {
@@ -579,6 +609,42 @@ impl VoiceDriver {
             self.reply_event(speech, AgentRunEvent::LlmChunk { request, chunk });
         }
         self.reply_event(speech, AgentRunEvent::LlmEnded { request });
+    }
+
+    pub(crate) fn settle_input_blocked_replies(&mut self) {
+        let ready: Vec<_> = self
+            .activity
+            .tools
+            .replies
+            .iter_mut()
+            .filter_map(|(speech, reply)| {
+                if self
+                    .activity
+                    .tools
+                    .deferred
+                    .iter()
+                    .any(|call| call.speech == *speech && call.id.is_none())
+                {
+                    return None;
+                }
+                reply.deferred_spoken.take().map(|text| (*speech, text))
+            })
+            .collect();
+        for (speech, text) in ready {
+            self.reply_spoken(speech, text);
+        }
+    }
+
+    pub(crate) fn remote_inputs_ready(&self, speech: SpeechId, name: &str) -> bool {
+        let Some(reply) = self.activity.tools.replies.get(&speech) else { return true };
+        let remote = reply.agent.as_ref().is_some_and(|agent| {
+            agent
+                .definition()
+                .tools
+                .iter()
+                .any(|tool| tool.spec.name == name && tool.remote.is_some())
+        });
+        !remote || matches!(reply.input_gate, super::input::ReplyInputGate::Ready)
     }
 
     /// The reply task reports its step's calls over and, with `answer`, waits for its next

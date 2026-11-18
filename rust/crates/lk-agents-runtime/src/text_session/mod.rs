@@ -155,6 +155,45 @@ impl Driver {
 
     async fn command(&mut self, command: SessionCommand, effects: &mut VecDeque<SessionEffect>) {
         let (command, done) = match command {
+            SessionCommand::RoutingContext {
+                remote_id,
+                endpoint,
+                proposed,
+                selected_task,
+                offered,
+                done,
+            } => {
+                done.resolve(lk_agents_core::delegation::remote::routing::request(
+                    &self.session.snapshot(),
+                    &remote_id,
+                    &endpoint,
+                    proposed,
+                    selected_task.as_deref(),
+                    &offered,
+                ));
+                return;
+            }
+            SessionCommand::AdmitCall { request, verdict, usage, candidate, drivers, done } => {
+                self.session.routing_usage(&usage);
+                let state = self.session.snapshot();
+                done.resolve(
+                    lk_agents_core::delegation::remote::routing::admit(&state, &request, verdict)
+                        .and_then(|admission| {
+                            drivers.admit(
+                                &state,
+                                &request.remote_id,
+                                &request.endpoint,
+                                admission,
+                                candidate,
+                            )
+                        }),
+                );
+                return;
+            }
+            SessionCommand::RemoteDriver { remote_id, endpoint, task, drivers, done } => {
+                done.resolve(drivers.get(&self.session.snapshot(), &remote_id, &endpoint, &task));
+                return;
+            }
             SessionCommand::AdmitInput { request, verdict, done } => {
                 let result = self.session.admit_input(*request, verdict);
                 let saved = self.checkpoint_command(effects).await;
@@ -172,8 +211,16 @@ impl Driver {
                 done.resolve(result);
                 return;
             }
-            SessionCommand::HeldInput { remote_id, endpoint, done } => {
-                done.resolve(self.session.held_remote_input(&remote_id, &endpoint));
+            SessionCommand::HeldInput { remote_id, endpoint, task_id, done } => {
+                done.resolve(self.session.held_remote_input(
+                    &remote_id,
+                    &endpoint,
+                    task_id.as_deref(),
+                ));
+                return;
+            }
+            SessionCommand::Task { remote_id, endpoint, task_id, done } => {
+                done.resolve(self.session.remote_task(&remote_id, &endpoint, &task_id));
                 return;
             }
             SessionCommand::Response { reference, done } => {

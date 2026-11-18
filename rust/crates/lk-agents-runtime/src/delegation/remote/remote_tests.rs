@@ -46,10 +46,15 @@ fn input_required_answers_keep_the_original_partition_ancestry() {
             artifacts: vec![],
         })
         .unwrap();
-    let RemoteEvent::InputRequired { request_id, .. } = event else {
-        panic!("expected input request")
-    };
+    let RemoteEvent::InputRequired { .. } = event else { panic!("expected input request") };
     remote.cancelled().unwrap();
-    let answer = remote.inner.answer(&request_id, "Theo".into()).unwrap();
+    let answer = remote
+        .inner
+        .task_message(&DelegationInput {
+            arguments: json!({"request": "Theo"}),
+            structured: false,
+            input_request: None,
+        })
+        .unwrap();
     assert_eq!(answer.metadata.unwrap().application.unwrap()[PARTITION_CHAIN_KEY], expected);
 }

@@ -193,7 +193,7 @@ impl Runs {
             for requirement in requirements {
                 if !run.input_requirements.iter().any(|retained| {
                     retained.invocation_id == requirement.invocation_id
-                        && retained.call.call_id == requirement.call.call_id
+                        && retained.call.id == requirement.call.id
                 }) {
                     run.input_requirements.push(requirement.clone());
                 }

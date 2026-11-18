@@ -118,10 +118,6 @@ pub struct Experts {
     /// Wake the frontend once per held occurrence, including after its tool becomes eligible.
     #[serde(skip)]
     prompted_responses: BTreeSet<InputRequestRef>,
-    /// A tool invocation handed this human turn to its existing body. This is local admission,
-    /// not wire acknowledgement; repeated calls in that same turn must not create new work.
-    #[serde(skip)]
-    forwarded_responses: BTreeMap<ExpertTool, String>,
 }
 
 impl Experts {
@@ -164,6 +160,9 @@ impl Experts {
             return false;
         }
         d.progress_seen = occurrence;
+        if text.trim().is_empty() {
+            return false;
+        }
         let queued = self.queue.iter_mut().find(|q| q.output_id == output_id);
         match queued {
             Some(Queued { event: ExpertInboxEvent::Progress(old), .. }) => *old = text,
@@ -356,27 +355,31 @@ impl Experts {
         }
     }
 
-    /// The recognized response was already handed to this tool in the current human turn.
-    pub fn response_forwarded(&self, tool: &ExpertTool, human_id: &str) -> bool {
-        self.forwarded_responses.get(tool).is_some_and(|id| id == human_id)
-    }
-
-    /// A live request belongs to this exact endpoint/tool pair, including across agent changes.
-    pub fn matches_tool(&self, request: &PendingRequest, tool: &ExpertTool) -> bool {
-        self.delegations.get(&request.output_id).is_some_and(|delegation| delegation.tool == *tool)
-    }
-
-    /// Claim before handing the response to its one live body. Reentrant tool calls in the
-    /// same human turn observe the admission rather than starting another remote interaction.
-    pub fn forward_response(
-        &mut self,
-        request: &PendingRequest,
-        human_id: String,
-    ) -> Result<(), Stale> {
-        let tool = self.delegations.get(&request.output_id).ok_or(Stale)?.tool.clone();
-        self.answer(request)?;
-        self.forwarded_responses.insert(tool, human_id);
-        Ok(())
+    /// A checkpointed outgoing operation owns this exact response. It is no longer a
+    /// promptable question; this says nothing about peer acceptance or output delivery.
+    pub fn response_queued(&mut self, reference: &InputRequestRef) -> bool {
+        let waiting: Vec<_> = self
+            .delegations
+            .iter()
+            .filter_map(|(output_id, delegation)| {
+                let request_id = delegation.waiting.as_ref()?;
+                (!delegation.settled
+                    && delegation.requests.get(request_id).and_then(Option::as_ref)
+                        == Some(reference))
+                .then(|| PendingRequest {
+                    output_id: output_id.clone(),
+                    request_id: request_id.clone(),
+                })
+            })
+            .collect();
+        let consumed = !waiting.is_empty();
+        for request in waiting {
+            self.answer(&request)
+                .expect("the exact waiting occurrence was checked in this transition");
+        }
+        self.responses.remove(reference);
+        self.prompted_responses.remove(reference);
+        consumed
     }
 
     /// An eligible agent gets one normal planning turn for responses retained while it was away.

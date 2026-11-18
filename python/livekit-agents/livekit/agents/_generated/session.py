@@ -25,7 +25,7 @@ class ToolCallRef:
     agent_id: str
     """Agent context containing the originating tool call."""
     call_id: str
-    """Tool-call ID within that context, not the configured tool's name."""
+    """Canonical FunctionCall.id within that context; provider call_id values may repeat."""
 
 
 AgentCallStatus: TypeAlias = Literal["approval", "ready", "running"]

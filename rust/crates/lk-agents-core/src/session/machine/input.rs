@@ -23,7 +23,12 @@ impl Session {
                 history: self.state.chat_history.clone(),
                 candidates: candidates.clone(),
             }));
-            self.phase = Phase::Routing { request_id, message, candidates };
+            self.phase = Phase::Routing {
+                request_id,
+                message,
+                candidates,
+                offered: crate::delegation::remote::routing::offered(&self.state),
+            };
         }
     }
 
@@ -31,9 +36,10 @@ impl Session {
         &self,
         remote_id: &str,
         endpoint: &str,
+        task_id: Option<&str>,
     ) -> Result<Option<InputRequestRef>, StorageError> {
         let Some(remote) = self.remote_state(remote_id, endpoint)? else { return Ok(None) };
-        input::held_remote_input(remote_id, remote)
+        input::held_remote_input(remote_id, remote, task_id)
     }
     pub fn input_response(&self, reference: &InputRequestRef) -> Result<ChatMessage, StorageError> {
         if self.closing || self.persistence_failure.is_some() || matches!(self.phase, Phase::Done) {
@@ -50,13 +56,15 @@ impl Session {
         now: lk_agents_abi::Ts,
         effects: &mut Vec<super::SessionEffect>,
     ) {
-        let Phase::Routing { request_id: current, message, candidates } = &self.phase else {
+        let Phase::Routing { request_id: current, message, candidates, offered } = &self.phase
+        else {
             return;
         };
         if *current != request_id {
             return;
         }
         let message = message.clone();
+        let offered = offered.clone();
         self.usage.add(&usage);
         let admission = match input::route(&mut self.state, &message, candidates, result) {
             Ok(admission) => admission,
@@ -90,7 +98,8 @@ impl Session {
         let frame = self.active_frame_mut();
         frame.history.push(observation.into());
         self.phase = Phase::NotStarted;
-        self.invoke(Some(message), now, effects);
+        let offered = crate::delegation::remote::routing::refresh_offered(&self.state, &offered);
+        self.invoke_offered(Some(message), Some(offered), now, effects);
     }
 
     pub fn input(&mut self, command: SessionInputCommand) -> Result<(), StorageError> {

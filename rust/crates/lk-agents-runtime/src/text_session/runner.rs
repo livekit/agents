@@ -29,6 +29,82 @@ impl Runner {
 }
 
 impl lk_agents_abi::session::SessionCommands for Runner {
+    fn routing_context<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        proposed: serde_json::Value,
+        selected_task: Option<&'a str>,
+        offered: &'a [lk_agents_abi::session::InputCandidate],
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            lk_agents_abi::delegation::routing::CallRoutingRequest,
+            lk_agents_abi::storage::StorageError,
+        >,
+    > {
+        Box::pin(async move {
+            self.commands()?
+                .routing_context(remote_id, endpoint, proposed, selected_task, offered)
+                .await
+        })
+    }
+
+    fn admit_call<'a>(
+        &'a self,
+        request: &'a lk_agents_abi::delegation::routing::CallRoutingRequest,
+        verdict: Option<
+            Result<
+                lk_agents_abi::delegation::routing::CallRoute,
+                lk_agents_abi::errors::ProviderError,
+            >,
+        >,
+        usage: lk_agents_abi::usage::Usage,
+        candidate: std::sync::Weak<dyn lk_agents_abi::a2a::remote::RemoteTaskDriver>,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            lk_agents_abi::a2a::remote::RemoteCallAdmission,
+            lk_agents_abi::storage::StorageError,
+        >,
+    > {
+        Box::pin(
+            async move { self.commands()?.admit_call(request, verdict, usage, candidate).await },
+        )
+    }
+
+    fn routing_model(&self) -> Option<std::sync::Arc<dyn lk_agents_abi::Llm>> {
+        self.commands().ok().and_then(|port| port.routing_model())
+    }
+
+    fn register_remote_driver(
+        &self,
+        remote_id: &str,
+        endpoint: &str,
+        request_id: &str,
+        driver: std::sync::Weak<dyn lk_agents_abi::a2a::remote::RemoteTaskDriver>,
+    ) {
+        // Registering a weak handle changes no saved state; preparation will refuse an ended owner.
+        if let Ok(port) = self.commands() {
+            port.register_remote_driver(remote_id, endpoint, request_id, driver);
+        }
+    }
+
+    fn remote_driver<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        task: &'a lk_agents_abi::delegation::remote::RemoteTaskRef,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            Option<std::sync::Arc<dyn lk_agents_abi::a2a::remote::RemoteTaskDriver>>,
+            lk_agents_abi::storage::StorageError,
+        >,
+    > {
+        Box::pin(async move { self.commands()?.remote_driver(remote_id, endpoint, task).await })
+    }
+
     fn admit_input(
         &self,
         request: lk_agents_abi::session::InputRoutingRequest,
@@ -53,6 +129,7 @@ impl lk_agents_abi::session::SessionCommands for Runner {
         &'a self,
         remote_id: &'a str,
         endpoint: &'a str,
+        task_id: Option<&'a str>,
     ) -> lk_agents_abi::BoxFuture<
         'a,
         Result<
@@ -60,7 +137,22 @@ impl lk_agents_abi::session::SessionCommands for Runner {
             lk_agents_abi::storage::StorageError,
         >,
     > {
-        Box::pin(async move { self.commands()?.held_input(remote_id, endpoint).await })
+        Box::pin(async move { self.commands()?.held_input(remote_id, endpoint, task_id).await })
+    }
+
+    fn task<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        task_id: &'a str,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            lk_agents_abi::delegation::remote::RemoteTaskRef,
+            lk_agents_abi::storage::StorageError,
+        >,
+    > {
+        Box::pin(async move { self.commands()?.task(remote_id, endpoint, task_id).await })
     }
 
     fn response<'a>(
@@ -292,7 +384,10 @@ fn start(
     let (events_tx, events) = mpsc::channel(64);
     let (progress_tx, progress) = mpsc::channel(32);
     let (release_tx, releases) = mpsc::channel(1);
-    let (commands_tx, commands) = CommandPort::channel(32);
+    let (commands_tx, commands) = CommandPort::channel(
+        32,
+        runner.delegation.as_ref().and_then(|options| options.routing_model.clone()),
+    );
     let (usage_tx, usage) = signal::signal(session.usage());
     let driver = Driver {
         delegation: runner.delegation.clone(),

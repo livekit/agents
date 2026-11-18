@@ -648,6 +648,58 @@ async fn an_unconsumed_input_question_remains_answerable_after_the_observer_clos
 }
 
 #[tokio::test]
+async fn client_close_settles_stalled_task_reconciliation_with_read_timeout_disabled() {
+    let mut peer = Peer::start(Scenario::StalledRpcHeaders).await;
+    let clock = Arc::new(RealClock::new());
+    let client = Arc::new(
+        AgentClient::new(
+            &env(clock),
+            peer.url.clone(),
+            None,
+            ApiConnectOptions { max_retry: 0, read_timeout: None, ..Default::default() },
+        )
+        .unwrap(),
+    );
+    let reconciling = tokio::spawn({
+        let client = client.clone();
+        async move {
+            client
+                .get_task(
+                    TaskRef { id: "working".into(), context_id: "conversation".into() },
+                    &Cx::NONE,
+                    None,
+                )
+                .await
+        }
+    });
+    let mut observed = Vec::new();
+    tokio::time::timeout(LIMIT, async {
+        loop {
+            let request = peer.observed.recv().await.unwrap();
+            let started = request.rpc.as_ref().is_some_and(|rpc| rpc.method == "GetTask");
+            observed.push(request);
+            if started {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the peer received the reconciliation request");
+    tokio::time::timeout(LIMIT, client.aclose())
+        .await
+        .expect("read-only reconciliation must settle when local observation closes");
+    let result = tokio::time::timeout(LIMIT, reconciling).await.unwrap().unwrap();
+    assert!(matches!(result, Err(ClientError::Protocol(_))));
+    observed.extend(peer.finish().await);
+    let methods: Vec<_> = observed
+        .iter()
+        .filter_map(|request| request.rpc.as_ref())
+        .map(|rpc| rpc.method.as_str())
+        .collect();
+    assert_eq!(methods, ["GetTask"], "stopping observation never cancels business work");
+}
+
+#[tokio::test]
 async fn client_close_owns_a_stalled_cancel_request_until_its_original_ack_is_drained() {
     let peer = Peer::start(Scenario::DelayedCancel).await;
     let clock = Arc::new(RealClock::new());

@@ -185,7 +185,7 @@ There is one logical conversation state with different execution and inspection 
 | Session | Native decision machine advancing the conversation and emitting effects. Its live execution also has transient state. |
 | SessionSnapshot | Recoverable conversation data at a coherent revision; contains no model objects, runtime tasks, connections or command capabilities. |
 | SessionState | Generated public view. A bound view follows the owner's state; a detached view stays fixed. |
-| SessionCheckpoint | Private data describing one atomic write batch: snapshot update and related content/history/task/journal changes. The runtime/storage execute the write. |
+| SessionCheckpoint | Private acquired scope retaining storage ownership from reload through an atomic commit of framework state and related content/history/task/journal changes. Dropping it releases ownership. |
 | state.snapshot() | Existing public inspection operation returning a detached SessionState; it neither writes storage nor returns a new public SessionSnapshot class. |
 
 The recoverable data includes root/current agent identities, local agent/call/input state,
@@ -214,9 +214,11 @@ last committed state; it does not restore the previous process's Python coroutin
 connection. The separate configured routing model and bound RemoteTask command capability
 are supplied by the new runtime, not serialized into SessionSnapshot.
 
-The schema/codegen slice proves the concrete shared encoding. SessionSnapshot
-is a private data record; SessionCheckpoint is a private write-description record. Neither
-performs I/O. They do not add public conversation objects or an event-sourced database.
+The schema/codegen slice proves the concrete shared encoding. SessionSnapshot is private
+recoverable data. SessionCheckpoint is a private runtime/storage scope with a commit operation;
+it is not serialized or exposed as a public state class. The native decision machine emits
+changes, and the I/O layer executes their checkpoint. Neither adds another public conversation
+object or an event-sourced database.
 
 ### Initialization and retention
 
@@ -327,7 +329,7 @@ class AgentState:
     # Return this child's final result to the parent agent's tool call; None for root.
     # Human answers use the question's continuation, not this reference.
     origin: ToolCallRef | None
-    # This agent's calls to tools implemented by local agents, keyed by tool-call ID.
+    # This agent's calls to local agent tools, keyed by canonical FunctionCall.id.
     # Read call order from chat_ctx; retain entries until result propagation settles.
     calls: dict[str, AgentCallState]
     input_requests: dict[str, AgentInputRequest]  # Occurrence ID -> local request for input.
@@ -340,7 +342,7 @@ class AgentState:
 @dataclass(frozen=True)
 class ToolCallRef:
     agent_id: str                               # Caller context in SessionState's agent-state map.
-    call_id: str                                 # Specific caller tool call to resolve.
+    call_id: str                                 # Canonical FunctionCall.id; provider IDs may repeat.
 
 
 @dataclass
@@ -500,6 +502,12 @@ and independent messages. Each task has its own status, artifacts and lifecycle.
 can reply with a Message without creating a task, and several tasks can run in the same context.
 Continuing input-required work addresses its task; terminal follow-up starts new work, possibly
 in the same context. A remote relationship is not a single task or originating tool call.
+
+The existing delegation tool selects known work with an optional `task_id`; its argument
+contract lives in [targeting a remote task](delegation.md#targeting-a-remote-task).
+Input-occurrence IDs stay in framework routing and recovery state. The remote agent interprets
+task messages and owns which information is still missing, including several answers requested
+within one task.
 
 ### What we reuse from A2A
 
@@ -1031,6 +1039,12 @@ application-supplied ContextStore remains usable for the following text turn or 
 
 ## Design and implementation checklist
 
+The [delegation completion roadmap](delegation.md#implementation-checklist) owns the overall
+implementation order and release exits. The checks here detail this plan's state contracts;
+finishing them does not by itself complete live execution, voice delivery or interoperability.
+
+### Agreed decisions
+
 - [x] Agree on history scope: shared across modes, private per conversation frame.
 - [x] Distinguish root_agent, current_agent and their private chat_ctx views.
 - [x] Back root_agent/current_agent properties with one agent-state map and saved context IDs.
@@ -1048,12 +1062,14 @@ application-supplied ContextStore remains usable for the following text turn or 
 - [x] Replace single-request DelegationRecord with remote agent/context/task communication state.
 - [x] Put origin/dispatch information on requests and input/cancellation on tasks;
       omit a relationship-wide origin or cancellation flag.
-- [x] Remove standalone answer_tool in favor of question-specific continuation.
-- [x] Remove InputRequired's tool argument; local continuation returns to the owning agent,
+- [x] Choose question-specific continuation instead of a standalone answer_tool field.
+- [x] Choose InputRequired without a tool argument; local continuation returns to the owning agent,
       and remote continuation uses the selected input request's A2A task/context.
-- [x] Expose cancellation as RemoteTask.cancel() on bound task views.
+- [x] Choose RemoteTask.cancel() on bound task views for explicit cancellation.
 - [x] Keep ordinary AgentState completed/output/error fields; omit a new local status enum and
       Python state-variant classes. Reuse shared TaskState for A2A task status.
+### Implementation work
+
 - [ ] Apply purpose/ownership/recovery comments to every finalized ABI/schema field and
       regenerate host documentation from those declarations.
 - [ ] Finalize session/execution identity, initialization and frame relationship fields.

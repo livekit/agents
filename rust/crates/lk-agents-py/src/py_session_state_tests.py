@@ -93,7 +93,12 @@ async def test_a_childs_call_ref_and_pending_arguments_are_owned_by_its_parent()
     detached = app.session.snapshot()
     current, parent = app.session.current_agent, app.session.root_agent
     assert current is not None and parent is not None and current.origin is not None
-    call = parent.calls["parent"]
+    call_id = next(
+        item.id
+        for item in parent.chat_ctx.items
+        if item.type == "function_call" and item.call_id == "parent"
+    )
+    call = parent.calls[call_id]
     assert call.origin == current.origin
     assert call.parent_tool_name == "booking"
     assert call.validated_arguments == {}

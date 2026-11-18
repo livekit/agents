@@ -4,12 +4,14 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
+use lk_agents_abi::a2a::client::AgentClientError;
+use lk_agents_abi::a2a::remote::{DelegationInput, RemoteResponseClaim, RemoteTaskDriver};
 use lk_agents_abi::agent::VoiceAgent as _;
 use lk_agents_abi::delegation::DelegationOptions;
 use lk_agents_abi::delegation::remote::{InputRequest, RemoteAgentState, RemoteTaskState};
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::session::InputRequestRef;
 use lk_agents_abi::session::InputRequestState;
+use lk_agents_abi::session::{InputRequestRef, SessionCommands as _};
 use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::text_session::{SessionSnapshot, SessionStateSink as _};
 use lk_agents_abi::voice::session::VoiceSession as _;
@@ -24,6 +26,53 @@ use parking_lot::Mutex;
 use serde_json::json;
 
 const REMOTE: &str = "https://travel.test";
+
+/// These tests drive the native journal boundary directly; the admitted callback identity
+/// remains real, while this live resource never opens a second transport of its own.
+struct AdmissionCandidate;
+
+impl RemoteTaskDriver for AdmissionCandidate {
+    fn is_live(&self) -> bool {
+        true
+    }
+
+    fn input<'a>(
+        &'a self,
+        _input: DelegationInput,
+        _response_claim: Option<Arc<RemoteResponseClaim>>,
+        _origin: Option<lk_agents_abi::session::ToolCallRef>,
+    ) -> BoxFuture<'a, Result<(), AgentClientError>> {
+        Box::pin(async { panic!("the native receipt test drives its original journal directly") })
+    }
+
+    fn resume<'a>(
+        &'a self,
+        _request_id: String,
+        _request: Box<lk_agents_abi::a2a::protocol::SendMessageRequest>,
+        _streaming: bool,
+        _input_request: Option<InputRequestRef>,
+        _origin: Option<lk_agents_abi::session::ToolCallRef>,
+    ) -> BoxFuture<'a, Result<(), AgentClientError>> {
+        Box::pin(async { panic!("the native receipt test only inspects saved recovery") })
+    }
+
+    fn reconcile(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+}
+
+/// The session loop belongs to the deterministic harness. Poll a native command to enqueue
+/// it, then pump all immediately runnable owner work before inspecting its actual receipt.
+async fn native_receipt<T>(run: &mut Run, mut receipt: BoxFuture<'_, T>, what: &str) -> T {
+    use futures_util::FutureExt as _;
+    if let Some(value) = receipt.as_mut().now_or_never() {
+        return value;
+    }
+    run.apply(&Input::Advance { ms: Millis(0) }).await;
+    receipt
+        .now_or_never()
+        .unwrap_or_else(|| panic!("{what} did not settle after pumping its owner"))
+}
 
 struct ObservedLlm {
     inner: Arc<FakeLlm>,
@@ -103,7 +152,7 @@ fn admitted_remote_responses_remain_visible_to_later_frontend_replies() {
             |args, registry| {
                 args.session_sink = Some(binding.clone());
                 args.delegation =
-                    Some(DelegationOptions { routing_model: FakeLlm::new(registry.clone()) });
+                    Some(DelegationOptions { routing_model: Some(FakeLlm::new(registry.clone())) });
                 args.llm = Some(frontend(registry, requests.clone()));
             },
         )
@@ -170,8 +219,9 @@ fn a_corrected_turn_is_classified_again_before_the_frontend_answers_it() {
         let setup = Setup { stt: true, tts: false, turn: TurnMode::Manual, ..Default::default() };
         let mut run = Run::start_with(&setup, 0, Default::default(), |args, registry| {
             args.session_sink = Some(binding.clone());
-            args.delegation =
-                Some(DelegationOptions { routing_model: frontend(registry, routing.clone()) });
+            args.delegation = Some(DelegationOptions {
+                routing_model: Some(frontend(registry, routing.clone())),
+            });
             args.llm = Some(frontend(registry, requests.clone()));
         })
         .await;
@@ -308,7 +358,7 @@ fn response_handoff(reused_call_ids: bool) {
             |args, registry| {
                 args.session_sink = Some(binding.clone());
                 args.delegation =
-                    Some(DelegationOptions { routing_model: FakeLlm::new(registry.clone()) });
+                    Some(DelegationOptions { routing_model: Some(FakeLlm::new(registry.clone())) });
                 args.llm = Some(Arc::new(ObservedLlm {
                     inner: if reused_call_ids {
                         FakeLlm::reusing_call_ids(registry.clone())
@@ -445,8 +495,6 @@ fn response_handoff(reused_call_ids: bool) {
             run.apply(&input).await;
         }
         let lk_agents_fuzz::record::Detail::Tool {
-            invocation_id,
-            operation,
             item_id: continuation_item,
             call_id: continuation,
             ..
@@ -462,43 +510,151 @@ fn response_handoff(reused_call_ids: bool) {
                 "the fake did not reuse the provider ID"
             );
         }
-        let origin = lk_agents_abi::voice::session::VoiceCommandOrigin::Tool {
-            invocation_id: invocation_id.clone(),
-            operation: *operation,
-            call_id: continuation.clone(),
+        let owner = run.registry.session().unwrap().clone();
+        let captured = binding.restore().unwrap().unwrap();
+        // The body-start event above proves the actual callback received this canonical
+        // call. Memory-only conversation history contains committed calls, not a live body's
+        // private preparation; do not wait for or invent a premature history checkpoint.
+        let canonical = callbacks
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|call| call.id == continuation_item)
+            .cloned()
+            .expect("the started body did not receive its canonical call");
+        let offered =
+            lk_agents_core::delegation::remote::routing::captured_offers(&canonical).unwrap();
+        let request = native_receipt(
+            &mut run,
+            owner.routing_context(
+                REMOTE,
+                REMOTE,
+                json!({"label":"the model rewrote Friday"}),
+                None,
+                &offered,
+            ),
+            "remote routing context",
+        )
+        .await
+        .unwrap();
+        let verdict = lk_agents_core::delegation::remote::routing::parse(
+            r#"{"action":"respond","candidate":0,"response":0}"#,
+            &request,
+        )
+        .unwrap();
+        let candidate: Arc<dyn RemoteTaskDriver> = Arc::new(AdmissionCandidate);
+        let admission = native_receipt(
+            &mut run,
+            owner.admit_call(
+                &request,
+                Some(Ok(verdict.clone())),
+                Default::default(),
+                Arc::downgrade(&candidate),
+            ),
+            "remote call admission",
+        )
+        .await
+        .unwrap();
+        assert!(Arc::ptr_eq(admission.driver.as_ref().unwrap(), &candidate));
+        let response_claim =
+            admission.response_claim.expect("an unsent answer needs its owned claim");
+        let lk_agents_abi::delegation::routing::CallAdmission::Respond {
+            request: reference,
+            message,
+        } = admission.admission
+        else {
+            panic!("the native admission did not retain the human response")
         };
-        for attempt in 0..3 {
-            let receipt = run
-                .registry
-                .session()
+        assert_eq!(
+            message.raw_text_content().as_deref(),
+            Some("Friday"),
+            "model arguments replaced the person's actual words"
+        );
+        let task = reference.remote().unwrap().1.clone();
+        let origin = lk_agents_abi::session::ToolCallRef {
+            agent_id: captured.root_frame_id.value.clone(),
+            call_id: continuation_item.clone(),
+        };
+        let command = lk_agents_abi::delegation::remote::RemoteCommand {
+            remote_id: REMOTE.into(),
+            endpoint: REMOTE.into(),
+            input: lk_agents_abi::delegation::remote::RemoteInput::Prepare {
+                request_id: "lost-native-response".into(),
+                request: lk_agents_abi::delegation::remote::A2ARequest::Send(
+                    serde_json::from_value(json!({"message":{
+                        "messageId":"native-response", "role":"ROLE_USER",
+                        "contextId":task.context_id, "taskId":task.task_id,
+                        "parts":[{"text":message.raw_text_content().unwrap()}]
+                    }}))
+                    .unwrap(),
+                ),
+                streaming: true,
+                origin: Some(origin.clone()),
+                input_request: Some(reference),
+            },
+        };
+        // This is the journal command used by the native transport driver. Enqueue it, then
+        // lose its local receipt before the owner commits; the original operation still owns
+        // the response, and subsequent tool calls must observe that admission rather than fork.
+        use futures_util::FutureExt as _;
+        let mut receipt = owner.remote(command);
+        assert!(receipt.as_mut().now_or_never().is_none());
+        drop(receipt);
+        run.apply(&Input::Advance { ms: Millis(0) }).await;
+        drop(response_claim);
+        for _ in 0..2 {
+            assert_eq!(
+                native_receipt(
+                    &mut run,
+                    owner.admit_call(
+                        &request,
+                        Some(Ok(verdict.clone())),
+                        Default::default(),
+                        Arc::downgrade(&candidate)
+                    ),
+                    "duplicate remote call admission",
+                )
+                .await
                 .unwrap()
-                .continue_remote_tool(REMOTE.into(), "travel".into(), origin.clone())
-                .unwrap();
-            if attempt == 0 {
-                // The owner may accept a handoff even when its caller loses the local receipt.
-                drop(receipt);
-                run.apply(&Input::Advance { ms: Millis(100) }).await;
-                continue;
-            }
-            run.apply(&Input::Advance { ms: Millis(100) }).await;
-            use futures_util::FutureExt as _;
-            let report = receipt
-                .now_or_never()
-                .expect("the command receipt did not settle")
-                .unwrap()
-                .expect("the existing task was mistaken for new work");
-            assert!(matches!(report.outcome, ToolOutcome::Value { .. }));
+                .admission,
+                lk_agents_abi::delegation::routing::CallAdmission::AlreadyForwarded {
+                    task: task.clone()
+                }
+            );
         }
-        let answers = callbacks.expert_answers.lock().unwrap().clone();
+        let accepted = binding.restore().unwrap().unwrap();
+        let remote = &accepted.remote_agents[REMOTE];
+        assert_eq!(remote.requests.len(), 1, "a lost receipt duplicated native response admission");
+        assert_eq!(remote.requests["lost-native-response"].origin.as_ref(), Some(&origin));
+        let recovered = native_receipt(
+            &mut run,
+            owner.recover(REMOTE, REMOTE, &origin),
+            "remote response recovery",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let lk_agents_abi::delegation::remote::RemoteRecovery::Dispatch { request, .. } = recovered
+        else {
+            panic!("the response with a lost receipt was not recoverable")
+        };
+        let lk_agents_abi::delegation::remote::A2ARequest::Send(send) = *request else {
+            panic!("response recovery changed operation")
+        };
+        assert_eq!(send.message.message_id, "native-response");
+        assert_eq!(send.message.text(), Some("Friday"));
         assert_eq!(
             requests.lock().len(),
             3,
             "the pending foreground tool already owns a planning turn; do not wake another"
         );
-        assert_eq!(answers.len(), 1, "two invocations sent the same human response twice");
-        assert_eq!(answers[0].0, original_call.id, "the response reached a different invocation");
-        assert_eq!(answers[0].1, "Friday", "model arguments replaced the person's actual words");
-        // As the real host callback does, return its handoff report and let the frontend finish.
+        assert!(
+            callbacks.expert_answers.lock().unwrap().is_empty(),
+            "native remote admission must not revive the host AnswerExpert continuation path"
+        );
+        // The new caller reports dispatch while the original body still owns the eventual
+        // result. Reused provider IDs must not redirect that result to this newer call.
         for input in [
             Input::ToolAnswered {
                 tool: Ref::new(1),

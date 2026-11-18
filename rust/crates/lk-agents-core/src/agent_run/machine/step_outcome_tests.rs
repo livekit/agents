@@ -205,7 +205,7 @@ fn a_recorded_response_requires_owner_admission_before_granting_a_readback_repea
                 .pending_call
                 .as_ref()
                 .unwrap()
-                .call_id
+                .id
                 .clone()]))
         } else {
             run
@@ -386,7 +386,7 @@ fn answering_one_approval_never_grants_a_retained_siblings_repeat() {
         first.run_tools(|_| panic!("an unapproved body must not run"));
         let result = first.result();
         assert_eq!(result.input_requirements.len(), 2);
-        let selected = &result.input_requirements[0].call.call_id;
+        let selected = &result.input_requirements[0].call.id;
         let history = result.all_messages.clone();
         let admitted = owner_admitted.then(|| BTreeSet::from([selected.clone()]));
         let repeated = repeat_approval(history.clone(), "delete_first", "one", admitted.clone());

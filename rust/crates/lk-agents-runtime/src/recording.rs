@@ -526,30 +526,67 @@ async fn process<E: OggOpusEncoder, W: Write>(
     let mut input = Some(input);
     let mut timeline = Timeline::default();
     loop {
-        match next(&mut input, &mut rx).await {
-            Next::Input(None, _) => input = None,
-            Next::Input(Some(item), before) => {
-                shared.check_failure()?;
-                let head = input.as_ref().is_some_and(|audio| audio.head().received > before);
-                timeline.apply(item, head, file, &mut between)?;
-            }
-            Next::Command(None) => return Err(RecordingFailure::Closed),
-            Next::Command(Some(item)) => {
-                if let Some(summary) =
-                    apply_command(file, &mut timeline, shared, item, &mut between)?
-                {
-                    return Ok(summary);
-                }
-            }
+        let selected = next(&mut input, &mut rx).await;
+        if let Some(summary) =
+            dispatch(file, &mut timeline, &mut input, shared, selected, &mut between)?
+        {
+            return Ok(summary);
         }
         publish_progress(file, shared)?;
     }
 }
 
+#[cfg(any(test, feature = "media-ffmpeg"))]
+fn dispatch<E: OggOpusEncoder, W: Write>(
+    file: &mut RecordingFile<E, W>,
+    timeline: &mut Timeline,
+    input: &mut Option<AudioReceiver<f64>>,
+    shared: &Shared,
+    selected: Next,
+    between: lk_agents_media::recorder::BetweenBlocks<'_>,
+) -> Result<Option<RecordingSummary>, RecordingFailure> {
+    match selected {
+        Next::Input(None, _) => *input = None,
+        Next::Input(Some(item), before) => {
+            shared.check_failure()?;
+            let head = input.as_ref().is_some_and(|audio| audio.head().received > before);
+            timeline.apply(item, head, file, between)?;
+        }
+        Next::Command(None) => return Err(RecordingFailure::Closed),
+        Next::Command(Some(item)) => {
+            // Audio can arrive after select polled its branch empty but before the command
+            // branch became ready. Drain that snapshot before a flush or finish anchors the
+            // file; a live producer cannot extend the selected command's boundary.
+            drain_input(file, timeline, input, shared, between)?;
+            return apply_command(file, timeline, shared, item, between);
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(any(test, feature = "media-ffmpeg"))]
+fn drain_input<E: OggOpusEncoder, W: Write>(
+    file: &mut RecordingFile<E, W>,
+    timeline: &mut Timeline,
+    input: &mut Option<AudioReceiver<f64>>,
+    shared: &Shared,
+    between: lk_agents_media::recorder::BetweenBlocks<'_>,
+) -> Result<(), RecordingFailure> {
+    if let Some(audio) = input {
+        for (item, head) in audio.drain_pending() {
+            shared.check_failure()?;
+            timeline.apply(item, head, file, between)?;
+        }
+    }
+    Ok(())
+}
+
 /// The next microphone item, ahead of the next command; only commands once the audio ended.
 #[cfg(any(test, feature = "media-ffmpeg"))]
 async fn next(input: &mut Option<AudioReceiver<f64>>, rx: &mut mpsc::Receiver<Queued>) -> Next {
-    let Some(audio) = input else { return Next::Command(rx.recv().await) };
+    let Some(audio) = input else {
+        return Next::Command(rx.recv().await);
+    };
     let head = audio.head();
     tokio::select! {
         biased;

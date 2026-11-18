@@ -62,9 +62,6 @@ pub enum SessionEvent {
         result: Option<Result<InputRoute, lk_agents_abi::errors::ProviderError>>,
         usage: Usage,
     },
-    InputRoutingUnavailable {
-        request_id: String,
-    },
     Run {
         invocation_id: String,
         event: agent_run::AgentRunEvent,
@@ -126,7 +123,12 @@ struct Invocation {
 
 enum Phase {
     NotStarted,
-    Routing { request_id: String, message: ChatMessage, candidates: Vec<InputCandidate> },
+    Routing {
+        request_id: String,
+        message: ChatMessage,
+        candidates: Vec<InputCandidate>,
+        offered: Vec<InputCandidate>,
+    },
     Running(Invocation),
     Releasing(Invocation, InvocationRelease),
     Done,

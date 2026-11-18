@@ -38,6 +38,24 @@ class _Selection(BaseModel):
     labels: list[str] = ["default"]
 
 
+async def test_imported_tool_history_keeps_opaque_item_ids_and_reused_provider_ids() -> None:
+    first = llm.FunctionCall(id="first", call_id="reused", name="lookup", arguments="{}")
+    first_output = llm.FunctionCallOutput(
+        id="opaque-receipt", call_id="reused", output="one", is_error=False
+    )
+    second = llm.FunctionCall(id="second", call_id="reused", name="lookup", arguments="{}")
+    second_output = llm.FunctionCallOutput(
+        id="another-receipt", call_id="reused", output="two", is_error=False
+    )
+    history = [first, first_output, second, second_output]
+    model = FakeLLM(["I have both results."])
+    agent = Agent(instructions="Help.", llm=model)
+
+    await agent.run("What did you find?", message_history=history)
+
+    assert [item for item in model.requests[0].items if item.type != "message"] == history
+
+
 @pytest.mark.parametrize(
     "arguments",
     [

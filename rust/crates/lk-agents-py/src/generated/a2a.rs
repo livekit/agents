@@ -652,9 +652,9 @@ impl CoreRemoteInteraction {
     /// Run the delegation on the endpoint: connect with `token`, send the call's message
     /// (`thread_id` shares the caller's thread under `token`'s grant), then follow its updates:
     /// each reaches `host.progress`, a moved task is followed, and on a call (`live`) the
-    /// request is announced through `host.delegated` and each question answered through
-    /// `host.ask`. Returns the outcome, or, off a call, the expert's question. The client and
-    /// its reply are closed before it returns.
+    /// request releases the frontend through `host.delegated` and each question is presented
+    /// through `host.question`. Task messages reach the same native driver. Returns the outcome,
+    /// or, off a call, the expert's question. The client and its reply close before it returns.
     #[pyo3(signature = (host, arguments, structured, history, token, thread_id, conn_options, live, owner = None, origin = None))]
     fn run<'py>(
         &self,
@@ -1167,6 +1167,61 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
         })
     }
 
+    fn question<'a>(
+        &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+        context: &::lk_agents_abi::invoke::CallContext,
+        question: ::std::string::String,
+        verbatim: bool,
+        input_request: ::std::option::Option<::lk_agents_abi::session::InputRequestRef>,
+    ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
+    {
+        let host = ::std::clone::Clone::clone(&self.host);
+        let question_arg = question;
+        let verbatim_arg = verbatim;
+        let input_request_arg = input_request;
+        let started = ::lk_agents_runtime::host::call(
+            &crate::py_calls::Entry,
+            "DelegationHost._core_question",
+            context,
+            &[],
+            cx,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(question_arg, py)?,
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim_arg, py)?,
+                    match input_request_arg {
+                        None => py.None().into_bound(py),
+                        Some(x) => {
+                            crate::generated::records::session_input::input_request_ref_to_py(
+                                py, x,
+                            )?
+                        }
+                    },
+                ];
+                Ok((
+                    host.bind(py)?.getattr("_core_question")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(())
+            })
+        })
+    }
+
     fn ask<'a>(
         &'a self,
         cx: &::lk_agents_abi::telemetry::Cx,
@@ -1176,7 +1231,10 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
         input_request: ::std::option::Option<::lk_agents_abi::session::InputRequestRef>,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
-        ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError>,
+        ::std::result::Result<
+            ::lk_agents_abi::a2a::remote::DelegationInput,
+            ::lk_agents_abi::errors::HostError,
+        >,
     > {
         let host = ::std::clone::Clone::clone(&self.host);
         let question_arg = question;
@@ -1208,6 +1266,7 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
                 ))
             }),
         );
+        let context = ::lk_agents_abi::agent::HostContext::host_context(context).cloned();
         ::std::boxed::Box::pin(async move {
             let out = started.await;
             ::pyo3::Python::attach(|py| {
@@ -1218,7 +1277,7 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
                     }
                 };
                 let o = out.value.bind(py);
-                let out = (o.extract::<::std::string::String>()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (context.as_ref().map(|context| out.returned_context(py, context)).transpose().and_then(|context| crate::py_calls::returning(context, || crate::generated::records::a2a_remote::delegation_input_from_py(o.as_any())))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

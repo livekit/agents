@@ -287,7 +287,7 @@ impl AgentClient {
         let operation = OperationGuard { stop: stop.clone(), settled: settled.clone() };
         let call = RemoteCall {
             delivery: Delivery { inner: self.inner.clone(), updates, progress, observer },
-            task_response: request.task_response,
+            drain_on_cancel: request.task_response && !request.replay_safe,
             admitted: admitted.clone(),
             stop: stop.clone(),
         };
@@ -437,7 +437,9 @@ impl Inner {
 /// socket. An explicit control request already in flight is drained to learn its outcome.
 struct RemoteCall {
     delivery: Delivery,
-    task_response: bool,
+    /// Unsafe task control writes retain their answer after cancellation. Read-only task
+    /// reconciliation has no business side effect and may release its observation immediately.
+    drain_on_cancel: bool,
     admitted: signal::Cell<Option<()>>,
     stop: CancellationToken,
 }
@@ -459,7 +461,7 @@ impl RemoteCall {
             tokio::pin!(exchange);
             tokio::select! {
                 biased;
-                () = self.stop.cancelled(), if !self.task_response => None,
+                () = self.stop.cancelled(), if !self.drain_on_cancel => None,
                 result = &mut exchange => Some(result),
             }
         };

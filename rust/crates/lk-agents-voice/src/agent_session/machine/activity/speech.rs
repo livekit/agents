@@ -112,10 +112,6 @@ impl VoiceDriver {
             return self.activity.handoff.held_speech.push(cmd);
         }
         match cmd {
-            SpeechCommand::ContinueRemoteTool { endpoint, name, call } => {
-                let report = self.continue_remote_tool(&endpoint, &name);
-                self.answer(Some(call), Answer::RemoteTool(Ok(report)));
-            }
             SpeechCommand::GenerateReply(request) => self.generate_reply(now, request),
             // The model speaks a `say` only with no TTS. These arms must come before the pipeline
             // arm: a guarded arm after its unguarded twin is dead code.
@@ -816,7 +812,7 @@ impl VoiceDriver {
                     .is_none_or(|s| s.interrupted() || s.done());
             let committed =
                 plan.after.is_none_or(|after| self.activity.reply_predecessor_settled(after));
-            if !cancelled && !committed {
+            if !cancelled && (!committed || self.input_capture_pending(plan.speech)) {
                 waiting.push_back((call, plan));
                 continue;
             }
@@ -828,10 +824,7 @@ impl VoiceDriver {
                         && message.raw_text_content().is_some_and(|text| !text.trim().is_empty())
                 })
             {
-                self.record_effect(crate::agent_session::effects::VoiceEffect::RouteInput {
-                    speech: plan.speech,
-                    message: message.clone(),
-                });
+                self.begin_input_route(plan.speech, message.clone());
                 self.input_plans.insert(plan.speech, (call, plan));
                 continue;
             }

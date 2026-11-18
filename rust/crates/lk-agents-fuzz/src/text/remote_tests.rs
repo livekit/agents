@@ -43,6 +43,9 @@ struct Service {
     cancel_reply: CancelReply,
     cancellations: Mutex<u32>,
     canceled: Mutex<bool>,
+    /// Recovery may remain unavailable until a fresh caller acquires the conversation.
+    fail_reconciliation: Mutex<bool>,
+    stalled_reconciliation: Mutex<Option<lk_agents_runtime::net::signal::Producer<Option<()>>>>,
 }
 
 impl HttpExchangePort for Service {
@@ -104,6 +107,16 @@ impl HttpExchangePort for Service {
                         }
                     }
                     a2a::methods::GET_TASK => {
+                        let stalled = self.stalled_reconciliation.lock().take();
+                        if let Some(started) = stalled {
+                            started.resolve(());
+                            return std::future::pending().await;
+                        }
+                        if *self.fail_reconciliation.lock() {
+                            return Err(AttemptFailure::Connection(
+                                "the peer is unavailable for reconciliation".into(),
+                            ));
+                        }
                         let booked = !self.bookings.lock().is_empty();
                         let state = if *self.canceled.lock() {
                             "TASK_STATE_CANCELED"
@@ -423,6 +436,8 @@ fn origin() -> lk_agents_abi::session::ToolCallRef {
 struct Presenter {
     answer: Option<String>,
     lose_write_ack: Option<Arc<Store>>,
+    owner: Option<Arc<dyn SessionCommands>>,
+    background: Option<lk_agents_runtime::net::owned::Background>,
 }
 
 impl lk_agents_abi::a2a::remote::DelegationHost for Presenter {
@@ -442,20 +457,66 @@ impl lk_agents_abi::a2a::remote::DelegationHost for Presenter {
     ) -> BoxFuture<'a, Result<(), HostError>> {
         Box::pin(async { Ok(()) })
     }
+    fn question<'a>(
+        &'a self,
+        _: &lk_agents_abi::telemetry::Cx,
+        _: &'a lk_agents_abi::invoke::CallContext,
+        question: String,
+        _: bool,
+        input_request: Option<lk_agents_abi::session::InputRequestRef>,
+    ) -> BoxFuture<'a, Result<(), HostError>> {
+        Box::pin(async move {
+            assert_eq!(question, "Which day?");
+            let reference = input_request.expect("a live question retains its input occurrence");
+            let (_, task, _) = reference.remote().unwrap();
+            let owner = self.owner.as_ref().unwrap();
+            let driver = owner
+                .remote_driver(ENDPOINT, ENDPOINT, task)
+                .await
+                .unwrap()
+                .expect("the task has one registered live driver");
+            if let Some(database) = &self.lose_write_ack {
+                database.lose_next_write_acknowledgement();
+            }
+            let answer = self.answer.clone().unwrap();
+            self.background.as_ref().unwrap().spawn("fixture remote answer", async move {
+                // This fixture loses the response after its business operation commits.
+                assert!(
+                    driver
+                        .input(
+                            lk_agents_abi::a2a::remote::DelegationInput {
+                                arguments: json!({"request": answer}),
+                                structured: false,
+                                input_request: Some(reference),
+                            },
+                            None,
+                            Some(origin())
+                        )
+                        .await
+                        .is_err()
+                );
+            });
+            Ok(())
+        })
+    }
     fn ask<'a>(
         &'a self,
         _: &lk_agents_abi::telemetry::Cx,
         _: &'a lk_agents_abi::invoke::CallContext,
         question: String,
         _: bool,
-        _: Option<lk_agents_abi::session::InputRequestRef>,
-    ) -> BoxFuture<'a, Result<String, HostError>> {
+        input_request: Option<lk_agents_abi::session::InputRequestRef>,
+    ) -> BoxFuture<'a, Result<lk_agents_abi::a2a::remote::DelegationInput, HostError>> {
         Box::pin(async move {
             assert_eq!(question, "Which day?");
             if let Some(database) = &self.lose_write_ack {
                 database.lose_next_write_acknowledgement();
             }
-            Ok(self.answer.clone().expect("a text invocation returns its input request"))
+            Ok(lk_agents_abi::a2a::remote::DelegationInput {
+                arguments: json!({"request": self.answer.clone().expect("a text invocation returns its input request")}),
+                structured: false,
+                input_request,
+            })
         })
     }
 }
@@ -472,27 +533,11 @@ async fn interact(
     env: &Arc<Env>,
     service: Arc<Service>,
     owner: Arc<dyn SessionCommands>,
-    presenter: Presenter,
+    mut presenter: Presenter,
 ) -> Result<lk_agents_abi::a2a::remote::RemoteEvent, lk_agents_abi::a2a::client::AgentClientError> {
     use lk_agents_abi::a2a::remote::RemoteInteraction as _;
-    use lk_agents_runtime::delegation::remote::{RemoteInteraction, RemoteInvocation};
-    let interaction = RemoteInteraction::new(
-        ENDPOINT.into(),
-        "booking".into(),
-        ChatItem::FunctionCall(lk_agents_abi::FunctionCall {
-            id: "local-call".into(),
-            call_id: origin().call_id,
-            name: "booking".into(),
-            arguments: "{}".into(),
-            created_at: std::time::UNIX_EPOCH,
-            extra: Default::default(),
-            group_id: None,
-        }),
-        String::new(),
-        String::new(),
-        String::new(),
-    )
-    .unwrap();
+    use lk_agents_runtime::delegation::remote::RemoteInvocation;
+    let interaction = interaction();
     let client = AgentClient::with_transport(
         ENDPOINT.into(),
         None,
@@ -502,6 +547,8 @@ async fn interact(
         env.clock.clone(),
     )
     .unwrap();
+    presenter.owner = Some(owner.clone());
+    presenter.background = Some(env.process.background().unwrap());
     let result = interaction
         .run_with_client(
             &env.process,
@@ -517,11 +564,33 @@ async fn interact(
                 cx: env.tracer.root(),
                 owner: Some(owner),
                 origin: Some(origin()),
+                conn_options: Default::default(),
             },
         )
         .await;
     interaction.settled().await;
     result
+}
+
+fn interaction() -> lk_agents_runtime::delegation::remote::RemoteInteraction {
+    use lk_agents_abi::a2a::remote::RemoteInteraction as _;
+    lk_agents_runtime::delegation::remote::RemoteInteraction::new(
+        ENDPOINT.into(),
+        "booking".into(),
+        ChatItem::FunctionCall(lk_agents_abi::FunctionCall {
+            id: origin().call_id,
+            call_id: "provider-call".into(),
+            name: "booking".into(),
+            arguments: "{}".into(),
+            created_at: std::time::UNIX_EPOCH,
+            extra: Default::default(),
+            group_id: None,
+        }),
+        String::new(),
+        String::new(),
+        String::new(),
+    )
+    .unwrap()
 }
 
 fn journal(owner: Arc<dyn SessionCommands>, id: &str) -> Arc<dyn RequestObserver> {
@@ -619,6 +688,93 @@ async fn accepted_response_lost_then_fresh_owner_reads_the_same_task_without_boo
 #[tokio::test(start_paused = true)]
 async fn lost_intent_write_ack_and_remote_response_do_not_book_twice_after_restart() {
     reconcile_a_booked_task(true).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn owner_shutdown_releases_a_stalled_reconciliation_without_canceling_business_work() {
+    use lk_agents_abi::a2a::remote::RemoteInteraction as _;
+    use lk_agents_runtime::delegation::remote::RemoteInvocation;
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_runtime::net::clock::SimClock::new());
+    let env = environment(clock.clone());
+    let database = Store::open(71, false, clock.clone()).await;
+    let store = ContextStore::bound(
+        database.backend.clone(),
+        database.thread_id.clone(),
+        PARTITION_KEY.into(),
+        env.tracer.root(),
+    )
+    .await
+    .unwrap();
+    let (owner, updates, binding, _) = owner(&env, store.clone()).await;
+    let (started, read_started) = lk_agents_runtime::net::signal::once();
+    let service = Arc::new(Service {
+        stalled_reconciliation: Mutex::new(Some(started)),
+        ..Default::default()
+    });
+    let options = lk_agents_abi::ApiConnectOptions { read_timeout: None, ..Default::default() };
+    let client = AgentClient::with_transport(
+        ENDPOINT.into(),
+        None,
+        options,
+        service.clone(),
+        (env.process.spawner)().unwrap(),
+        clock.clone(),
+    )
+    .unwrap();
+    let interaction = interaction();
+    let running = interaction.run_with_client(
+        &env.process,
+        client,
+        RemoteInvocation {
+            arguments: json!({"request": "Book a seat"}),
+            structured: false,
+            history: Vec::new(),
+            shared: None,
+            live: true,
+            host: Arc::new(Presenter {
+                answer: Some("Friday".into()),
+                owner: Some(owner.clone()),
+                background: Some(env.process.background().unwrap()),
+                ..Default::default()
+            }),
+            context: Default::default(),
+            cx: env.tracer.root(),
+            owner: Some(owner),
+            origin: Some(origin()),
+            conn_options: options,
+        },
+    );
+    tokio::pin!(running);
+    tokio::select! {
+        biased;
+        result = &mut running => panic!("the read must still be pending: {result:?}"),
+        started = read_started.wait() => started.unwrap(),
+    }
+    // The owner releases the partition while its old native observer is still reading.
+    assert_eq!(
+        Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,
+        Closed::Clean
+    );
+    binding.close();
+    store.finish_session(false).await.unwrap();
+    assert!(!database.held(PARTITION_KEY).await);
+    interaction.cancelled().unwrap();
+    let result = running.await;
+    match result {
+        Ok(lk_agents_abi::a2a::remote::RemoteEvent::Outcome { .. }) | Err(_) => {}
+        other => panic!("stopping a local observer did not settle its waiter: {other:?}"),
+    }
+    interaction.settled().await;
+    assert_eq!(service.messages.lock().len(), 2);
+    assert_eq!(service.bookings.lock().as_slice(), ["Friday"]);
+    assert_eq!(*service.cancellations.lock(), 0);
+    assert!(
+        env.process
+            .tasks
+            .wait_empty(&*clock, Some(clock.now().saturating_add(Duration::from_secs(15))))
+            .await
+    );
+    assert!(!database.held(PARTITION_KEY).await);
 }
 
 #[tokio::test(start_paused = true)]
@@ -770,7 +926,7 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
     let clock: Arc<dyn Clock> = Arc::new(lk_agents_runtime::net::clock::SimClock::new());
     let env = environment(clock.clone());
     let database = Arc::new(Store::open(23, false, clock.clone()).await);
-    let service = Arc::new(Service::default());
+    let service = Arc::new(Service { fail_reconciliation: Mutex::new(true), ..Default::default() });
     let store = ContextStore::bound(
         database.backend.clone(),
         database.thread_id.clone(),
@@ -790,6 +946,7 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
             Presenter {
                 answer: Some("Friday".into()),
                 lose_write_ack: lose_intent_write_ack.then(|| database.clone()),
+                ..Default::default()
             }
         )
         .await
@@ -826,6 +983,7 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
     binding.close();
     store.finish_session(false).await.unwrap();
     drop(first);
+    *service.fail_reconciliation.lock() = false;
     assert!(!database.held(PARTITION_KEY).await);
 
     let fresh_store = ContextStore::bound(
@@ -871,7 +1029,7 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
         "one original request and one answer, never a replay"
     );
     assert_eq!(service.bookings.lock().as_slice(), ["Friday"], "one committed business booking");
-    assert_eq!(remote.events.len(), 6, "a retried checkpoint cannot append communication twice");
+    assert_eq!(remote.events.len(), 8, "a retried checkpoint cannot append communication twice");
     assert_eq!(remote.tasks["booking"].task.artifacts.as_ref().unwrap().len(), 1);
     assert_eq!(
         Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,

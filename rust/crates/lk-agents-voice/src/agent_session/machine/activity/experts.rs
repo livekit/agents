@@ -9,7 +9,7 @@ use crate::audio_recognition::EndOfTurnInfo;
 use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle};
 use crate::experts::{ExpertTool, Floor, Presentation};
 use crate::generation::ReplySource;
-use crate::tool_executor::{CallId, Delivery, HostedTool, ToolOutcome, ToolReport, answer};
+use crate::tool_executor::{CallId, Delivery, HostedTool, ToolOutcome, answer};
 use lk_agents_abi::llm::tool_executor::ASK_IN_OWN_WORDS;
 use lk_agents_abi::{ChatItem, ChatMessage, Role, Ts};
 use lk_agents_core::markup::ChatMessageExt;
@@ -250,7 +250,11 @@ impl VoiceDriver {
     }
 
     fn answer_expert(&mut self, hosted: HostedTool, user: ChatMessage, source: Source) {
-        let answer = user.text_content().unwrap_or_default();
+        let answer = lk_agents_abi::a2a::remote::DelegationInput {
+            arguments: serde_json::json!({"request": user.text_content().unwrap_or_default()}),
+            structured: false,
+            input_request: None,
+        };
         self.commit_item(ChatItem::Message(user), source, Visibility::Both);
         self.record_effect(VoiceEffect::AnswerExpert { hosted, answer });
     }
@@ -263,110 +267,6 @@ impl VoiceDriver {
         for reference in requests {
             self.session.experts.reserve(reference, message.clone());
         }
-    }
-
-    /// Recognition reserves a destination; only its tool invocation may hand that response to
-    /// the live continuation. No second RemoteInteraction or network send is created here.
-    pub(crate) fn continue_remote_tool(
-        &mut self,
-        endpoint: &str,
-        name: &str,
-    ) -> Option<ToolReport> {
-        let report = |outcome| Some(ToolReport { outcome, input_request: None, transition: None });
-        let tool = ExpertTool::new(endpoint, name);
-        let tools = self.activity.expert_tools();
-        let floor = Floor { tools: &tools, free: true, task: self.activity.voice_tasks.running() };
-        let caller = match &self.command_origin {
-            crate::agent_session::VoiceCommandOrigin::Tool {
-                invocation_id,
-                operation,
-                call_id,
-            } => self.activity.tools.update_owner(invocation_id, *operation, call_id),
-            _ => None,
-        };
-        if !tools.contains(&tool) || caller.is_none_or(|running| running.call.name != name) {
-            return report(ToolOutcome::ToolError(
-                "this invocation cannot access the remote continuation".into(),
-            ));
-        }
-        let human_id = self
-            .session
-            .chat_ctx
-            .items()
-            .filter_map(|item| {
-                item.as_message().filter(|message| message.role == Role::User).map(|m| m.id.clone())
-            })
-            .last();
-        let human_id = human_id?;
-        let responses: Vec<_> = self
-            .session
-            .experts
-            .responses(floor)
-            .into_iter()
-            .filter(|(request, _)| self.session.experts.matches_tool(request, &tool))
-            .collect();
-        // Matching by the originating delegation's endpoint prevents a same-named tool from
-        // claiming a different remote's response.
-        if self.session.experts.response_forwarded(&tool, &human_id) {
-            return report(ToolOutcome::Value {
-                text: "This human turn's response is already with the existing remote task. \
-                    Do not start it again; handle any remaining topic while awaiting its \
-                    progress or result."
-                    .into(),
-                reply_required: true,
-                verbatim: false,
-                more: None,
-            });
-        }
-        if responses.is_empty() {
-            return None;
-        }
-        // A grouped reply may identify several original tasks of the same remote tool. Validate
-        // every live body before consuming any reservation; recognition already chose sources.
-        let mut prepared = Vec::new();
-        let mut sources = std::collections::BTreeSet::new();
-        for (request, message) in responses {
-            let reference = self
-                .session
-                .experts
-                .reference(&request)
-                .expect("a reserved response carries its native reference")
-                .clone();
-            let hosted = self
-                .activity
-                .tools
-                .running
-                .iter()
-                .find(|running| running.output_id == request.output_id)
-                .map(|running| running.hosted.clone());
-            let Some(hosted) = hosted.filter(|_| sources.insert(reference)) else {
-                return report(ToolOutcome::ToolError(
-                    "a reserved remote input has no unique live continuation; \
-                        reconcile its task before sending"
-                        .into(),
-                ));
-            };
-            prepared.push((request, message, hosted));
-        }
-        for (request, message, hosted) in prepared {
-            self.session
-                .experts
-                .forward_response(&request, human_id.clone())
-                .expect("all reservations were validated in this atomic transition");
-            self.record_effect(VoiceEffect::AnswerExpert {
-                hosted,
-                answer: message.text_content().unwrap_or_default(),
-            });
-        }
-        report(ToolOutcome::Value {
-            text: "The person's exact response was forwarded to the existing remote task. \
-                Handle any remaining topic; its progress, questions and result arrive \
-                separately. Do not repeat the response as new work."
-                .into(),
-            reply_required: true,
-            verbatim: false,
-            more: None,
-        })
     }
 }
 

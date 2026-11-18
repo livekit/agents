@@ -119,7 +119,24 @@ impl VoiceRuntime {
         use lk_agents_voice::agent_session::effects::VoiceEffect as E;
         // VoiceDriver journalled each effect when it was produced.
         match effect {
-            E::RouteInput { speech, message } => self.route_input(speech, message),
+            E::RouteInput { speech, request_id, message } => {
+                self.route_input(speech, request_id, message)
+            }
+            E::CaptureInputOffers { speech, request } => {
+                let offered = if self
+                    .delegation
+                    .as_ref()
+                    .and_then(|options| options.routing_model.as_ref())
+                    .is_some()
+                {
+                    self.conversation_snapshot()
+                        .map(|state| lk_agents_core::delegation::remote::routing::offered(&state))
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                let _ = self.reports.send(VoiceEvent::InputOffers { speech, request, offered });
+            }
             E::RealtimePlayer { speech, event } => self.forward_to_realtime_player(speech, *event),
             E::CloseRealtimePlayer(speech) => {
                 self.realtime_players.remove(&speech);

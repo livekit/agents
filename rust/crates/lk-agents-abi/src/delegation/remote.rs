@@ -217,7 +217,12 @@ pub struct RemoteCommand {
 #[derive(Debug, Clone, PartialEq)]
 pub enum RemoteRecovery {
     /// No dispatch marker was committed. Only this original operation may be sent.
-    Dispatch { request_id: String, request: Box<A2ARequest>, streaming: bool },
+    Dispatch {
+        request_id: String,
+        request: Box<A2ARequest>,
+        streaming: bool,
+        input_request: Option<InputRequestRef>,
+    },
     /// A send may have reached the peer. Read this task; never repeat its business message.
     GetTask(RemoteTaskRef),
     /// The peer already supplied an accepted message-only reply.

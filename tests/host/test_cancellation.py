@@ -428,19 +428,15 @@ async def test_concurrent_runs_share_one_toolset_setup_and_close() -> None:
     assert lifecycle == ["setup", "close"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the agent's toolsets close in a task the session close does not join "
-    "(lk-agents-runtime voice/session/host_drain.rs close_toolsets_later)",
-)
 async def test_closing_a_session_waits_for_its_agents_nested_toolset_to_close() -> None:
-    """`VoiceSession.aclose()` returns only after the active agent's toolsets, nested ones
-    included, have finished closing (voice-session.md: "end the call's session and wait for it")."""
+    """Session shutdown joins its active agent's nested resource cleanup."""
+    started, release = asyncio.Event(), asyncio.Event()
     closed: list[str] = []
 
     class Inner(Toolset):
         async def aclose(self) -> None:
-            await asyncio.sleep(0.05)  # a slow disconnect
+            started.set()
+            await release.wait()
             closed.append(self.id)
             await super().aclose()
 
@@ -448,9 +444,18 @@ async def test_closing_a_session_waits_for_its_agents_nested_toolset_to_close() 
     session = VoiceSession(vad=None)
     await session.start(agent)
 
-    await session.aclose()
+    async def close_session() -> None:
+        await session.aclose()
+        closed.append("session")
 
-    assert closed == ["inner"]
+    closing = asyncio.create_task(close_session())
+    try:
+        await until(started.is_set, "nested toolset cleanup started")
+        assert not closing.done(), "the nested resource still owns its close boundary"
+    finally:
+        release.set()
+        await closing
+    assert closed == ["inner", "session"]
 
 
 # -- the core cancels or abandons Python work it drives

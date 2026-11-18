@@ -29,6 +29,7 @@ class FrameId:
 class ParentCall:
     frame_id: FrameId
     call_id: str
+    """Canonical call item ID; the output retains the provider's separate wire call_id."""
 
 
 @dataclass(kw_only=True, slots=True)

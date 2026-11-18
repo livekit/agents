@@ -1,6 +1,6 @@
 use lk_agents_abi::llm::chat_context::{ChatContextPlans, MergeInsertion};
 use lk_agents_abi::{ChatContext, ChatItem, CopyOptions, ItemKind, MergeOptions, Role};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::SystemTime;
 
 /// What a host that owns its items reports; the rules over them stay here.
@@ -41,6 +41,30 @@ impl<'a> ItemFacts<'a> {
     fn is_function_call_pair(&self) -> bool {
         self.kind.is_function_call_pair()
     }
+}
+
+/// Ordered, unambiguous call/output pairs. Provider IDs can be reused after their previous
+/// call ended; item IDs remain opaque. Overlapping pending calls with the same wire ID do
+/// not identify either call; further pairing for that wire ID stays ambiguous.
+pub fn tool_pairs(facts: &[ItemFacts<'_>]) -> Vec<(usize, usize)> {
+    let mut pending = BTreeMap::<&str, Option<usize>>::new();
+    let mut pairs = Vec::new();
+    for (index, item) in facts.iter().enumerate() {
+        let Some(call_id) = item.call_id else { continue };
+        match item.kind {
+            ItemKind::FunctionCall => {
+                pending.entry(call_id).and_modify(|call| *call = None).or_insert(Some(index));
+            }
+            ItemKind::FunctionCallOutput => {
+                if let Some(Some(call)) = pending.get(call_id).copied() {
+                    pending.remove(call_id);
+                    pairs.push((call, index));
+                }
+            }
+            _ => {}
+        }
+    }
+    pairs
 }
 
 /// `valid_call_ids`: the calls `opts.tools` keeps, which an output with no name is paired by.

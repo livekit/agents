@@ -14,7 +14,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from .. import _core, llm, telemetry, utils
-from .._generated.a2a_remote import DelegationPartition
+from .._generated.a2a_remote import DelegationInput, DelegationPartition
 from .._generated.agent_run import (
     ArgumentIdentity,
     ArgumentIdentityFingerprint,
@@ -535,7 +535,7 @@ class AgentCallbacks:
         if task is not None:
             task.cancel()
 
-    def answer_expert(self, invocation: Invocation, answer: str) -> None:
+    def answer_expert(self, invocation: Invocation, answer: DelegationInput) -> None:
         ctx = self._bodies.get(_operation_key(invocation))
         waiting = None if ctx is None else ctx._expert_answer
         if waiting is not None and not waiting.done():

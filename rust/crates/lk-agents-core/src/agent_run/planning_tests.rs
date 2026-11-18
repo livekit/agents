@@ -55,7 +55,7 @@ fn an_empty_manual_turn_does_not_consume_the_selected_readback() {
     let mut history = vec![
         ChatItem::FunctionCall(call),
         ChatItem::FunctionCallOutput(FunctionCallOutput {
-            id: "output".into(),
+            id: "call_item_out".into(),
             call_id: "transfer".into(),
             name: "transfer".into(),
             output: format!(
@@ -72,7 +72,7 @@ fn an_empty_manual_turn_does_not_consume_the_selected_readback() {
         assert!(answer_pending_input(&mut history, silence).is_empty());
         assert_eq!(history, before);
     }
-    assert_eq!(answer_pending_input(&mut history, "sure"), ["transfer".into()].into());
+    assert_eq!(answer_pending_input(&mut history, "sure"), ["call_item".into()].into());
     let ChatItem::FunctionCallOutput(output) = &history[1] else { unreachable!() };
     assert_eq!(output.output, "sure");
 }

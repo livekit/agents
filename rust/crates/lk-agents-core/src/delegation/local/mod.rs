@@ -31,24 +31,19 @@ pub fn opening(parent: &[ChatItem], mode: ChatHistory) -> Vec<ChatItem> {
     if mode == ChatHistory::Fresh {
         return Vec::new();
     }
-    let answered: std::collections::BTreeSet<&str> = parent
-        .iter()
-        .filter_map(|item| match item {
-            ChatItem::FunctionCallOutput(output) => Some(output.call_id.as_str()),
-            _ => None,
-        })
-        .filter(|id| {
-            parent.iter().any(|i| matches!(i, ChatItem::FunctionCall(c) if c.call_id == *id))
-        })
+    let facts: Vec<_> = parent.iter().map(crate::llm::history::ItemFacts::of).collect();
+    let answered: std::collections::BTreeSet<_> = crate::llm::history::tool_pairs(&facts)
+        .into_iter()
+        .flat_map(|(call, output)| [call, output])
         .collect();
     let complete = parent
         .iter()
-        .filter(|item| match item {
-            ChatItem::FunctionCall(call) => answered.contains(call.call_id.as_str()),
-            ChatItem::FunctionCallOutput(output) => answered.contains(output.call_id.as_str()),
+        .enumerate()
+        .filter(|(index, item)| match item {
+            ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_) => answered.contains(index),
             _ => true,
         })
-        .cloned()
+        .map(|(_, item)| item.clone())
         .collect();
     let options = CopyOptions {
         exclude_instructions: true,
@@ -199,6 +194,23 @@ mod tests {
             extra,
             group_id: None,
         })
+    }
+
+    #[test]
+    fn a_fork_does_not_inherit_an_unanswered_call_with_a_reused_provider_id() {
+        let first = call("provider", Default::default());
+        let output = ChatItem::FunctionCallOutput(lk_agents_abi::FunctionCallOutput::new(
+            "opaque-receipt",
+            "provider",
+            "first result",
+            false,
+            UNIX_EPOCH,
+        ));
+        let mut second = first.clone();
+        let ChatItem::FunctionCall(current) = &mut second else { unreachable!() };
+        current.id = "new-item".into();
+        let history = [first, output, second];
+        assert_eq!(opening(&history, ChatHistory::Fork), history[..2]);
     }
 
     #[test]

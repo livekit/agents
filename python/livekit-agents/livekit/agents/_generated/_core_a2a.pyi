@@ -177,9 +177,9 @@ class _core_RemoteInteraction:
         """Run the delegation on the endpoint: connect with `token`, send the call's message
         (`thread_id` shares the caller's thread under `token`'s grant), then follow its updates:
         each reaches `host.progress`, a moved task is followed, and on a call (`live`) the
-        request is announced through `host.delegated` and each question answered through
-        `host.ask`. Returns the outcome, or, off a call, the expert's question. The client and
-        its reply are closed before it returns.
+        request releases the frontend through `host.delegated` and each question is presented
+        through `host.question`. Task messages reach the same native driver. Returns the outcome,
+        or, off a call, the expert's question. The client and its reply close before it returns.
         """
     def cancelled(self) -> None:
         """Stop the local tool wait and close its observation resources. Remote business work is

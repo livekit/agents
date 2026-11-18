@@ -72,6 +72,85 @@ fn an_answer_retains_its_checkpointed_occurrence_until_the_next_peer_observation
 }
 
 #[test]
+fn a_task_clarification_does_not_claim_the_waiters_input_occurrence() {
+    use lk_agents_abi::delegation::remote::{InputRequestRef, RemoteTaskRef};
+    let mut remote = interaction("clarification");
+    begin(&mut remote, false);
+    remote.update(&update(TaskState::InputRequired, "trip", "booking", "Which day?")).unwrap();
+    let reference = InputRequestRef::RemoteTask {
+        remote_id: "remote".into(),
+        task: RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() },
+        request_id: "booking/input_3".into(),
+    };
+    remote.retain_input_request(Some(reference.clone())).unwrap();
+    let request_id = remote.snapshot().request_id.unwrap();
+    let mut stale = reference.clone();
+    let InputRequestRef::RemoteTask { request_id: occurrence, .. } = &mut stale else {
+        unreachable!()
+    };
+    *occurrence = "booking/input_2".into();
+    assert!(remote.continue_input(&request_id, Some(stale)).is_err());
+    assert_eq!(remote.snapshot().input_request, Some(reference));
+    remote.continue_input(&request_id, None).unwrap();
+    let message = remote
+        .message(
+            "Why do you need the date?".into(),
+            "clarification".into(),
+            None,
+            "",
+            None,
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(message.task_id.as_deref(), Some("booking"));
+    assert_eq!(message.context_id.as_deref(), Some("trip"));
+    assert_eq!(remote.snapshot().input_request, None);
+}
+
+#[test]
+fn a_working_task_accepts_a_correction_without_replacing_its_result_owner() {
+    let mut remote = interaction("working-correction");
+    begin(&mut remote, false);
+    remote.update(&update(TaskState::Working, "trip", "booking", "Searching Friday")).unwrap();
+    let original = remote.snapshot();
+    let message = remote
+        .task_message("Saturday, not Friday".into(), "correction".into(), None, false)
+        .unwrap();
+    assert_eq!(message.task_id.as_deref(), Some("booking"));
+    assert_eq!(message.context_id.as_deref(), Some("trip"));
+    assert_eq!(message.text(), Some("Saturday, not Friday"));
+    assert_eq!(remote.snapshot(), original, "the existing observer still owns the original call");
+    remote.update(&update(TaskState::Completed, "trip", "booking", "Saturday options")).unwrap();
+    assert!(remote.task_message("again".into(), "late".into(), None, false).is_err());
+}
+
+#[test]
+fn task_messages_revalidate_captured_occurrences_without_replacing_a_pending_question() {
+    use lk_agents_abi::delegation::remote::{InputRequestRef, RemoteTaskRef};
+    let mut remote = interaction("captured-correction");
+    begin(&mut remote, false);
+    remote.update(&update(TaskState::InputRequired, "trip", "booking", "Which day?")).unwrap();
+    let reference = InputRequestRef::RemoteTask {
+        remote_id: "remote".into(),
+        task: RemoteTaskRef { context_id: "trip".into(), task_id: "booking".into() },
+        request_id: "booking/input_3".into(),
+    };
+    remote.retain_input_request(Some(reference.clone())).unwrap();
+    let original = remote.snapshot();
+    remote
+        .task_message("Why do you need the date?".into(), "clarification".into(), None, false)
+        .unwrap();
+    assert_eq!(remote.snapshot(), original);
+    remote.task_message("Friday".into(), "answer".into(), Some(reference.clone()), false).unwrap();
+    assert_eq!(remote.snapshot(), original);
+    remote.update(&update(TaskState::InputRequired, "trip", "booking", "What budget?")).unwrap();
+    assert!(remote.task_message("Friday".into(), "stale".into(), Some(reference), false).is_err());
+    assert_eq!(remote.snapshot().id.parent_call_id, original.id.parent_call_id);
+}
+
+#[test]
 fn new_work_reuses_the_saved_remote_context_without_inheriting_a_task_or_thread_authority() {
     let mut remote = interaction("new-work");
     let message = remote

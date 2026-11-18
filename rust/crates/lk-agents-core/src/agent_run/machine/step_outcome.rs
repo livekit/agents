@@ -163,6 +163,7 @@ pub(super) fn input_requirement(
     Some(lk_agents_abi::agent::run::RunInputRequirement {
         invocation_id: invocation_id.to_owned(),
         call: lk_agents_abi::a2a::turn::PendingCall {
+            id: item.id.clone(),
             name: item.name.clone(),
             call_id: item.call_id.clone(),
             answer_tool: tool.clone(),

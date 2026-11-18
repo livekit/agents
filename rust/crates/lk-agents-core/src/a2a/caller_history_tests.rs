@@ -117,7 +117,7 @@ fn caller_history_keeps_parallel_complete_pairs_and_excludes_the_delegation_call
         output("delegate"),
     ];
     let history =
-        CallerHistory::from_chat_items(&items, Some("delegate"), &HistorySharing::default())
+        CallerHistory::from_chat_items(&items, Some("item-delegate"), &HistorySharing::default())
             .unwrap();
     let selected = history.to_chat_items();
     assert_eq!(selected, items[..5]);
@@ -125,6 +125,34 @@ fn caller_history_keeps_parallel_complete_pairs_and_excludes_the_delegation_call
     assert!(!encoded.to_string().contains("delegate"));
     assert!(!encoded.to_string().contains("unfinished"));
     assert_eq!(CallerHistory::decode(encoded).unwrap().to_chat_items(), selected);
+}
+
+#[test]
+fn repeated_provider_ids_keep_earlier_exchanges_and_exclude_only_the_current_call_item() {
+    let mut payload = wire();
+    let mut call = payload["items"][1].clone();
+    call["id"] = json!("next-call");
+    let mut output = payload["items"][2].clone();
+    output["id"] = json!("next-output");
+    payload["items"].as_array_mut().unwrap().extend([call, output]);
+    let history = CallerHistory::decode(payload).unwrap().to_chat_items();
+    let selected =
+        CallerHistory::from_chat_items(&history, Some("next-call"), &HistorySharing::default())
+            .unwrap()
+            .to_chat_items();
+    assert_eq!(selected, history[..3]);
+    assert!(
+        CallerHistory::decode(json!({"items": [
+            {"type":"function_call", "id":"first", "call_id":"reused", "name":"lookup",
+                "arguments":"{}", "created_at":1},
+            {"type":"function_call", "id":"second", "call_id":"reused", "name":"lookup",
+                "arguments":"{}", "created_at":2},
+            {"type":"function_call_output", "id":"output", "call_id":"reused",
+                "output":"ambiguous", "is_error":false, "created_at":3}
+        ]}))
+        .is_err(),
+        "overlapping pending calls with the same provider ID remain ambiguous"
+    );
 }
 
 #[test]

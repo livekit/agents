@@ -120,9 +120,9 @@ pub struct VoiceRuntime {
     _events_end: lk_agents_net::signal::Producer<()>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum HostCallbackId {
-    InputRouting,
+    InputRouting(String),
     OutputValidation(lk_agents_abi::agent::run::ValidationId),
     ToolRefusal(lk_agents_core::agent_run::CallId),
 }
@@ -403,8 +403,9 @@ impl VoiceRuntime {
     fn handle(&mut self, event: VoiceRuntimeEvent, now: Now) {
         match event {
             VoiceRuntimeEvent::Input(mut input) => {
-                if let VoiceEvent::InputRouted { speech, .. } = &input {
-                    self.speeches.end_callback(*speech, HostCallbackId::InputRouting);
+                if let VoiceEvent::InputRouted { speech, request_id, .. } = &input {
+                    self.speeches
+                        .end_callback(*speech, HostCallbackId::InputRouting(request_id.clone()));
                 }
                 if let VoiceEvent::Gen(lk_agents_voice::generation::GenEvent::OutputValidated {
                     speech,

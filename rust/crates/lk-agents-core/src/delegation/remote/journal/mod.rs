@@ -215,6 +215,7 @@ pub fn recovery(state: &RemoteAgentState, request_id: &str) -> Result<RemoteReco
                 lk_agents_abi::a2a_protocol::methods::SEND_STREAMING_MESSAGE
                     | lk_agents_abi::a2a_protocol::methods::SUBSCRIBE_TO_TASK
             ),
+            input_request: request.input_request.clone(),
         });
     }
     if let Some(task) = &request.task {

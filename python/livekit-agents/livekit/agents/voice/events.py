@@ -27,6 +27,7 @@ from ..llm import (
 from .io import SpeechHandle, SpeechHandle as HostSpeechHandle  # noqa: F401
 
 if TYPE_CHECKING:
+    from .._generated.a2a_remote import DelegationInput
     from .._generated.agent_run import Invocation
     from .._generated.usage import Usage
     from ..storage import Thread
@@ -77,7 +78,7 @@ class RunContext(_facades.RunContext[Context_T]):
         steps = speech_handle.num_steps if speech_handle is not None else 1
         self._initial_step_idx = steps - 1 if steps else None
         # on a call: the person's reply to the delegated expert's question
-        self._expert_answer: asyncio.Future[str] | None = None
+        self._expert_answer: asyncio.Future[DelegationInput] | None = None
         # what an agent tool's child, run in process for this call, consumed
         self._delegate_usage: Usage | None = None
 

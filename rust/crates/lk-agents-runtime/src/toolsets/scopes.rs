@@ -15,6 +15,8 @@ struct State {
     policy: Policy,
     next: u64,
     lifetimes: Vec<Arc<dyn Lifetime>>,
+    /// Activations stay owned until their close settles, including after the policy releases
+    /// them. Whole-session shutdown must join an earlier close whose waiter was cancelled.
     groups: BTreeMap<u64, Arc<Group>>,
 }
 // A cancelled or failed admission cannot occupy the older activation's release slot.
@@ -26,15 +28,33 @@ struct Admission {
 impl Drop for Admission {
     fn drop(&mut self) {
         if !self.accepted {
-            let retired = {
+            let closing = {
                 let mut state = self.state.lock();
                 state.policy.discard(self.id);
-                state.groups.remove(&self.id)
+                state.groups.get(&self.id).cloned()
             };
-            drop(retired);
+            if let Some(group) = closing {
+                group.request_close();
+            }
         }
     }
 }
+
+impl Scopes {
+    async fn close_groups(&self, groups: Vec<(u64, Arc<Group>)>) -> Result<(), HostError> {
+        // The group owns its close driver. A cancelled waiter leaves it in the registry so a
+        // later whole-session release can join the same operation.
+        let results =
+            futures_util::future::join_all(groups.iter().map(|(_, group)| group.aclose())).await;
+        let retired: Vec<_> = {
+            let mut state = self.state.lock();
+            groups.iter().filter_map(|(id, _)| state.groups.remove(id)).collect()
+        };
+        drop(retired);
+        results.into_iter().find_map(Result::err).map_or(Ok(()), Err)
+    }
+}
+
 impl toolsets::ToolsetScopes for Scopes {
     type Env = ProcessEnv;
     fn new(env: &ProcessEnv) -> Self {
@@ -74,23 +94,29 @@ impl toolsets::ToolsetScopes for Scopes {
             (id, group)
         };
         let mut admission = Admission { state: self.state.clone(), id, accepted: false };
-        group.start().await?;
+        if let Err(error) = group.start().await {
+            // A failed start already settled its rollback. A cancelled start instead leaves
+            // its group to the admission guard and whole-session shutdown.
+            let retired = self.state.lock().groups.remove(&id);
+            drop(retired);
+            return Err(error);
+        }
         admission.accepted = true;
         Ok(id)
     }
     async fn release(&self, scope: Option<u64>) -> Result<(), HostError> {
         let groups: Vec<_> = {
             let mut state = self.state.lock();
-            state
-                .policy
-                .release(scope)
-                .into_iter()
-                .filter_map(|id| state.groups.remove(&id))
-                .collect()
+            let released = state.policy.release(scope);
+            match scope {
+                Some(_) => released
+                    .into_iter()
+                    .filter_map(|id| state.groups.get(&id).map(|group| (id, group.clone())))
+                    .collect(),
+                None => state.groups.iter().map(|(&id, group)| (id, group.clone())).collect(),
+            }
         };
-        let results =
-            futures_util::future::join_all(groups.iter().map(|group| group.aclose())).await;
-        results.into_iter().find_map(Result::err).map_or(Ok(()), Err)
+        self.close_groups(groups).await
     }
 }
 
@@ -106,13 +132,13 @@ impl toolsets::ScopesPort for Scopes {
         let group = {
             let mut state = self.state.lock();
             state.policy.discard(activation);
-            state.groups.remove(&activation)
+            state.groups.get(&activation).cloned()
         };
+        if let Some(group) = &group {
+            group.request_close();
+        }
         Box::pin(async move {
-            match group {
-                Some(group) => group.aclose().await,
-                None => Ok(()),
-            }
+            self.close_groups(group.into_iter().map(|group| (activation, group)).collect()).await
         })
     }
     fn release(&self, scope: Option<u64>) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {

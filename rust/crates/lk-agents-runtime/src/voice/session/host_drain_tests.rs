@@ -302,6 +302,113 @@ async fn hook_answers_reach_the_driver_as_the_host_gave_them() {
     assert_eq!(*raising.failed.lock(), [HookName::OnUserTurnCompleted]);
 }
 
+struct HeldCloseToolset {
+    lifetime: Arc<dyn lk_agents_abi::llm::toolsets::Lifetime>,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    closed: std::sync::atomic::AtomicBool,
+}
+
+impl lk_agents_abi::llm::toolsets::ToolsetHooks for HeldCloseToolset {
+    fn lifetime(&self) -> &Arc<dyn lk_agents_abi::llm::toolsets::Lifetime> {
+        &self.lifetime
+    }
+    fn setup(
+        &self,
+        _: &lk_agents_abi::telemetry::Cx,
+        _: Arc<dyn lk_agents_abi::invoke::Cancellation>,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn close(
+        &self,
+        _: &lk_agents_abi::telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(async move {
+            self.entered.notify_one();
+            self.release.notified().await;
+            self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+    }
+    fn children(
+        &self,
+    ) -> Result<Option<Arc<dyn lk_agents_abi::llm::toolsets::LeaseGroup>>, HostError> {
+        Ok(None)
+    }
+}
+
+struct ObservedShutdownScopes {
+    inner: crate::toolsets::scopes::Scopes,
+    shutdown: tokio::sync::Notify,
+}
+
+impl lk_agents_abi::llm::toolsets::ScopesPort for ObservedShutdownScopes {
+    fn acquire(
+        &self,
+        scope: u64,
+        tools: Vec<Arc<dyn lk_agents_abi::llm::toolsets::ToolsetHooks>>,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<u64, HostError>> {
+        lk_agents_abi::llm::toolsets::ScopesPort::acquire(&self.inner, scope, tools)
+    }
+    fn discard(&self, activation: u64) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        lk_agents_abi::llm::toolsets::ScopesPort::discard(&self.inner, activation)
+    }
+    fn release(&self, scope: Option<u64>) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(async move {
+            if scope.is_none() {
+                self.shutdown.notify_one();
+            }
+            lk_agents_abi::llm::toolsets::ScopesPort::release(&self.inner, scope).await
+        })
+    }
+}
+
+// Catches: on_exit starts an authored close, but aclose returns before it settles because the
+// activation is already absent from the registry's active scopes.
+#[tokio::test(start_paused = true)]
+async fn session_close_joins_the_toolset_close_started_by_on_exit() {
+    use lk_agents_abi::llm::toolsets::{ScopesPort as _, ToolsetLifetime as _, ToolsetScopes as _};
+    use lk_agents_abi::voice::session::VoiceSession as _;
+    let env = lk_agents_net::env::ProcessEnv::current_runtime();
+    let toolset = Arc::new(HeldCloseToolset {
+        lifetime: Arc::new(crate::toolsets::lifetime::Lifetime::new(&env)),
+        entered: Default::default(),
+        release: Default::default(),
+        closed: Default::default(),
+    });
+    let scopes = Arc::new(ObservedShutdownScopes {
+        inner: crate::toolsets::scopes::Scopes::new(&env),
+        shutdown: Default::default(),
+    });
+    scopes.acquire(0, vec![toolset.clone()]).await.unwrap();
+    let hooks = Arc::new(ScriptedHooks::default());
+    assert!(hooks.toolsets.port.set(scopes.clone()).is_ok());
+    let args = lk_agents_abi::voice::session::VoiceSessionArgs {
+        agent: "agent".into(),
+        agent_host: Some(host_ref(1)),
+        hooks: Some(hooks),
+        ..Default::default()
+    };
+    let api = super::super::VoiceSession::new(&env, Arc::new(no_room()), args, None).unwrap();
+    api.start().unwrap().await.unwrap();
+    let mut closing = api.aclose("user_initiated".into(), false).unwrap();
+    tokio::select! {
+        biased;
+        () = toolset.entered.notified() => {}
+        () = &mut closing => panic!("session close returned while the toolset close was held"),
+    }
+    tokio::select! {
+        biased;
+        () = scopes.shutdown.notified() => {}
+        () = &mut closing => panic!("session shutdown did not join the on_exit toolset close"),
+    }
+    assert!(!toolset.closed.load(std::sync::atomic::Ordering::SeqCst));
+    toolset.release.notify_one();
+    closing.await;
+    assert!(toolset.closed.load(std::sync::atomic::Ordering::SeqCst));
+}
+
 struct Instructions;
 impl lk_agents_abi::agent::HostInstructions for Instructions {
     fn render<'a>(

@@ -80,6 +80,20 @@ impl<E> AudioQueue<E> {
         self.core.flush(event)
     }
 
+    fn take_pending(&mut self) -> Self {
+        Self {
+            core: self.core.take_pending(),
+            policy: self.policy,
+            lag: std::mem::take(&mut self.lag),
+            head_items: std::mem::take(&mut self.head_items),
+            head_received: self.head_received,
+        }
+    }
+
+    fn progress(&self) -> Head {
+        Head { received: self.head_received, pending: self.head_items > 0 }
+    }
+
     /// Drops the oldest filler the policy may drop, which leaves no gap and loses nothing said;
     /// without one, the oldest frame, into the gap that starts the run. Returns what was lost.
     fn drop_oldest(&mut self) -> Duration {
@@ -238,6 +252,31 @@ impl<E> AudioReceiver<E> {
         })
     }
 
+    /// Takes the audio pending at this call's boundary. Later input stays queued for the next
+    /// receive, even while this finite batch is merged or processed. Each item's bool identifies
+    /// head audio, as an increase in [`Head::received`] does for [`Self::recv`].
+    pub fn drain_pending(&mut self) -> Vec<(Item<AudioFrame, E>, bool)> {
+        let mut pending = self.queue.apply(AudioQueue::take_pending);
+        let mut items = Vec::new();
+        loop {
+            self.meter.receiving(pending.progress());
+            let before = pending.head_received;
+            let Some(item) = pending.pop(&mut self.rest) else {
+                break;
+            };
+            let head = pending.head_received > before;
+            let item = match item {
+                Item::Media(first) if !self.rest.is_empty() => {
+                    Item::Media(merge(first, &mut self.rest))
+                }
+                item => item,
+            };
+            items.push((item, head));
+        }
+        self.queue.apply(|queue| queue.head_received = pending.head_received);
+        items
+    }
+
     /// Frames the policy dropped so far, monotone.
     pub fn dropped(&self) -> u64 {
         self.queue.read(|queue| queue.core.dropped())
@@ -246,8 +285,7 @@ impl<E> AudioReceiver<E> {
     /// How far the receiver is through the head audio: a received item that grew
     /// [`Head::received`] was head audio.
     pub fn head(&self) -> Head {
-        self.queue
-            .read(|queue| Head { received: queue.head_received, pending: queue.head_items > 0 })
+        self.queue.read(AudioQueue::progress)
     }
 }
 
