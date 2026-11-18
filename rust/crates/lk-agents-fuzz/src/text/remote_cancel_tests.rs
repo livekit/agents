@@ -573,7 +573,7 @@ async fn restarted_bound_cancel(reply: CancelReply) {
     let _serial = CONTROL_CREDENTIALS.lock().await;
     let _credentials = control_credentials();
     let clock: Arc<dyn Clock> = Arc::new(lk_agents_runtime::net::clock::SimClock::new());
-    let database = Store::open(163, false, clock.clone()).await;
+    let database = Store::open(167, false, clock.clone()).await;
     let lost = matches!(reply, CancelReply::Lost);
     let service = Arc::new(Service {
         context_id: Some(database.thread_id.clone()),

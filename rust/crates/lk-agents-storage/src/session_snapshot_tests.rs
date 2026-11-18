@@ -129,10 +129,11 @@ async fn compaction_keeps_every_reference_unfinished_remote_work_and_inputs_pin(
     run.checkpoint_session(state.clone(), vec![]).await.unwrap();
     // A later checkpoint adds communication; the unfinished task, its input occurrence and the
     // uncertain response keep pointing at revisions written by the earlier checkpoint.
-    state["state"]["remote_agents"]["booking"]["events"].as_array_mut().unwrap().push(
-        json!({"sequence":1,"request_id":"answer","kind":"request_recorded",
-            "payload":{"message":held.clone()}}),
-    );
+    state["state"]["remote_agents"]["booking"]["events"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"sequence":1,"request_id":"answer","kind":"request_recorded",
+            "payload":{"message":held.clone()}}));
     run.checkpoint_session(state.clone(), vec![]).await.unwrap();
     let raw = partition.info().await.unwrap().unwrap().state;
     assert!(serde_json::to_string(&raw).unwrap().len() < 4000, "content stays out of routing");

@@ -658,10 +658,8 @@ async fn unavailable_discovery_and_task_reads_retry_but_an_unavailable_send_is_n
     .unwrap();
     client.aclose().await;
     let requests = peer.finish().await;
-    let kinds: Vec<_> = requests
-        .iter()
-        .map(|r| r.rpc.as_ref().map_or("card", |rpc| rpc.method.as_str()))
-        .collect();
+    let kinds: Vec<_> =
+        requests.iter().map(|r| r.rpc.as_ref().map_or("card", |rpc| rpc.method.as_str())).collect();
     assert_eq!(kinds, ["card", "card", "GetTask", "GetTask", "SendStreamingMessage"]);
 }
 

@@ -208,9 +208,11 @@ fn a_cancel_answered_by_completion_keeps_the_intent_and_accepts_the_real_result(
         },
     )
     .unwrap();
-    super::super::apply("booking", &mut state, RemoteInput::DispatchStarted {
-        request_id: "cancel".into(),
-    })
+    super::super::apply(
+        "booking",
+        &mut state,
+        RemoteInput::DispatchStarted { request_id: "cancel".into() },
+    )
     .unwrap();
     let completed: a2a::Task = serde_json::from_value(json!({"id":"booking","contextId":"trip",
         "status":{"state":"TASK_STATE_COMPLETED"},
@@ -232,8 +234,8 @@ fn a_cancel_answered_by_completion_keeps_the_intent_and_accepts_the_real_result(
     assert_eq!(accepted.status.state, a2a::TaskState::Completed);
     let receipt = &accepted.artifacts.as_ref().unwrap()[0];
     assert_eq!(receipt.parts[0].as_text(), Some("Booked Friday"));
-    let control = crate::delegation::remote::cancel::operation(&target(), None, "cancel".into())
-        .unwrap();
+    let control =
+        crate::delegation::remote::cancel::operation(&target(), None, "cancel".into()).unwrap();
     let crate::delegation::remote::cancel::CancellationStep::Finished(result) =
         control.observed(Ok(completed.clone()))
     else {
