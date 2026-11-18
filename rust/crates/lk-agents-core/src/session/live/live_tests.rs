@@ -233,7 +233,7 @@ fn a_closed_owner_joins_its_cancelled_bodies_without_queueing_a_delivery() {
     let (initial, _, _) = live.commit_started().unwrap();
     live.committed(initial);
 
-    assert_eq!(live.close(), [held.clone()]);
+    assert_eq!(live.close(), std::slice::from_ref(&held));
     assert!(!live.idle(), "the cancelled body is still owned until it ends");
     assert!(!live.settle(&held, ToolOutcome::Cancelled.into()));
 
