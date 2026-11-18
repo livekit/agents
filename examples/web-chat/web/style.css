@@ -1,30 +1,3 @@
-:root {
-  color-scheme: light dark;
-  --bg: #fff;
-  --side: #f6f6f7;
-  --line: #e4e4e7;
-  --text: #18181b;
-  --muted: #71717a;
-  --mine: #18181b;
-  --mine-text: #fff;
-  --theirs: #f0f0f2;
-  --accent: #1fd5f9;
-  --column: max(16px, calc(50% - 360px));
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0b0b0c;
-    --side: #131315;
-    --line: #26262a;
-    --text: #f4f4f5;
-    --muted: #8b8b93;
-    --mine: #f4f4f5;
-    --mine-text: #0b0b0c;
-    --theirs: #1c1c1f;
-  }
-}
-
 * {
   box-sizing: border-box;
 }
@@ -33,44 +6,44 @@ body {
   display: flex;
   height: 100dvh;
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: #fff;
+  color: #111;
+  font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 button,
 input {
   font: inherit;
   color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
 }
 
 /* the sidebar: logo, new chat, this browser's threads */
 
 aside {
   display: flex;
-  flex: none;
   flex-direction: column;
-  gap: 12px;
-  width: 260px;
-  padding: 16px;
-  background: var(--side);
-  border-right: 1px solid var(--line);
+  gap: 8px;
+  width: 240px;
+  padding: 20px 12px;
+  border-right: 1px solid #eee;
 }
 
 header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  padding: 0 8px 12px;
   font-weight: 600;
 }
 
-#new {
-  padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--bg);
+#new,
+#threads li {
+  padding: 6px 8px;
+  border-radius: 6px;
   text-align: left;
-  cursor: pointer;
 }
 
 #threads {
@@ -78,22 +51,14 @@ header {
   padding: 0;
   overflow-y: auto;
   list-style: none;
+  color: #888;
 }
 
-#threads li {
-  padding: 8px 10px;
-  border-radius: 8px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-}
-
+#new:hover,
 #threads li:hover,
 #threads li.open {
-  background: var(--line);
-  color: var(--text);
+  background: #f4f4f4;
+  color: #111;
 }
 
 /* the open chat and the composer */
@@ -109,67 +74,67 @@ main {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 10px;
-  padding: 24px var(--column);
+  gap: 16px;
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 32px 16px;
   overflow-y: auto;
+}
+
+.hint,
+.pending {
+  color: #888;
 }
 
 .hint {
   margin: auto;
-  color: var(--muted);
 }
 
 .bubble {
-  align-self: flex-start;
-  max-width: 75%;
-  padding: 9px 14px;
-  border-radius: 18px;
-  background: var(--theirs);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .bubble.user {
   align-self: flex-end;
-  background: var(--mine);
-  color: var(--mine-text);
-}
-
-.bubble.pending {
-  color: var(--muted);
+  max-width: 80%;
+  padding: 8px 14px;
+  border-radius: 16px;
+  background: #f4f4f4;
 }
 
 form {
   display: flex;
   gap: 8px;
-  padding: 16px var(--column) 24px;
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 0 16px 24px;
 }
 
 form input {
   flex: 1;
-  padding: 11px 16px;
-  border: 1px solid var(--line);
-  border-radius: 22px;
-  background: var(--bg);
+  padding: 12px 16px;
+  border: 1px solid #ddd;
+  border-radius: 12px;
   outline: none;
+  cursor: text;
 }
 
 form input:focus {
-  border-color: var(--accent);
+  border-color: #111;
 }
 
 form button {
-  padding: 0 18px;
-  border: 0;
-  border-radius: 22px;
-  background: var(--mine);
-  color: var(--mine-text);
-  cursor: pointer;
+  padding: 0 16px;
+  border-radius: 12px;
+  background: #111;
+  color: #fff;
 }
 
 form button:disabled {
-  opacity: 0.4;
-  cursor: default;
+  opacity: 0.3;
 }
 
 @media (max-width: 640px) {
