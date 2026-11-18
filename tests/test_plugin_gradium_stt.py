@@ -831,3 +831,165 @@ async def test_final_end_of_stream_send_on_a_closed_socket_is_not_an_error():
         ev.alternatives[0].text for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT
     ]
     assert finals == ["hello"]
+
+
+async def test_preflight_transcript_is_emitted_when_the_vad_first_trips():
+    """The first positive VAD step sends the words so far as a preflight transcript, so the
+    session can start generating before the model delay elapses and the turn is finalized."""
+    frames = [READY, _text("hello", 0.1), _text("world", 0.4)] + [
+        _vad_step(i, SILENT) for i in range(4)
+    ]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    types = [ev.type for ev in events]
+    assert types == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.PREFLIGHT_TRANSCRIPT,
+        SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+    assert events[3].alternatives[0].text == "hello world"
+    assert events[4].alternatives[0].text == "hello world"
+
+
+def _preflights(events: list[Any]) -> list[str]:
+    return [
+        ev.alternatives[0].text for ev in events if ev.type == SpeechEventType.PREFLIGHT_TRANSCRIPT
+    ]
+
+
+async def test_preflight_transcript_is_resent_when_speech_resumes_with_new_words():
+    """A pause, more words, then another pause: each pause previews the words so far."""
+    frames = [READY, _text("hello", 0.1), _vad_step(0, SILENT)]
+    frames += [_vad_step(1, (0.1,) * len(VAD_HORIZONS)), _text("world", 0.4)]
+    frames += [_vad_step(i, SILENT) for i in range(2, 6)]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    assert _preflights(events) == ["hello", "hello world"]
+    assert events[-1].alternatives[0].text == "hello world"
+
+
+async def test_preflight_transcript_is_resent_when_the_vad_drops_and_trips_again():
+    """A VAD drop resets the preview: the next trip is a new end-of-turn candidate and the
+    session may have had to ignore the first one (the agent was still speaking)."""
+    frames = [READY, _text("hello", 0.1), _vad_step(0, SILENT)]
+    frames += [_vad_step(1, (0.1,) * len(VAD_HORIZONS))]
+    frames += [_vad_step(i, SILENT) for i in range(2, 6)]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    assert _preflights(events) == ["hello", "hello"]
+
+
+async def test_preflight_transcript_carries_the_end_text_timing():
+    """When the server already sent `end_text` at the trip, the preview reports the same
+    end_time as the final transcript of the turn."""
+    frames = [READY, _text("hello", 0.1), {"type": "end_text", "stop_s": 0.4}]
+    frames += [_vad_step(i, SILENT) for i in range(4)]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.start_time_offset = 7.0
+    # the boundary lies within audio already sent, as a real `end_text` always does
+    stream.push_frame(_audio_frame(1.0))
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    preflight = next(ev for ev in events if ev.type == SpeechEventType.PREFLIGHT_TRANSCRIPT)
+    final = events[-1]
+    # the offset is anchored at the first frame's capture time: its push minus its duration
+    assert final.alternatives[0].end_time == pytest.approx(7.0 - 1.0 + 0.4, abs=0.01)
+    assert preflight.alternatives[0].end_time == pytest.approx(final.alternatives[0].end_time)
+
+
+async def test_preflight_transcript_has_no_end_time_before_end_text():
+    """Words still being transcribed at the trip have no end timing yet."""
+    frames = [READY, _text("hello", 0.1)] + [_vad_step(i, SILENT) for i in range(4)]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.start_time_offset = 7.0
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.PREFLIGHT_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    assert events[-1].alternatives[0].end_time == 0.0
+
+
+async def test_no_preflight_transcript_without_words():
+    """A VAD-only turn (vad_start_threshold) has nothing to preview."""
+    frames = [READY, _vad_step(1, (0.1,) * len(VAD_HORIZONS))]
+    frames += [_vad_step(i, SILENT) for i in range(2, 6)]
+    stt, _, _ = _make_stt(frames, vad_start_threshold=0.5)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(stream, lambda ev: ev.type == SpeechEventType.END_OF_SPEECH)
+    finally:
+        await stream.aclose()
+
+    assert _preflights(events) == []
+
+
+async def test_preflight_transcript_can_be_disabled():
+    """`preflight_trigger=None` keeps the interim and final events but previews nothing."""
+    frames = [READY, _text("hello", 0.1)] + [_vad_step(i, SILENT) for i in range(4)]
+    stt, _, _ = _make_stt(frames, preflight_trigger=None)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    assert _preflights(events) == []
+    assert [ev.type for ev in events] == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+
+
+def test_unknown_preflight_trigger_is_rejected():
+    """A misspelt trigger raises instead of silently disabling the preview."""
+    with pytest.raises(ValueError, match="preflight_trigger"):
+        _make_stt([READY], preflight_trigger="vad_trip")
