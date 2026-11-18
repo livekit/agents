@@ -136,7 +136,16 @@ class AvatarioAPI:
                 last_exc = e
                 if not e.retryable:
                     raise
-                logger.warning("Avatario API returned error", extra={"error": str(e)})
+                logger.warning(
+                    "Avatario API returned error",
+                    extra={
+                        "error_message": e.message,
+                        "status_code": e.status_code,
+                        "retryable": e.retryable,
+                        "lk.pii.error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
             except Exception as e:
                 last_exc = e
                 logger.exception("failed to call Avatario API")

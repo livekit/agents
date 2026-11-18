@@ -791,7 +791,7 @@ class RealtimeSession(
                     break
 
             except Exception as e:
-                logger.error(f"Ultravox WebSocket error: {e}", exc_info=True)
+                logger.error("Ultravox WebSocket error", exc_info=True)
 
                 # Determine if error is recoverable based on type
                 is_recoverable = False
@@ -853,8 +853,8 @@ class RealtimeSession(
                     await ws_conn.send_str(json.dumps(msg_dict))
                     if lk_ultravox_debug:
                         logger.debug(">>>", extra={"lk.pii.event": msg_dict})
-            except Exception as e:
-                logger.error(f"Error sending message: {e}", exc_info=True)
+            except Exception:
+                logger.error("Error sending message", exc_info=True)
                 break
 
         self._closing = True
@@ -879,8 +879,8 @@ class RealtimeSession(
                     event = parse_ultravox_event(data)
                     self._handle_ultravox_event(event)
 
-                except Exception as e:
-                    logger.error(f"Error handling message: {e}", exc_info=True)
+                except Exception:
+                    logger.error("Error handling message", exc_info=True)
 
             elif msg.type == aiohttp.WSMsgType.BINARY:
                 self._handle_audio_data(msg.data)
@@ -896,7 +896,7 @@ class RealtimeSession(
                 # Unexpected close
                 raise APIConnectionError(message="Ultravox S2S connection closed unexpectedly")
             elif msg.type == aiohttp.WSMsgType.ERROR:
-                logger.error(f"Ultravox WebSocket error: {ws_conn.exception()}")
+                logger.error("Ultravox WebSocket error", exc_info=ws_conn.exception())
                 break
 
     def _start_new_generation(self, *, created_ts: float | None = None) -> None:
@@ -1249,7 +1249,7 @@ class RealtimeSession(
             )
             current_gen.audio_ch.send_nowait(frame)
         except Exception as e:
-            logger.error(f"Error processing audio data: {e}")
+            logger.error("Error processing audio data", exc_info=e)
 
     def commit_audio(self) -> None:
         logger.warning("commit audio is not supported by Ultravox.")

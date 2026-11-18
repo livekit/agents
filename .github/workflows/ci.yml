@@ -34,6 +34,9 @@ jobs:
         continue-on-error: true
         id: ruff-check
 
+      - name: Check exception logging
+        run: uv run --no-sync python scripts/check_exception_logging.py
+
       - name: Check format
         run: uv run --no-sync ruff format --check .
         continue-on-error: true

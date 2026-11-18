@@ -840,13 +840,13 @@ class _Connection:
         if kind == "Error":
             error = _error_from_frame(data, session_id=self.session_id)
             logger.warning(
-                "AssemblyAI TTS error: %s",
-                error.message,
+                "AssemblyAI TTS error",
                 extra={
                     "session_id": self.session_id,
                     "error_code": data.get("error_code"),
                     "error_type": data.get("error_type"),
                 },
+                exc_info=error,
             )
             self._fail(error)
             return

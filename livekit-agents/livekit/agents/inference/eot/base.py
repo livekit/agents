@@ -419,9 +419,9 @@ class _BaseStreamingTurnDetectorStream:
     def _degrade(self, *, reason: BaseException) -> None:
         """Give up on detection: no transport is left to drain audio or predict."""
         logger.warning(
-            "cloud turn detector failed (%s); local fallback is disabled, so turn detection "
+            "cloud turn detector failed; local fallback is disabled, so turn detection "
             "is off for the rest of this stream and turns commit on the endpointing delay",
-            reason,
+            exc_info=reason,
         )
         self._degraded = True
         while not self._audio_ch.empty():  # close() alone would retain the backlog
@@ -442,8 +442,7 @@ class _BaseStreamingTurnDetectorStream:
 
         if not self._warned_cloud_failure:
             logger.warning(
-                "cloud turn detector failed (%s); falling back to local mini model",
-                reason,
+                "cloud turn detector failed; falling back to local mini model", exc_info=reason
             )
             self._warned_cloud_failure = True
 
@@ -472,8 +471,8 @@ class _BaseStreamingTurnDetectorStream:
     def _on_local_failure(self, *, reason: BaseException) -> None:
         if not self._warned_local_failure:
             logger.warning(
-                "local audio turn detector failed (%s); defaulting to 1.0 and retrying on next turn",
-                reason,
+                "local audio turn detector failed; defaulting to 1.0 and retrying on next turn",
+                exc_info=reason,
             )
             self._warned_local_failure = True
         self._emit_default_for_inflight()

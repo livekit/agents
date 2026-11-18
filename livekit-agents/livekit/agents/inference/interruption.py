@@ -479,13 +479,10 @@ class InterruptionStreamBase(ABC):
 
                     retry_interval = self._conn_options._interval_for_retry(self._num_retries)
                     logger.warning(
-                        "failed to detect interruption, retrying in %ss: %s",
+                        "failed to detect interruption, retrying in %ss",
                         retry_interval,
-                        e,
-                        extra={
-                            "model": self._model._label,
-                            "attempt": self._num_retries,
-                        },
+                        extra={"model": self._model._label, "attempt": self._num_retries},
+                        exc_info=e,
                     )
                     await asyncio.sleep(retry_interval)
 

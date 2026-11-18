@@ -267,7 +267,7 @@ class WebSocketClient:
             return self.connected
 
         except Exception as e:
-            logger.error(f"Connection failed: {e}")
+            logger.error("Connection failed", exc_info=e)
             return False
 
     async def synthesize(
@@ -306,7 +306,7 @@ class WebSocketClient:
             if self.sio is not None:
                 await self.sio.emit("synthesize", message, namespace=WEBSOCKET_NAMESPACE)
         except Exception as e:
-            logger.error(f"Failed to emit synthesis: {e}")
+            logger.error("Failed to emit synthesis", exc_info=e)
             del self.audio_callbacks[request_id]
             del self.active_requests[request_id]
             raise
@@ -529,5 +529,5 @@ class SynthesizeStream(tts.SynthesizeStream):
             output_emitter.end_input()
 
         except Exception as e:
-            logger.error(f"Segment synthesis error: {e}")
+            logger.error("Segment synthesis error", exc_info=e)
             raise APIError(f"Segment synthesis failed: {str(e)}") from e

@@ -367,7 +367,9 @@ class STT(stt.STT):
                                 ) from None
 
                         elif msg.type == aiohttp.WSMsgType.ERROR:
-                            logger.error(f"Gladia WebSocket connection error: {ws.exception()}")
+                            logger.error(
+                                "Gladia WebSocket connection error", exc_info=ws.exception()
+                            )
                             raise ws.exception() or APIConnectionError(
                                 "Gladia WebSocket connection error"
                             )
@@ -398,11 +400,11 @@ class STT(stt.STT):
 
         except asyncio.TimeoutError as e:
             # Catch timeout during connection or initial phase
-            logger.error(f"Timeout during Gladia connection/initialization: {e}")
+            logger.error("Timeout during Gladia connection/initialization", exc_info=e)
             raise APITimeoutError("Timeout connecting to or initializing Gladia session") from e
         except aiohttp.ClientResponseError as e:
             # Error during session initialization POST request
-            logger.error(f"Gladia API status error during session init: {e.status} {e.message}")
+            logger.error("Gladia API status error during session init", exc_info=e)
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status,
@@ -411,12 +413,12 @@ class STT(stt.STT):
             ) from e
         except aiohttp.ClientError as e:
             # General client errors (connection refused, DNS resolution etc.)
-            logger.error(f"Gladia connection error: {e}")
+            logger.error("Gladia connection error", exc_info=e)
             raise APIConnectionError(f"Gladia connection error: {e}") from e
         except Exception as e:
             # Catch-all for other unexpected errors
             logger.exception(
-                f"Unexpected error during Gladia synchronous recognition: {e}"
+                "Unexpected error during Gladia synchronous recognition"
             )  # Use logger.exception to include stack trace
             raise APIConnectionError(f"An unexpected error occurred: {e}") from e
 
@@ -444,7 +446,7 @@ class STT(stt.STT):
                     )
                 return await res.json()  # type: ignore
         except Exception as e:
-            logger.exception(f"Failed to initialize Gladia session: {e}")
+            logger.exception("Failed to initialize Gladia session")
             raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
 
     def _create_speech_event(
@@ -962,8 +964,8 @@ class SpeechStream(stt.SpeechStream):
                     self._process_gladia_message(data)
                     if data.get("type") in ("transcript", "translation"):
                         self._mark_provider_progress()
-                except Exception as e:
-                    logger.exception(f"Error processing Gladia message: {e}")
+                except Exception:
+                    logger.exception("Error processing Gladia message")
             elif msg.type in (
                 aiohttp.WSMsgType.CLOSED,
                 aiohttp.WSMsgType.CLOSE,

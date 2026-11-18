@@ -581,7 +581,7 @@ class RealtimeSession(llm.RealtimeSession):
                 try:
                     await self._socket_ctx.__aexit__(None, None, None)
                 except Exception as e:
-                    logger.warning(f"Error closing Phonic socket: {e}")
+                    logger.warning("Error closing Phonic socket", exc_info=e)
                 finally:
                     self._socket = None
                     self._socket_ctx = None
@@ -1288,7 +1288,7 @@ class RealtimeSession(llm.RealtimeSession):
             for task in done:
                 exception = task.exception()
                 if task is not shutdown_wait_task and exception:
-                    logger.error(f"Error in Phonic task: {exception}")
+                    logger.error("Error in Phonic task", exc_info=exception)
                     raise exception
 
             for task in pending:
@@ -1297,7 +1297,7 @@ class RealtimeSession(llm.RealtimeSession):
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error(f"Phonic Realtime API error: {e}", exc_info=e)
+            logger.error("Phonic Realtime API error", exc_info=e)
             self._emit_error(e, recoverable=False)
         finally:
             await self._close_active_session()
@@ -1332,7 +1332,9 @@ class RealtimeSession(llm.RealtimeSession):
                 elif msg_type == "tool_call":
                     self._handle_tool_call(message)
                 elif msg_type == "warning":
-                    logger.warning(f"Phonic warning: {message.warning.message}")
+                    logger.warning(
+                        "Phonic warning", extra={"lk.pii.warning": message.warning.message}
+                    )
                 elif msg_type == "error":
                     self._emit_error(Exception(message.error.message), recoverable=False)
                 elif msg_type == "assistant_ended_conversation":
@@ -1352,7 +1354,7 @@ class RealtimeSession(llm.RealtimeSession):
                     self._ready_to_start.set()
         except Exception as e:
             if not self._session_should_close.is_set():
-                logger.error(f"Error in Phonic receive loop: {e}", exc_info=e)
+                logger.error("Error in Phonic receive loop", exc_info=e)
                 self._emit_error(e, recoverable=True)
                 raise e
 
@@ -1452,7 +1454,7 @@ class RealtimeSession(llm.RealtimeSession):
                     )
                     audio_duration_sec = frame.samples_per_channel / PHONIC_OUTPUT_SAMPLE_RATE
             except Exception as e:
-                logger.error(f"Failed to decode Phonic audio chunk: {e}")
+                logger.error("Failed to decode Phonic audio chunk", exc_info=e)
 
         if message.text:
             gen.push_text(

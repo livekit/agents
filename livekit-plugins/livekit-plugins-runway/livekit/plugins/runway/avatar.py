@@ -193,7 +193,7 @@ class AvatarSession(BaseAvatarSession):
                 if isinstance(error, APIConnectionError):
                     logger.warning(
                         "failed to call Runway avatar API",
-                        extra={"error": str(error)},
+                        extra={"lk.pii.error": str(error), "error_type": type(error).__name__},
                     )
                 else:
                     logger.exception("failed to call Runway avatar API")
@@ -232,7 +232,7 @@ class AvatarSession(BaseAvatarSession):
             except Exception as exc:
                 logger.warning(
                     "error ending Runway realtime session via data channel",
-                    extra={"error": str(exc)},
+                    extra={"lk.pii.error": str(exc), "error_type": type(exc).__name__},
                 )
 
         # Fallback for hard shutdowns where the room is already disconnected
@@ -273,7 +273,11 @@ class AvatarSession(BaseAvatarSession):
         except Exception as exc:
             logger.warning(
                 "error cancelling Runway realtime session",
-                extra={"session_id": session_id, "error": str(exc)},
+                extra={
+                    "session_id": session_id,
+                    "lk.pii.error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
             )
 
     async def aclose(self) -> None:

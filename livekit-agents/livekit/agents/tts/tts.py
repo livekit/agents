@@ -446,10 +446,10 @@ class ChunkedStream(ABC):
                 retry_interval = self._conn_options._interval_for_retry(i)
                 self._emit_error(e, recoverable=True)
                 logger.warning(
-                    "failed to synthesize speech: %s, retrying in %ss",
-                    e,
+                    "failed to synthesize speech, retrying in %ss",
                     retry_interval,
                     extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
+                    exc_info=e,
                 )
 
                 await asyncio.sleep(retry_interval)
@@ -662,10 +662,10 @@ class SynthesizeStream(ABC):
                 retry_interval = self._conn_options._interval_for_retry(i)
                 self._emit_error(e, recoverable=True)
                 logger.warning(
-                    "failed to synthesize speech: %s, retrying in %ss",
-                    e,
+                    "failed to synthesize speech, retrying in %ss",
                     retry_interval,
                     extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
+                    exc_info=e,
                 )
 
                 await asyncio.sleep(retry_interval)

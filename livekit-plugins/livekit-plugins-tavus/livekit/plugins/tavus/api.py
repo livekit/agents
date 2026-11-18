@@ -212,14 +212,24 @@ class TavusAPI:
                     raise
                 logger.warning(
                     "failed to call tavus api",
-                    extra={"attempt": attempt + 1, "status_code": e.status_code},
+                    extra={
+                        "error_message": e.message,
+                        "retryable": e.retryable,
+                        "attempt": attempt + 1,
+                        "status_code": e.status_code,
+                    },
                 )
                 if attempt >= self._conn_options.max_retry:
                     raise
                 await asyncio.sleep(self._conn_options.retry_interval)
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning(
-                    "failed to call tavus api", extra={"attempt": attempt + 1, "error": str(e)}
+                    "failed to call tavus api",
+                    extra={
+                        "attempt": attempt + 1,
+                        "lk.pii.error": str(e),
+                        "error_type": type(e).__name__,
+                    },
                 )
                 if attempt >= self._conn_options.max_retry:
                     raise APIConnectionError("Failed to call Tavus API after all retries") from e

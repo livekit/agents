@@ -30,7 +30,7 @@ def _discover_and_import_plugins() -> list[str]:
         try:
             importlib.import_module(name)
         except Exception as e:
-            logger.warning("failed to import %s: %s", name, e)
+            logger.warning("failed to import %s", name, exc_info=e)
     return attempted
 
 
@@ -48,7 +48,7 @@ def _download_files() -> int:
         try:
             plugin.download_files()
         except Exception as e:
-            logger.error("failed downloading files for %s: %s", plugin.package, e)
+            logger.error("failed downloading files for %s", plugin.package, exc_info=e)
             exit_code = 1
         else:
             logger.info("finished downloading files for %s", plugin.package)

@@ -83,7 +83,7 @@ class DIDAPI:
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning(
                     f"D-ID API request failed (attempt {attempt + 1}/{num_attempts})",
-                    extra={"error": str(e)},
+                    extra={"lk.pii.error": str(e), "error_type": type(e).__name__},
                 )
                 if attempt == num_attempts - 1:
                     raise APIConnectionError(f"Failed to connect to D-ID API at {url}") from e

@@ -492,7 +492,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
             return
         logger.debug(
             "AMD: call ended before detection could run, settling",
-            extra={"error": error},
+            extra={"lk.pii.error": error},
         )
         self._classifier.settle(AMDCategory.UNCERTAIN, reason="participant_missing")
 

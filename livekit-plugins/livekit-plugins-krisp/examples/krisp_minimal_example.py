@@ -108,7 +108,7 @@ async def test_krisp_filter():
 
     except Exception as e:
         logger.error("\n" + "=" * 60)
-        logger.error(f"❌ TEST FAILED: {e}")
+        logger.error("❌ TEST FAILED", exc_info=e)
         logger.error("=" * 60)
         raise
 

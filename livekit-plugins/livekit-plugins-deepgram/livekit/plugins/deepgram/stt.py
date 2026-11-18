@@ -640,7 +640,7 @@ class SpeechStream(stt.SpeechStream):
                     return
                 raise APIConnectionError("deepgram connection closed unexpectedly") from e
             except Exception as e:
-                logger.warning(f"Deepgram keepalive task exited: {e}")
+                logger.warning("Deepgram keepalive task exited", exc_info=e)
                 return
 
         @utils.log_exceptions(logger=logger)

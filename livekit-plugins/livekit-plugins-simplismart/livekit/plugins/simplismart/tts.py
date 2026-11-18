@@ -230,10 +230,10 @@ class ChunkedStream(tts.ChunkedStream):
                 output_emitter.flush()
 
         except asyncio.TimeoutError as e:
-            logger.error("Simplismart TTS API timeout: %s", e)
+            logger.error("Simplismart TTS API timeout", exc_info=e)
             raise APITimeoutError("Simplismart TTS API request timed out") from e
         except aiohttp.ClientError as e:
-            logger.error("Simplismart TTS API client error: %s", e)
+            logger.error("Simplismart TTS API client error", exc_info=e)
             raise APIConnectionError(f"Simplismart TTS API connection error: {e}") from e
         except APIStatusError:
             raise

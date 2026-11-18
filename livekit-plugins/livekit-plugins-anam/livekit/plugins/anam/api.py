@@ -174,7 +174,7 @@ class AnamAPI:
                         raise
                     logger.warning(
                         f"API request to {url} failed on attempt {attempt + 1}",
-                        extra={"error": str(e)},
+                        extra={"lk.pii.error": str(e), "error_type": type(e).__name__},
                     )
                     if attempt >= self._conn_options.max_retry:
                         raise
@@ -182,7 +182,7 @@ class AnamAPI:
                 except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                     logger.warning(
                         f"API request to {url} failed on attempt {attempt + 1}",
-                        extra={"error": str(e)},
+                        extra={"lk.pii.error": str(e), "error_type": type(e).__name__},
                     )
                     if attempt >= self._conn_options.max_retry:
                         raise APIConnectionError(f"Failed to connect to Anam API at {url}") from e

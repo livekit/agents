@@ -267,10 +267,10 @@ class STT(stt.STT):
                     alternatives=alternatives,
                 )
         except asyncio.TimeoutError as e:
-            logger.error(f"Simplismart API timeout: {e}")
+            logger.error("Simplismart API timeout", exc_info=e)
             raise APITimeoutError("Simplismart API request timed out") from e
         except aiohttp.ClientError as e:
-            logger.error(f"Simplismart API client error: {e}")
+            logger.error("Simplismart API client error", exc_info=e)
             raise APIConnectionError(f"Simplismart API connection error: {e}") from e
         except APIStatusError:
             raise
@@ -392,7 +392,7 @@ class SpeechStream(stt.SpeechStream):
                     if self._session.closed:
                         return
                     # Preserve the underlying transport error.
-                    logger.warning("simplismart connection lost: %r", ws.exception())
+                    logger.warning("simplismart connection lost", exc_info=ws.exception())
                     self._reconnect_event.set()
                     return
 
@@ -491,7 +491,7 @@ class SpeechStream(stt.SpeechStream):
             )
         except Exception as e:
             logger.error(
-                f"Failed to send initial configuration: {e}",
+                "Failed to send initial configuration",
                 extra={"request_id": self._request_id},
                 exc_info=True,
             )
@@ -542,13 +542,10 @@ class SpeechStream(stt.SpeechStream):
                 },
             )
 
-        except Exception as e:
+        except Exception:
             logger.error(
-                f"Error processing transcript data: {e}",
-                extra={
-                    "request_id": self._request_id,
-                    "lk.pii.transcript_text": transcript_text,
-                },
+                "Error processing transcript data",
+                extra={"request_id": self._request_id, "lk.pii.transcript_text": transcript_text},
                 exc_info=True,
             )
             raise

@@ -331,10 +331,10 @@ class _CloudTransport:
 
                 retry_interval = self._conn_options._interval_for_retry(self._num_retries)
                 logger.warning(
-                    "livekit turn detector connection failed: %s, retrying in %ss",
-                    e,
+                    "livekit turn detector connection failed, retrying in %ss",
                     retry_interval,
                     extra={"attempt": self._num_retries},
+                    exc_info=e,
                 )
                 await asyncio.sleep(retry_interval)
                 self._num_retries += 1

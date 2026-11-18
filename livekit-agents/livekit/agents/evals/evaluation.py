@@ -169,7 +169,7 @@ class JudgeGroup:
                 )
                 return judge.name, result
             except Exception as e:
-                logger.warning(f"Judge '{judge.name}' failed: {e}")
+                logger.warning(f"Judge '{judge.name}' failed", exc_info=e)
                 return judge.name, e
 
         results = await asyncio.gather(*[run_judge(j) for j in self._judges])

@@ -57,7 +57,7 @@ def get_app_name(*, mod_data: ModuleData) -> str:
     try:
         mod = importlib.import_module(mod_data.module_import_str)
     except (ImportError, ValueError) as e:
-        logger.error(f"Import error: {e}")
+        logger.error("Import error", exc_info=e)
         logger.warning("Ensure all the package directories have an [blue]__init__.py[/blue] file")
         raise
 

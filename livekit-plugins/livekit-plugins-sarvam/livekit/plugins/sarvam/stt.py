@@ -369,7 +369,7 @@ def _calculate_audio_duration(
             # Single AudioFrame
             return buffer.samples_per_channel / buffer.sample_rate
     except Exception as e:
-        logger.warning(f"Could not calculate audio duration: {e}")
+        logger.warning("Could not calculate audio duration", exc_info=e)
     return 0.0
 
 
@@ -726,16 +726,16 @@ class STT(stt.STT):
                 )
 
         except asyncio.TimeoutError as e:
-            self._logger.error(f"Sarvam API timeout: {e}")
+            self._logger.error("Sarvam API timeout", exc_info=e)
             raise APITimeoutError("Sarvam API request timed out") from e
         except aiohttp.ClientError as e:
-            self._logger.error(f"Sarvam API client error: {e}")
+            self._logger.error("Sarvam API client error", exc_info=e)
             raise APIConnectionError(f"Sarvam API connection error: {e}") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
             # Preserve provider-originated status/body/retry metadata.
             raise
         except Exception as e:
-            self._logger.error(f"Error during Sarvam STT processing: {e}")
+            self._logger.error("Error during Sarvam STT processing", exc_info=e)
             raise APIConnectionError(f"Unexpected error in Sarvam STT: {e}") from e
 
     def stream(
@@ -1093,8 +1093,7 @@ class SpeechStream(stt.SpeechStream):
                 await utils.aio.cancel_and_wait(*tasks_to_cancel)
             except Exception as e:
                 self._logger.warning(
-                    f"Error cancelling tasks: {e}",
-                    extra=self._build_log_context(),
+                    "Error cancelling tasks", extra=self._build_log_context(), exc_info=e
                 )
 
         # Close WebSocket
@@ -1103,7 +1102,9 @@ class SpeechStream(stt.SpeechStream):
                 await self._ws.close()
                 self._logger.debug("WebSocket closed", extra=self._build_log_context())
         except Exception as e:
-            self._logger.warning(f"Error closing WebSocket: {e}", extra=self._build_log_context())
+            self._logger.warning(
+                "Error closing WebSocket", extra=self._build_log_context(), exc_info=e
+            )
         finally:
             self._ws = None
 
@@ -1111,7 +1112,9 @@ class SpeechStream(stt.SpeechStream):
         try:
             await super().aclose()
         except Exception as e:
-            self._logger.warning(f"Error in parent cleanup: {e}", extra=self._build_log_context())
+            self._logger.warning(
+                "Error in parent cleanup", extra=self._build_log_context(), exc_info=e
+            )
 
         # Close session last
         try:
@@ -1119,7 +1122,9 @@ class SpeechStream(stt.SpeechStream):
                 await self._session.close()
                 self._logger.debug("HTTP session closed", extra=self._build_log_context())
         except Exception as e:
-            self._logger.warning(f"Error closing session: {e}", extra=self._build_log_context())
+            self._logger.warning(
+                "Error closing session", extra=self._build_log_context(), exc_info=e
+            )
         finally:
             self._client_request_id = None
             self._server_request_id = None
@@ -1170,7 +1175,7 @@ class SpeechStream(stt.SpeechStream):
             )
         except Exception as e:
             self._logger.error(
-                f"Failed to send initial configuration: {e}",
+                "Failed to send initial configuration",
                 extra=self._build_log_context(),
                 exc_info=True,
             )
@@ -1186,7 +1191,7 @@ class SpeechStream(stt.SpeechStream):
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             async with self._connection_lock:
                 self._connection_state = ConnectionState.FAILED
-            self._logger.error(f"Connection failed: {e}", extra=self._build_log_context())
+            self._logger.error("Connection failed", extra=self._build_log_context(), exc_info=e)
             raise APIConnectionError(f"Failed to connect to STT WebSocket: {e}") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
             async with self._connection_lock:
@@ -1197,7 +1202,7 @@ class SpeechStream(stt.SpeechStream):
             async with self._connection_lock:
                 self._connection_state = ConnectionState.FAILED
             self._logger.error(
-                f"Unexpected error in STT WebSocket session: {e}",
+                "Unexpected error in STT WebSocket session",
                 extra=self._build_log_context(),
                 exc_info=True,
             )
@@ -1327,8 +1332,7 @@ class SpeechStream(stt.SpeechStream):
                     await ws.close()
             except Exception as e:
                 self._logger.warning(
-                    f"Error closing WebSocket: {e}",
-                    extra=self._build_log_context(),
+                    "Error closing WebSocket", extra=self._build_log_context(), exc_info=e
                 )
 
     @utils.log_exceptions(logger=logger)
@@ -1387,9 +1391,9 @@ class SpeechStream(stt.SpeechStream):
                                     extra=self._build_log_context(),
                                 )
 
-                    except Exception as e:
+                    except Exception:
                         self._logger.error(
-                            f"Error processing audio frame: {e}",
+                            "Error processing audio frame",
                             extra=self._build_log_context(),
                             exc_info=True,
                         )
@@ -1415,9 +1419,9 @@ class SpeechStream(stt.SpeechStream):
 
             await ws.send_str(self._end_of_stream_msg)
 
-        except Exception as e:
+        except Exception:
             self._logger.error(
-                f"Error in audio processing: {e}",
+                "Error in audio processing",
                 extra={**self._build_log_context(), "chunks_sent": chunks_sent},
                 exc_info=True,
             )
@@ -1457,7 +1461,8 @@ class SpeechStream(stt.SpeechStream):
                             extra={
                                 **self._build_log_context(),
                                 "lk.pii.raw_data": msg.data,
-                                "error": str(e),
+                                "lk.pii.error": str(e),
+                                "error_type": type(e).__name__,
                             },
                         )
                         continue  # Skip malformed message
@@ -1467,7 +1472,11 @@ class SpeechStream(stt.SpeechStream):
                     except Exception as e:
                         self._logger.error(
                             "Error processing WebSocket message",
-                            extra={**self._build_log_context(), "error": str(e)},
+                            extra={
+                                **self._build_log_context(),
+                                "lk.pii.error": str(e),
+                                "error_type": type(e).__name__,
+                            },
                             exc_info=True,
                         )
                         raise APIStatusError(
@@ -1532,11 +1541,9 @@ class SpeechStream(stt.SpeechStream):
         except (APIStatusError, APIConnectionError, APITimeoutError):
             # Already logged at origin — just propagate
             raise
-        except Exception as e:
+        except Exception:
             self._logger.error(
-                f"Error in message processing loop: {e}",
-                extra=self._build_log_context(),
-                exc_info=True,
+                "Error in message processing loop", extra=self._build_log_context(), exc_info=True
             )
             raise
 
@@ -1575,15 +1582,16 @@ class SpeechStream(stt.SpeechStream):
 
         except KeyError as e:
             self._logger.warning(
-                f"Missing required field in message: {e}",
+                "Missing required field in message",
                 extra={**self._build_log_context(), "lk.pii.data": data},
+                exc_info=e,
             )
         except (APIStatusError, APIConnectionError):
             # Let API errors propagate without re-wrapping
             raise
         except Exception as e:
             self._logger.error(
-                f"Unexpected error handling message: {e}",
+                "Unexpected error handling message",
                 extra={**self._build_log_context(), "lk.pii.data": data},
                 exc_info=True,
             )
@@ -1635,13 +1643,10 @@ class SpeechStream(stt.SpeechStream):
                 },
             )
 
-        except Exception as e:
+        except Exception:
             self._logger.error(
-                f"Error processing transcript data: {e}",
-                extra={
-                    **self._build_log_context(),
-                    "lk.pii.transcript_data": transcript_data,
-                },
+                "Error processing transcript data",
+                extra={**self._build_log_context(), "lk.pii.transcript_data": transcript_data},
                 exc_info=True,
             )
             raise
@@ -1697,9 +1702,9 @@ class SpeechStream(stt.SpeechStream):
                     extra=self._build_log_context(),
                 )
 
-        except Exception as e:
+        except Exception:
             self._logger.error(
-                f"Error processing VAD event: {e}",
+                "Error processing VAD event",
                 extra={**self._build_log_context(), "lk.pii.event_data": event_data},
                 exc_info=True,
             )

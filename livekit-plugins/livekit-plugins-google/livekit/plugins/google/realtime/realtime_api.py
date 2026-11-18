@@ -608,7 +608,7 @@ class RealtimeSession(llm.RealtimeSession):
                 try:
                     await self._active_session.close()
                 except Exception as e:
-                    logger.warning(f"error closing Gemini session: {e}")
+                    logger.warning("error closing Gemini session", exc_info=e)
                 finally:
                     self._active_session = None
 
@@ -1222,7 +1222,9 @@ class RealtimeSession(llm.RealtimeSession):
 
                     for task in done:
                         if task is not restart_wait_task and task.exception():
-                            logger.error(f"error in task {task.get_name()}: {task.exception()}")
+                            logger.error(
+                                "error in task %s", task.get_name(), exc_info=task.exception()
+                            )
                             raise task.exception() or Exception(f"{task.get_name()} failed")
 
                     if restart_wait_task not in done and self._msg_ch.closed:
@@ -1244,10 +1246,7 @@ class RealtimeSession(llm.RealtimeSession):
             except Exception as e:
                 # Provide a hint for 1008 errors (often model/API mismatch for unknown models)
                 hint = _get_1008_error_hint(str(e))
-                if hint:
-                    logger.error(f"Gemini Realtime API error: {e}{hint}", exc_info=e)
-                else:
-                    logger.error(f"Gemini Realtime API error: {e}", exc_info=e)
+                logger.error("Gemini Realtime API error", exc_info=e, extra={"hint": hint})
 
                 if not self._msg_ch.closed:
                     # Gemini Live closes with 1007 ("Request contains an invalid argument")
@@ -1357,7 +1356,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         except Exception as e:
             if not self._session_should_close.is_set():
-                logger.error(f"error in send task: {e}", exc_info=e)
+                logger.error("error in send task", exc_info=e)
                 self._session_error = e
                 self._mark_restart_needed(on_error=True)
         finally:
@@ -1450,7 +1449,7 @@ class RealtimeSession(llm.RealtimeSession):
                 # TODO(dz): a server-side turn is complete
         except Exception as e:
             if not self._session_should_close.is_set():
-                logger.error(f"error in receive task: {e}", exc_info=e)
+                logger.error("error in receive task", exc_info=e)
                 self._session_error = e
                 self._mark_restart_needed(on_error=True)
         finally:
@@ -1626,7 +1625,7 @@ class RealtimeSession(llm.RealtimeSession):
                         )
                         current_gen.audio_ch.send_nowait(frame)
                     except ValueError as e:
-                        logger.error(f"Error creating audio frame from Gemini data: {e}")
+                        logger.error("Error creating audio frame from Gemini data", exc_info=e)
 
         if input_transcription := server_content.input_transcription:
             text = input_transcription.text

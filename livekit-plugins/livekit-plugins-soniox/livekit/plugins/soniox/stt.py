@@ -384,7 +384,7 @@ class SpeechStream(stt.SpeechStream):
                 raise
             except asyncio.TimeoutError as e:
                 logger.error(
-                    f"Timeout during Soniox Speech-to-Text API connection/initialization: {e}"
+                    "Timeout during Soniox Speech-to-Text API connection/initialization", exc_info=e
                 )
                 raise APITimeoutError(
                     "Timeout connecting to or initializing Soniox Speech-to-Text API session"
@@ -392,19 +392,18 @@ class SpeechStream(stt.SpeechStream):
 
             except aiohttp.ClientResponseError as e:
                 logger.error(
-                    "Soniox Speech-to-Text API status error during session init:"
-                    + f"{e.status} {e.message}"
+                    "Soniox Speech-to-Text API status error during session init", exc_info=e
                 )
                 raise APIStatusError(
                     message=e.message, status_code=e.status, request_id=None, body=None
                 ) from e
 
             except aiohttp.ClientError as e:
-                logger.error(f"Soniox Speech-to-Text API connection error: {e}")
+                logger.error("Soniox Speech-to-Text API connection error", exc_info=e)
                 raise APIConnectionError(f"Soniox Speech-to-Text API connection error: {e}") from e
 
             except Exception as e:
-                logger.exception(f"Unexpected error occurred: {e}")
+                logger.exception("Unexpected error occurred")
                 raise APIConnectionError(f"An unexpected error occurred: {e}") from e
             # Close the WebSocket connection on finish.
             finally:
@@ -424,7 +423,7 @@ class SpeechStream(stt.SpeechStream):
                 return
             raise APIConnectionError("Soniox STT keepalive write failed") from e
         except Exception as e:
-            logger.error(f"Error while sending keep alive message: {e}")
+            logger.error("Error while sending keep alive message", exc_info=e)
 
     async def _prepare_audio_task(self) -> None:
         """Read audio frames and enqueue PCM data for sending."""
@@ -459,7 +458,7 @@ class SpeechStream(stt.SpeechStream):
                     return
                 raise APIConnectionError("Soniox STT audio write failed") from e
             except Exception as e:
-                logger.error(f"Error while sending audio data: {e}")
+                logger.error("Error while sending audio data", exc_info=e)
                 break
 
     async def _recv_messages_task(self) -> None:
@@ -554,7 +553,9 @@ class SpeechStream(stt.SpeechStream):
 
                 if msg.type == aiohttp.WSMsgType.ERROR:
                     # Preserve the underlying transport error.
-                    logger.warning("Soniox STT WebSocket error frame: %r", self._ws.exception())
+                    logger.warning(
+                        "Soniox STT WebSocket error frame", exc_info=self._ws.exception()
+                    )
                     break
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -681,8 +682,8 @@ class SpeechStream(stt.SpeechStream):
 
                 except APIError:
                     raise
-                except Exception as e:
-                    logger.exception(f"Error processing message: {e}")
+                except Exception:
+                    logger.exception("Error processing message")
 
         except asyncio.CancelledError:
             # Normal shutdown — don't trigger reconnect.
@@ -690,9 +691,9 @@ class SpeechStream(stt.SpeechStream):
         except APIError:
             raise
         except aiohttp.ClientError as e:
-            logger.error(f"WebSocket error while receiving: {e}")
+            logger.error("WebSocket error while receiving", exc_info=e)
         except Exception as e:
-            logger.error(f"Unexpected error while receiving messages: {e}")
+            logger.error("Unexpected error while receiving messages", exc_info=e)
 
         # Request reconnect if STT silently dies on WS drop.
         if not self._reconnect_event.is_set():

@@ -26,7 +26,7 @@ def _cpu_count_from_env() -> float | None:
         if "NUM_CPUS" in os.environ:
             return float(os.environ["NUM_CPUS"])
     except ValueError as e:
-        logger.warning("failed to parse NUM_CPUS from environment: %s", e)
+        logger.warning("failed to parse NUM_CPUS from environment", exc_info=e)
     return None
 
 

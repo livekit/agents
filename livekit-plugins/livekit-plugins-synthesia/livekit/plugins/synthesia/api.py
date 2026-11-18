@@ -131,7 +131,7 @@ class SynthesiaAPI:
                 last_body, last_exc = None, e
                 logger.debug(
                     "synthesia session request errored, retrying",
-                    extra={"error": type(e).__name__},
+                    extra={"error_type": type(e).__name__},
                 )
 
             if attempt < conn_options.max_retry:

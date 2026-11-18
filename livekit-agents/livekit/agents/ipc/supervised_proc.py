@@ -472,8 +472,9 @@ class SupervisedProc(ABC):
                 )
             except Exception as e:
                 logger.warning(
-                    f"failed to mark process as dead for prometheus: {e}",
+                    "failed to mark process as dead for prometheus",
                     extra=self.logging_extra(),
+                    exc_info=e,
                 )
 
         self._proc.close()
@@ -664,9 +665,7 @@ class SupervisedProc(ABC):
                     return
 
                 logger.warning(
-                    "failed to get memory info for process: %s",
-                    e,
-                    extra=self.logging_extra(),
+                    "failed to get memory info for process", extra=self.logging_extra(), exc_info=e
                 )
                 # don't bother rechecking if we cannot get process info
                 return
