@@ -436,6 +436,31 @@ async def test_speech_stream_sends_language_in_json_config():
     assert setup_msg["json_config"] == {"language": "pt", "temp": 0.3}
 
 
+async def test_setup_send_failure_is_retryable_and_closes_the_socket():
+    """A server closing right after the handshake fails the setup send."""
+    from livekit.agents import APIConnectionError
+
+    stt, _, ws = _make_stt([READY], fail_send_on="setup")
+    closes: list[bool] = []
+    close = ws.close
+
+    async def tracked_close() -> bool:
+        closes.append(True)
+        return await close()
+
+    ws.close = tracked_close  # type: ignore[method-assign]
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIConnectionError) as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.retryable is True
+    finally:
+        await stream.aclose()
+    assert closes
+
+
 @pytest.mark.parametrize(
     ("options", "expected"),
     [

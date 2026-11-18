@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import dataclasses
 import json
 import os
@@ -29,6 +30,7 @@ import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     LanguageCode,
@@ -622,5 +624,11 @@ class SpeechStream(stt.SpeechStream):
         if self._opts.log_level is not None:
             setup_msg["log_level"] = self._opts.log_level
 
-        await ws.send_str(json.dumps(setup_msg))
+        try:
+            await ws.send_str(json.dumps(setup_msg))
+        except Exception as e:
+            # the server closed right after the handshake
+            with contextlib.suppress(Exception):
+                await ws.close()
+            raise APIConnectionError("failed to send the Gradium setup") from e
         return ws
