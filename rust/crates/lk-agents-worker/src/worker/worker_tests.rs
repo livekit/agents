@@ -3,11 +3,13 @@
     clippy::disallowed_methods,
     reason = "tests drive tokio's sync primitives directly"
 )]
+use super::{ActiveConnection, ConnectionEvent, Heartbeat, Outbox, WriteCompletion};
 use crate::transport::{
     Connected, TransportError, TransportEvent, WorkerSink, WorkerStream, WorkerTransport,
 };
 use crate::*;
 use async_trait::async_trait;
+use futures_util::FutureExt;
 use livekit_protocol::{self as protocol, RegisterWorkerResponse, ServerMessage, server_message};
 use lk_agents_abi::{Clock, Ts};
 use parking_lot::Mutex;
@@ -594,6 +596,117 @@ async fn an_open_connection_reconnects_when_a_ping_goes_unanswered() {
     task.await.unwrap().unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_queued_ping_gets_its_full_pong_deadline_after_the_write() {
+    use lk_agents_net::clock::RealClock;
+
+    let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
+    let mut outbox = Outbox::new(Duration::from_secs(10), clock.clone());
+    let wire = Arc::new(Mutex::new(Wire::default()));
+    let (release, earlier_write) = tokio::sync::oneshot::channel();
+    let mut connection = ActiveConnection {
+        transport: Connected {
+            sink: Arc::new(Sink(wire.clone())),
+            stream: Box::new(Stream(Default::default())),
+        },
+        registration_deadline: None,
+        heartbeat: Some(Heartbeat::SendPingAt(clock.now())),
+        writing: Some(
+            async move {
+                earlier_write.await.unwrap();
+                Ok(WriteCompletion::Message)
+            }
+            .boxed(),
+        ),
+    };
+
+    assert!(matches!(
+        connection.next_event(&mut outbox, &clock).await,
+        Ok(ConnectionEvent::Progress)
+    ));
+    let event = connection.next_event(&mut outbox, &clock);
+    assert!(tokio::time::timeout(Duration::from_secs(3), event).await.is_err());
+    assert!(wire.lock().sent.is_empty());
+
+    release.send(()).unwrap();
+    assert!(matches!(
+        connection.next_event(&mut outbox, &clock).await,
+        Ok(ConnectionEvent::Progress)
+    ));
+    assert!(matches!(
+        connection.next_event(&mut outbox, &clock).await,
+        Ok(ConnectionEvent::Progress)
+    ));
+    assert!(matches!(
+        wire.lock().sent[0].message,
+        Some(protocol::worker_message::Message::Ping(_))
+    ));
+
+    let event = connection.next_event(&mut outbox, &clock);
+    assert!(tokio::time::timeout(Duration::from_millis(1999), event).await.is_err());
+    let event = connection.next_event(&mut outbox, &clock);
+    let result = tokio::time::timeout(Duration::from_millis(100), event).await.unwrap();
+    assert!(
+        matches!(result, Err(RuntimeError::Connection(TransportError::Failed(reason))) if reason.contains("waiting for LiveKit pong"))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_ready_matching_pong_wins_at_the_deadline() {
+    use lk_agents_net::clock::RealClock;
+
+    let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
+    let mut outbox = Outbox::new(Duration::from_secs(10), clock.clone());
+    let timestamp = 1234;
+    let mut connection = ActiveConnection {
+        transport: Connected {
+            sink: Arc::new(Sink(Arc::new(Mutex::new(Wire::default())))),
+            stream: Box::new(Stream([Ok(pong_message(timestamp))].into())),
+        },
+        registration_deadline: None,
+        heartbeat: Some(Heartbeat::AwaitingPong { timestamp, sent_at: clock.now() }),
+        writing: None,
+    };
+    tokio::time::advance(Duration::from_secs(2)).await;
+
+    let event = connection.next_event(&mut outbox, &clock).await;
+    assert!(matches!(event, Ok(ConnectionEvent::ServerMessage(_))));
+    assert!(matches!(connection.heartbeat, Some(Heartbeat::SendPingAt(_))));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pong_received_before_the_write_completes_is_kept() {
+    use lk_agents_net::clock::RealClock;
+
+    let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
+    let mut outbox = Outbox::new(Duration::from_secs(10), clock.clone());
+    let timestamp = 1234;
+    let (release, write) = tokio::sync::oneshot::channel();
+    let mut connection = ActiveConnection {
+        transport: Connected {
+            sink: Arc::new(Sink(Arc::new(Mutex::new(Wire::default())))),
+            stream: Box::new(Stream([Ok(pong_message(timestamp))].into())),
+        },
+        registration_deadline: None,
+        heartbeat: Some(Heartbeat::SendingPing { timestamp, pong_received: false }),
+        writing: Some(
+            async move {
+                write.await.unwrap();
+                Ok(WriteCompletion::Ping)
+            }
+            .boxed(),
+        ),
+    };
+
+    let event = connection.next_event(&mut outbox, &clock).await;
+    assert!(matches!(event, Ok(ConnectionEvent::ServerMessage(_))));
+    release.send(()).unwrap();
+
+    let event = connection.next_event(&mut outbox, &clock).await;
+    assert!(matches!(event, Ok(ConnectionEvent::Progress)));
+    assert!(matches!(connection.heartbeat, Some(Heartbeat::SendPingAt(_))));
+}
+
 // Catches: the reconnect budget spent over the worker's lifetime instead of per outage (the
 // reference resets it on each connect): with `max_retry = 1`, an outage after a recovered one
 // still gets its retry.
@@ -895,8 +1008,12 @@ async fn an_unanswered_webtransport_dial_fails_startup_with_the_reason() {
 async fn dropping_command_handles_does_not_starve_registration_deadlines() {
     let RuntimeRig { mut runtime, handle, peer: _peer, sent: _sent, closed, .. } = runtime_rig();
     drop(handle);
-    let result = tokio::time::timeout(Duration::from_secs(11), runtime.run()).await.unwrap();
-    assert!(matches!(result, Err(RuntimeError::RetriesExhausted { retries: 0, .. })));
+    let started = tokio::time::Instant::now();
+    let error =
+        tokio::time::timeout(Duration::from_secs(11), runtime.run()).await.unwrap().unwrap_err();
+    assert!(matches!(error, RuntimeError::RetriesExhausted { retries: 0, .. }));
+    assert!(error.to_string().contains("registration timed out"));
+    assert!(started.elapsed() >= Duration::from_secs(10));
     assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 

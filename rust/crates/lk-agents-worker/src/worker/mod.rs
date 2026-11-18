@@ -267,6 +267,12 @@ struct PendingWrite {
     deadline: Ts,
 }
 
+enum WriteCompletion {
+    Message,
+    Availability(String),
+    Ping,
+}
+
 /// Encode the core's ordered acceptance without making another admission decision.
 fn availability_message(job_id: &str, arguments: crate::AcceptArguments) -> WorkerMessage {
     WorkerMessage {
@@ -363,24 +369,23 @@ struct ActiveConnection {
     /// `None` after the server's registration response has been received.
     registration_deadline: Option<Ts>,
     heartbeat: Option<Heartbeat>,
-    writing: Option<BoxFuture<'static, Result<Option<String>, TransportError>>>,
+    writing: Option<BoxFuture<'static, Result<WriteCompletion, TransportError>>>,
 }
 
 #[derive(Clone, Copy)]
 enum Heartbeat {
     SendPingAt(Ts),
+    SendingPing { timestamp: i64, pong_received: bool },
     AwaitingPong { timestamp: i64, sent_at: Ts },
 }
 
 impl Heartbeat {
-    async fn due(heartbeat: Option<Self>, clock: &dyn Clock) -> Self {
-        let Some(heartbeat) = heartbeat else { return std::future::pending().await };
-        let deadline = match heartbeat {
-            Self::SendPingAt(at) => at,
-            Self::AwaitingPong { sent_at, .. } => sent_at.saturating_add(WORKER_PONG_TIMEOUT),
-        };
-        clock.wait_until(deadline).await;
-        heartbeat
+    fn deadline(self) -> Option<Ts> {
+        match self {
+            Self::SendPingAt(at) => Some(at),
+            Self::SendingPing { .. } => None,
+            Self::AwaitingPong { sent_at, .. } => Some(sent_at.saturating_add(WORKER_PONG_TIMEOUT)),
+        }
     }
 }
 
@@ -515,27 +520,42 @@ impl ActiveConnection {
         let heartbeat = self.heartbeat.filter(|_| self.registration_deadline.is_none());
         tokio::select! {
             biased;
-            heartbeat = Heartbeat::due(heartbeat, &**clock) => match heartbeat {
-                Heartbeat::SendPingAt(_) => {
-                    let sent_at = clock.now();
+            () = wait_for_deadline(&**clock, heartbeat.and_then(Heartbeat::deadline)) => {
+                if matches!(heartbeat, Some(Heartbeat::SendPingAt(_))) {
                     let timestamp = (lk_agents_abi::unix_secs(clock.wall()) * 1000.0) as i64;
                     outbox.push(WorkerMessage {
                         message: Some(proto::worker_message::Message::Ping(proto::WorkerPing {
                             timestamp,
                         })),
                     }, None)?;
-                    self.heartbeat = Some(Heartbeat::AwaitingPong { timestamp, sent_at });
-                    Ok(ConnectionEvent::Progress)
+                    self.heartbeat = Some(Heartbeat::SendingPing { timestamp, pong_received: false });
+                    return Ok(ConnectionEvent::Progress);
                 }
-                Heartbeat::AwaitingPong { .. } => {
-                    Err(TransportError::Failed("worker ping timed out waiting for LiveKit pong".into()).into())
+                // Check a ready reply once. Other traffic cannot extend the deadline.
+                if let Some(received) = self.transport.stream.recv().now_or_never() {
+                    let event = self.receive(received?)?;
+                    if matches!(self.heartbeat, Some(Heartbeat::SendPingAt(_))) {
+                        return Ok(event);
+                    }
                 }
+                Err(TransportError::Failed("worker ping timed out waiting for LiveKit pong".into()).into())
             },
             sent = await_write(&mut self.writing) => {
                 self.writing = None;
                 Ok(match sent? {
-                    Some(job_id) => ConnectionEvent::AvailabilitySent(job_id),
-                    None => ConnectionEvent::Progress,
+                    WriteCompletion::Availability(job_id) => ConnectionEvent::AvailabilitySent(job_id),
+                    WriteCompletion::Message => ConnectionEvent::Progress,
+                    WriteCompletion::Ping => {
+                        if let Some(Heartbeat::SendingPing { timestamp, pong_received }) = self.heartbeat {
+                            let sent_at = clock.now();
+                            self.heartbeat = Some(if pong_received {
+                                Heartbeat::SendPingAt(sent_at.saturating_add(WORKER_PING_INTERVAL))
+                            } else {
+                                Heartbeat::AwaitingPong { timestamp, sent_at }
+                            });
+                        }
+                        ConnectionEvent::Progress
+                    }
                 })
             }
             received = self.transport.stream.recv() => self.receive(received?),
@@ -557,12 +577,22 @@ impl ActiveConnection {
                 }
             }
             TransportEvent::ServerMessage(message) => {
-                if let Some(proto::server_message::Message::Pong(pong)) = &message.message
-                    && let Some(Heartbeat::AwaitingPong { timestamp, sent_at }) = self.heartbeat
-                    && timestamp == pong.last_timestamp
-                {
-                    self.heartbeat =
-                        Some(Heartbeat::SendPingAt(sent_at.saturating_add(WORKER_PING_INTERVAL)));
+                if let Some(proto::server_message::Message::Pong(pong)) = &message.message {
+                    match &mut self.heartbeat {
+                        Some(Heartbeat::SendingPing { timestamp, pong_received })
+                            if *timestamp == pong.last_timestamp =>
+                        {
+                            *pong_received = true;
+                        }
+                        Some(Heartbeat::AwaitingPong { timestamp, sent_at })
+                            if *timestamp == pong.last_timestamp =>
+                        {
+                            self.heartbeat = Some(Heartbeat::SendPingAt(
+                                sent_at.saturating_add(WORKER_PING_INTERVAL),
+                            ));
+                        }
+                        _ => {}
+                    }
                 }
                 Ok(ConnectionEvent::ServerMessage(message))
             }
@@ -576,8 +606,8 @@ impl ActiveConnection {
 }
 
 async fn await_write(
-    writing: &mut Option<BoxFuture<'static, Result<Option<String>, TransportError>>>,
-) -> Result<Option<String>, TransportError> {
+    writing: &mut Option<BoxFuture<'static, Result<WriteCompletion, TransportError>>>,
+) -> Result<WriteCompletion, TransportError> {
     match writing {
         Some(writing) => writing.await,
         None => std::future::pending().await,
@@ -596,15 +626,20 @@ impl PendingWrite {
         self,
         sink: Arc<dyn WorkerSink>,
         clock: Arc<dyn Clock>,
-    ) -> Result<Option<String>, TransportError> {
+    ) -> Result<WriteCompletion, TransportError> {
         let expired = || TransportError::Failed("control write deadline exceeded".into());
         if clock.now() >= self.deadline {
             return Err(expired());
         }
+        let is_ping = matches!(self.message.message, Some(proto::worker_message::Message::Ping(_)));
         lk_agents_abi::before(&*clock, Some(self.deadline), sink.send(self.message))
             .await
             .map_err(|_| expired())??;
-        Ok(self.accepted)
+        Ok(match self.accepted {
+            Some(job_id) => WriteCompletion::Availability(job_id),
+            None if is_ping => WriteCompletion::Ping,
+            None => WriteCompletion::Message,
+        })
     }
 }
 
