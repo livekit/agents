@@ -1,0 +1,19 @@
+tests/test_realtime_metrics.py
+  s_3ac646524cfde0::t_0299e9c6280f43 652
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7ae69dd3d2af0f09db3dffd5244e45782bbb717a",
+  "prompts": {},
+  "sessions": {
+    "s_3ac646524cfde0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ef0c-b7e0-73b0-99c0-c9c38d58af71",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
