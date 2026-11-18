@@ -152,8 +152,9 @@ await session.start(agent=front_desk, room=ctx.room)
 
 The endpoint supplies the tool's name (its `endpoint=`) and description. The tool takes
 a required `request` argument for the request stated in full, plus optional `task_id`
-selection described in [delegation](delegation.md#select-work-through-the-same-tool). It exists as soon as the agent is
-built; nothing is fetched when a session starts.
+selection described in [delegation](delegation.md#select-work-through-the-same-tool). The toolset
+also holds `cancel_<name>`, which takes only a required `task_id` and cancels that running task
+of the remote. Both exist as soon as the agent is built; nothing is fetched when a session starts.
 
 A reference resolves to the endpoint where the worker runs:
 

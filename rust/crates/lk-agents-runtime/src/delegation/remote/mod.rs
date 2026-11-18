@@ -203,6 +203,51 @@ impl Port for RemoteInteraction {
         }
     }
 
+    async fn cancel_task(
+        &self,
+        env: &ProcessEnv,
+        arguments: Value,
+        thread_id: Option<String>,
+        owner: Option<Arc<dyn lk_agents_abi::session::SessionCommands>>,
+    ) -> Result<ToolOutcome, AgentClientError> {
+        use lk_agents_core::delegation::remote::cancel::outcome_text;
+        let task_id = match lk_agents_core::a2a::client::cancel_task_id(&arguments) {
+            Ok(task_id) => task_id,
+            Err(error) => {
+                return Ok(ToolOutcome::ToolError(AgentClientError::from(error).to_string()));
+            }
+        };
+        let Some(owner) = owner else {
+            return Ok(ToolOutcome::ToolError(
+                "There are no running tasks to cancel in this conversation.".into(),
+            ));
+        };
+        let (identity, project) = {
+            let state = self.inner.0.lock();
+            (state.policy.snapshot().id, state.project.clone())
+        };
+        let outcome = control::cancel_for_model(
+            env,
+            owner,
+            &identity.remote_id,
+            &identity.endpoint,
+            &task_id,
+            &project,
+            thread_id.filter(|thread| !thread.is_empty()),
+        )
+        .await;
+        match outcome {
+            Ok(outcome) => Ok(ToolOutcome::Value {
+                text: outcome_text(outcome).into(),
+                reply_required: true,
+                verbatim: false,
+                more: None,
+            }),
+            Err(AgentClientError::InvalidInput(message)) => Ok(ToolOutcome::ToolError(message)),
+            Err(error) => Err(error),
+        }
+    }
+
     fn cancelled(&self) -> Result<(), AgentClientError> {
         if let Some(running) = &*self.running.lock() {
             running.stop.cancel();
@@ -1037,6 +1082,10 @@ impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
         description: String,
     ) -> Result<lk_agents_abi::a2a::client::AgentCard, AgentClientError> {
         Ok(lk_agents_core::a2a::client::delegation_tool(name, description)?)
+    }
+
+    fn _core_cancel_tool(name: String) -> lk_agents_abi::a2a::client::AgentCard {
+        lk_agents_core::a2a::client::cancel_tool(&name)
     }
 
     fn _core_remote_token(

@@ -334,3 +334,102 @@ fn waiting_for_a_fence_does_not_turn_old_intent_into_a_retry_after_new_refusal()
         CancellationRoute::Retained { recovery: None }
     ));
 }
+
+fn with_state(mut remote: RemoteAgentState, state: a2a::TaskState) -> RemoteAgentState {
+    remote.tasks.get_mut("booking").unwrap().task.status.state = state;
+    remote
+}
+
+#[test]
+fn the_model_cancels_only_known_running_work_of_this_remote_and_hears_why_not() {
+    let running = retained("booking", None);
+    assert_eq!(model_target(Some(&running), "booking").unwrap(), (target(), None));
+    assert_eq!(
+        model_target(None, "booking").unwrap_err(),
+        lk_agents_abi::storage::StorageError::Invalid(UNKNOWN_TASK.into()),
+        "a remote this conversation never used has no tasks to cancel"
+    );
+    for (remote, task_id, feedback) in [
+        (retained("booking", None), "hotel", UNKNOWN_TASK),
+        (retained("booking", None), "", UNKNOWN_TASK),
+        (
+            with_state(retained("booking", None), a2a::TaskState::Completed),
+            "booking",
+            ALREADY_FINISHED,
+        ),
+        (
+            with_state(retained("booking", None), a2a::TaskState::Canceled),
+            "booking",
+            ALREADY_CANCELLED,
+        ),
+        (with_state(retained("booking", None), a2a::TaskState::Failed), "booking", ALREADY_ENDED),
+    ] {
+        assert_eq!(
+            model_target(Some(&remote), task_id).unwrap_err(),
+            lk_agents_abi::storage::StorageError::Invalid(feedback.into()),
+            "{task_id:?} must be refused before any control is journaled"
+        );
+    }
+}
+
+#[test]
+fn a_new_model_intent_may_retry_only_after_a_definite_refusal() {
+    let mut remote = retained("booking", None);
+    control_failure(
+        &mut remote,
+        "lost",
+        RemoteFailure::Protocol { message: "connection reset".into() },
+    );
+    assert_eq!(
+        model_target(Some(&remote), "booking").unwrap().1,
+        None,
+        "a lost reply is reconciled"
+    );
+    control_failure(
+        &mut remote,
+        "refused",
+        RemoteFailure::Rpc {
+            error: a2a::JsonRpcError {
+                code: a2a::error_code::TASK_NOT_CANCELABLE,
+                message: "protected".into(),
+                data: None,
+            },
+        },
+    );
+    assert_eq!(model_target(Some(&remote), "booking").unwrap().1.as_deref(), Some("refused"));
+}
+
+#[test]
+fn the_model_hears_cancelled_only_from_an_observed_state_and_refused_only_from_a_typed_refusal() {
+    let running = retained("booking", None);
+    assert_eq!(model_outcome(&running, &target()), RemoteCancelOutcome::Unconfirmed);
+    let canceled = with_state(retained("booking", None), a2a::TaskState::Canceled);
+    assert_eq!(model_outcome(&canceled, &target()), RemoteCancelOutcome::Cancelled);
+    let foreign = RemoteTaskRef { task_id: "booking".into(), context_id: "other".into() };
+    assert_eq!(model_outcome(&canceled, &foreign), RemoteCancelOutcome::Unconfirmed);
+
+    let mut lost = retained("booking", None);
+    control_failure(&mut lost, "lost", RemoteFailure::Protocol { message: "refused".into() });
+    assert_eq!(model_outcome(&lost, &target()), RemoteCancelOutcome::Unconfirmed);
+
+    let mut refused = retained("booking", None);
+    control_failure(
+        &mut refused,
+        "refused",
+        RemoteFailure::Rpc {
+            error: a2a::JsonRpcError {
+                code: a2a::error_code::TASK_NOT_CANCELABLE,
+                message: "protected".into(),
+                data: None,
+            },
+        },
+    );
+    assert_eq!(model_outcome(&refused, &target()), RemoteCancelOutcome::Refused);
+    let texts = [
+        RemoteCancelOutcome::Cancelled,
+        RemoteCancelOutcome::Refused,
+        RemoteCancelOutcome::Unconfirmed,
+    ]
+    .map(outcome_text);
+    assert!(texts.iter().all(|text| !text.contains("A2A") && !text.contains("remote")));
+}

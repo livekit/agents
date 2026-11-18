@@ -228,6 +228,19 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
         cx: crate::telemetry::Cx,
     ) -> Result<RemoteEvent, AgentClientError>;
 
+    /// The model's cancel of one of this remote's tasks in the conversation `owner` serializes.
+    /// `arguments` hold only `task_id`. It runs through the same native control and journal as
+    /// `RemoteTask.cancel()`; the outcome states what was observed: cancelled, refused by the
+    /// peer, or unconfirmed after reconciliation. An unknown or ended task is tool feedback.
+    #[host(await)]
+    async fn cancel_task(
+        &self,
+        env: &Self::Env,
+        arguments: Value,
+        thread_id: Option<String>,
+        owner: Option<std::sync::Arc<dyn crate::session::SessionCommands>>,
+    ) -> Result<ToolOutcome, AgentClientError>;
+
     /// Stop the local tool wait and close its observation resources. Remote business work is
     /// unchanged; `settled()` waits for local cleanup, not remote task cancellation.
     #[host(call)]
@@ -262,6 +275,11 @@ pub trait RemoteConfiguration: Send + Sync + Sized + 'static {
         name: String,
         description: String,
     ) -> Result<AgentCard, AgentClientError>;
+
+    /// The sibling `cancel_<name>` tool of the remote tool `name`, taking only the `task_id`
+    /// to cancel.
+    #[host(function)]
+    fn _core_cancel_tool(name: String) -> AgentCard;
 
     /// Resolve an endpoint credential: `token` as given; else, for an endpoint on the server's
     /// project's origin (`project_url`, signed with `api_key`/`api_secret`; empty when there is

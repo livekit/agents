@@ -49,6 +49,22 @@ pub(crate) enum SessionCommand {
         drivers: Arc<drivers::Drivers>,
         done: Receipt<lk_agents_abi::session::control::RemoteCancellationAdmission>,
     },
+    CancelTask {
+        remote_id: String,
+        endpoint: String,
+        task_id: String,
+        scope: Option<lk_agents_abi::delegation::remote::RemoteControlScope>,
+        candidate: Arc<dyn lk_agents_abi::session::control::RemoteCancellation>,
+        drivers: Arc<drivers::Drivers>,
+        done: Receipt<(
+            lk_agents_abi::session::control::RemoteControlRef,
+            lk_agents_abi::session::control::RemoteCancellationAdmission,
+        )>,
+    },
+    CancelOutcome {
+        target: lk_agents_abi::session::control::RemoteControlRef,
+        done: Receipt<lk_agents_abi::delegation::remote::RemoteCancelOutcome>,
+    },
     AdmitInput {
         request: Box<lk_agents_abi::session::InputRoutingRequest>,
         verdict: Option<
@@ -116,6 +132,8 @@ impl SessionCommand {
             Self::AdmitCall { done, .. } => done.resolve(Err(error)),
             Self::RemoteDriver { done, .. } => done.resolve(Err(error)),
             Self::CancelRemote { done, .. } => done.resolve(Err(error)),
+            Self::CancelTask { done, .. } => done.resolve(Err(error)),
+            Self::CancelOutcome { done, .. } => done.resolve(Err(error)),
             Self::AdmitInput { done, .. } => done.resolve(Err(error)),
             Self::Flush { done } => done.resolve(Err(error)),
             Self::Input { done, .. } => done.resolve(Err(error)),
@@ -316,6 +334,76 @@ impl lk_agents_abi::session::SessionCommands for CommandPort {
         })
     }
 
+    fn cancel_task<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        task_id: &'a str,
+        scope: Option<&'a lk_agents_abi::delegation::remote::RemoteControlScope>,
+        candidate: Arc<dyn lk_agents_abi::session::control::RemoteCancellation>,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            (
+                lk_agents_abi::session::control::RemoteControlRef,
+                lk_agents_abi::session::control::RemoteCancellationAdmission,
+            ),
+            lk_agents_abi::a2a::client::AgentClientError,
+        >,
+    > {
+        Box::pin(async move {
+            use lk_agents_abi::a2a::client::AgentClientError;
+            let (done, result) = signal::once();
+            self.sender
+                .send(SessionCommand::CancelTask {
+                    remote_id: remote_id.into(),
+                    endpoint: endpoint.into(),
+                    task_id: task_id.into(),
+                    scope: scope.cloned(),
+                    candidate,
+                    drivers: self.drivers.clone(),
+                    done,
+                })
+                .await
+                .map_err(|_| {
+                    AgentClientError::InvalidInput("the conversation owner ended".into())
+                })?;
+            result
+                .wait()
+                .await
+                .map_err(|_| {
+                    AgentClientError::InvalidInput(
+                        "the conversation owner ended before admitting task cancellation".into(),
+                    )
+                })?
+                .map_err(|error| match error {
+                    StorageError::Invalid(message) => AgentClientError::InvalidInput(message),
+                    error => AgentClientError::Protocol(error.to_string()),
+                })
+        })
+    }
+
+    fn cancel_outcome<'a>(
+        &'a self,
+        target: &'a lk_agents_abi::session::control::RemoteControlRef,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<lk_agents_abi::delegation::remote::RemoteCancelOutcome, StorageError>,
+    > {
+        Box::pin(async move {
+            let (done, result) = signal::once();
+            self.sender
+                .send(SessionCommand::CancelOutcome { target: target.clone(), done })
+                .await
+                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
+            result.wait().await.map_err(|_| {
+                StorageError::Invalid(
+                    "the conversation owner ended before reading the cancellation".into(),
+                )
+            })?
+        })
+    }
+
     fn admit_input(
         &self,
         request: lk_agents_abi::session::InputRoutingRequest,
@@ -491,6 +579,48 @@ pub(crate) fn admit_cancellation(
             Ok(RemoteCancellationAdmission::Retained { recovery })
         }
     }
+}
+
+/// The model's cancel names a task by ID; the core resolves it and freezes this intent's
+/// retry evidence against the owner's current state before the shared admission.
+pub(crate) fn admit_task_cancellation(
+    state: &lk_agents_abi::session::snapshot::SessionSnapshot,
+    drivers: &drivers::Drivers,
+    remote_id: String,
+    endpoint: String,
+    task_id: &str,
+    scope: Option<&lk_agents_abi::delegation::remote::RemoteControlScope>,
+    candidate: Arc<dyn lk_agents_abi::session::control::RemoteCancellation>,
+) -> Result<
+    (
+        lk_agents_abi::session::control::RemoteControlRef,
+        lk_agents_abi::session::control::RemoteCancellationAdmission,
+    ),
+    StorageError,
+> {
+    use lk_agents_core::delegation::remote::cancel;
+    let remote = lk_agents_core::session::remote::state(state, &remote_id, &endpoint)?;
+    let (task, retry_after) = cancel::model_target(remote, task_id)?;
+    let target = lk_agents_abi::session::control::RemoteControlRef { remote_id, endpoint, task };
+    let admission = admit_cancellation(
+        state,
+        drivers,
+        target.clone(),
+        scope,
+        candidate,
+        retry_after.as_deref(),
+    )?;
+    Ok((target, admission))
+}
+
+pub(crate) fn cancel_outcome(
+    state: &lk_agents_abi::session::snapshot::SessionSnapshot,
+    target: &lk_agents_abi::session::control::RemoteControlRef,
+) -> Result<lk_agents_abi::delegation::remote::RemoteCancelOutcome, StorageError> {
+    let remote =
+        lk_agents_core::session::remote::state(state, &target.remote_id, &target.endpoint)?
+            .ok_or_else(|| StorageError::Invalid("this remote has no known tasks".into()))?;
+    Ok(lk_agents_core::delegation::remote::cancel::model_outcome(remote, &target.task))
 }
 
 #[cfg(test)]

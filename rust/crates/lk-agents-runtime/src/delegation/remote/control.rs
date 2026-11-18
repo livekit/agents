@@ -154,7 +154,7 @@ async fn execute(
                     let current = current.ok_or_else(|| {
                         unavailable("the current bound project cannot address this retained task")
                     })?;
-                    perform(env, bound, target, current, recovery, owner, http).await
+                    perform(env, bound.ended(), target, current, recovery, owner, http).await
                 }
             }
         }
@@ -184,8 +184,15 @@ async fn execute(
                     let (port, commands) = CommandPort::channel(16, None);
                     let (finish, finishing) = signal::once();
                     let owner = scope_owner(scope, commands, finishing, bound.clone());
-                    let writing =
-                        perform(env, bound, target, current, recovery, Arc::new(port), http);
+                    let writing = perform(
+                        env,
+                        bound.ended(),
+                        target,
+                        current,
+                        recovery,
+                        Arc::new(port),
+                        http,
+                    );
                     tokio::pin!(owner, writing);
                     let (result, closed) = tokio::select! {
                         biased;
@@ -231,6 +238,15 @@ impl CurrentScope {
             api_key: server_setting("LIVEKIT_API_KEY").unwrap_or_default(),
             api_secret: server_setting("LIVEKIT_API_SECRET").unwrap_or_default(),
         };
+        Self::for_thread(&project, endpoint, thread_id)
+    }
+
+    /// The project's grant scope for `thread_id`, when `endpoint` is on the project's origin.
+    fn for_thread(
+        project: &Project,
+        endpoint: &str,
+        thread_id: String,
+    ) -> Result<Option<Self>, AgentClientError> {
         let Some(project) = project.serving(endpoint)? else { return Ok(None) };
         let origin = url::Url::parse(&project.url)
             .map_err(|error| unavailable(error.to_string()))?
@@ -260,9 +276,75 @@ impl CurrentScope {
     }
 }
 
+/// The frontend model's cancel, inside a tool call of the conversation `owner` serializes. The
+/// owner resolves the task and shares any pending attempt; a retained task is controlled with
+/// the current project's grant for the call's own thread, as a bound control would be.
+pub(super) async fn cancel_for_model(
+    env: &ProcessEnv,
+    owner: Arc<dyn SessionCommands>,
+    remote_id: &str,
+    endpoint: &str,
+    task_id: &str,
+    project: &Project,
+    thread_id: Option<String>,
+) -> Result<lk_agents_abi::delegation::remote::RemoteCancelOutcome, AgentClientError> {
+    let background = env.background().map_err(|error| unavailable(error.to_string()))?;
+    let current = match thread_id {
+        Some(thread_id) => CurrentScope::for_thread(project, endpoint, thread_id)?,
+        None => None,
+    };
+    let (done, candidate) = Receipt::pair();
+    let (target, admission) = owner
+        .cancel_task(
+            remote_id,
+            endpoint,
+            task_id,
+            current.as_ref().map(|current| &current.proof),
+            candidate.clone(),
+        )
+        .await?;
+    // Admitted work outlives this tool call: other callers may share this published attempt.
+    let (control_env, control_owner, control_target) = (env.clone(), owner.clone(), target.clone());
+    background.spawn("model remote task cancellation", async move {
+        let result = match admission {
+            RemoteCancellationAdmission::Confirmed => Ok(()),
+            RemoteCancellationAdmission::Pending(receipt) => tokio::select! {
+                biased;
+                result = receipt.wait() => result,
+                () = control_owner.ended() => Err(unavailable(
+                    "the conversation owner ended before cancellation was confirmed",
+                )),
+            },
+            RemoteCancellationAdmission::Retained { recovery } => match current {
+                Some(current) => {
+                    perform(
+                        &control_env,
+                        std::future::pending(),
+                        &control_target,
+                        current,
+                        recovery,
+                        control_owner,
+                        None,
+                    )
+                    .await
+                }
+                None => Err(unavailable("the current project cannot address this retained task")),
+            },
+        };
+        done.resolve(result);
+    });
+    let settled = candidate.wait().await;
+    // The outcome is judged from checkpointed facts rather than the settled error, which only
+    // matters when the owner can no longer answer.
+    match owner.cancel_outcome(&target).await {
+        Ok(outcome) => Ok(outcome),
+        Err(error) => settled.and(Err(storage_error(error))),
+    }
+}
+
 async fn perform(
     env: &ProcessEnv,
-    bound: &Arc<dyn BoundSessionControl>,
+    ended: impl std::future::Future<Output = ()>,
     target: &RemoteControlRef,
     current: CurrentScope,
     recovery: Option<RemoteRecovery>,
@@ -313,12 +395,12 @@ async fn perform(
             None,
         )) as Arc<dyn RequestObserver>
     });
-    tokio::pin!(writing);
+    tokio::pin!(writing, ended);
     let outcome = tokio::select! {
         biased;
         outcome = &mut writing => outcome,
         () = owner.ended() => { client.aclose().await; writing.await },
-        () = bound.ended() => { client.aclose().await; writing.await },
+        () = &mut ended => { client.aclose().await; writing.await },
     };
     // Every peer observation has already been checkpointed. There is no live business-call
     // observer on this path; the explicit control receives the core's confirmation outcome.

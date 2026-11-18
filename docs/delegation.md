@@ -142,6 +142,26 @@ inheriting a task ID. A response or clarification keeps the selected task's own 
 Configure distinct stable remote IDs when the application needs independent remote
 conversations; each ID retains its own default context.
 
+Beside the remote tool, `.as_tool()` offers a sibling `cancel_<tool name>` tool for the person's
+"stop that" requests:
+
+```json
+{"task_id": "booking-42"}
+```
+
+Its schema is the framework's, never the card's: it takes only the `task_id`, so the model never
+invents business input to stop work and no business data travels with the control. The task
+must be known on that configured remote and nonterminal; unknown, foreign and ended IDs return
+tool feedback before any control is sent. It runs through the same native control as
+`tasks[task_id].cancel()`, below, in voice, TextSession and a bound Agent.run alike. Its output is
+a plain fact for the frontend to relay:
+
+| Observed | The model reads |
+| --- | --- |
+| The task's state is canceled | The task is cancelled; it has stopped. |
+| The peer definitely refused the control | That task could not be cancelled. |
+| A lost reply, or reconciliation showing work still running | Cancelling the task was requested, but it is not confirmed yet whether it stopped. |
+
 One live task has one native observer and original result owner. Further calls to it wait for
 message admission; the original call receives the final result. A peer merging requests cannot
 create another result owner. Native state, rather than copied model-history metadata, owns
@@ -246,10 +266,11 @@ remote = app.session.remote_agents["travel"]
 await remote.tasks[task_id].cancel()
 ```
 
-Cancel through a bound task view. Its native owner journals intent and dispatch progress;
+Cancel through a bound task view, or let the model use the remote's `cancel_<tool name>`
+tool. Its native owner journals intent and dispatch progress;
 success requires persisted observation of remote cancellation. A lost reply is not proof that
-the task stopped. Concurrent callers share the pending attempt; after definite refusal, a
-later explicit call may issue another request. Ending a call never requests cancellation.
+the task stopped. Concurrent callers, the model's tool and the application alike, share the
+pending attempt; after definite refusal, a later explicit call may issue another request. Ending a call never requests cancellation.
 [Persistence](persistence.md#canceling-retained-remote-work) owns binding and current-credential
 requirements for controls between runs.
 

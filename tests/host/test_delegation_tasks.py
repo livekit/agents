@@ -1456,3 +1456,160 @@ async def test_independent_questions_are_paced_and_a_passed_one_returns_after_th
         await session.generate_reply(user_input="How is the weather?")
         await session.wait_for_idle()
         assert prompts(session)[4:] == [second], "a passed question is asked once more only"
+
+
+CANCELLED = "The task is cancelled; it has stopped."
+REFUSED = "That task could not be cancelled."
+UNCONFIRMED = "Cancelling the task was requested, but it is not confirmed yet whether it stopped."
+
+
+@pytest.mark.parametrize(
+    ("reply", "told"),
+    [
+        ("canceled", CANCELLED),
+        ("refused", REFUSED),
+        ("lost", CANCELLED),
+        ("lost_unconfirmed", UNCONFIRMED),
+    ],
+)
+async def test_the_frontend_cancels_one_of_two_running_tasks_and_hears_what_happened(
+    peer: Peer, reply: str, told: str
+) -> None:
+    """The model's cancel reaches the peer for the named task only and reports only what was
+    observed; a lost reply is reconciled, never taken as a refusal. The other task completes and
+    is presented."""
+    hotel_done = asyncio.Event()
+
+    def events(message: dict[str, Any]) -> list[dict[str, Any] | asyncio.Event]:
+        task_id = "flight" if "flight" in message["parts"][0]["text"] else "hotel"
+        task = {"id": task_id, "contextId": message.get("contextId", "trip")}
+        working: dict[str, Any] = {"task": {**task, "status": {"state": "TASK_STATE_WORKING"}}}
+        if task_id == "flight":
+            return [working, asyncio.Event()]
+        completed = {
+            "statusUpdate": {
+                "taskId": "hotel",
+                "contextId": task["contextId"],
+                "status": {
+                    "state": "TASK_STATE_COMPLETED",
+                    "message": {
+                        "messageId": "hotel-completed",
+                        "role": "ROLE_AGENT",
+                        "parts": [{"text": "Booked hotel"}],
+                    },
+                },
+            }
+        }
+        return [working, hotel_done, completed]
+
+    peer.events = events
+    peer.cancel_reply = reply
+    remote = RemoteAgent(peer.url, name="travel", description="Book travel.")
+
+    def frontend(history: ChatContext) -> str | FunctionToolCall:
+        texts = [item.text_content for item in history.items if item.type == "message"]
+        booked = any(
+            item.type == "function_call_output" and "Booked hotel" in item.output
+            for item in history.items
+        )
+        if booked and "Your hotel is booked." not in texts:
+            return "Your hotel is booked."
+        last = history.items[-1]
+        if last.type == "function_call_output":
+            return last.output if last.name == "cancel_travel" else "I'm on it."
+        latest = last_input(history)
+        if latest == "Cancel the flight":
+            return tool_call("cancel_travel", task_id="flight")
+        return tool_call("travel", request=latest)
+
+    store = ContextStore()
+    async with VoiceSession(context=store.bind(), vad=None) as session:
+        await session.start(
+            Agent(
+                name="desk", instructions="Help.", tools=[remote.as_tool()], llm=FakeLLM(frontend)
+            )
+        )
+        await session.generate_reply(user_input="Book a flight")
+        await session.generate_reply(user_input="Book a hotel")
+        await until(
+            lambda: (
+                sum(
+                    item.type == "function_call_output" and item.name == "travel"
+                    for item in session.history.items
+                )
+                == 2
+            ),
+            "both tasks were not running",
+        )
+        await session.generate_reply(user_input="Cancel the flight")
+        await until(
+            lambda: any(
+                item.type == "function_call_output" and item.name == "cancel_travel"
+                for item in session.history.items
+            ),
+            "the cancel tool did not answer",
+        )
+        answer = next(
+            item
+            for item in session.history.items
+            if item.type == "function_call_output" and item.name == "cancel_travel"
+        )
+        assert answer.output == told
+        assert not answer.is_error, "an observed outcome is a fact for the model, not a failure"
+        assert peer.cancelled == ["flight"]
+        assert len(peer.messages) == 2, "a cancel never sends business data"
+
+        hotel_done.set()
+        await until(
+            lambda: any(
+                item.type == "message"
+                and item.role == "assistant"
+                and item.text_content == "Your hotel is booked."
+                for item in session.history.items
+            ),
+            "the other task's result was not presented",
+        )
+        saved = await store.load_session()
+        tasks = saved.remote_agents[peer.url].tasks
+        assert tasks["hotel"].task.status.state == pb.TASK_STATE_COMPLETED
+        assert tasks["flight"].cancel_requested
+        assert (tasks["flight"].task.status.state == pb.TASK_STATE_CANCELED) == (told == CANCELLED)
+        controls = [
+            entry.payload.id
+            for entry in saved.remote_agents[peer.url].events
+            if entry.kind == "request_recorded" and isinstance(entry.payload, pb.CancelTaskRequest)
+        ]
+        assert controls == ["flight"], "the control is journaled once, for the named task"
+
+
+@pytest.mark.parametrize(
+    ("task_id", "feedback"),
+    [
+        ("missing", "There is no task with that ID"),
+        ("remote-task", "already finished"),
+    ],
+)
+async def test_the_model_cannot_cancel_unknown_or_finished_work(
+    peer: Peer, task_id: str, feedback: str
+) -> None:
+    remote = RemoteAgent(peer.url, name="flights", description="Book flights.")
+    agent = Agent(
+        name="desk",
+        instructions="Help.",
+        tools=[remote.as_tool()],
+        llm=FakeLLM(
+            [
+                tool_call("flights", request="Book"),
+                "Booked.",
+                tool_call("cancel_flights", task_id=task_id),
+                "That cannot be cancelled.",
+            ]
+        ),
+    )
+    store = ContextStore()
+    await agent.run("Book", context=store.bind())
+    result = await agent.run("Cancel it", context=store.bind())
+    outputs = [item for item in result.new_messages() if item.type == "function_call_output"]
+    assert outputs[-1].is_error
+    assert feedback in outputs[-1].output
+    assert "CancelTask" not in peer.methods, "invalid targets fail before any control is sent"

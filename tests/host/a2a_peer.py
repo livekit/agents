@@ -43,6 +43,11 @@ class Peer:
         self.methods: list[str] = []
         self.cancelled: list[str] = []
         """The id of each task a ``CancelTask`` named."""
+        self.cancel_reply = "canceled"
+        """How a ``CancelTask`` ends: ``canceled``; ``refused`` (not cancelable); ``lost``, which
+        cancels the task but drops the reply; or ``lost_unconfirmed``, which drops the reply and
+        leaves the task working. A later ``GetTask`` reads the task's state."""
+        self._task_states: dict[str, Json] = {}
         self.received = asyncio.Event()
         self._release = asyncio.Event()
         self._connections: set[asyncio.Task[None]] = set()
@@ -95,7 +100,19 @@ class Peer:
         if rpc["method"] == "CancelTask":
             self.cancelled.append(params["id"])
             result = {"id": params["id"], "contextId": params["contextId"]}
-            result["status"] = {"state": "TASK_STATE_CANCELED"}
+            if self.cancel_reply == "refused":
+                error = {"code": -32002, "message": "This task can no longer be canceled"}
+                body = json.dumps({"jsonrpc": "2.0", "id": rpc["id"], "error": error})
+                await self._respond(writer, "application/json", body.encode())
+                return
+            state = "WORKING" if self.cancel_reply == "lost_unconfirmed" else "CANCELED"
+            result["status"] = {"state": f"TASK_STATE_{state}"}
+            self._task_states[params["id"]] = result
+            if self.cancel_reply == "canceled":
+                await self._respond(writer, "application/json", _envelope(rpc, result))
+            return
+        if rpc["method"] == "GetTask" and params.get("id") in self._task_states:
+            result = self._task_states[params["id"]]
             await self._respond(writer, "application/json", _envelope(rpc, result))
             return
         if rpc["method"] == "GetTask" and self.task_snapshot is not None:

@@ -5,9 +5,10 @@ use crate::a2a::client::ClientError;
 use crate::a2a::rpc::TaskRef;
 use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::delegation::remote::{
-    A2ARequest, RemoteAgentState, RemoteCancellationEvidence, RemoteControlScope, RemoteFailure,
-    RemoteRecovery, RemoteTaskRef,
+    A2ARequest, RemoteAgentState, RemoteCancelOutcome, RemoteCancellationEvidence,
+    RemoteControlScope, RemoteFailure, RemoteRecovery, RemoteTaskRef,
 };
+use lk_agents_abi::storage::StorageError;
 
 /// One approved native operation. This transient decision record owns no client or credential.
 #[derive(Debug)]
@@ -158,7 +159,6 @@ pub fn route(
     retry_after: Option<&str>,
 ) -> Result<CancellationRoute, lk_agents_abi::storage::StorageError> {
     use lk_agents_abi::session::SessionRecovery;
-    use lk_agents_abi::storage::StorageError;
     if !crate::session::remote::cancel_required(remote, target)? {
         return Ok(CancellationRoute::Confirmed);
     }
@@ -241,6 +241,69 @@ pub fn authorize(
         ));
     }
     Ok(())
+}
+
+const UNKNOWN_TASK: &str = "There is no task with that ID on this agent in this conversation.";
+const ALREADY_CANCELLED: &str = "That task was already cancelled.";
+const ALREADY_FINISHED: &str = "That task already finished, so there is nothing to cancel.";
+const ALREADY_ENDED: &str =
+    "That task already ended without finishing, so there is nothing to cancel.";
+const CANCELLED: &str = "The task is cancelled; it has stopped.";
+const REFUSED: &str = "That task could not be cancelled.";
+const UNCONFIRMED: &str =
+    "Cancelling the task was requested, but it is not confirmed yet whether it stopped.";
+
+/// The frontend model's cancel names a task of this remote by ID. Only known, nonterminal work
+/// is admitted; each call is a fresh explicit intent, so a definite earlier refusal of this
+/// task may be retried while an attempt still pending or uncertain is shared or reconciled.
+pub fn model_target(
+    remote: Option<&RemoteAgentState>,
+    task_id: &str,
+) -> Result<(RemoteTaskRef, Option<String>), StorageError> {
+    let remote = remote.ok_or_else(|| StorageError::Invalid(UNKNOWN_TASK.into()))?;
+    let saved = remote
+        .tasks
+        .get(task_id)
+        .filter(|saved| saved.task.id == task_id && !saved.task.context_id.is_empty())
+        .ok_or_else(|| StorageError::Invalid(UNKNOWN_TASK.into()))?;
+    let ended = match saved.task.status.state {
+        a2a::TaskState::Canceled => Some(ALREADY_CANCELLED),
+        a2a::TaskState::Completed => Some(ALREADY_FINISHED),
+        a2a::TaskState::Failed | a2a::TaskState::Rejected => Some(ALREADY_ENDED),
+        _ => None,
+    };
+    if let Some(ended) = ended {
+        return Err(StorageError::Invalid(ended.into()));
+    }
+    let target =
+        RemoteTaskRef { task_id: task_id.into(), context_id: saved.task.context_id.clone() };
+    let retry_after = retry_after(remote, &target);
+    Ok((target, retry_after))
+}
+
+/// Judged from checkpointed facts after the control settled, never from an error's wording:
+/// an observed canceled state, else a typed definite refusal of the latest control.
+pub fn model_outcome(remote: &RemoteAgentState, target: &RemoteTaskRef) -> RemoteCancelOutcome {
+    let canceled = remote.tasks.get(&target.task_id).is_some_and(|saved| {
+        saved.task.context_id == target.context_id
+            && saved.task.status.state == a2a::TaskState::Canceled
+    });
+    if canceled {
+        RemoteCancelOutcome::Cancelled
+    } else if retry_after(remote, target).is_some() {
+        RemoteCancelOutcome::Refused
+    } else {
+        RemoteCancelOutcome::Unconfirmed
+    }
+}
+
+/// Plain facts the frontend can relay in its own words.
+pub fn outcome_text(outcome: RemoteCancelOutcome) -> &'static str {
+    match outcome {
+        RemoteCancelOutcome::Cancelled => CANCELLED,
+        RemoteCancelOutcome::Refused => REFUSED,
+        RemoteCancelOutcome::Unconfirmed => UNCONFIRMED,
+    }
 }
 
 #[cfg(test)]

@@ -181,6 +181,32 @@ pub trait SessionCommands: std::any::Any + Send + Sync {
         Result<control::RemoteCancellationAdmission, crate::a2a::client::AgentClientError>,
     >;
 
+    /// The frontend model's cancel: resolve `task_id` among this remote's known, nonterminal
+    /// tasks, then admit it as `cancel_remote` does, with this intent's retry evidence.
+    fn cancel_task<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        task_id: &'a str,
+        scope: Option<&'a crate::delegation::remote::RemoteControlScope>,
+        candidate: std::sync::Arc<dyn control::RemoteCancellation>,
+    ) -> crate::BoxFuture<
+        'a,
+        Result<
+            (control::RemoteControlRef, control::RemoteCancellationAdmission),
+            crate::a2a::client::AgentClientError,
+        >,
+    >;
+
+    /// After a cancellation settled: what this owner's checkpointed journal proves about it.
+    fn cancel_outcome<'a>(
+        &'a self,
+        target: &'a control::RemoteControlRef,
+    ) -> crate::BoxFuture<
+        'a,
+        Result<crate::delegation::remote::RemoteCancelOutcome, crate::storage::StorageError>,
+    >;
+
     /// Validate the offered occurrences and checkpoint their reservations before continuation.
     fn admit_input(
         &self,

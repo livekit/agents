@@ -135,6 +135,44 @@ impl lk_agents_abi::session::SessionCommands for Runner {
         })
     }
 
+    fn cancel_task<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        task_id: &'a str,
+        scope: Option<&'a lk_agents_abi::delegation::remote::RemoteControlScope>,
+        candidate: std::sync::Arc<dyn lk_agents_abi::session::control::RemoteCancellation>,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            (
+                lk_agents_abi::session::control::RemoteControlRef,
+                lk_agents_abi::session::control::RemoteCancellationAdmission,
+            ),
+            lk_agents_abi::a2a::client::AgentClientError,
+        >,
+    > {
+        Box::pin(async move {
+            let commands = self.commands().map_err(|error| {
+                lk_agents_abi::a2a::client::AgentClientError::InvalidInput(error.to_string())
+            })?;
+            commands.cancel_task(remote_id, endpoint, task_id, scope, candidate).await
+        })
+    }
+
+    fn cancel_outcome<'a>(
+        &'a self,
+        target: &'a lk_agents_abi::session::control::RemoteControlRef,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            lk_agents_abi::delegation::remote::RemoteCancelOutcome,
+            lk_agents_abi::storage::StorageError,
+        >,
+    > {
+        Box::pin(async move { self.commands()?.cancel_outcome(target).await })
+    }
+
     fn admit_input(
         &self,
         request: lk_agents_abi::session::InputRoutingRequest,
