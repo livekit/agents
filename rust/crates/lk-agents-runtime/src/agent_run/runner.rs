@@ -1,7 +1,7 @@
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-use lk_agents_abi::agent::run::{AgentRunner, RunRequest, RunUpdate};
+use lk_agents_abi::agent::run::{AgentRunner, RunRequest, RunUpdate, SayOutcome};
 use lk_agents_abi::agent::{AgentCallbacks, AgentDefinition, Invocation};
 use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::errors::ProviderError;
@@ -105,11 +105,8 @@ impl AgentRunner for Runner {
         invocation_id: &str,
         operation: u64,
         message: String,
-    ) -> lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>> {
-        self.port(invocation_id).map_or_else(
-            |error| Box::pin(async move { Err(error) }) as _,
-            |port| port.say(operation, message),
-        )
+    ) -> Result<lk_agents_abi::BoxFuture<'static, SayOutcome>, ProviderError> {
+        self.port(invocation_id)?.say(operation, message)
     }
 }
 

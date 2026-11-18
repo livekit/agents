@@ -56,12 +56,21 @@ pub fn captured_offers(
 /// Capture at model-turn admission, including responses this human turn already forwarded.
 /// A subsequent call can recognize that admission without treating all later calls as duplicates.
 pub fn offered(state: &SessionSnapshot) -> Vec<InputCandidate> {
+    match state.chat_history.iter().rev().find(|message| message.role == lk_agents_abi::Role::User)
+    {
+        Some(human) => offered_to(state, human),
+        None => crate::session::input::candidates(state),
+    }
+}
+
+/// `offered` for a known human turn, which the snapshot may not hold yet. Only that turn's own
+/// forwarded responses are offered: an answer an earlier turn already sent is not a response
+/// to this one, so a correction cannot be recognized as its duplicate.
+pub fn offered_to(
+    state: &SessionSnapshot,
+    human: &lk_agents_abi::ChatMessage,
+) -> Vec<InputCandidate> {
     let mut candidates = crate::session::input::candidates(state);
-    let Some(human) =
-        state.chat_history.iter().rev().find(|message| message.role == lk_agents_abi::Role::User)
-    else {
-        return candidates;
-    };
     for (remote_id, remote) in &state.remote_agents {
         for (task_id, task) in &remote.tasks {
             for (request_id, input) in &task.input_requests {

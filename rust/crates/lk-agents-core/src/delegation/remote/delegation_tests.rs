@@ -531,3 +531,59 @@ fn matching_task_names_cannot_move_an_input_occurrence_between_remote_ids() {
     let mut replacement = interaction("replacement");
     assert!(replacement.respond_to(foreign).is_err());
 }
+
+#[test]
+fn a_lost_observation_reads_a_known_task_again_and_never_guesses_without_one() {
+    let mut fresh = interaction("lost");
+    assert_eq!(fresh.observation_lost(true, 3), ObservationLoss::Unknown, "no task identity");
+    let mut running = interaction("lost");
+    running.update(&update(TaskState::Working, "trip", "booking", "")).unwrap();
+    let task = TaskRef { id: "booking".into(), context_id: "trip".into() };
+    assert_eq!(running.observation_lost(true, 3), ObservationLoss::Resubscribe(task.clone()));
+    assert_eq!(running.observation_lost(false, 3), ObservationLoss::Snapshot(task.clone()));
+    // Only the opening snapshot arrived again: no progress, so the bound keeps counting.
+    running.update(&update(TaskState::Working, "trip", "booking", "")).unwrap();
+    assert_eq!(running.observation_lost(true, 3), ObservationLoss::Resubscribe(task.clone()));
+    assert_eq!(running.observation_lost(true, 3), ObservationLoss::Unknown, "bounded");
+    let refused =
+        crate::a2a::client::ClientError::Rpc { code: -32004, message: "no".into(), data: None };
+    assert_eq!(
+        ObservationLoss::resubscribe_failed(task.clone(), &refused),
+        ObservationLoss::Snapshot(task.clone())
+    );
+    let lost = crate::a2a::client::ClientError::incomplete();
+    assert_eq!(ObservationLoss::resubscribe_failed(task, &lost), ObservationLoss::Unknown);
+}
+
+#[test]
+fn progress_after_a_resubscription_resets_the_recovery_bound() {
+    let mut running = interaction("progress");
+    running.update(&update(TaskState::Working, "trip", "booking", "")).unwrap();
+    for _ in 0..5 {
+        assert!(matches!(running.observation_lost(true, 1), ObservationLoss::Resubscribe(_)));
+        running.update(&update(TaskState::Working, "trip", "booking", "")).unwrap();
+        running.update(&update(TaskState::Working, "trip", "booking", "")).unwrap();
+    }
+    running.update(&update(TaskState::Completed, "trip", "booking", "done")).unwrap();
+    assert_eq!(running.observation_lost(true, 1), ObservationLoss::Unknown, "settled");
+}
+
+#[test]
+fn a_snapshot_of_a_still_running_lost_task_stays_unknown() {
+    let mut running = interaction("snapshot");
+    running.update(&update(TaskState::Working, "trip", "booking", "")).unwrap();
+    let still: a2a::Task = serde_json::from_value(
+        json!({"id":"booking","contextId":"trip","status":{"state":"TASK_STATE_WORKING"}}),
+    )
+    .unwrap();
+    assert_eq!(running.reconcile_lost(a2a::StreamResponse::Task(still)).unwrap(), None);
+    let done: a2a::Task = serde_json::from_value(
+        json!({"id":"booking","contextId":"trip","status":{"state":"TASK_STATE_COMPLETED"},
+            "artifacts":[{"artifactId":"r","parts":[{"text":"Booked"}]}]}),
+    )
+    .unwrap();
+    assert!(matches!(
+        running.reconcile_lost(a2a::StreamResponse::Task(done)).unwrap(),
+        Some(DelegationUpdate::Completed(_))
+    ));
+}

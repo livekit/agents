@@ -3932,7 +3932,8 @@ impl VoiceSession {
     }
 
     /// Enqueue an exact output under the originating tool's native identity. The returned
-    /// awaitable only watches the independent say speech; dropping it never cancels that speech.
+    /// awaitable only watches the independent say speech for its outcome; dropping it never
+    /// cancels that speech.
     #[pyo3(signature = (invocation_id, operation, call_id, text))]
     fn tool_say<'py>(
         &self,
@@ -3946,8 +3947,13 @@ impl VoiceSession {
         crate::py_calls::check_pid()?;
         let call = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::tool_say(&self.0, invocation_id, operation, call_id, text)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         crate::py_calls::future_into_py(py, async move {
-            let () = call.await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+            let out = call.await;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::agent_run::say_outcome_to_py(py, out)?,
+                    py,
+                )
+            })
         })
     }
 

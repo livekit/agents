@@ -2986,6 +2986,20 @@ pub mod agent_run {
 
     // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
 
+    pub fn say_outcome_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::agent::run::SayOutcome,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::agent::run::SayOutcome::Delivered => "delivered",
+            ::lk_agents_abi::agent::run::SayOutcome::Interrupted => "interrupted",
+            ::lk_agents_abi::agent::run::SayOutcome::Failed => "failed",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
+
     pub fn tool_result_status_to_py<'py>(
         py: Python<'py>,
         value: ::lk_agents_abi::agent::run::ToolResultStatus,
@@ -6892,6 +6906,7 @@ pub mod delegation_remote {
                 crate::py_values::number_from_py::<u64>(v, "RemoteTaskState.next_input")
             })?,
             terminal_event: ::std::default::Default::default(),
+            artifact_sources: ::std::default::Default::default(),
         })
     }
 
@@ -6905,6 +6920,7 @@ pub mod delegation_remote {
             cancel_requested,
             next_input,
             terminal_event: _,
+            artifact_sources: _,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("task", crate::py_protocol::a2a_task_to_py(py, task)?)?;

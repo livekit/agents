@@ -44,3 +44,26 @@ async fn the_speaker_oracle_rejects_wrong_missing_shifted_and_unplayed_pcm() {
         assert_eq!(speaker.check(&recording).is_none(), matches, "{tag} at {at} for {duration}");
     }
 }
+
+/// The recording's resampler settles within `EDGE` of a full-scale step into and out of
+/// silence; a wider ringing would make the speaker check report filter ripple as a mismatch.
+#[test]
+fn edge_covers_the_resamplers_ringing() {
+    let mut resampler =
+        lk_agents_media::Resampler::new(24_000, RATE, 1, lk_agents_media::Quality::Medium).unwrap();
+    let input: Vec<i16> =
+        [(0, 4_800), (i16::MAX, 9_600), (0, 4_800)].iter().flat_map(|&(v, n)| vec![v; n]).collect();
+    let mut out = resampler.push(&input).unwrap().to_vec();
+    out.extend_from_slice(resampler.flush().unwrap());
+    let (up, down) = (9_600, 28_800);
+    let expected = |i: i64| if (up..down).contains(&i) { i16::MAX } else { 0 };
+    for (i, sample) in out.iter().enumerate() {
+        let i = i as i64;
+        let near_an_edge = (i - up).abs() < EDGE || (i - down).abs() < EDGE;
+        assert!(
+            near_an_edge || (i32::from(*sample) - i32::from(expected(i))).abs() <= 1,
+            "sample {i} is {sample}, {} ms from a step",
+            (i - up).abs().min((i - down).abs()) * 1000 / i64::from(RATE),
+        );
+    }
+}

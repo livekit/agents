@@ -80,6 +80,7 @@ fn remote_views_group_observations_and_keep_their_bound_or_detached_owner() {
             cancel_requested: false,
             next_input: 0,
             terminal_event: None,
+            artifact_sources: Default::default(),
         },
     );
     let mut initial = initial_voice("desk".into(), Vec::new());

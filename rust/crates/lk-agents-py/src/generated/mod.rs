@@ -5,6 +5,8 @@
 //!
 //! The declared classes' pyo3 adapters, one module per ABI subject.
 
+#![allow(clippy::clone_on_copy, reason = "generated code clones fields of any type")]
+
 use pyo3::prelude::*;
 
 pub mod a2a;

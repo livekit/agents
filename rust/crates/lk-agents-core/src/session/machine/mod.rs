@@ -211,9 +211,9 @@ impl Session {
             }
             SessionEvent::Run {
                 invocation_id,
-                event: agent_run::AgentRunEvent::ToolOutputDelivered { output, result },
+                event: agent_run::AgentRunEvent::ToolOutputDelivered { output, outcome },
             } => {
-                return self.delivered_tool_output(invocation_id, output, result, now);
+                return self.delivered_tool_output(invocation_id, output, outcome, now);
             }
             SessionEvent::ToolOutputCommitted { invocation_id, output, result } => {
                 return self.committed_tool_output(invocation_id, output, result, now);

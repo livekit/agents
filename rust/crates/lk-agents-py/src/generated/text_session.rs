@@ -187,7 +187,8 @@ impl TextSessionRunner {
         })
     }
 
-    /// Enqueue exact text now; the private reader confirms the source's local output boundary.
+    /// Enqueue exact text now, or refuse it before admission. The private reader settles with
+    /// the outcome at the source's local output boundary; dropping it never cancels the output.
     #[pyo3(signature = (invocation_id, operation, message))]
     fn say<'py>(
         &self,
@@ -198,17 +199,15 @@ impl TextSessionRunner {
         message: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let call = py.detach(|| {
-            <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::say(
-                &self.0,
-                &invocation_id,
-                operation,
-                message,
-            )
-        });
+        let call = py.detach(|| <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::say(&self.0, &invocation_id, operation, message)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
         crate::py_calls::future_into_py(py, async move {
-            let () = call.await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+            let out = call.await;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::agent_run::say_outcome_to_py(py, out)?,
+                    py,
+                )
+            })
         })
     }
 }
@@ -431,7 +430,8 @@ impl CoreLocalInteraction {
         })
     }
 
-    /// Enqueue exact text now; the private reader confirms the source's local output boundary.
+    /// Enqueue exact text now, or refuse it before admission. The private reader settles with
+    /// the outcome at the source's local output boundary; dropping it never cancels the output.
     #[pyo3(signature = (invocation_id, operation, message))]
     fn say<'py>(
         &self,
@@ -442,17 +442,15 @@ impl CoreLocalInteraction {
         message: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let call = py.detach(|| {
-            <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::say(
-                &self.0,
-                &invocation_id,
-                operation,
-                message,
-            )
-        });
+        let call = py.detach(|| <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::say(&self.0, &invocation_id, operation, message)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
         crate::py_calls::future_into_py(py, async move {
-            let () = call.await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+            let out = call.await;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::agent_run::say_outcome_to_py(py, out)?,
+                    py,
+                )
+            })
         })
     }
 }

@@ -127,7 +127,7 @@ impl VoiceRuntime {
             E::RouteInput { speech, request_id, message } => {
                 self.route_input(speech, request_id, message)
             }
-            E::CaptureInputOffers { speech, request } => {
+            E::CaptureInputOffers { speech, request, human } => {
                 let offered = if self
                     .delegation
                     .as_ref()
@@ -136,9 +136,11 @@ impl VoiceRuntime {
                 {
                     self.conversation_snapshot()
                         .map(|state| {
-                            self.driver.input_routing_candidates(
-                                lk_agents_core::delegation::remote::routing::offered(&state),
-                            )
+                            use lk_agents_core::delegation::remote::routing;
+                            self.driver.input_routing_candidates(match &human {
+                                Some(human) => routing::offered_to(&state, human),
+                                None => routing::offered(&state),
+                            })
                         })
                         .unwrap_or_default()
                 } else {

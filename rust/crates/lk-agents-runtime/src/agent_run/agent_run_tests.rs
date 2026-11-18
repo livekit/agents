@@ -520,7 +520,7 @@ async fn progress_waits_for_capacity_and_ends_when_the_receiver_closes() {
     let (tx, mut rx) = mpsc::channel(1);
     let owner = Arc::new(TaskSet::default());
     let spawner: Arc<dyn Spawner> = Arc::new(lk_agents_net::task::TokioSpawner::current());
-    let progress = Progress::new("source".into(), tx, &owner, spawner);
+    let progress = Progress::new("source".into(), tx, &owner, spawner, false);
     let operation = progress.open(1, CallId(1));
     progress.report(1, "first".into()).await.unwrap();
     let mut waiting = progress.enqueue(1, "second".into(), false);

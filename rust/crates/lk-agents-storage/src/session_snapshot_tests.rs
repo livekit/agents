@@ -84,6 +84,89 @@ async fn compact_checkpoints_reuse_values_and_preserve_private_revisions() {
 }
 
 #[tokio::test]
+async fn compaction_keeps_every_reference_unfinished_remote_work_and_inputs_pin() {
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let thread = fixture.thread().await;
+    let partition = thread.partition("default");
+    let holder = Holder::new("unfinished-remote");
+    let mut run = partition.open(RunOptions::new("first", ""), &holder).await.unwrap();
+    let question = json!({"messageId":"which-day","role":"ROLE_AGENT",
+        "parts":[{"text":"Which day? ".repeat(5_000)}]});
+    let held = json!({"messageId":"friday","role":"ROLE_USER","taskId":"booking",
+        "contextId":"trip","parts":[{"text":"Friday"}]});
+    let working = json!({"id":"booking","contextId":"trip",
+        "status":{"state":"TASK_STATE_INPUT_REQUIRED","message":question.clone()},
+        "artifacts":[{"artifactId":"draft","parts":[{"text":"draft ".repeat(5_000)}]}]});
+    let human = json!({"id":"human-friday","type":"message","role":"user",
+        "content":["Friday"]});
+    let mut state = json!({"version":1,"kind":"conversation","state":{
+        "chat_history":[human.clone()],
+        "frames":{"root":{"history":[human.clone()],"visible_dialogue":[human.clone()],
+            "input_requests":{"booking/0":{"source_message":question.clone(),
+                "response_message":held.clone(),"state":"responding"}}}},
+        "remote_agents":{"booking":{
+            "endpoint":"https://booking.test",
+            "events":[{"sequence":0,"request_id":"send","kind":"request_recorded",
+                "payload":{"message":question.clone()}}],
+            "requests":{
+                "send":{"method":"SendStreamingMessage","request_event":0,
+                    "dispatch_started":true,"ended":true,
+                    "task":{"task_id":"booking","context_id":"trip"},
+                    "origin":{"call_id":"call-1"},"input_request":null},
+                "answer":{"method":"SendStreamingMessage","request_event":1,
+                    "dispatch_started":true,"ended":false,
+                    "task":{"task_id":"booking","context_id":"trip"},
+                    "origin":null,"input_request":{"remote_id":"booking","task_id":"booking",
+                        "context_id":"trip","occurrence":"0"}}},
+            "messages":{"which-day":question.clone(),"friday":held.clone()},
+            "tasks":{"booking":{"task":working.clone(),"cancel_requested":true,
+                "next_input":1,"input_requests":{"0":{"state":"responding",
+                    "source_message_id":"which-day","response_message_id":"friday",
+                    "presented_message_id":"human-friday","human_response_id":"human-friday"}}}},
+            "default_context_id":"trip"
+        }}
+    }});
+    run.checkpoint_session(state.clone(), vec![]).await.unwrap();
+    // A later checkpoint adds communication; the unfinished task, its input occurrence and the
+    // uncertain response keep pointing at revisions written by the earlier checkpoint.
+    state["state"]["remote_agents"]["booking"]["events"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"sequence":1,"request_id":"answer","kind":"request_recorded",
+            "payload":{"message":held.clone()}}));
+    run.checkpoint_session(state.clone(), vec![]).await.unwrap();
+    let raw = partition.info().await.unwrap().unwrap().state;
+    assert!(serde_json::to_string(&raw).unwrap().len() < 4000, "content stays out of routing");
+    let packed = &raw.as_ref().unwrap()["state"]["remote_agents"]["booking"];
+    assert_eq!(packed["requests"], state["state"]["remote_agents"]["booking"]["requests"]);
+    assert_eq!(
+        packed["tasks"]["booking"]["input_requests"],
+        state["state"]["remote_agents"]["booking"]["tasks"]["booking"]["input_requests"]
+    );
+    let journal = thread.journal(0, 100).await.unwrap();
+    for pinned in [&question, &held, &working] {
+        assert_eq!(journal.iter().filter(|entry| &entry.payload == pinned).count(), 1);
+    }
+    run.commit(CommitOptions::default()).await.unwrap();
+
+    // A fresh owner reuses the hydrated references; a further compact checkpoint and another
+    // restart still resolve every revision unfinished work depends on.
+    let mut second = partition.open(RunOptions::new("second", ""), &holder).await.unwrap();
+    assert_eq!(second.state(), Some(&state));
+    state["state"]["remote_agents"]["booking"]["requests"]["answer"]["ended"] = json!(true);
+    second.checkpoint_session(state.clone(), vec![]).await.unwrap();
+    second.commit(CommitOptions::default()).await.unwrap();
+    let journal = thread.journal(0, 100).await.unwrap();
+    for pinned in [&question, &held, &working] {
+        assert_eq!(journal.iter().filter(|entry| &entry.payload == pinned).count(), 1);
+    }
+    let mut third = partition.open(RunOptions::new("third", ""), &holder).await.unwrap();
+    assert_eq!(third.state(), Some(&state));
+    third.commit(CommitOptions::default()).await.unwrap();
+    fixture.cleanup(&[&thread]).await;
+}
+
+#[tokio::test]
 async fn a_missing_immutable_revision_is_an_error() {
     let fixture = Backend::Sqlite.fixture(None).await;
     let thread = fixture.thread().await;

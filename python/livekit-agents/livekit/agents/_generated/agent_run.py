@@ -390,6 +390,13 @@ envelope (sequence, agent name, invocation and frame ids).
 """
 
 
+SayOutcome: TypeAlias = Literal["delivered", "interrupted", "failed"]
+"""How `ctx.say()` exact output ended at this hop's local output boundary: audio playout on a
+call, the stream's accepted read or the A2A handoff in text. Never a business outcome: the
+tool and any remote work continue whichever it is, and a hop never confirms the next one.
+"""
+
+
 ToolResultStatus: TypeAlias = Literal["completed", "failed", "cancelled"]
 
 

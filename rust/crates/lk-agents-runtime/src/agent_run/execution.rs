@@ -208,8 +208,8 @@ impl Execution {
             AgentRunEffect::DeliverToolOutput { output, message } => {
                 self.deliver_output(output, *message)
             }
-            AgentRunEffect::ToolOutputSettled { output, result } => {
-                self.settle_output(output, result)
+            AgentRunEffect::ToolOutputSettled { output, outcome } => {
+                self.settle_output(output, outcome)
             }
             AgentRunEffect::Emit(event) => {
                 if let lk_agents_abi::agent::run::StreamEvent::Progress { message, silent, .. } =
@@ -432,10 +432,8 @@ impl Execution {
             Report::ToolOutputRequested { output, call, text, done } => {
                 let stream = self.output.as_ref().is_some_and(super::output::Target::is_stream);
                 if self.tool_outputs.contains_key(&output) {
-                    done.finish(Err(HostError::new(
-                        "the native exact-output identity is already admitted",
-                    )
-                    .into()));
+                    // The native exact-output identity is already admitted.
+                    done.finish(Ok(lk_agents_abi::agent::run::SayOutcome::Failed));
                     return (AgentRunEvent::Wake, None);
                 }
                 self.tool_outputs.insert(output, super::output::Pending::Admitted(done));

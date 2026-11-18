@@ -356,14 +356,17 @@ async fn exact_output_waits_for_its_playout_boundary_and_retains_its_words_once(
 
     speech.state.mark_done(None);
     speech.publish();
-    receipt.await.unwrap();
-    handle.exact_delivery("Your booking reference is ABC.").await.unwrap();
+    assert_eq!(receipt.await, SayOutcome::Delivered);
+    assert_eq!(
+        handle.exact_delivery("Your booking reference is ABC.").await,
+        SayOutcome::Delivered
+    );
     assert_eq!(handle.chat_items(), vec![words], "reading a receipt cannot append history");
 }
 
 #[tokio::test]
 async fn interrupted_or_unheard_exact_output_cannot_report_success() {
-    for interrupted in [false, true] {
+    for (interrupted, expected) in [(false, SayOutcome::Failed), (true, SayOutcome::Interrupted)] {
         let mut speech = Speech::created(true);
         let handle = speech.handle();
         speech.state.mark_scheduled();
@@ -380,10 +383,26 @@ async fn interrupted_or_unheard_exact_output_cannot_report_success() {
         }
         speech.state.mark_done(None);
         speech.publish();
-        let error = handle.exact_delivery("Your booking reference is ABC.").await.unwrap_err();
-        assert!(!error.cancelled(), "delivery failure cannot cancel business work");
-        assert!(!error.retryable(), "a partial exact output cannot be safely replayed");
+        assert_eq!(
+            handle.exact_delivery("Your booking reference is ABC.").await,
+            expected,
+            "partial words are never delivered: cut off by an interruption, else lost"
+        );
     }
+}
+
+// Catches: a speech the closing session dropped before it was scheduled reading as a failed
+// output, or its waiter parking until the next speech.
+#[tokio::test]
+async fn an_exact_output_closed_before_it_played_is_interrupted() {
+    let mut speech = Speech::created(true);
+    let handle = speech.handle();
+    let receipt = handle.exact_delivery("Reference ABC.");
+    tokio::pin!(receipt);
+    assert!(futures_util::poll!(receipt.as_mut()).is_pending());
+    speech.state.mark_done(None);
+    speech.publish();
+    assert_eq!(receipt.await, SayOutcome::Interrupted);
 }
 
 #[tokio::test]
@@ -393,9 +412,9 @@ async fn exact_output_receipts_settle_on_output_failure_or_owner_loss() {
         "speaker failed".into(),
     )));
     failed.state.mark_scheduled();
-    failed.state.mark_done(Some(failure.clone()));
+    failed.state.mark_done(Some(failure));
     failed.publish();
-    assert_eq!(failed.handle().exact_delivery("ABC").await, Err(failure.into_final()));
+    assert_eq!(failed.handle().exact_delivery("ABC").await, SayOutcome::Failed);
 
     let mut lost = Speech::created(true);
     lost.state.mark_scheduled();
@@ -405,13 +424,14 @@ async fn exact_output_receipts_settle_on_output_failure_or_owner_loss() {
     tokio::pin!(receipt);
     assert!(futures_util::poll!(receipt.as_mut()).is_pending());
     drop(lost);
-    assert!(!receipt.await.unwrap_err().cancelled());
+    assert_eq!(receipt.await, SayOutcome::Failed, "a lost owner settles its waiter");
 
     let (not_created, signals) = pending_speech(SpeechId(99), true);
     drop(signals);
-    assert!(
-        !not_created.exact_delivery("ABC").await.unwrap_err().cancelled(),
-        "never-created output cannot manufacture business cancellation"
+    assert_eq!(
+        not_created.exact_delivery("ABC").await,
+        SayOutcome::Failed,
+        "never-created output settles without a business cancellation"
     );
 }
 
@@ -436,6 +456,6 @@ async fn losing_an_exact_output_waiter_does_not_cancel_or_replay_its_speech() {
     speech.state.item_added(&words);
     speech.state.mark_done(None);
     speech.publish();
-    handle.exact_delivery("ABC").await.unwrap();
+    assert_eq!(handle.exact_delivery("ABC").await, SayOutcome::Delivered);
     assert_eq!(handle.chat_items(), vec![words]);
 }

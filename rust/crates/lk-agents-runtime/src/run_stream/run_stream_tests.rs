@@ -319,8 +319,7 @@ async fn exact_output_waits_for_the_accepted_stream_read_and_survives_reader_los
     let mut second = output.prepare(lk_agents_abi::ChatMessage { id: "next".into(), ..message });
     assert!((&mut second).now_or_never().is_none());
     events.aclose().await.unwrap();
-    let error = second.await.unwrap_err();
-    assert!(!error.cancelled());
+    assert_eq!(second.await, SayOutcome::Interrupted, "a closed stream interrupted the output");
     stream.aclose().await.unwrap();
 }
 
@@ -339,5 +338,5 @@ async fn result_draining_refuses_exact_output_without_waiting_for_its_own_final_
     let consumer = stream.begin_result().unwrap();
     stream.result(consumer).await.unwrap();
     stream.end_result(consumer, true);
-    assert!(receipt.await.is_err());
+    assert_eq!(receipt.await, SayOutcome::Failed, "a result-only reader has no live output");
 }

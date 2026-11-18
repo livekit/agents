@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import signal
 import socket
 import sys
@@ -121,6 +122,8 @@ async def pod(tmp_path: Path, request: pytest.FixtureRequest) -> AsyncIterator[P
         env = {
             "PATH": "/usr/bin:/bin",
             "HOME": str(tmp_path),
+            # what the interpreter itself needs to start: a shared libpython (setup-python's)
+            **({"LD_LIBRARY_PATH": lib} if (lib := os.environ.get("LD_LIBRARY_PATH")) else {}),
             # scheduling_provider/kube.go: the pod template
             "LK_HOSTED_AGENTS": "1",
             "LIVEKIT_REGION_NAME": REGION,

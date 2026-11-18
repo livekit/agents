@@ -233,6 +233,8 @@ fn every_arrival_order_settles_the_same_history_once() {
                 pending[i].1 += 1;
             }
         }
+        // The settled sibling results are reported with the question.
+        d.reply("Got r1 and r3. Which?", &[]);
         let finished =
             d.effects.iter().filter(|e| matches!(e, AgentRunEffect::Finished { .. })).count();
         assert_eq!(finished, 1, "seed {seed}");

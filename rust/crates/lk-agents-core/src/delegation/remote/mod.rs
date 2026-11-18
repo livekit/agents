@@ -102,10 +102,38 @@ pub enum DelegationUpdate {
     Pending,
 }
 
+/// How a lost observation is recovered. Reading a known task is safe; resending the
+/// operation that created it never is.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ObservationLoss {
+    /// Follow the same task on a fresh stream.
+    Resubscribe(TaskRef),
+    /// Read the task once: the peer cannot stream it, or refused the resubscription.
+    Snapshot(TaskRef),
+    /// No task identity was observed, or recovery made no progress within the connection
+    /// policy: the outcome stays unknown.
+    Unknown,
+}
+
+impl ObservationLoss {
+    /// A peer that answered the resubscription (refused it, or the task already ended) can
+    /// still be read once; a transport failure leaves the outcome unknown.
+    pub fn resubscribe_failed(task: TaskRef, error: &crate::a2a::client::ClientError) -> Self {
+        match error {
+            crate::a2a::client::ClientError::Rpc { .. } => Self::Snapshot(task),
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// One interaction's decision owner. A reusable RemoteAgent holds none of this state.
 #[derive(Debug)]
 pub struct RemoteInteraction {
     state: InteractionState,
+    /// Consecutive lost observations that delivered nothing after their opening snapshot.
+    losses: u32,
+    /// Updates consumed since the last lost observation.
+    since_loss: u32,
 }
 
 impl RemoteInteraction {
@@ -122,6 +150,8 @@ impl RemoteInteraction {
                 phase: InteractionPhase::Ready,
                 input_request: None,
             },
+            losses: 0,
+            since_loss: 0,
         })
     }
 
@@ -287,6 +317,11 @@ impl RemoteInteraction {
         }
         self.identify(update)?;
         self.state.input_request = None;
+        // A resubscription opens with the task snapshot; only a later update is progress.
+        self.since_loss = self.since_loss.saturating_add(1);
+        if self.since_loss > 1 {
+            self.losses = 0;
+        }
         let exact = update.metadata.get("livekit/verbatim").and_then(|v| v.as_str());
         let outcome = match update.state {
             TaskState::Unspecified | TaskState::Submitted | TaskState::Working => {
@@ -371,6 +406,20 @@ impl RemoteInteraction {
         })
     }
 
+    /// A snapshot read after a lost observation. A task still running cannot be observed
+    /// further this way: `None` keeps its outcome unknown rather than polling or resending.
+    /// A merged task is followed to its replacement.
+    pub fn reconcile_lost(
+        &mut self,
+        response: a2a::StreamResponse,
+    ) -> Result<Option<DelegationUpdate>, DelegationError> {
+        let lost = self.state.pending_task_id.clone();
+        Ok(match self.reconcile(response)? {
+            DelegationUpdate::Follow(task) if lost.as_ref() == Some(&task.id) => None,
+            event => Some(event),
+        })
+    }
+
     fn identify(&mut self, update: &TaskUpdate) -> Result<(), DelegationError> {
         if self.state.context_id.as_ref().is_some_and(|id| id != &update.context_id)
             || self.state.pending_task_id.as_ref().is_some_and(|id| id != &update.task_id)
@@ -384,6 +433,23 @@ impl RemoteInteraction {
             self.state.pending_task_id = Some(update.task_id.clone());
         }
         Ok(())
+    }
+
+    /// The observation stream ended or failed before an outcome. A known running task is
+    /// read again (`streaming` is the peer's card capability); `max_retry` bounds consecutive
+    /// recoveries that made no progress.
+    pub fn observation_lost(&mut self, streaming: bool, max_retry: u32) -> ObservationLoss {
+        let (Some(id), Some(context_id)) = (&self.state.pending_task_id, &self.state.context_id)
+        else {
+            return ObservationLoss::Unknown;
+        };
+        if self.state.phase == InteractionPhase::Settled || self.losses >= max_retry {
+            return ObservationLoss::Unknown;
+        }
+        self.losses += 1;
+        self.since_loss = 0;
+        let task = TaskRef { id: id.clone(), context_id: context_id.clone() };
+        if streaming { ObservationLoss::Resubscribe(task) } else { ObservationLoss::Snapshot(task) }
     }
 
     pub fn ended(&self) -> Result<(), DelegationError> {

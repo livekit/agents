@@ -1,4 +1,5 @@
 use crate::agent_session::machine::activity::scheduling::SpeechId;
+use lk_agents_abi::agent::run::SayOutcome;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{ChatItem, MetricsReport};
 
@@ -161,31 +162,25 @@ impl SpeechView {
         }
     }
 
-    /// Exact output requires the complete output boundary and its canonical words. A settled
-    /// ordinary wait alone also admits interrupted, refused and owner-lost speeches.
-    pub fn exact_delivery(&self, expected: &str, items: &[ChatItem]) -> Result<(), ProviderError> {
-        if let Some(error) = self.error() {
-            return Err(error.clone().into_final());
+    /// Exact output is delivered only at the complete output boundary with its canonical
+    /// words. An output error or lost words fail it; an interruption, or a speech that ended
+    /// unscheduled because its session closed, interrupts it.
+    pub fn exact_delivery(&self, expected: &str, items: &[ChatItem]) -> SayOutcome {
+        if self.error().is_some() {
+            return SayOutcome::Failed;
         }
-        let complete = self.done()
-            && self.scheduled()
-            && !self.interrupted()
-            && (expected.is_empty()
-                || items.iter().any(|item| {
-                    item.as_message().is_some_and(|message| {
-                        message.role == lk_agents_abi::Role::Assistant
-                            && !message.interrupted
-                            && message.raw_text_content().as_deref() == Some(expected)
-                    })
-                }));
-        if complete {
-            Ok(())
-        } else {
-            Err(lk_agents_abi::errors::HostError::new(
-                "the exact tool output was not delivered completely",
-            )
-            .into())
+        if self.interrupted() || (self.done() && !self.scheduled()) {
+            return SayOutcome::Interrupted;
         }
+        let heard = expected.is_empty()
+            || items.iter().any(|item| {
+                item.as_message().is_some_and(|message| {
+                    message.role == lk_agents_abi::Role::Assistant
+                        && !message.interrupted
+                        && message.raw_text_content().as_deref() == Some(expected)
+                })
+            });
+        if self.done() && heard { SayOutcome::Delivered } else { SayOutcome::Failed }
     }
 
     fn scheduling(&self) -> Scheduling {

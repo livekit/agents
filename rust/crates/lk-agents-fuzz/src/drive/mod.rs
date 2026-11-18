@@ -90,6 +90,7 @@ pub use apply::BUDGET_MS;
 pub use finish::{Ending, Outcome, PHASES, finish, guard, run};
 pub use probe::WAIT_BOUND_MS;
 pub use queue::Policy;
+pub use start::case_process;
 
 use self::apply::{Feeding, Pending};
 use self::queue::Next;
@@ -127,6 +128,9 @@ pub struct Setup {
     /// A separately configured FakeLlm exercises real input-response inference and owner
     /// admission. Authored setups leave routing disabled unless explicitly requested.
     pub input_routing: bool,
+    /// A remote A2A peer behind [`crate::fakes::remote_tool::REMOTE_TOOL`], which `tools` must
+    /// name for the frontend to delegate to it: the real delegation executors run over the peer.
+    pub remote: Option<crate::fakes::a2a_peer::PeerScript>,
     pub max_tool_steps: Option<u32>,
     pub instructions: String,
     pub max_unrecoverable_errors: u32,
@@ -505,6 +509,7 @@ impl Default for Setup {
             preemptive: false,
             tools: vec!["lookup".into()],
             input_routing: false,
+            remote: None,
             max_tool_steps: None,
             instructions: "You are a test agent.".into(),
             max_unrecoverable_errors: 3,

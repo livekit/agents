@@ -11,6 +11,7 @@ from typing import Self
 from livekit.agents.a2a import _Delegation
 
 from .._core import _core_RunResources, _core_RunStream
+from .agent_run import SayOutcome
 from .chat_items import ChatItem
 from .connect import APIConnectOptions
 from .delegation import DelegationOptions
@@ -52,8 +53,10 @@ class TextSessionRunner:
         message: str,
         silent: bool = False,
     ) -> None: ...
-    async def say(self, invocation_id: str, operation: int, message: str) -> None:
-        """Enqueue exact text now; the private reader confirms the source's local output boundary."""
+    async def say(self, invocation_id: str, operation: int, message: str) -> SayOutcome:
+        """Enqueue exact text now, or refuse it before admission. The private reader settles with
+        the outcome at the source's local output boundary; dropping it never cancels the output.
+        """
 
 class TextSessionUpdates:
     async def recv(self) -> TextSessionUpdate | None: ...
@@ -104,5 +107,7 @@ class _core_LocalInteraction:
         silent: bool = False,
     ) -> None:
         """`ctx.update(message)` from a tool body of the child's invocation `invocation_id`."""
-    async def say(self, invocation_id: str, operation: int, message: str) -> None:
-        """Enqueue exact text now; the private reader confirms the source's local output boundary."""
+    async def say(self, invocation_id: str, operation: int, message: str) -> SayOutcome:
+        """Enqueue exact text now, or refuse it before admission. The private reader settles with
+        the outcome at the source's local output boundary; dropping it never cancels the output.
+        """

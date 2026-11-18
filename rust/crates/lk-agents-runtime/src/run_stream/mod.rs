@@ -6,14 +6,15 @@ mod tests;
 
 use crate::agent_run::resources::RunResources;
 use input::{Input, Message};
+use lk_agents_abi::ChatMessage;
 use lk_agents_abi::agent::resources::RunResources as _;
+use lk_agents_abi::agent::run::SayOutcome;
 use lk_agents_abi::agent::stream::PresentedEvent;
 use lk_agents_abi::agent::stream::{self, StreamError, StreamOutcome, StreamRefused};
 use lk_agents_abi::errors::{HostError, Invalid};
 use lk_agents_abi::text_session::TextSessionDelivery;
 use lk_agents_abi::usage::Usage;
 use lk_agents_abi::{BoxFuture, Spawner};
-use lk_agents_abi::{ChatMessage, errors::ProviderError};
 use lk_agents_core::run_stream::{
     Stream as Policy, View,
     projection::{Item, Projection},
@@ -26,7 +27,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
 type Outcome = Result<StreamOutcome, StreamError>;
-type ExactDelivery = signal::Producer<Option<Result<(), ProviderError>>>;
+type ExactDelivery = signal::Producer<Option<SayOutcome>>;
 
 pub struct RunStream(Arc<Inner>);
 
@@ -51,32 +52,23 @@ struct Inner {
 #[derive(Clone)]
 pub(crate) struct Output(Weak<Inner>);
 impl Output {
-    pub(crate) fn prepare(
-        &self,
-        message: ChatMessage,
-    ) -> BoxFuture<'static, Result<(), ProviderError>> {
+    /// Delivered at the consumer's accepted read; a stream closed or dropped first interrupted
+    /// it, and one that no longer accepts output cannot deliver it.
+    pub(crate) fn prepare(&self, message: ChatMessage) -> BoxFuture<'static, SayOutcome> {
         let Some(inner) = self.0.upgrade() else {
-            return Box::pin(async { Err(output_ended()) });
+            return Box::pin(async { SayOutcome::Interrupted });
         };
         let (done, receipt) = signal::once();
         {
             let mut outputs = inner.exact_outputs.lock();
             if !inner.policy.lock().accepts_output() {
-                return Box::pin(async {
-                    Err(HostError::new(
-                        "exact tool output requires a live voice, text stream or A2A output",
-                    )
-                    .into())
-                });
+                return Box::pin(async { SayOutcome::Failed });
             }
             let previous = outputs.insert(message.id, done);
             assert!(previous.is_none(), "core exact output IDs are unique within their source");
         }
-        Box::pin(async move { receipt.wait().await.unwrap_or_else(|_| Err(output_ended())) })
+        Box::pin(async move { receipt.wait().await.unwrap_or(SayOutcome::Interrupted) })
     }
-}
-fn output_ended() -> ProviderError {
-    HostError::new("the exact output's stream delivery boundary has ended").into()
 }
 
 impl RunStream {
@@ -115,20 +107,13 @@ impl Inner {
     fn fail_outputs(&self) {
         let pending = std::mem::take(&mut *self.exact_outputs.lock());
         for (_, done) in pending {
-            done.resolve(Err(output_ended()));
+            done.resolve(SayOutcome::Interrupted);
         }
     }
     fn accept_output(&self, id: &str, accepted: bool) {
         let done = self.exact_outputs.lock().remove(id);
         if let Some(done) = done {
-            done.resolve(if accepted {
-                Ok(())
-            } else {
-                Err(HostError::new(
-                    "exact tool output requires a live voice, text stream or A2A output",
-                )
-                .into())
-            });
+            done.resolve(if accepted { SayOutcome::Delivered } else { SayOutcome::Failed });
         }
     }
 

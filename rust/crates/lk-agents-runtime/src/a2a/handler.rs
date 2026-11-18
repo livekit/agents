@@ -254,7 +254,7 @@ impl HandlerPort for HandlerTurn {
     fn say(
         &self,
         message: lk_agents_abi::ChatMessage,
-    ) -> BoxFuture<'static, Result<(), lk_agents_abi::errors::HostError>> {
+    ) -> BoxFuture<'static, lk_agents_abi::agent::run::SayOutcome> {
         self.enqueue_exact(message)
     }
     fn token(&self, delta: String) -> BoxFuture<'_, ()> {

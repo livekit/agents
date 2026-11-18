@@ -1,6 +1,6 @@
 use super::*;
 use lk_agents_abi::a2a::turn::HandlerPort;
-use lk_agents_abi::errors::HostError;
+use lk_agents_abi::agent::run::SayOutcome;
 use lk_agents_abi::{BoxFuture, ChatMessage};
 use lk_agents_net::task::ScopedTask;
 
@@ -19,18 +19,19 @@ impl Target {
         matches!(self, Self::Stream(_))
     }
     /// Registers receipt ownership synchronously before the following text event can be read.
-    fn prepare(&self, message: ChatMessage) -> BoxFuture<'static, Result<(), ProviderError>> {
+    fn prepare(&self, message: ChatMessage) -> BoxFuture<'static, SayOutcome> {
         match self {
-            Self::Handler(port) => {
-                let receipt = port.say(message);
-                Box::pin(async move { receipt.await.map_err(Into::into) })
-            }
+            Self::Handler(port) => port.say(message),
             Self::Stream(output) => output.prepare(message),
+            // This hop's boundary is the parent's admission of its own owned exact output.
             Self::Delegate { host, cx, context } => {
                 let (host, cx, context) = (host.clone(), cx.clone(), context.clone());
                 let text = message.raw_text_content().unwrap_or_default();
                 Box::pin(async move {
-                    host.say(&cx, &context, text, Default::default()).await.map_err(Into::into)
+                    match host.say(&cx, &context, text, Default::default()).await {
+                        Ok(()) => SayOutcome::Delivered,
+                        Err(_) => SayOutcome::Failed,
+                    }
                 })
             }
         }
@@ -46,16 +47,13 @@ pub(super) enum Pending {
     Admitted(super::progress::Receipt),
     Delivering {
         receipt: super::progress::Receipt,
-        result: signal::Cell<Option<Result<(), ProviderError>>>,
+        result: signal::Cell<Option<SayOutcome>>,
         task: Option<ScopedTask>,
     },
     Delivered {
         receipt: super::progress::Receipt,
         _task: Option<ScopedTask>,
     },
-}
-fn ended() -> ProviderError {
-    HostError::new("the exact output's delivery owner has ended").into()
 }
 
 impl Execution {
@@ -69,12 +67,7 @@ impl Execution {
         };
         let future = match &self.output {
             Some(target) => target.prepare(message),
-            None => Box::pin(async {
-                Err(HostError::new(
-                    "exact tool output requires a live voice, text stream or A2A output",
-                )
-                .into())
-            }),
+            None => Box::pin(async { SayOutcome::Failed }),
         };
         let (done, result) = signal::once();
         let task = self.progress.spawn_output(done, future);
@@ -85,7 +78,7 @@ impl Execution {
     pub(super) fn settle_output(
         &mut self,
         output: lk_agents_core::agent_run::ToolOutputId,
-        result: Result<(), ProviderError>,
+        outcome: SayOutcome,
     ) {
         let Some(pending) = self.tool_outputs.remove(&output) else {
             return;
@@ -95,17 +88,17 @@ impl Execution {
             | Pending::Delivering { receipt, .. }
             | Pending::Delivered { receipt, .. } => receipt,
         };
-        receipt.finish(result);
+        receipt.finish(Ok(outcome));
     }
     /// Both the host invoker and exact subwork report death to their existing driver.
     pub(crate) async fn settled(&mut self) -> Option<AgentRunEvent> {
         tokio::select! {
             biased;
-            (output, result) = delivered(&self.tool_outputs) => {
+            (output, outcome) = delivered(&self.tool_outputs) => {
                 let pending = self.tool_outputs.remove(&output).expect("selected owned output");
                 let Pending::Delivering { receipt, task, .. } = pending else { unreachable!("selected delivering output") };
                 self.tool_outputs.insert(output, Pending::Delivered { receipt, _task: task });
-                Some(AgentRunEvent::ToolOutputDelivered { output, result })
+                Some(AgentRunEvent::ToolOutputDelivered { output, outcome })
             }
             _ = self.invoker.settled() => None,
         }
@@ -113,16 +106,15 @@ impl Execution {
 }
 async fn delivered(
     outputs: &BTreeMap<lk_agents_core::agent_run::ToolOutputId, Pending>,
-) -> (lk_agents_core::agent_run::ToolOutputId, Result<(), ProviderError>) {
+) -> (lk_agents_core::agent_run::ToolOutputId, SayOutcome) {
     let futures: Vec<_> = outputs
         .iter()
         .filter_map(|(id, pending)| {
             let Pending::Delivering { result, .. } = pending else {
                 return None;
             };
-            Some(Box::pin(
-                async move { (*id, result.wait().await.unwrap_or_else(|_| Err(ended()))) },
-            ))
+            // A delivery task lost before settling lost its output.
+            Some(Box::pin(async move { (*id, result.wait().await.unwrap_or(SayOutcome::Failed)) }))
         })
         .collect();
     if futures.is_empty() {

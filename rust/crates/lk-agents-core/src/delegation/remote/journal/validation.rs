@@ -7,14 +7,17 @@ pub fn validate(remote_id: &str, state: &RemoteAgentState) -> Result<(), RemoteE
     if state.endpoint.is_empty() || state.default_context_id.as_deref() == Some("") {
         return Err(invalid("missing endpoint or empty default context"));
     }
-    for (position, event) in state.events.iter().enumerate() {
+    let mut previous = None;
+    for event in &state.events {
         let request = state
             .requests
             .get(&event.request_id)
             .ok_or_else(|| invalid("journal entry has no request"))?;
-        if event.sequence != position as u64 {
-            return Err(invalid("journal positions changed"));
+        // Compaction removes settled entries; the remaining order never changes.
+        if previous.is_some_and(|previous| event.sequence <= previous) {
+            return Err(invalid("journal order changed"));
         }
+        previous = Some(event.sequence);
         match (&event.kind, &event.payload) {
             (A2AJournalKind::RequestRecorded, A2AJournalPayload::Request(body)) => {
                 if request.request_event != event.sequence
@@ -37,8 +40,7 @@ pub fn validate(remote_id: &str, state: &RemoteAgentState) -> Result<(), RemoteE
     }
     for (id, request) in &state.requests {
         let entry = state
-            .events
-            .get(request.request_event as usize)
+            .event(request.request_event)
             .ok_or_else(|| invalid("request content is missing"))?;
         if &entry.request_id != id || entry.kind != A2AJournalKind::RequestRecorded {
             return Err(invalid("request refers to another operation's content"));

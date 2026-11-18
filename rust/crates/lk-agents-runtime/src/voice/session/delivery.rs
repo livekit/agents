@@ -1,5 +1,5 @@
 use super::*;
-use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::agent::run::SayOutcome;
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_voice::agent_session::ToolUpdate;
 
@@ -12,7 +12,7 @@ impl VoiceSession {
         operation: u64,
         call_id: String,
         text: String,
-    ) -> Result<BoxFuture<'static, Result<(), ProviderError>>, CommandRefused> {
+    ) -> Result<BoxFuture<'static, SayOutcome>, CommandRefused> {
         self.api()?;
         let (speech, call, reply) = self.speech_call(None)?;
         let origin = VoiceCommandOrigin::Tool {

@@ -139,6 +139,7 @@ fn waiting_for_date() -> Arc<SessionBinding> {
             cancel_requested: false,
             next_input: 1,
             terminal_event: None,
+            artifact_sources: Default::default(),
         },
     );
     state.remote_agents.insert(REMOTE.into(), remote);

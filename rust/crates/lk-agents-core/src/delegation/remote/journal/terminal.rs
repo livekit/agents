@@ -23,11 +23,8 @@ pub fn observed(
         return Err(invalid("the observed task identity or context changed"));
     }
     let Some(sequence) = saved.terminal_event else { return Ok(None) };
-    let event = state
-        .events
-        .get(sequence as usize)
-        .filter(|event| event.sequence == sequence)
-        .ok_or_else(|| invalid("the accepted terminal event is missing"))?;
+    let event =
+        state.event(sequence).ok_or_else(|| invalid("the accepted terminal event is missing"))?;
     let A2AJournalPayload::Response(response) = &event.payload else {
         return Err(invalid("accepted terminal position does not contain a response"));
     };
@@ -36,7 +33,10 @@ pub fn observed(
             task.status.state.is_terminal() && task.status.state == saved.task.status.state
         })
         .ok_or_else(|| invalid("the accepted terminal event does not match this task"))?;
-    task.artifacts = Some(artifacts(state, &event.request_id, sequence, target));
+    // A terminal response after a stream gap must not present cached partial chunks as a
+    // complete result. Its SDK state remains inspectable, and completion never triggers resend.
+    task.artifacts =
+        Some(assembled(state, &event.request_id, sequence + 1, target).unwrap_or_default());
     // History is already retained for inspection; it is not a second tool-result transcript.
     task.history = None;
     Ok(Some(a2a::SendMessageResponse::Task(task)))
@@ -76,16 +76,21 @@ fn status(response: &A2AResponse, target: &RemoteTaskRef) -> Option<a2a::Task> {
     }
 }
 
-fn artifacts(
+/// The artifacts one request's own observations assembled before `before`, or `None` when
+/// a chunk continued content this request never saw.
+pub(super) fn assembled(
     state: &RemoteAgentState,
     request: &str,
-    terminal: u64,
+    before: u64,
     target: &RemoteTaskRef,
-) -> Vec<a2a::Artifact> {
+) -> Option<Vec<a2a::Artifact>> {
     let mut result: Vec<a2a::Artifact> = Vec::new();
     let mut incomplete = BTreeSet::new();
-    for event in
-        state.events.iter().take(terminal as usize + 1).filter(|event| event.request_id == request)
+    for event in state
+        .events
+        .iter()
+        .take_while(|event| event.sequence < before)
+        .filter(|event| event.request_id == request)
     {
         let A2AJournalPayload::Response(response) = &event.payload else { continue };
         if let Some(task) = status(response, target)
@@ -119,9 +124,7 @@ fn artifacts(
             }
         }
     }
-    // A terminal response after a stream gap must not present cached partial chunks as a
-    // complete result. Its SDK state remains inspectable, and completion never triggers resend.
-    if incomplete.is_empty() { result } else { Vec::new() }
+    incomplete.is_empty().then_some(result)
 }
 
 #[cfg(test)]

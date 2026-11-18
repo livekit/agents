@@ -872,7 +872,7 @@ AgentClientError, RunResult, InputRequired, ToolResult, ChatContext and SpeechHa
 | SessionState.root_agent/current_agent/chat_history/remote_agents | Generated inspection properties. The remote properties messages/tasks/contexts/events expose the records above. snapshot() keeps its existing detached-read role. |
 | TextSession detached state/history entry points | Migrate existing state arguments/results to the agreed binding path, with no compatibility path; add no new parallel continuation API. |
 | ctx.update(text, silent=False) | Extend the existing update method with immediate enqueue and an optional-await admission receipt; add silent progress behavior. |
-| ctx.say(text) | New exact-output method: enqueue immediately and return a private Awaitable[None]. Awaiting confirms complete delivery at the local output boundary; incomplete delivery raises an existing delivery error. Dropping the waiter does not cancel admitted work. |
+| ctx.say(text) | New exact-output method: enqueue immediately and return a private Awaitable[SayOutcome]. Awaiting returns "delivered" at the complete local output boundary, else "interrupted" (interruption or close) or "failed" (output failure, owner loss); it never raises for undelivered output. Dropping the waiter does not cancel admitted work. |
 | RemoteTask.cancel() | Async command on the bound task view, with no repeated remote/context/task arguments. Success requires observed cancellation to be persisted; retain explicit refusal/uncertainty outcomes. |
 | Agent.as_tool(..., merge_chat_ctx=...) | Rename the existing merge_chat_history option without a compatibility alias. needs_approval and fresh/fork remain existing capabilities. |
 | inbox="live" | Add a value to the existing endpoint policy; no public LiveSession/LiveLane class. |
@@ -959,7 +959,7 @@ a public Python export or an additional SDK constructor.
 | ToolReport.input_request and RunInputRequirement.input_request | Carry the existing native occurrence reference through the call table and settled requirement. | A reported question keeps its owner even if a sibling fails. The public result does not export this execution reference, and model-history metadata cannot recreate it. |
 | VoiceHistory, private I/O record | Captures the conversation and the database baseline observed by that snapshot. | Reconciled receipts retain their fence and observation order. Disjoint edits rebase; colliding foreign and local edits preserve the original local intent and report a typed conflict without advancing its baseline. Native own-write proof distinguishes an earlier partial checkpoint. This is not a persisted format or a public constructor. |
 | TranscriptForward, private I/O request | Serializes the existing transcript writer's paced output, direct captures and delivery drains. | One physical output order and owned receipts across synchronization changes; no new Python API or presentation policy. |
-| Delivery receipt, private awaitable | Internal adapter over existing signal/playback/output machinery. | ctx.update() and ctx.say() enqueue immediately and return Awaitable[None], with no public receipt constructor. Await update for admission and say for exact local output delivery. Losing a waiter leaves admitted work running. |
+| Delivery receipt, private awaitable | Internal adapter over existing signal/playback/output machinery. | ctx.update() enqueues immediately and returns Awaitable[None]; ctx.say() returns Awaitable[SayOutcome], an ABI-declared closed set; no public receipt constructor. Await update for admission and say for its exact local output outcome. Losing a waiter leaves admitted work running. |
 | HttpExchangePort, working name | New injected network boundary if the current concrete GatewayHttp exchange cannot be reused directly. | Let DST run real client/executor logic over fake HTTP observations; do not fake the entire remote delegation controller. |
 | FakeA2AHttp, working name, native test-only | New implementation of that boundary in the existing DST. | Model accepted requests/lost responses, SDK task snapshots, stream fragments and faults without replacing native client or delegation decisions. |
 | ProtectedStepGuard, conditional working name | Needed only if the protected-step context-manager contract is adopted. | Scoped cancellation protection with explicit ownership and shutdown bounds. |
@@ -1166,9 +1166,10 @@ Routine private type layout and generator work do not require another public pri
   grants? The configured staging endpoint still requires `agent.databaseAdmin` when creating
   a thread, preventing the live cross-server storage acceptance story from reaching execution.
 
-- When interruption prevents complete `ctx.say()` delivery, should awaiting its receipt raise
-  an existing delivery error or return an outcome the caller must inspect? Either way, the
-  receipt settles and remote business work continues. The recommended contract is an error.
+- **Decided:** when interruption, close or output failure prevents complete `ctx.say()`
+  delivery, awaiting its receipt returns a `SayOutcome` (`"delivered"`, `"interrupted"` or
+  `"failed"`) the caller inspects, rather than raising. The receipt still settles promptly,
+  ignoring it leaves admitted work running, and remote business work continues.
 
 - The pinned Python A2A SDK exposes protobuf operation models but no JSON-RPC error class.
   Native storage preserves the SDK's exact code/message/data. Decide whether public inspection
@@ -1386,7 +1387,7 @@ effects separately. No fixed batching delay or blanket one-question-per-utteranc
 
 - [ ] Finish immediate enqueue and optional-await update/say receipts. Awaited progress means
   admission. Awaited exact text means its local output boundary: backend A2A/text handoff or
-  frontend audio playout. Finalize interruption/close outcomes using existing error types.
+  frontend audio playout. Interruption, close and output failure settle say as an outcome.
 - [ ] Carry source references through rephrasing and actual delivery for pipeline and realtime
   voice. Unheard or interrupted output cannot mark an entire prompt delivered; partial/grouped
   presentation needs its own admission evidence and readable regression.

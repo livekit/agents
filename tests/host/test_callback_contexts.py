@@ -381,17 +381,25 @@ async def test_a_second_binding_while_a_run_holds_the_store_is_refused() -> None
             await session.run("again", context=store.bind(app))
 
 
-async def test_a_snapshot_taken_while_a_tool_runs_is_not_resumed() -> None:
-    """A session read while a tool's outcome is still unknown cannot be resumed: the tool might
-    have taken effect, so the run is refused rather than replayed."""
+# Catches: a session read while a tool ran (a worker that died inside the tool) leaving the
+# conversation unusable, or the tool run again although it may have taken effect.
+async def test_a_snapshot_taken_while_a_tool_runs_resumes_with_the_tool_settled_as_an_error() -> (
+    None
+):
     store = ContextStore()
     app = await store.load_context(BoundApp())
     entered = asyncio.Event()
-    agent = Agent(name="desk", instructions="Help.", llm=FakeLLM([tool_call("charge")]))
+    runs: list[None] = []
+    agent = Agent(
+        name="desk",
+        instructions="Help.",
+        llm=FakeLLM([tool_call("charge"), "The charge may not have gone through."]),
+    )
 
     @agent.tool
     async def charge() -> str:
         """Charge the card."""
+        runs.append(None)
         entered.set()
         await asyncio.Future()
         return "unreachable"
@@ -404,8 +412,17 @@ async def test_a_snapshot_taken_while_a_tool_runs_is_not_resumed() -> None:
     restored = await fresh.load_context(BoundApp())
     restored.session = unknown
     await fresh.save_context(restored)
-    with pytest.raises(ValueError, match="reconcile"):
-        await TextSession(agent=agent).run("continue", context=fresh.bind(restored))
+    result = await TextSession(agent=agent).run("continue", context=fresh.bind(restored))
+
+    assert result.status == "completed"
+    assert result.output == "The charge may not have gone through."
+    assert len(runs) == 1
+    settled = [
+        (i.output, i.is_error)
+        for i in result.all_messages()
+        if i.type == "function_call_output" and i.name == "charge"
+    ]
+    assert settled == [("An internal error occurred", True)]
 
 
 async def test_a_failed_turn_saves_none_of_the_context_its_tools_saved(

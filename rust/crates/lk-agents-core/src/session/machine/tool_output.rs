@@ -1,6 +1,6 @@
 use super::*;
 use crate::agent_run::ToolOutputId;
-use lk_agents_abi::errors::{HostError, ProviderError};
+use lk_agents_abi::agent::run::SayOutcome;
 
 pub(in crate::session) struct Pending {
     frame: FrameId,
@@ -14,14 +14,10 @@ enum OutputPhase {
     Committing,
 }
 
-fn settled(
-    invocation_id: String,
-    output: ToolOutputId,
-    result: Result<(), ProviderError>,
-) -> SessionEffect {
+fn settled(invocation_id: String, output: ToolOutputId, outcome: SayOutcome) -> SessionEffect {
     SessionEffect::Run {
         invocation_id,
-        effect: agent_run::AgentRunEffect::ToolOutputSettled { output, result },
+        effect: agent_run::AgentRunEffect::ToolOutputSettled { output, outcome },
     }
 }
 
@@ -44,20 +40,17 @@ impl Session {
             return Vec::new();
         }
         let planned = (|| {
-            if self.closing
-                || self.persistence_failure.is_some()
-                || matches!(self.phase, Phase::Done)
-            {
-                return Err(
-                    HostError::new("the exact output's conversation owner has ended").into()
-                );
+            if self.closing || matches!(self.phase, Phase::Done) {
+                return Err(SayOutcome::Interrupted);
             }
-            let call = call.ok_or_else(|| {
-                ProviderError::from(HostError::new("the exact output lost its tool operation"))
-            })?;
+            if self.persistence_failure.is_some() {
+                return Err(SayOutcome::Failed);
+            }
+            // A lost tool operation or body has no live source to speak for.
+            let call = call.ok_or(SayOutcome::Failed)?;
             if let Some(invocation) =
                 self.phase.invocation_mut().filter(|invocation| invocation.id == invocation_id)
-                && let Ok(message) = invocation.run.plan_tool_output(call, text.clone(), now)
+                && let Some(message) = invocation.run.plan_tool_output(call, text.clone(), now)
             {
                 return Ok((invocation.frame_id.clone(), call, message));
             }
@@ -66,11 +59,7 @@ impl Session {
                 .as_ref()
                 .and_then(|live| live.output_source(&(invocation_id.clone(), call)))
                 .map(|(frame, _)| frame.clone())
-                .ok_or_else(|| {
-                    ProviderError::from(HostError::new(
-                        "the exact output's originating body is no longer live",
-                    ))
-                })?;
+                .ok_or(SayOutcome::Failed)?;
             let id = self.mint("say");
             let at = self.stamp(now);
             Ok((source, call, ChatMessage::text(id, Role::Assistant, text, at)))
@@ -106,7 +95,7 @@ impl Session {
                 }
                 effects
             }
-            Err(error) => vec![settled(invocation_id, output, Err(error))],
+            Err(outcome) => vec![settled(invocation_id, output, outcome)],
         }
     }
 
@@ -114,7 +103,7 @@ impl Session {
         &mut self,
         invocation_id: String,
         output: ToolOutputId,
-        result: Result<(), ProviderError>,
+        outcome: SayOutcome,
         now: Ts,
     ) -> Vec<SessionEffect> {
         let key = (invocation_id.clone(), output);
@@ -132,24 +121,23 @@ impl Session {
                 invocation_id.clone(),
                 lk_agents_abi::agent::run::StreamEvent::TextEnd {
                     message_id: message.id.clone(),
-                    interrupted: result.is_err(),
+                    interrupted: outcome != SayOutcome::Delivered,
                 },
                 &mut effects,
             );
         }
-        let result = result.and_then(|()| {
-            if self.closing
-                || self.persistence_failure.is_some()
-                || matches!(self.phase, Phase::Done)
-            {
-                return Err(HostError::new(
-                    "the exact output owner ended before recording its handoff",
-                )
-                .into());
+        let recorded = (|| {
+            if outcome != SayOutcome::Delivered {
+                return Err(outcome);
             }
-            let frame = self.state.frames.get_mut(&pending.frame).ok_or_else(|| {
-                ProviderError::from(HostError::new("the exact output lost its originating frame"))
-            })?;
+            // Words the owner can no longer record were cut off by its close, or lost.
+            if self.closing || matches!(self.phase, Phase::Done) {
+                return Err(SayOutcome::Interrupted);
+            }
+            if self.persistence_failure.is_some() {
+                return Err(SayOutcome::Failed);
+            }
+            let frame = self.state.frames.get_mut(&pending.frame).ok_or(SayOutcome::Failed)?;
             if !frame.history.iter().any(|item| item.id() == message.id) {
                 frame.history.push(ChatItem::Message(*message.clone()));
             }
@@ -182,9 +170,9 @@ impl Session {
                 }
             }
             Ok(())
-        });
-        if let Err(error) = result {
-            effects.push(settled(invocation_id, output, Err(error)));
+        })();
+        if let Err(outcome) = recorded {
+            effects.push(settled(invocation_id, output, outcome));
             return effects;
         }
         let call = pending.call;
@@ -223,7 +211,7 @@ impl Session {
             );
         } else {
             self.tool_outputs.remove(&key);
-            effects.insert(0, settled(invocation_id, output, Ok(())));
+            effects.insert(0, settled(invocation_id, output, SayOutcome::Delivered));
         }
         effects
     }
@@ -245,16 +233,10 @@ impl Session {
         }
         self.tool_outputs.remove(&key);
         match result {
-            Ok(()) => vec![settled(invocation_id, output, Ok(()))],
+            Ok(()) => vec![settled(invocation_id, output, SayOutcome::Delivered)],
+            // Delivered words whose record could not be checkpointed are not a safe delivery.
             Err(error) => {
-                let mut effects = vec![settled(
-                    invocation_id,
-                    output,
-                    Err(HostError::new(format!(
-                        "exact output could not checkpoint its delivery: {error}"
-                    ))
-                    .into()),
-                )];
+                let mut effects = vec![settled(invocation_id, output, SayOutcome::Failed)];
                 effects.extend(self.handle(SessionEvent::PersistenceFailed(error), now));
                 effects
             }

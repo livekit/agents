@@ -17,8 +17,10 @@ use crate::record::{RecorderCall, Sink};
 /// The recording's rate, as the session's.
 const RATE: u32 = 48_000;
 /// A played stretch's first and last samples ramp through the resampler's filter: only its inside
-/// is held to be sound. The fakes' audio is a constant tag per chunk, never near zero.
-const EDGE: i64 = (RATE / 500) as i64;
+/// is held to be sound. The fakes' audio is a constant tag per chunk, never near zero. The
+/// recording's medium-quality resampler rings past one unit for up to 2.6 ms around a full-scale
+/// step, on both sides: 3 ms covers it.
+const EDGE: i64 = (RATE / 1000 * 3) as i64;
 
 /// Keeps the timeline's interleaved PCM as written: the recording.
 #[derive(Clone, Default)]
@@ -157,7 +159,7 @@ impl Default for Recording {
 
 impl RoomSpeaker {
     /// Compare identity, placement and silence against the source's own PCM, rather than the
-    /// callbacks the recorder received. Ignore only 2 ms at frame boundaries for resampling.
+    /// callbacks the recorder received. Ignore only `EDGE` at frame boundaries for resampling.
     fn check(&self, recording: &Recording) -> Option<RecorderCall> {
         let summary = recording.file.summary();
         let t0 = summary.started_at?;

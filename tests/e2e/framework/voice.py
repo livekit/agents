@@ -13,7 +13,6 @@ from livekit import api, rtc
 from livekit.agents._generated.types import ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID
 
 from ..resources import finish_cleanup
-from ..sfu import KEY, SECRET
 from .app import RunningApp
 from .media import PHRASES, Heard, hearing, next_transcription, read_transcriptions, speak
 
@@ -67,17 +66,19 @@ class VoiceClient:
 
 @asynccontextmanager
 async def connected_voice(
-    app: RunningApp, *, phrases: Mapping[int, str] = PHRASES
+    app: RunningApp, *, phrases: Mapping[int, str] = PHRASES, thread_id: str = ""
 ) -> AsyncIterator[VoiceClient]:
     if not app.voice:
         raise ValueError("start the application with voice=True")
     name = "e2e-" + uuid.uuid4().hex
     token = (
-        api.AccessToken(KEY, SECRET)
+        api.AccessToken(app.env["LIVEKIT_API_KEY"], app.env["LIVEKIT_API_SECRET"])
         .with_identity("caller")
         .with_grants(api.VideoGrants(room_join=True, room=name))
         .with_room_config(
-            api.RoomConfiguration(agents=[api.RoomAgentDispatch(agent_name=app.agent_name)])
+            api.RoomConfiguration(
+                agents=[api.RoomAgentDispatch(agent_name=app.agent_name, thread_id=thread_id)]
+            )
         )
         .to_jwt()
     )

@@ -284,6 +284,20 @@ pub enum StreamEvent {
     },
 }
 
+/// How `ctx.say()` exact output ended at this hop's local output boundary: audio playout on a
+/// call, the stream's accepted read or the A2A handoff in text. Never a business outcome: the
+/// tool and any remote work continue whichever it is, and a hop never confirms the next one.
+#[crate::host(record(module = "agent_run", path = "livekit.agents.voice.events", emit))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SayOutcome {
+    /// The complete words reached the boundary.
+    Delivered,
+    /// Stopped before the boundary: an interruption, or its session, stream or turn closed.
+    Interrupted,
+    /// The output failed or its owner was lost; partial words are never replayed.
+    Failed,
+}
+
 #[crate::host(record(module = "agent_run", emit))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolResultStatus {
@@ -454,12 +468,13 @@ pub trait AgentRunner: Send + Sync + Sized + 'static {
         #[host(default = false)] silent: bool,
     ) -> crate::BoxFuture<'static, Result<(), crate::errors::ProviderError>>;
 
-    /// Enqueue exact text now; the private reader confirms the source's local output boundary.
+    /// Enqueue exact text now, or refuse it before admission. The private reader settles with
+    /// the outcome at the source's local output boundary; dropping it never cancels the output.
     #[host(await)]
     fn say(
         &self,
         invocation_id: &str,
         operation: u64,
         message: String,
-    ) -> crate::BoxFuture<'static, Result<(), crate::errors::ProviderError>>;
+    ) -> Result<crate::BoxFuture<'static, SayOutcome>, crate::errors::ProviderError>;
 }

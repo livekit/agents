@@ -22,7 +22,9 @@ use crate::input::Input;
 mod probes;
 pub use probes::{Fault, Probe, Site, Wait};
 mod recognition;
+mod remote;
 pub use recognition::{Recognised, Recognition, SttReport};
+pub use remote::RemoteStep;
 mod resources;
 mod storage;
 pub use storage::{
@@ -747,6 +749,7 @@ pub struct Recording {
     probes: Vec<Probe>,
     /// Waiters still parked once the driver finished and the run went quiet, by site.
     parked: Vec<String>,
+    remote: Vec<(Observed, RemoteStep)>,
 }
 
 /// Lookups by identity, maintained as facts arrive.

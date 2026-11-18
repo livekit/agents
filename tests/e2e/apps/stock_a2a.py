@@ -3,6 +3,7 @@
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 from uuid import uuid4
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -12,6 +13,47 @@ from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.server.tasks import InMemoryTaskStore, TaskUpdater
 from a2a.types import a2a_pb2 as pb
 from starlette.applications import Starlette
+
+ITINERARY_REQUEST = "send my itinerary"
+ITINERARY: dict[str, Any] = {"flight": "LK204", "seats": ["12A", "12B"], "refundable": False}
+ITINERARY_PDF = b"%PDF-1.4 itinerary"
+TICKET_URL = "https://example.com/tickets/LK204.pdf"
+NOTE = "Itinerary assembled from the reservation."
+
+
+async def itinerary(
+    event_queue: EventQueue, updater: TaskUpdater, task_id: str, context_id: str
+) -> None:
+    """A completed task with structured data and file parts, whose history omits the request."""
+    data = pb.Part(media_type="application/json")
+    data.data.struct_value.update(ITINERARY)
+    data.metadata.update({"schema": "itinerary/v1"})
+    await event_queue.enqueue_event(
+        pb.Task(
+            id=task_id,
+            context_id=context_id,
+            status=pb.TaskStatus(state=pb.TaskState.TASK_STATE_WORKING),
+            history=[
+                pb.Message(
+                    message_id="itinerary-note",
+                    task_id=task_id,
+                    context_id=context_id,
+                    role=pb.Role.ROLE_AGENT,
+                    parts=[pb.Part(text=NOTE)],
+                )
+            ],
+        )
+    )
+    await updater.add_artifact(
+        [
+            data,
+            pb.Part(raw=ITINERARY_PDF, filename="itinerary.pdf", media_type="application/pdf"),
+            pb.Part(url=TICKET_URL, filename="ticket.pdf", media_type="application/pdf"),
+        ],
+        artifact_id="itinerary",
+        name="Itinerary",
+    )
+    await updater.complete()
 
 
 class Travel(AgentExecutor):
@@ -35,6 +77,9 @@ class Travel(AgentExecutor):
 
         task_id = context.task_id or uuid4().hex
         updater = TaskUpdater(event_queue, task_id, context_id)
+        if text == ITINERARY_REQUEST:
+            await itinerary(event_queue, updater, task_id, context_id)
+            return
         if context.current_task is None:
             await event_queue.enqueue_event(
                 pb.Task(

@@ -31,6 +31,8 @@ enum CancelReply {
     Confirmed,
     Refused,
     Lost,
+    /// The business work finished first: the peer answers the cancel with its completed task.
+    Completed,
 }
 
 struct CancelGate {
@@ -176,6 +178,11 @@ impl HttpExchangePort for Service {
                         assert_eq!(params["contextId"], self.context());
                         *self.cancellations.lock() += 1;
                         match self.cancel_reply {
+                            CancelReply::Completed => json!({"jsonrpc":"2.0","id":rpc.id,"result":{
+                                "id":"booking","contextId":self.context(),
+                                "status":{"state":"TASK_STATE_COMPLETED"},
+                                "artifacts":[{"artifactId":"receipt","parts":[{"text":"Booked Friday"}]}]
+                            }}),
                             CancelReply::Refused => json!({"jsonrpc":"2.0","id":rpc.id,
                                 "error":{"code":a2a::error_code::TASK_NOT_CANCELABLE,
                                     "message":"Booking is protected","data":{"stage":"booking"}}}),
@@ -925,6 +932,7 @@ async fn reconcile_cancellation(cancel_reply: CancelReply) {
             assert!(result.is_err());
             assert_eq!(remote.tasks["booking"].task.status.state, a2a::TaskState::InputRequired);
         }
+        CancelReply::Completed => unreachable!("late completion is the bound cancel story"),
     }
     client.aclose().await;
     assert_eq!(
@@ -958,6 +966,7 @@ async fn reconcile_cancellation(cancel_reply: CancelReply) {
                 context_id: task.context_id.clone()
             })
         ),
+        CancelReply::Completed => unreachable!("late completion is the bound cancel story"),
     }
     let client = AgentClient::with_transport(
         ENDPOINT.into(),
@@ -975,6 +984,7 @@ async fn reconcile_cancellation(cancel_reply: CancelReply) {
     let expected = match cancel_reply {
         CancelReply::Confirmed | CancelReply::Lost => a2a::TaskState::Canceled,
         CancelReply::Refused => a2a::TaskState::InputRequired,
+        CancelReply::Completed => unreachable!("late completion is the bound cancel story"),
     };
     assert_eq!(observed.status.state, expected);
     let snapshot = view._snapshot_data().unwrap().unwrap();
@@ -1118,3 +1128,6 @@ mod terminal_observation;
 
 #[path = "remote_child_tests.rs"]
 mod completed_child;
+
+#[path = "remote_stream_tests.rs"]
+mod lost_stream;

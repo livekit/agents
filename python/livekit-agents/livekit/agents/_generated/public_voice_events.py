@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from .agent_run import SayOutcome as SayOutcome
 from .events import (
     AgentFalseInterruptionEvent as AgentFalseInterruptionEvent,
     AgentState as AgentState,
@@ -36,6 +37,7 @@ from .session_wire import SpeechCreatedEvent as SpeechCreatedEvent
 from .voice_session import FillerSource as FillerSource
 
 __all__: list[str] = [
+    "SayOutcome",
     "UserState",
     "AgentState",
     "UserStateChangedEvent",

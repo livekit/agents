@@ -828,7 +828,8 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     ) -> Result<BoxFuture<'static, Result<(), crate::errors::ProviderError>>, CommandRefused>;
 
     /// Enqueue an exact output under the originating tool's native identity. The returned
-    /// awaitable only watches the independent say speech; dropping it never cancels that speech.
+    /// awaitable only watches the independent say speech for its outcome; dropping it never
+    /// cancels that speech.
     #[host(await)]
     fn tool_say(
         &self,
@@ -836,7 +837,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         operation: u64,
         call_id: String,
         text: String,
-    ) -> Result<BoxFuture<'static, Result<(), crate::errors::ProviderError>>, CommandRefused>;
+    ) -> Result<BoxFuture<'static, crate::agent::run::SayOutcome>, CommandRefused>;
 
     /// `Agent.update_chat_ctx()` on a running agent: replace the context.
     #[host(call)]

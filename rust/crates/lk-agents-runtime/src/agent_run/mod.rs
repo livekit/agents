@@ -121,7 +121,13 @@ pub(crate) fn start_with_output(
     let (update_tx, update_rx) = outbox(updates.max(1));
     let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
     let driving = Arc::new(TaskSet::default());
-    let progress = Progress::new(input_id.clone(), events_tx.clone(), &driving, spawner.clone());
+    let progress = Progress::new(
+        input_id.clone(),
+        events_tx.clone(),
+        &driving,
+        spawner.clone(),
+        output.is_some(),
+    );
     let (usage_tx, usage) = signal::signal(run.usage());
     let accepted = Accepted::default();
     let mut driver = Driver {

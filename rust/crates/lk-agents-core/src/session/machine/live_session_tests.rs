@@ -482,7 +482,10 @@ fn detached_exact_output_is_minted_recorded_and_committed_under_its_original_sou
         .unwrap();
     let effects = driver.send(SessionEvent::Run {
         invocation_id: owner.clone(),
-        event: agent_run::AgentRunEvent::ToolOutputDelivered { output, result: Ok(()) },
+        event: agent_run::AgentRunEvent::ToolOutputDelivered {
+            output,
+            outcome: lk_agents_abi::agent::run::SayOutcome::Delivered,
+        },
     });
     assert!(effects.iter().any(|effect| matches!(effect, SessionEffect::ToolOutputCheckpoint { invocation_id, output: actual, .. } if invocation_id == &owner && actual == &output)));
     assert!(
@@ -521,7 +524,7 @@ fn detached_exact_output_is_minted_recorded_and_committed_under_its_original_sou
         result: Ok(()),
     });
     assert!(
-        matches!(effects.as_slice(), [SessionEffect::Run { invocation_id, effect: agent_run::AgentRunEffect::ToolOutputSettled { result: Ok(()), .. } }] if invocation_id == &owner)
+        matches!(effects.as_slice(), [SessionEffect::Run { invocation_id, effect: agent_run::AgentRunEffect::ToolOutputSettled { outcome: lk_agents_abi::agent::run::SayOutcome::Delivered, .. } }] if invocation_id == &owner)
     );
     assert!(
         driver

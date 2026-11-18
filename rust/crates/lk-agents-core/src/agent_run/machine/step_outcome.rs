@@ -47,6 +47,8 @@ impl AgentRun {
         let mut terminal_call = None;
         let mut input_requirements = Vec::new();
         let mut replies = false;
+        // Results the person has not heard: a question ending the step must not drop them.
+        let mut results = false;
         let mut calls = Vec::with_capacity(recorded.len());
         let mut outputs = Vec::with_capacity(recorded.len());
         for Recorded { id, item, settled } in &recorded {
@@ -78,6 +80,7 @@ impl AgentRun {
                 }
                 _ => None,
             };
+            results |= this.is_none() && reply_required;
             if terminal.is_none() {
                 if this.is_some() {
                     terminal_call = Some(item.call_id.clone());
@@ -108,7 +111,7 @@ impl AgentRun {
                 let (_, validation) = accepted.expect("an accepted candidate is the terminal");
                 Next::Output(validation)
             }
-            (None, Some(Terminal::Ask(ask))) => Next::Ask(ask),
+            (None, Some(Terminal::Ask(ask))) => Next::Ask { ask, results },
             (None, Some(Terminal::Stop)) => Next::Stop,
             // A step whose every output asks for no reply ends the turn there.
             (None, None) if !replies => Next::Stop,
@@ -147,7 +150,7 @@ impl AgentRun {
         match next {
             Next::Fail(error) => self.finish(Err(error), fx),
             Next::Output(validation) => self.complete(Output::Validated(validation), fx),
-            Next::Ask(ask) => self.ask_from_tool(ask, now, fx),
+            Next::Ask { ask, results } => self.ask_from_tool(ask, results, now, fx),
             Next::Stop => self.end_without_output(fx),
             Next::Continue if self.reconciliation.is_some() => self.end_without_output(fx),
             Next::Continue => self.next_step(now, fx),
@@ -169,7 +172,11 @@ pub(super) fn input_requirement(
 pub(super) enum Next {
     Fail(RunError),
     Output(ValidationId),
-    Ask(RunQuestion),
+    /// `results`: the step also settled results that the person has not heard yet.
+    Ask {
+        ask: RunQuestion,
+        results: bool,
+    },
     Stop,
     Continue,
 }
