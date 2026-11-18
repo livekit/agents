@@ -110,7 +110,13 @@ class ChunkedStream(tts.ChunkedStream):
                     sock_read=self._conn_options.timeout,
                 ),
             ) as resp:
-                resp.raise_for_status()
+                if resp.status >= 400:
+                    raise APIStatusError(
+                        message=resp.reason or "Giggy TTS request failed",
+                        status_code=resp.status,
+                        request_id=resp.headers.get("x-request-id"),
+                        body=await resp.text(),
+                    )
 
                 output_emitter.initialize(
                     request_id=resp.headers.get("x-request-id") or utils.shortuuid(),
@@ -125,9 +131,7 @@ class ChunkedStream(tts.ChunkedStream):
                 output_emitter.flush()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
-            ) from None
+        except APIStatusError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
