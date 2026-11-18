@@ -351,11 +351,26 @@ class PrismHistory:
             if previous is None:
                 additions.append(item)
                 continue
-            if additions or positions[item.id] < last:
+            if additions:
                 raise HistoryUpdateError(
                     "Shared history requires append order; use replace_chat_ctx"
                 )
-            last = positions[item.id]
+            position = positions[item.id]
+            if position < last:
+                previous_item = self._chat.items[last]
+                exchange = (
+                    isinstance(previous_item, llm.ChatMessage)
+                    and isinstance(item, llm.FunctionCall)
+                ) or (
+                    isinstance(previous_item, llm.FunctionCall)
+                    and isinstance(item, llm.ChatMessage)
+                )
+                if abs(position - last) != 1 or not exchange:
+                    raise HistoryUpdateError(
+                        "Shared history requires append order; use replace_chat_ctx"
+                    )
+            else:
+                last = position
             if _wire(previous, validate_text=False) == _wire(item, validate_text=False):
                 continue
             if (
