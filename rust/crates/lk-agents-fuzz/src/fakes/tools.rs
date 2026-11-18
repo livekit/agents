@@ -13,6 +13,7 @@ use lk_agents_runtime::voice::speech_handle::SpeechHandle;
 use lk_agents_voice::tool_executor::{ToolOutcome, ToolReport, VoiceAgentFrame};
 use tokio::sync::oneshot;
 
+use super::remote_tool::REMOTE_TOOL;
 use super::{
     Control, Registry, Slot,
     hazard::{Site, strike},
@@ -35,6 +36,9 @@ pub const TEMPLATED_TOOL: &str = "notify";
 pub const TEMPLATED_REPLY: &str = "Tell the person what changed: ";
 
 pub fn tool_spec(name: &str) -> ToolSpec {
+    if name == REMOTE_TOOL {
+        return super::remote_tool::spec();
+    }
     ToolSpec {
         name: name.to_owned(),
         provider_tool: None,
@@ -104,6 +108,7 @@ pub fn tool_infos(tools: &[String]) -> Vec<FunctionToolInfo> {
 }
 
 fn tool_info(name: &str) -> FunctionToolInfo {
+    let remote = name == super::remote_tool::REMOTE_TOOL;
     FunctionToolInfo {
         spec: tool_spec(name),
         raw_schema: false,
@@ -115,7 +120,7 @@ fn tool_info(name: &str) -> FunctionToolInfo {
         },
         duplicate_scope: DuplicateScope::Name,
         retries: None,
-        remote: None,
+        remote: remote.then(|| super::a2a_peer::ENDPOINT.into()),
         local_agent: None,
     }
 }
@@ -249,6 +254,11 @@ impl AgentCallbacks for FakeTools {
         let call = call_of(invocation).clone();
         self.calls.lock().unwrap().push(call.clone());
         Box::pin(async move {
+            if let Some(peer) = self.registry.remote().filter(|_| call.name == REMOTE_TOOL) {
+                let (outcome, extra) = self.delegate(invocation, &call, peer.clone()).await;
+                let report = ToolReport { outcome, input_request: None, transition: None };
+                return Ok(lk_agents_abi::agent::ToolCompletion { report, extra, usage: None });
+            }
             let outcome = self.answer(invocation, &call, &handle).await;
             // Every completion carries a value: whether it ends a task is the core's decision,
             // so the rules see what it decides.
@@ -308,6 +318,26 @@ impl AgentCallbacks for FakeTools {
 }
 
 impl FakeTools {
+    /// The remote tool's body: the real delegation to the peer until it returns, or until the
+    /// driver cancels it, which stops the local wait and leaves the remote task running.
+    async fn delegate(
+        &self,
+        invocation: &Invocation,
+        call: &FunctionCall,
+        peer: Arc<super::a2a_peer::RemotePeer>,
+    ) -> (ToolOutcome, serde_json::Map<String, serde_json::Value>) {
+        let (cancel, cancelled) = oneshot::channel();
+        self.running.lock().unwrap().insert(call.id.clone(), cancel);
+        let delegation = super::remote_tool::run(&self.registry, peer, invocation, call);
+        let reported = tokio::select! {
+            biased;
+            Ok(()) = cancelled => None,
+            reported = delegation => Some(reported),
+        };
+        self.running.lock().unwrap().remove(&call.id);
+        reported.unwrap_or_else(|| (ToolOutcome::Cancelled, call.extra.clone()))
+    }
+
     /// The body's outcome, or `Cancelled` wherever it waits once the driver cancels it.
     async fn answer(
         &self,

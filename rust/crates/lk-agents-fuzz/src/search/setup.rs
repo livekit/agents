@@ -6,6 +6,7 @@ use crate::{
         AmdAnswer, AmdSetup, ConnSetup, Faults, KeytermDetectionSetup, NodeSetup, PreConnect,
         ProcessorFaults, RealtimeSetup, RoomLegs, RoomSetup, Setup, StorageSetup, TtsAlignment,
     },
+    fakes::a2a_peer::{CancelReply, PeerEnd, PeerScript},
     fakes::{CaptureFault, UnreportedClear},
     input::{AGENT_TURNS, DELAYS_MS, NAMES, TurnMode},
 };
@@ -40,6 +41,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         preemptive: rng.bool(),
         tools: if rng.bool() { names(rng) } else { vec![] },
         input_routing: false,
+        remote: None,
         max_tool_steps: rng.bool().then(|| rng.u32(0..4)),
         instructions: AGENT_TURNS[rng.usize(0..AGENT_TURNS.len())].to_owned(),
         max_unrecoverable_errors: rng.u32(0..4),
@@ -244,7 +246,27 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
             _ => {}
         }
     }
+    // A frontend in five delegates to a remote A2A peer through its remote tool, drawn last so
+    // every seed keeps the setup it drew before. The peer's faults are its own dice.
+    if rng.u8(0..100) < 20 {
+        setup.remote = Some(peer_script(rng));
+        setup.tools.push(crate::fakes::remote_tool::REMOTE_TOOL.into());
+    }
     setup
+}
+
+/// How the remote peer works and misbehaves: slow work, progress bursts, questions, a lost
+/// acknowledgement after commit, a dropped stream, a failed task, a refused or lost cancel.
+fn peer_script(rng: &mut Rng) -> PeerScript {
+    PeerScript {
+        work_ms: [0, 50, 400, 3_000, 20_000][rng.usize(0..5)],
+        progress: [0, 1, 1, 3, 8][rng.usize(0..5)],
+        asks: rng.u8(0..3),
+        end: if rng.u8(0..5) == 0 { PeerEnd::Failed } else { PeerEnd::Completed },
+        lost_ack: rng.u8(0..4) == 0,
+        drop_after: (rng.u8(0..4) == 0).then(|| rng.u8(0..4)),
+        cancel: [CancelReply::Confirmed, CancelReply::Refused, CancelReply::Lost][rng.usize(0..3)],
+    }
 }
 
 /// One stressed call in eight has an audio output that misbehaves the way custom and remote ones

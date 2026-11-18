@@ -60,6 +60,7 @@ mod playout {
 
 mod avatar;
 mod realtime;
+mod remote;
 mod room;
 mod session;
 mod speech;

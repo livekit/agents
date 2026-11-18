@@ -210,6 +210,7 @@ impl Run {
                         }
                     }
                 }
+                Record::Remote { at, step } => self.record.record_remote(at, step),
                 Record::CancelRefused { at, call_id } => {
                     self.record.record_cancel_refused(at, call_id);
                 }

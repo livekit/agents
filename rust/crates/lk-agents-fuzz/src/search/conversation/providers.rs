@@ -62,6 +62,14 @@ impl Talk {
                 lk_agents_core::session::input_routing::TOOL.into(),
                 input_verdict(candidates, self.rng.usize(0..5)),
             ))
+        } else if offered(&self.run, lk_agents_core::delegation::remote::routing::TOOL) {
+            // The remote call's router: new work, a continuation or a held response of one of
+            // the first candidates, unclear, or indices the owner must refuse.
+            let verdict = REMOTE_VERDICTS[self.rng.usize(0..REMOTE_VERDICTS.len())];
+            Some((
+                lk_agents_core::delegation::remote::routing::TOOL.into(),
+                ToolArgs(verdict.into()),
+            ))
         } else if offered(&self.run, RECORD_KEYTERMS_TOOL) {
             // Terms to track, to apply and to drop, drawn from the call's names, or an answer
             // that changes nothing.
@@ -96,7 +104,13 @@ impl Talk {
         } else if !self.run.setup.tools.is_empty() && self.rng.u8(0..100) < self.host.tool_calls {
             let tools = &self.run.setup.tools;
             let name = tools[self.rng.usize(0..tools.len())].clone();
-            Some((name, self.draw::<ToolArgs>()))
+            if name == crate::fakes::remote_tool::REMOTE_TOOL {
+                // A request stated in full, or arguments the delegation refuses.
+                let args = REMOTE_REQUESTS[self.rng.usize(0..REMOTE_REQUESTS.len())];
+                Some((name, ToolArgs(args.into())))
+            } else {
+                Some((name, self.draw::<ToolArgs>()))
+            }
         } else {
             None
         };
@@ -183,6 +197,25 @@ impl Talk {
 
 /// Provider payload fixtures, selected independently of the person's words. A routing fake
 /// never decides which request owns an answer or whether an operation is approved.
+/// What the frontend asks the remote desk for, as a model states it.
+const REMOTE_REQUESTS: [&str; 4] = [
+    r#"{"request":"Book a table for two tonight"}"#,
+    r#"{"request":"Move my booking to Friday"}"#,
+    r#"{"request":"Is my booking confirmed?"}"#,
+    "{}",
+];
+
+/// What the remote call router answers.
+const REMOTE_VERDICTS: [&str; 7] = [
+    r#"{"action":"new","candidate":null,"response":null}"#,
+    r#"{"action":"continue","candidate":0,"response":null}"#,
+    r#"{"action":"respond","candidate":0,"response":0}"#,
+    r#"{"action":"respond","candidate":0,"response":0}"#,
+    r#"{"action":"respond","candidate":1,"response":0}"#,
+    r#"{"action":"unclear","candidate":null,"response":null}"#,
+    r#"{"action":"respond","candidate":7,"response":null}"#,
+];
+
 fn input_verdict(candidates: usize, choice: usize) -> ToolArgs {
     let (selected, unclear) = match choice {
         0 => (Vec::new(), false),

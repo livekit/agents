@@ -1,6 +1,7 @@
 //! The search campaign over many seeds, reporting what it reached and found; ignored by default.
 //! `cargo test --release -p lk-agents-fuzz --test survey -- --ignored --nocapture`
-//! Tuned by `VOICE_SEEDS`, `VOICE_BUDGET`, `VOICE_FIRST_SEED`, `VOICE_SEED`, `VOICE_FAMILY`.
+//! Tuned by `VOICE_SEEDS`, `VOICE_BUDGET`, `VOICE_FIRST_SEED`, `VOICE_SEED`, `VOICE_FAMILY`;
+//! `VOICE_REMOTE=1` keeps only the window's seeds whose frontend delegates to the remote peer.
 
 #![allow(
     clippy::unwrap_used,
@@ -164,7 +165,13 @@ struct Window {
 /// Every seed of the window, run on all cores and returned in seed order, so the report does not
 /// depend on which thread finished first. A seed is the whole of its run, so runs share nothing.
 fn run_all(window: &Window) -> Vec<(u64, Outcome, std::time::Duration)> {
-    let seeds: Vec<u64> = (window.first..window.first + window.seeds).collect();
+    let remote_only = std::env::var_os("VOICE_REMOTE").is_some();
+    let seeds: Vec<u64> = (window.first..window.first + window.seeds)
+        .filter(|seed| {
+            !remote_only
+                || search::sample_setup(&mut fastrand::Rng::with_seed(*seed)).remote.is_some()
+        })
+        .collect();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(seeds.len());
     let mut done: Vec<(u64, Outcome, std::time::Duration)> = std::thread::scope(|scope| {
