@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LiveKit chat</title>
+    <link rel="stylesheet" href="static/style.css">
+    <script src="static/app.js" defer></script>
+  </head>
+  <body>
+    <aside>
+      <header>
+        <svg width="22" height="22" viewBox="0 0 24 24" aria-label="LiveKit">
+          <path fill="var(--accent)" d="M14.4 9.6H9.6v4.8h4.8zM19.2 4.8h-4.8v4.8h4.8zM19.2 14.4h-4.8v4.8h4.8zM24 0h-4.8v4.8H24zM24 19.2h-4.8V24H24z"/>
+          <path fill="currentColor" d="M4.8 19.2V0H0v24h14.4v-4.8z"/>
+        </svg>
+        Chat
+      </header>
+      <button id="new">+ New chat</button>
+      <ul id="threads"></ul>
+    </aside>
+    <main>
+      <div id="messages">
+        <p class="hint">Ask anything.</p>
+      </div>
+      <form id="composer">
+        <input id="text" placeholder="Message" autocomplete="off" autofocus>
+        <button>Send</button>
+      </form>
+    </main>
+  </body>
+</html>

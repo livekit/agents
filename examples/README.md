@@ -8,6 +8,7 @@ back office that holds the system and does the work.
 | [`frontdesk/`](frontdesk/README.md) | A dental practice's scheduling: two tools and a booking that asks for what it is missing. |
 | [`hotel-receptionist/`](hotel-receptionist/README.md) | A hotel's bookings, lookups and cancellations: guided flows, verification, approval on writes. |
 | [`airline-support/`](airline-support/README.md) | An airline's customer care: a back office that asks for what is missing, EU261 in code, payment after a reviewed reply. |
+| [`web-chat/`](web-chat/README.md) | A text chat agent and its one-page web app: a grant per browser, streamed A2A replies, threads to list and read. |
 
 ## The homepage agent
 
