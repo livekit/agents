@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, Awaitable, Callable
+import inspect
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+from contextlib import aclosing
 from typing import cast
 
 from .. import _core
@@ -14,7 +16,7 @@ from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 from . import StorageError, Thread
 from .context import ContextStore
 
-_Handler = Callable[["A2ASessionContext"], Awaitable[object]]
+_Handler = Callable[["A2ASessionContext"], Awaitable[object] | AsyncIterator[str]]
 
 
 class A2ASessionContext:
@@ -113,7 +115,14 @@ class _TurnHost:
 
         token = set_run_hooks(hooks)
         try:
-            output = await self._handler(context)
+            call = self._handler(context)
+            if inspect.isasyncgen(call):
+                async with aclosing(call):
+                    text = await context.stream(_texts(call))
+                # the outcome is the last run the handler streamed, else the text it yielded
+                output: object = results[-1] if results else text
+            else:
+                output = await cast(Awaitable[object], call)
         except StorageError:
             raise
         except Exception as e:
@@ -162,6 +171,15 @@ class _TurnHost:
             output,
             results,
         )
+
+
+async def _texts(handler: AsyncIterator[object]) -> AsyncIterator[str]:
+    async for chunk in handler:
+        if not isinstance(chunk, str):
+            raise TypeError(
+                f"an a2a_session handler yields the answer's text as str, not {type(chunk).__name__}"
+            )
+        yield chunk
 
 
 __all__ = [

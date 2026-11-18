@@ -39,14 +39,35 @@ no artifact. The handler saves application fields explicitly
 before returning either result.
 
 Called once per turn with the agent's partition already loaded; a batched burst
-is one call. The return value is the answer; the framework commits the partition
-and delivers it. A handler that raises ends the task `failed`.
+is one call. The return value is the answer, or the handler is an async generator
+that streams it (below); the framework commits the partition and delivers it. A handler that raises ends the task `failed`.
 
-For explicit streaming, consume `agent.run_stream(...)`, forward text through
-`ctx.stream(...)`, and return its complete `RunResult` after saving context.
-The returned result finalizes the same answer rather than delivering the text
-again. See [managed streaming endpoints](agents.md#managed-endpoints-and-persistence)
-for the complete entrypoint and cancellation contract.
+A handler that streams its answer is an async generator (`AsyncIterator[str]`)
+yielding the text as it is produced:
+
+```python
+@server.a2a_session(endpoint="travel-desk", description="Plans trips.")
+async def chat(ctx: A2ASessionContext) -> AsyncIterator[str]:
+    trip = Trip(airline=AirlineClient())
+    await ctx.store.load_context(trip)
+    async with travel_desk_agent.run_stream(
+        ctx.message, context=trip, message_history=ctx.message_history,
+    ) as s:
+        async for delta in s.stream_text(delta=True):
+            yield delta
+    await ctx.store.save_context(trip)
+```
+
+- Each yielded `str` is delivered as `ctx.stream(...)` delivers it; a non-`str` fails the
+  task with a `TypeError`.
+- The outcome is the `RunResult` of the last `run_stream` the handler opened for this
+  request (completed with its typed output, or input-required); it finalizes the streamed
+  answer without sending the text again. A run that fails raises in the handler.
+- A generator that opened no `run_stream` completes with the joined yielded text.
+
+`ctx.stream(source)` is the lower-level form: forward the run's text through it and return
+`await s.result()`. See [managed streaming endpoints](agents.md#managed-endpoints-and-persistence)
+for the persistence and cancellation contract.
 
 A handler using `await agent.run(...)` can use automatic managed forwarding.
 `run_stream(...)` instead gives its consumer control of delivery, so the same

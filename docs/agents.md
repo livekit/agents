@@ -678,7 +678,7 @@ example below uses detached application context and stages its save after the ru
 
 ```python
 @server.a2a_session(endpoint="support", description="Airline support.")
-async def support(ctx: A2ASessionContext) -> RunResult[Refund]:
+async def support(ctx: A2ASessionContext) -> AsyncIterator[str]:
     app = await make_airline_context(ctx)
     await ctx.store.load_context(app)
 
@@ -687,19 +687,20 @@ async def support(ctx: A2ASessionContext) -> RunResult[Refund]:
         message_history=ctx.message_history,
         context=app,
     ) as stream:
-        await ctx.stream(stream.stream_text(delta=True))
-        result = await stream.result()
+        async for delta in stream.stream_text(delta=True):
+            yield delta
 
     await ctx.store.save_context(app)
-    return result
 ```
 
 `run_stream` hands delivery to its consumer. It does not also automatically
-forward those same text occurrences through the managed endpoint. In this
-example, `ctx.stream(...)` performs incremental delivery. Returning the full
-result finalizes the existing answer artifact or input-required status; it does
-not send the streamed text a second time. A direct `agent.run()` can retain the
-managed endpoint's automatic forwarding behavior.
+forward those same text occurrences through the managed endpoint. Here each
+yielded delta is delivered incrementally, and the run's `RunResult` is the
+outcome: it finalizes the existing answer artifact or input-required status
+without sending the streamed text a second time. The lower-level form forwards
+with `await ctx.stream(stream.stream_text(delta=True))` and returns
+`await stream.result()` ([handler contract](server.md)). A direct `agent.run()`
+can retain the managed endpoint's automatic forwarding behavior.
 
 A failed or cancelled run can leave already delivered text visible; that text is
 not an accepted typed result. Stream delivery does not change the selected
