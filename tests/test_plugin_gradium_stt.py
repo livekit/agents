@@ -12,7 +12,7 @@ import aiohttp
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, APITimeoutError
 from livekit.agents.stt import SpeechEventType
 from livekit.plugins.gradium.stt import DEFAULT_DELAY_IN_FRAMES
 
@@ -103,7 +103,13 @@ class FakeWebSocket:
         frame = self._frames.pop(0)
         if frame == "close":
             return _Msg(aiohttp.WSMsgType.CLOSE, self.close_code, "")
+        if isinstance(frame, tuple) and frame[0] == "error":
+            self._exception = frame[1]
+            return _Msg(aiohttp.WSMsgType.ERROR, frame[1])
         return _Msg(aiohttp.WSMsgType.TEXT, json.dumps(frame))
+
+    def exception(self) -> BaseException | None:
+        return getattr(self, "_exception", None)
 
     async def close(self) -> bool:
         return True
@@ -876,3 +882,58 @@ async def test_stream_times_out_on_hung_connect():
             await _collect_until(stream, lambda ev: False)
     finally:
         await stream.aclose()
+
+
+async def test_connect_failures_are_retryable_api_errors():
+    """DNS, refused connection, TLS: aiohttp raises ClientConnectionError subclasses that
+    the base class would treat as fatal unless mapped."""
+    from livekit.plugins.gradium import STT
+
+    class RefusingSession:
+        async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+            raise aiohttp.ClientOSError(111, "Connection refused")
+
+    stt = STT(api_key="test-key", http_session=RefusingSession())  # type: ignore[arg-type]
+    stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1))
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIConnectionError) as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.retryable is True
+    finally:
+        await stream.aclose()
+
+
+async def test_transport_error_frame_reconnects():
+    """aiohttp reports a transport failure as an ERROR message, not a close frame."""
+    err = RuntimeError("transport failed")
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1), ("error", err)])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIConnectionError) as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.__cause__ is err
+        assert excinfo.value.retryable is True
+    finally:
+        await stream.aclose()
+
+
+async def test_a_text_frame_without_start_s_does_not_corrupt_the_turn():
+    bad = {"type": "text", "text": "dropped"}  # no start_s
+    frames = [READY, bad, _text("hello", 0.1)] + [_vad_step(i, SILENT) for i in range(4)]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    assert [ev.type for ev in events].count(SpeechEventType.START_OF_SPEECH) == 1
+    assert events[0].type == SpeechEventType.START_OF_SPEECH
+    assert events[-1].alternatives[0].text == "hello"

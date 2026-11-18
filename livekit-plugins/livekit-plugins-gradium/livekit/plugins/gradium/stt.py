@@ -29,6 +29,7 @@ import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
@@ -46,12 +47,6 @@ from .models import LogLevel
 from .tts import _close_error
 
 STTEncoding = Literal["pcm_s16le"]
-
-# Define bytes per frame for different encoding types
-bytes_per_frame = {
-    "pcm_s16le": 2,
-}
-
 
 SUPPORTED_SAMPLE_RATE = 24000
 # Gradium's default model delay, used until the server's ready message arrives
@@ -78,7 +73,7 @@ class STTOptions:
     encoding: str = "pcm_s16le"
     temperature: float | None = None
     language: LanguageCode = LanguageCode("en")
-    vad_threshold: float = 0.6
+    vad_threshold: float = 0.9
     vad_bucket: int | None = 2
     # When set, we flush the stt state on the first time the VAD triggers
     # in order to recover the text currently being processed as soon as possible.
@@ -127,7 +122,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=True,  # only final transcripts
+                interim_results=True,
                 aligned_transcript=False,  # only chunk start times are available
                 offline_recognize=False,
             ),
@@ -309,7 +304,6 @@ class SpeechStream(stt.SpeechStream):
         self._model_endpoint = model_endpoint
         self._model_name = model_name
         self._session = http_session
-        self._speech_duration: float = 0
 
         self._reconnect_event = asyncio.Event()
         self._ready_msg: dict[str, Any] | None = None
@@ -462,8 +456,15 @@ class SpeechStream(stt.SpeechStream):
                         body=f"{msg.data=} {msg.extra=}",
                     )
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if closing_ws:
+                        _finalize()
+                        return
+                    # a transport failure surfaces as an ERROR message, not a close frame
+                    raise APIConnectionError("Gradium connection lost") from ws.exception()
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.error("Unexpected Gradium message type: %s", msg.type)
+                    logger.warning("Unexpected Gradium message type: %s", msg.type)
                     continue
 
                 try:
@@ -496,16 +497,18 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     if type_ == "text":
+                        # read the fields first: a malformed frame must not open a turn
+                        text, start_s = data["text"], data["start_s"]
                         speech_end = 0.0
                         if not buffered_text:
                             utterance_start = (
-                                timeline.remove_padding(data["start_s"]) + self.start_time_offset
+                                timeline.remove_padding(start_s) + self.start_time_offset
                             )
                         if speaking is False:
                             speaking = True
                             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                             self._event_ch.send_nowait(start_event)
-                        buffered_text.append(data["text"])
+                        buffered_text.append(text)
                         # The agent treats an interim as the whole partial utterance (it
                         # replaces the previous one), not as a delta.
                         event = stt.SpeechEvent(
@@ -624,6 +627,9 @@ class SpeechStream(stt.SpeechStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
+        except Exception as e:
+            # DNS, refused connection, TLS: transient, and not an APIError by itself
+            raise APIConnectionError() from e
 
         # Build and send the setup payload as the first message
         setup_msg: dict[str, Any] = {
