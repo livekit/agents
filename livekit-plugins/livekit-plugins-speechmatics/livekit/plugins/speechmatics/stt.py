@@ -203,9 +203,10 @@ class STT(stt.STT):
                 set.
 
             turn_detection_mode: How end-of-speech turns are detected. `EXTERNAL` (the
-                default) uses the plugin's local `vad` when available and supports manual
-                stream flushing without it. `VAD` lets the service close turns. To use
-                those turn boundaries, set `turn_detection="stt"` on the `AgentSession`.
+                default) uses the plugin's local VAD when configured. Set `vad=None` to
+                let `AgentSession` flush using its own VAD and turn detector, or to flush
+                the stream directly. `VAD` lets Speechmatics close turns. To use those
+                boundaries, set `turn_handling={"turn_detection": "stt"}` on `AgentSession`.
                 The deprecated `FIXED`, `ADAPTIVE` and `SMART_TURN` modes all resolve to
                 the default mode with a warning. Defaults to `DEFAULT_TURN_DETECTION_MODE`.
 
@@ -259,12 +260,11 @@ class STT(stt.STT):
                 describes what is actually sent; anything else raises a `ValueError`.
                 Defaults to `AudioEncoding.PCM_S16LE`.
 
-            vad: External Voice Activity Detector, used only in `EXTERNAL` turn-detection
-                mode where its end-of-speech drives `finalize()`. Ignored in `VAD` mode.
-                When omitted in `EXTERNAL` mode, `livekit-plugins-silero` is loaded if it
-                is installed, so a bare `STT()` still closes turns. Pass `vad=None` to use
-                the session's turn handling or to call `stream.flush()` yourself.
-                Defaults to NOT_GIVEN.
+            vad: The plugin's local VAD for `EXTERNAL` mode. If omitted, the plugin
+                loads Silero from `livekit-plugins-silero` when installed. To let
+                `AgentSession` flush using its VAD and turn detector, pass `vad=None`
+                here. If you omit `vad` on `AgentSession`, it uses its bundled VAD.
+                Direct callers can pass `vad=None` and call `stream.flush()`.
 
             **kwargs: Catches deprecated parameters. A warning is logged for every name,
                 whether it is a recognised deprecation or not.
@@ -387,7 +387,12 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.RecognizeStream:
-        """Create a new SpeechStream."""
+        """Create a new SpeechStream.
+
+        With `STT(vad=None)` in `EXTERNAL` mode, `stream.flush()` sends buffered
+        audio before asking Speechmatics to finalize the turn. `AgentSession`
+        can request this flush through its turn handling.
+        """
 
         # Create the stream
         stream = SpeechStream(
@@ -454,10 +459,11 @@ class STT(stt.STT):
         )
 
     def finalize(self) -> None:
-        """Force the current turn to end, flushing buffered words as final segments.
+        """Request final segments for each connected stream in `EXTERNAL` mode.
 
-        Only takes effect in `EXTERNAL` turn-detection mode; in `VAD` mode the
-        service endpoints on its own and this is a no-op.
+        With `STT(vad=None)`, use `stream.flush()` to send queued audio before
+        finalizing a single stream. `AgentSession` can request that flush using
+        its own VAD and turn detector.
         """
 
         # Iterate over the streams
@@ -704,7 +710,11 @@ class SpeechStream(stt.RecognizeStream):
                 self._stt._streams.remove(self)
 
     async def _process_audio(self) -> None:
-        """Process audio from the input channel."""
+        """Send queued audio and apply flushes in audio order.
+
+        In `EXTERNAL` mode without a plugin-local VAD, a session or caller
+        flush asks Speechmatics to finalize the turn after sending buffered audio.
+        """
         try:
             # Input audio stream
             audio_bstream = utils.audio.AudioByteStream(
@@ -764,7 +774,7 @@ class SpeechStream(stt.RecognizeStream):
             pass
 
     async def _process_vad(self, vad_stream: vad.VADStream) -> None:
-        """Call `client.finalize()` whenever the external VAD reports end of speech."""
+        """Call `client.finalize()` when the plugin's local VAD detects end of speech."""
         try:
             async for ev in vad_stream:
                 if ev.type == vad.VADEventType.END_OF_SPEECH:
@@ -969,14 +979,12 @@ _DEPRECATED_TURN_DETECTION_MODES = frozenset(
 def _load_default_vad() -> vad.VAD | None:
     """Load a local VAD to drive `finalize()` in `EXTERNAL` mode, or `None` if unavailable.
 
-    The pre-Agent-STT plugin loaded Silero here and raised `ImportError` when it was
-    missing, which made the plugin unusable wherever the optional package was not
-    installed. Returning `None` instead lets construction succeed and leaves the caller
-    with the `EXTERNAL`-without-a-`vad` warning, which says what to do about it.
+    The pre-Agent-STT plugin raised `ImportError` without the optional Silero plugin.
+    Returning `None` lets `AgentSession` use its bundled VAD and turn detector to flush
+    the stream. Standalone callers can flush the stream directly.
 
-    Deliberately not `livekit.agents.inference.VAD`: that one is bundled, so it would load
-    for everybody and run a second VAD over the same audio as the one `AgentSession` fills
-    in for itself, with independent thresholds.
+    Loading the bundled `inference.VAD` here would add a second VAD with independent
+    thresholds when `AgentSession` already supplies one.
     """
     try:
         from livekit.plugins.silero import VAD as SileroVAD
@@ -1060,7 +1068,7 @@ def _handle_turn_detection_mode(mode: TurnDetectionMode) -> AgentTurnDetectionMo
     """Map the plugin's turn detection mode onto the session driver's.
 
     - `VAD`      -> the service runs its own VAD and closes turns.
-    - `EXTERNAL` -> the plugin or caller signals when a turn ends.
+    - `EXTERNAL` -> the plugin, `AgentSession`, or the caller signals when a turn ends.
 
     The plugin's enum values are the SDK's values, so this is a direct lookup — but it
     is still required: `TurnConfig.to_dict()` reads the enum member's value, so the

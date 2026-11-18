@@ -349,11 +349,7 @@ def test_turn_config_is_a_top_level_sibling() -> None:
 
 
 def test_bare_external_loads_a_vad() -> None:
-    """`EXTERNAL` is the default and the service does not endpoint in it.
-
-    The pre-Agent-STT plugin auto-loaded Silero here. Without it a bare `STT()` finalizes
-    nothing and transcribes nothing, which is the zero-config path.
-    """
+    """The plugin loads Silero so standalone `STT()` streams close turns automatically."""
     pytest.importorskip("livekit.plugins.silero")
 
     instance = _stt()
