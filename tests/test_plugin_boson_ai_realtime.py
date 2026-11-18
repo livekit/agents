@@ -25,7 +25,7 @@ from openai.types.realtime import (
 
 from livekit.agents import APIError, llm, utils
 from livekit.agents.types import APIConnectOptions
-from livekit.plugins.boson import realtime
+from livekit.plugins.boson_ai import realtime
 
 pytestmark = pytest.mark.unit
 
@@ -1309,7 +1309,7 @@ async def test_boson_realtime_rebuild_warns_about_turns_it_cannot_put_back(open_
     _server_event(session, _user_item_added("user_1", [{"type": "input_audio"}]))
     assert session._remote_chat_ctx.get("user_1").item.content == []
 
-    with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson"):
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson_ai"):
         target = _ctx(("summary", "user", "so far: ..."), ("user_1", "user", []))
         update_task = asyncio.create_task(session.update_chat_ctx(target))
         events = [await session._msg_ch.recv(), await session._msg_ch.recv()]
@@ -1338,7 +1338,7 @@ async def test_boson_realtime_emptied_turn_is_deleted_loudly(open_session, caplo
         "user_2",
     ]
 
-    with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson"):
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson_ai"):
         update_task = asyncio.create_task(
             session.update_chat_ctx(_ctx(("user_1", "user", "hi"), ("user_2", "user", [])))
         )
@@ -1363,7 +1363,7 @@ async def test_boson_realtime_emptied_turn_is_deleted_loudly(open_session, caplo
     # The warning keys on a delete going out for the id, not on a create being
     # dropped: an item the server never held, here a system one, is no loss.
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson"):
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson_ai"):
         events = session._create_update_chat_ctx_events(
             _ctx(("user_1", "user", "hi"), ("sys_1", "system", "Be brief."))
         )

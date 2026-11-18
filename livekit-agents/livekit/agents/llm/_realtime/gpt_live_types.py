@@ -259,6 +259,8 @@ class DelegationInfo(BaseModel):
 
 class SessionDelegationCreatedEvent(BaseModel):
     type: Literal["session.delegation.created"] = "session.delegation.created"
+    offset_ms: int | None = None
+    """Where on the session's audio clock the model delegated."""
     delegation: DelegationInfo = DelegationInfo()
     client_event_id: str | None = None
     """The ``response.create`` that started it, when the application did."""

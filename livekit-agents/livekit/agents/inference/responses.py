@@ -45,6 +45,7 @@ from ..utils import is_given
 from ._utils import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
+    _resolve_provider,
     _terminal_denial,
     create_access_token,
     create_api_error_from_response,
@@ -154,7 +155,7 @@ class LLM(llm.LLM):
         self,
         model: LLMModels | str,
         *,
-        provider: str | None = None,
+        provider: NotGivenOr[str | None] = NOT_GIVEN,
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
@@ -164,12 +165,18 @@ class LLM(llm.LLM):
         use_websocket: bool = False,
         reasoning: NotGivenOr[ReasoningSetting] = NOT_GIVEN,
     ) -> None:
+        """
+        Args:
+            provider: Deprecated. Provider pinning will no longer be supported on
+                March 1, 2027. Omit this argument to let LiveKit route requests and
+                use fallback providers.
+        """
         super().__init__()
 
         lk_api_key, lk_api_secret = resolve_credentials(api_key, api_secret)
         self._opts = _LLMOptions(
             model=model,
-            provider=provider,
+            provider=_resolve_provider(provider=provider),
             base_url=base_url if base_url else get_default_inference_url(),
             api_key=lk_api_key,
             api_secret=lk_api_secret,
