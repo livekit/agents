@@ -16,6 +16,7 @@ from livekit.agents.a2a import AgentClient
 
 from ..resources import STARTUP_SECONDS, Child, child_process, finish_cleanup
 from ..sfu import KEY, SECRET
+from .providers import SITE, Providers
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -93,11 +94,26 @@ class E2E:
         env: Mapping[str, str] | None = None,
         voice: bool = False,
         python: str = sys.executable,
+        path: Path | None = None,
+        providers: Providers | None = None,
+        project: bool = False,
     ) -> RunningApp:
+        """Run `module` (importable from `path` when given) in its own process. `providers`
+        replaces its inference models and speech before it is imported. `project` runs it
+        against the configured LiveKit project (`LIVEKIT_URL`, key and secret): its rooms,
+        endpoint routing and AgentDB, instead of the isolated SFU and local credentials."""
         self._apps += 1
         directory = self.directory / f"app-{self._apps}"
         directory.mkdir()
         child_env = dict(os.environ)
+        if project:
+            missing = [
+                v
+                for v in ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
+                if not os.environ.get(v)
+            ]
+            if missing:
+                raise RuntimeError(f"a project app needs {', '.join(missing)}")
         # Each app uses private local credentials/data; exported project routing cannot affect it.
         for name in (
             "LIVEKIT_URL",
@@ -106,14 +122,27 @@ class E2E:
             "LIVEKIT_AGENT_VERSION",
         ):
             child_env.pop(name, None)
+        name = "e2e-" + uuid.uuid4().hex
+        roots = [str(ROOT / "python/livekit-agents"), str(ROOT)]
+        if path is not None:
+            roots.insert(0, str(path))
+            child_env["E2E_APP_MAIN"] = "1"
+        if providers is not None:
+            roots.insert(0, str(SITE))
+            child_env.update(providers.environment())
+        if project:
+            child_env["LIVEKIT_URL"] = os.environ["LIVEKIT_URL"]
+        else:
+            child_env.update(LIVEKIT_API_KEY=KEY, LIVEKIT_API_SECRET=SECRET)
         child_env.update(
-            LIVEKIT_API_KEY=KEY,
-            LIVEKIT_API_SECRET=SECRET,
-            LIVEKIT_AGENT_NAME="e2e-" + uuid.uuid4().hex,
+            LIVEKIT_AGENT_NAME=name,
+            # An application that names itself still registers under the test's name.
+            LIVEKIT_AGENT_NAME_OVERRIDE=name,
             LIVEKIT_AGENT_THREADS_DIR=str(directory / "threads"),
-            PYTHONPATH=os.pathsep.join((str(ROOT / "python/livekit-agents"), str(ROOT))),
+            E2E_ARTIFACT_DIR=str(directory),
+            PYTHONPATH=os.pathsep.join(roots),
         )
-        if voice:
+        if voice and not project:
             child_env["LIVEKIT_URL"] = self._sfu()
         child_env.update(env or {})
         app = RunningApp(module, directory, child_env, voice, python)
@@ -133,12 +162,15 @@ class E2E:
             await client.aclose()
 
     def voice_client(
-        self, app: RunningApp, *, phrases: Mapping[int, str] | None = None
+        self, app: RunningApp, *, phrases: Mapping[int, str] | None = None, thread_id: str = ""
     ) -> AbstractAsyncContextManager[VoiceClient]:
+        """A caller; `thread_id` makes the dispatch carry the call's durable thread."""
         from .voice import connected_voice
 
         return (
-            connected_voice(app, phrases=phrases) if phrases is not None else connected_voice(app)
+            connected_voice(app, phrases=phrases, thread_id=thread_id)
+            if phrases is not None
+            else connected_voice(app, thread_id=thread_id)
         )
 
     async def aclose(self) -> None:

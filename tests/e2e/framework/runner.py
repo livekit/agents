@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import os
 import signal
 import socket
 import sys
@@ -33,6 +34,11 @@ async def run(module: str, marker: Path, registered: bool) -> None:
     server = application.server
     if not isinstance(server, AgentServer):
         raise TypeError(f"{module}.server must be an AgentServer")
+    if os.environ.get("E2E_APP_MAIN"):
+        # A script such as an example's main.py: `python main.py` job processes re-import it as
+        # `__mp_main__`, which is where its server and its endpoints exist. Here the runner is
+        # `__main__`, so job processes import the app module instead.
+        server._preload_modules = (*server._preload_modules, module)
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
