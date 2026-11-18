@@ -54,7 +54,7 @@ async def call(ctx: JobContext) -> None:
     await session.generate_reply(instructions="Greet the guest and offer to book a table.")
 
 
-server = AgentServer(storage=AgentDBStorage(), agent_name="bistro")
+server = AgentServer(storage=AgentDBStorage(), agent_name="delegation-voice")
 server.add(front, reservations.reservations, pastry.pastry)
 
 if __name__ == "__main__":

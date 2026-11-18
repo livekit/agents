@@ -1,12 +1,12 @@
-# Bistro Lumen
+# Delegation from a voice agent
 
-A restaurant's phone line as a fast brain and two slow brains: a voice host that talks to the
+The phone line of Bistro Lumen, a made-up restaurant, as a fast brain and two slow brains: a voice host that talks to the
 guest, a reservations desk and a pastry kitchen that do slow work in the background, ask
 questions mid-task and report progress while the call goes on.
 
 | File              | Agent                     | What                                                                                     |
 | ----------------- | ------------------------- | ---------------------------------------------------------------------------------------- |
-| `main.py`         | `bistro`                  | The voice host on the call. Its two tools are the remote desks. The server, all handlers. |
+| `main.py`         | `delegation-voice`        | The voice host on the call. Its two tools are the remote desks. The server, all handlers. |
 | `reservations.py` | partition `reservations`  | Finds and holds tables: slow, asks for seating, reads the hold back, speaks the code.    |
 | `pastry.py`       | partition `pastry`        | Plans a cake: slow, independent work that runs beside a table search.                    |
 
