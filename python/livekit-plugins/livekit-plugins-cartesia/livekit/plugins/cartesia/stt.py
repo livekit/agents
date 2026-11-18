@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 import weakref
-from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
+from typing import Annotated, ClassVar, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode
 
 from pydantic import Field
@@ -362,6 +362,8 @@ class _TurnsStream(stt.WebSocketStream[_TurnsMessage, _Close]):
     See https://docs.cartesia.ai/api-reference/stt/turns/websocket
     """
 
+    completion: ClassVar[stt.Completion] = "peer_closed"
+
     # turn.start and turn.end are Cartesia's own turn boundaries
     provider_vad = True
 
@@ -522,6 +524,8 @@ class _ManualStream(stt.WebSocketStream[_ManualMessage, str]):
 
     See https://docs.cartesia.ai/api-reference/stt/stt
     """
+
+    completion: ClassVar[stt.Completion] = "session_finished"
 
     def __init__(
         self, *, stt: STT, conn_options: APIConnectOptions, language: LanguageCode | None

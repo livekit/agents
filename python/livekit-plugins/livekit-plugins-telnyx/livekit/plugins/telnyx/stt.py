@@ -8,7 +8,7 @@ from __future__ import annotations
 import struct
 import weakref
 from dataclasses import dataclass
-from typing import Literal, NotRequired, TypedDict, assert_never
+from typing import ClassVar, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode
 
 from livekit import rtc
@@ -108,7 +108,10 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         resolved_language = LanguageCode(language) if is_given(language) else self._opts.language
-        stream = SpeechStream(
+        stream_type = (
+            _DeepgramStream if self._opts.transcription_engine == "deepgram" else SpeechStream
+        )
+        stream = stream_type(
             stt=self,
             conn_options=conn_options,
             language=resolved_language,
@@ -156,7 +159,11 @@ class _Transcript(TypedDict):
     confidence: NotRequired[float]
 
 
-class SpeechStream(stt.WebSocketStream[_Transcript, None]):
+class _Control(TypedDict):
+    type: Literal["Finalize", "CloseStream"]
+
+
+class SpeechStream(stt.WebSocketStream[_Transcript, _Control]):
     frame_ms = 50
 
     def __init__(
@@ -189,11 +196,17 @@ class SpeechStream(stt.WebSocketStream[_Transcript, None]):
     def setup(self) -> bytes:
         return _create_streaming_wav_header(self._opts.sample_rate, NUM_CHANNELS)
 
-    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | None:
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> bytes | _Control | None:
         match item:
             case rtc.AudioFrame():
                 return bytes(item.data)
-            case stt.Flush() | stt.EndOfAudio():
+            case stt.Flush():
+                if self._opts.transcription_engine == "deepgram" and not self.input.closed:
+                    return _Control(type="Finalize")
+                return None
+            case stt.EndOfAudio():
+                if self._opts.transcription_engine == "deepgram":
+                    return _Control(type="CloseStream")
                 return None
             case _:
                 assert_never(item)
@@ -208,3 +221,7 @@ class SpeechStream(stt.WebSocketStream[_Transcript, None]):
                     confidence=message.get("confidence", 0.0),
                 )
             )
+
+
+class _DeepgramStream(SpeechStream):
+    completion: ClassVar[stt.Completion] = "peer_closed"

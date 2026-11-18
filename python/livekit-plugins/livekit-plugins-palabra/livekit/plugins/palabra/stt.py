@@ -227,10 +227,14 @@ class SpeechStream(stt.RecognizeStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._client = client
         self._opts = opts
+        self._finished = False
+
+    def _core_settled(self) -> bool:
+        return self._finished
 
     async def _run(self) -> None:
         request_id = utils.shortuuid()
-        input_closed = asyncio.Event()
+        self._finished = False
         utterances: dict[str, _Utterance] = {}
 
         def _make_session() -> SttSession:
@@ -257,10 +261,9 @@ class SpeechStream(stt.RecognizeStream):
                     await session.send_audio(frame.data.tobytes())
             for frame in audio_bstream.flush():
                 await session.send_audio(frame.data.tobytes())
-            input_closed.set()
-            # The protocol has no end-of-stream message; closing the WS is the signal.
-            # The close also makes session.receive() return None, which ends _recv_task.
-            await session.close()
+            # Empty audio flushes pending transcription and translations. Closing the
+            # client socket here can discard them before stream_finished arrives.
+            await session.send_audio(b"")
 
         def _speech_data(ev: SttTranscript) -> stt.SpeechData:
             offset = self.start_time_offset
@@ -339,9 +342,10 @@ class SpeechStream(stt.RecognizeStream):
                     )
                 if isinstance(event, SttTranscript):
                     _emit(event)
-            # The iterator ends when the connection closes.
-            # That is expected only after _send_task closed the WS at end of input.
-            if not input_closed.is_set():
+                elif event.type == "stream_finished":
+                    self._finished = True
+                    return
+            if not self._finished:
                 # the SDK ends the iterator on any close: its socket keeps the code
                 code = session._ws.close_code if session._ws is not None else None
                 raise APIConnectionError(

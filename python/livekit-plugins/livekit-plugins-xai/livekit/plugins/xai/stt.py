@@ -19,7 +19,7 @@ import os
 import uuid
 import weakref
 from dataclasses import dataclass
-from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
+from typing import Annotated, ClassVar, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode
 
 from pydantic import Field, TypeAdapter, ValidationError
@@ -295,6 +295,7 @@ class _AudioDone(TypedDict):
 
 
 class SpeechStream(stt.WebSocketStream[_Message, _AudioDone]):
+    completion: ClassVar[stt.Completion] = "session_finished"
     frame_ms = 50
     # audio waits for transcript.created
     awaits_ready = True

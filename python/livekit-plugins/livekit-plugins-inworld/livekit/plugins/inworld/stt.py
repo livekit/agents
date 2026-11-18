@@ -283,11 +283,13 @@ class SpeechStream(stt.WebSocketStream[_Event, _Command]):
     def setup(self) -> _Command:
         return _Command(transcribeConfig=self._build_transcribe_config())
 
-    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> _Command:
+    def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> _Command | None:
         match item:
             case rtc.AudioFrame():
                 return _Command(audioChunk={"content": base64.b64encode(item.data).decode()})
             case stt.Flush():
+                if self.input.closed:
+                    return None
                 return _Command(endTurn={})
             case stt.EndOfAudio():
                 return _Command(closeStream={})

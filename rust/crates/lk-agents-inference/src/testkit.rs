@@ -45,10 +45,14 @@ pub struct FakeWs {
     hang_connect: bool,
     /// Never complete a send: a peer that stopped reading, its TCP window full.
     stall_sends: bool,
+    refuse_finalize: bool,
     /// Hold each handshake until notified: a slow connect.
     connect_gate: Option<Arc<tokio::sync::Notify>>,
     /// Answer only once the client flushed its input, as the gateway finishes a synthesis.
     after_flush: bool,
+    answers_pings: bool,
+    pings: Arc<Mutex<usize>>,
+    closes: Arc<Mutex<usize>>,
 }
 
 impl FakeWs {
@@ -61,8 +65,12 @@ impl FakeWs {
             keep_open: false,
             hang_connect: false,
             stall_sends: false,
+            refuse_finalize: false,
             connect_gate: None,
             after_flush: false,
+            answers_pings: true,
+            pings: Arc::new(Mutex::new(0)),
+            closes: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -93,6 +101,26 @@ impl FakeWs {
     pub fn after_flush(mut self) -> Self {
         self.after_flush = true;
         self
+    }
+
+    /// A half-open connection accepts writes but never answers a ping.
+    pub fn unresponsive(mut self) -> Self {
+        self.answers_pings = false;
+        self
+    }
+
+    /// A socket whose finalization write fails instead of reaching its peer.
+    pub fn refusing_finalize(mut self) -> Self {
+        self.refuse_finalize = true;
+        self
+    }
+
+    pub fn close_count(&self) -> usize {
+        *self.closes.lock()
+    }
+
+    pub fn ping_count(&self) -> usize {
+        *self.pings.lock()
     }
 
     pub fn failing(err: TransportError) -> Self {
@@ -144,6 +172,10 @@ impl WsTransport for FakeWs {
             sent: self.sent.clone(),
             closed: Default::default(),
             stall: self.stall_sends,
+            refuse_finalize: self.refuse_finalize,
+            pings: self.pings.clone(),
+            closes: self.closes.clone(),
+            replies: self.answers_pings.then(|| self.incoming.clone()),
         });
         let receiver = Box::new(FakeWsReceiver {
             incoming: self.incoming.clone(),
@@ -158,6 +190,10 @@ struct FakeWsSender {
     sent: Arc<Mutex<Vec<String>>>,
     closed: Mutex<bool>,
     stall: bool,
+    refuse_finalize: bool,
+    pings: Arc<Mutex<usize>>,
+    closes: Arc<Mutex<usize>>,
+    replies: Option<Incoming>,
 }
 
 #[async_trait]
@@ -168,6 +204,9 @@ impl WsSender for FakeWsSender {
         }
         if self.stall {
             std::future::pending::<()>().await;
+        }
+        if self.refuse_finalize && text.contains("\"session.finalize\"") {
+            return Err(TransportError::Io("finalize write failed".into()));
         }
         self.sent.lock().push(text);
         Ok(())
@@ -182,12 +221,21 @@ impl WsSender for FakeWsSender {
         Ok(())
     }
 
+    async fn ping(&self) -> Result<(), TransportError> {
+        *self.pings.lock() += 1;
+        if let Some(replies) = &self.replies {
+            replies.lock().push_back(Ok(WsMessage::Other));
+        }
+        Ok(())
+    }
+
     fn is_closed(&self) -> bool {
         *self.closed.lock()
     }
 
     async fn close(&self) {
         *self.closed.lock() = true;
+        *self.closes.lock() += 1;
     }
 }
 

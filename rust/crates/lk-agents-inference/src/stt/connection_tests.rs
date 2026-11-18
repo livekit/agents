@@ -16,7 +16,6 @@ use super::{GatewayStt, SttOptions};
 /// A half-open gateway socket fails recognition with a retryable connection error.
 /// https://github.com/livekit/agents/pull/8023
 #[tokio::test]
-#[ignore = "https://github.com/livekit/agents/pull/8023 reproduces: half-open gateway socket never fails"]
 async fn a_gateway_that_stops_answering_pings_returns_a_retryable_connection_error() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("ws://{}", listener.local_addr().unwrap());

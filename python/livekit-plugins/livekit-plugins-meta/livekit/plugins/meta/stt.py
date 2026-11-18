@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 import weakref
-from typing import Literal, Never, NotRequired, TypedDict, assert_never, final
+from typing import ClassVar, Literal, Never, NotRequired, TypedDict, assert_never, final
 from urllib.parse import urlparse
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -354,6 +354,7 @@ class _EndStream(TypedDict):
 
 
 class SpeechStream(stt.WebSocketStream[_Message, _Handshake | _EndStream]):
+    completion: ClassVar[stt.Completion] = "peer_closed"
     # Muse reads audio no faster than it plays, in 80 ms packets
     frame_ms = 80
     awaits_ready = True

@@ -3,6 +3,8 @@ mod connection_tests;
 mod executor;
 pub(crate) mod gaps;
 pub(crate) mod input;
+#[cfg(test)]
+mod lifecycle_tests;
 pub mod normalizer;
 pub mod options;
 mod provider_options;
@@ -52,7 +54,7 @@ const WHAT: &str = "LiveKit Inference STT";
 /// A stream's event queue, in items.
 pub(crate) const STREAM_QUEUE: usize = 50;
 
-/// Quiet period after audio EOF, or after a later interim, that completes an unacknowledged stream.
+/// Absolute maximum drain after audio EOF, independent of later transcripts or acknowledgments.
 pub(super) const FINALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// `_MAX_AGENT_CONTEXT_CHARS`: AssemblyAI caps `agent_context`, so the tail is kept.

@@ -18,7 +18,7 @@ import os
 import weakref
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Annotated, Literal, NotRequired, TypeAlias, TypedDict, assert_never
+from typing import Annotated, ClassVar, Literal, NotRequired, TypeAlias, TypedDict, assert_never
 
 from pydantic import Field
 
@@ -623,6 +623,8 @@ class _Out(TypedDict):
 class _NovaStream(stt.WebSocketStream[_Message, _Out]):
     """A recognition on `/v1/listen`."""
 
+    completion: ClassVar[stt.Completion] = "peer_closed"
+
     # https://developers.deepgram.com/reference/listen-live#stream-keepalive
     keepalive = stt.Keepalive(every=5.0, frame=_Out(type="KeepAlive"))
     frame_ms = 50
@@ -811,6 +813,8 @@ class _Configure(TypedDict):
 
 class _FluxStream(stt.WebSocketStream[_FluxMessage, _CloseStream | _Configure]):
     """A recognition on `/v2/listen`."""
+
+    completion: ClassVar[stt.Completion] = "peer_closed"
 
     frame_ms = 50
     # Flux detects turns itself: StartOfTurn and EndOfTurn

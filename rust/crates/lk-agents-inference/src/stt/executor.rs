@@ -1,5 +1,6 @@
 use super::*;
 use crate::telemetry;
+use crate::websocket::liveness::{Beat, Liveness};
 use gaps::Gaps;
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::{ErrorKind, Timeout};
@@ -176,6 +177,8 @@ impl SttStreamExecutor {
 
         // Wakes the settlement timer whenever the input or a message moves its deadline.
         let rearm = Arc::new(signal::Shared::new(0));
+        let liveness =
+            Arc::new(Mutex::new(Liveness::new(Duration::from_secs(30), self.clock.now())));
         let gaps = Arc::new(Mutex::new(Gaps::starting(self.offset)));
         let sample_rate = self.opts.sample_rate;
         let uplink = AudioUplink {
@@ -209,6 +212,7 @@ impl SttStreamExecutor {
             rearm: rearm.clone(),
             connection: Some(connection),
             awaiting_ack: true,
+            liveness: liveness.clone(),
         }
         .run(receiver.as_mut(), progress.clone());
         let finalize = Self::vad_finalize_loop(sender.clone(), &mut vad_source);
@@ -233,12 +237,31 @@ impl SttStreamExecutor {
                 }
             }
         };
+        let heartbeat = async {
+            loop {
+                let at = liveness.lock().wake_at();
+                self.clock.wait_until(at).await;
+                let beat = liveness.lock().tick(self.clock.now());
+                match beat {
+                    Beat::Wait => {}
+                    Beat::Ping => {
+                        sender.ping().await.map_err(|error| connect_error(WHAT, error))?
+                    }
+                    Beat::Lost => {
+                        return Err(ApiError::connection(Some(
+                            "LiveKit Inference STT stopped answering pings".into(),
+                        )));
+                    }
+                }
+            }
+        };
         let outcome = tokio::select! {
             biased;
             () = self.stop.cancelled() => Ok(()),
-            r = settle => r,
-            r = send => r,
             r = recv => r,
+            r = send => r,
+            r = settle => r,
+            r = heartbeat => r,
             r = finalize => r,
         };
         if !progress.lock().server_closed && !sender.is_closed() {
@@ -321,12 +344,10 @@ impl SttStreamExecutor {
             if event.kind != lk_agents_abi::VadEventType::EndOfSpeech {
                 continue;
             }
-            if sender.is_closed() {
-                return Ok(());
-            }
-            if sender.send_text(wire::session_finalize().to_string()).await.is_err() {
-                return Ok(());
-            }
+            sender
+                .send_text(wire::session_finalize().to_string())
+                .await
+                .map_err(|error| connect_error(WHAT, error))?;
         }
         std::future::pending::<()>().await;
         Ok(())
@@ -349,6 +370,7 @@ struct Progress {
     transcript: TranscriptMachine,
     total_deadline: Option<Ts>,
     finalization_deadline: Option<Ts>,
+    transcript_deadline: Option<Ts>,
     input_ended: bool,
     finished: bool,
     server_closed: bool,
@@ -369,6 +391,7 @@ impl Progress {
             transcript: TranscriptMachine::new(request_id, language),
             total_deadline,
             finalization_deadline: None,
+            transcript_deadline: None,
             input_ended: false,
             finished: false,
             server_closed: false,
@@ -376,7 +399,11 @@ impl Progress {
     }
 
     fn wake_at(&self) -> Option<Ts> {
-        self.total_deadline.into_iter().chain(self.finalization_deadline).min()
+        self.total_deadline
+            .into_iter()
+            .chain(self.finalization_deadline)
+            .chain(self.transcript_deadline)
+            .min()
     }
 
     /// `None` while the stream runs at `now`. Once it ended, `Some` with the outcome when this
@@ -387,7 +414,12 @@ impl Progress {
         }
         let outcome = if self.total_deadline.is_some_and(|deadline| now >= deadline) {
             Err(ApiError::timed_out(Timeout::Total).into_final())
-        } else if self.finalization_deadline.is_some_and(|deadline| now >= deadline) {
+        } else if self
+            .finalization_deadline
+            .into_iter()
+            .chain(self.transcript_deadline)
+            .any(|deadline| now >= deadline)
+        {
             Ok(())
         } else {
             return None;
@@ -402,7 +434,7 @@ impl Progress {
         }
     }
 
-    /// The input ended: whether the gateway is asked to finalize. The quiet period starts.
+    /// The input ended: whether the gateway is asked to finalize. The absolute drain starts.
     fn input_ended(&mut self, now: Ts) -> bool {
         if self.settle(now).is_some() || self.input_ended {
             return false;
@@ -437,23 +469,20 @@ impl Progress {
                 }
             }
             Incoming::FinalTranscript(_) => FINAL_TRANSCRIPT_QUIET,
-            Incoming::InterimTranscript(_) | Incoming::PreflightTranscript(_) => {
-                FINALIZATION_TIMEOUT
+            Incoming::InterimTranscript(data) | Incoming::PreflightTranscript(data)
+                if self.transcript_deadline.is_some() && !data.transcript.is_empty() =>
+            {
+                FINAL_TRANSCRIPT_QUIET
             }
             _ => Duration::ZERO,
         };
         if self.input_ended && !quiet.is_zero() {
-            self.finalization_deadline = Some(now.saturating_add(quiet));
+            self.transcript_deadline = Some(now.saturating_add(quiet));
         }
-        let acknowledged = self.input_ended && matches!(message, Incoming::SessionFinalized { .. });
+        // Finalize acks are uncorrelated and some providers send them before their finals.
+        // Only the quiet period, absolute drain limit or session close completes the drain.
         let processed = self.transcript.process(message);
-        let outcome = if let Some(error) = processed.error {
-            Some(Err(error))
-        } else if acknowledged {
-            Some(Ok(()))
-        } else {
-            None
-        };
+        let outcome = processed.error.map(Err);
         self.finished |= outcome.is_some();
         Received { events: processed.events, end_of_speech: processed.end_of_speech, outcome }
     }
@@ -593,8 +622,8 @@ impl AudioUplink {
     }
 
     /// The input ended: the VAD hears it, the gateway may be asked the gateway to finalize, and the
-    /// settlement timer re-arms. Completion is an acknowledgment or a quiet period: the receive
-    /// half and the settlement timer observe it.
+    /// settlement timer re-arms. The receive half observes a session close; the timer observes
+    /// transcript silence and the absolute drain limit.
     async fn finish_input(mut self) -> Result<(), ApiError> {
         if let Some(sink) = self.vad_sink.as_mut() {
             sink.end_input();
@@ -629,6 +658,7 @@ struct RecvCtx {
     /// Only the first read (the `session.create` ack) is a response the session waits for;
     /// later silence is the user's.
     awaiting_ack: bool,
+    liveness: Arc<Mutex<Liveness>>,
 }
 
 impl RecvCtx {
@@ -665,7 +695,10 @@ impl RecvCtx {
             recv.await
         };
         match received {
-            Ok(msg) => Ok(msg),
+            Ok(msg) => {
+                self.liveness.lock().heard();
+                Ok(msg)
+            }
             Err(TransportError::Timeout) if self.awaiting_ack => {
                 Err(ApiError::timed_out(lk_agents_abi::errors::Timeout::Read))
             }
@@ -767,7 +800,7 @@ mod tests {
     // (Deepgram and AssemblyAI keep the socket open with no `session.finalized` after
     // `session.finalize`), failing every `stt.stream()` read to its end with a read timeout.
     #[test]
-    fn input_eof_completes_on_acknowledgment_or_quiet_period() {
+    fn input_eof_completes_on_quiet_period_or_absolute_limit() {
         let now = Ts::ZERO;
         let at = |secs| now.saturating_add(Duration::from_secs(secs));
         let make = || Progress::new("r".into(), None, None);
@@ -780,6 +813,8 @@ mod tests {
         assert!(progress.input_ended(now), "the gateway is asked to finalize");
         assert!(!progress.input_ended(now), "once");
         assert!(progress.message(final_transcript(), at(1)).outcome.is_none());
+        let empty = wire::decode(r#"{"type":"interim_transcript","transcript":""}"#).unwrap();
+        progress.message(empty, at(3));
         assert!(progress.settle(at(3)).is_none());
         assert!(matches!(progress.settle(at(4)), Some(Some(Ok(())))));
         assert!(matches!(progress.settle(at(5)), Some(None)), "ended once");
@@ -793,10 +828,35 @@ mod tests {
         let mut progress = make();
         progress.input_ended(now);
         let acknowledged = progress.message(Incoming::SessionFinalized { truncated: false }, now);
-        assert!(matches!(acknowledged.outcome, Some(Ok(()))));
+        assert!(acknowledged.outcome.is_none());
 
         let mut progress = make();
         progress.input_ended(now);
         assert!(matches!(progress.server_eof(now), Some(Err(_))));
+    }
+    // Catches an immediate or earlier VAD finalize ack discarding a later final transcript.
+    #[test]
+    fn a_finalize_ack_does_not_end_the_drain_before_its_transcript() {
+        let mut progress = Progress::new("r".into(), None, None);
+        progress.input_ended(Ts::ZERO);
+        let ack = progress.message(Incoming::SessionFinalized { truncated: false }, Ts::ZERO);
+        assert!(ack.outcome.is_none(), "an uncorrelated ack cannot confirm all audio");
+        let final_ = wire::decode(r#"{"type":"final_transcript","transcript":"tail"}"#).unwrap();
+        let received = progress.message(final_, Ts::from_nanos(1_000_000_000));
+        assert!(received.events.iter().any(|e| e.alternatives.iter().any(|a| a.text == "tail")));
+    }
+
+    // Catches a provider extending EOF draining forever by continuing to send interims.
+    #[test]
+    fn transcript_progress_cannot_extend_the_absolute_drain_deadline() {
+        let mut progress = Progress::new("r".into(), None, None);
+        progress.input_ended(Ts::ZERO);
+        let late = FINALIZATION_TIMEOUT - Duration::from_secs(1);
+        let interim = wire::decode(r#"{"type":"interim_transcript","transcript":"tail"}"#).unwrap();
+        progress.message(interim, Ts::ZERO.saturating_add(late));
+        assert!(matches!(
+            progress.settle(Ts::ZERO.saturating_add(FINALIZATION_TIMEOUT)),
+            Some(Some(Ok(())))
+        ));
     }
 }

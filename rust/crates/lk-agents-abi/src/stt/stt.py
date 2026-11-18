@@ -453,8 +453,9 @@ class RecognizeStream(ABC):
 
     async def aclose(self) -> None:
         """Close the stream immediately."""
-        self.input.close()
+        # Abort before closing input: EOF asks a live producer to commit and drain.
         await aio.cancel_and_wait(self._task, timeout=self._core_attempts.cleanup_timeout)
+        self.input.close()
         self._event_ch.close()
         # The reader is done with the stream: what was buffered for it is dropped, not returned.
         while not self._event_ch.empty():

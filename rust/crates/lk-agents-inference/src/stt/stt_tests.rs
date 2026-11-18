@@ -592,24 +592,36 @@ async fn only_the_vads_end_of_speech_finalizes_the_session() {
     impl lk_agents_abi::utils::stream::ProviderStream<VadEvent> for ScriptedSource {}
 
     // Three inference-done events and one end-of-speech: exactly one finalize.
-    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
-    let vad = Arc::new(ScriptedVad(vec![
-        VadEventType::InferenceDone,
-        VadEventType::InferenceDone,
-        VadEventType::StartOfSpeech,
-        VadEventType::EndOfSpeech,
-        VadEventType::InferenceDone,
-    ]));
-    let stt = stt(ws.clone()).with_vad(vad);
-    let (sink, _source) =
-        stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
-    sink.push(frame(800)).unwrap();
-    for _ in 0..60 {
-        tokio::task::yield_now().await;
+    // A failed VAD finalize must fail recognition rather than silently complete it.
+    for fail in [false, true] {
+        let ws = FakeWs::new(vec![]).keep_open();
+        let ws = Arc::new(if fail { ws.refusing_finalize() } else { ws });
+        let vad = Arc::new(ScriptedVad(vec![
+            VadEventType::InferenceDone,
+            VadEventType::InferenceDone,
+            VadEventType::StartOfSpeech,
+            VadEventType::EndOfSpeech,
+            VadEventType::InferenceDone,
+        ]));
+        let stt = stt_once(ws.clone()).with_vad(vad);
+        let (sink, mut source) =
+            stt.stream_native(&lk_agents_abi::telemetry::Cx::NONE, None, 0.0).unwrap().split();
+        sink.push(frame(800)).unwrap();
+        if fail {
+            let error = source.next().await.expect_err("a failed finalize is not completion");
+            assert!(error.message().contains("finalize write failed"));
+            assert_eq!(ws.connect_count(), 1);
+        } else {
+            until("the VAD finalize", || {
+                ws.sent_json().iter().any(|v| v["type"] == "session.finalize")
+            })
+            .await;
+            let finalizes =
+                ws.sent_json().iter().filter(|v| v["type"] == "session.finalize").count();
+            assert_eq!(finalizes, 1, "sent {:?}", ws.sent_json());
+        }
+        Box::new(source).close(lk_agents_abi::Ts::from_nanos(u64::MAX)).await;
     }
-    let finalizes =
-        ws.sent_json().iter().filter(|v| v["type"] == json!("session.finalize")).count();
-    assert_eq!(finalizes, 1, "sent {:?}", ws.sent_json());
 }
 
 // Catches: the billed audio duration computed wrong (0.05 s per 50 ms frame).
@@ -897,7 +909,8 @@ async fn a_session_dropped_before_the_input_ends_reconnects_after_delivered_tran
     let dropped = [Ok(WsMessage::Closed), text(json!({"type": "session.closed"}))];
     for drop in dropped {
         let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
-        let stt = stt(ws.clone());
+        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+        let stt = stt(ws.clone()).with_clock(clock.clone());
         let (sink, source) =
             stt.stream_native(&lk_agents_abi::telemetry::Cx::NONE, None, 0.0).unwrap().split();
         let mut source: crate::abi::SttSource = Box::new(source);
@@ -910,6 +923,8 @@ async fn a_session_dropped_before_the_input_ends_reconnects_after_delivered_tran
         };
         until("sent the second frame", || audio(&ws) == 2).await;
         ws.feed(drop.clone());
+        until("closed the failed connection", || ws.close_count() == 1).await;
+        crate::testkit::arm_then_advance(&clock, Duration::from_secs(1)).await;
         until("reconnected", || ws.connect_count() == 2).await;
 
         ws.feed(text(json!({"type": "session.created"})));
@@ -923,6 +938,7 @@ async fn a_session_dropped_before_the_input_ends_reconnects_after_delivered_tran
         ws.feed(text(json!({"type": "session.finalized"})));
         let events = drain_until(source.as_mut(), SpeechEventType::FinalTranscript).await;
         assert_eq!(events.last().unwrap().alternatives[0].text, "second");
+        crate::testkit::arm_then_advance(&clock, executor::FINAL_TRANSCRIPT_QUIET).await;
         let end = lk_agents_abi::timeout(
             &lk_agents_net::clock::RealClock::new(),
             Duration::from_secs(2),

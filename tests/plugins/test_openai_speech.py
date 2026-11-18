@@ -24,6 +24,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     TokenUsage,
+    _core,
     http,
     llm,
     stt,
@@ -626,3 +627,210 @@ async def test_closing_the_tts_closes_the_client_it_created(
     await tts.aclose()
 
     assert [client.is_closed() for client in created] == [True]
+
+
+@pytest.mark.parametrize("failed", [False, True])
+async def test_realtime_eof_drains_every_committed_item_and_reports_item_failure(
+    failed: bool,
+) -> None:
+    """A clear ack and one completed item cannot discard another outstanding transcription."""
+    peer = _RealtimePeer()
+    async with _serve(("GET", "/v1/realtime", peer.handle)) as base_url:
+        model = openai_stt.STT(
+            api_key="test", base_url=base_url, model="gpt-live-transcribe", vad=None
+        )
+        stream = model.stream(conn_options=APIConnectOptions(max_retry=2))
+        events: list[stt.SpeechEvent] = []
+
+        async def read() -> None:
+            async for event in stream:
+                events.append(event)
+
+        async with stream:
+            reader = asyncio.create_task(read())
+            try:
+                await peer.configured()
+                stream.push_frame(_silence())
+                stream.flush()
+                await until(
+                    lambda: any(e["type"] == "input_audio_buffer.commit" for e in peer.sent),
+                    "the first utterance is committed",
+                )
+                await peer.sockets[0].send_json(
+                    {"type": "input_audio_buffer.committed", "item_id": "one"}
+                )
+                stream.push_frame(_silence())
+                stream.end_input()
+                await until(
+                    lambda: any(e["type"] == "input_audio_buffer.clear" for e in peer.sent),
+                    "the final commit is followed by a clear barrier",
+                )
+                await peer.sockets[0].send_json(
+                    {"type": "input_audio_buffer.committed", "item_id": "two"}
+                )
+                await peer.sockets[0].send_json({"type": "input_audio_buffer.cleared"})
+                await peer.sockets[0].send_json(
+                    {
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "item_id": "two",
+                        "transcript": "second",
+                    }
+                )
+                await until(
+                    lambda: any(
+                        e.alternatives and e.alternatives[0].text == "second" for e in events
+                    ),
+                    "the second item completes first",
+                )
+                if failed:
+                    await peer.sockets[0].send_json(
+                        {
+                            "type": "conversation.item.input_audio_transcription.failed",
+                            "item_id": "one",
+                            "error": {"message": "transcription failed"},
+                        }
+                    )
+                    await until(reader.done, "the failed item reaches the caller")
+                    with pytest.raises(APIError):
+                        reader.result()
+                    assert len(peer.sockets) == 1, "EOF leaves no audio for a retry"
+                else:
+                    await peer.sockets[0].send_json(
+                        {
+                            "type": "conversation.item.input_audio_transcription.completed",
+                            "item_id": "one",
+                            "transcript": "first",
+                        }
+                    )
+                    await until(reader.done, "all committed items drain")
+                    reader.result()
+                    finals = [
+                        e.alternatives[0].text
+                        for e in events
+                        if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+                    ]
+                    assert finals == ["second", "first"]
+            finally:
+                reader.cancel()
+                await asyncio.gather(reader, return_exceptions=True)
+                await model.aclose()
+
+
+async def test_failed_transcription_preserves_other_pending_items_before_input_ends() -> None:
+    peer = _RealtimePeer()
+    async with _serve(("GET", "/v1/realtime", peer.handle)) as base_url:
+        model = openai_stt.STT(api_key="test", base_url=base_url, use_realtime=True)
+        stream = model.stream(conn_options=NO_RETRY)
+        events: list[stt.SpeechEvent] = []
+        try:
+            await peer.configured()
+            for item_id in ("bad", "good"):
+                await peer.sockets[0].send_json(
+                    {"type": "input_audio_buffer.committed", "item_id": item_id}
+                )
+            await peer.sockets[0].send_json(
+                {
+                    "type": "conversation.item.input_audio_transcription.failed",
+                    "item_id": "bad",
+                    "error": {"message": "failed"},
+                }
+            )
+            await peer.sockets[0].send_json(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "item_id": "good",
+                    "transcript": "kept",
+                }
+            )
+            with pytest.raises(APIError, match="transcription failed"):
+                async with asyncio.timeout(2):
+                    async for event in stream:
+                        events.append(event)
+            finals = [
+                e.alternatives[0].text
+                for e in events
+                if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+            ]
+            assert finals == ["kept"]
+            assert len(peer.sockets) == 1
+        finally:
+            await stream.aclose()
+            await model.aclose()
+
+
+async def test_a_short_manual_flush_is_padded_and_an_empty_flush_is_not_committed() -> None:
+    peer = _RealtimePeer()
+    async with _serve(("GET", "/v1/realtime", peer.handle)) as base_url:
+        model = openai_stt.STT(
+            api_key="test", base_url=base_url, model="gpt-live-transcribe", vad=None
+        )
+        stream = model.stream(conn_options=NO_RETRY)
+        try:
+            await peer.configured()
+            stream.push_frame(rtc.AudioFrame(bytes(2400), 24000, 1, 1200))
+            stream.flush()
+            stream.flush()
+            stream.end_input()
+            await until(
+                lambda: any(e["type"] == "input_audio_buffer.clear" for e in peer.sent),
+                "all flushes precede the clear barrier",
+            )
+            assert sum(e["type"] == "input_audio_buffer.commit" for e in peer.sent) == 1
+            chunks = [
+                base64.b64decode(str(e["audio"]))
+                for e in peer.sent
+                if e["type"] == "input_audio_buffer.append"
+            ]
+            assert len(b"".join(chunks)) == 4800
+        finally:
+            await stream.aclose()
+            await model.aclose()
+
+
+async def test_one_completed_item_cannot_make_an_unanswered_item_a_successful_drain() -> None:
+    peer = _RealtimePeer()
+    async with _serve(("GET", "/v1/realtime", peer.handle)) as base_url:
+        model = openai_stt.STT(
+            api_key="test", base_url=base_url, model="gpt-live-transcribe", vad=None
+        )
+        stream = model.stream(conn_options=APIConnectOptions(max_retry=0, read_timeout=5))
+        events: list[stt.SpeechEvent] = []
+
+        async def read() -> None:
+            async for event in stream:
+                events.append(event)
+
+        reader = asyncio.create_task(read())
+        try:
+            await peer.configured()
+            stream.push_frame(_silence())
+            stream.end_input()
+            await until(
+                lambda: any(e["type"] == "input_audio_buffer.clear" for e in peer.sent),
+                "the EOF barrier is sent",
+            )
+            for item_id in ("missing", "completed"):
+                await peer.sockets[0].send_json(
+                    {"type": "input_audio_buffer.committed", "item_id": item_id}
+                )
+            await peer.sockets[0].send_json({"type": "input_audio_buffer.cleared"})
+            await peer.sockets[0].send_json(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "item_id": "completed",
+                    "transcript": "kept",
+                }
+            )
+            await until(
+                lambda: any(e.type == stt.SpeechEventType.FINAL_TRANSCRIPT for e in events),
+                "the completed item is delivered",
+            )
+            _core.skip_host_time(5)
+            await until(reader.done, "the outstanding item times out")
+            with pytest.raises(APITimeoutError):
+                reader.result()
+        finally:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+            await stream.aclose()
+            await model.aclose()

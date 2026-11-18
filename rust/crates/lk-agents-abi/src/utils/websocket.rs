@@ -83,6 +83,20 @@ pub struct WebSocketInput {
     pub pace: f64,
 }
 
+/// The protocol's evidence that all input has been processed, independent of turn finals.
+#[crate::host(string)]
+#[crate::host(wire_strs(msg = format!("unknown WebSocket completion {s:?}")))]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum WebSocketCompletion {
+    /// No terminal guarantee: settled transcripts may finish at the bounded read limit.
+    #[default]
+    Settled,
+    /// A promised terminal message must signal `SessionFinished` before success.
+    SessionFinished,
+    /// The provider promises to flush results and close; keep reading until its clean close.
+    PeerClosed,
+}
+
 /// What a received message tells the connection.
 #[crate::host(string)]
 #[crate::host(wire_strs(msg = format!("unknown WebSocket signal {s:?}")))]
@@ -237,6 +251,10 @@ pub trait WebSocketHost: Send + Sync {
     /// A failed attempt the session retries, as the provider's recoverable `error` event.
     #[host(notify, name = "_core_retrying")]
     fn retrying(&self, error: ProviderError);
+
+    /// The provider's completion contract, read when each stream connection opens.
+    #[host(call, name = "_core_completion")]
+    fn completion(&self) -> Result<WebSocketCompletion, HostError>;
 
     /// The input ended: whether the provider owes a reply to what this connection sent, so the
     /// connection waits for it.

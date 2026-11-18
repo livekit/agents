@@ -51,6 +51,7 @@ OutboundT = TypeVar("OutboundT")
 FrameT_co = TypeVar("FrameT_co", covariant=True)
 
 Signal = Literal["ready", "session_finished"]
+Completion = Literal["settled", "session_finished", "peer_closed"]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -280,6 +281,10 @@ class WebSocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
     pacing: WebSocketPacing | None = None
     """How fast frames go: a minimum interval between two, or no faster than the input plays.
     One ``WebSocketPacing`` set on several streams (one the model holds) paces them together."""
+    completion: ClassVar[Completion] = "settled"
+    """The documented session completion: settled transcripts, a terminal message reported as
+    ``SessionFinished``, or a clean peer close after it flushes its last responses."""
+
     awaits_ready: ClassVar[bool] = False
     """Each connection opens a provider session that says when it is ready: nothing but the
     ``setup`` goes until ``on_message`` reports it, within the connect limit."""
@@ -654,6 +659,9 @@ class WebSocketHost:
 
     def _core_retrying(self, error: Exception) -> None:
         self._kind.retrying(error)
+
+    def _core_completion(self) -> Completion:
+        return self._protocol.completion
 
     def _core_owes_reply(self) -> bool:
         return self._kind.owes_reply()

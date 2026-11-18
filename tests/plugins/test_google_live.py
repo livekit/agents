@@ -514,7 +514,9 @@ async def test_gemini_stt_emits_the_finalized_transcript_on_arrival(gemini_live:
 
     https://github.com/livekit/agents/pull/6991
     """
-    stream = GeminiSTT(api_key="test", http_options=gemini_live.http_options).stream()
+    stream = GeminiSTT(api_key="test", http_options=gemini_live.http_options).stream(
+        conn_options=APIConnectOptions(max_retry=0, read_timeout=5)
+    )
     stream.push_frame(rtc.AudioFrame(bytes(320), 16000, 1, 160))
     stream.end_input()
     # Gemini answers the end of the audio with the last turn: a turn complete before it is one
@@ -535,18 +537,29 @@ async def test_gemini_stt_emits_the_finalized_transcript_on_arrival(gemini_live:
         serverContent={"inputTranscription": {"text": "Greetings, welcome to the age of AI."}}
     )
     await gemini_live.send(serverContent={"generationComplete": True, "turnComplete": True})
+    await gemini_live.send(serverContent={"inputTranscription": {"text": "A later turn."}})
+    events: list[tuple[stt.SpeechEventType, str]] = []
+
+    async def read() -> None:
+        async for event in stream:
+            if event.type in (
+                stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                stt.SpeechEventType.FINAL_TRANSCRIPT,
+            ):
+                events.append((event.type, event.alternatives[0].text))
+
     async with stream:
-        events = [
-            (e.type, e.alternatives[0].text)
-            async for e in stream
-            if e.type
-            in (stt.SpeechEventType.INTERIM_TRANSCRIPT, stt.SpeechEventType.FINAL_TRANSCRIPT)
-        ]
+        reader = asyncio.create_task(read())
+        await until(lambda: len(events) == 4, "the transcript after turn completion arrives")
+        _core.skip_host_time(5)
+        await until(reader.done, "the bounded drain ends")
+        reader.result()
 
     assert events == [
         (stt.SpeechEventType.INTERIM_TRANSCRIPT, "Greetings."),
         (stt.SpeechEventType.INTERIM_TRANSCRIPT, "Greetings, welcome"),
         (stt.SpeechEventType.FINAL_TRANSCRIPT, "Greetings, welcome to the age of AI."),
+        (stt.SpeechEventType.FINAL_TRANSCRIPT, "A later turn."),
     ]
 
 
