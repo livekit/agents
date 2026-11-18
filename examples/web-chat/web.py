@@ -21,6 +21,10 @@ from livekit.agents.storage import AgentDBStorage, Thread
 
 load_dotenv()
 
+# For demo purposes nothing here is authenticated: each browser is only scoped by the random
+# id it sends, so anyone can read or continue any thread whose id they know. A real app ties
+# the scope to its signed-in user and checks a thread is theirs before minting a token.
+
 KEY = os.environ["LIVEKIT_API_KEY"]
 SECRET = os.environ["LIVEKIT_API_SECRET"]
 
@@ -34,26 +38,12 @@ credentials = Credentials(KEY, SECRET)
 storage = AgentDBStorage(api_key=KEY, api_secret=SECRET)
 
 
-# --- Who is asking ---------------------------------------------------------------------------
-
-
 def scope_of(request: Request) -> str | None:
     """The browser's scope, from the random id the page keeps in localStorage."""
     browser = request.query_params.get("browser", "")
     if not re.fullmatch(r"[0-9a-f-]{36}", browser):
         return None
     return f"browser:{browser}"
-
-
-async def owns(scope: str, thread: str) -> bool:
-    """Whether the thread belongs to the browser."""
-    if not re.fullmatch(r"AT_\w+", thread):
-        return False
-    info = await storage.threads.get_thread(thread)
-    return info.scope == scope
-
-
-# --- Routes ----------------------------------------------------------------------------------
 
 
 async def token(request: Request) -> Response:
@@ -65,10 +55,8 @@ async def token(request: Request) -> Response:
 
     if thread is None:
         grant = AgentThreadGrant(scope=scope, create=True, write=True)
-    elif await owns(scope, thread):
-        grant = AgentThreadGrant(thread_ids=[thread], read=True, write=True)
     else:
-        return Response(status_code=403)
+        grant = AgentThreadGrant(thread_ids=[thread], read=True, write=True)
 
     token = credentials.thread_grant_token(grant, ttl_seconds=TOKEN_TTL)
     return JSONResponse({"token": token, "ttl": TOKEN_TTL, "agent": AGENT})
@@ -86,10 +74,7 @@ async def list_threads(request: Request) -> Response:
 
 async def thread_messages(request: Request) -> Response:
     """A thread's user and assistant messages, in order."""
-    scope = scope_of(request)
     thread = request.path_params["thread"]
-    if scope is None or not await owns(scope, thread):
-        return Response(status_code=403)
 
     messages: list[dict[str, str]] = []
     after: str | None = None

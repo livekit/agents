@@ -60,7 +60,7 @@ async function listThreads() {
 // The thread is the source of truth: always render it from what was stored.
 async function open(id) {
   thread = id;
-  const messages = await get(`threads/${id}?browser=${browser}`);
+  const messages = await get(`threads/${id}`);
 
   $("messages").replaceChildren();
   for (const { role, text } of messages) bubble(role, text);
