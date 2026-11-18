@@ -185,3 +185,63 @@ fn an_uninterrupted_terminal_stream_keeps_two_intentionally_equal_appends() {
         "payload equality is not a replay cursor"
     );
 }
+
+#[test]
+fn a_cancel_answered_by_completion_keeps_the_intent_and_accepts_the_real_result() {
+    let mut state = RemoteAgentState::new("https://booking.test".into());
+    start(&mut state, "start", false);
+    event(&mut state, "start", working());
+    super::super::apply(
+        "booking",
+        &mut state,
+        RemoteInput::Prepare {
+            request_id: "cancel".into(),
+            request: A2ARequest::Cancel(a2a::CancelTaskRequest {
+                id: "booking".into(),
+                metadata: None,
+                tenant: None,
+            }),
+            streaming: false,
+            origin: None,
+            input_request: None,
+            control_scope: None,
+        },
+    )
+    .unwrap();
+    super::super::apply(
+        "booking",
+        &mut state,
+        RemoteInput::DispatchStarted { request_id: "cancel".into() },
+    )
+    .unwrap();
+    let completed: a2a::Task = serde_json::from_value(json!({"id":"booking","contextId":"trip",
+        "status":{"state":"TASK_STATE_COMPLETED"},
+        "artifacts":[{"artifactId":"receipt","parts":[{"text":"Booked Friday"}]}]}))
+    .unwrap();
+    super::super::apply(
+        "booking",
+        &mut state,
+        RemoteInput::Response {
+            request_id: "cancel".into(),
+            response: Box::new(A2AResponse::Task(completed.clone())),
+        },
+    )
+    .unwrap();
+    let task = &state.tasks["booking"];
+    assert!(task.cancel_requested, "the person's intent is kept beside the observed outcome");
+    assert_eq!(task.task.status.state, a2a::TaskState::Completed);
+    let accepted = accepted(&state);
+    assert_eq!(accepted.status.state, a2a::TaskState::Completed);
+    let receipt = &accepted.artifacts.as_ref().unwrap()[0];
+    assert_eq!(receipt.parts[0].as_text(), Some("Booked Friday"));
+    let control =
+        crate::delegation::remote::cancel::operation(&target(), None, "cancel".into()).unwrap();
+    let crate::delegation::remote::cancel::CancellationStep::Finished(result) =
+        control.observed(Ok(completed.clone()))
+    else {
+        panic!("a task answer settles the control")
+    };
+    assert_eq!(result.observation.unwrap(), completed, "late success is delivered as observed");
+    assert!(result.confirmation.is_err(), "completion is not a confirmed cancellation");
+    assert!(result.confirmed_task.is_none());
+}

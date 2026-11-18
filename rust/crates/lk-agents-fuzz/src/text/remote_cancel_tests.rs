@@ -96,6 +96,11 @@ async fn a_later_explicit_bound_cancel_can_retry_a_definitely_refused_control() 
     bound_cancel(CancelReply::Refused, false).await;
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_cancel_answered_by_completion_delivers_the_result_and_keeps_the_intent() {
+    bound_cancel(CancelReply::Completed, false).await;
+}
+
 async fn bound_cancel(cancel_reply: CancelReply, queue_continuation: bool) {
     let clock: Arc<dyn Clock> = Arc::new(lk_agents_runtime::net::clock::SimClock::new());
     let env = environment(clock.clone());
@@ -243,6 +248,16 @@ async fn bound_cancel(cancel_reply: CancelReply, queue_continuation: bool) {
                 running.await.unwrap(),
                 RemoteEvent::Outcome { outcome: ToolOutcome::Cancelled }
             ));
+        }
+        CancelReply::Completed => {
+            assert!(outcome.is_err(), "completion is never reported as a confirmed cancel");
+            assert_eq!(task.task().unwrap().status.state, a2a::TaskState::Completed);
+            let RemoteEvent::Outcome { outcome: ToolOutcome::Value { text, .. } } =
+                running.await.unwrap()
+            else {
+                panic!("the original call receives the real late result")
+            };
+            assert!(text.contains("Booked Friday"), "{text}");
         }
     }
     interaction.settled().await;
@@ -539,6 +554,102 @@ async fn a_bound_idle_control_uses_current_worker_credentials_after_restart_with
     );
     fresh.close();
     assert!(matches!(task.cancel(&env.process).await, Err(AgentClientError::InvalidInput(_))));
+    CONTROL_HTTP.with(|http| http.borrow_mut().take());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_restarted_bound_cancel_reconciles_its_lost_ack_without_another_control_write() {
+    restarted_bound_cancel(CancelReply::Lost).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_restarted_bound_cancel_keeps_a_refusal_until_a_later_explicit_intent() {
+    restarted_bound_cancel(CancelReply::Refused).await;
+}
+
+/// The bound `task.cancel()` fails (refused, or applied with its reply and read lost), the
+/// owner restarts, and a fresh owner's `task.cancel()` continues from the saved journal.
+async fn restarted_bound_cancel(reply: CancelReply) {
+    let _serial = CONTROL_CREDENTIALS.lock().await;
+    let _credentials = control_credentials();
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_runtime::net::clock::SimClock::new());
+    let database = Store::open(167, false, clock.clone()).await;
+    let lost = matches!(reply, CancelReply::Lost);
+    let service = Arc::new(Service {
+        context_id: Some(database.thread_id.clone()),
+        cancel_reply: reply,
+        fail_reconciliation: Mutex::new(lost),
+        ..Default::default()
+    });
+    let env = control_environment(clock.clone(), service.clone());
+    let store = ContextStore::bound(
+        database.backend.clone(),
+        database.thread_id.clone(),
+        PARTITION_KEY.into(),
+        env.tracer.root(),
+    )
+    .await
+    .unwrap();
+    let (first, updates, binding, _) = owner(&env, store.clone()).await;
+    verified_delegation(&env, &database, service.clone(), first).await;
+    assert_eq!(
+        Box::new(updates).close(clock.now().saturating_add(Duration::from_secs(15))).await,
+        Closed::Clean
+    );
+    binding.close();
+    store.finish_session(false).await.unwrap();
+    store.close();
+
+    let mut cancels = Vec::new();
+    for _restart in 0..2 {
+        let fresh = ContextStore::bound(
+            database.backend.clone(),
+            database.thread_id.clone(),
+            PARTITION_KEY.into(),
+            env.tracer.root(),
+        )
+        .await
+        .unwrap();
+        let restored =
+            SessionState::new(Some(fresh.load_session_snapshot().await.unwrap())).unwrap();
+        let task = restored
+            .remote_agents()
+            .remove(ENDPOINT)
+            .unwrap()
+            .tasks()
+            .unwrap()
+            .remove("booking")
+            .unwrap();
+        fresh
+            .declare_binding(
+                HostRef::new(0, &env.refs),
+                HostRef::new(0, &env.refs),
+                Some(restored.clone()),
+            )
+            .unwrap();
+        let result = task.cancel(&env.process).await;
+        assert!(task.cancel_requested().unwrap(), "the person's intent survives the restart");
+        cancels.push((result, task.task().unwrap().status.state, *service.cancellations.lock()));
+        assert!(!database.held(PARTITION_KEY).await, "each short fenced owner releases its lease");
+        fresh.close();
+        // The peer becomes readable again only after the first owner is gone.
+        *service.fail_reconciliation.lock() = false;
+    }
+    let [(first, first_state, first_writes), (second, second_state, second_writes)] =
+        <[_; 2]>::try_from(cancels).unwrap();
+    assert!(first.is_err(), "neither a refusal nor an unknown outcome is success");
+    assert_eq!(first_state, a2a::TaskState::InputRequired);
+    assert_eq!(first_writes, 1);
+    if lost {
+        second.expect("the fresh owner reconciles the applied cancel");
+        assert_eq!(second_state, a2a::TaskState::Canceled);
+        assert_eq!(second_writes, 1, "a lost ack is read back, never sent again");
+    } else {
+        assert!(second.is_err(), "the peer still refuses");
+        assert_eq!(second_state, a2a::TaskState::InputRequired);
+        assert_eq!(second_writes, 2, "a later explicit intent after a definite refusal retries");
+    }
+    assert_eq!(service.messages.lock().len(), 1, "restoration never replays the business send");
     CONTROL_HTTP.with(|http| http.borrow_mut().take());
 }
 

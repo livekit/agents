@@ -159,6 +159,11 @@ impl Client {
             .is_some_and(|exts| exts.iter().any(|ext| ext.uri == EXTENSION_URI))
     }
 
+    /// Streams sends and lets a known task be resubscribed after a lost stream.
+    pub fn offers_streaming(&self) -> bool {
+        self.card.as_ref().is_some_and(|c| c.capabilities.streaming == Some(true))
+    }
+
     pub fn card_request(&self) -> Result<Request, ClientError> {
         self.ensure_open()?;
         let (path, query) = self
@@ -232,7 +237,7 @@ impl Client {
         let routing = (context_id.map(str::to_owned), task_id.map(str::to_owned));
         message.context_id = routing.0;
         message.task_id = routing.1;
-        let streaming = self.card.as_ref().is_some_and(|c| c.capabilities.streaming == Some(true));
+        let streaming = self.offers_streaming();
         self.resume_send(
             SendMessageRequest { message, configuration: None, metadata: None, tenant: None },
             streaming,
@@ -254,8 +259,7 @@ impl Client {
         if message.task_id.is_some() && message.context_id.is_none() {
             return Err(ClientError::InvalidInput("a saved task message needs its context".into()));
         }
-        if streaming && !self.card.as_ref().is_some_and(|c| c.capabilities.streaming == Some(true))
-        {
+        if streaming && !self.offers_streaming() {
             return Err(ClientError::InvalidInput(
                 "the peer no longer supports the saved streaming operation".into(),
             ));

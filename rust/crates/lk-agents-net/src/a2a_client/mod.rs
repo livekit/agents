@@ -164,6 +164,10 @@ impl AgentClient {
         self.inner.core.lock().offers_extension()
     }
 
+    pub fn offers_streaming(&self) -> bool {
+        self.inner.core.lock().offers_streaming()
+    }
+
     /// An explicitly supplied, validated conversation is sent only to a capable peer and
     /// omitted when an explicit caller thread lets the endpoint load its permitted history.
     pub async fn send(
