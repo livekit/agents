@@ -17,7 +17,7 @@ permissions:
 jobs:
   e2e:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
-    runs-on: ubuntu-latest
+    runs-on: nscloud-ubuntu-24.04-amd64-16x32-with-cache
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7

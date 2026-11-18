@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: nscloud-ubuntu-24.04-amd64-16x32-with-cache
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - uses: ./.github/actions/setup
@@ -30,7 +30,7 @@ jobs:
   # On 3.12: some extras (AWS realtime) install only there. Pyright still checks the code as
   # 3.11 (pythonVersion in pyproject.toml).
   types:
-    runs-on: ubuntu-latest
+    runs-on: nscloud-ubuntu-24.04-amd64-16x32-with-cache
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - uses: ./.github/actions/setup
@@ -45,7 +45,7 @@ jobs:
       - run: make type-check
 
   tests:
-    runs-on: ubuntu-latest
+    runs-on: nscloud-ubuntu-24.04-amd64-16x32-with-cache
     strategy:
       fail-fast: false
       matrix:

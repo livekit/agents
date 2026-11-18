@@ -115,7 +115,7 @@ fn build_vendored() -> std::path::PathBuf {
             std::env::var_os("LK_CODECS_NO_FETCH").is_none(),
             "vendor/ffmpeg-{version} is missing and LK_CODECS_NO_FETCH is set"
         );
-        let st = std::process::Command::new("bash")
+        let st = std::process::Command::new(bash())
             .arg(manifest.join("vendor/fetch.sh"))
             .status()
             .expect("running vendor/fetch.sh");
@@ -181,7 +181,7 @@ fn compile_ffmpeg(src: &std::path::Path, entry: &std::path::Path, prefix: &std::
     }
 
     run(
-        std::process::Command::new("bash")
+        std::process::Command::new(bash())
             .arg(src.join("configure"))
             .args(&args)
             .current_dir(&build),
@@ -226,6 +226,34 @@ fn link_archive(directory: &std::path::Path, name: &str) {
     } else {
         println!("cargo:rustc-link-lib=static={name}");
     }
+}
+
+/// The POSIX shell for FFmpeg's scripts. On Windows a bare `bash` resolves through System32
+/// first, which is the WSL launcher (failing without a distribution), so the shell is found on
+/// PATH outside the Windows directory (Git Bash, MSYS2), or named by `LK_BASH`.
+fn bash() -> std::path::PathBuf {
+    println!("cargo:rerun-if-env-changed=LK_BASH");
+    if let Some(explicit) = std::env::var_os("LK_BASH").filter(|value| !value.is_empty()) {
+        return explicit.into();
+    }
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return "bash".into();
+    }
+    let windows = std::env::var_os("SystemRoot").map(std::path::PathBuf::from);
+    std::env::var_os("PATH")
+        .and_then(|paths| {
+            std::env::split_paths(&paths)
+                .filter(|dir| {
+                    let lower = dir.to_string_lossy().to_ascii_lowercase();
+                    let in_windows = windows.as_ref().is_some_and(|w| {
+                        lower.starts_with(&w.to_string_lossy().to_ascii_lowercase())
+                    });
+                    !in_windows && !lower.contains("windowsapps")
+                })
+                .map(|dir| dir.join("bash.exe"))
+                .find(|candidate| candidate.is_file())
+        })
+        .expect("a POSIX bash (Git Bash or MSYS2) on PATH, or LK_BASH")
 }
 
 fn which(bin: &str) -> Option<std::path::PathBuf> {

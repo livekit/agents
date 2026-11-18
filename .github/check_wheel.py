@@ -45,11 +45,14 @@ def check_contents(archive: zipfile.ZipFile) -> list[str]:
         .stdout.rstrip("\0")
         .split("\0")
     )
-    # Skip metadata and the libraries auditwheel (`<dist>.libs/`) or delocate (`.dylibs/`) bundle.
+    # Skip directory entries, metadata and the libraries auditwheel (`<dist>.libs/`) or delocate
+    # (`<dist>.dylibs/`) bundle.
     shipped = {
         n
         for n in archive.namelist()
-        if not n.split("/")[0].endswith((".dist-info", ".libs")) and "/.dylibs/" not in n
+        if not n.endswith("/")
+        and not n.split("/")[0].endswith((".dist-info", ".libs", ".dylibs"))
+        and "/.dylibs/" not in n
     }
     extensions = {n for n in shipped if n.endswith(EXTENSION_SUFFIXES)}
     errors = []

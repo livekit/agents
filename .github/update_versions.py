@@ -184,7 +184,9 @@ def update_versions(bump_type: str) -> None:
         update_agents_pyproject_optional_dependencies(plugin_versions)
 
 
-def update_prerelease(prerelease_type: str, agents_only: bool = False) -> None:
+def update_prerelease(
+    prerelease_type: str, agents_only: bool = False, align_plugins: bool = False
+) -> None:
     agents_ver = AGENTS_PROJECT / "livekit" / "agents" / "version.py"
     plugins_root = pathlib.Path("python/livekit-plugins")
 
@@ -214,7 +216,10 @@ def update_prerelease(prerelease_type: str, agents_only: bool = False) -> None:
         pypi_name = _read_pypi_name(pdir)
         if vf.exists():
             cur = read_version(vf)
-            new_v = bump_prerelease(cur, prerelease_type)
+            # aligned: every plugin takes the agents' prerelease (2.0.0b2), whatever line it was on
+            new_v = new_agents_version if align_plugins and new_agents_version else (
+                bump_prerelease(cur, prerelease_type)
+            )
             print(f"{pypi_name}: {_esc(31)}{cur}{_esc(0)} -> {_esc(32)}{new_v}{_esc(0)}")
             write_new_version(vf, new_v)
             plugin_versions[pypi_name] = new_v
@@ -241,12 +246,17 @@ def update_prerelease(prerelease_type: str, agents_only: bool = False) -> None:
     help="Pre-release livekit-agents alone; the plugins and their livekit-agents floor stay as they are.",
 )
 @click.option(
+    "--align-plugins",
+    is_flag=True,
+    help="Pre-release every plugin at the new livekit-agents version, with that version as floor.",
+)
+@click.option(
     "--bump-type",
     type=click.Choice(["patch", "minor", "major", "release"]),
     default="patch",
     help="Type of version bump to apply to every package. Use 'release' to strip pre-release suffixes. Defaults to patch.",
 )
-def bump(pre: str, bump_type: str, agents_only: bool) -> None:
+def bump(pre: str, bump_type: str, agents_only: bool, align_plugins: bool) -> None:
     """
     Single command to do either normal or pre-release bumps.
 
@@ -258,7 +268,7 @@ def bump(pre: str, bump_type: str, agents_only: bool) -> None:
     if pre == "none":
         update_versions(bump_type)
     else:
-        update_prerelease(pre, agents_only)
+        update_prerelease(pre, agents_only, align_plugins)
 
 
 if __name__ == "__main__":
