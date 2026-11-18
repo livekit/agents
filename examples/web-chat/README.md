@@ -1,7 +1,7 @@
 # Web chat
 
 A chat agent with a one-page web app. Each browser keeps its own conversations, stored in
-[threads](../../docs/threads.md).
+LiveKit threads.
 
 - `agent.py`: the agent. It streams its answers and is reached through LiveKit Cloud.
 - `web.py`: the page and its backend. It holds the project key, mints the browser's tokens
