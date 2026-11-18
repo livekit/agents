@@ -32,7 +32,7 @@ SECRET = os.environ["LIVEKIT_API_SECRET"]
 DEPLOYMENT = os.environ.get("LIVEKIT_AGENT_DEPLOYMENT", "_")
 AGENT = os.environ["LIVEKIT_URL"].replace("ws", "http", 1) + f"/agents/web-chat/{DEPLOYMENT}"
 
-TOKEN_TTL = 15 * 60  # seconds
+TOKEN_TTL = 15 * 60  # seconds; the page asks for a fresh token per message
 
 credentials = Credentials(KEY, SECRET)
 storage = AgentDBStorage(api_key=KEY, api_secret=SECRET)
@@ -59,7 +59,7 @@ async def token(request: Request) -> Response:
         grant = AgentThreadGrant(thread_ids=[thread], read=True, write=True)
 
     token = credentials.thread_grant_token(grant, ttl_seconds=TOKEN_TTL)
-    return JSONResponse({"token": token, "ttl": TOKEN_TTL, "agent": AGENT})
+    return JSONResponse({"token": token, "agent": AGENT})
 
 
 async def list_threads(request: Request) -> Response:
