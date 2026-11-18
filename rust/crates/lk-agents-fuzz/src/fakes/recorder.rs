@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
-use lk_agents_abi::AudioFrame;
 use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure};
+use lk_agents_abi::{AudioFrame, Clock, Ts};
 use lk_agents_media::recorder::{
     OUTPUT_CHANNEL, OggOpusEncoder, RecordingCommand, RecordingFile, RecordingLimits,
 };
@@ -11,8 +11,8 @@ use crate::record::{RecorderCall, Sink};
 
 // The recording port: the session's tap feeds the real recording timeline (the media crate's
 // `RecordingFile`, sans-I/O), written as PCM in memory. At every flush the newly written agent
-// channel is held against what the sink reported played: a played stretch is never silence, and
-// no played audio arrives after its place was written.
+// channel is held against what the sink reported played. Room-only runs additionally compare
+// its PCM with the source's independent speaker timeline, including silence and unplayed tails.
 
 /// The recording's rate, as the session's.
 const RATE: u32 = 48_000;
@@ -48,19 +48,99 @@ struct Recording {
     /// The agent channel is checked up to this sample.
     checked: i64,
     late: u64,
+    failure: Option<RecordingFailure>,
+    finished: bool,
 }
 
 pub struct FakeRecorder {
     registry: Arc<Registry>,
     recording: Mutex<Recording>,
+    speaker: Option<RoomSpeaker>,
+}
+
+struct RoomSpeaker {
+    room: Arc<super::room::FakeRoom>,
+    anchor: (f64, Ts),
 }
 
 impl FakeRecorder {
-    pub fn new(registry: Arc<Registry>) -> Arc<Self> {
+    pub fn new(
+        registry: Arc<Registry>,
+        speaker: Option<(Arc<super::room::FakeRoom>, Arc<dyn Clock>)>,
+    ) -> Arc<Self> {
+        let speaker = speaker.map(|(room, clock)| RoomSpeaker {
+            room,
+            anchor: (lk_agents_abi::unix_secs(clock.wall()), clock.now()),
+        });
+        Arc::new(FakeRecorder { registry, recording: Mutex::default(), speaker })
+    }
+
+    fn apply(&self, call: RecorderCall, command: RecordingCommand) {
+        self.registry.record_sink(Sink::Recorder(call));
+        let mut recording = self.recording.lock().unwrap();
+        if recording.failure.is_some() || recording.finished {
+            return;
+        }
+        match recording.file.apply(command, &mut || Ok(())) {
+            Ok(finished) => recording.finished = finished,
+            Err(error) => {
+                recording.failure = Some(error);
+                self.registry.record_sink(Sink::Recorder(RecorderCall::Failed));
+            }
+        }
+    }
+
+    /// The harness owns attached recorders as a hosting job does. Finalization writes and
+    /// checks the unflushed tail; a file failure is recorded and never fails the conversation.
+    pub fn finish_recording(&self) {
+        self.apply(RecorderCall::Finished, RecordingCommand::FinishRecording(None));
+        self.check_written();
+        let recording = self.recording.lock().unwrap();
+        let summary = recording.file.summary();
+        if let Some(at) = summary.started_at {
+            self.registry.record_sink(Sink::Recorder(RecorderCall::Origin {
+                unix_micros: (at * 1_000_000.0).round() as u64,
+                written_through_unix_micros: summary
+                    .last_flushed
+                    .map(|at| (at * 1e6).round() as u64),
+            }));
+        }
+    }
+
+    fn check_written(&self) {
+        // A custom output has its own speaker; room PCM alone cannot judge that mixture.
+        if self.registry.only_room_speaker()
+            && let Some(speaker) = &self.speaker
+        {
+            let recording = self.recording.lock().unwrap();
+            if let Some(mismatch) = speaker.check(&recording) {
+                self.registry.record_sink(Sink::Recorder(mismatch));
+            }
+            let samples = recording.pcm.0.lock().unwrap().len() / 2;
+            let samples = samples.saturating_sub(recording.checked.max(0) as usize);
+            self.registry.record_sink(Sink::Recorder(RecorderCall::SpeakerChecked { samples }));
+        }
+        let (unheard, late) = self.recording.lock().unwrap().check();
+        if let Some(at_ms) = unheard {
+            self.registry.record_sink(Sink::Recorder(RecorderCall::Unheard { at_ms }));
+        }
+        if late > 0 {
+            self.registry.record_sink(Sink::Recorder(RecorderCall::Late { samples: late }));
+        }
+    }
+}
+
+impl Default for Recording {
+    fn default() -> Self {
         let pcm = Pcm::default();
-        let limits = RecordingLimits::default().file();
-        let file = RecordingFile::new(pcm.clone(), std::io::sink(), RATE, None, limits);
-        let recording = Recording {
+        let file = RecordingFile::new(
+            pcm.clone(),
+            std::io::sink(),
+            RATE,
+            None,
+            RecordingLimits::default().file(),
+        );
+        Self {
             file,
             pcm,
             played: Vec::new(),
@@ -69,15 +149,64 @@ impl FakeRecorder {
             reported: false,
             checked: 0,
             late: 0,
-        };
-        Arc::new(FakeRecorder { registry, recording: Mutex::new(recording) })
+            failure: None,
+            finished: false,
+        }
     }
+}
 
-    fn apply(&self, call: RecorderCall, command: RecordingCommand) {
-        self.registry.record_sink(Sink::Recorder(call));
-        let mut recording = self.recording.lock().unwrap();
-        // A refused command fails the recording; what was written so far is still checked.
-        let _ = recording.file.apply(command, &mut || Ok(()));
+impl RoomSpeaker {
+    /// Compare identity, placement and silence against the source's own PCM, rather than the
+    /// callbacks the recorder received. Ignore only 2 ms at frame boundaries for resampling.
+    fn check(&self, recording: &Recording) -> Option<RecorderCall> {
+        let summary = recording.file.summary();
+        let t0 = summary.started_at?;
+        let pcm = recording.pcm.0.lock().unwrap();
+        let end = pcm.len() / 2;
+        let start = recording.checked.max(0) as usize;
+        let mut expected = vec![0i16; end.saturating_sub(start)];
+        let mut edges = vec![false; expected.len()];
+        let at = |ts: Ts| {
+            let (wall, origin) = self.anchor;
+            let seconds = if ts >= origin {
+                ts.saturating_duration_since(origin).as_secs_f64()
+            } else {
+                -origin.saturating_duration_since(ts).as_secs_f64()
+            };
+            ((wall + seconds - t0) * f64::from(RATE)).round() as i64
+        };
+        // Audio before the recorder attached is outside its promise.
+        let start = start.max((at(self.anchor.1) + EDGE).max(EDGE) as usize);
+        let checked = recording.checked.max(0) as usize;
+        for source in self.room.local_participant().sources() {
+            for (since, frame) in source.heard_audio() {
+                let lo = at(since);
+                let hi = lo + (frame.duration() * f64::from(RATE)).round() as i64;
+                let samples = lk_agents_media::pcm_samples(&frame.data);
+                let mono = lk_agents_media::downmix_mono(&samples, frame.num_channels);
+                for edge in [lo, hi] {
+                    for i in (edge - EDGE).max(checked as i64)..(edge + EDGE).min(end as i64) {
+                        edges[i as usize - checked] = true;
+                    }
+                }
+                for i in lo.max(checked as i64)..hi.min(end as i64) {
+                    let sample =
+                        ((i - lo) as u64 * u64::from(frame.sample_rate) / u64::from(RATE)) as usize;
+                    expected[i as usize - checked] = mono[sample.min(mono.len() - 1)];
+                }
+            }
+        }
+        (start..end).find_map(|i| {
+            let expected = expected[i - checked];
+            let actual = pcm[i * 2 + OUTPUT_CHANNEL];
+            (!edges[i - checked] && (i32::from(expected) - i32::from(actual)).abs() > 1).then_some(
+                RecorderCall::Mismatch {
+                    at_ms: i as u64 * 1000 / u64::from(RATE),
+                    expected,
+                    actual,
+                },
+            )
+        })
     }
 }
 
@@ -149,13 +278,11 @@ impl AudioRecorder for FakeRecorder {
     }
     fn flush(&self, now: f64) -> Result<(), RecordingFailure> {
         self.apply(RecorderCall::Flush, RecordingCommand::Flush(now));
-        let (unheard, late) = self.recording.lock().unwrap().check();
-        if let Some(at_ms) = unheard {
-            self.registry.record_sink(Sink::Recorder(RecorderCall::Unheard { at_ms }));
-        }
-        if late > 0 {
-            self.registry.record_sink(Sink::Recorder(RecorderCall::Late { samples: late }));
-        }
-        Ok(())
+        self.check_written();
+        self.recording.lock().unwrap().failure.clone().map_or(Ok(()), Err)
     }
 }
+
+#[cfg(test)]
+#[path = "recorder_tests.rs"]
+mod tests;

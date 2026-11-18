@@ -253,7 +253,7 @@ class Qwen3SynthesizeStream(tts.WebSocketStream[_Message, _Command]):
         elif message["type"] == "error":
             raise _error(message)
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
 
 def _words(info: _TimestampInfo | None, offset: float) -> list[TranscriptChunk]:

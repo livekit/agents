@@ -362,7 +362,7 @@ class SynthesizeStream(tts.WebSocketStream[_Message, _Speak]):
                 self._forget(segment_id)
                 self.report(tts.SegmentDone(segment_id))
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _forget(self, segment_id: str) -> None:
         self._owed.pop(segment_id, None)

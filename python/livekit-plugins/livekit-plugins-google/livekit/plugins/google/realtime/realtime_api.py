@@ -976,6 +976,16 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
     def clear_audio(self) -> None:
         logger.warning("clear_audio is not supported by Gemini Realtime API.")
 
+    def _emit_socket_error(self, error: Exception, *, recoverable: bool) -> None:
+        # The failed connection cannot answer its pending request or finish its open streams.
+        # Detach the waiter before closing streams, whose callbacks may request another reply.
+        pending = self._pending_generation_fut
+        self._pending_generation_fut = None
+        if pending is not None and not pending.done():
+            pending.set_exception(llm.RealtimeError(str(error)))
+        self._mark_current_generation_done()
+        super()._emit_socket_error(error, recoverable=recoverable)
+
     async def aclose(self) -> None:
         await self._video_tasks.aclose()
         await super().aclose()
@@ -1000,6 +1010,17 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
             return
 
         server_content = message.get("serverContent")
+        if (
+            server_content
+            and server_content.get("turnComplete")
+            and (reason := server_content.get("turnCompleteReason"))
+            and reason != "TURN_COMPLETE_REASON_UNSPECIFIED"
+        ):
+            # A rejected turn may contain no output at all, so no generation will resolve its
+            # request. Settle that waiter before another request can reuse the pending slot.
+            if (pending := self._pending_generation_fut) is not None and not pending.done():
+                self._pending_generation_fut = None
+                pending.set_exception(llm.RealtimeError(f"Gemini turn ended: {reason}"))
         if not self._current_generation or self._current_generation.done:
             if server_content and server_content.get("interrupted"):
                 # two cases an interrupted event is sent without an active generation

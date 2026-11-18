@@ -221,11 +221,10 @@ mod realtime_late_answer_interrupted {
                     && matches!(s, Step::Realtime(RealtimeStep::Sent { kind: k, .. }) if *k == kind)
             })
         };
-        let cancel =
-            sent(RealtimeCommandKind::CancelReply).expect("the scenario: the timeout cancels");
-        let interrupt =
-            sent(RealtimeCommandKind::Interrupt).expect("the late reply is interrupted");
-        assert!(cancel < interrupt, "the reply landed after the cancel crossed it");
+        sent(RealtimeCommandKind::CancelReply).expect("the scenario: the timeout cancels");
+        // The production inference machine now cancels the late response before exposing it to
+        // voice. A second voice-level Interrupt is unnecessary; the server must still be free
+        // for the next request.
         assert!(
             !outcome.failures.iter().any(|f| f.contract == "realtime_server_accepts_requests"),
             "{:#?}",

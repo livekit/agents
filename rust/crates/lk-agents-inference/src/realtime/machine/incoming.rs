@@ -5,9 +5,7 @@ use lk_agents_abi::ChatItem;
 use lk_agents_abi::Ts;
 
 use super::context::CtxOp;
-use crate::realtime::protocol::{
-    CANCELLATION_FAILED, Incoming, OutputItemKind, TranscriptionCompleted, error_code,
-};
+use crate::realtime::protocol::{Incoming, OutputItemKind, TranscriptionCompleted, error_code};
 use lk_agents_abi::llm::realtime::{
     AudioDelta, Event, GenerateReplyFailed, GenerationCreated, GenerationDone, GenerationStatus,
     InputSpeechStopped, InputTranscription, MessageDone, MessageModalities, MessageStarted,
@@ -55,6 +53,10 @@ impl RealtimeMachine {
                 if item_id.is_empty() || transcript.is_empty() {
                     return Step::default();
                 }
+                self.transcript_acc
+                    .entry(item_id.clone())
+                    .or_default()
+                    .insert(0, transcript.clone());
                 partial_transcription(item_id, transcript)
             }
             Incoming::TranscriptionCompleted(t) => self.on_transcription_completed(now, t),
@@ -171,17 +173,33 @@ impl RealtimeMachine {
 
     /// Closes any open partial stream so a consumer waiting for `is_final` does not hang. With
     /// nothing accumulated nothing is emitted.
-    fn on_transcription_failed(&mut self, item_id: String, content_index: usize) -> Step {
+    pub(super) fn on_transcription_failed(
+        &mut self,
+        item_id: String,
+        content_index: usize,
+    ) -> Step {
+        if self
+            .held
+            .as_ref()
+            .is_some_and(|t| t.item_id == item_id && t.content_index == content_index)
+        {
+            self.held = None;
+        }
         let partial = self.take_accumulated(&item_id, content_index);
-        let turn_started_at = self.speech_started_at.remove(&item_id).map(|t| self.wall_secs(t));
-        let Some(transcript) = partial else { return Step::default() };
-        Step::event(Event::InputTranscription(InputTranscription {
+        let Some(transcript) = partial else {
+            self.speech_started_at.remove(&item_id);
+            return Step::default();
+        };
+        // The caller and the replayed model context must agree on the partial that survived.
+        self.finalize_transcript(TranscriptionCompleted {
             item_id,
+            content_index,
             transcript,
-            is_final: true,
             confidence: None,
-            turn_started_at,
-        }))
+            in_progress: false,
+            event_id: String::new(),
+            usage: None,
+        })
     }
 
     fn on_text_delta(&mut self, now: Ts, item_id: String, delta: String) -> Step {
@@ -362,6 +380,15 @@ impl RealtimeMachine {
     fn on_transcription_completed(&mut self, now: Ts, t: TranscriptionCompleted) -> Step {
         if self.dialect.defer_transcript_finalization {
             let mut step = Step::default();
+            // A cumulative revision replaces the previous text. Keep even an in-progress
+            // completion so failure or connection teardown can settle the latest words.
+            self.transcript_acc
+                .entry(t.item_id.clone())
+                .or_default()
+                .insert(t.content_index, t.transcript.clone());
+            if t.in_progress && self.held.as_ref().is_some_and(|h| h.item_id == t.item_id) {
+                self.held = None;
+            }
             // Only hold a settled transcript; `in_progress` ones will be revised.
             if !t.in_progress {
                 if self.held.as_ref().is_some_and(|h| h.item_id != t.item_id) {
@@ -377,6 +404,11 @@ impl RealtimeMachine {
                 confidence: None,
                 turn_started_at: None,
             }));
+            // ASR may finish after the answer's last output. No later output is guaranteed to
+            // flush a settled transcript; once the model has spoken, publish it now.
+            if !t.in_progress && self.response_spoke {
+                step.merge(self.flush_held_transcript(now));
+            }
             return step;
         }
         let metrics = self.transcription_metrics(now, &t);
@@ -546,7 +578,7 @@ impl RealtimeMachine {
                 self.ctx_update.as_mut().and_then(|update| update.by_event_id.remove(event_id));
             if let Some(rejected) = rejected {
                 step.merge(self.settle_rejected_item(now, rejected, err.code.as_deref()));
-                if !fatal {
+                if !fatal && err.code.as_deref() == Some(error_code::DUPLICATE_ITEM_ID) {
                     return step;
                 }
             } else if self.pending_replies.remove(event_id) {
@@ -555,7 +587,7 @@ impl RealtimeMachine {
         }
 
         // A cancel raced a finished response. Nothing went wrong.
-        if err.message.starts_with(CANCELLATION_FAILED) {
+        if err.code.as_deref() == Some(error_code::CANCEL_NOT_ACTIVE) {
             return step;
         }
         // The server VAD commits each segment itself, so our commit lands on an emptied buffer.

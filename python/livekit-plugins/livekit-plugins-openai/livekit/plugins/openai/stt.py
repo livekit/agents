@@ -865,7 +865,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
                 detail=error.get("message"),
             )
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _completed(self, message: _Completed) -> None:
         item_id = message.get("item_id", "")

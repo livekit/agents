@@ -427,7 +427,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
         elif message["type"] == "error" or message["type"] == "Error":
             raise _error(message)
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _transcript(self, body: _TranscriptBody, *, final: bool, language: str | None) -> None:
         text = (body.get("transcript") or "").strip()

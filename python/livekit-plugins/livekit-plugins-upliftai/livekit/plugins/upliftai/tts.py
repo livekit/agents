@@ -350,7 +350,7 @@ class SynthesizeStream(tts.WebSocketStream[_Inbound, str]):
                 "Uplift rejected the synthesis request", kind="invalid_request", body=message
             )
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
 
 def _event(packet: str, data: object) -> str:

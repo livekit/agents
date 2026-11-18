@@ -11,7 +11,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import llm
+from livekit.agents import APIConnectOptions, APIError, llm
 from livekit.plugins.phonic.realtime import RealtimeModel, RealtimeSession
 from tests.fakes import until
 
@@ -65,6 +65,7 @@ async def conversation() -> AsyncIterator[tuple[_Peer, RealtimeSession, Wire]]:
     async with TestServer(app) as server:
         model = RealtimeModel(
             api_key="key",
+            conn_options=APIConnectOptions(max_retry=0),
             base_url=str(server.make_url("").with_scheme("ws")),
             default_language="en",
             additional_languages=["es"],
@@ -143,3 +144,59 @@ async def test_a_speech_forbidding_tool_opens_no_reply_after_its_output(
 
     assert await answer(session, "t1", "hang_up") == 0
     assert await answer(session, "t2", "lookup") == 1
+
+
+async def test_a_provider_validation_error_settles_the_pending_reply_and_keeps_its_code(
+    conversation: tuple[_Peer, RealtimeSession, Wire],
+) -> None:
+    """Phonic's observed validation envelope must fail the waiter and preserve diagnostics."""
+    peer, session, config = conversation
+    assert "event_id" not in config  # Phonic rejects OpenAI's extra configuration field.
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    reply = session.generate_reply()
+    await peer.next("generate_reply")
+    await peer.send(
+        {
+            "type": "error",
+            "error": {"code": "user_message_validation_failed", "message": "Invalid parameters"},
+            "param_errors": {"type": "Invalid discriminator value"},
+        }
+    )
+    await until(lambda: reply.done() and bool(errors), "validation settles reply and error")
+    assert reply.exception() is not None
+    assert not errors[-1].recoverable
+    error = errors[-1].error
+    assert isinstance(error, APIError)
+    assert error.kind == "invalid_request"
+    assert error.detail is not None
+    assert json.loads(error.detail)["error"]["code"] == "user_message_validation_failed"
+
+
+async def test_reply_timeout_and_old_callbacks_do_not_settle_the_successor(
+    conversation: tuple[_Peer, RealtimeSession, Wire],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.plugins.reply_timers import capture_reply_timers
+
+    peer, session, _ = conversation
+    timers = capture_reply_timers(monkeypatch, 10.0)
+    first = session.generate_reply()
+    await peer.next("generate_reply")
+    assert len(timers) == 1
+    timers[0].fire()
+    await until(first.done, "the first reply times out")
+    with pytest.raises(llm.RealtimeError, match="timed out"):
+        first.result()
+    second = session.generate_reply()
+    await peer.next("generate_reply")
+    assert len(timers) == 2
+    timers[0].fire(stale=True)
+    assert not second.done()
+    await peer.send({"type": "assistant_started_speaking"})
+    await until(second.done, "the next reply is correlated")
+    generation = second.result()
+    assert generation.user_initiated
+    timers[1].fire(stale=True)
+    assert second.result() is generation
+    await peer.send({"type": "assistant_finished_speaking"})

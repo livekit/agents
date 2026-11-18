@@ -1,5 +1,6 @@
 pub mod dialect;
 pub mod host;
+pub(crate) mod ids;
 pub mod machine;
 pub mod openai;
 pub mod protocol;

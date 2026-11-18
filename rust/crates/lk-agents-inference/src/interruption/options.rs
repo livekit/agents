@@ -1,4 +1,5 @@
-use thiserror::Error;
+use lk_agents_abi::errors::Invalid;
+use lk_agents_abi::types::connect::duration_from_seconds;
 
 /// The gateway's fixed input rate (`inference/interruption.py:50`).
 pub const SAMPLE_RATE: u32 = 16_000;
@@ -28,20 +29,8 @@ pub fn min_frames_for(min_interruption_duration: f64) -> u32 {
     if frames.is_nan() { 0 } else { frames.clamp(0.0, u32::MAX as f64) as u32 }
 }
 
-/// What `AdaptiveInterruptionDetector.__init__` raises.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum OptionsError {
-    #[error("max_audio_duration must be less than or equal to 3.0 seconds")]
-    MaxAudioDurationTooLarge,
-    #[error(
-        "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
-    )]
-    MissingApiKey,
-    #[error(
-        "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
-    )]
-    MissingApiSecret,
-}
+/// Invalid detector construction parameters.
+pub type OptionsError = Invalid;
 
 /// `InterruptionOptions` (`inference/interruption.py:68`). `threshold`'s `NotGivenOr` collapses to
 /// `Option` safely: `is_given` is the only test applied to it.
@@ -77,13 +66,28 @@ impl InterruptionOptions {
     ) -> Result<Self, OptionsError> {
         // Ordered as `__init__`: the duration check runs before the credentials.
         if max_audio_duration > MAX_AUDIO_DURATION {
-            return Err(OptionsError::MaxAudioDurationTooLarge);
+            return Err(Invalid(
+                "max_audio_duration must be less than or equal to 3.0 seconds".into(),
+            ));
+        }
+        for (field, value) in [
+            ("min_interruption_duration", min_interruption_duration),
+            ("max_audio_duration", max_audio_duration),
+            ("audio_prefix_duration", audio_prefix_duration),
+            ("detection_interval", detection_interval),
+            ("inference_timeout", inference_timeout),
+        ] {
+            if duration_from_seconds(value).is_none() {
+                return Err(Invalid(format!(
+                    "{field} must be a finite, non-negative duration within 100 years"
+                )));
+            }
         }
         if api_key.is_empty() {
-            return Err(OptionsError::MissingApiKey);
+            return Err(Invalid("api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable".into()));
         }
         if api_secret.is_empty() {
-            return Err(OptionsError::MissingApiSecret);
+            return Err(Invalid("api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable".into()));
         }
         Ok(InterruptionOptions {
             sample_rate: SAMPLE_RATE,
@@ -154,15 +158,52 @@ mod tests {
     // Catches: accepting an empty resolved credential; the two messages name different env vars.
     #[test]
     fn missing_credentials_name_the_right_variable() {
-        assert_eq!(opts(MAX_AUDIO_DURATION, "", ""), Err(OptionsError::MissingApiKey));
-        assert_eq!(opts(MAX_AUDIO_DURATION, "k", ""), Err(OptionsError::MissingApiSecret));
+        assert_eq!(opts(MAX_AUDIO_DURATION, "", ""), Err(Invalid("api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable".into())));
+        assert_eq!(opts(MAX_AUDIO_DURATION, "k", ""), Err(Invalid("api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable".into())));
         assert!(opts(MAX_AUDIO_DURATION, "k", "s").is_ok());
     }
 
     // Catches: the duration guard drifting to `>=`, or running after the credentials.
     #[test]
     fn max_audio_duration_rejects_above_three_seconds_before_looking_at_credentials() {
-        assert_eq!(opts(3.001, "", ""), Err(OptionsError::MaxAudioDurationTooLarge));
+        assert_eq!(
+            opts(3.001, "", ""),
+            Err(Invalid("max_audio_duration must be less than or equal to 3.0 seconds".into()))
+        );
         assert!(opts(3.0, "k", "s").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod invalid_duration_regressions {
+    use super::*;
+
+    #[test]
+    fn invalid_detector_durations_are_refused_before_a_stream_can_panic() {
+        for field in 0..5 {
+            for invalid in [f64::NAN, f64::INFINITY, -1.0, f64::MAX] {
+                let mut values = [
+                    MIN_INTERRUPTION_DURATION,
+                    MAX_AUDIO_DURATION,
+                    AUDIO_PREFIX_DURATION,
+                    DETECTION_INTERVAL,
+                    REMOTE_INFERENCE_TIMEOUT,
+                ];
+                values[field] = invalid;
+                let [minimum, maximum, prefix, interval, timeout] = values;
+                let options = InterruptionOptions::new(
+                    None,
+                    minimum,
+                    maximum,
+                    prefix,
+                    interval,
+                    timeout,
+                    "https://gateway".into(),
+                    "key".into(),
+                    "secret".into(),
+                );
+                assert!(options.is_err(), "duration {field} accepted {invalid}");
+            }
+        }
     }
 }

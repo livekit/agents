@@ -6,18 +6,20 @@ use crate::{
     record::{RecorderCall, Recording, Sink},
 };
 
-// The recorder fake writes the session's recording with the real timeline and checks each
-// flush's newly written agent channel against what the sink reported played.
+// The recorder fake writes the real timeline as PCM. Room-only runs compare identity, timing
+// and silence against the simulated source's own audible PCM, independently of recorder
+// callbacks. Other outputs retain the callback-based hole and late-placement checks.
 
 pub struct RecordingIsWhatPlayed;
 
 impl Rule for RecordingIsWhatPlayed {
     const CONTRACT: Contract = Contract {
         id: "recording_is_what_played",
-        guarantee: "The session recording holds the agent's audio wherever the speaker reported it \
-                    played, and no played audio reaches the recording after its place was written.",
+        guarantee: "The recording matches the room speaker's audible PCM, including silence and \
+                    interrupted tails; other outputs retain every reported played stretch, and \
+                    no played audio arrives after its place was written.",
         examples: &[checked],
-        counterexamples: &[a_hole, dropped_late],
+        counterexamples: &[a_hole, dropped_late, unplayed_audio],
         probe: Some(a_recorded_reply),
     };
 
@@ -38,6 +40,11 @@ impl Rule for RecordingIsWhatPlayed {
                     Subject::Session,
                     false,
                     format!("{samples} played samples reached the recording late (seq {})", at.seq),
+                ),
+                RecorderCall::Mismatch { at_ms, expected, actual } => check.expect(
+                    Subject::Session,
+                    false,
+                    format!("recording differs from the room speaker at {at_ms} ms: expected {expected}, recorded {actual} (seq {})", at.seq),
                 ),
                 _ => {}
             }
@@ -60,6 +67,13 @@ fn dropped_late() -> Recording {
     Authored::new()
         .sink(Sink::Recorder(RecorderCall::Flush))
         .sink(Sink::Recorder(RecorderCall::Late { samples: 960 }))
+        .done()
+}
+
+fn unplayed_audio() -> Recording {
+    Authored::new()
+        .sink(Sink::Recorder(RecorderCall::Flush))
+        .sink(Sink::Recorder(RecorderCall::Mismatch { at_ms: 120, expected: 0, actual: 1000 }))
         .done()
 }
 

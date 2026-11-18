@@ -224,6 +224,21 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     if let Some(seed) = setup.stress {
         misbehaving_sink(&mut setup, &mut Rng::with_seed(seed ^ 0x7369_6e6b));
     }
+    // ASR is a separate provider job: its final may trail the reply or a later user's final.
+    // Draw after the existing switches so the rest of each seed's setup remains reproducible.
+    if let Some(realtime) = setup.realtime.as_mut().filter(|r| !r.duplex) {
+        match rng.u8(0..4) {
+            0 => {
+                realtime.delays.transcription = Some(20_000);
+                realtime.delays.transcription_partial = Some(100);
+            }
+            1 => {
+                realtime.delays.first_transcription = Some(25_000);
+                realtime.delays.transcription = Some(100);
+            }
+            _ => {}
+        }
+    }
     setup
 }
 

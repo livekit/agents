@@ -19,6 +19,8 @@ lk-agents-media = { path = "../lk-agents-media" }
 # Ephemeral transport and worker operation identifiers.
 rand = "0.9"
 livekit-token.workspace = true
+# Preserve verified token claims when refreshing, including future server restrictions.
+jsonwebtoken = { version = "10", default-features = false }
 # RoomService, SIP and connector calls the framework makes in a job's room (`room_service`).
 livekit-api.workspace = true
 livekit-protocol.workspace = true

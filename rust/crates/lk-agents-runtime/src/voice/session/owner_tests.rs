@@ -15,6 +15,28 @@ fn owner() -> SessionOwner {
     )
 }
 
+#[tokio::test]
+async fn report_timestamp_uses_the_sessions_audio_clock() {
+    let owner = owner();
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let room = crate::room_io::FixedRoom::new(
+        None,
+        super::super::Timebase::from_virtual(clock.clone()),
+        None,
+    );
+    let session = Arc::new(super::super::tests::unobserved(room, None));
+    let session_time = session.time.clone();
+    assert!(owner.0.session.set(session).is_ok());
+    clock.advance(std::time::Duration::from_secs(7));
+    let report = owner.report(Default::default(), SessionLegs::none(), Vec::new(), Vec::new());
+    let expected = lk_agents_abi::unix_secs(session_time.wall());
+    assert!(
+        (report.timestamp - expected).abs() < 1e-6,
+        "report {} and audio clock {expected} diverged",
+        report.timestamp
+    );
+}
+
 #[derive(Default)]
 struct Recorder {
     finishing: Notify,

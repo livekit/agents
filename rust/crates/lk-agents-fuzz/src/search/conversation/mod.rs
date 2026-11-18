@@ -1000,6 +1000,7 @@ impl Talk {
                         RtEvent::ServerError,
                         RtEvent::ResponseFailed,
                         RtEvent::TranscriptionFailed,
+                        RtEvent::OldestTranscriptionFailed,
                         RtEvent::SecondGeneration,
                     ]);
                     rows.push(Input::RealtimeEvent { socket: socket_ref, event });

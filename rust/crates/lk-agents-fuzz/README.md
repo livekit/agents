@@ -124,7 +124,7 @@ do not duplicate those rules in a generator or fake.
 | [Tools/hooks](src/fakes/tools.rs) | Actual call identity, arguments, host outcomes, hooks and validation fixtures | Bodies wait on case-controlled replies; production owns deadlines/approval. No Python context or external side effects |
 | [Nodes](src/fakes/nodes.rs) | Records active agent/node opening and forwards to controlled providers | Exercises override plumbing and transcript forwarding, not Python execution |
 | [Output/input](src/fakes/output.rs) | Records per-instance text/audio, segment receipts, microphone and recorder activity | Segment identity distinguishes replacement; case controls ordinary playback receipts. No device or real video capture |
-| [Realtime](src/fakes/realtime/mod.rs) | Controlled server events, requests, conversation items, generation and connection faults | [server.rs](src/fakes/realtime/server.rs) owns paced provider behavior; production owns session policy. No native transport/retry implementation |
+| [Realtime](src/fakes/realtime/mod.rs) | Production inference `RealtimeMachine` handles commands, response correlation, cancellation, transcripts, history acknowledgements and reconnect replay against typed server events | [server.rs](src/fakes/realtime/server.rs) owns paced provider behavior, applied writes with delayed acknowledgements, request refusals and post-cancel output. The adapter executes typed effects and virtual deadlines; no WebSocket, serialization or native transport/retry implementation |
 | [Room](src/fakes/room/mod.rs) | In-memory RTC capabilities, participants, publications, streams and faults; records where each SDK object binds to the host loop | Injected clock paces audio; production room executors own lifecycle. No SDK network behavior |
 | [Avatar](src/fakes/avatar.rs) | Tagged frames/audio, buffer clear and room relay over real avatar runner wiring | Injected frame clock, generation latency and queue pressure; no model or SDK AVSynchronizer |
 | [Console](src/fakes/console.rs) | Fake CLI protocol peer over in-memory bytes, paced speaker receipts | Real console transport/parser, injected timing; no OS socket or speaker |
@@ -132,6 +132,43 @@ do not duplicate those rules in a generator or fake.
 
 The LLM, TTS, STT and realtime fakes draw their delays from the measured deciles in
 [calibration.rs](src/calibration.rs); keep the provider and model each set was measured on.
+
+## Realtime transcription and failure ordering
+
+Input ASR runs independently of response generation. The fake schedules partials and finals
+by the provider's item ID; it does not wait for a transcript before answering. In addition to
+measured delays and seeded stalls, `RealtimeDelays` can hold a final for 20–30 seconds, finish
+a later turn first, and deliver partial text long before its final:
+
+| Control | What it exercises |
+| --- | --- |
+| `transcription`, `first_transcription`, `transcription_partial` | Late finals, reversed turn completions, and partial/final separation |
+| `RtEvent::TranscriptionFailed`, `OldestTranscriptionFailed` | Failure before any text, after partial text, or in an older job after a newer turn completed |
+| `ResponseFailed`, `ServerError`, `FatalError` | Response failure and recoverable or terminal provider errors |
+| `Disconnected`, `Reconnected` | Lost connection, partial settlement and replay into a fresh server |
+| `context_ack` | Applied conversation edits whose acknowledgements arrive later or are lost with the connection |
+| `StorageSetup::lose_commit_answer_at` | A history commit applied once with its first answer lost; the real storage resend must recover it |
+| `StorageSetup::outage` | A refused checkpoint must produce an explicit storage-error close |
+
+The transcription regressions read the real SQLite partition back after close. They assert
+stable user item identity, conversation order despite completion order, absence of duplicate
+local-recognition rows, and preservation of received partials when ASR fails or reconnects.
+A failed ASR job that supplied no words retains its empty model placeholder without emitting
+an invented human transcript. Provider-compatible machine tests also exercise xAI cumulative
+corrections and revisable completion envelopes across failure, reconnect and close.
+
+These orderings follow the [OpenAI server-event contract](https://developers.openai.com/api/reference/resources/realtime/server-events),
+[OpenAI transcription ordering guidance](https://developers.openai.com/api/docs/guides/realtime-transcription),
+[xAI voice-event contract](https://docs.x.ai/developers/rest-api-reference/inference/voice), and
+[Azure Voice Live event contract](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live-api-reference-2026-04-10).
+OpenAI explicitly permits input ASR to finish after response events and different turns' finals
+to finish out of order. xAI cumulative updates can revise earlier words, so they replace rather
+than append to the prior partial.
+
+Two bounded synthetic-audio probes on 2026-11-17, using `gpt-realtime-mini` with
+`gpt-4o-mini-transcribe` and `whisper-1`, both observed the assistant's `response.done` before
+the user's transcription completion. Those samples confirm the ordering case; they do not
+replace the existing measured latency distribution or define a maximum ASR delay.
 
 ## Follow execution and observations
 

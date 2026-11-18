@@ -156,22 +156,18 @@ impl IdGen for SeqIds {
     }
 }
 
-const MAX_CALL_ID_LEN: usize = 32;
+#[cfg(test)]
+const MAX_CALL_ID_LEN: usize = crate::realtime::ids::MAX_ID_LEN;
 
 /// `_shorten_call_id`: OpenAI caps `call_id` at 32 characters. FNV-1a as 32 hex characters, not
 /// the reference's SHA-256 prefix; only determinism matters, since both ends of a pair go
 /// through this function.
 pub fn shorten_call_id(call_id: &str) -> String {
-    if call_id.len() <= MAX_CALL_ID_LEN {
-        return call_id.to_owned();
+    if crate::realtime::ids::valid(call_id) {
+        call_id.to_owned()
+    } else {
+        crate::realtime::ids::fingerprint(call_id)
     }
-    let mut a: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut b: u64 = 0x9e37_79b9_7f4a_7c15;
-    for (i, byte) in call_id.bytes().enumerate() {
-        a = (a ^ byte as u64).wrapping_mul(0x100_0000_01b3);
-        b = (b ^ ((byte as u64) << (i % 8))).wrapping_mul(0x100_0000_01b3);
-    }
-    format!("{a:016x}{b:016x}")
 }
 
 const PCM_SAMPLE_BYTES: usize = std::mem::size_of::<i16>();
@@ -189,3 +185,6 @@ pub fn audio_frame(pcm: Vec<u8>) -> lk_agents_abi::AudioFrame {
 #[cfg(test)]
 #[path = "wire_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod provider_contract_tests;

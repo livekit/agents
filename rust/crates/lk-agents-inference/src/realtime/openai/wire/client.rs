@@ -389,13 +389,13 @@ pub fn to_wire_item(item: &ChatItem, images: &dyn ImageResolver) -> Result<Item,
     Ok(match item {
         ChatItem::FunctionCall(fc) => Item::FunctionCall {
             id: fc.id.clone(),
-            call_id: shorten_call_id(&fc.call_id),
+            call_id: fc.call_id.clone(),
             name: fc.name.clone(),
             arguments: fc.arguments.clone(),
         },
         ChatItem::FunctionCallOutput(fc) => Item::FunctionCallOutput {
             id: fc.id.clone(),
-            call_id: shorten_call_id(&fc.call_id),
+            call_id: fc.call_id.clone(),
             output: fc.output.clone(),
         },
         ChatItem::Message(m) => Item::Message {

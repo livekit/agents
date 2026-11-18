@@ -9,7 +9,7 @@ import os
 import time
 from collections.abc import AsyncIterable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict, assert_never
+from typing import Literal, TypedDict
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
@@ -373,7 +373,7 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
         elif message["type"] == "call_started":
             self._report_connection_acquired(time.perf_counter() - self._connect_started)
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     # Helper function to fix TTFT issue : TTFT was showing -1.0 seconds during function calls
     def _pick_created_timestamp(self) -> float:
@@ -539,16 +539,19 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
             if not fut.done():
                 raise
 
-    def _resolve_pending(self, gen: _ResponseGeneration) -> None:
-        fut = self._pending_generation_fut
-        if fut is not None and not fut.done() and self._pending_requested:
-            fut.set_result(
-                llm.GenerationCreatedEvent(
-                    message_stream=gen.message_ch,
-                    function_stream=gen.function_ch,
-                    user_initiated=True,
-                )
-            )
+    def _generation_event(self, gen: _ResponseGeneration) -> llm.GenerationCreatedEvent:
+        pending = self._pending_generation_fut
+        requested = pending is not None and not pending.done() and self._pending_requested
+        event = llm.GenerationCreatedEvent(
+            message_stream=gen.message_ch,
+            function_stream=gen.function_ch,
+            user_initiated=requested,
+            response_id=gen.response_id,
+        )
+        if requested and pending is not None:
+            self._pending_generation_fut = None
+            pending.set_result(event)
+        return event
 
     def interrupt(self) -> None:
         if self._current_generation and not self._current_generation.done:
@@ -571,6 +574,14 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
 
     def clear_audio(self) -> None:
         logger.warning("clear audio is not supported by Ultravox.")
+
+    def _emit_socket_error(self, error: Exception, *, recoverable: bool) -> None:
+        pending = self._pending_generation_fut
+        self._pending_generation_fut = None
+        if pending is not None and not pending.done():
+            pending.set_exception(llm.RealtimeError(str(error)))
+        self._interrupt_current_generation()
+        super()._emit_socket_error(error, recoverable=recoverable)
 
     async def aclose(self) -> None:
         await self._say_tasks.aclose()
@@ -604,12 +615,9 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
                 modalities=modalities,
             )
         )
-        self.emit(
-            "generation_created",
-            llm.GenerationCreatedEvent(
-                message_stream=gen.message_ch, function_stream=gen.function_ch, user_initiated=False
-            ),
-        )
+        # One event and one stream owner: a requested generation travels through its Future,
+        # while an unsolicited generation travels through the emitted event.
+        self.emit("generation_created", self._generation_event(gen))
         return gen
 
     def _active_generation(self) -> _ResponseGeneration:
@@ -686,7 +694,6 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
             if incremental:
                 if gen.first_token_timestamp is None:
                     gen.first_token_timestamp = time.time()
-                    self._resolve_pending(gen)
                 gen.text_ch.send_nowait(incremental)
                 gen.output_text += incremental
             if final:
@@ -699,7 +706,7 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
             # the user finished speaking: TTFT counts from here
             self._active_generation()
         elif event["state"] == "speaking":
-            self._resolve_pending(self._active_generation())
+            self._active_generation()
             self.emit(
                 "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
             )

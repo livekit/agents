@@ -807,7 +807,7 @@ class SynthesizeStream(tts.WebSocketStream[_Message, _Command]):
         elif message["type"] == "error" or message["type"] == "errors":
             raise _error(message.get("data") or {})
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
 
 def _error(error_data: _ErrorData) -> APIError:

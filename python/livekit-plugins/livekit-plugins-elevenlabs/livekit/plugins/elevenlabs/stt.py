@@ -701,7 +701,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _AudioChunk]):
                 + (f" - {details}" if details else ""),
             )
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _committed(self, message: _Committed | _CommittedWithTimestamps) -> None:
         # 11labs sends every commit twice; _final_message_type picks the copy this session reads

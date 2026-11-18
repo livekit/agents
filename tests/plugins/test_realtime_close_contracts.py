@@ -208,3 +208,16 @@ async def test_a_duplex_provider_that_never_starts_fails_the_session_with_a_time
     finally:
         await session.aclose()
         await model.aclose()
+
+
+async def test_personaplex_explicitly_refuses_manual_replies_instead_of_leaving_a_waiter(
+    ws_peer: WsPeer,
+) -> None:
+    model = MODELS["nvidia"](ws_peer)
+    session = await _open(model)
+    try:
+        with pytest.raises(NotImplementedError, match="generate_reply"):
+            session.generate_reply()
+    finally:
+        await session.aclose()
+        await model.aclose()

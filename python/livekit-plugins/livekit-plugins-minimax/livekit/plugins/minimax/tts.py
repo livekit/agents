@@ -511,7 +511,7 @@ class SynthesizeStream(tts.WebSocketStream[_Message, _Command]):
                 body=message,
             )
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
 
 class ChunkedStream(tts.ChunkedStream):

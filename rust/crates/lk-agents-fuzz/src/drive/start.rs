@@ -8,7 +8,10 @@ impl Run {
     /// The probe is installed before `start()`, so the driver's first step is stamped from the
     /// same counter as everything else, keeping the recording a happens-before order.
     pub async fn start(setup: &Setup, schedule: u64, policy: Policy) -> Run {
-        let time = Timebase::of_clock(Arc::new(lk_agents_runtime::net::clock::SimClock::new()));
+        let wall_clock = Arc::new(fakes::clock::SkewClock::new(Arc::new(
+            lk_agents_runtime::net::clock::SimClock::new(),
+        )));
+        let time = Timebase::of_clock(wall_clock.clone());
         let stamps = Stamps::new(time.clone());
         let gate = (policy == Policy::TaskBridge).then(|| Arc::new(super::queue::Gate::new()));
         let tasks = Arc::new(Tasks {
@@ -171,17 +174,46 @@ impl Run {
                         return duplex as Arc<dyn Realtime>;
                     }
                     let setup = fakes::ServerSetup {
+                        provider: server.provider,
                         vad,
                         seed: server.seed,
                         connect,
                         tool_calls: server.tool_calls,
                         text_only: server.text_only,
-                        fallback: server.fallback,
+                        fallback: server.fallback && server.fallback_provider.is_none(),
                         timing: setup.timing(),
                         delays: server.delays,
                     };
-                    fakes::FakeRealtime::new(registry.clone(), setup, time.clock(), tasks.clone())
-                        as Arc<dyn Realtime>
+                    let primary = fakes::FakeRealtime::new(
+                        registry.clone(),
+                        setup.clone(),
+                        time.clock(),
+                        tasks.clone(),
+                    );
+                    let Some(provider) = server.fallback_provider else {
+                        return primary as Arc<dyn Realtime>;
+                    };
+                    let secondary = fakes::FakeRealtime::new(
+                        registry.clone(),
+                        fakes::ServerSetup { provider, ..setup },
+                        time.clock(),
+                        tasks.clone(),
+                    );
+                    use lk_agents_inference::fallback::{
+                        IgnoreEvents,
+                        realtime::{ChainModel, RealtimeFallbackModel},
+                    };
+                    Arc::new(
+                        RealtimeFallbackModel::new(
+                            vec![ChainModel::Native(primary), ChainModel::Native(secondary)],
+                            0.0,
+                            None,
+                            true,
+                            Arc::new(IgnoreEvents),
+                            time.clock(),
+                        )
+                        .expect("the test providers have matching capabilities"),
+                    ) as Arc<dyn Realtime>
                 })
                 .map(lk_agents_abi::llm::fallback::RealtimeLeg::Native),
             tts,
@@ -358,6 +390,7 @@ impl Run {
             .expect("attach the AMD");
         }
         let mut run = Run {
+            wall_clock,
             api,
             room,
             closing: None,
@@ -400,6 +433,7 @@ impl Run {
             background: None,
             avatar: None,
             avatar_sink,
+            recorders: Vec::new(),
             refs,
             legs: providers,
             setup: setup.clone(),

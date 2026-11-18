@@ -466,7 +466,7 @@ class _TurnsStream(stt.WebSocketStream[_TurnsMessage, _Close]):
             self.report(self._transcript(transcript, final=True))
             self.report(stt.SpeechEnded())
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
 
 # -- manual endpoint (/stt/websocket)
@@ -570,7 +570,7 @@ class _ManualStream(stt.WebSocketStream[_ManualMessage, str]):
         elif message["type"] == "transcript":
             self._report_transcript(message)
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _report_transcript(self, message: _Transcript) -> None:
         offset = self.start_time_offset

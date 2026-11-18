@@ -367,7 +367,7 @@ class SpeechStream(stt.WebSocketStream[_Event, bytes]):
                 if result["Alternatives"]:
                     self.report(self._transcript(result))
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _transcript(self, result: _Result) -> stt.Transcript:
         alternative = result["Alternatives"][0]

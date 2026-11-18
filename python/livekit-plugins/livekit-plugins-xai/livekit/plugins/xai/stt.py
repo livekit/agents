@@ -405,7 +405,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _AudioDone]):
         elif message["type"] == "transcript.partial":
             self._partial(message)
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _partial(self, message: _Partial) -> None:
         if not (text := message.get("text", "")):

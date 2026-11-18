@@ -32,6 +32,7 @@ impl RealtimeSession for Scripted {
             let next = self.events.lock().pop_front();
             match next {
                 Some(ev) => Some(ev),
+                None if self.closed.load(std::sync::atomic::Ordering::Acquire) => None,
                 None => std::future::pending().await,
             }
         })
@@ -521,4 +522,95 @@ async fn pre_connect_audio_reaches_the_serving_model_as_head() {
     let session = model.session(lk_agents_abi::telemetry::Cx::NONE, false, None).await.unwrap();
     session.head(lk_agents_abi::AudioFrame::new(vec![0u8; 960], 24_000, 1, 480));
     assert_eq!(*primary.sent.lock(), ["head"]);
+}
+
+#[tokio::test]
+async fn a_retired_childs_final_input_transcript_precedes_the_new_sessions_frame() {
+    let final_words = Event::InputTranscription(lk_agents_abi::llm::realtime::InputTranscription {
+        item_id: "original-user".into(),
+        transcript: "book Tuesday".into(),
+        is_final: true,
+        confidence: None,
+        turn_started_at: Some(1.0),
+    });
+    let primary = scripted(vec![
+        fatal(),
+        final_words.clone(),
+        Event::GenerationCreated(GenerationCreated {
+            response_id: "retired-late-reply".into(),
+            req_id: None,
+        }),
+    ]);
+    let backup = scripted(vec![]);
+    let chain = RealtimeFallbackModel::new(
+        vec![
+            ChainModel::Native(Arc::new(Model(primary))),
+            ChainModel::Native(Arc::new(Model(backup))),
+        ],
+        60.0,
+        None,
+        true,
+        Arc::new(crate::fallback::IgnoreEvents),
+        Arc::new(lk_agents_net::clock::RealClock::new()),
+    )
+    .unwrap();
+    let session = chain.session(lk_agents_abi::telemetry::Cx::NONE, false, None).await.unwrap();
+    assert!(matches!(session.next_event().await, Some(Event::Error(e)) if e.recoverable));
+    assert_eq!(session.next_event().await, Some(final_words));
+    assert!(matches!(session.next_event().await, Some(Event::SessionSwapped { .. })));
+    session.aclose().await;
+}
+
+#[tokio::test]
+async fn a_silently_ended_provider_uses_the_healthy_realtime_fallback() {
+    let primary = scripted(vec![]);
+    primary.closed.store(true, std::sync::atomic::Ordering::Release);
+    let backup = scripted(vec![Event::InputTranscription(
+        lk_agents_abi::llm::realtime::InputTranscription {
+            item_id: "healthy".into(),
+            transcript: "still here".into(),
+            is_final: true,
+            ..Default::default()
+        },
+    )]);
+    let model = RealtimeFallbackModel::new(
+        vec![
+            ChainModel::Native(Arc::new(Model(primary))),
+            ChainModel::Native(Arc::new(Model(backup))),
+        ],
+        10.0,
+        None,
+        false,
+        Arc::new(crate::fallback::IgnoreEvents),
+        Arc::new(lk_agents_net::clock::RealClock::default()),
+    )
+    .unwrap();
+    let session = model.session(lk_agents_abi::telemetry::Cx::NONE, false, None).await.unwrap();
+    assert!(matches!(session.next_event().await, Some(Event::Error(e)) if e.recoverable));
+    assert!(matches!(session.next_event().await, Some(Event::SessionSwapped { .. })));
+    assert!(
+        matches!(session.next_event().await, Some(Event::InputTranscription(t)) if t.item_id == "healthy")
+    );
+    assert_eq!(model.active_index(), 1);
+    session.aclose().await;
+    assert!(session.next_event().await.is_none());
+}
+
+#[tokio::test]
+async fn a_silently_ended_last_provider_reports_one_terminal_failure_then_ends() {
+    let child = scripted(vec![]);
+    child.closed.store(true, std::sync::atomic::Ordering::Release);
+    let model = RealtimeFallbackModel::new(
+        vec![ChainModel::Native(Arc::new(Model(child)))],
+        10.0,
+        None,
+        false,
+        Arc::new(crate::fallback::IgnoreEvents),
+        Arc::new(lk_agents_net::clock::RealClock::default()),
+    )
+    .unwrap();
+    let session = model.session(lk_agents_abi::telemetry::Cx::NONE, false, None).await.unwrap();
+    assert!(matches!(session.next_event().await, Some(Event::Error(e)) if !e.recoverable));
+    assert!(session.next_event().await.is_none());
+    session.aclose().await;
 }

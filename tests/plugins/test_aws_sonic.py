@@ -389,11 +389,6 @@ async def test_one_generation_per_assistant_turn_with_complete_text_and_audio(
     assert audio == pcm * 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/issues/8260 reproduces: completionStart "
-    "announces a generation before the user speaks",
-)
 async def test_completion_start_does_not_announce_a_generation_before_the_user_turn(
     session: sonic.RealtimeSession, bedrock: Bedrock
 ) -> None:
@@ -721,3 +716,203 @@ async def test_close_during_a_recycle_leaves_no_session_task_running(
 
     assert [t.get_name() for t in asyncio.all_tasks() - before if not t.done()] == []
     assert len(bedrock.duplexes) == 1
+
+
+async def test_reply_timeouts_are_bound_to_their_own_future_and_allow_the_next_turn(
+    session: sonic.RealtimeSession,
+    bedrock: Bedrock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.plugins.reply_timers import capture_reply_timers
+
+    await start(session, bedrock)
+    timers = capture_reply_timers(monkeypatch, 10.0)
+    first = session.generate_reply(instructions="first")
+    session.update_options(tool_choice="none")
+    assert not first.done(), "an unsupported option update must leave the pending reply intact"
+    timers[0].fire()
+    with pytest.raises(llm.RealtimeError, match="timed out"):
+        first.result()
+    second = session.generate_reply(instructions="second")
+    timers[0].fire(stale=True)
+    assert not second.done()
+    await bedrock.answer(
+        contentStart={
+            "contentId": "answer-2",
+            "type": "TEXT",
+            "role": "ASSISTANT",
+            "additionalModelFields": SPECULATIVE,
+        }
+    )
+    await until(second.done, "the successor receives its generation")
+    generation = second.result()
+    timers[1].fire(stale=True)
+    assert second.result() is generation
+
+
+async def test_an_unprompted_reply_waiter_is_settled_when_the_session_closes(
+    session: sonic.RealtimeSession,
+    bedrock: Bedrock,
+) -> None:
+    await start(session, bedrock)
+    pending = session.generate_reply()
+    await session.aclose()
+    assert pending.done(), "a no-instructions request must not become an orphaned Future"
+    if not pending.cancelled():
+        pending.exception()
+
+
+async def test_generation_callbacks_cannot_redirect_the_response_to_a_new_future(
+    session: sonic.RealtimeSession,
+    bedrock: Bedrock,
+) -> None:
+    await start(session, bedrock)
+    events: list[llm.GenerationCreatedEvent] = []
+    requested: list[asyncio.Future[llm.GenerationCreatedEvent]] = []
+
+    def on_generation(event: llm.GenerationCreatedEvent) -> None:
+        events.append(event)
+        if len(events) == 1:
+            requested.append(session.generate_reply(instructions="the next request"))
+
+    session.on("generation_created", on_generation)
+    first = session.generate_reply(instructions="first")
+    await bedrock.answer(
+        contentStart={
+            "contentId": "first-answer",
+            "type": "TEXT",
+            "role": "ASSISTANT",
+            "additionalModelFields": SPECULATIVE,
+        }
+    )
+    assert first.done() and not first.cancelled()
+    assert first.result() is events[0]
+    assert first.result().user_initiated
+    [second] = requested
+    assert not second.done(), "the callback's request must not receive the response it observed"
+    await bedrock.answer(contentEnd={"type": "AUDIO", "stopReason": "END_TURN"})
+    await bedrock.answer(contentStart={"contentId": "next-user", "type": "TEXT", "role": "USER"})
+    await bedrock.answer(textOutput={"contentId": "next-user", "role": "USER", "content": "next"})
+    await bedrock.answer(
+        contentStart={
+            "contentId": "second-answer",
+            "type": "TEXT",
+            "role": "ASSISTANT",
+            "additionalModelFields": SPECULATIVE,
+        }
+    )
+    await until(second.done, "the new request receives its own response")
+    assert second.result().response_id != first.result().response_id
+
+
+async def test_voice_reply_handles_keep_their_own_nova_responses(bedrock: Bedrock) -> None:
+    from livekit.agents import Agent, VoiceSession
+    from tests.fakes import FakeAudioOutput
+
+    model = sonic.RealtimeModel(region="us-east-1")
+    try:
+        async with VoiceSession(llm=model, vad=None) as session:
+            session.output.audio = FakeAudioOutput()
+            await session.start(Agent(instructions="Be brief."))
+            duplex = await bedrock.stream(0)
+            handles = []
+            for index in range(2):
+                handle = session.generate_reply(instructions=f"request {index}")
+                await duplex.wait_until(
+                    lambda sent, required=index + 2: sum("textInput" in e for e in sent) >= required
+                )
+                await bedrock.answer(
+                    contentStart={
+                        "contentId": f"a{index}",
+                        "type": "TEXT",
+                        "role": "ASSISTANT",
+                        "additionalModelFields": SPECULATIVE,
+                    }
+                )
+                await bedrock.answer(
+                    textOutput={
+                        "contentId": f"a{index}",
+                        "role": "ASSISTANT",
+                        "content": f"reply {index}",
+                    }
+                )
+                await bedrock.answer(contentStart={"contentId": f"audio{index}", "type": "AUDIO"})
+                await bedrock.answer(
+                    audioOutput={
+                        "contentId": f"audio{index}",
+                        "content": base64.b64encode(b"\x01\x00" * 240).decode(),
+                    }
+                )
+                await bedrock.answer(contentEnd={"type": "AUDIO", "stopReason": "END_TURN"})
+                await handle
+                assert handle.exception() is None
+                assert len(handle.chat_items) == 1
+                assert handle.chat_items[0].text_content == f"reply {index}"
+                handles.append(handle)
+            assert handles[0].chat_items[0].id != handles[1].chat_items[0].id
+    finally:
+        await model.aclose()
+
+
+@pytest.mark.parametrize("started", [False, True])
+async def test_terminal_stream_failure_settles_the_reply_or_its_generation(
+    session: sonic.RealtimeSession,
+    bedrock: Bedrock,
+    started: bool,
+) -> None:
+    from tests.plugins.conftest import LivePeer
+
+    duplex = await start(session, bedrock)
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    pending = session.generate_reply()
+    drained: asyncio.Task[tuple[str, int, list[str]]] | None = None
+    if started:
+        await bedrock.answer(
+            contentStart={
+                "contentId": "partial",
+                "type": "TEXT",
+                "role": "ASSISTANT",
+                "additionalModelFields": SPECULATIVE,
+            }
+        )
+        await bedrock.answer(
+            textOutput={"contentId": "partial", "role": "ASSISTANT", "content": "partial"}
+        )
+        drained = asyncio.create_task(LivePeer.drain(await pending))
+    duplex.inbox.put_nowait(ValidationException("Invalid request configuration"))
+    try:
+        await until(lambda: errors, "the terminal stream error is reported")
+        if drained is None:
+            assert pending.done(), "the dead stream must settle its response waiter"
+            with pytest.raises(llm.RealtimeError):
+                pending.result()
+        else:
+            await until(drained.done, "the dead stream closes its generation channels")
+            assert await drained == ("partial", 0, [])
+        assert not errors[-1].recoverable
+    finally:
+        if drained is not None:
+            drained.cancel()
+            await asyncio.gather(drained, return_exceptions=True)
+
+
+async def test_cancelling_a_waiter_does_not_return_that_cancelled_future_for_the_next_request(
+    session: sonic.RealtimeSession,
+    bedrock: Bedrock,
+) -> None:
+    await start(session, bedrock)
+    first = session.generate_reply()
+    first.cancel()
+    # No loop yield: the old Future's done callback has not cleared its slot yet.
+    second = session.generate_reply()
+    assert second is not first and not second.done()
+    await bedrock.answer(
+        contentStart={
+            "contentId": "next",
+            "type": "TEXT",
+            "role": "ASSISTANT",
+            "additionalModelFields": SPECULATIVE,
+        }
+    )
+    assert (await second).user_initiated

@@ -1097,3 +1097,68 @@ async def test_a_control_message_sent_while_encoding_goes_ahead_of_the_item(
     assert await _say(model.stream(conn_options=NO_RETRY), "one fish.")
     assert texts[-2:] == ["flush", "<end>"]
     await model.mux.aclose()
+
+
+@pytest.mark.parametrize("failure", [KeyError("missing turn"), AssertionError("out of order")])
+async def test_handler_failures_end_the_stream_as_protocol_errors_with_request_identity(
+    peer: Callable[[Handler], Awaitable[str]],
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+) -> None:
+    def broken_handler(self: LoopbackSttStream, message: object) -> None:
+        self._websocket.request_id = "previous-turn"
+        self._websocket.name_request("broken-turn")
+        raise failure
+
+    async def provider(ws: web.WebSocketResponse, request: web.Request) -> None:
+        await ws.send_json({"type": "transcript", "text": "hello", "final": True})
+        await ws.receive()
+
+    monkeypatch.setattr(LoopbackSttStream, "on_message", broken_handler)
+    stream = LoopbackStt(await peer(provider)).stream(conn_options=NO_RETRY)
+    with pytest.raises(APIError) as failed:
+        await events(stream)
+    assert (failed.value.kind, failed.value.retryable) == ("protocol", False)
+    assert failed.value.request_id == "broken-turn"
+    assert type(failure).__name__ in (failed.value.detail or "")
+
+
+async def test_custom_decoder_unknown_messages_do_not_prevent_the_next_transcript(
+    peer: Callable[[Handler], Awaitable[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = LoopbackSttStream.on_message
+
+    def evolved_handler(self: LoopbackSttStream, message: Any) -> None:
+        if message["type"] == "future_event":
+            self._skip_unknown_message(message)
+        else:
+            original(self, message)
+
+    async def provider(ws: web.WebSocketResponse, request: web.Request) -> None:
+        async for kind in _commands(ws, []):
+            if kind == "close":
+                await ws.send_json({"type": "future_event", "payload": {"new": 1}})
+                await ws.send_json({"type": "transcript", "text": "hello", "final": True})
+                await ws.send_json({"type": "finished"})
+
+    monkeypatch.setattr(LoopbackSttStream, "decode", lambda self, frame: json.loads(frame))
+    monkeypatch.setattr(LoopbackSttStream, "on_message", evolved_handler)
+    stream = LoopbackStt(await peer(provider)).stream(conn_options=NO_RETRY)
+    stream.push_frame(audio(50))
+    stream.end_input()
+    got = await events(stream)
+    assert [e.alternatives[0].text for e in got if e.alternatives] == ["hello"]
+
+
+async def test_multiplexer_routing_failure_is_a_protocol_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mux = LoopbackMux("ws://unused")
+
+    def broken_route(message: object) -> str:
+        raise KeyError("missing context")
+
+    monkeypatch.setattr(mux, "route", broken_route)
+    with pytest.raises(APIError) as failed:
+        await mux._core_route('{"type": "done", "context_id": "lost"}')
+    assert (failed.value.kind, failed.value.retryable) == ("protocol", False)

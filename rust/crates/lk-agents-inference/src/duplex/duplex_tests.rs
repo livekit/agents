@@ -705,3 +705,47 @@ fn duplex_output_eof_flushes_retained_future_text_without_waiting_for_audio() {
         assert_eq!(f.seg.waiting_fragments(), 0);
     }
 }
+
+#[test]
+fn extreme_provider_span_offsets_do_not_overflow_or_lose_the_transcript() {
+    use std::time::SystemTime;
+    for audio_start in [i64::MIN, 0, i64::MAX] {
+        for text_start in [i64::MIN, 0, i64::MAX] {
+            let mut seg = Segmenter::new("fake", super::AUDIO_TIMEOUT, "item_".into());
+            let mut events = seg
+                .on_transcript(
+                    Ts::ZERO,
+                    SystemTime::UNIX_EPOCH,
+                    Fragment {
+                        text: "hello".into(),
+                        start_ms: Some(text_start),
+                        end_ms: Some(i64::MAX),
+                    },
+                )
+                .events;
+            events.extend(
+                seg.on_audio(
+                    Ts::ZERO,
+                    SystemTime::UNIX_EPOCH,
+                    frame(0.3),
+                    Some(audio_start),
+                    Ok(true),
+                )
+                .events,
+            );
+            events.extend(
+                seg.on_audio(Ts::ZERO, SystemTime::UNIX_EPOCH, frame(0.0), None, Ok(false)).events,
+            );
+            events.extend(seg.on_output_ended(Ts::ZERO, SystemTime::UNIX_EPOCH, None).events);
+            let text: String = events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::TextDelta(delta) => Some(delta.delta.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(text, "hello");
+            assert_eq!(seg.waiting_fragments(), 0);
+        }
+    }
+}

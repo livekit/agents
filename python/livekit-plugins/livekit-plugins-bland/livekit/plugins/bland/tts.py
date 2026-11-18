@@ -449,7 +449,7 @@ class SynthesizeStream(tts.WebSocketStream[_Message, _Command]):
         elif message["type"] == "ready" or message["type"] == "utterance_start":
             pass
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
 
 def _controls(opts: _TTSOptions) -> _Controls:

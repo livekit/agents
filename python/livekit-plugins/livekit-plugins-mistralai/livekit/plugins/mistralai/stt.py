@@ -430,7 +430,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
             self._report_usage(message.get("usage") or _Usage())
             self.report(self._final(message))
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _final(self, message: _Done) -> stt.Transcript:
         offset = self.start_time_offset

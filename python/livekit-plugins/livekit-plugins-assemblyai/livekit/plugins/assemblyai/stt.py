@@ -791,7 +791,7 @@ class SpeechStream(
         elif message["type"] == "Turn":
             self._turn(message)
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _turn(self, message: _Turn) -> None:
         language = LanguageCode(message.get("language_code", "en"))

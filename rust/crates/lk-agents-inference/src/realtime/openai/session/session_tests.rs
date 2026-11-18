@@ -77,7 +77,7 @@ async fn opening_a_session_connects_and_configures_it() {
     let (url, headers) = ws.last_connect().expect("connected");
     assert_eq!(url, "wss://api.openai.com/v1/realtime?model=gpt-realtime");
     assert_eq!(headers.get("Authorization"), Some("Bearer sk-test"));
-    assert_eq!(headers.get("User-Agent"), Some("LiveKit Agents"));
+    assert_eq!(headers.get("User-Agent"), Some(lk_agents_net::job_identity::user_agent().as_str()));
 
     session.aclose().await;
 }
@@ -348,6 +348,10 @@ async fn azure_gets_its_url_and_header_for_every_credential() {
         let (url, headers) = ws.last_connect().unwrap();
         assert_eq!(url, "wss://res.openai.azure.com/openai/v1/realtime?model=gpt-rt");
         assert_eq!(headers.get("api-key"), api_key);
+        assert_eq!(
+            headers.get("User-Agent"),
+            Some(lk_agents_net::job_identity::user_agent().as_str())
+        );
         let bearer = entra_token.map(|t| format!("Bearer {t}"));
         assert_eq!(headers.get("Authorization"), bearer.as_deref());
 

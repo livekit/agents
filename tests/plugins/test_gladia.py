@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from typing import Any, Literal
 
@@ -22,6 +23,54 @@ from livekit.agents import (
 from livekit.plugins.gladia import STT
 from tests.fakes import until
 from tests.plugins.conftest import Close, WsPeer
+
+
+async def test_energy_filter_preserves_silence_duration_on_the_provider_timeline(
+    ws_peer: WsPeer,
+) -> None:
+    """Filtering must not compress timestamps or finalize a live stream during silence."""
+
+    async def initialize(request: web.Request) -> web.StreamResponse:
+        return web.json_response({"id": "session", "url": ws_peer.ws_url + "/session"})
+
+    ws_peer.http = initialize
+    ws_peer.reply = lambda _, message: (
+        [{"type": "post_final_transcript"}] if "stop_recording" in str(message) else []
+    )
+    model = STT(api_key="key", base_url=ws_peer.url + "/v2/live", energy_filter=True)
+    silence = rtc.AudioFrame(b"\0\0" * 1600, 16000, 1, 1600)
+    speech = rtc.AudioFrame(b"\0\x20" * 1600, 16000, 1, 1600)
+
+    try:
+        async with model.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+
+            async def consume() -> None:
+                async for _ in stream:
+                    pass
+
+            async with asyncio.TaskGroup() as tasks:
+                reader = tasks.create_task(consume())
+                # Wait for each wire receipt so this tests filtering, not ingress overload.
+                for index, frame in enumerate([silence] * 20 + [speech]):
+                    stream.push_frame(frame)
+                    connection = await ws_peer.connected(1)
+                    await until(
+                        lambda connection=connection, index=index: len(connection.texts) > index,
+                        "the next provider frame",
+                    )
+                    assert json.loads(connection.texts[index])["type"] == "audio_chunk"
+                stream.end_input()
+                await until(reader.done, "Gladia's finalization after all input audio")
+                reader.result()
+    finally:
+        await model.aclose()
+
+    messages = [json.loads(m) for connection in ws_peer.connections for m in connection.texts]
+    audio = b"".join(
+        base64.b64decode(m["data"]["chunk"]) for m in messages if m["type"] == "audio_chunk"
+    )
+    assert audio == bytes(silence.data) * 20 + bytes(speech.data)
+    assert [m["type"] for m in messages].count("stop_recording") == 1
 
 
 async def test_startup_timeout_reaches_consumer() -> None:

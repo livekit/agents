@@ -60,6 +60,28 @@ fn run() -> AgentRun {
     AgentRun { operation: GenAiOperation::InvokeAgent, agent_name: "front".into() }
 }
 
+#[test]
+fn scoped_work_keeps_its_owners_clock_and_the_process_identity_and_capture_policy() {
+    let process_clock = Arc::new(VirtualClock::new());
+    let session_clock = Arc::new(VirtualClock::new());
+    let sink = Arc::new(Collect::default());
+    let tracer = Tracer::new(sink.clone(), process_clock.clone(), 7);
+    let parent = start(&tracer.root(), run());
+    let cx = with_clock(parent.cx(), session_clock.clone());
+    process_clock.advance(std::time::Duration::from_secs(10));
+    session_clock.advance(std::time::Duration::from_secs(1));
+    tracer.set_capture_content(false);
+    assert!(!cx.capture_content(), "the shared process capture policy remains live");
+    drop(start(&cx, JudgeEvaluation { name: "clocked".into() }));
+    drop(start(parent.cx(), JudgeEvaluation { name: "process".into() }));
+    let spans = sink.spans();
+    let [clocked, process] = spans.as_slice() else { panic!("{spans:?}") };
+    assert_eq!(clocked.parent, parent.cx().span().map(|s| s.span_id));
+    assert_eq!(clocked.context.trace_id, process.context.trace_id);
+    assert_ne!(clocked.context.span_id, process.context.span_id);
+    assert_eq!(process.start_unix_nanos - clocked.start_unix_nanos, 9_000_000_000);
+}
+
 // Catches: a dropped span never recorded, or recorded without `lk.cancelled`, or a child not
 // parented under the span whose context opened it.
 #[test]

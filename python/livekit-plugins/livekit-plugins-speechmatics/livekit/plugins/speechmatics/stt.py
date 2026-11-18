@@ -722,7 +722,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
             if transcript.final and self._turn_detection_mode == TurnDetectionMode.EXTERNAL:
                 self.report(stt.SpeechEnded())
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _transcript(self, message: _AddSegment | _AddPartialSegment) -> stt.Transcript:
         segment = message.get("segment") or _SegmentBody()

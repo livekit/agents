@@ -11,7 +11,7 @@ import time
 import weakref
 from collections.abc import AsyncIterable, Mapping
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal, NotRequired, Required, TypedDict, assert_never
+from typing import Annotated, Any, Literal, NotRequired, Required, TypedDict
 
 from pydantic import Field, JsonValue
 
@@ -514,6 +514,7 @@ class _ToolCallInterrupted(TypedDict):
 
 class _Detail(TypedDict):
     message: str
+    code: NotRequired[str]
 
 
 class _Error(TypedDict):
@@ -684,7 +685,7 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
                 kind="invalid_request",
             )
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _update_configured(self) -> None:
         if is_given(self._opts.instructions) and self._tools_set:
@@ -1182,6 +1183,16 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, ClientMessage]
             "truncate is not supported by the Phonic realtime model. "
             "User interruptions are automatically handled by Phonic."
         )
+
+    def _emit_socket_error(self, error: Exception, *, recoverable: bool) -> None:
+        # A reply sent on the failed connection is not replayed on reconnect. Settle it now,
+        # rather than leaving the caller waiting for a turn that can no longer arrive.
+        pending = self._pending_reply
+        self._pending_reply = None
+        if pending is not None and not pending.done():
+            pending.set_exception(llm.RealtimeError(str(error)))
+        self._close_current_generation(interrupted=True)
+        super()._emit_socket_error(error, recoverable=recoverable)
 
     async def aclose(self) -> None:
         await self._say_tasks.aclose()

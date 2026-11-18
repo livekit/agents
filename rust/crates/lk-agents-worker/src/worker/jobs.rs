@@ -3,7 +3,8 @@ use lk_agents_abi::ATTRIBUTE_AGENT_NAME;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use lk_agents_abi::{OwnedTask, SpawnerExt, Ts};
+use super::decision::Decision;
+use lk_agents_abi::Ts;
 
 use super::{Completion, Outbox, Worker, WorkerNotification};
 use crate::config::{ASSIGNMENT_TIMEOUT, UPDATE_LOAD_INTERVAL, UPDATE_STATUS_INTERVAL};
@@ -39,17 +40,20 @@ pub(super) enum ConnState {
     Registered,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub(super) enum PendingState {
     /// Waiting for a fresh load sample before checking capacity.
     AwaitingLoad,
-    AwaitingUser,
+    AwaitingUser(Decision),
     /// Accepted; waiting for `JobAssignment` under the 7.5 s timer.
-    AwaitingAssignment(AcceptArguments),
-    Launching(Box<RunningJobInfo>),
+    AwaitingAssignment {
+        args: AcceptArguments,
+        accepted_at: Ts,
+    },
+    Launching(PendingLaunch),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub(super) struct Pending {
     pub(super) slot: Slot,
     pub(super) generation: u64,
@@ -57,10 +61,90 @@ pub(super) struct Pending {
     pub(super) job: Job,
     pub(super) resuming: bool,
     pub(super) state: PendingState,
-    pub(super) early_status: Option<JobStatus>,
-    /// When the request arrived, and when it was accepted.
+    /// When the request arrived. Acceptance time belongs to the accepted state.
     pub(super) received: Ts,
-    pub(super) accepted: Ts,
+}
+
+/// Status may precede the launch receipt; only a launch in flight can retain it.
+pub(super) struct PendingLaunch {
+    info: Box<RunningJobInfo>,
+    early_status: Option<JobStatus>,
+    result: lk_agents_abi::BoxFuture<'static, Result<JobId, HostError>>,
+}
+
+impl std::fmt::Debug for PendingLaunch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingLaunch")
+            .field("job_id", &self.info.job.id)
+            .field("early_status", &self.early_status)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PendingLaunch {
+    fn record_status(&mut self, status: JobStatus) {
+        // Completion is final even when child status races the launch receipt.
+        if !matches!(self.early_status, Some(JobStatus::JsSuccess | JobStatus::JsFailed)) {
+            self.early_status = Some(status);
+        }
+    }
+
+    fn new(host: std::sync::Arc<dyn super::WorkerHost>, info: RunningJobInfo) -> Self {
+        let retained = Box::new(info.clone());
+        let result = Box::pin(async move {
+            let job_id = info.job.id.clone();
+            match super::host_outcome("job launch", async { host.launch_job(info).await }).await {
+                Ok(result) => result,
+                Err(error) => {
+                    // The host may have created the child before losing its launch receipt.
+                    // Settle that child before reporting the assignment as failed.
+                    let cleanup = super::host_outcome("job launch cleanup", async {
+                        host.terminate_job(job_id.clone()).await
+                    })
+                    .await
+                    .and_then(std::convert::identity);
+                    if let Err(cleanup) = cleanup {
+                        log::error!(target: lk_agents_abi::LOG_TARGET, job_id = job_id.as_str(); "failed to clean up a lost job launch: {cleanup}");
+                    }
+                    Err(error)
+                }
+            }
+        });
+        Self { info: retained, early_status: None, result }
+    }
+}
+
+/// Each in-flight operation is polled from the state that owns it. Its future stays pinned
+/// there while the worker races other inputs, and removing the state drops the operation.
+pub(super) async fn next(pending: &mut [Pending]) -> Completion {
+    std::future::poll_fn(|cx| {
+        for pending in pending.iter_mut() {
+            let ready = match &mut pending.state {
+                PendingState::AwaitingUser(decision) => {
+                    decision.poll(cx).map(|decision| Completion::Decision {
+                        generation: pending.generation,
+                        slot: pending.slot,
+                        decision,
+                    })
+                }
+                PendingState::Launching(launch) => {
+                    launch.result.as_mut().poll(cx).map(|result| Completion::Launched {
+                        generation: pending.generation,
+                        slot: pending.slot,
+                        result,
+                    })
+                }
+                PendingState::AwaitingLoad | PendingState::AwaitingAssignment { .. } => {
+                    std::task::Poll::Pending
+                }
+            };
+            if ready.is_ready() {
+                return ready;
+            }
+        }
+        std::task::Poll::Pending
+    })
+    .await
 }
 
 // Provisional worker-wide admission/history bound; calibrated by the shared budget manifest.
@@ -88,7 +172,7 @@ impl Worker {
 
     /// Requests waiting for a load sample do not reserve capacity.
     pub(super) fn reserved_slots(&self) -> usize {
-        self.pending.iter().filter(|p| p.state != PendingState::AwaitingLoad).count()
+        self.pending.iter().filter(|p| !matches!(p.state, PendingState::AwaitingLoad)).count()
     }
 
     /// Idempotent; `None` or zero disables the deadline.
@@ -139,7 +223,7 @@ impl Worker {
             .pending
             .iter()
             .filter(|p| {
-                p.state == PendingState::AwaitingLoad
+                matches!(p.state, PendingState::AwaitingLoad)
                     && now.saturating_duration_since(p.received) >= crate::load::STALE_AFTER
             })
             .map(|p| (p.slot, p.job.id.clone()))
@@ -285,9 +369,7 @@ impl Worker {
             job,
             resuming: req.resuming,
             state: PendingState::AwaitingLoad,
-            early_status: None,
             received: now,
-            accepted: now,
         });
         if self.cfg.load_threshold.get(self.cfg.devmode).is_infinite() {
             self.resume_availability(slot, outbox);
@@ -324,26 +406,14 @@ impl Worker {
             self.queue(availability_reject(&job_id), outbox);
             return;
         }
-        p.state = PendingState::AwaitingUser;
         let request = JobRequest { job: p.job.clone(), resuming: p.resuming };
         log::info!(target: lk_agents_abi::LOG_TARGET, job_id = request.job.id.as_str(), dispatch_id = request.job.dispatch_id.as_str(), room = request.room_name(), resuming = request.resuming, agent_name = self.cfg.agent_name.as_str(); "received job request");
-        self.ask_user(slot, request);
-    }
-
-    /// The host decides on its own task; dropping the task (a disconnect, a close) cancels it.
-    fn ask_user(&mut self, slot: Slot, request: JobRequest) {
-        let (host, generation) = (self.host.clone(), self.generation);
-        let (decided, decision) = tokio::sync::oneshot::channel();
-        let task: OwnedTask = self.spawner.spawn(async move {
-            let _ = decided.send(host.on_job_request(request).await);
-        });
-        self.requests.insert(slot, task);
-        self.operations.push(Box::pin(async move {
-            match decision.await {
-                Ok(decision) => Completion::Decision { generation, slot, decision },
-                Err(_) => Completion::Done,
-            }
-        }));
+        p.state = PendingState::AwaitingUser(Decision::spawn(
+            self.host.clone(),
+            &*self.spawner,
+            &self.decision_tasks,
+            request,
+        ));
     }
 
     pub(super) fn on_decision(
@@ -353,12 +423,11 @@ impl Worker {
         decision: JobDecision,
         outbox: &mut Outbox,
     ) {
-        self.requests.remove(&slot);
         if generation != self.generation {
             return;
         }
         let Some(p) = self.pending.iter().find(|p| p.slot == slot) else { return };
-        if p.state != PendingState::AwaitingUser {
+        if !matches!(p.state, PendingState::AwaitingUser(_)) {
             return;
         }
         let job_id = p.job.id.clone();
@@ -367,8 +436,7 @@ impl Worker {
                 let arguments = accept_arguments(&self.cfg.agent_name, args.clone());
                 let now = self.clock.now();
                 if let Some(p) = self.pending.iter_mut().find(|p| p.slot == slot) {
-                    p.state = PendingState::AwaitingAssignment(args);
-                    p.accepted = now;
+                    p.state = PendingState::AwaitingAssignment { args, accepted_at: now };
                 }
                 self.send(super::availability_message(&job_id, arguments), Some(job_id), outbox);
             }
@@ -381,11 +449,9 @@ impl Worker {
 
     /// The transport finished writing an acceptance; its assignment is waited for from now.
     pub(super) fn on_availability_sent(&mut self, job_id: JobId) {
-        if let Some(p) = self
-            .pending
-            .iter()
-            .find(|p| p.job.id == job_id && matches!(p.state, PendingState::AwaitingAssignment(_)))
-        {
+        if let Some(p) = self.pending.iter().find(|p| {
+            p.job.id == job_id && matches!(p.state, PendingState::AwaitingAssignment { .. })
+        }) {
             self.timers.set_deadline(
                 WorkerTimer::Assignment(p.slot),
                 self.clock.now().saturating_add(ASSIGNMENT_TIMEOUT),
@@ -401,7 +467,7 @@ impl Worker {
             return;
         }
         let found = self.pending.iter().position(|p| {
-            p.job.id == job_id && matches!(p.state, PendingState::AwaitingAssignment(_))
+            p.job.id == job_id && matches!(p.state, PendingState::AwaitingAssignment { .. })
         });
         let Some(idx) = found else {
             if self
@@ -419,7 +485,6 @@ impl Worker {
                 .map(|pending| pending.slot)
             {
                 self.drop_pending(slot);
-                self.requests.remove(&slot);
             }
             if self.assignment_usage() < self.assignment_capacity {
                 self.dispositions.insert(job_id.clone(), JobStatus::JsFailed);
@@ -430,10 +495,12 @@ impl Worker {
         };
         let slot = self.pending[idx].slot;
         self.timers.clear_deadline(WorkerTimer::Assignment(slot));
-        let PendingState::AwaitingAssignment(args) = &self.pending[idx].state else {
+        let PendingState::AwaitingAssignment { args, accepted_at } = &self.pending[idx].state
+        else {
             unreachable!("checked above")
         };
         let args = args.clone();
+        let accepted_at = *accepted_at;
         let url = match a.url {
             Some(u) if !u.is_empty() => u,
             _ => self.cfg.ws_url.clone(),
@@ -448,15 +515,12 @@ impl Worker {
             worker_id: self.worker_id.clone(),
             fake_job: false,
             received_at: Some(unix(p.received)),
-            accepted_at: Some(unix(p.accepted)),
+            accepted_at: Some(unix(accepted_at)),
             assigned_at: Some(unix(self.clock.now())),
             launched_at: 0.0,
         };
-        self.pending[idx].state = PendingState::Launching(Box::new(info.clone()));
-        let (host, generation) = (self.host.clone(), self.generation);
-        self.operations.push(Box::pin(async move {
-            Completion::Launched { generation, slot, result: host.launch_job(info).await }
-        }));
+        self.pending[idx].state =
+            PendingState::Launching(PendingLaunch::new(self.host.clone(), info));
     }
 
     /// Drops the pending job and warns; nothing is sent to the server.
@@ -484,14 +548,15 @@ impl Worker {
         match result {
             Ok(_) => {
                 self.dispositions.insert(p.job.id.clone(), JobStatus::JsRunning);
-                if let PendingState::Launching(info) = p.state {
+                if let PendingState::Launching(launch) = p.state {
+                    let info = launch.info;
                     let job_id = info.job.id.clone();
                     if info.worker_id != self.worker_id && self.conn == ConnState::Registered {
                         self.queue(migrate_jobs([&*info]), outbox);
                     }
                     self.starting_jobs.insert(job_id.clone(), self.clock.now());
                     self.active.push(*info);
-                    if let Some(status) = p.early_status {
+                    if let Some(status) = launch.early_status {
                         self.on_job_status(job_id, status, outbox);
                     }
                 }
@@ -511,7 +576,9 @@ impl Worker {
             .iter_mut()
             .find(|p| p.job.id == job_id && matches!(p.state, PendingState::Launching(_)))
         {
-            pending.early_status = Some(status);
+            if let PendingState::Launching(launch) = &mut pending.state {
+                launch.record_status(status);
+            }
             return;
         }
         if !self.active.iter().any(|j| j.job.id == job_id) {
@@ -529,7 +596,10 @@ impl Worker {
     fn terminate_job(&mut self, id: JobId) {
         let host = self.host.clone();
         self.operations.push(Box::pin(async move {
-            if let Err(error) = host.terminate_job(id.clone()).await {
+            let result = super::host_outcome("job termination", async {
+                host.terminate_job(id.clone()).await
+            }).await.and_then(std::convert::identity);
+            if let Err(error) = result {
                 log::error!(target: lk_agents_abi::LOG_TARGET, job_id = id.as_str(); "failed to terminate job: {error}");
             }
             Completion::Done

@@ -225,7 +225,7 @@ class SynthesizeStream(tts.WebSocketStream[_Message, _Command]):
                 self._open.remove(segment_id)
             self.report(tts.SegmentDone(segment_id))
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _setup(self, segment_id: str) -> _Setup:
         setup = _Setup(

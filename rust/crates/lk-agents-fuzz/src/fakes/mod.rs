@@ -23,6 +23,7 @@ use crate::{
 // A delivery to a closed receiver is a recorded, rejected attempt, never a panic.
 
 mod avatar;
+pub(crate) mod clock;
 mod console;
 pub use console::{FakeCli, FakeConsolePort};
 mod eot;
@@ -345,6 +346,7 @@ pub struct Registry {
     /// Atomic so a fake can mint an identity from inside a product call without blocking.
     next: BTreeMap<Kind, AtomicU32>,
     tool_serial: AtomicU32,
+    custom_audio_outputs: AtomicU32,
     /// Every synthesis fails at the open while set.
     voice_down: std::sync::atomic::AtomicBool,
     refuse_cancel: std::sync::atomic::AtomicBool,
@@ -374,6 +376,7 @@ impl Registry {
             records,
             next,
             tool_serial: AtomicU32::new(0),
+            custom_audio_outputs: AtomicU32::new(0),
             voice_down: std::sync::atomic::AtomicBool::new(false),
             refuse_cancel: std::sync::atomic::AtomicBool::new(false),
             session: std::sync::OnceLock::new(),
@@ -521,7 +524,12 @@ impl Registry {
     }
 
     pub(super) fn new_audio_output(&self, playout: Arc<output::Playout>) -> u32 {
+        self.custom_audio_outputs.fetch_add(1, Ordering::SeqCst);
         self.register(Kind::Output, Detail::Output { audio: true }, Control::Output(playout)).nth
+    }
+
+    pub(super) fn only_room_speaker(&self) -> bool {
+        self.custom_audio_outputs.load(Ordering::SeqCst) == 0
     }
 
     pub fn new_output(&self, audio: bool) -> u32 {

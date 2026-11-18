@@ -71,7 +71,7 @@ impl SessionOwner {
         events: Vec<serde_json::Value>,
         session: telemetry::SessionReport,
     ) -> telemetry::SessionReport {
-        let timestamp = lk_agents_abi::unix_secs(self.0.env.clock.wall());
+        let timestamp = lk_agents_abi::unix_secs(self.0.wall());
         let recording_started_at = self.recording_started_at();
         telemetry::SessionReport {
             job_id: job.job_id,
@@ -156,6 +156,11 @@ struct Selection {
 }
 
 impl Inner {
+    /// Reports and avatar item events share the running session's recording timeline.
+    fn wall(&self) -> std::time::SystemTime {
+        self.session.get().map_or_else(|| self.env.clock.wall(), |session| session.time.wall())
+    }
+
     fn select(&self, agent: Option<lk_agents_abi::HostRef>) -> u64 {
         let (id, retired) = {
             let mut selection = self.selection.lock();
@@ -185,7 +190,7 @@ impl SessionEvents for Events {
         if let HostWire::ItemAdded(added) = &wire
             && let Some(owner) = self.owner.upgrade()
         {
-            let at = lk_agents_abi::unix_secs(owner.env.clock.wall());
+            let at = lk_agents_abi::unix_secs(owner.wall());
             crate::avatar::lifecycle::item_added(&SessionOwner(owner), &added.item, at);
         }
         if let HostWire::Close(close) = &wire

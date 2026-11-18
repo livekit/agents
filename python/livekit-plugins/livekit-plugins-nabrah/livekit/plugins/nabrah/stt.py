@@ -325,7 +325,7 @@ class SpeechStream(stt.WebSocketStream[_Ready | _Error | _Transcript, _Config | 
         elif message["type"] == "transcript":
             self._transcript(message)
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _turn_word_list(self) -> tuple[TranscriptChunk, ...]:
         """Every word in the turn so far: committed utterances plus the open one."""

@@ -373,6 +373,13 @@ pub enum NodeUse {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecorderCall {
+    Finished,
+    Failed,
+    /// The file's sample-zero time, retained at finalization for upload alignment checks.
+    Origin {
+        unix_micros: u64,
+        written_through_unix_micros: Option<u64>,
+    },
     InputFrame,
     CaptureFrame,
     PlaybackStarted,
@@ -390,6 +397,16 @@ pub enum RecorderCall {
     /// Played audio reached the recording after its place was written, and was dropped.
     Late {
         samples: u64,
+    },
+    /// Recorded PCM differs from the independent room speaker, including unplayed audio.
+    Mismatch {
+        at_ms: u64,
+        expected: i16,
+        actual: i16,
+    },
+    /// Independent speaker PCM was compared, including expected silence.
+    SpeakerChecked {
+        samples: usize,
     },
 }
 

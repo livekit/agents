@@ -308,7 +308,7 @@ class SynthesizeStream(tts.WebSocketStream[_Message, _Init | _Text]):
                 detail=error.get("desc"),
             )
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _complete(self, segment_id: str) -> None:
         if segment_id in self._ended and segment_id not in self._generations.values():

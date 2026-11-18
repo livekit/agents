@@ -190,15 +190,30 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
 }
 
 /// The production executor, keeping the journal of the cores it takes over.
-struct Observing(Executor, Arc<Mutex<Option<super::shared::Journal>>>);
+struct Observing {
+    executor: Executor,
+    journal: Arc<Mutex<Option<super::shared::Journal>>>,
+    opened_cx: Option<Arc<Mutex<Option<Cx>>>>,
+}
+
+pub(super) fn observing_opened_context(
+    api: &VoiceSession,
+    opened_cx: Arc<Mutex<Option<Cx>>>,
+) -> Box<dyn SessionExecutor> {
+    Box::new(Observing {
+        executor: Executor::new(api.time().clone(), api.spawner()),
+        journal: Arc::default(),
+        opened_cx: Some(opened_cx),
+    })
+}
 
 impl SessionExecutor for Observing {
     fn tts_adapter(&self) -> crate::voice::session::TtsAdapter {
-        self.0.tts_adapter()
+        self.executor.tts_adapter()
     }
 
     fn stt_adapter(&self) -> crate::voice::session::SttAdapter {
-        self.0.stt_adapter()
+        self.executor.stt_adapter()
     }
 
     fn open_legs<'a>(
@@ -208,7 +223,10 @@ impl SessionExecutor for Observing {
         vad: Option<Arc<dyn lk_agents_abi::Vad>>,
         cx: lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>> {
-        self.0.open_legs(resources, stt, vad, cx)
+        if let Some(observed) = &self.opened_cx {
+            *observed.lock() = Some(cx.clone());
+        }
+        self.executor.open_legs(resources, stt, vad, cx)
     }
 
     fn open_realtime<'a>(
@@ -225,16 +243,16 @@ impl SessionExecutor for Observing {
             DriverError,
         >,
     > {
-        self.0.open_realtime(resources, model, disabled, tools, cx)
+        self.executor.open_realtime(resources, model, disabled, tools, cx)
     }
 
     fn tasks(&self) -> Arc<lk_agents_net::task::TaskSet> {
-        self.0.tasks()
+        self.executor.tasks()
     }
 
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {
-        *self.1.lock() = Some(cores.peer.journal.clone());
-        Box::new(self.0).own(cores)
+        *self.journal.lock() = Some(cores.peer.journal.clone());
+        Box::new(self.executor).own(cores)
     }
 }
 
@@ -247,7 +265,11 @@ async fn a_session_nobody_observes_keeps_no_journal() {
     let observed = journal.clone();
     let opening = api
         .open(
-            Box::new(Observing(Executor::new(api.time().clone(), api.spawner()), observed)),
+            Box::new(Observing {
+                executor: Executor::new(api.time().clone(), api.spawner()),
+                journal: observed,
+                opened_cx: None,
+            }),
             None,
             move |mut runner: SessionRunner| {
                 Box::pin(async move {

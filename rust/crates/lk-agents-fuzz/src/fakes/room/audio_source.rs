@@ -43,6 +43,7 @@ struct SourceState {
     /// The host shim's ledger: a frame cut mid-play counts only its unplayed part.
     ledger: PlayoutLedger,
     speaker: Speaker,
+    heard_audio: Vec<(Ts, AudioFrame)>,
 }
 
 struct Queued {
@@ -116,6 +117,21 @@ impl FakeAudioSource {
         self.state.lock().unwrap().speaker.clone()
     }
 
+    /// PCM at the simulated speaker, independent of the framework's playback reports.
+    /// Includes the prefix of a frame currently playing, even before a clear or drain.
+    pub fn heard_audio(&self) -> Vec<(Ts, AudioFrame)> {
+        self.settle();
+        let now = self.clock.now();
+        let state = self.state.lock().unwrap();
+        let mut heard = state.heard_audio.clone();
+        for queued in &state.queue {
+            if let Some(frame) = audible_prefix(queued, now) {
+                heard.push(frame);
+            }
+        }
+        heard
+    }
+
     pub fn is_closed(&self) -> bool {
         self.state.lock().unwrap().closed
     }
@@ -143,6 +159,9 @@ impl FakeAudioSource {
                 .speaker
                 .heard
                 .push(HeardFrame { clears_before: q.clears_before, until: q.ends_at });
+            state
+                .heard_audio
+                .push((q.ends_at.saturating_sub(frame_duration(&q.frame)), q.frame.clone()));
             state.played.push(q.frame);
         }
         // `drain_at` is deliberately not clamped to `now`: its readers handle a stale value.
@@ -172,6 +191,9 @@ impl FakeAudioSource {
         let unplayed = Self::buffered_locked(state, now);
         state.ledger.add_discarded(unplayed);
         for q in state.queue.drain(..) {
+            if let Some(frame) = audible_prefix(&q, now) {
+                state.heard_audio.push(frame);
+            }
             if q.ends_at.saturating_sub(frame_duration(&q.frame)) < now {
                 state.speaker.heard.push(HeardFrame { clears_before: q.clears_before, until: now });
             }
@@ -260,6 +282,26 @@ impl FakeAudioSource {
             self.parked_until(parked, at).await;
         }
     }
+}
+
+fn audible_prefix(queued: &Queued, now: Ts) -> Option<(Ts, AudioFrame)> {
+    let started = queued.ends_at.saturating_sub(frame_duration(&queued.frame));
+    let frame = &queued.frame;
+    let samples = (now.saturating_duration_since(started).as_secs_f64()
+        * f64::from(frame.sample_rate))
+    .floor() as u32;
+    let samples = samples.min(frame.samples_per_channel);
+    (samples > 0).then(|| {
+        let bytes = samples as usize * usize::from(frame.num_channels) * 2;
+        (
+            started,
+            AudioFrame {
+                data: frame.data.slice(..bytes),
+                samples_per_channel: samples,
+                ..frame.clone()
+            },
+        )
+    })
 }
 
 impl AudioSource for FakeAudioSource {

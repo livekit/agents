@@ -392,7 +392,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
         elif message["type"] == "conversation.item.input_audio_transcription.completed":
             self._complete(item_id, message["transcript"])
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _interim(self, item_id: str, item: _Item) -> None:
         text = item.finalized + item.hypothesis

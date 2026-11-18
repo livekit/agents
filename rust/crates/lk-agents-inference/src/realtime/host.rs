@@ -301,7 +301,7 @@ impl HostRealtimeLeg {
 }
 
 impl HostRealtimeLeg {
-    /// A session update, awaited before the next command; a failure is logged.
+    /// A session update, awaited before the next command; its failure is a recoverable event.
     async fn update(&self, cmd: RealtimeCommand) {
         let (host, cx) = (&self.host, &self.cx);
         let updated = match cmd {
@@ -316,9 +316,7 @@ impl HostRealtimeLeg {
             // `send` routes the rest here only as updates.
             _ => Ok(()),
         };
-        if let Err(e) = updated {
-            log::error!(target: lk_agents_abi::LOG_TARGET, error = e.message.as_str(); "failed to update the realtime session");
-        }
+        self.failures.report(None, updated);
     }
 }
 

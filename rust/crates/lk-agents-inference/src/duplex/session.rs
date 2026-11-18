@@ -1,7 +1,7 @@
 use crate::realtime::openai::queue::{self, Delivery, EventReceiver};
 use crate::telemetry;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 
 use parking_lot::Mutex;
@@ -195,7 +195,7 @@ impl DuplexSession {
                     let started_at = t
                         .turn_started_at
                         .filter(|s| s.is_finite())
-                        .map(|s| SystemTime::UNIX_EPOCH + Duration::from_secs_f64(s.max(0.0)))
+                        .and_then(|s| lk_agents_abi::wall_from_secs(s.max(0.0)))
                         .unwrap_or(wall);
                     st.seg.on_input_transcription(
                         &t.item_id,

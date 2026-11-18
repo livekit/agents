@@ -24,6 +24,10 @@ async def test_a_final_between_vad_boundaries_reports_its_words_and_utterances()
     async def recognize(request: web.Request) -> web.WebSocketResponse:
         socket = web.WebSocketResponse()
         await socket.prepare(request)
+        # Prewarmed sockets carry no turn until its audio arrives.
+        async for frame in socket:
+            if frame.type == web.WSMsgType.BINARY:
+                break
         await socket.send_json({"type": "speech_started"})
         await socket.send_json(
             {

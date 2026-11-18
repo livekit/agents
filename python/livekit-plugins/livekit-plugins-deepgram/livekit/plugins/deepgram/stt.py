@@ -709,7 +709,7 @@ class _NovaStream(stt.WebSocketStream[_Message, _Out]):
             if message.get("speech_final", False):
                 self.report(stt.SpeechEnded())
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
         self._apply_pending_keyterms()
 
     def _transcript(self, message: _Results) -> stt.Transcript:
@@ -887,7 +887,7 @@ class _FluxStream(stt.WebSocketStream[_FluxMessage, _CloseStream | _Configure]):
         elif message["type"] == "TurnInfo":
             self._turn_info(message)
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _turn_info(self, message: _TurnInfo) -> None:
         if request_id := message.get("request_id"):

@@ -181,6 +181,7 @@ class ServerContent(TypedDict, total=False):
     outputTranscription: Transcription
     generationComplete: bool
     turnComplete: bool
+    turnCompleteReason: str
     interrupted: bool
 
 

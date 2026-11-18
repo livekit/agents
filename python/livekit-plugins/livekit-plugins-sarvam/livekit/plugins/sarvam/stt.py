@@ -611,7 +611,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Control | _ConfigUpdate]):
         elif message["event"] == "error":
             self._error(message)
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _transcript(self, message: _PartialTranscript | _FinalTranscript) -> stt.Transcript:
         final = message["event"] == "transcript.final"

@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use livekit_token::{
     AccessToken, AccessTokenError, AgentDatabaseGrants, AgentThreadGrants, Claims, InferenceGrants,
@@ -6,7 +6,7 @@ use livekit_token::{
 };
 use lk_agents_abi::errors::{ApiError, ErrorKind};
 
-// Token extension preserves claims modelled by `livekit-token`; unknown claims are dropped.
+// Renewal preserves the verified claim document, including future server restrictions.
 
 /// Lifetime of a refreshed job token.
 pub const RELOAD_EXTENSION: Duration = Duration::from_secs(3600);
@@ -22,6 +22,14 @@ fn refused(error: AccessTokenError) -> ApiError {
 fn require(api_key: &str, api_secret: &str) -> Result<(), ApiError> {
     if api_key.is_empty() || api_secret.is_empty() {
         return Err(ApiError::new(ErrorKind::Auth, "api key and api secret are required"));
+    }
+    Ok(())
+}
+
+/// Refuse lifetimes the signing SDK cannot add to the current wall clock safely.
+pub(crate) fn validate_token_ttl(ttl: Duration) -> Result<(), ApiError> {
+    if SystemTime::now().checked_add(ttl).is_none() {
+        return Err(ApiError::new(ErrorKind::InvalidRequest, "token TTL is out of range"));
     }
     Ok(())
 }
@@ -53,6 +61,9 @@ pub fn room_join_token(
 ) -> Result<String, ApiError> {
     let RoomJoinOptions { agent, ttl } = options;
     require(api_key, api_secret)?;
+    if let Some(ttl) = ttl {
+        validate_token_ttl(ttl)?;
+    }
     let mut token = AccessToken::with_api_key(api_key, api_secret)
         .with_identity(identity)
         .with_grants(VideoGrants {
@@ -74,24 +85,39 @@ pub fn room_join_token(
 }
 
 /// Verify an SFU-issued join token and refresh its lifetime to [`RELOAD_EXTENSION`].
-/// Preserves all modelled claims and checks the issuer and expiration.
+/// Preserves every signed claim, changing only `nbf` and `exp`, after checking the original
+/// signature, issuer and validity window. Future restrictions must not be dropped on reload.
 pub fn extend_job_token(token: &str, api_key: &str, api_secret: &str) -> Result<String, ApiError> {
     require(api_key, api_secret)?;
-    let c = TokenVerifier::with_api_key(api_key, api_secret).verify(token).map_err(refused)?;
-    let mut t = AccessToken::with_api_key(api_key, api_secret)
-        .with_ttl(RELOAD_EXTENSION)
-        .with_identity(&c.sub)
-        .with_name(&c.name)
-        .with_kind(&c.kind)
-        .with_metadata(&c.metadata)
-        .with_sha256(&c.sha256)
-        .with_attributes(c.attributes)
-        .with_grants(c.video)
-        .with_sip_grants(c.sip);
-    if let Some(rc) = c.room_config {
-        t = t.with_room_config(rc);
+    let verified =
+        TokenVerifier::with_api_key(api_key, api_secret).verify(token).map_err(refused)?;
+    // Keep the signing SDK's room-join validation when retaining the original document.
+    if verified.video.room_join && (verified.sub.is_empty() || verified.video.room.is_empty()) {
+        return Err(refused(AccessTokenError::InvalidClaims(
+            "token grants room_join but doesn't have an identity or room",
+        )));
     }
-    t.to_jwt().map_err(refused)
+    // This exact document has already been verified above. Reading it without rebuilding a
+    // typed Claims retains nested permissions and claims added by a newer server.
+    let mut claims = jsonwebtoken::dangerous::insecure_decode::<
+        serde_json::Map<String, serde_json::Value>,
+    >(token)
+    .map_err(|error| refused(error.into()))?
+    .claims;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|_| ApiError::new(ErrorKind::Auth, "system clock is before the Unix epoch"))?;
+    let expires = now
+        .checked_add(RELOAD_EXTENSION)
+        .ok_or_else(|| ApiError::new(ErrorKind::Auth, "token expiration is out of range"))?;
+    claims.insert("nbf".into(), now.as_secs().into());
+    claims.insert("exp".into(), expires.as_secs().into());
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(api_secret.as_bytes()),
+    )
+    .map_err(|error| refused(error.into()))
 }
 
 /// The `sub` of a token without verifying it. Only for `simulate_job`, where the caller supplied
@@ -152,6 +178,7 @@ pub fn inference_bearer_with_ttl(
             "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable",
         ));
     }
+    validate_token_ttl(ttl)?;
     AccessToken::with_api_key(api_key, api_secret)
         .with_identity("agent")
         .with_inference_grants(InferenceGrants::default().with_perform())
@@ -317,6 +344,115 @@ mod tests {
             );
             // `exp`/`nbf` enforcement (with a 60 s leeway) is `TokenVerifier`'s, pinned in `livekit-token`.
             assert!(extend_job_token(&original, KEY, "").is_err_and(|e| !e.retryable));
+        }
+    }
+}
+
+#[cfg(test)]
+mod renewal_regressions {
+    use super::*;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn job_token_renewal_preserves_known_grants_and_future_signed_restrictions() {
+        let original = AccessToken::with_api_key("key", "secret")
+            .with_identity("agent")
+            .with_agent_thread_grants(AgentThreadGrants {
+                sql: true,
+                thread_ids: vec!["AT_1".into()],
+                ..Default::default()
+            })
+            .with_agent_database_grants(AgentDatabaseGrants {
+                read: true,
+                database_ids: vec!["DB_1".into()],
+                ..Default::default()
+            })
+            .with_inference_grants(InferenceGrants::default().with_perform())
+            .with_observability_grants(ObservabilityGrants::default().with_write())
+            .to_jwt()
+            .unwrap();
+        let claims = TokenVerifier::with_api_key("key", "secret").verify(&original).unwrap();
+        let mut claims = serde_json::to_value(claims).unwrap();
+        claims["futureRestriction"] = json!({"allowedModels": ["only-this"], "ceiling": 0});
+        claims["video"]["futurePermission"] = json!({"deny": true});
+        let original = jsonwebtoken::encode(
+            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(b"secret"),
+        )
+        .unwrap();
+        let renewed = extend_job_token(&original, "key", "secret").unwrap();
+        TokenVerifier::with_api_key("key", "secret").verify(&renewed).unwrap();
+        let mut renewed =
+            jsonwebtoken::dangerous::insecure_decode::<Value>(&renewed).unwrap().claims;
+        for field in ["exp", "nbf"] {
+            claims.as_object_mut().unwrap().remove(field);
+            renewed.as_object_mut().unwrap().remove(field);
+        }
+        assert_eq!(renewed, claims);
+        assert!(extend_job_token(&original, "key", "foreign-secret").is_err());
+    }
+
+    #[test]
+    fn unrepresentable_token_lifetimes_return_errors_instead_of_panicking() {
+        assert!(
+            room_join_token(
+                "key",
+                "secret",
+                "agent",
+                "room",
+                RoomJoinOptions { ttl: Some(Duration::MAX), ..Default::default() }
+            )
+            .is_err()
+        );
+        assert!(inference_bearer_with_ttl("key", "secret", Duration::MAX).is_err());
+    }
+}
+
+#[cfg(test)]
+mod validity_window_regressions {
+    use super::*;
+
+    #[test]
+    fn renewal_does_not_resign_expired_or_not_yet_valid_claims() {
+        let original = AccessToken::with_api_key("key", "secret").to_jwt().unwrap();
+        let original = TokenVerifier::with_api_key("key", "secret").verify(&original).unwrap();
+        for (field, value) in [("exp", 1), ("nbf", original.nbf as u64 + 3600)] {
+            let mut claims = serde_json::to_value(&original).unwrap();
+            claims[field] = value.into();
+            let invalid = jsonwebtoken::encode(
+                &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+                &claims,
+                &jsonwebtoken::EncodingKey::from_secret(b"secret"),
+            )
+            .unwrap();
+            assert!(
+                extend_job_token(&invalid, "key", "secret").is_err_and(|error| !error.retryable)
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod join_claim_regressions {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn renewal_keeps_the_signers_validation_of_room_join_claims() {
+        let original = AccessToken::with_api_key("key", "secret").to_jwt().unwrap();
+        let claims = TokenVerifier::with_api_key("key", "secret").verify(&original).unwrap();
+        for (identity, room) in [("", "room"), ("agent", "")] {
+            let mut claims = serde_json::to_value(&claims).unwrap();
+            claims["sub"] = identity.into();
+            claims["video"] = json!({"roomJoin": true, "room": room});
+            let invalid = jsonwebtoken::encode(
+                &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+                &claims,
+                &jsonwebtoken::EncodingKey::from_secret(b"secret"),
+            )
+            .unwrap();
+            assert!(extend_job_token(&invalid, "key", "secret").is_err());
         }
     }
 }

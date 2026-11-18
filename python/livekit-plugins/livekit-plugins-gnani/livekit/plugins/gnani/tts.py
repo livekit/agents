@@ -314,7 +314,7 @@ class SynthesizeStream(tts.WebSocketStream[_Message, _Request]):
             if message["type"] == "complete":
                 self.report(tts.SegmentDone(self._segment))
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
 
 __all__ = ["TTS", "SynthesizeStream"]

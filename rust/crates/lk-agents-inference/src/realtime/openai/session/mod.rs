@@ -70,13 +70,13 @@ impl Connect {
         Ok(match &self.auth {
             Auth::Bearer(key) => {
                 let mut headers = Headers::new();
-                headers.insert("User-Agent", "LiveKit Agents");
+                headers.insert("User-Agent", lk_agents_net::job_identity::user_agent());
                 headers.insert("Authorization", format!("Bearer {key}"));
                 headers
             }
             Auth::Azure { api_key, entra_token } => {
                 let mut h = Headers::new();
-                h.insert("User-Agent", "LiveKit Agents");
+                h.insert("User-Agent", lk_agents_net::job_identity::user_agent());
                 if let Some(token) = entra_token {
                     h.insert("Authorization", format!("Bearer {token}"));
                 }
@@ -671,6 +671,7 @@ impl Pump {
         tokio::pin!(writer);
         // Every step is taken under a write permit, so no local backlog can fail the session.
         let mut permit = outgoing.try_reserve().ok();
+        let initial = self.shared.machine.lock().await.prepare_step(initial);
         self.dispatch(initial, &mut permit)?;
         let mut decoding: Option<Decoding> = None;
         loop {
@@ -740,6 +741,8 @@ impl Pump {
                     }
                 },
             };
+
+            step = self.shared.machine.lock().await.prepare_step(step);
 
             if let Some(error) = step.fatal.take() {
                 let _ = self.dispatch(step, &mut permit);

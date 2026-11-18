@@ -50,8 +50,11 @@ pub enum RuntimeError {
 
 mod jobs;
 use jobs::{ConnState, Pending, WorkerTimer};
+mod decision;
 mod load_driver;
 pub use jobs::{Slot, retry_delay};
+#[cfg(test)]
+mod host_failure_tests;
 #[cfg(test)]
 #[path = "worker_tests.rs"]
 mod tests;
@@ -212,9 +215,9 @@ pub struct Worker {
     operations: FuturesUnordered<BoxFuture<'static, Completion>>,
     load_pending: bool,
     send_failure: Option<TransportError>,
-    /// Host decisions and endpoint exchanges in flight, each its own task; removing one
-    /// cancels it, and its completion still reaches `operations`.
-    requests: HashMap<Slot, OwnedTask>,
+    /// Joins decisions after their owning pending states cancel them.
+    decision_tasks: Arc<lk_agents_net::task::TaskSet>,
+    /// Endpoint exchanges in flight, each cancelled when removed.
     endpoints: HashMap<u64, OwnedTask>,
     next_endpoint: u64,
     closing: bool,
@@ -462,6 +465,9 @@ fn dial(
     let token = config.worker_token.clone();
     let timeout = config.connection_timeout;
     let mut headers = config.headers.clone();
+    if !headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("User-Agent")) {
+        headers.push(("User-Agent".to_owned(), lk_agents_net::job_identity::user_agent()));
+    }
     if !config.api_key.is_empty() && !config.api_secret.is_empty() {
         let jwt = lk_agents_net::token::worker_token(&config.api_key, &config.api_secret)
             .map_err(|e| RuntimeError::Configuration(e.to_string()))?;
@@ -510,6 +516,9 @@ impl ActiveConnection {
                         self.registration_deadline = None;
                         Ok(ConnectionEvent::Registered(response))
                     }
+                    // Prost drops future oneof members. An extension must neither reject
+                    // this connection nor satisfy or extend its registration deadline.
+                    None => Ok(ConnectionEvent::Progress),
                     _ => Err(RuntimeError::ExpectedRegister),
                 }
             }
@@ -563,6 +572,18 @@ enum Completion {
     CpuSample(load_driver::CpuSampleResult),
     Done,
     EndpointDone(u64),
+}
+
+/// A host callback may unwind without taking the worker and its other jobs with it. Keep
+/// constructing the callback's future inside `call`, so synchronous failures are caught too.
+async fn host_outcome<T>(
+    operation: &'static str,
+    call: impl Future<Output = T> + Send,
+) -> Result<T, HostError> {
+    std::panic::AssertUnwindSafe(call)
+        .catch_unwind()
+        .await
+        .map_err(|_| HostError::new(format!("{operation} callback panicked")))
 }
 
 impl Worker {
@@ -624,7 +645,7 @@ impl Worker {
                 operations: FuturesUnordered::new(),
                 load_pending: false,
                 send_failure: None,
-                requests: HashMap::new(),
+                decision_tasks: Arc::default(),
                 endpoints: HashMap::new(),
                 next_endpoint: 0,
                 closing: false,
@@ -681,13 +702,24 @@ impl Worker {
         self.publish();
         let result = self.run_loop(&mut connection).await;
 
-        self.host.stop_endpoints().await;
+        self.decision_tasks.close();
+        self.pending.clear();
         self.operations.clear();
-        self.requests.clear();
+        let deadline = self.clock.now().saturating_add(self.runtime_cfg.connection_timeout);
+        if !self.decision_tasks.wait_empty(&*self.clock, Some(deadline)).await {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "job decisions did not settle before worker shutdown");
+        }
+        if let Err(error) =
+            host_outcome("endpoint shutdown", async { self.host.stop_endpoints().await }).await
+        {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "endpoint shutdown failed; closing the worker transport: {error}");
+        }
         self.endpoints.clear();
         self.load_pending = false;
         self.rx.close();
         connection.close().await;
+        self.conn = ConnState::Disconnected;
+        self.publish();
         let reason =
             result.as_ref().err().map(ToString::to_string).unwrap_or_else(|| "closed".into());
         self.shared().finished = Some(reason.clone());
@@ -734,6 +766,10 @@ impl Worker {
                     if let Some(completion) = completion {
                         self.complete(completion, &mut connection.outbox);
                     }
+                    Ok(())
+                }
+                completion = jobs::next(&mut self.pending) => {
+                    self.complete(completion, &mut connection.outbox);
                     Ok(())
                 }
                 event = connection.next_event(self.transport.clone(), &self.runtime_cfg) => event.map(|event| {
@@ -854,7 +890,6 @@ impl Worker {
     fn disconnect(&mut self, connection: &mut ConnectionIo) {
         self.rollover_requested = false;
         connection.disconnect();
-        self.requests.clear();
         self.endpoints.clear();
         self.on_disconnected();
         self.settle();

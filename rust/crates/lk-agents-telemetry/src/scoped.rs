@@ -28,6 +28,36 @@ pub use lk_agents_abi::telemetry::instruments::{
 pub use lk_agents_abi::telemetry::record::SpanContext;
 pub use lk_agents_abi::telemetry::{Cx, Recorder};
 
+/// Keep a context's process recorder and identity source, timing scoped work on its owner's
+/// clock. Content-capture changes remain live on the process recorder.
+pub fn with_clock(cx: &Cx, clock: Arc<dyn Clock>) -> Cx {
+    let Some(recorder) = cx.recorder() else { return cx.clone() };
+    cx.clone().with_recorder(Arc::new(ClockedRecorder { recorder: recorder.clone(), clock }))
+}
+
+struct ClockedRecorder {
+    recorder: Arc<dyn Recorder>,
+    clock: Arc<dyn Clock>,
+}
+
+impl Recorder for ClockedRecorder {
+    fn record(&self, record: Record) {
+        self.recorder.record(record);
+    }
+
+    fn now_nanos(&self) -> u64 {
+        nanos(self.clock.wall())
+    }
+
+    fn next_id(&self) -> u64 {
+        self.recorder.next_id()
+    }
+
+    fn capture_content(&self) -> bool {
+        self.recorder.capture_content()
+    }
+}
+
 /// The process's span recording: where records go, the clock that times them and the id source.
 /// One per process, lent through `ProcessEnv`; the DST builds its own with a fixed seed.
 #[derive(Clone)]

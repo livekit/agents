@@ -82,9 +82,12 @@ impl<T: Transport<RoleClient> + 'static> Transport<RoleClient> for Observed<T> {
         &mut self,
         item: ClientJsonRpcMessage,
     ) -> impl Future<Output = Result<(), McpError>> + Send + 'static {
-        let send = self.inner.as_mut().expect("rmcp never sends after close").send(item);
+        let send = self.inner.as_mut().map(|inner| inner.send(item));
         let receipt = self.receipt.clone();
         async move {
+            let Some(send) = send else {
+                return Err(McpError::Unavailable);
+            };
             send.await.map_err(|e| {
                 let cause: lk_agents_abi::llm::mcp::McpCause = Arc::new(e);
                 receipt.fail(McpError::Transport(cause.clone()));

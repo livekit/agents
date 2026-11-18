@@ -178,3 +178,78 @@ async fn a_kept_job_survives_the_dev_channel_round_trip() {
         ("wss://sfu", "token", "AW_1", true)
     );
 }
+
+#[tokio::test]
+async fn an_invalid_kept_job_does_not_discard_healthy_jobs_or_close_the_dev_channel() {
+    #[derive(Default)]
+    struct RecordingServer(parking_lot::Mutex<Vec<RunningJobInfo>>);
+    impl ServerJobs for RecordingServer {
+        fn running_jobs(&self) -> Vec<RunningJobInfo> {
+            self.0.lock().clone()
+        }
+        fn reload_jobs(
+            &self,
+            jobs: Vec<RunningJobInfo>,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<(), lk_agents_abi::worker::ipc_host::WorkerError>>
+        {
+            self.0.lock().extend(jobs);
+            Box::pin(async { Ok(()) })
+        }
+    }
+    let token =
+        lk_agents_net::token::room_join_token("key", "secret", "agent", "room", Default::default())
+            .unwrap();
+    let make = |id: &str, token: String| livekit_protocol::agent::RunningAgentJobInfo {
+        job: livekit_protocol::Job { id: id.into(), ..Default::default() }.encode_to_vec(),
+        token,
+        ..Default::default()
+    };
+    let jobs = vec![
+        make("first", token.clone()),
+        make("bad-token", "not-a-token".into()),
+        livekit_protocol::agent::RunningAgentJobInfo {
+            job: vec![0xff],
+            token: token.clone(),
+            ..Default::default()
+        },
+        make("last", token),
+    ];
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let peer = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        recv(&mut socket).await.unwrap().unwrap();
+        recv(&mut socket).await.unwrap().unwrap();
+        send(
+            &mut socket,
+            Message::GetRunningJobsResponse(livekit_protocol::agent::GetRunningAgentJobsResponse {
+                jobs,
+            }),
+        )
+        .await
+        .unwrap();
+        send(&mut socket, Message::GetRunningJobsRequest(Default::default())).await.unwrap();
+        let reply = recv(&mut socket).await.unwrap().unwrap();
+        let Some(Message::GetRunningJobsResponse(reply)) = reply.message else {
+            panic!("expected a running-jobs reply");
+        };
+        let ids: Vec<_> =
+            reply.jobs.into_iter().map(|job| from_proto(job).unwrap().job.id).collect();
+        assert_eq!(ids, ["first", "last"]);
+    });
+    let server = Arc::new(RecordingServer::default());
+    serve_dev_channel(
+        addr,
+        "test".into(),
+        "wss://new-sfu".into(),
+        "key".into(),
+        "secret".into(),
+        server.clone(),
+    )
+    .await
+    .unwrap();
+    peer.await.unwrap();
+    let jobs = server.0.lock();
+    assert_eq!(jobs.iter().map(|job| job.job.id.as_str()).collect::<Vec<_>>(), ["first", "last"]);
+    assert!(jobs.iter().all(|job| job.url == "wss://new-sfu"));
+}

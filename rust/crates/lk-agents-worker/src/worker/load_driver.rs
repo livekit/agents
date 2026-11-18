@@ -18,7 +18,10 @@ impl Worker {
         let (host, clock) = (self.host.clone(), self.clock.clone());
         self.operations.push(
             async move {
-                let load = lk_agents_abi::timeout(&*clock, STALE_AFTER, host.user_load()).await;
+                let call = super::host_outcome("load", async move { host.user_load().await });
+                let load = lk_agents_abi::timeout(&*clock, STALE_AFTER, call)
+                    .await
+                    .map(|sample| sample.unwrap_or_else(|error| Some(Err(error))));
                 // `Ok(None)`: no `load_fnc`, the CPU is sampled instead.
                 Completion::Load(match load {
                     Ok(None) => None,

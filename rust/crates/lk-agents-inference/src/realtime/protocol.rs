@@ -1,11 +1,10 @@
 /// The `previous_item_id` that places an item first in the conversation.
 pub const ROOT_ITEM: &str = "root";
 
-/// How the message of a cancel that raced a finished response starts.
-pub const CANCELLATION_FAILED: &str = "Cancellation failed";
-
 /// Server error codes the session acts on.
 pub mod error_code {
+    /// A cancellation that raced the end of its response.
+    pub const CANCEL_NOT_ACTIVE: &str = "response_cancel_not_active";
     /// A create for an item the server already holds.
     pub const DUPLICATE_ITEM_ID: &str = "item_create_duplicate_item_id";
     /// A commit of an input buffer the server's own VAD already emptied.

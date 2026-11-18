@@ -465,7 +465,7 @@ class SynthesizeStream(tts.WebSocketStream[_Message, _Packet]):
                 "SmallestAI TTS error", kind="invalid_request", detail=str(message.get("message"))
             )
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _packet(self, segment_id: str, text: str, *, more: bool) -> _Packet:
         opts = self._opts

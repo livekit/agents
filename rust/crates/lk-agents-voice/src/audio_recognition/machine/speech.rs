@@ -577,15 +577,15 @@ impl AudioRecognition {
                         self.speaking_hint(),
                     )));
                     self.last_final_transcript_time = Some(now);
-                    self.append_final(&text);
                 } else {
                     eff.push(AudioRecognitionEffect::PublishSessionEvent(transcript(
                         false,
                         self.speaking_hint(),
                     )));
-                    self.interim_transcript = text;
-                    self.interim_utterance = None;
                 }
+                // Server ASR is correlated by item, and may arrive after this turn or a later
+                // one was answered. The realtime history path owns those words; accumulating
+                // them as current local recognition would commit them again under a new ID.
             }
         }
         eff

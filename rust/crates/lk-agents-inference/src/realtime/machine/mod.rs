@@ -49,6 +49,7 @@ pub struct RealtimeMachine {
     opts: SessionOptions,
     caps: RealtimeCapabilities,
     ids: EventIds,
+    provider_ids: crate::realtime::ids::ProviderIds,
     connection_generation: u64,
     response_timeout: Option<Duration>,
     reply_deadlines: BTreeMap<String, Ts>,
@@ -137,6 +138,7 @@ impl RealtimeMachine {
             opts,
             caps,
             ids: EventIds { prefix: id_prefix, next: Cell::new(0) },
+            provider_ids: Default::default(),
             connection_generation: 0,
             response_timeout: Some(Duration::from_secs(5)),
             reply_deadlines: BTreeMap::new(),
@@ -319,10 +321,20 @@ impl RealtimeMachine {
         self
     }
 
-    pub fn incoming_on(&mut self, generation: u64, now: Ts, msg: wire::Incoming) -> Step {
+    /// Translate an admitted effect batch once at the provider boundary, before encoding or I/O.
+    /// The machine's history and emitted events retain application identities.
+    pub fn prepare_step(&mut self, mut step: Step) -> Step {
+        for frame in &mut step.frames {
+            self.provider_ids.outgoing(frame);
+        }
+        step
+    }
+
+    pub fn incoming_on(&mut self, generation: u64, now: Ts, mut msg: wire::Incoming) -> Step {
         if generation != self.connection_generation {
             return Step::default();
         }
+        self.provider_ids.incoming(&mut msg);
         let mut step = self.tick(now);
         if step.recycle {
             return step;
@@ -439,9 +451,9 @@ impl RealtimeMachine {
         step
     }
 
-    pub fn close(&mut self, now: Ts) -> Step {
+    pub fn close(&mut self, _now: Ts) -> Step {
         self.closing = true;
-        let mut step = self.flush_held_transcript(now);
+        let mut step = self.reset_input_turn_state();
         step.merge(self.close_generation());
         for req_id in std::mem::take(&mut self.pending_replies) {
             step.events.push(Event::GenerateReplyFailed(GenerateReplyFailed {
@@ -477,12 +489,21 @@ impl RealtimeMachine {
     /// `_reset_input_turn_state`. On xAI this flushes the held transcript first, as the override
     /// does; discarding it would drop the last user turn of every recycled session.
     fn reset_input_turn_state(&mut self) -> Step {
-        let step = if self.dialect.defer_transcript_finalization {
+        let mut step = if self.dialect.defer_transcript_finalization {
             self.flush_held_transcript(Ts::ZERO)
         } else {
             Step::default()
         };
-        self.transcript_acc.clear();
+        // A lost connection cannot complete its ASR jobs. Settle each received partial under
+        // its original identity before replay, just as an explicit transcription failure does.
+        let pending: Vec<_> = self
+            .transcript_acc
+            .iter()
+            .flat_map(|(item_id, parts)| parts.keys().map(|index| (item_id.clone(), *index)))
+            .collect();
+        for (item_id, content_index) in pending {
+            step.merge(self.on_transcription_failed(item_id, content_index));
+        }
         self.speech_started_at.clear();
         self.response_spoke = false;
         step

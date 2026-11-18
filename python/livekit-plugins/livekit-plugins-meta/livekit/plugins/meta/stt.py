@@ -462,7 +462,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Handshake | _EndStream]):
                 )
                 self._processed_ms = processed
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _transcript(
         self, text: str, turn_id: str | int | None, *, final: bool = False

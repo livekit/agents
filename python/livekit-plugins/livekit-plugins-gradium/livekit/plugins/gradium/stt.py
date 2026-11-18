@@ -335,7 +335,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Setup | _Audio | _Command]):
         elif message["type"] == "step":
             self._step(message)
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _step(self, message: _Step) -> None:
         if not self.speaking or not (vad_bucket := self._opts.vad_bucket):
