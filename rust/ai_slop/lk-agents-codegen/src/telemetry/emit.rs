@@ -4,8 +4,9 @@ use serde_json::{Map, Value, json};
 
 // The Weaver files are YAML written in its JSON subset, so one JSON printer writes every output.
 
-/// livekit/protocol's commit whose `otel/model/shared` the shared keys are read from (PR #1866).
-pub const PROTOCOL_REF: &str = "424a912b1db6878a43a9cbea3cd71cb92e4ad712";
+/// The livekit/protocol `main` commit whose `otel/model/shared` the shared keys are read from;
+/// it must be reachable from a branch, since Weaver clones the repository to check it out.
+pub const PROTOCOL_REF: &str = "538dd3f088c9e28cbb4dccea110272f1421163a6";
 /// OpenTelemetry semantic conventions.
 const SEMCONV_REF: &str = "v1.44.0";
 /// The GenAI registry has no tags; it is pinned by commit, as protocol pins it.
