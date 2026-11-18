@@ -1,0 +1,23 @@
+tests/test_plugin_elevenlabs_stt_live.py
+  s_1a6176064eede6::t_621f391735b776 161,165,172
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/stt.py
+  s_1a6176064eede6::t_621f391735b776 531,614,626,716,810
+tests/test_plugin_elevenlabs_stt.py
+  s_1a6176064eede6::t_621f391735b776 82,940,991,1018,1074
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9564d98da34615c4e9002e48b1920d2572f04991",
+  "prompts": {},
+  "sessions": {
+    "s_1a6176064eede6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ea50-b503-71c0-a323-750834adcd15",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
