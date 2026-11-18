@@ -49,7 +49,7 @@ identity or detect extra unplayed audio.
 Room-only runs now compare the real `RecordingFile`'s PCM against PCM retained by the fake RTC
 source at its simulated speaker, including partial frames cut by clear/close. This reference
 does not use framework playback reports, the production playhead ledger or recorder callbacks.
-It compares both sound and silence, allowing one PCM quantization unit and excluding 2 ms at
+It compares both sound and silence, allowing one PCM quantization unit and excluding 3 ms at
 resampling boundaries. Oracle tests deliberately substitute wrong, missing, shifted and extra
 audio to establish that those corruptions are rejected.
 
