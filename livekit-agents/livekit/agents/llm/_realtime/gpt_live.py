@@ -51,8 +51,8 @@ _SILENCE_RMS = 0.0006
 # long enough that a pause between sentences does not split an utterance in two
 _MIN_SILENCE_DURATION = 0.8
 _MIN_SILENCE_MS = _MIN_SILENCE_DURATION * 1000
-# a caller turn the model has not replied to still ends after this much quiet
-_UNREPLIED_SILENCE_MS = 2000
+# a caller turn ends after this much of their quiet audio when no transcript shows the pause
+_FALLBACK_SILENCE_MS = 2000
 # the service rejects an input audio burst over 5 s of audio, whatever its encoding, and audio
 # queued before session.started goes out in one burst when the session starts
 _MAX_QUEUED_INPUT_AUDIO_SAMPLES = 4 * SAMPLE_RATE
@@ -1002,6 +1002,16 @@ class GPTLiveSession(
             )
             if role == "user":
                 self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+        if role == "assistant" and (user := self._speech.get("user")) is not None:
+            # the model's transcript reaching past the caller's pause ends their replied turn: it
+            # runs behind the caller's, so their words from before it have arrived already
+            if (
+                user.end_ms is not None
+                and event.start_ms is not None
+                and event.start_ms - user.end_ms > _MIN_SILENCE_MS
+                and self._turn_reply_time(user) is not None
+            ):
+                self._end_speech("user")
         speech.text += event.delta
         # the next fragment arrives only once its span ends, so the caller's quiet starts here
         speech.quiet_ms = (
@@ -1151,14 +1161,15 @@ class GPTLiveSession(
                 name=item.name,
                 arguments=item.arguments,
             )
-            # the tool reads the chat context, so the request it serves is committed first. a turn
-            # that began after the delegation is not its request
+            # the tool reads the chat context, so the request it serves is committed first, once.
+            # a turn that began after the delegation is not its request
             if (
                 (user := self._speech.get("user")) is not None
                 and self._delegation is not None
                 and self._delegation[0] == d_id
                 and (user.start_ms or 0) < self._delegation[1]
             ):
+                self._delegation = None
                 self._end_speech("user")
             self._history.insert(fnc_call)
             self.emit("function_call", fnc_call)
@@ -1331,12 +1342,11 @@ class GPTLiveSession(
         return self._tools.copy()
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        # the caller's turn ends on their own audio pushed since their last fragment, sooner once
-        # the model has replied
+        # without a transcript to show the pause, the caller's turn ends on their own audio
+        # pushed since their last fragment
         if (speech := self._speech.get("user")) is not None:
             speech.quiet_ms += round(frame.duration * 1000)
-            replied = self._turn_reply_time(speech) is not None
-            if speech.quiet_ms >= (_MIN_SILENCE_MS if replied else _UNREPLIED_SILENCE_MS):
+            if speech.quiet_ms >= _FALLBACK_SILENCE_MS:
                 self._end_speech("user")
 
         if self._input_resampler and frame.sample_rate != self._input_resampler._input_rate:
