@@ -7,8 +7,9 @@ body {
   height: 100dvh;
   margin: 0;
   background: #fff;
-  color: #111;
-  font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #0d0d0d;
+  font: 15px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 button,
@@ -17,6 +18,7 @@ input {
   color: inherit;
   background: none;
   border: 0;
+  outline: none;
   cursor: pointer;
 }
 
@@ -25,25 +27,33 @@ input {
 aside {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  width: 240px;
-  padding: 20px 12px;
-  border-right: 1px solid #eee;
+  gap: 4px;
+  width: 260px;
+  padding: 16px 12px;
+  background: #f9f9f9;
 }
 
 header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 8px 12px;
+  gap: 10px;
+  padding: 4px 10px 16px;
   font-weight: 600;
 }
 
-#new,
-#threads li {
-  padding: 6px 8px;
-  border-radius: 6px;
+#new {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  background: #fff;
   text-align: left;
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+}
+
+#new:hover {
+  background: #f4f4f4;
 }
 
 #threads {
@@ -51,14 +61,20 @@ header {
   padding: 0;
   overflow-y: auto;
   list-style: none;
-  color: #888;
+  font-size: 14px;
 }
 
-#new:hover,
+#threads li {
+  padding: 7px 10px;
+  border-radius: 8px;
+  color: #555;
+  cursor: pointer;
+}
+
 #threads li:hover,
 #threads li.open {
-  background: #f4f4f4;
-  color: #111;
+  background: #ececec;
+  color: #0d0d0d;
 }
 
 /* the open chat and the composer */
@@ -70,25 +86,28 @@ main {
   min-width: 0;
 }
 
+#messages,
+form {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
 #messages {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 16px;
-  width: 100%;
-  max-width: 680px;
-  margin: 0 auto;
-  padding: 32px 16px;
+  gap: 24px;
+  padding-top: 40px;
+  padding-bottom: 24px;
   overflow-y: auto;
-}
-
-.hint,
-.pending {
-  color: #888;
 }
 
 .hint {
   margin: auto;
+  font-size: 26px;
+  font-weight: 500;
 }
 
 .bubble {
@@ -98,43 +117,52 @@ main {
 
 .bubble.user {
   align-self: flex-end;
-  max-width: 80%;
-  padding: 8px 14px;
-  border-radius: 16px;
-  background: #f4f4f4;
+  max-width: 75%;
+  padding: 10px 16px;
+  border-radius: 20px;
+  background: #f1f1f1;
+}
+
+.bubble.pending {
+  color: #999;
 }
 
 form {
   display: flex;
-  gap: 8px;
-  width: 100%;
-  max-width: 680px;
-  margin: 0 auto;
-  padding: 0 16px 24px;
+  align-items: center;
+  width: calc(100% - 48px);
+  max-width: 672px;
+  margin-bottom: 24px;
+  padding: 6px 6px 6px 20px;
+  border: 1px solid #e5e5e5;
+  border-radius: 26px;
+  box-shadow: 0 2px 12px rgb(0 0 0 / 6%);
+}
+
+form:focus-within {
+  border-color: #d0d0d0;
 }
 
 form input {
   flex: 1;
-  padding: 12px 16px;
-  border: 1px solid #ddd;
-  border-radius: 12px;
-  outline: none;
+  min-width: 0;
+  padding: 8px 0;
   cursor: text;
 }
 
-form input:focus {
-  border-color: #111;
-}
-
 form button {
-  padding: 0 16px;
-  border-radius: 12px;
-  background: #111;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #0d0d0d;
   color: #fff;
+  font-size: 18px;
+  line-height: 1;
 }
 
 form button:disabled {
   opacity: 0.3;
+  cursor: default;
 }
 
 @media (max-width: 640px) {

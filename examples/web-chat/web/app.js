@@ -140,7 +140,7 @@ $("new").onclick = () => {
   thread = null;
   const hint = document.createElement("p");
   hint.className = "hint";
-  hint.textContent = "Ask anything.";
+  hint.textContent = "How can I help?";
   $("messages").replaceChildren(hint);
   listThreads().catch(showError);
   $("text").focus();
