@@ -69,6 +69,9 @@ fn main() {
     } else if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
         println!("cargo:rustc-link-lib=m");
         println!("cargo:rustc-link-lib=z");
+    } else if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // libavutil's random seed reads BCryptGenRandom.
+        println!("cargo:rustc-link-lib=bcrypt");
     }
     println!("cargo:rustc-cfg=ffmpeg_built");
 }
@@ -165,8 +168,15 @@ fn compile_ffmpeg(src: &std::path::Path, entry: &std::path::Path, prefix: &std::
     let build = entry.join("build");
     std::fs::create_dir_all(&build).expect("create ffmpeg build directory");
 
-    let mut args: Vec<String> = vec![format!("--prefix={}", prefix.display())];
+    let shell_prefix = shell_path(prefix);
+    let mut args: Vec<String> = vec![format!("--prefix={shell_prefix}")];
     args.extend(CONFIGURE.iter().map(|s| (*s).to_owned()));
+    // FFmpeg's MSVC toolchain makes archives Rust's MSVC linker accepts; cl defaults to the
+    // static CRT, while Rust links the DLL one.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        args.push("--toolchain=msvc".into());
+        args.push("--extra-cflags=-MD".into());
+    }
     // Apple Clang still defaults to common symbols. FFmpeg's large tables then make
     // ld over-align __common beyond the segment limit; use real BSS definitions instead.
     if std::env::var("TARGET").is_ok_and(|target| target.contains("-apple-")) {
@@ -182,7 +192,7 @@ fn compile_ffmpeg(src: &std::path::Path, entry: &std::path::Path, prefix: &std::
 
     run(
         std::process::Command::new(bash())
-            .arg(src.join("configure"))
+            .arg(shell_path(&src.join("configure")))
             .args(&args)
             .current_dir(&build),
         "configure",
@@ -195,18 +205,11 @@ fn compile_ffmpeg(src: &std::path::Path, entry: &std::path::Path, prefix: &std::
     run(
         std::process::Command::new("make")
             .arg("install")
-            .arg(format!("DESTDIR={}", destination.display()))
+            .arg(format!("DESTDIR={}", shell_path(&destination)))
             .current_dir(&build),
         "make install",
     );
-    let relative_prefix: std::path::PathBuf =
-        prefix
-            .components()
-            .filter_map(|part| {
-                if let std::path::Component::Normal(name) = part { Some(name) } else { None }
-            })
-            .collect();
-    let installed = destination.join(relative_prefix);
+    let installed = destination.join(shell_prefix.trim_start_matches('/'));
     for directory in ["include", "lib"] {
         std::fs::rename(installed.join(directory), entry.join(directory))
             .expect("collect installed FFmpeg artifacts");
@@ -256,9 +259,27 @@ fn bash() -> std::path::PathBuf {
         .expect("a POSIX bash (Git Bash or MSYS2) on PATH, or LK_BASH")
 }
 
+/// A path as FFmpeg's scripts and Makefiles take it: POSIX, so `C:\a\b` is `/c/a/b` under
+/// MSYS2 and Git Bash (a drive colon or a backslash breaks Make).
+fn shell_path(path: &std::path::Path) -> String {
+    let text = path.to_str().expect("FFmpeg build paths are UTF-8").to_owned();
+    if !cfg!(windows) {
+        return text;
+    }
+    let text = text.replace('\\', "/");
+    match text.split_once(':') {
+        Some((drive, rest)) if drive.len() == 1 => {
+            format!("/{}{rest}", drive.to_ascii_lowercase())
+        }
+        _ => text,
+    }
+}
+
 fn which(bin: &str) -> Option<std::path::PathBuf> {
-    std::env::var_os("PATH")
-        .and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(bin)).find(|p| p.is_file()))
+    let file = format!("{bin}{}", std::env::consts::EXE_SUFFIX);
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths).map(|d| d.join(&file)).find(|p| p.is_file())
+    })
 }
 
 fn run(cmd: &mut std::process::Command, what: &str) {

@@ -80,8 +80,7 @@ jobs:
           - { name: musllinux-aarch64, os: nscloud-ubuntu-24.04-arm64-8x16-with-cache, target: aarch64, manylinux: musllinux_1_2, container: quay.io/pypa/musllinux_1_2_aarch64:latest, test: false }
           - { name: macos-arm64, os: nscloud-macos-sequoia-arm64-6x14, target: aarch64, manylinux: "", test: true }
           - { name: macos-x86_64, os: macos-15-intel, target: x86_64, manylinux: "", test: true }
-          # windows-x64 returns once its job installs the MSYS2 toolchain FFmpeg's build needs
-          # (make, nasm, pkg-config, opus); until then a release ships Linux and macOS wheels.
+          - { name: windows-x64, os: nscloud-windows-2022-amd64-16x32, target: x86_64-pc-windows-msvc, manylinux: "", test: true }
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -123,10 +122,36 @@ jobs:
             echo "PKG_CONFIG_ALL_STATIC=1"
           } >> "$GITHUB_ENV"
 
-      - name: Build wheel
+      # FFmpeg builds with its MSVC toolchain under MSYS2's bash and make; libopus is vcpkg's
+      # static build against the DLL CRT, found through pkg-config.
+      - name: Install Windows codec build prerequisites
+        if: runner.os == 'Windows'
+        id: msys2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: UCRT64
+          update: false
+          path-type: inherit
+          install: make diffutils mingw-w64-ucrt-x86_64-nasm mingw-w64-ucrt-x86_64-pkgconf
+
+      - name: Expose the Windows codec toolchain
+        if: runner.os == 'Windows'
+        shell: pwsh
         env:
-          # System32's bash is the WSL launcher; FFmpeg's scripts need Git Bash
-          LK_BASH: ${{ runner.os == 'Windows' && 'C:\Program Files\Git\bin\bash.exe' || '' }}
+          MSYS2: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          vcpkg install opus:x64-windows-static-md
+          # MSYS2's coreutils `link` would shadow MSVC's linker in FFmpeg's configure
+          Remove-Item "$env:MSYS2\usr\bin\link.exe"
+          Add-Content $env:GITHUB_PATH "$env:MSYS2\usr\bin", "$env:MSYS2\ucrt64\bin"
+          Add-Content $env:GITHUB_ENV "LK_BASH=$env:MSYS2\usr\bin\bash.exe",
+            "PKG_CONFIG_PATH=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md\lib\pkgconfig"
+
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+
+      - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           working-directory: python/livekit-agents
