@@ -718,6 +718,49 @@ impl CoreRemoteInteraction {
         })
     }
 
+    /// The model's cancel of one of this remote's tasks in the conversation `owner` serializes.
+    /// `arguments` hold only `task_id`. It runs through the same native control and journal as
+    /// `RemoteTask.cancel()`; the outcome states what was observed: cancelled, refused by the
+    /// peer, or unconfirmed after reconciliation. An unknown or ended task is tool feedback.
+    #[pyo3(signature = (arguments, thread_id, owner))]
+    fn cancel_task<'py>(
+        &self,
+        py: Python<'py>,
+        arguments: Bound<'_, PyAny>,
+        thread_id: ::std::option::Option<::std::string::String>,
+        owner: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let env = crate::process::env();
+        let arguments = crate::py_values::value_from_py(arguments.as_any(), "arguments")?;
+        let owner = owner
+            .map(|v| {
+                crate::py_objects::native::<dyn ::lk_agents_abi::session::SessionCommands>(
+                    v.as_any(),
+                )
+                .and_then(|native| {
+                    native.ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "owner",
+                            ": expected the active native conversation owner"
+                        ))
+                    })
+                })
+            })
+            .transpose()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let out = <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::cancel_task(&this, &env, arguments, thread_id, owner)
+                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::tool_report::tool_outcome_to_py(py, out)?,
+                    py,
+                )
+            })
+        })
+    }
+
     /// Stop the local tool wait and close its observation resources. Remote business work is
     /// unchanged; `settled()` waits for local cleanup, not remote task cancellation.
     fn cancelled(&self, py: Python<'_>) -> PyResult<()> {
@@ -799,6 +842,19 @@ pub fn _core_delegation_tool<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
     let out = py.detach(|| <RemoteConfigurationImpl as ::lk_agents_abi::a2a::remote::RemoteConfiguration>::_core_delegation_tool(name, description)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
+    crate::generated::records::a2a_client::agent_card_to_py(py, out)
+}
+
+/// The sibling `cancel_<name>` tool of the remote tool `name`, taking only the `task_id`
+/// to cancel.
+#[pyfunction]
+#[pyo3(signature = (name))]
+pub fn _core_cancel_tool<'py>(
+    py: Python<'py>,
+    name: ::std::string::String,
+) -> PyResult<Bound<'py, PyAny>> {
+    crate::py_calls::check_pid()?;
+    let out = py.detach(|| <RemoteConfigurationImpl as ::lk_agents_abi::a2a::remote::RemoteConfiguration>::_core_cancel_tool(name));
     crate::generated::records::a2a_client::agent_card_to_py(py, out)
 }
 

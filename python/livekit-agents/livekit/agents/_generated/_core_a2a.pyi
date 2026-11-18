@@ -26,6 +26,7 @@ from .storage_class import ThreadInfo
 from .storage_handler import HandlerOutcome, HandlerRun
 from .storage_options import Policy, TurnOptions
 from .storage_turn import HandlerOutput, TurnResult
+from .tool_report import ToolOutcome
 
 class _core_Credentials:
     def __new__(cls, api_key: str, api_secret: str) -> Self: ...
@@ -181,6 +182,17 @@ class _core_RemoteInteraction:
         through `host.question`. Task messages reach the same native driver. Returns the outcome,
         or, off a call, the expert's question. The client and its reply close before it returns.
         """
+    async def cancel_task(
+        self,
+        arguments: object,
+        thread_id: str | None,
+        owner: TextSessionRunner | VoiceSession | None,
+    ) -> ToolOutcome:
+        """The model's cancel of one of this remote's tasks in the conversation `owner` serializes.
+        `arguments` hold only `task_id`. It runs through the same native control and journal as
+        `RemoteTask.cancel()`; the outcome states what was observed: cancelled, refused by the
+        peer, or unconfirmed after reconciliation. An unknown or ended task is tool feedback.
+        """
     def cancelled(self) -> None:
         """Stop the local tool wait and close its observation resources. Remote business work is
         unchanged; `settled()` waits for local cleanup, not remote task cancellation.
@@ -198,6 +210,11 @@ def _core_delegation_chain(metadata: dict[str, object]) -> list[DelegationPartit
 def _core_delegation_tool(name: str, description: str) -> AgentCard:
     """The delegation tool declared in code: `name` and `description` are required, and the tool
     takes the request, stated in full. Nothing is fetched from the endpoint.
+    """
+
+def _core_cancel_tool(name: str) -> AgentCard:
+    """The sibling `cancel_<name>` tool of the remote tool `name`, taking only the `task_id`
+    to cancel.
     """
 
 def _core_remote_token(

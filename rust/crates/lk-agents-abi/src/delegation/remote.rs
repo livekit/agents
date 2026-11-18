@@ -305,3 +305,14 @@ pub enum RemoteRecovery {
     /// Dispatch may have happened, but no accepted task or reply identifies its outcome.
     Uncertain,
 }
+
+/// What the journal proves about a settled cancellation the frontend model requested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteCancelOutcome {
+    /// The task's observed state is canceled.
+    Cancelled,
+    /// The peer definitely refused the latest control; the task was not canceled by it.
+    Refused,
+    /// Neither: a lost reply or an unconfirmed state after reconciliation.
+    Unconfirmed,
+}

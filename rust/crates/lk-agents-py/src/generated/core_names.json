@@ -163,6 +163,7 @@
     "_core_auth_grant_can_list",
     "_core_auth_grant_can_read",
     "_core_auth_grant_can_write",
+    "_core_cancel_tool",
     "_core_create_room_session",
     "_core_delegation_chain",
     "_core_delegation_tool",

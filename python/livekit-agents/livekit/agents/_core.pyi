@@ -18,6 +18,7 @@ from ._generated._core_a2a import (
     _core_auth_grant_can_list as _core_auth_grant_can_list,
     _core_auth_grant_can_read as _core_auth_grant_can_read,
     _core_auth_grant_can_write as _core_auth_grant_can_write,
+    _core_cancel_tool as _core_cancel_tool,
     _core_Credentials as _core_Credentials,
     _core_delegation_chain as _core_delegation_chain,
     _core_delegation_tool as _core_delegation_tool,

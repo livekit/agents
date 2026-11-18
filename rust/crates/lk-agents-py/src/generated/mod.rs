@@ -296,6 +296,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(a2a::_core_remote_id, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_delegation_chain, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_delegation_tool, m)?)?;
+    m.add_function(wrap_pyfunction!(a2a::_core_cancel_tool, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_remote_token, m)?)?;
     m.add_class::<a2a::CoreHandlerTurn>()?;
     m.add_class::<a2a::Turn>()?;

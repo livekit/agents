@@ -317,6 +317,30 @@ impl VoiceRuntime {
                 ));
                 return;
             }
+            SessionCommand::CancelTask {
+                remote_id,
+                endpoint,
+                task_id,
+                scope,
+                candidate,
+                drivers,
+                done,
+            } => {
+                done.resolve(crate::session::admit_task_cancellation(
+                    &state,
+                    &drivers,
+                    remote_id,
+                    endpoint,
+                    &task_id,
+                    scope.as_ref(),
+                    candidate,
+                ));
+                return;
+            }
+            SessionCommand::CancelOutcome { target, done } => {
+                done.resolve(crate::session::cancel_outcome(&state, &target));
+                return;
+            }
             SessionCommand::DefaultContext { remote_id, endpoint, done } => {
                 let result = remote::state(&state, &remote_id, &endpoint)
                     .map(|remote| remote.and_then(|remote| remote.default_context_id.clone()));

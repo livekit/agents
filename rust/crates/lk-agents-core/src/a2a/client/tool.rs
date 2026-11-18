@@ -85,6 +85,40 @@ fn add_task_argument(schema: &mut serde_json::Map<String, Value>) -> Result<(), 
     Ok(())
 }
 
+/// The remote tool's sibling that cancels one of its tasks. It is framework-owned: no card
+/// schema shapes it, so a business tool's required input never has to be invented to stop
+/// work, and no business data can travel with the control.
+pub fn cancel_tool(remote: &str) -> ToolCard {
+    ToolCard {
+        name: format!("cancel_{remote}"),
+        description: format!(
+            "Cancel a running {remote} task in this conversation, when the person asks to stop \
+             it. Cancelling stops the work; it does not undo anything already done."
+        ),
+        extensions: Vec::new(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "The task to cancel."}
+            },
+            "required": ["task_id"],
+            "additionalProperties": false
+        })
+        .as_object()
+        .cloned()
+        .expect("a JSON object"),
+        structured_input: false,
+    }
+}
+
+/// The cancel tool's one argument: the task it names.
+pub fn cancel_task_id(arguments: &Value) -> Result<String, ClientError> {
+    match arguments.as_object().map(|arguments| (arguments.len(), arguments.get("task_id"))) {
+        Some((1, Some(Value::String(id)))) if !id.trim().is_empty() => Ok(id.clone()),
+        _ => Err(ClientError::InvalidInput("give the task_id of the task to cancel".into())),
+    }
+}
+
 /// Remove framework routing before validating or transmitting the remote's business input.
 pub fn take_task_id(arguments: &mut Value) -> Result<Option<String>, ClientError> {
     let arguments = arguments.as_object_mut().ok_or_else(|| {
@@ -166,6 +200,24 @@ mod tests {
         assert_eq!(definition.name, "insurance");
         assert_eq!(definition.input_schema["required"], json!(["request"]));
         assert!(!definition.structured_input);
+    }
+
+    #[test]
+    fn the_cancel_tool_takes_only_a_task_id_whatever_the_business_schema() {
+        let cancel = cancel_tool("travel");
+        assert_eq!(cancel.name, "cancel_travel");
+        assert_eq!(cancel.input_schema["required"], json!(["task_id"]));
+        assert_eq!(cancel.input_schema["properties"].as_object().unwrap().len(), 1);
+        assert_eq!(cancel_task_id(&json!({"task_id": "flight"})).unwrap(), "flight");
+        for malformed in [
+            json!({}),
+            json!({"task_id": " "}),
+            json!({"task_id": null}),
+            json!({"task_id": "flight", "request": "Cancel it"}),
+            json!("flight"),
+        ] {
+            assert!(cancel_task_id(&malformed).is_err(), "{malformed}");
+        }
     }
 
     #[test]

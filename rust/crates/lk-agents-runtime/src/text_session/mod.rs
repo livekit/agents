@@ -273,6 +273,30 @@ impl Driver {
                 done.resolve(result);
                 return;
             }
+            SessionCommand::CancelTask {
+                remote_id,
+                endpoint,
+                task_id,
+                scope,
+                candidate,
+                drivers,
+                done,
+            } => {
+                done.resolve(crate::session::admit_task_cancellation(
+                    &self.session.snapshot(),
+                    &drivers,
+                    remote_id,
+                    endpoint,
+                    &task_id,
+                    scope.as_ref(),
+                    candidate,
+                ));
+                return;
+            }
+            SessionCommand::CancelOutcome { target, done } => {
+                done.resolve(crate::session::cancel_outcome(&self.session.snapshot(), &target));
+                return;
+            }
             SessionCommand::AdmitInput { request, verdict, done } => {
                 let result = self.session.admit_input(*request, verdict);
                 let saved = self.checkpoint_command(effects).await;

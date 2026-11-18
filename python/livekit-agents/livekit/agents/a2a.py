@@ -114,9 +114,12 @@ class _ExpertTool(RawFunctionTool):
 
 
 class _RemoteTool(Toolset):
+    """The remote tool, and its sibling that cancels one of its tasks."""
+
     def __init__(self, agent: RemoteAgent) -> None:
         self._agent = agent
         self._tool: _ExpertTool | None = None
+        self._cancel: RawFunctionTool | None = None
         if agent._card is not None:
             self._define(agent._card)
         super().__init__(id=agent._card.name if agent._card is not None else agent._url())
@@ -131,6 +134,15 @@ class _RemoteTool(Toolset):
             },
         )
         self._tool = _ExpertTool(tool, self._agent)
+        cancel = _core._core_cancel_tool(card.name)
+        self._cancel = function_tool(
+            self._invoke_cancel,
+            raw_schema={
+                "name": cancel.name,
+                "description": cancel.description,
+                "parameters": cancel.input_schema,
+            },
+        )
 
     async def setup(self) -> Self:
         if self._tool is None:
@@ -140,7 +152,9 @@ class _RemoteTool(Toolset):
     @property
     def tools(self) -> Sequence[Tool | Toolset]:
         # a URL's card is read when a run first sets the tool up
-        return [self._tool] if self._tool is not None else []
+        if self._tool is None or self._cancel is None:
+            return []
+        return [self._tool, self._cancel]
 
     async def _invoke(self, ctx: RunContext, raw_arguments: dict[str, object]) -> ToolReport:
         agent = self._agent
@@ -185,11 +199,7 @@ class _RemoteTool(Toolset):
                 thread_id,
                 agent._conn_options,
                 ctx._session is not None,
-                ctx._session._running
-                if ctx._session is not None
-                else ctx._run.runner
-                if ctx._run is not None and isinstance(ctx._run.runner, _core.TextSessionRunner)
-                else None,
+                _owner(ctx),
                 ToolCallRef(agent_id=ctx._run.frame_id.value, call_id=ctx.function_call.id)
                 if ctx._run is not None and ctx._run.frame_id is not None
                 else None,
@@ -207,6 +217,28 @@ class _RemoteTool(Toolset):
             )
         assert isinstance(event, RemoteEventOutcome)
         return ToolReport(outcome=event.outcome)
+
+    async def _invoke_cancel(self, ctx: RunContext, raw_arguments: dict[str, object]) -> ToolReport:
+        agent = self._agent
+        interaction = _core._core_RemoteInteraction(
+            agent._url(), ctx.function_call, *_server_credentials(), agent.id
+        )
+        thread = ctx._run.thread if ctx._run is not None else ctx._call().thread
+        outcome = await interaction.cancel_task(
+            raw_arguments,
+            thread.id if agent._token is None and thread is not None else None,
+            _owner(ctx),
+        )
+        return ToolReport(outcome=outcome)
+
+
+def _owner(ctx: RunContext) -> _core.TextSessionRunner | _core.VoiceSession | None:
+    """The native conversation owner of this call: the live session, or a bound text run's."""
+    if ctx._session is not None:
+        return ctx._session._running
+    if ctx._run is not None and isinstance(ctx._run.runner, _core.TextSessionRunner):
+        return ctx._run.runner
+    return None
 
 
 _DELEGATED = "The remote request is running. Its progress, questions and result arrive separately."

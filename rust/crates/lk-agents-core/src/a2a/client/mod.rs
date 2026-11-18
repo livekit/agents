@@ -2,7 +2,7 @@ use lk_agents_abi::a2a_protocol as a2a;
 mod messages;
 pub use messages::{message_from_wire, message_to_wire, metadata_to_wire, part_from_wire};
 mod tool;
-pub use tool::{delegation_tool, take_task_id, tool_definition};
+pub use tool::{cancel_task_id, cancel_tool, delegation_tool, take_task_id, tool_definition};
 
 use a2a::{
     AgentCard, Artifact, CancelTaskRequest, JsonRpcId, JsonRpcRequest, JsonRpcResponse, Message,
