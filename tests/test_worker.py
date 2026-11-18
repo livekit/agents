@@ -514,6 +514,9 @@ async def test_final_job_status_reaches_worker_websocket(
                 await ws.send_bytes(
                     agent.ServerMessage(availability=availability).SerializeToString()
                 )
+            elif message.HasField("ping"):
+                pong = agent.WorkerPong(last_timestamp=message.ping.timestamp)
+                await ws.send_bytes(agent.ServerMessage(pong=pong).SerializeToString())
             elif message.HasField("availability"):
                 assignment = agent.JobAssignment(job=job, token="fake_token")
                 await ws.send_bytes(agent.ServerMessage(assignment=assignment).SerializeToString())
