@@ -14,7 +14,7 @@ from livekit.agents.voice.agent_run import AgentCallbacks
 
 from .._core import Storage, _core_ContextActivation
 from .agent_authoring import AgentConfiguration, CallbackKind, Registered, ToolOptions
-from .agent_run import AgentDefinition, EventExpectation, Retries, RunRequest, RunUpdate
+from .agent_run import AgentDefinition, EventExpectation, Retries, RunRequest, RunUpdate, SayOutcome
 from .chat_items import ChatItem
 from .run_stream_events import PresentedEvent, StreamOutcome
 from .usage import Usage
@@ -131,8 +131,10 @@ class AgentRunner:
         `invocation_id`: the run streams it as progress. Waits for queue admission rather than
         dropping an update under pressure. Refused once this runner no longer owns the invocation.
         """
-    async def say(self, invocation_id: str, operation: int, message: str) -> None:
-        """Enqueue exact text now; the private reader confirms the source's local output boundary."""
+    async def say(self, invocation_id: str, operation: int, message: str) -> SayOutcome:
+        """Enqueue exact text now, or refuse it before admission. The private reader settles with
+        the outcome at the source's local output boundary; dropping it never cancels the output.
+        """
 
 class AgentRunUpdates:
     async def recv(self) -> RunUpdate | None: ...

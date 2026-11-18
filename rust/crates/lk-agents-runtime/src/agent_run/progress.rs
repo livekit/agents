@@ -1,4 +1,5 @@
 use super::execution::Report;
+use lk_agents_abi::agent::run::SayOutcome;
 use lk_agents_abi::errors::{ApiError, ErrorKind, HostError, ProviderError};
 use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_core::agent_run::{CallId, ToolOutputId};
@@ -14,7 +15,10 @@ const MAX_PENDING_BYTES: usize = crate::a2a::door::MAX_PAYLOAD_BYTES;
 #[path = "progress_tests.rs"]
 mod tests;
 
-type Completion = signal::Cell<Option<Result<(), ProviderError>>>;
+/// An admitted report's settlement: progress settles `Delivered` once admitted, exact output
+/// with its outcome at the output boundary; `Err` is a report that was never admitted.
+type Settled = Result<SayOutcome, ProviderError>;
+type Completion = signal::Cell<Option<Settled>>;
 type Key = (String, u64);
 
 #[derive(Clone)]
@@ -24,6 +28,8 @@ pub struct Progress {
     owner: Weak<TaskSet>,
     spawner: Arc<dyn Spawner>,
     state: Arc<Mutex<State>>,
+    /// Whether this execution has a live output boundary for exact text.
+    exact_output: bool,
 }
 
 #[derive(Default)]
@@ -52,11 +58,11 @@ impl Drop for Permit {
 }
 
 pub(crate) struct Receipt {
-    done: signal::Producer<Option<Result<(), ProviderError>>>,
+    done: signal::Producer<Option<Settled>>,
     permit: Permit,
 }
 impl Receipt {
-    pub(crate) fn finish(self, result: Result<(), ProviderError>) {
+    pub(crate) fn finish(self, result: Settled) {
         let Self { done, permit } = self;
         // Return capacity before a resumed host can enqueue its next awaited update.
         drop(permit);
@@ -96,7 +102,7 @@ impl OperationScope {
         };
         if let Some(tail) = tail {
             match tail.wait().await {
-                Ok(Ok(())) | Ok(Err(_)) | Err(signal::Ended) => {}
+                Ok(Ok(_)) | Ok(Err(_)) | Err(signal::Ended) => {}
             }
         }
     }
@@ -105,8 +111,8 @@ impl OperationScope {
 fn ended() -> ProviderError {
     HostError::new("the tool's native report owner has ended").into()
 }
-fn failed(error: ProviderError) -> BoxFuture<'static, Result<(), ProviderError>> {
-    Box::pin(async move { Err(error) })
+pub(crate) fn no_output() -> ProviderError {
+    HostError::new("exact tool output requires a live voice, text stream or A2A output").into()
 }
 
 impl Progress {
@@ -115,8 +121,10 @@ impl Progress {
         events: mpsc::Sender<(String, Report)>,
         owner: &Arc<TaskSet>,
         spawner: Arc<dyn Spawner>,
+        exact_output: bool,
     ) -> Self {
-        Self { invocation, events, owner: Arc::downgrade(owner), spawner, state: Arc::default() }
+        let owner = Arc::downgrade(owner);
+        Self { invocation, events, owner, spawner, state: Arc::default(), exact_output }
     }
     pub(crate) fn for_invocation(&self, invocation: String) -> Self {
         Self { invocation, ..self.clone() }
@@ -135,8 +143,8 @@ impl Progress {
     }
     pub(super) fn spawn_output(
         &self,
-        producer: signal::Producer<Option<Result<(), ProviderError>>>,
-        future: BoxFuture<'static, Result<(), ProviderError>>,
+        producer: signal::Producer<Option<SayOutcome>>,
+        future: BoxFuture<'static, SayOutcome>,
     ) -> Option<lk_agents_net::task::ScopedTask> {
         self.owner.upgrade()?.try_scoped(&*self.spawner, "tool exact output", async move {
             producer.resolve(future.await);
@@ -149,14 +157,31 @@ impl Progress {
         message: String,
         silent: bool,
     ) -> BoxFuture<'static, Result<(), ProviderError>> {
-        self.submit(operation, message, false, silent)
+        match self.submit(operation, message, false, silent) {
+            Ok(receipt) => {
+                Box::pin(async move { receipt.wait().await.map_err(|_| ended())?.map(drop) })
+            }
+            Err(error) => Box::pin(async move { Err(error) }),
+        }
     }
+    /// Refused before admission without a live output boundary or capacity. Once admitted, the
+    /// reader settles with its outcome; an owner ending first interrupted the output.
     pub fn say(
         &self,
         operation: u64,
         message: String,
-    ) -> BoxFuture<'static, Result<(), ProviderError>> {
-        self.submit(operation, message, true, false)
+    ) -> Result<BoxFuture<'static, SayOutcome>, ProviderError> {
+        if !self.exact_output {
+            return Err(no_output());
+        }
+        let receipt = self.submit(operation, message, true, false)?;
+        Ok(Box::pin(async move {
+            match receipt.wait().await {
+                Ok(Ok(outcome)) => outcome,
+                Ok(Err(_)) => SayOutcome::Failed,
+                Err(signal::Ended) => SayOutcome::Interrupted,
+            }
+        }))
     }
     /// Compatibility for native callers that always await admission.
     pub async fn report(&self, operation: u64, message: String) -> Result<(), ProviderError> {
@@ -169,18 +194,16 @@ impl Progress {
         text: String,
         exact: bool,
         silent: bool,
-    ) -> BoxFuture<'static, Result<(), ProviderError>> {
+    ) -> Result<Completion, ProviderError> {
         let Some(owner) = self.owner.upgrade().filter(|_| !self.events.is_closed()) else {
-            return failed(ended());
+            return Err(ended());
         };
         if text.len() > MAX_PENDING_BYTES {
-            return failed(
-                HostError {
-                    kind: lk_agents_abi::errors::HostErrorKind::TooLarge,
-                    ..HostError::new("tool output exceeds the local output payload limit")
-                }
-                .into(),
-            );
+            return Err(HostError {
+                kind: lk_agents_abi::errors::HostErrorKind::TooLarge,
+                ..HostError::new("tool output exceeds the local output payload limit")
+            }
+            .into());
         }
         let (done, receipt) = signal::once();
         let bytes = text.len();
@@ -189,17 +212,15 @@ impl Progress {
             if state.pending >= MAX_PENDING_REPORTS
                 || state.bytes.saturating_add(bytes) > MAX_PENDING_BYTES
             {
-                return failed(
-                    ApiError::new(
-                        ErrorKind::RateLimit,
-                        "the native tool report admission budget is full",
-                    )
-                    .into(),
-                );
+                return Err(ApiError::new(
+                    ErrorKind::RateLimit,
+                    "the native tool report admission budget is full",
+                )
+                .into());
             }
             let key = (self.invocation.clone(), operation);
             let Some(Operation::Open { call, tail }) = state.operations.get_mut(&key) else {
-                return failed(ended());
+                return Err(ended());
             };
             let call = *call;
             let before = tail.replace(receipt.clone());
@@ -215,8 +236,9 @@ impl Progress {
             if let Some(before) = before {
                 match before.wait().await {
                     Ok(_) => {}
+                    // The owner ended before this report's turn: an exact output was cut off.
                     Err(signal::Ended) => {
-                        done.finish(Err(ended()));
+                        done.finish(if exact { Ok(SayOutcome::Interrupted) } else { Err(ended()) });
                         return;
                     }
                 }
@@ -226,17 +248,17 @@ impl Progress {
                 if let Err(mpsc::error::SendError((_, Report::ToolOutputRequested { done, .. }))) =
                     events.send((invocation, report)).await
                 {
-                    done.finish(Err(ended()));
+                    done.finish(Ok(SayOutcome::Interrupted));
                 }
             } else {
                 let report = Report::Progress { call, message: text, silent };
                 let result = events.send((invocation, report)).await.map_err(|_| ended());
-                done.finish(result);
+                done.finish(result.map(|()| SayOutcome::Delivered));
             }
         };
         if !owner.try_spawn(&*self.spawner, "owned tool report admission", work) {
-            return failed(ended());
+            return Err(ended());
         }
-        Box::pin(async move { receipt.wait().await.map_err(|_| ended())? })
+        Ok(receipt)
     }
 }

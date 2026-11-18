@@ -1,5 +1,6 @@
 use super::*;
 use crate::agent_run::ToolOutputId;
+use lk_agents_abi::agent::run::SayOutcome;
 #[cfg(test)]
 #[path = "tool_output_tests.rs"]
 mod tests;
@@ -28,19 +29,14 @@ impl AgentRun {
         call: CallId,
         text: String,
         now: Ts,
-    ) -> Result<ChatMessage, ProviderError> {
+    ) -> Option<ChatMessage> {
         let active = match &self.phase {
             Phase::Requesting(_, acting) | Phase::Acting(acting) => {
                 acting.calls.running_call(call).is_some()
             }
             _ => false,
         };
-        if !active {
-            return Err(
-                HostError::new("the exact output's originating tool is no longer live").into()
-            );
-        }
-        Ok(ChatMessage::text(self.item_id(), Role::Assistant, text, self.stamp(now)))
+        active.then(|| ChatMessage::text(self.item_id(), Role::Assistant, text, self.stamp(now)))
     }
 
     /// The surrounding source owner has accepted this same canonical message. This factual
@@ -66,11 +62,9 @@ impl AgentRun {
         if self.tool_outputs.contains_key(&output) {
             return;
         }
-        let result = call
-            .ok_or_else(|| HostError::new("the exact output lost its tool operation").into())
-            .and_then(|call| self.plan_tool_output(call, text, now));
-        match result {
-            Ok(message) => {
+        // A lost tool operation, or one no longer running, has no live source to speak for.
+        match call.and_then(|call| self.plan_tool_output(call, text, now)) {
+            Some(message) => {
                 self.tool_outputs.insert(output, (message.clone(), stream));
                 effects.push(AgentRunEffect::DeliverToolOutput {
                     output,
@@ -83,16 +77,15 @@ impl AgentRun {
                     }));
                 }
             }
-            Err(error) => {
-                effects.push(AgentRunEffect::ToolOutputSettled { output, result: Err(error) })
-            }
+            None => effects
+                .push(AgentRunEffect::ToolOutputSettled { output, outcome: SayOutcome::Failed }),
         }
     }
 
     pub(super) fn delivered_tool_output(
         &mut self,
         output: ToolOutputId,
-        result: Result<(), ProviderError>,
+        outcome: SayOutcome,
         effects: &mut Vec<AgentRunEffect>,
     ) {
         let Some((message, stream)) = self.tool_outputs.remove(&output) else {
@@ -101,14 +94,18 @@ impl AgentRun {
         if stream {
             effects.push(AgentRunEffect::Emit(StreamEvent::TextEnd {
                 message_id: message.id.clone(),
-                interrupted: result.is_err(),
+                interrupted: outcome != SayOutcome::Delivered,
             }));
         }
-        let result = if matches!(self.phase, Phase::Done) {
-            Err(HostError::new("the exact output owner ended before recording its handoff").into())
-        } else {
-            result.map(|()| self.record_tool_output(message))
+        // Words the ended run can no longer record were cut off by its close.
+        let outcome = match outcome {
+            SayOutcome::Delivered if matches!(self.phase, Phase::Done) => SayOutcome::Interrupted,
+            SayOutcome::Delivered => {
+                self.record_tool_output(message);
+                SayOutcome::Delivered
+            }
+            undelivered => undelivered,
         };
-        effects.push(AgentRunEffect::ToolOutputSettled { output, result });
+        effects.push(AgentRunEffect::ToolOutputSettled { output, outcome });
     }
 }

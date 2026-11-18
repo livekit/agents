@@ -1,13 +1,12 @@
 use super::{ExactOutput, HandlerTurn, Report};
-use lk_agents_abi::errors::HostError;
+use lk_agents_abi::agent::run::SayOutcome;
 use lk_agents_abi::{BoxFuture, ChatMessage};
 use lk_agents_net::signal;
 
 impl HandlerTurn {
-    pub(super) fn enqueue_exact(
-        &self,
-        message: ChatMessage,
-    ) -> BoxFuture<'static, Result<(), HostError>> {
+    /// Delivered at the publisher's checked handoff and failed when it refuses; a turn closed
+    /// before the handoff interrupted it.
+    pub(super) fn enqueue_exact(&self, message: ChatMessage) -> BoxFuture<'static, SayOutcome> {
         let (delivered, receipt) = signal::once();
         let output = Report::Exact(ExactOutput {
             task_id: self.task_id.clone(),
@@ -34,9 +33,7 @@ impl HandlerTurn {
                     admitted,
                     work,
                 ) {
-                    return Box::pin(async {
-                        Err(HostError::new("the A2A output owner has closed"))
-                    });
+                    return Box::pin(async { SayOutcome::Interrupted });
                 }
             }
             None => {
@@ -45,10 +42,11 @@ impl HandlerTurn {
             }
         }
         Box::pin(async move {
-            receipt
-                .wait()
-                .await
-                .map_err(|_| HostError::new("the A2A output owner ended before exact delivery"))?
+            match receipt.wait().await {
+                Ok(Ok(())) => SayOutcome::Delivered,
+                Ok(Err(_)) => SayOutcome::Failed,
+                Err(signal::Ended) => SayOutcome::Interrupted,
+            }
         })
     }
 

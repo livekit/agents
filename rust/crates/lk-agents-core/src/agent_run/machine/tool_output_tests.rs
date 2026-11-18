@@ -29,8 +29,12 @@ fn exact_tool_output_is_recorded_once_only_after_its_local_boundary_accepts_it()
     assert!(
         matches!(effects.as_slice(), [AgentRunEffect::DeliverToolOutput { .. }, AgentRunEffect::Emit(StreamEvent::TextDelta { message_id, delta })] if message_id == &message.id && delta == "Reference ABC.")
     );
-    driver.send(AgentRunEvent::ToolOutputDelivered { output, result: Ok(()) });
-    assert!(driver.send(AgentRunEvent::ToolOutputDelivered { output, result: Ok(()) }).is_empty());
+    driver.send(AgentRunEvent::ToolOutputDelivered { output, outcome: SayOutcome::Delivered });
+    assert!(
+        driver
+            .send(AgentRunEvent::ToolOutputDelivered { output, outcome: SayOutcome::Delivered })
+            .is_empty()
+    );
     driver.send(AgentRunEvent::ToolSettled { call, report: value("Booked").into() });
     driver.reply("Done", &[]);
     let result = driver.result();
@@ -40,7 +44,7 @@ fn exact_tool_output_is_recorded_once_only_after_its_local_boundary_accepts_it()
 }
 
 #[test]
-fn a_failed_exact_handoff_does_not_enter_perceived_history_or_cancel_the_business_tool() {
+fn an_interrupted_exact_handoff_does_not_enter_perceived_history_or_cancel_the_business_tool() {
     let mut driver =
         Driver::new(text_agent(vec![string_tool("lookup", "id")]), "Find booking", vec![]);
     driver.reply("", &[("lookup", json!({"id":"ABC"}))]);
@@ -55,13 +59,12 @@ fn a_failed_exact_handoff_does_not_enter_perceived_history_or_cancel_the_busines
         text: "Unheard reference".into(),
         stream: false,
     });
-    let effects = driver.send(AgentRunEvent::ToolOutputDelivered {
-        output,
-        result: Err(HostError::new("the observer closed").into()),
-    });
-    assert!(
-        matches!(&effects[..], [AgentRunEffect::ToolOutputSettled { result: Err(error), .. }] if !error.cancelled())
-    );
+    let effects = driver
+        .send(AgentRunEvent::ToolOutputDelivered { output, outcome: SayOutcome::Interrupted });
+    assert!(matches!(
+        &effects[..],
+        [AgentRunEffect::ToolOutputSettled { outcome: SayOutcome::Interrupted, .. }]
+    ));
     driver.send(AgentRunEvent::ToolSettled { call, report: value("Booked").into() });
     driver.reply("Done", &[]);
     assert!(

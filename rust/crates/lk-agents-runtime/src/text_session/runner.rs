@@ -332,17 +332,18 @@ impl TextSessionRunner for Runner {
         invocation_id: &str,
         operation: u64,
         message: String,
-    ) -> lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>> {
+    ) -> Result<
+        lk_agents_abi::BoxFuture<'static, lk_agents_abi::agent::run::SayOutcome>,
+        ProviderError,
+    > {
         match self.control.lock().as_ref() {
             Some(control) => {
                 control.progress.for_invocation(invocation_id.into()).say(operation, message)
             }
-            None => Box::pin(async {
-                Err(lk_agents_abi::errors::HostError::new(
-                    "the conversation report owner has ended",
-                )
-                .into())
-            }),
+            None => Err(lk_agents_abi::errors::HostError::new(
+                "the conversation report owner has ended",
+            )
+            .into()),
         }
     }
 }
@@ -446,11 +447,13 @@ fn start(
     let (updates, receiver) = lk_agents_net::outbox::outbox(UPDATE_QUEUE);
     let (events_tx, events) = mpsc::channel(64);
     let driving = Arc::new(TaskSet::default());
+    // A live binding attaches each later request's own output.
     let progress = crate::agent_run::Progress::new(
         String::new(),
         events_tx.clone(),
         &driving,
         spawner.clone(),
+        output_target.is_some() || live_origin.is_some(),
     );
     let (release_tx, releases) = mpsc::channel(1);
     let (owner_tx, owner_commands) = mpsc::channel(2);

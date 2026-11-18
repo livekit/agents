@@ -206,7 +206,7 @@ through any parameter annotated with it; the parameter is optional:
 | `ctx.usage` | latest immutable usage snapshot of the owning execution scope; see [usage](usage.md#scope-and-delegation) |
 | `ctx.function_call` | the call being executed, inside a tool |
 | `ctx.update(message, *, silent=False)` | immediately enqueue progress; await admission; the frontend may word or batch it |
-| `ctx.say(text)` | immediately enqueue exact text; await its local text delivery or audio playout boundary; see [delivery guarantees](delegation.md#progress-and-exact-output) |
+| `ctx.say(text)` | immediately enqueue exact text; await its `"delivered"`, `"interrupted"` or `"failed"` outcome at the local text delivery or audio playout boundary; see [delivery guarantees](delegation.md#progress-and-exact-output) |
 
 On a call the context also carries the speech: `ctx.speech_handle`,
 `ctx.wait_for_playout()`, `ctx.with_filler(...)`, `ctx.foreground()` and

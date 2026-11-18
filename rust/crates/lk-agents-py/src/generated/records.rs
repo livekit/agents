@@ -2986,6 +2986,20 @@ pub mod agent_run {
 
     // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
 
+    pub fn say_outcome_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::agent::run::SayOutcome,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::agent::run::SayOutcome::Delivered => "delivered",
+            ::lk_agents_abi::agent::run::SayOutcome::Interrupted => "interrupted",
+            ::lk_agents_abi::agent::run::SayOutcome::Failed => "failed",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/agent/run.rs.
+
     pub fn tool_result_status_to_py<'py>(
         py: Python<'py>,
         value: ::lk_agents_abi::agent::run::ToolResultStatus,

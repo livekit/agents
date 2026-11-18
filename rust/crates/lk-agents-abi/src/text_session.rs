@@ -371,14 +371,18 @@ pub trait TextSessionRunner: Send + Sync + Sized + 'static {
         #[host(default = false)] silent: bool,
     ) -> crate::BoxFuture<'static, Result<(), crate::errors::ProviderError>>;
 
-    /// Enqueue exact text now; the private reader confirms the source's local output boundary.
+    /// Enqueue exact text now, or refuse it before admission. The private reader settles with
+    /// the outcome at the source's local output boundary; dropping it never cancels the output.
     #[host(await)]
     fn say(
         &self,
         invocation_id: &str,
         operation: u64,
         message: String,
-    ) -> crate::BoxFuture<'static, Result<(), crate::errors::ProviderError>>;
+    ) -> Result<
+        crate::BoxFuture<'static, crate::agent::run::SayOutcome>,
+        crate::errors::ProviderError,
+    >;
 }
 
 /// One call of an agent tool outside a TextSession: the child agent runs in process as a delegate
@@ -444,12 +448,16 @@ pub trait LocalInteraction: Send + Sync + Sized + 'static {
         #[host(default = false)] silent: bool,
     ) -> crate::BoxFuture<'static, Result<(), crate::errors::ProviderError>>;
 
-    /// Enqueue exact text now; the private reader confirms the source's local output boundary.
+    /// Enqueue exact text now, or refuse it before admission. The private reader settles with
+    /// the outcome at the source's local output boundary; dropping it never cancels the output.
     #[host(await)]
     fn say(
         &self,
         invocation_id: &str,
         operation: u64,
         message: String,
-    ) -> crate::BoxFuture<'static, Result<(), crate::errors::ProviderError>>;
+    ) -> Result<
+        crate::BoxFuture<'static, crate::agent::run::SayOutcome>,
+        crate::errors::ProviderError,
+    >;
 }

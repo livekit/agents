@@ -173,15 +173,13 @@ pub trait HandlerPort: std::any::Any + Send + Sync {
         self.progress(text)
     }
     /// Enqueue exact output under the source's existing canonical message identity. A private
-    /// reader confirms this text/A2A output handoff only; dropping it cannot cancel admission.
-    /// The source coordinator records the message only after this succeeds.
+    /// reader settles with this text/A2A output handoff's outcome only; dropping it cannot
+    /// cancel admission. The source coordinator records the message only once delivered.
     fn say(
         &self,
         _message: crate::ChatMessage,
-    ) -> crate::BoxFuture<'static, Result<(), crate::errors::HostError>> {
-        Box::pin(async {
-            Err(crate::errors::HostError::new("this handler has no live exact output boundary"))
-        })
+    ) -> crate::BoxFuture<'static, crate::agent::run::SayOutcome> {
+        Box::pin(async { crate::agent::run::SayOutcome::Failed })
     }
     /// One piece of the reply; waits while the turn's queue is full.
     fn token(&self, delta: String) -> crate::BoxFuture<'_, ()>;

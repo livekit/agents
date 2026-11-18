@@ -154,13 +154,16 @@ continuation authority.
 async def reserve(ctx: RunContext[App], itinerary: str) -> str:
     await ctx.update("Checking availability.")
     reservation = await ctx.context.bookings.reserve_once(itinerary)
-    await ctx.say(f"Your booking reference is {reservation.reference}.")
+    outcome = await ctx.say(f"Your booking reference is {reservation.reference}.")
+    if outcome != "delivered":
+        return "The reservation was confirmed, but its reference was not heard."
     return "The reservation was confirmed."
 ```
 
-Both methods enqueue immediately and return a private `Awaitable[None]`. Omitting an await
-allows the body to continue while admitted work remains owned and ordered. Canceling or
-discarding that waiter does not cancel admitted delivery.
+Both methods enqueue immediately and return a private awaitable: `ctx.update()` an
+`Awaitable[None]`, `ctx.say()` an `Awaitable[SayOutcome]`. Omitting an await allows the body
+to continue while admitted work remains owned and ordered. Canceling or discarding that
+waiter does not cancel admitted delivery.
 
 | Operation | Await guarantee |
 | --- | --- |
@@ -169,11 +172,22 @@ discarding that waiter does not cancel admitted delivery.
 | `ctx.say(text)` in voice | The exact text completed the configured local output boundary: audio playout when audio is attached, or text delivery in a text-only session |
 | `ctx.say(text)` in text/A2A | The exact text reached that execution's live output boundary |
 
-An A2A backend's `await ctx.say()` does not acknowledge downstream speech. Each hop confirms
-its own boundary; stock A2A provides no end-to-end “heard by the person” receipt. Incomplete
-delivery, failed output and owner loss settle the delivery waiter with an existing error;
-that error does not itself cancel business work or undo an external effect. A plain run
-without a live output sink refuses exact delivery instead of recording invented human history.
+Awaiting `ctx.say()` returns how the exact text ended at that boundary, like a speech
+handle's interrupted state, and never raises for undelivered output:
+
+| `SayOutcome` | Meaning |
+| --- | --- |
+| `"delivered"` | The complete words reached the boundary and are recorded once |
+| `"interrupted"` | Stopped first: an interruption, or the session, stream or turn closed |
+| `"failed"` | The output failed or its owner was lost, or no live output can carry it |
+
+The waiter settles promptly with any outcome; it never cancels business work or undoes an
+external effect, and partial words are never replayed or recorded as heard. An A2A backend's
+`await ctx.say()` does not acknowledge downstream speech. Each hop reports its own boundary;
+stock A2A provides no end-to-end “heard by the person” receipt, and a busy remote never
+delays stopping its words on the call. A plain result-only run has no live output and reads
+`"failed"` instead of recording invented human history. Only a refusal before admission,
+such as a tool with no live invocation or text over the payload limit, raises.
 
 A realtime voice session needs an explicit TTS provider or TTS node for exact tool speech.
 Without that path, exact delivery is refused before audio generation.
