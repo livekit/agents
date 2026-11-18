@@ -122,6 +122,7 @@ from .turn import (
 if TYPE_CHECKING:
     from ..llm import mcp
     from .agent_session import AgentSession, ExpressiveOptions
+    from .io import AudioOutput
 
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
@@ -261,6 +262,15 @@ def _record_interruption(speech_handle: SpeechHandle) -> None:
     span.set_attribute(
         trace_types.ATTR_INTERRUPTION_SOURCE, speech_handle._interrupt_source or "programmatic"
     )
+
+
+def _playout_ended_at(audio_output: AudioOutput | None) -> float:
+    """When the speech's audio stopped playing, read once its playout has been awaited.
+
+    The finish event lands after the source has run dry, so its arrival dates no audio."""
+    if audio_output is not None and (played_until := audio_output._last_played_until) is not None:
+        return played_until
+    return time.time()
 
 
 @contextlib.contextmanager
@@ -3528,7 +3538,6 @@ class AgentActivity(RecognitionHooks):
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
 
-        stopped_speaking_at = time.time()
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
         _record_interruption(speech_handle)
         if speech_handle.interrupted:
@@ -3537,6 +3546,7 @@ class AgentActivity(RecognitionHooks):
             if audio_output is not None:
                 audio_output.clear_buffer()
                 await audio_output.wait_for_playout()
+        stopped_speaking_at = _playout_ended_at(audio_output)
 
         if tee is not None:
             await tee.aclose()
@@ -3605,7 +3615,7 @@ class AgentActivity(RecognitionHooks):
             self._session._update_agent_state(
                 "thinking" if self._has_followup_work else "listening"
             )
-            self._on_end_of_agent_speech(ended_at=time.time())
+            self._on_end_of_agent_speech(ended_at=stopped_speaking_at)
             if self.interruption_enabled:
                 self.interruption_by_audio_activity_enabled = True
 
@@ -4093,7 +4103,7 @@ class AgentActivity(RecognitionHooks):
             if speech_handle.interrupted:
                 break
 
-        stopped_speaking_at = time.time()
+        stopped_speaking_at = _playout_ended_at(audio_output)
         assistant_metrics: llm.MetricsReport = {}
 
         if self.llm:
@@ -4174,7 +4184,7 @@ class AgentActivity(RecognitionHooks):
 
         if not speech_handle.interrupted and len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
-            self._on_end_of_agent_speech(ended_at=time.time())
+            self._on_end_of_agent_speech(ended_at=stopped_speaking_at)
             if self.interruption_enabled:
                 self.interruption_by_audio_activity_enabled = True
         elif self._session.agent_state == "speaking":
@@ -4183,7 +4193,7 @@ class AgentActivity(RecognitionHooks):
             self._session._update_agent_state(
                 "thinking" if tool_running or self._has_followup_work else "listening"
             )
-            self._on_end_of_agent_speech(ended_at=time.time())
+            self._on_end_of_agent_speech(ended_at=stopped_speaking_at)
             if self.interruption_enabled:
                 self.interruption_by_audio_activity_enabled = True
 
@@ -4844,12 +4854,11 @@ class AgentActivity(RecognitionHooks):
         # the tool calls outlive the preamble, so it ends on "thinking" (#6904)
         if function_calls and not speech_handle.interrupted:
             self._background_speeches.add(speech_handle)
+        stopped_speaking_at = _playout_ended_at(audio_output)
         self._session._update_agent_state("thinking" if self._has_followup_work else "listening")
-        self._on_end_of_agent_speech(ended_at=time.time())
+        self._on_end_of_agent_speech(ended_at=stopped_speaking_at)
         if self.interruption_enabled:
             self.interruption_by_audio_activity_enabled = True
-
-        stopped_speaking_at = time.time()
 
         def _create_assistant_message(
             message_id: str, forwarded_text: str, interrupted: bool

@@ -175,6 +175,9 @@ class AudioOutput(
         self.__last_playback_ev: PlaybackFinishedEvent = PlaybackFinishedEvent(
             playback_position=0, interrupted=False
         )
+        # end of the latest run reported for the open segment, and for the last finished one
+        self.__played_until: float | None = None
+        self.__last_played_until: float | None = None
 
         # auto-wrap a bare leaf with a _AudioSinkProxy so the leaf can be
         # hot-swapped later without disturbing wrappers above
@@ -232,6 +235,9 @@ class AudioOutput(
         Sinks that own their playback device report one run at a time; one that reports
         nothing is described by its segment endpoints instead.
         """
+        ended_at = started_at + duration
+        if self.__played_until is None or ended_at > self.__played_until:
+            self.__played_until = ended_at
         self.emit(
             "playback_progressed",
             PlaybackProgressedEvent(started_at=started_at, offset=offset, duration=duration),
@@ -268,6 +274,7 @@ class AudioOutput(
         self.__playback_finished_count += 1
         self.__playback_finished_event.set()
         self.__last_playback_ev = ev
+        self.__last_played_until, self.__played_until = self.__played_until, None
         return True
 
     def _mark_input_truncated(self) -> None:
@@ -290,6 +297,14 @@ class AudioOutput(
             self.__playback_finished_event.clear()
 
         return self.__last_playback_ev
+
+    @property
+    def _last_played_until(self) -> float | None:
+        """When the last finished segment's audio stopped playing (time.time()).
+
+        None when its sink reported no runs: the finish event's arrival is then the only clock.
+        """
+        return self.__last_played_until
 
     def _reset_playback_count(self) -> None:
         self.__playback_segments_count = 0
