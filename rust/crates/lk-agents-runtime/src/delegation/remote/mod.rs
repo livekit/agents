@@ -485,7 +485,7 @@ impl Delegation {
                         &lk_agents_abi::session::SessionRecovery::Call(origin.clone()),
                     )
                     .await
-                    .map_err(protocol)?
+                    .map_err(input_error)?
             }
             _ => None,
         };

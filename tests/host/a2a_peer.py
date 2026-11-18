@@ -219,8 +219,9 @@ def _status(task: dict[str, str], state: str, text: str) -> Json:
     }
 
 
-@pytest_asyncio.fixture
-async def peer() -> AsyncIterator[Peer]:
+@contextlib.asynccontextmanager
+async def serving() -> AsyncIterator[Peer]:
+    """One peer on its own port, so its URL is a distinct endpoint."""
     peer = Peer()
     server = await asyncio.start_server(peer.accept, "127.0.0.1", 0)
     peer.url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/expert"
@@ -230,3 +231,9 @@ async def peer() -> AsyncIterator[Peer]:
         server.close()
         await peer.close()
         await server.wait_closed()
+
+
+@pytest_asyncio.fixture
+async def peer() -> AsyncIterator[Peer]:
+    async with serving() as peer:
+        yield peer
