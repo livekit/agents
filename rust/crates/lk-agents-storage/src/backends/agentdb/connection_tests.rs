@@ -1042,6 +1042,27 @@ async fn an_unexpected_frame_on_request_id_0_ends_the_socket() {
     conn.close();
 }
 
+/// Catches: the server's `not_found` on request id 0 (the database deleted with the socket open)
+/// read as a protocol error: the write in flight failed `Disconnected` (outcome unknown) and the
+/// next call redialed. The write applied nothing and fails not found; so does every later call,
+/// unsent, with no redial.
+#[tokio::test]
+async fn a_database_deleted_with_the_socket_open_fails_not_found_for_good() {
+    let (url, log) = serve_draining(ErrorCode::NOT_FOUND, is_exec, false).await;
+    let conn = dial(&url, "DB_1").await.unwrap();
+    let err = conn.exec(&st("INSERT", vec![]), conn.deadline()).await.err().unwrap();
+    assert!(
+        matches!(&err, WriteError::Sent(WsdbError::Server { code: ErrorCode::NOT_FOUND, .. })),
+        "{err}"
+    );
+    assert!(matches!(StorageError::from(err), StorageError::NotFound(_)), "applied nothing");
+    let err = conn.query_all(&st("SELECT", vec![]), conn.deadline()).await.err().unwrap();
+    assert!(matches!(&err, WsdbError::Server { code: ErrorCode::NOT_FOUND, .. }), "{err}");
+    assert_eq!(sent(&log, is_exec).len(), 1, "never sent again");
+    assert!(sent(&log, is_query).is_empty(), "a later call is not sent");
+    assert_eq!(hellos(&log), 1, "no redial");
+}
+
 /// Catches: new requests waiting for a socket refused `wrong_shard_server` to finish its
 /// requests in flight. As with HTTP/2's GOAWAY, the next socket opens at once: the refused query
 /// and a later exec are served there while the first socket still holds a write, which then
