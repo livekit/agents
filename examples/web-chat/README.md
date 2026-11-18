@@ -6,13 +6,15 @@ each browser chats with the agent and sees only its own conversations.
 | File      | What                                                                           |
 | --------- | ------------------------------------------------------------------------------ |
 | `main.py` | The agent and its `chat` text door.                                            |
-| `web.py`  | The page's backend: serves `web/`, mints tokens and reads the threads.         |
+| `web.py`  | The app's backend: mints the page's tokens and reads its threads.              |
 | `web/`    | The page: `index.html`, `style.css` and `app.js`. No build step, no framework. |
 
 ## How the pieces connect
 
 ```
-browser ──── page, tokens, history ────▶ web.py (your backend, localhost:8000)
+browser ──── page ─────────────────────▶ web/ (any static server, localhost:8000)
+   │
+   ├──── tokens, history ──────────────▶ web.py (your backend, localhost:8001)
    │                                        │ reads threads with the project key
    │                                        ▼
    └──── messages (A2A) ──▶ LiveKit Cloud ──▶ main.py (the agent, wherever it runs)
@@ -41,11 +43,12 @@ browser ──── page, tokens, history ────▶ web.py (your backend,
 
 ## Run
 
-With the environment of [`../README.md`](../README.md), from this directory, in two terminals:
+With the environment of [`../README.md`](../README.md), from this directory, in three terminals:
 
 ```sh
-lk agent dev     # the agent: registers with LiveKit Cloud, which routes the chat to it
-uv run web.py    # the page and its backend, on http://localhost:8000
+lk agent dev                          # the agent: registers with LiveKit Cloud
+uv run web.py                         # the backend, on http://localhost:8001
+python -m http.server 8000 -d web     # the page, on http://localhost:8000
 ```
 
 Then open http://localhost:8000.

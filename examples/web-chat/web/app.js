@@ -13,9 +13,11 @@ async function auth(id = "") {
   return (grants[id] = fresh);
 }
 
-// web.py reads the threads for the page, from the threads API.
+// The app's backend, web.py: tokens, and the threads it reads for the page.
+const BACKEND = "http://localhost:8001";
+
 async function get(path) {
-  const res = await fetch(path);
+  const res = await fetch(`${BACKEND}/${path}`);
   if (!res.ok) throw new Error(`${path.split("?")[0]}: ${res.status}`);
   return res.json();
 }

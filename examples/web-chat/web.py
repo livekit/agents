@@ -1,19 +1,19 @@
-"""The app's backend: the chat page, its tokens and its threads, on http://localhost:8000.
+"""The app's backend, on http://localhost:8001: the page's tokens and its threads.
 
 It holds the project key; the agent itself runs elsewhere and is reached through LiveKit Cloud.
 """
 
 import os
 import re
-from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Mount, Route
-from starlette.staticfiles import StaticFiles
+from starlette.routing import Route
 
 from livekit.agents.a2a import AgentThreadGrant, Credentials
 from livekit.agents.storage import AgentDBStorage, Thread
@@ -87,9 +87,10 @@ app = Starlette(
         Route("/token", token),
         Route("/threads", list_threads),
         Route("/threads/{thread}", thread_messages),
-        Mount("/", StaticFiles(directory=Path(__file__).parent / "web", html=True)),
-    ]
+    ],
+    # the page is served from its own origin
+    middleware=[Middleware(CORSMiddleware, allow_origins=["http://localhost:8000"])],
 )
 
 if __name__ == "__main__":
-    uvicorn.run(app, port=8000)
+    uvicorn.run(app, port=8001)
