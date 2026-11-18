@@ -1464,12 +1464,17 @@ class GPTLiveSession(
         self.send_event(types.InputAudioUnmuteEvent(event_id=utils.shortuuid("unmute_")))
 
     async def aclose(self) -> None:
+        closed = await self._release_and_close()
+        with contextlib.suppress(asyncio.CancelledError):
+            await closed
+
+    async def _release_and_close(self) -> asyncio.Future[None]:
         await super().aclose()
         if not self._session_started_fut.done():
             self._session_started_fut.cancel()
         self._msg_ch.close()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_atask
+        # the main task sends session.close, then waits for the final usage in session.closed
+        return self._main_atask
 
     # framework hooks
 

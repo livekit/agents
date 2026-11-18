@@ -728,6 +728,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
         self._closing: bool = False
+        # realtime sessions of past activities, still closing after a handoff
+        self._rt_closing: set[asyncio.Future[None]] = set()
         self._job_context_cb_registered: bool = False
 
         # count of active `claim_user_turn` scopes. while > 0, `wait_for_idle`
@@ -1469,6 +1471,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             await activity.aclose()
         self._activity = None
+
+        # the final usage of every realtime session must land before the session closes;
+        # asyncio.wait, unlike gather, never cancels a provider's own close
+        if self._rt_closing:
+            await asyncio.wait(list(self._rt_closing))
 
         if self._agent_speaking_span:
             self._agent_speaking_span.end()
