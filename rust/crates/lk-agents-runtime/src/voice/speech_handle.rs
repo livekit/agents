@@ -1,5 +1,6 @@
 use super::session::Tx;
 use crate::voice::VoiceRuntimeEvent;
+use lk_agents_abi::agent::run::SayOutcome;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::session::VoiceCommandOrigin;
 use lk_agents_abi::{AudioFrame, ChatItem, HostRef, MetricsReport};
@@ -457,10 +458,9 @@ impl SpeechHandle {
     }
 
     /// An exact tool output waits on this independent `say` speech, never on the speech whose
-    /// tool is still running. Reading a receipt does not own or cancel the speech. Completion
-    /// requires its output boundary and the complete canonical words, rather than only the
-    /// ordinary playout wait (which also settles on interruption and owner death).
-    pub(crate) async fn exact_delivery(&self, expected: &str) -> Result<(), ProviderError> {
+    /// tool is still running. Reading a receipt does not own or cancel the speech. It settles
+    /// when the speech is done or its owner is lost, the outcome decided by the speech's view.
+    pub(crate) async fn exact_delivery(&self, expected: &str) -> SayOutcome {
         self.wait(|l| l.done || l.creation == Creation::Detached).await;
         let inner = self.inner.lock();
         inner.view.exact_delivery(expected, &inner.chat_items)

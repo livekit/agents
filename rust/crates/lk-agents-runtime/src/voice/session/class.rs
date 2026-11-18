@@ -741,8 +741,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         operation: u64,
         call_id: String,
         text: String,
-    ) -> Result<BoxFuture<'static, Result<(), lk_agents_abi::errors::ProviderError>>, CommandRefused>
-    {
+    ) -> Result<BoxFuture<'static, lk_agents_abi::agent::run::SayOutcome>, CommandRefused> {
         self.enqueue_tool_say(invocation_id, operation, call_id, text)
     }
 

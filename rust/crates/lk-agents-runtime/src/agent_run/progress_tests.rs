@@ -6,7 +6,7 @@ async fn a_hundred_unawaited_updates_are_owned_ordered_and_fenced_before_the_too
     let (send, mut receive) = mpsc::channel(1);
     let owner = Arc::new(TaskSet::default());
     let spawner: Arc<dyn Spawner> = Arc::new(lk_agents_net::task::TokioSpawner::current());
-    let port = Progress::new("original".into(), send, &owner, spawner);
+    let port = Progress::new("original".into(), send, &owner, spawner, false);
     let operation = port.open(7, CallId(3));
     for n in 0..100 {
         drop(port.enqueue(7, format!("step {n}"), n % 2 == 0));
@@ -28,7 +28,7 @@ async fn local_report_pressure_is_bounded_before_tasks_are_admitted_and_remains_
     let (send, receive) = mpsc::channel(1);
     let owner = Arc::new(TaskSet::default());
     let spawner: Arc<dyn Spawner> = Arc::new(lk_agents_net::task::TokioSpawner::current());
-    let port = Progress::new("original".into(), send, &owner, spawner);
+    let port = Progress::new("original".into(), send, &owner, spawner, false);
     let operation = port.open(7, CallId(3));
     for _ in 0..MAX_PENDING_REPORTS {
         drop(port.enqueue(7, "queued".into(), false));

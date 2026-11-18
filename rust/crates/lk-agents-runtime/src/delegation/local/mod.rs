@@ -169,13 +169,16 @@ impl Port for LocalInteraction {
         invocation_id: &str,
         operation: u64,
         message: String,
-    ) -> lk_agents_abi::BoxFuture<'static, Result<(), lk_agents_abi::errors::ProviderError>> {
+    ) -> Result<
+        lk_agents_abi::BoxFuture<'static, lk_agents_abi::agent::run::SayOutcome>,
+        lk_agents_abi::errors::ProviderError,
+    > {
         match self.port(invocation_id) {
             Some(port) => port.say(operation, message),
-            None => Box::pin(async {
+            None => {
                 Err(lk_agents_abi::errors::HostError::new("the local tool report owner has ended")
                     .into())
-            }),
+            }
         }
     }
 }

@@ -152,7 +152,7 @@ pub enum AgentRunEvent {
     },
     ToolOutputDelivered {
         output: super::ToolOutputId,
-        result: Result<(), ProviderError>,
+        outcome: lk_agents_abi::agent::run::SayOutcome,
     },
     /// `ctx.update(text)`.
     ToolProgress {
@@ -498,8 +498,8 @@ impl AgentRun {
             AgentRunEvent::ToolOutputRequested { output, call, text, stream } => {
                 self.request_tool_output(output, call, text, stream, now, &mut fx);
             }
-            AgentRunEvent::ToolOutputDelivered { output, result } => {
-                self.delivered_tool_output(output, result, &mut fx);
+            AgentRunEvent::ToolOutputDelivered { output, outcome } => {
+                self.delivered_tool_output(output, outcome, &mut fx);
             }
             AgentRunEvent::Start => self.start(now, &mut fx),
             AgentRunEvent::Cancel => self.abort(RunError::Cancelled, now, &mut fx),

@@ -192,10 +192,17 @@ class RunContext(_facades.RunContext[Context_T]):
             call_id=self._function_call.call_id,
         )
 
-    def say(self, text: str) -> Awaitable[None]:
-        """Enqueue exact text. Await its local output boundary, without canceling queued output
-        when its reader is canceled. A voice receipt confirms playout; text confirms its own
-        live output handoff, which does not acknowledge audio on a remote frontend.
+    def say(self, text: str) -> Awaitable[SayOutcome]:
+        """Enqueue exact text and return a reader of its outcome at the local output boundary.
+
+        A voice receipt reads audio playout; text reads its own live output handoff, which does
+        not acknowledge audio on a remote frontend. The reader settles ``"delivered"``,
+        ``"interrupted"`` (an interruption, or the session, stream or turn closed first) or
+        ``"failed"`` (the output failed); it never raises for an undelivered output, and
+        canceling or dropping it leaves the admitted output and the tool's work running.
+
+        Raises:
+            RuntimeError: refused before admission, such as a run with no live output.
         """
         invocation = self._invocation
         if invocation is None:
@@ -208,11 +215,7 @@ class RunContext(_facades.RunContext[Context_T]):
             if self._run is None or self._run.runner is None:
                 raise RuntimeError("the tool's native report owner has ended")
             receipt = self._run.runner.say(invocation.invocation_id, invocation.operation, text)
-        # Retrieving a completed failure suppresses an unobserved-future warning. Awaiting the
-        # same private native reader still raises it; the queued work has a separate owner.
-        future = cast(asyncio.Future[None], receipt)
-        future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
-        return future
+        return cast(asyncio.Future[SayOutcome], receipt)
 
     def update(self, message: str, *, silent: bool = False) -> Awaitable[None]:
         """Enqueue progress now; awaiting confirms framework admission.

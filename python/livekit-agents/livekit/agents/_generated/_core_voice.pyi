@@ -34,6 +34,7 @@ from .._core import (
 )
 from ..types import NotGivenOr
 from .agent_nodes import NodeFrame
+from .agent_run import SayOutcome
 from .amd import AMDConfig, AMDPredictionEvent
 from .avatar import AudioReceiverObservation, MediaFrame
 from .avatar_options import AvatarOptions
@@ -809,9 +810,16 @@ class VoiceSession:
         call_id: str,
         report: ToolReport,
     ) -> None: ...
-    async def tool_say(self, invocation_id: str, operation: int, call_id: str, text: str) -> None:
+    async def tool_say(
+        self,
+        invocation_id: str,
+        operation: int,
+        call_id: str,
+        text: str,
+    ) -> SayOutcome:
         """Enqueue an exact output under the originating tool's native identity. The returned
-        awaitable only watches the independent say speech; dropping it never cancels that speech.
+        awaitable only watches the independent say speech for its outcome; dropping it never
+        cancels that speech.
         """
     def update_chat_ctx(self, items: Sequence[ChatItem]) -> None:
         """`Agent.update_chat_ctx()` on a running agent: replace the context."""

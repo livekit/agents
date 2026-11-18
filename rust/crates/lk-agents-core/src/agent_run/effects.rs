@@ -107,10 +107,10 @@ pub enum AgentRunEffect {
         output: super::ToolOutputId,
         message: Box<lk_agents_abi::ChatMessage>,
     },
-    /// Settle only this native request's private receipt after canonical acceptance.
+    /// Settle only this native request's private receipt, delivered after canonical acceptance.
     ToolOutputSettled {
         output: super::ToolOutputId,
-        result: Result<(), lk_agents_abi::errors::ProviderError>,
+        outcome: lk_agents_abi::agent::run::SayOutcome,
     },
     Emit(StreamEvent),
     /// Diagnostic: malformed model arguments were repaired.

@@ -1,5 +1,6 @@
 use super::super::{Read, tests::open};
 use lk_agents_abi::a2a::turn::HandlerOutput;
+use lk_agents_abi::agent::run::SayOutcome;
 use lk_agents_abi::{ChatMessage, Role, Ts};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -21,7 +22,7 @@ async fn an_exact_output_receipt_waits_for_handoff_instead_of_handler_queue_admi
     let mut handler = open(move |turn, _| {
         let confirmed = confirmed.clone();
         Box::pin(async move {
-            turn.say(words(1)).await.unwrap();
+            assert_eq!(turn.say(words(1)).await, SayOutcome::Delivered);
             confirmed.store(true, Ordering::SeqCst);
             Ok(HandlerOutput::default())
         })
@@ -74,10 +75,26 @@ async fn closing_the_handler_settles_unread_exact_receipts_before_awaiting_its_h
     }
     let receipt = held.lock().take().expect("the host immediately enqueued its exact output");
     assert!(handler.close(&lk_agents_net::clock::RealClock::new(), Ts::from_nanos(u64::MAX)).await);
-    let error = receipt.await.unwrap_err();
-    assert_ne!(
-        error.kind,
-        lk_agents_abi::errors::HostErrorKind::Cancelled,
-        "closing presentation cannot manufacture a business-task cancellation"
+    assert_eq!(
+        receipt.await,
+        SayOutcome::Interrupted,
+        "a turn closed before the handoff interrupted the output, without failing the business task"
     );
+}
+
+#[tokio::test]
+async fn a_refused_publisher_handoff_fails_the_exact_output_and_the_handler_still_finishes() {
+    let outcome = Arc::new(Mutex::new(None));
+    let observed = outcome.clone();
+    let mut handler = open(move |turn, _| {
+        let outcome = outcome.clone();
+        Box::pin(async move {
+            *outcome.lock() = Some(turn.say(words(1)).await);
+            Ok(HandlerOutput::default())
+        })
+    });
+    let Some(Read::Exact(output)) = handler.next().await else { panic!("exact report expected") };
+    output.delivered.resolve(Err(lk_agents_abi::errors::HostError::new("the observer refused")));
+    assert!(matches!(handler.next().await, Some(Read::Output(_))), "the business result follows");
+    assert_eq!(*observed.lock(), Some(SayOutcome::Failed));
 }

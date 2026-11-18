@@ -33,6 +33,8 @@ class Peer:
         self.events: Callable[[Json], list[Json]] | None = None
         self.response_gate: asyncio.Event | None = None
         """An optional boundary holding a stream after its first admission event."""
+        self.gated_after = 0
+        """The index of the event the ``response_gate`` holds the stream after."""
         self.input_schema: dict[str, Json] | None = None
         self.messages: list[Json] = []
         """Each message a ``SendStreamingMessage`` carried."""
@@ -125,7 +127,7 @@ class Peer:
                 for index, event in enumerate(events):
                     writer.write(f"{len(event):x}\r\n".encode() + event + b"\r\n")
                     await writer.drain()
-                    if index == 0:
+                    if index == self.gated_after:
                         await self.response_gate.wait()
                 writer.write(b"0\r\n\r\n")
                 await writer.drain()
