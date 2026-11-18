@@ -22,7 +22,7 @@ env:
 jobs:
   # fmt, Clippy, rust/check and generated-code drift (AGENTS.md "Rust architecture rules").
   rules:
-    runs-on: ubuntu-latest
+    runs-on: nscloud-ubuntu-24.04-amd64-16x32-with-cache
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - uses: ./.github/actions/setup
@@ -32,7 +32,7 @@ jobs:
       - run: make -C rust check test-checks
 
   tests:
-    runs-on: ubuntu-latest
+    runs-on: nscloud-ubuntu-24.04-amd64-16x32-with-cache
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - uses: ./.github/actions/setup
@@ -44,7 +44,7 @@ jobs:
 
   # Against the repository's venv: the generated Python facades over the Rust bindings.
   bindings:
-    runs-on: ubuntu-latest
+    runs-on: nscloud-ubuntu-24.04-amd64-16x32-with-cache
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - uses: ./.github/actions/setup
@@ -55,7 +55,7 @@ jobs:
       - run: make -C rust test-bindings
 
   dst:
-    runs-on: ubuntu-latest
+    runs-on: nscloud-ubuntu-24.04-amd64-16x32-with-cache
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -71,7 +71,7 @@ jobs:
   # The generated OTel registry, each reference resolved against the registries pinned in
   # rust/otel/manifest.yaml.
   otel-registry:
-    runs-on: ubuntu-latest
+    runs-on: nscloud-ubuntu-24.04-amd64-16x32-with-cache
     timeout-minutes: 10
     env:
       WEAVER_VERSION: v0.28.0
