@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
+import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -19,6 +21,7 @@ from livekit.agents import (
     TextSession,
     VoiceSession,
     _core,
+    a2a as agents_a2a,
     persisted,
 )
 from livekit.agents.a2a import RemoteAgent
@@ -459,7 +462,7 @@ async def test_voice_clarification_reuses_the_live_task_without_claiming_a_respo
             for item in session.history.items
             if item.type == "function_call_output" and item.id == f"{original.id}_out"
         )
-        assert "The remote request is running" in pending.output
+        assert "Remote task booking-42 is running" in pending.output
         assert (
             any(
                 item.type == "message"
@@ -1869,3 +1872,169 @@ async def test_a_silent_answered_task_holds_other_questions_only_for_its_follow_
             "a silent answered task held the other question past its window",
         )
         peer.response_gate.set()
+
+
+def task_id_of(history: ChatContext, request: str) -> str:
+    """The task ID the remote tool's own result gave for `request`, as the model reads it."""
+    for item in history.items:
+        if item.type == "function_call_output" and (
+            match := re.search(
+                rf'Remote task (\S+) is running \("{re.escape(request)}"\)', item.output
+            )
+        ):
+            return match.group(1)
+    raise AssertionError(f"no running fact names {request!r}")
+
+
+def spoken(session: VoiceSession) -> str:
+    return " ".join(assistant_replies(session))
+
+
+async def test_the_frontend_cancels_the_task_it_read_from_its_results_not_a_guessed_one(
+    peer: Peer,
+) -> None:
+    """Two jobs run under peer-minted IDs the model was never told in its script: it reads the
+    export's ID from the export's own running fact and cancels only that task."""
+    ids = {
+        "Export the invoices": f"AT_{uuid.uuid4().hex}",
+        "Book a flight": f"AT_{uuid.uuid4().hex}",
+    }
+
+    def events(message: dict[str, Any]) -> list[dict[str, Any] | asyncio.Event]:
+        task = {"id": ids[message["parts"][0]["text"]], "contextId": message.get("contextId", "c")}
+        return [{"task": {**task, "status": {"state": "TASK_STATE_WORKING"}}}, asyncio.Event()]
+
+    peer.events = events
+
+    def frontend(history: ChatContext) -> str | FunctionToolCall:
+        if history.items[-1].type == "function_call_output":
+            return "Okay."
+        latest = last_input(history)
+        if latest == "Stop the export":
+            return tool_call("cancel_jobs", task_id=task_id_of(history, "Export the invoices"))
+        return tool_call("jobs", request=latest)
+
+    store = ContextStore()
+    async with VoiceSession(context=store.bind(), vad=None) as session:
+        await session.start(
+            Agent(
+                name="desk",
+                instructions="Help.",
+                tools=[RemoteAgent(peer.url, name="jobs", description="Run jobs.").as_tool()],
+                llm=FakeLLM(frontend),
+            )
+        )
+        await session.generate_reply(user_input="Export the invoices")
+        await session.generate_reply(user_input="Book a flight")
+        await until(lambda: len(peer.messages) == 2, "both jobs did not start")
+        await session.generate_reply(user_input="Stop the export")
+        await until(lambda: peer.cancelled, "the cancel never reached the peer")
+        await session.wait_for_idle()
+        assert peer.cancelled == [ids["Export the invoices"]]
+        for task_id in ids.values():
+            assert task_id not in spoken(session), "a task ID was spoken"
+
+
+async def test_an_answer_and_its_correction_reach_the_task_that_asked(
+    peer: Peer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With automatic routing off, the model targets work only by the IDs it was given: both
+    questions are presented with their task IDs, never spoken, and the date answer and its
+    correction go to the flight task, never the hotel task."""
+    ids = {"Book a flight": f"AT_{uuid.uuid4().hex}", "Book a hotel": f"AT_{uuid.uuid4().hex}"}
+    questions = {"Book a flight": "Which date?", "Book a hotel": "What budget?"}
+
+    def events(message: dict[str, Any]) -> list[dict[str, Any] | asyncio.Event]:
+        if task_id := message.get("taskId"):
+            task = {"id": task_id, "contextId": message["contextId"]}
+            return [{"task": {**task, "status": {"state": "TASK_STATE_WORKING"}}}, asyncio.Event()]
+        request = message["parts"][0]["text"]
+        task = {"id": ids[request], "contextId": message.get("contextId", "trip")}
+        asking = {
+            "statusUpdate": {
+                "taskId": task["id"],
+                "contextId": task["contextId"],
+                "status": {
+                    "state": "TASK_STATE_INPUT_REQUIRED",
+                    "message": {
+                        "messageId": f"{task['id']}-question",
+                        "role": "ROLE_AGENT",
+                        "parts": [{"text": questions[request]}],
+                    },
+                },
+            }
+        }
+        working = {"task": {**task, "status": {"state": "TASK_STATE_WORKING"}}}
+        return [working, both_running, asking]
+
+    both_running = asyncio.Event()
+    peer.events = events
+    presented: list[Any] = []
+    # The acknowledgement holds the floor until both questions wait, so they are asked together.
+    floor = Hang()
+
+    def frontend(history: ChatContext) -> str | list[FunctionToolCall] | FunctionToolCall:
+        head, data = instruction(history)
+        if (asked := asked_question(head, data)) is not None:
+            if data is not None:
+                assert "never say them" in head
+                presented.extend(data)
+            return asked
+        if history.items[-1].type == "function_call_output":
+            return [floor, "On it."]
+        latest = latest_human(history)
+        if latest == "Book a flight and a hotel":
+            return [tool_call("jobs", request=request) for request in questions]
+        calls = [item for item in history.items if item.type == "function_call"]
+        if not any(latest in item.arguments for item in calls):
+            # The date question came from the flight work: target it by its own ID.
+            return tool_call("jobs", request=latest, task_id=task_id_of(history, "Book a flight"))
+        return "Noted."
+
+    # Both questions reach the session before the floor frees: they are asked together.
+    reported: list[str] = []
+    question = agents_a2a._Delegation._core_question
+
+    async def report(self: agents_a2a._Delegation, text: str, *args: Any) -> None:
+        await question(self, text, *args)
+        reported.append(text)
+
+    monkeypatch.setattr(agents_a2a._Delegation, "_core_question", report)
+
+    async with VoiceSession(vad=None, delegation=DelegationOptions(routing_model=None)) as session:
+        await session.start(
+            Agent(
+                name="desk",
+                instructions="Plan the trip.",
+                tools=[RemoteAgent(peer.url, name="jobs").as_tool()],
+                llm=FakeLLM(frontend),
+            )
+        )
+        started = session.generate_reply(user_input="Book a flight and a hotel")
+        await until(floor.started.is_set, "the acknowledgement did not take the floor")
+        both_running.set()
+        await until(lambda: len(reported) == 2, "both tasks did not ask")
+        floor.release()
+        await started
+        await until(
+            lambda: all(q in spoken(session) for q in questions.values()),
+            "both questions were not asked",
+        )
+        await session.wait_for_idle()
+        await session.generate_reply(user_input="Friday")
+        await until(lambda: len(peer.messages) == 3, "the answer was not sent")
+        await session.wait_for_idle()
+        await session.generate_reply(user_input="Actually Saturday")
+        await until(lambda: len(peer.messages) == 4, "the correction was not sent")
+        assert [m.get("taskId") for m in peer.messages] == [
+            None,
+            None,
+            ids["Book a flight"],
+            ids["Book a flight"],
+        ]
+        assert [m["parts"][0]["text"] for m in peer.messages[2:]] == ["Friday", "Actually Saturday"]
+        assert {item["task_id"] for item in presented} == set(ids.values()), (
+            "the questions asked together did not name their tasks"
+        )
+        for task_id in ids.values():
+            assert task_id not in spoken(session), "a task ID was spoken"

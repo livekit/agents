@@ -398,7 +398,7 @@ fn repeat_approval(
     });
     driver.send(AgentRunEvent::LlmEnded { request });
     for (call, arguments) in driver.prepares() {
-        driver.prepared(call, Value::Object(arguments));
+        driver.prepared(call, serde_json::Value::Object(arguments));
     }
     driver
 }
@@ -600,4 +600,37 @@ fn a_grouped_prompt_records_only_its_selected_sources_and_never_streams_unvalida
             );
         }
     }
+}
+
+#[test]
+fn a_remote_question_output_names_its_task_for_the_model_but_not_the_question_asked() {
+    let mut driver =
+        Driver::new(text_agent(vec![string_tool("hotel", "city")]), "book", Vec::new());
+    driver.reply("", &[("hotel", json!({"city":"?"}))]);
+    let (call, arguments) = driver.prepares().remove(0);
+    driver.prepared(call, serde_json::Value::Object(arguments));
+    driver.send(AgentRunEvent::ToolSettled {
+        call,
+        report: lk_agents_abi::llm::tool_executor::ToolReport {
+            outcome: ToolOutcome::InputRequired { question: "Which city?".into(), verbatim: true },
+            input_request: Some(Box::new(remote_input())),
+            transition: None,
+        },
+    });
+    let result = driver.result().clone();
+    let output = result
+        .all_messages
+        .iter()
+        .find_map(|item| match item {
+            ChatItem::FunctionCallOutput(output) => Some(output.output.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(output.starts_with("waiting for the person's answer to: Which city?"), "{output}");
+    assert!(output.contains("remote task booking"), "{output}");
+    assert!(output.contains("task_id \"booking\""), "{output}");
+    assert!(
+        matches!(result.outcome, RunOutcome::InputRequired(ref ask) if ask.question == "Which city?"),
+        "the person is asked the question alone"
+    );
 }

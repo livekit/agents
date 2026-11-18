@@ -518,6 +518,7 @@ impl lk_agents_abi::a2a::remote::DelegationHost for Presenter {
         &'a self,
         _: &lk_agents_abi::telemetry::Cx,
         _: &'a lk_agents_abi::invoke::CallContext,
+        _: String,
     ) -> BoxFuture<'a, Result<(), HostError>> {
         Box::pin(async { Ok(()) })
     }

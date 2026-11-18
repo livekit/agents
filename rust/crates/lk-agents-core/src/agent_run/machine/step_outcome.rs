@@ -55,7 +55,13 @@ impl AgentRun {
             let (id, item) = (*id, item.clone());
             let outcome = &settled.outcome;
             let shape = tool_outcome::shape(outcome, self.input.mode);
-            let text = tool_outcome::exact_output_note(outcome).unwrap_or(shape.text);
+            let mut text = tool_outcome::exact_output_note(outcome).unwrap_or(shape.text);
+            // A remote question names its task, so a later turn can answer or correct it.
+            if let (ToolOutcome::InputRequired { .. }, Some((_, task, _))) =
+                (outcome, settled.input_request.as_ref().and_then(|r| r.remote()))
+            {
+                text.push_str(&crate::delegation::remote::facts::asked_by(&task.task_id));
+            }
             let reply_required = shape.reply_required;
             if let Some(said) = tool_outcome::verbatim(outcome) {
                 self.verbatim.push(said.to_owned());

@@ -928,3 +928,21 @@ fn a_silent_answered_task_holds_other_questions_only_until_its_window_passes() {
     };
     assert_eq!(next[0].output_id, "car", "the late follow-up did not keep its head start");
 }
+
+#[test]
+fn a_remote_question_names_the_task_that_asked_it() {
+    let mut experts = opened();
+    let reference = InputRequestRef::RemoteTask {
+        remote_id: "refunds".into(),
+        task: lk_agents_abi::delegation::remote::RemoteTaskRef {
+            context_id: "conversation".into(),
+            task_id: "AT_refund-9".into(),
+        },
+        request_id: "input_1".into(),
+    };
+    experts.ask("call_1", "r1", "Which day?".into(), false, Some(reference));
+    experts.open("call_2", refunds());
+    experts.ask("call_2", "r2", "Which seat?".into(), false, None);
+    assert_eq!(experts.asking_task("call_1", "r1"), Some("AT_refund-9"));
+    assert_eq!(experts.asking_task("call_2", "r2"), None, "a local question has no remote task");
+}

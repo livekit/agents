@@ -140,11 +140,13 @@ pub trait DelegationHost: Send + Sync {
         })
     }
     /// On a call, the request reached the expert: the conversation goes on while it works.
+    /// `fact` is the call's output for the model, naming the task it can target.
     #[host(await, name = "_core_delegated")]
     fn delegated<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a crate::invoke::CallContext,
+        fact: String,
     ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
     /// Present a remote question; its response returns through the task's native driver.
     #[host(await, name = "_core_question")]

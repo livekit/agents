@@ -45,10 +45,6 @@ pub fn spec() -> ToolSpec {
     }
 }
 
-/// `_DELEGATED`: the fact that releases the tool's step while the expert works.
-const DELEGATED: &str =
-    "The remote request is running. Its progress, questions and result arrive separately.";
-
 /// The tool's native identity, as `RunContext` holds it.
 #[derive(Clone)]
 struct Origin {
@@ -135,12 +131,10 @@ impl DelegationHost for Delegation {
         &'a self,
         _cx: &Cx,
         _context: &'a CallContext,
+        fact: String,
     ) -> BoxFuture<'a, Result<(), HostError>> {
-        let outcome = ToolOutcome::Update {
-            message: DELEGATED.into(),
-            raw: String::new(),
-            reply_required: true,
-        };
+        let outcome =
+            ToolOutcome::Update { message: fact, raw: String::new(), reply_required: true };
         let reported = self.origin.report(outcome.into());
         Box::pin(async move { reported })
     }

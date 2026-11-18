@@ -142,6 +142,24 @@ inheriting a task ID. A response or clarification keeps the selected task's own 
 Configure distinct stable remote IDs when the application needs independent remote
 conversations; each ID retains its own default context.
 
+### Targeting a remote task
+
+The model targets work by the peer's raw A2A task ID, never an invented handle. The ID appears
+wherever the model may refer back to the task, with a one-line description (the original
+request) so "the export" maps to an ID:
+
+| Where | What the model reads |
+| --- | --- |
+| A voice call's output while the task runs | `Remote task <id> is running ("<request>"). ... pass task_id "<id>"; never say the ID to the person.` |
+| Before the peer assigned an ID | The request was sent, but has no task ID yet, so it cannot be continued or cancelled by ID. |
+| A text run's question output | `waiting for the person's answer to: <question>`, then `Asked by remote task <id>: ... pass task_id "<id>"` |
+| Questions asked together in a call | Each question's JSON carries its `task_id`; the prompt says IDs are for tool calls only |
+| The remote tool's `task_id` and `cancel_<tool name>`'s `task_id` | Described as the ID exactly as the remote tool's results gave it |
+
+IDs are for tool calls only. Presentation prompts that carry them tell the model never to say
+them; verbatim questions, exact output and spoken results never include them. A finished
+task's result replaces its running fact: ended work cannot be targeted.
+
 Beside the remote tool, `.as_tool()` offers a sibling `cancel_<tool name>` tool for the person's
 "stop that" requests:
 

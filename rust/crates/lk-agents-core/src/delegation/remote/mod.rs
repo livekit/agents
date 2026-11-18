@@ -1,5 +1,6 @@
 use lk_agents_abi::a2a_protocol as a2a;
 pub mod cancel;
+pub mod facts;
 pub mod journal;
 mod result;
 pub mod retained;

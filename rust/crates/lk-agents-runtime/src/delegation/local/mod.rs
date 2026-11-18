@@ -214,7 +214,16 @@ impl Delegate {
         let mut history = agent_tool::opening(&parent, self.tool.chat_history);
         let mut input_answers = std::collections::BTreeSet::new();
         let mut message = agent_tool::task(self.id("task"), &arguments, self.stamp());
-        if live && let Err(error) = self.host.delegated(&self.cx, &self.context).await {
+        if live
+            && let Err(error) = self
+                .host
+                .delegated(
+                    &self.cx,
+                    &self.context,
+                    lk_agents_core::delegation::remote::facts::LOCAL_RUNNING.into(),
+                )
+                .await
+        {
             return ToolOutcome::Failed(error.to_string());
         }
         loop {
