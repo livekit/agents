@@ -80,7 +80,7 @@ SPAN_PARENTS: dict[str, frozenset[str | None]] = {
         "function_tool": {"agent_turn"},
         "agent_speaking": {"agent_turn"},
         "realtime_inference": {"agent_turn"},
-        "realtime_metrics": {"realtime_inference", "agent_turn"},
+        "realtime_metrics": {"realtime_inference", "agent_turn", "agent_session"},
         # -- model requests: under the node that made them, or the feature that owns them.
         # An adapter's request span stands in for the provider's and opens no attempt span of
         # its own: each wrapped request nests directly under it, with its own attempts:
@@ -92,6 +92,8 @@ SPAN_PARENTS: dict[str, frozenset[str | None]] = {
             "keyterm_detection",
             "judge_evaluation",
             "amd",
+            # a realtime model's own text model (GPT-Live's backend), which no node calls
+            "agent_session",
         },
         "llm_fallback_adapter": {"llm_node", "keyterm_detection", "judge_evaluation", "amd"},
         "llm_request_run": {"llm_request"},
