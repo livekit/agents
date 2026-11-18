@@ -91,6 +91,12 @@ checkpoints shared conversation state; save application fields explicitly.
 
 ### Progress, checkpoints and cancellation
 
+`A2ASessionContext.update()` and `stream()` are handler coroutines and must be awaited.
+A tool's `RunContext.update()` and `say()` have a different
+[immediate-admission contract](delegation.md#progress-and-exact-output): their admitted work
+remains owned when the optional reader is discarded, and final output waits for prior
+admitted exact delivery.
+
 The handler runs as one call the turn awaits. What it reports, `update(text)`,
 the text `stream(...)` and managed forwarding send, and each checkpoint a run
 reaches, crosses to the turn in the order the handler awaited it:
@@ -109,7 +115,8 @@ reaches, crosses to the turn in the order the handler awaited it:
 - **A departed client.** A client that disconnects or stops reading does not stop the
   turn. The handler keeps running, its reports are dropped from that client's stream
   (`update()` texts still reach the journal), and the answer is committed and
-  available to a later `tasks/get`.
+  available to a later `tasks/get`. Exact tool output still needs a live boundary to accept it;
+  a missing observer can fail its delivery waiter without canceling the business task.
 - **After the answer.** A task the handler left running reports into nothing:
   its reports are dropped, and a checkpoint returns "yield" at once.
 
@@ -530,6 +537,7 @@ is set. Otherwise the channel is `livekit/channel`, or `a2a` when absent.
 | `batch`      | the message is queued in the partition's inbox; after `debounce`, every queued message is answered in one turn. The reply goes on the last message's task; the earlier ones complete with no artifact and `livekit/mergedInto` pointing at it                                     | `sms`, `whatsapp`, `email`       |
 | `concurrent` | runs take no lease and may overlap; they append to the history and cannot save application fields or routing state. Only for endpoints that do not write application data                                                                                                                                      | opt-in                           |
 | `reject`     | the request fails with `UnsupportedOperationError`, whose data names the running task as `runningTaskId`; no task is created. The client cancels the running task first                                                                                                      | opt-in                           |
+| `live` | one managed conversation serializes model turns while admitted tool bodies continue; each incoming message retains its own task and result source | opt-in |
 
 ```python
 @server.a2a_session(
@@ -550,6 +558,35 @@ default. Under `queue`, a message that has not had its turn
 after `wait_timeout` (a `timedelta`, a minute by default) fails `lease-timeout`;
 under `batch` it keeps waiting, since the run that drains the inbox owns its
 messages. `debounce` and `wait_timeout` are `timedelta`s.
+
+### Live managed conversations
+
+Use `inbox="live"` when a backend must accept new input while a long-running tool continues:
+
+```python
+@handler.a2a_session(endpoint="booking", inbox="live")
+async def booking_endpoint(ctx: A2ASessionContext):
+    app = await ctx.store.load_context(App(services=services))
+    return await booking.run(ctx.message, context=ctx.store.bind(app))
+```
+
+The binding selects one native conversation owner. Useful progress or an input request can
+release the foreground while the original tool body remains owned. A subsequent human message
+can run another turn; model invocations are serialized. The tool's progress, exact output,
+checkpoint and final result keep their original task and handler output boundary. An unrelated
+turn cannot consume them. Finalizing a handler waits for its admitted output.
+
+A new unaddressed message reaches the current local agent and keeps its own transport task.
+An explicit `taskId` selects existing work under the [A2A continuation contract](protocol/a2a.md#answering-a-task).
+Canceling one task targets that task's owned work; it does not cancel other admitted tasks.
+An opaque handler that has not entered managed execution still owns its own cancellation and
+output. Its committed dialogue is observed by the managed conversation without replaying it
+as a new human turn or granting approval.
+
+Closing an SSE observer detaches observation; the endpoint continues owned work and final
+storage commits. Endpoint shutdown and explicit task cancellation settle that work through
+its owner. Applications do not create another scheduler or retain a Python parent coroutine.
+See [delegation](delegation.md#long-work-on-a-backend) for frontend behavior and delivery guarantees.
 
 ## Tasks on the wire
 

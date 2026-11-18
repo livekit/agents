@@ -404,6 +404,23 @@ classes at their host class's module. A handwritten module lists only its own na
 them with the generated list, the one spelling pyright follows:
 `__all__ = ["AudioOutput"]` then `__all__ += _public.__all__`.
 
+### Conversation views and output readers
+
+`SessionState`, local agent/call records and remote inspection views are declared in ABI and
+generated. The native store owns revision changes and the distinction between a bound view
+and a detached snapshot. Python discovers persisted dataclass fields and preserves the
+application object's identity; it does not implement state transitions or copy a second
+conversation schema. A2A values cross as upstream SDK records, retaining optional fields and
+protocol unions.
+
+Immediate tool output admission is a synchronous native entry returning a private future.
+The entry reserves owned work before giving Python its optional reader. Python forwards
+`ctx.update` and `ctx.say` through that entry; making the entry an `async def` whose body only
+starts on first await would violate the contract. Reader cancellation settles that reader,
+while the admitted output stays with its native operation owner. No public receipt type or
+Python background task is required. Tests cover discarded readers, immediate body return,
+output failure and source-specific cleanup.
+
 ### Module registration
 
 Maturin builds `livekit.agents._core` from `rust/crates/lk-agents-py`, configured

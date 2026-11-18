@@ -69,7 +69,7 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | `await set_participant(identity)` | listen to another room participant (their audio, transcript and keypad); `None` listens to no one. By default the session links the first participant who joins, or `RoomOptions(participant_identity=)` |
 | `update_agent(agent)`, `update_options(...)`, `override_options(...)` | see [updating a live session](#updating-a-live-session) |
 | `history` | the call's conversation, a new `ChatContext` over the session's items on each read; empty on a new thread and before `start()`; see [reading the session from a callback](#reading-the-session-from-a-callback) |
-| `current_agent` | the agent speaking now |
+| `current_agent` | the live Python `Agent` selected for the call, including a temporary VoiceTask; remains selected while idle. Distinct from the recorded [`SessionState.current_agent`](session-state.md#root-current-agent-and-history) |
 | `stt`, `tts`, `vad` | the providers the session runs on now: a held `override_options` layer's, else the base's (the constructor's, then `update_options`'); `None` when removed |
 | `agent_state`, `user_state` | the agent's and the person's state, `"initializing"` and `"listening"` until their first change; read as `history` is |
 | `usage` | latest immutable `Usage` snapshot; retained after shutdown; see [usage and metrics](usage.md) |
@@ -754,234 +754,131 @@ persistence ownership.
 
 Doors selecting the same partition share transport history and explicitly saved application
 data. Fast and slow brains normally select different partition keys so each keeps its own
-conversation; see [partitions](threads.md#partitions-and-session-frames).
+conversation; see [partitions](threads.md#partitions-and-local-agent-state).
 
 ## Expert events and frontend presentation
 
-`VoiceSession` owns frontend remote-tool interactions: it retains pending
-expert references, routes human replies, and schedules presentation. The
-frontend attaches `RemoteAgent(...).as_tool()` through its agent's `tools=`
-and starts the live session. It does not construct a `TextSession`. Configure a separate
-response-routing model on the session; all remote tools share that policy:
+`VoiceSession` owns the frontend's remote-tool interactions, human response correlation and
+presentation. Attach `RemoteAgent(...).as_tool()` through the agent's `tools=`; no TextSession
+is needed. Configure a separate routing model for the whole session:
 
 ```python
 session = VoiceSession(
     llm=frontend_model,
     delegation=DelegationOptions(routing_model=routing_model),
-    context=store.bind(app),  # Optional: restore and checkpoint this conversation.
+    context=store.bind(app),
 )
 await session.start(front_desk, room=room)
 ```
 
 Without a binding, the same native communication state and admission path run in memory.
-A recognized human response reserves its original input occurrence before frontend planning.
-The frontend calls the matching remote tool to forward that response through the existing
-live interaction. That handoff uses the person's exact words, rather than rewritten tool
-arguments. A second routing check distinguishes that response from clarification, correction
-or independent new work. Repeating the admitted response observes its existing operation;
-requesting a hotel in that same turn can still start a separate task. Further messages to a
-working task reuse its native observer. Progress, the next question and the final result
-still arrive through the original interaction.
+Binding adds persisted references and recovery; it does not serialize live Python work or
+speech. [Delegation](delegation.md) owns the product behavior, remote task selection and
+response-recognition contract. [Conversation state](session-state.md) owns inspection views.
 
-If the speaking agent lacks that remote tool, recognition retains the response. When an
-eligible agent returns, the session gives it a normal planning turn to continue the request.
-This wake-up does not send anything on its own.
-
-A local `agent.as_tool()` on a call
-is an expert the same way: its child runs in process, and its progress,
-questions and result take this path ([local agents as tools](tools.md#local-agents-as-tools)).
+A local `agent.as_tool()` uses the same frontend presentation path for its progress, questions
+and result. Durable local child continuation belongs to text; voice role changes and
+VoiceTasks remain transient.
 
 ## Conversation-owned inbox
 
-Expert events enter an internal inbox scoped to one frontend agent's
-conversation. Each frontend conversation has its own inbox and input-request references,
-even when several frontends share a thread database. Backend
-agents do not acquire a presentation inbox merely by using `Agent.run()` or
-`TextSession`.
-
-The inbox belongs to the frontend conversation, not the shared `Agent`
-configuration object or the thread as a whole. Replacing the speaking agent
-within that frontend conversation preserves the inbox; switching to another
-frontend conversation does not transfer its events. Applications use the existing
-session APIs; they do not construct or dispatch an inbox themselves.
+The internal event queue belongs to one frontend conversation, rather than the shared Agent
+configuration or the thread database. Replacing the speaking agent preserves that queue.
+A different frontend in the same thread cannot consume it merely by sharing storage.
+Applications use the session APIs; they do not construct an inbox or poll a dequeue method.
 
 ### Frontend queue versus backend inbox
 
 | Mechanism | Scope | Contents | Delivery |
 | --- | --- | --- | --- |
-| Frontend event queue | One frontend conversation | Expert progress, questions, results, and failures | In-process push and wake-up of the live session |
-| Backend request inbox | One transport partition | Incoming requests buffered by endpoint policies such as batching | Managed request scheduling and storage |
+| Frontend event queue | One frontend conversation | Tool progress, input requests, results and failures | In-process push and wake-up |
+| Backend request inbox | One transport partition | Incoming messages admitted by endpoint policy | Managed request scheduling and storage |
 
-The frontend event queue is not persisted or restored across restarts.
-The frontend event queue needs neither AgentDB nor a durable queue service.
-It is an internal in-process queue for the active frontend session. A backend
-can persist its own conversation independently without making this queue durable.
+The presentation queue is transient. Bound SessionState retains communication evidence and
+input references separately, so recovery can reconcile remote work without replaying uncertain
+speech. Saving backend history does not make that queue durable.
 
 ### How the frontend receives events
 
-1. The expert adapter receives an update and pushes a correlated event into
-   the frontend event queue.
-2. Enqueueing wakes the live session's event loop; there is no database polling.
-3. The session processes queued events when the active agent exposes the
-   corresponding remote tool and speech, interruption, and frontend-task
-   scheduling permits presentation.
-4. Useful progress may be combined. Presenting progress, a question or a result runs a
-   presentation-only fast-brain reply with that source's content and tools disabled.
-   A result is the subject of its own presentation, even when a newer tool output merely
-   acknowledged a response handoff. Ordinary conversation planning and held-response
-   wake-ups retain tool access. Enqueueing alone does not invoke the LLM.
-5. The native conversation retains the original input occurrence. Actual assistant output
-   supplies its presentation receipt; queued or generated wording alone does not.
+1. The adapter receives a correlated event and enqueues it, waking the session without database polling.
+2. The session checks the active agent's tool access and current speech/task scheduling.
+3. When presentation is eligible, the frontend receives a model-valid view of the source and
+   relevant delivered conversation. Ordinary progress may be coalesced; questions, exact output
+   and final outcomes retain their identities.
+4. Actual assistant output supplies the presentation receipt. Enqueueing or generating words
+   alone does not establish that the person heard them.
 
-Applications do not call a dequeue method or run a polling loop. While the
-floor is occupied, the queue retains events for the session to process later.
-
-Each event identifies its delegation, source, destination, and occurrence.
-The live session retains its association with the originating frontend tool
-call. Remote events also retain the endpoint, context, and task references
-needed to continue the expert conversation. The adapter normalizes local and
-remote lifecycle events before delivery.
-
-| Event | Session responsibility | Frontend presentation |
-| --- | --- | --- |
-| Progress | Retain correlation and ordering; coalesce superseded progress | Present useful updates when the conversational floor permits, each through a presentation-only model reply with tools withheld |
-| Input required | Record the pending question and its expert as the reply destination | Ask through the fast brain, preserving meaning; deliver verbatim text unchanged |
-| Completed | Resolve the recorded parent tool call with the accepted result | Let the caller's next model invocation present the result |
-| Failed or cancelled | Settle the delegation with its recorded outcome | Explain the outcome through the frontend when appropriate |
+Each source retains its original tool call and remote context/task references. Further
+messages to a working task reuse its observer; a response-handoff acknowledgement cannot
+replace the original final result. A local tool's progress follows the same ordered path.
 
 ### When the fast brain runs
 
-Receiving an event does not immediately start a competing speech or model
-invocation. The live session serializes presentation with its current speech,
-interruptions, and frontend tasks. Progress can be combined or omitted when
-stale. Questions and final outcomes remain correlated and are not discarded
-as replaceable progress.
+Enqueueing alone does not invoke the model or start competing speech. The session serializes
+presentation with speech, interruption and VoiceTask scheduling. Progress, questions and
+results use presentation-only replies with business tools withheld. They do not resume an
+unresolved parent tool loop or mark its work complete. Normal human turns and held-response
+wake-ups retain their ordinary planning tools.
 
-While an expert is waiting, the fast brain can make a presentation-only model
-invocation to phrase its question or progress. That invocation receives a
-model-valid presentation view containing the relevant visible conversation
-and expert event. It does not resume the parent's ordinary tool loop, invoke
-new business tools, or mark the expert call complete. The parent's pending
-tool call remains recorded until the expert supplies its outcome. A new human turn still
-reaches the fast brain while the remote call runs; it need not wait for the expert.
+Remote latency does not delay interruption handling. A new human turn can reach the frontend
+while the remote body runs. The frontend decides whether acknowledgement is useful; there is
+no automatic announcement option. [Natural conversation](delegation.md#a-natural-conversation)
+owns pacing, question grouping and progress batching.
 
 ### Routing the person's reply
 
-An expert's input request is presented by the frontend and the person's answer
-is forwarded to that expert. The presentation step does not select a local
-collection tool or start a `VoiceTask` on the expert's behalf. For example,
-"What email should receive the receipt?" is phrased for the passenger; their
-answer goes back to the waiting refund task. Expert-triggered structured
-collection, such as automatically invoking `GetEmailTask` for that question,
-is outside this contract.
+Recognition runs before frontend planning and only considers established presentations.
+The session validates the exact human message and selected occurrences before reserving a
+response. A later transcript revision must be recognized again before its revised words can
+authorize forwarding. Private routing observations stay in model context and out of the
+person's perceived history.
 
-The live session records the expert question before presenting it. Rephrasing changes its
-wording, not its identity. Before the frontend model handles a new human turn, the separate
-routing model checks unresolved remote input requests that actually reached the person.
-"Why do you need the date?" leaves a date request open; "Friday" can answer it. Ambiguous or
-unavailable classification leaves requests open for clarification. No routing call is made
-without presented candidates, and the frontend model is never substituted for a missing
-routing model.
+Input classification belongs to its speech. Interrupting that speech closes its model stream
+and releases the waiting frontend plan. A reservation already acknowledged by storage remains
+owned by the conversation even if the assistant reply ends. See
+[response recognition](delegation.md#responding-to-questions) for ambiguity, corrections and
+eligibility, and [remote task selection](delegation.md#select-work-through-the-same-tool) for
+forwarding through the existing tool.
 
-The native owner validates the exact classified message and selected occurrences, then
-checkpoints their responses before forwarding to eligible live continuations. It can recognize
-an earlier presented request; foreground presentation priority is not answer authority. The
-frontend invokes the remote tool to send the person's exact reserved words through the
-original task. The fast brain receives the whole message and can handle an additional topic
-naturally; its tool arguments cannot rewrite an admitted human response. Recognition does not approve a business operation or prove remote delivery.
-
-Input classification belongs to its speech. An interruption closes its model stream and
-releases the waiting frontend plan. A reservation already acknowledged by storage remains
-owned by the conversation even if that assistant reply ends. Private routing observations stay
-in the agent's model context for later replies; they are excluded from the perceived
-conversation. If a final transcript revises an unheard reply's input, the replacement reply
-waits for recognition of those corrected words. The old verdict cannot authorize the revision.
-These rules do not make live Python continuations or the presentation queue durable.
-
-A frontend `VoiceTask` can temporarily own the live interaction. Its user
-turns answer that task; they are not also forwarded to the waiting expert.
-Expert events remain queued until the frontend can present them. Completion
-of the frontend task restores its caller without implicitly completing or
-cancelling the expert delegation.
+A VoiceTask temporarily owns the live interaction. Its human turns answer that task and are
+not also forwarded to earlier remote questions. Remote events remain queued until the
+frontend can present them. Completing the VoiceTask restores its caller without completing
+or canceling remote work.
 
 ### Extending input collection
 
-Keep the expert's pending input request separate from its presentation. Its
-internal record retains request identity, delegation/task references, reply
-destination, and lifecycle state. Rephrasing text, replacing the eligible
-frontend agent, or temporarily running a live task must not lose that identity.
-A received human answer is correlated with the request before being adapted
-to the expert's supported transport format.
+A remote input occurrence is separate from its presentation and response delivery. Rephrasing
+a question, replacing the speaking agent or running a temporary task preserves its identity.
+The existing path presents the question and forwards a recognized human response.
 
-The current collection path presents the question and forwards the human's
-answer. Keep that collection step separate from reply correlation and delivery,
-so another collection strategy can later supply an answer to the same pending
-request. Existing experts can continue to ask plain questions; they must not
-require collection-specific metadata.
-
-A future structured collector could use optional input hints and a local
-`VoiceTask`, then explicitly submit its validated result as the answer to that
-request. This is an extension point, not an additional public API or automatic
-behavior. A live task's result must never be forwarded merely because an expert
-is waiting. Completion, cancellation, and stale-request checks remain tied to
-the exact pending request; a late collector result cannot answer a different
-question. The expert remains responsible for validating the received answer
-and authorizing its own business actions.
+Automatic structured collection through a VoiceTask is outside this contract. A future
+collector would explicitly submit its validated result to that same occurrence, subject to
+cancellation and stale-request checks. A local task result must never be forwarded merely
+because a remote question is waiting. The remote service still validates the answer and
+controls its business authorization.
 
 ### Agent replacement and persistence
 
-Replacing the speaking agent does not delete the inbox, cancel a delegation,
-or change its originating call. Queued expert events become eligible for
-presentation when the active frontend agent exposes the corresponding remote
-tool and the conversational floor is available. It can be the original agent
-or a different configured agent with access to that same remote tool.
+Queued events are eligible when the active agent exposes the matching configured remote ID
+and the conversational floor is available. The original Agent object need not be active.
+A similar model-facing tool name does not grant access; replacing an agent never reassigns
+a result to another tool call.
 
-Tool access is matched against the configured remote-tool identity, not merely
-a similar model-visible name. A replacement without that tool cannot interact
-with the expert, including its pending task, and the events remain queued.
-The live session retains correlation independently of the active agent's tools;
-a queued event never grants access by itself.
+If the person answers an earlier presented question while an agent without that remote tool
+is current, the session can retain the response. The current agent handles the whole message;
+delivery waits for an eligible agent. Its return gives that agent a normal planning turn,
+without automatically sending or re-presenting the question. Settled or superseded
+occurrences cannot receive late responses.
 
-If an expert question was delivered before switching to an agent without its tool, the
-session can still recognize and retain the person's response. The current agent handles the
-whole message, while remote delivery waits. An eligible agent's return releases the held
-response to its original continuation; re-presenting the question is not required to make an
-already recognized answer valid. Settled or superseded questions cannot receive late answers.
+`await task.cancel()` on a bound remote task explicitly requests remote cancellation. Closing
+the frontend or removing a tool does not cancel business work. See
+[retained task control](persistence.md#canceling-retained-remote-work). Remote cancellation
+cannot prove an external action was undone; reconcile through its authoritative service.
 
-An eligible agent can present the expert's updates and continue its pending
-interaction. The existing delegation, remote task, and originating call IDs
-remain unchanged; regaining access does not create a new remote request or
-reassign a result to an unrelated tool call. The
-[airline refund example](voice-tasks.md#example-airline-refund-and-receipt-email)
-shows updates waiting during a frontend inline task.
-
-There is currently no public application API to settle or cancel a stranded frontend
-interaction. Applications must account for that limit when permanently removing expert access.
-The session does not automatically
-switch agents, start another remote request, or deliver the result through an
-unrelated agent. Cancellation is not proof that a refund or other remote effect
-did not happen; the authoritative service must reconcile uncertain outcomes.
-
-The default queue and its active reply correlation live in process. They can
-end with the frontend session. They are not backend routing frames or
-automatically saved application fields. Saving backend history or application
-fields does not make frontend event delivery recoverable.
-
-Durable frontend event delivery requires an application-owned transport and recovery design.
-The framework does not currently provide automatic queue persistence or replay. Such a design
-must retain event positions and delegation/reply identities and reconcile uncertain remote
-outcomes; serializing a queue or Python await is not sufficient.
-
-Another frontend in the same thread cannot consume these events simply because
-it shares a database. Duplicate event delivery must not resolve a tool call
-twice or present the same retained occurrence twice during normal processing.
-A crash between delivery and acknowledgement can still cause uncertainty;
-application-owned persistence does not promise exactly-once speech or external effects.
-
-The frontend queue coordinates expert events and presentation. It does not add
-background execution, a scheduler, or Python stack recovery. The backend request
-inbox continues to serve endpoint request policies independently.
-
+The session does not switch agents to recover stranded access. [Persistence](persistence.md)
+owns saved references and uncertainty. The transient queue supplies neither durable replay
+nor exactly-once speech. A crash between playout and acknowledgement can leave delivery
+uncertain; recovery must not blindly speak it again.
 
 ## Customizing the pipeline
 

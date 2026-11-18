@@ -616,6 +616,27 @@ Python only discovers dataclass fields and preserves application-object identity
 The handler checkpoint protocol is separate from the public
 [semantic run stream](../agents.md#semantic-events).
 
+### Tool output ownership
+
+A native tool operation owns an ordered report scope. `ctx.update` and `ctx.say` reserve work
+synchronously before returning their private readers. Dropping a reader leaves admitted work
+owned by the execution task set. Normal body completion fences its prior reports before
+publishing the final result; closing the owner settles capacity-waiting and delivery readers.
+Admission bounds count unread reports and their payloads, rather than only the channel itself.
+
+Progress admission is separate from human presentation. Exact output uses a canonical message
+minted by the core, then a source-specific output receipt and checkpoint. A direct stream
+consumer's accepted read, an A2A publisher's checked handoff and voice audio playout are different
+local boundaries. A backend receipt cannot confirm downstream speech. Plain result draining
+supplies no exact-output sink and cannot manufacture delivery history.
+
+Live backend execution retains original handler output ports while unrelated turns run.
+A checkpoint or exact report must return through its original source, even after another
+handler becomes current. Queued data is processed before its producer's completion, and an
+SSE observer detaching does not end the business owner. Model turns stay serialized under one
+managed conversation; this is separate from the endpoint's transport tasks and frontend
+presentation queue.
+
 ## Telemetry
 
 [Telemetry internals](telemetry.md) owns signal production, crate placement,

@@ -45,34 +45,15 @@ Every endpoint requires a token: a project token or a thread grant.
 
 ### Selecting work through a remote tool
 
-`RemoteAgent(...).as_tool()` adds an optional, nullable `task_id` argument to the tool's
-schema. For example, `{"request": "Why do you need the date?", "task_id": "booking-42"}`
-continues that remote task for clarification. Saved conversation state supplies its
-`contextId`; the model does not supply an input-occurrence ID. A task can also receive a
-correction or an answer. Selecting it does not by itself answer its current question.
+The caller's [remote task selection API](../delegation.md#select-work-through-the-same-tool)
+adds optional `task_id` to the tool schema. This argument is removed before sending business
+input. Known-task selection sets the outgoing A2A message's `taskId` and saved `contextId`;
+the model does not supply an input-occurrence ID. A custom card schema keeps its remaining
+business arguments in a DataPart and cannot declare the reserved field `task_id`.
 
-The task must be known on that configured remote in the current conversation and must
-still be nonterminal. Invalid selection returns tool feedback before dispatch, without
-creating new work. Omitted or null `task_id` leaves selection to the conversation owner.
-Bind `Agent.run`, `TextSession`, or `VoiceSession` to the conversation's context store to
-retain that state across executions; saved addresses do not restore credentials.
-
-The framework removes `task_id` before sending the remote's own business input, then sets
-the A2A message's `taskId` and saved `contextId`. A custom card schema keeps its other
-arguments as a data part. Declaring a business argument named `task_id` is a setup error.
-This tool argument is a caller API, not an extra A2A wire field.
-
-With a configured routing model, the owner separately recognizes human responses and routes
-proposed tool calls. The latter can continue working tasks, clarify a pending question, or
-start independent work. A failed or ambiguous decision produces tool feedback. Disabling
-automatic routing makes an explicit `task_id` continue known work and an omitted ID start new
-work. See [response routing](../text-session.md#responses-to-requests-for-input).
-
-A live task has one native observer. Further calls admitted to it wait for message admission;
-progress, questions and the final result stay with the originating call. The observer closes
-its old stream before opening another exchange, and a peer merging concurrent requests cannot
-create a second result owner. Request and message identities survive recovery of a prepared
-operation. Ending local observation leaves remote business work running.
+A direct Message remains a Message, without a fabricated task. Context reuse, response
+recognition and ownership of live task results belong to the caller's conversation, rather
+than additional A2A wire fields. Ending local observation leaves remote business work running.
 
 ## Threads and messages
 

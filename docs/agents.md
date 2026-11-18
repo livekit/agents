@@ -205,7 +205,8 @@ through any parameter annotated with it; the parameter is optional:
 | `ctx.task_id` | the A2A task ID of the turn, or `None` outside A2A; external operations need an operation-specific idempotency key |
 | `ctx.usage` | latest immutable usage snapshot of the owning execution scope; see [usage](usage.md#scope-and-delegation) |
 | `ctx.function_call` | the call being executed, inside a tool |
-| `await ctx.update(text)` | a progress message while the tool runs: a `working` frame on the text door, speech on a call |
+| `ctx.update(message, *, silent=False)` | immediately enqueue progress; await admission; the frontend may word or batch it |
+| `ctx.say(text)` | immediately enqueue exact text; await its local text delivery or audio playout boundary; see [delivery guarantees](delegation.md#progress-and-exact-output) |
 
 On a call the context also carries the speech: `ctx.speech_handle`,
 `ctx.wait_for_playout()`, `ctx.with_filler(...)`, `ctx.foreground()` and
@@ -411,8 +412,8 @@ same message, history, context, and retries arguments. Streaming
 does not change tool execution, output validation, approval, or human-input
 semantics.
 
-Backend `session.run_stream(...)` follows the same lifecycle. Its final value
-is the same result/state envelope returned by `session.run(...)`. Frontend
+Backend `session.run_stream(...)` follows the same lifecycle and returns
+the same RunResult as `session.run(...)`. Frontend
 `VoiceSession` presentation and its expert-event queue remain session-owned;
 starting a stream does not create a text session.
 
@@ -453,10 +454,9 @@ raised through iteration. Call `result()` for its typed final value.
 
 ### Stream handle
 
-`RunStream[Result]` carries the type returned by `result()`. For a direct
-agent, that is `RunResult[Output]`. For a text session, it is the session's
-existing envelope containing `result: RunResult[Output]` and `state: SessionState`.
-The stream does not put session metadata into the contained `RunResult`.
+`RunStream[Result]` carries the type returned by `result()`. Both an agent and a text
+session return `RunResult[Output]`. Conversation state remains available through the
+[bound SessionState](session-state.md); the result carries no separate state envelope.
 
 | Member | Contract |
 | --- | --- |
@@ -507,7 +507,9 @@ single-consumer notifications, not a durable replay subscription.
 
 Buffering is bounded. A slow consumer applies backpressure to notification
 production; text, admitted progress, questions, and terminal tool outcomes are not silently dropped.
-`await ctx.update(text)` waits for progress admission when the run's queue is full.
+`ctx.update(text)` immediately enqueues progress and returns a private awaitable for
+admission. Pending admissions and their total content are bounded, including updates whose
+waiters are discarded. See [tool output](delegation.md#progress-and-exact-output).
 Cancellation and cleanup must remain responsive while a consumer is blocked.
 The frontend's separate progress-coalescing queue does not change this run
 stream's event identity or history contract.
@@ -560,7 +562,7 @@ Every event has:
 | `"text_end"` / `TextEndEvent` | `message_id: str`, `interrupted: bool` | This assistant message ended; the run may continue |
 | `"tool_call"` / `ToolCallEvent` | `call_id: str`, `tool_name: str`, `arguments: dict[str, JsonValue]` | Validated, complete arguments for a selected tool call; not partial argument JSON |
 | `"tool_result"` / `ToolResultEvent` | `call_id: str`, `tool_name: str`, `outcome: Literal["completed", "failed", "cancelled"]`, `output: JsonValue`, `error: str | None` | The recorded call outcome; errors have an error description and may use a null output |
-| `"progress"` / `ProgressEvent` | `message: str`, `call_id: str | None`, `tool_name: str | None` | An application progress update, such as `ctx.update(...)`; call fields are set when emitted inside a tool |
+| `"progress"` / `ProgressEvent` | `message: str`, `call_id: str | None`, `tool_name: str | None`, `silent: bool` | Application status from `ctx.update(...)`; `silent=True` does not request conversational wording. Call fields are set inside a tool |
 
 `JsonValue` is JSON null, boolean, number, string, a list of JSON values, or a
 string-keyed dictionary of JSON values. Model/dataclass tool outputs are encoded

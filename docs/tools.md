@@ -151,7 +151,8 @@ await session.start(agent=front_desk, room=ctx.room)
 ```
 
 The endpoint supplies the tool's name (its `endpoint=`) and description. The tool takes
-one `request` argument: the request, stated in full. It exists as soon as the agent is
+a required `request` argument for the request stated in full, plus optional `task_id`
+selection described in [delegation](delegation.md#select-work-through-the-same-tool). It exists as soon as the agent is
 built; nothing is fetched when a session starts.
 
 A reference resolves to the endpoint where the worker runs:
@@ -180,47 +181,33 @@ eligibility = RemoteAgent(
 )
 ```
 
-`RemoteAgent(endpoint | url, *, name=None, description=None, token=None, conn_options=None)`
+`RemoteAgent(endpoint | url, *, id=None, name=None, description=None, token=None, conn_options=None)`
 takes `name` and `description` to override the endpoint's or the card's. It accepts the same [connection policy](models.md#connection-options)
 as `AgentClient`. A failed call is a tool error the parent model can answer around; it does
 not end the session.
+
+`id` identifies this configured remote in `SessionState.remote_agents` and frontend event
+eligibility. It defaults to the canonical endpoint URL. Renaming a tool does not change that
+identity. When two configurations use the same URL with different credentials, give them
+distinct IDs, such as `id="flights_personal"` and `id="flights_business"`. An ID grants no
+access; the endpoint and current credentials are checked independently. Conflicting live
+configurations cannot reuse one ID.
+
 The remote service owns its history, application data, approval behavior,
 and completion contract. Local agent-tool options such as `chat_history`,
 `merge_chat_ctx`, and `needs_approval` do not configure the remote tool.
 
-In the frontend, `VoiceSession` coordinates the interaction while the adapter
-handles the A2A protocol. Expert events enter the calling frontend conversation's in-process
-queue and wake its session without database polling. Persistence of frontend
-event delivery is optional. The frontend
-presents useful progress when the conversational floor permits and can rephrase
-questions without taking ownership of the expert's task. An input-required
-response records that expert as the destination for the next relevant human
-reply. See [inbox delivery](voice-session.md#conversation-owned-inbox). Completion delivers the remote result to the parent tool
-call, then the parent model continues. Failures and cancellation propagate
-through the tool lifecycle.
+`VoiceSession` owns live presentation and response correlation without a TextSession.
+A bound Agent.run or TextSession uses the same conversation-wide remote state for backend
+execution. The remote service retains its own private history. The
+[delegation guide](delegation.md) owns frontend behavior, response recognition, remote task
+selection, progress/exact delivery, cancellation and recovery.
 
-The frontend session retains the remote endpoint and conversation/task
-references in process. The remote service retains its private history; it can
-use plain `Agent.run()` or a text session. Frontend event recovery is optional
-and separate from backend persistence.
-
-Backend agents can attach the same remote tool through `tools=`. In that case,
-`TextSession` owns the pending call across requests. `context=store.bind(...)` checkpoints
-framework continuation state; application-field changes still require explicit saves.
-No frontend event queue or live session is created by a backend run.
-
-The adapter manages connection lifecycle, authentication, task correlation,
-and delegation metadata. Applications configure the endpoint and attach its
-tool; protocol calls and metadata recording are internal. One call of the tool
-connects, sends the request and follows the remote task to its outcome, a task
-the endpoint moved included; each update is recorded on the function call's
-`extra` before its progress text reaches `ctx.update()`. On a call the frontend decides whether
-and how to acknowledge dispatch. Remote questions enter the session's presentation queue;
-recognized responses reach their original task through the same remote tool. Off a call the
-question ends the tool call as `InputRequired`. Canceling the local tool wait closes its observation resources and
-retains its remote references. Remote business work continues; stopping the frontend does
-not send a task cancellation. Explicit cancellation is a separate task operation, described
-in [endpoint clients](clients.md#a-client-for-an-endpoint).
+The adapter handles connection lifecycle, authentication and A2A correlation. One remote
+can have multiple tasks/contexts or return a direct Message. A bound conversation journals
+original SDK requests, responses and errors before exposing normalized progress and results.
+Copied model history is not continuation authority; resumption uses native state selected by
+`context=store.bind(...)`. Application field saves remain explicit.
 
 When the caller holds
 [explicit authority](protocol/a2a.md#delegation-and-conversation-data) to share
@@ -260,7 +247,7 @@ parent conversation while returning only its accepted result.
 |---|---|
 | a value | the model reads it and continues; `None` follows the mode-specific rule below |
 | `ToolResult(output, reply_required=False)` | the output is recorded; the call asks for no reply |
-| `ToolResult(text, verbatim=True)` | the person gets the text exactly as written; the model reads that it was delivered and continues, or the turn ends there with `reply_required=False`; see [human input](#human-input) |
+| `ToolResult(text, verbatim=True)` | supplies exact text to the framework's output path; the model receives a separate-delivery note and continues, or the turn ends there with `reply_required=False`; see [human input](#human-input) |
 | raise `ToolError(message)` | the model reads the message as an error output and continues |
 | raise `ModelRetry(reason)` | the model reads the reason and calls again, within the tool's [retry budget](#retries); the same in `agent.run()` and on a call |
 | raise `StopResponse()` | the call is answered with nothing and asks for no reply; `run()` ends the turn with `status="no_output"` |
@@ -304,13 +291,16 @@ The agent facing the person words what reaches them.
 |---|---|---|
 | `InputRequired(question)` | asks in its own words: one model request with no tools in text, a `generate_reply` on a call | passes the question up as written; the agent facing the person words it |
 | `InputRequired(question, verbatim=True)` | asks it exactly as written: the turn's reply in text, `say()` on a call | passes it up flagged `livekit/verbatim`; asked as written at the end |
-| `ToolResult(text, verbatim=True)`, `Completed(value, verbatim=True)` | delivers the text as written; the model reads `delivered to the person as written: ...` and continues, unless `reply_required=False` ends the turn there | the same, and the exact text leads the answer, flagged `livekit/verbatim` |
+| `ToolResult(text, verbatim=True)`, `Completed(value, verbatim=True)` | supplies exact text for separate framework delivery; the model reads `exact text supplied for separate framework delivery: ...` and continues, unless `reply_required=False` ends the turn there | the same, and the exact text leads the answer, flagged `livekit/verbatim` |
 
 A run is another agent's when its turn's messages carry
 `livekit/kind: delegation`. A handler without a model asks as written. `result.verbatim` is the part of the answer or the question
 that was exact; the door puts it on the task as `livekit/verbatim`, and the
 delegate delivers that part as written and hands the rest to its model.
 A read-back from `needs_approval` is verbatim.
+The model-facing note records supplied text, not successful delivery. It cannot establish
+perceived conversation history. Output and playout receipts own that evidence; an output
+failure does not turn an already completed business effect into a retryable tool call.
 
 Human input is matched to a specific presented request before being reserved
 as its response. A side question or new topic can be handled while the

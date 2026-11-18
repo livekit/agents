@@ -11,7 +11,8 @@ These documents define the intended API and behavior.
 2. [Tools](tools.md): tool execution, human input, approvals, and agents as tools.
 3. [Context](context.md): declare application data and construct runtime dependencies.
 4. [Persistence](persistence.md): load/save fields, bind session state, and choose transaction boundaries.
-5. Choose [TextSession](text-session.md) for request-scoped text conversations or [VoiceSession](voice-session.md) for a live call.
+5. [Conversation state](session-state.md) and [delegation](delegation.md): inspect local and remote work and keep the frontend responsive.
+6. Choose [TextSession](text-session.md) for request-scoped text conversations or [VoiceSession](voice-session.md) for a live call.
 
 For bounded voice interactions, continue with [VoiceTask](voice-tasks.md).
 To expose and call your application, read [server entrypoints](server.md) and
@@ -22,13 +23,15 @@ To expose and call your application, read [server entrypoints](server.md) and
 | Document | Owns |
 | --- | --- |
 | [agents.md](agents.md) | Agent configuration, RunContext, execution, output contracts, history, lifecycle hooks, and streaming |
-| [tools.md](tools.md) | Tools, toolsets/MCP, approvals, human input, errors, and local/remote agents as tools |
+| [tools.md](tools.md) | Tool declaration, toolsets/MCP, approvals, human input, errors and local/remote tool configuration |
 | [models.md](models.md) | Model strings and the inference catalog, realtime options, connection options and pools, the HTTP/WebSocket client, timeouts, errors, retries, provider streams, and the plugin-author contract |
 | [telemetry.md](telemetry.md) | Exporting to your backend, application spans, distributed traces, content and PII, LiveKit Cloud recording, Prometheus, and diagnostics |
 | [usage.md](usage.md) | Usage snapshots, token and billing units, accounting scope, measurement availability, and performance metrics |
 | [context.md](context.md) | Runtime dependencies, persisted field declarations, context scopes, and schema evolution |
 | [persistence.md](persistence.md) | Explicit load/save, session binding and snapshots, durability, transactions, and concurrent updates |
-| [text-session.md](text-session.md) | Session rehydration, local agent state, delegation, private histories, and continuation across requests |
+| [session-state.md](session-state.md) | Shared conversation state, local agent/call views, perceived and private histories, remote observation views and input lifecycles |
+| [delegation.md](delegation.md) | Responsive frontend behavior, response recognition, remote task selection, progress/exact delivery and remote work recovery |
+| [text-session.md](text-session.md) | Text execution, local agents as tools, approval and continuation across requests |
 | [voice-session.md](voice-session.md) | Audio and turn configuration, agent replacement, frontend expert events, and reply routing |
 | [lexer.md](lexer.md) | A model reply's text on its way to the voice, the transcript and the history: hidden reasoning and template leaks, expressive markup, markdown and emoji, transcript sync, and how long text is held |
 | [voice-tasks.md](voice-tasks.md) | Constructing and running bounded voice interactions, typed completion, suspension, and cleanup |
@@ -99,4 +102,4 @@ Start with the [execution paths](internals/architecture.md#execution-paths) to f
 | Voice task | A temporary voice interaction that returns a typed result and restores its caller |
 | Thread | A durable conversation identity (`AT_...`), also used as A2A `contextId` |
 | Partition | History, routing, inbox and write ownership selected by a partition_key within a thread |
-| Frame | One backend conversation inside a text SessionState, with its own history and parent-call relationship |
+| Agent state | One local agent context in SessionState, with private history and an originating parent call when it is a child |

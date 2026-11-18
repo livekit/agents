@@ -85,6 +85,32 @@ interruption events keep running. The next command waits for that receipt. Stora
 the snapshot actually written, preserving input admitted while the write waited and refusing
 to acknowledge an older caller over a later transport receipt.
 
+### Delegation responsibilities
+
+Local and remote delegation have separate implementation folders. Local agents retain a
+parent tool-call relationship and an accepted typed child output. Remote communication retains
+upstream SDK requests, Messages, Tasks and stream observations; it is not represented as a
+local child or one synthetic task.
+
+| Component | Owns |
+| --- | --- |
+| `core::delegation::local` | Local agent-tool admission and output propagation |
+| `core::delegation::remote` | Remote interaction decisions, journal projection, accepted terminal observations, control recovery and model-facing result content |
+| `core::session` | Local agent contexts, response reservations, remote eligibility and source ownership across text turns |
+| `runtime::delegation::{local, remote}` | Host/body and network execution of those decisions, owned observations and cleanup |
+| `storage::session_state` | Generated bound/detached views, native encoding and command capability tied to a live store |
+
+The journal appends wire observations. Mutable dispatch facts and task/input state live beside
+it. A late stale working poll remains evidence but cannot reopen an accepted terminal task.
+The model-facing result is a bounded presentation of retained SDK content, without fetching
+file URLs or discarding other artifacts merely because one is named `answer`.
+
+Remote IDs identify current configured resources independently of model-facing tool names.
+Endpoint and credential conflicts are checked before borrowing a live observer or dispatching.
+Saved IDs, URLs and context references grant no authority; credentials remain runtime services.
+Public shapes belong to [conversation state](../session-state.md) and
+[delegation](../delegation.md).
+
 These entrypoints use one shared Rust implementation of agent execution:
 request planning, model/tool step decisions, argument preparation, approval,
 result interpretation, usage, recovery and output acceptance. Sharing contracts
@@ -514,7 +540,7 @@ enum and ordinary awaits, tested with the provider fakes.
 | Duplex adaptation | Gate/segment state for continuous provider output | Audio and transcript fragments retain their burst/segment identity |
 | Agent authoring | Configuration, callback registration order and hook replacement, freezing, retry budgets and configuration projection | Core stores callable IDs and plain data; the host retains callable objects, inspects types and discovers module assignment names. Public retry and model-setting records are generated |
 | Request streams | Consumer/read admission, event envelopes, text accumulation and presentation accounting | Core owns the consumption state; runtime binds native runner sources directly, executes cancellation and settles sources/resources with injected execution ports. Cursors retain admission through language delivery. Python hydrates typed results and retains exception identity; it owns no stream task or presentation buffer |
-| Text invocation resources | Temporary namespace/thread creation, context borrowing and owned activation lifetime | One native owner surrounds a direct run or every frame of a text-session turn. Cancelled startup/close waiters cannot abandon cleanup. Toolset cleanup settles before owned context/storage close; Python only hydrates thread/store handles and releases cached language objects |
+| Text invocation resources | Temporary namespace/thread creation, context borrowing and owned activation lifetime | One native owner surrounds a direct run or every local agent context of a text-session turn. Cancelled startup/close waiters cannot abandon cleanup. Toolset cleanup settles before owned context/storage close; Python only hydrates thread/store handles and releases cached language objects |
 | Toolset lifetimes | Pending acquisitions, sharing, last-user release, cancellation and scope selection | Runtime executes declared setup/close callbacks through HostInvoker. Failed initialization settles acquired roots and nested children before returning the failure, in both text and voice. Failed parents do not run their authored close. Ready lifetimes retain no host callback; closed lease groups release theirs |
 | MCP | Tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification (`lk_agents_core::mcp::http`), in `lk-agents-core` | The runtime's thin session I/O uses the SDK for stdio and Streamable HTTP and only executes; do not duplicate the MCP protocol engine |
 | Avatar provider | Create/terminate request policy and provider session identity | Gateway requests retry under one operation identity; a created session is delivered or terminated; voice owns presentation |

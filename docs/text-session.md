@@ -89,73 +89,29 @@ AgentRetries selects them individually. See [retries](agents.md#retries).
 
 ## Shared state and private histories
 
-`app.session.current_agent` and `app.session.root_agent` resolve entries in
-`app.session.agents`. Their `chat_ctx` values are private model histories. They include tool
-activity and any context inherited when a child started.
-
-`app.session.chat_history` records the conversation the person experienced across agents and
-supported text/voice transitions. It excludes tool calls, tool results and synthetic child task
-instructions. `snapshot()` returns a detached inspection view; execution continues through
-store binding. SessionSnapshot is private native data, not another public state class.
-
-`merge_chat_ctx=True` copies only the child's conversation with the person into the parent's
-model context. Human dialogue remains in chat_history regardless of that option. After the
-parent receives the child's accepted output and selected dialogue, the completed child is
-removed from the active agent map.
+Read `app.session.current_agent.chat_ctx` for the current agent's private model history and
+`app.session.chat_history` for the person's delivered conversation. Root/current views,
+local call relationships and snapshot behavior belong to [conversation state](session-state.md).
+The [persistence guide](persistence.md#session-state-and-explicit-binding) owns binding and saves.
 
 ## Responses to requests for input
 
-Configure a separate routing model with `DelegationOptions(routing_model=...)` on TextSession,
-or pass the same options as `delegation=` to a bound Agent.run or Agent.run_stream. This is
-conversation-wide configuration shared by every remote tool and local agent. The framework
-does not reuse the frontend model or select a provider implicitly.
+Configure `DelegationOptions(routing_model=...)` on TextSession, or pass the same options as
+`delegation=` to a bound Agent.run or Agent.run_stream. This separate model applies to the
+whole conversation. It checks presented unresolved requests before the current agent plans,
+then separately checks proposed remote tool calls against known work. Set `routing_model=None`
+to disable automatic routing and use explicit remote `task_id` selection.
 
-Set `routing_model=None` to disable automatic routing. The current agent handles incoming
-messages normally; remote tools can continue known work with `task_id`, and calls without it
-start new work. Task selection supports clarification and correction as well as responses;
-it does not itself consume a pending input occurrence. See [remote task routing](protocol/a2a.md#selecting-work-through-a-remote-tool).
+The current agent receives the whole human message. Recognition can retain a response while
+another child is current, but delivery waits for an eligible agent with the relevant remote
+tool. The original question and reserved human words keep their identity across that wait.
+[Delegation](delegation.md#responding-to-questions) owns recognition, clarification, grouping,
+corrections and dispatch rules.
 
-Before the current agent handles a new message, the routing model checks unresolved input
-requests that were actually presented. This includes a single question and earlier presented
-questions from inactive agents. A side question such as "Why do you need the date?" leaves the
-date request open. An unclear or failed classification lets the current agent clarify; it does
-not guess a destination. Without presented candidates, no classification call is made.
-The verdict applies to the exact message classified. A revised transcript must be classified
-again before its current words can answer a request.
-
-Related tool questions can become one prompt, such as "What are your first and last names?"
-The frontend selects the sources and wording together; each input request keeps its identity.
-A clear full-name response can address both requests. "My first name is Ada" answers only the
-first-name request, leaving the last name open. Questions omitted from the delivered prompt
-are not offered to the routing model. Grouping questions never grants business approval.
-
-The current agent still receives the entire human message and a private routing observation.
-The native owner validates selected occurrences and checkpoints their canonical human response
-before dispatch. Recognition can retain an answer while another agent is current. It does not
-switch agents, approve a business operation or prove that a remote received the response.
-When a selected response continues a remote task, it keeps that task's context and sends the
-person's reserved words. Model-generated tool arguments cannot rewrite them.
-
-The response belongs to the conversation's remote task. An eligible agent can send it even
-when that agent has a fresh private history. Until an eligible agent invokes the remote tool,
-the response stays held. A tool call cannot choose arbitrarily between several held responses
-or create a second outgoing operation for a response whose dispatch is already being tracked.
-While a response is held, the routing model can recognize a clear correction such as "Actually
-Saturday". The owner checks that the original response is still current before replacing it.
-Once dispatch may have started, it preserves the sent message and reconciles that operation.
-
-The same routing model separately checks proposed remote tool calls against known tasks.
-A side question need not become a new task, and an existing held response cannot redirect an
-unrelated hotel request. Each model turn retains the input occurrences it was offered;
-admission rechecks those occurrences before sending. A response whose outgoing operation is
-already tracked is acknowledged locally without another send. This deduplication applies to
-that response, so the same human turn can also start independent work.
-
-Text consumed from run_stream establishes delivery at that output boundary. Verbatim tool
-questions use the same stream and receipts as model text. Reading only a result without
-consuming its text does not establish presentation. Routing model consumption is included in
-the turn's usage. The [delegation design](proposals/delegation.md#input-response-detection)
-describes grouping, dispatch eligibility and recovery across execution modes.
+Text consumed from `run_stream` establishes delivery at that execution's output boundary.
+Verbatim questions use the same stream and receipts as model text. Reading only a result
+without consuming its text does not establish presentation. Routing-model consumption is
+included in the turn's usage.
 
 ## Local agents as tools
 
@@ -195,7 +151,7 @@ remain explicit saves. External services still need their own idempotency and au
 
 `RemoteAgent(url).as_tool()` communicates with an A2A endpoint. Remote communication is
 separate from local child execution: a remote can have multiple tasks and contexts, or return
-a direct Message without creating a task. See [delegation](proposals/delegation.md).
+a direct Message without creating a task. See [delegation](delegation.md).
 
 On A2A, `ctx.execution_id` is the task ID. A message addressed to a waiting task continues it.
 A message without taskId follows the endpoint's [task-answering contract](protocol/a2a.md#answering-a-task).

@@ -23,15 +23,15 @@ history, the state, the tasks, the A2A context.
 | an id       | `AT_...`, minted by the platform. A client learns it as the `contextId` of the first reply and sends it from then on; the handler reads it as `ctx.thread.id`  |
 | scope       | an optional opaque identifier the application sets for the person or account the thread is about; the one dimension threads are listed by, and a grant's scope |
 | attributes  | a small string map the application sets and reads back; a title, a preview, flags                                                                              |
-| partitions       | one per configured handler partition: transport history, saved application data and tasks; see [partition concepts](#partitions-and-session-frames)                           |
+| partitions       | one per configured handler partition: transport history, saved application data and tasks; see [partition concepts](#partitions-and-local-agent-state)                           |
 | the journal | the framework's append-only record of what happened, shared by every partition; see [journal](internals/storage.md#journal)                                         |
 
 Several endpoints can take part in one thread, each in its configured partition.
-Local agents coordinated by a session have separate frames within saved session
-state; those frames do not each create a transport partition. A tool reads another agent's history
+Local agents coordinated by a session have separate agent contexts in saved
+[conversation state](session-state.md); they do not each create a transport partition. A tool reads another agent's history
 with `ctx.thread.partition(partition_key).history()`.
 
-## Partitions and session frames
+## Partitions and local agent state
 
 `a2a_session(partition_key=...)` and `rtc_session(partition_key=...)` select saved
 history, tasks and write ownership inside a thread. Both resolve omitted keys to
@@ -41,8 +41,8 @@ continue the same history when their thread and partition key match. A remote
 expert selects a separate key when it needs independent conversation state.
 `AgentHandler` only groups entry points; it has no persistence identity.
 A partition is not allocated for every local agent invocation.
-`SessionState` keeps its own agent frames, private histories, and pending
-calls; those frames do not each create a partition.
+`SessionState` keeps local agent contexts, private histories and unresolved calls
+within that partition.
 
 The journal is the framework's append-only event record, separate from editable
 model history and explicitly saved context fields. Public thread methods read
@@ -169,7 +169,7 @@ The entrypoint selects the thread and partition; the
 [persistence guide](persistence.md#session-state-and-explicit-binding) defines
 how session execution binds that selection or reads detached snapshots.
 `ctx.thread.chat_history()` reads committed transport messages rather than
-private TextSession frame histories. Separate reads are not an atomic historical
+private TextSession agent histories. Separate reads are not an atomic historical
 snapshot.
 
 Delegation into an active caller/ancestor's same store/thread/partition is rejected before

@@ -155,12 +155,9 @@ Bound `agent.run(...)` and `agent.run_stream(...)` use the same native conversat
 TextSession. Pass `context=ctx.store.bind(app)` to continue it; a bound run rejects competing
 explicit `message_history`. `Agent.run()` still returns its invocation's RunResult.
 
-Inspect `app.session.current_agent.chat_ctx` for the current agent's private model context and
-`app.session.root_agent` for the top-level agent. `app.session.chat_history` contains accepted
-human input and assistant content actually delivered across local agent changes. Private tools,
-instructions and synthetic child tasks stay out of that delivered history. These are generated
-read-only views; `snapshot()` captures a detached view without saving it. Root and current are
-None before the conversation starts.
+[Conversation state](session-state.md) owns root/current agent views, private model context,
+the person's delivered history and remote observations. These generated views are updated
+through the binding; `snapshot()` captures a detached inspection view without saving it.
 
 Use `ctx.store.bind()` when execution has no application context. A `thread=`
 association alone does not enable VoiceSession persistence.
@@ -205,30 +202,45 @@ See [TextSession](text-session.md#running-a-conversation) and
 
 ### Inspecting remote communication
 
-`app.session.remote_agents` exposes retained communication with each remote. Its `messages`
-index contains observed A2A messages in both directions, including direct replies without a
-task or context. Its `tasks` index contains task views; each view's `task` is the upstream SDK
-Task, with its observed status, artifacts and optional history. `input_requests` and
-`cancel_requested` describe local task handling separately from that protocol status.
+`app.session.remote_agents` exposes configured remotes by stable `RemoteAgent.id`, defaulting
+to the canonical URL. Its task, message, context and event views describe retained SDK
+observations without network calls. See [remote communication views](session-state.md#remote-communication-views).
+
+Views retained from a bound SessionState follow that conversation; views obtained from
+`state.snapshot()` stay detached and fixed. Inspection alone gives no command capability.
+
+### Canceling retained remote work
+
+`await task.cancel()` uses an explicitly bound conversation. After loading application state,
+`store.bind(app)` associates its original SessionState view with that store; loading or copying
+a snapshot alone does not permit control operations. For example, a retained LiveKit task can
+be controlled between executions without starting another model turn:
 
 ```python
-remote = app.session.remote_agents[remote_id]
-task = remote.tasks[task_id]
-observed_status = task.task.status
-events = remote.events
-context = remote.contexts[task.task.context_id]
+app = await store.load_context(App(services=services))
+binding = store.bind(app)
+task = app.session.remote_agents["travel"].tasks[task_id]
+await task.cancel()
+# The same declaration can later be passed as context=binding to continue the conversation.
 ```
 
-`contexts` groups the same messages and tasks by their context IDs. It does not maintain a
-second message history. `events` retains requests, responses and observed errors in local
-journal order. This communication journal is separate from the person's `chat_history`:
-receiving remote text does not mean it was delivered to the person.
+The store must stay open. The task must come from the original associated `app.session`,
+not the detached value returned by `load_session()` or `snapshot()`.
 
-Inspection performs no network calls and describes retained observations, which may be
-partial. A task can exist without a full history or status snapshot. Collections and SDK
-values returned to Python are copies; editing them does not change the conversation. Retained
-remote/task views follow their bound SessionState. Views obtained through `state.snapshot()`
-stay detached and fixed.
+A running conversation uses its existing native owner and configured client. Between runs,
+LiveKit tasks can use the current worker/server credentials and the bound thread through a
+short fenced control scope. The framework saves no tokens. It verifies the task's original
+delegation scope before minting a fresh thread grant; a saved URL or context ID grants no access.
+For custom third-party authentication, the active task's configured client must still be
+owned by the conversation. `task.cancel()` takes no token or client argument and does not
+recreate custom credentials from a snapshot. Dispatch is refused without that live client
+or a verified current LiveKit scope. An already confirmed canceled task returns success without another request.
+
+Cancellation writes framework state and communication evidence without saving application
+field changes. Success requires a persisted observation of the canceled task. Concurrent
+callers share an attempt; an unknown reply is reconciled before another control is considered.
+A later explicit call may retry a definitely refused cancellation. Closing the frontend does
+not request cancellation, and closing the store invalidates its control capability.
 
 ### Resuming a remote call
 
