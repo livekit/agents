@@ -30,7 +30,7 @@ dependencies = [
     # 2.13 is the floor for AudioTranscriptionConfig.custom_vocabulary, which Gemini STT's
     # Live setup sends.
     "google-genai >= 2.13; python_version >= '3.10'",
-    "livekit-agents>=2.0.0b2",
+    "livekit-agents>=2.0.0b3",
     # Vertex AI uses an OpenAI-compatible client. google-genai still depends on httpx v1.
     "openai>=3.19,<4",
     "httpx2>=2.12,<3",
