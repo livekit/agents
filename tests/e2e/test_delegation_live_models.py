@@ -159,6 +159,7 @@ async def test_gemma_voice_handles_a_side_question_then_resumes_the_original_rem
             *,
             question: bool = False,
             latest: bool = False,
+            confirmation: bool = False,
         ) -> str:
             async with asyncio.timeout(35):
                 while True:
@@ -208,6 +209,12 @@ async def test_gemma_voice_handles_a_side_question_then_resumes_the_original_rem
                         accepted
                         and any(word in text for word in words)
                         and (not question or "?" in text)
+                        and (
+                            not confirmation
+                            or any(
+                                word in text for word in ("book", "confirm", "all set", "arrang")
+                            )
+                        )
                     ):
                         return speech.text
 
@@ -236,7 +243,7 @@ async def test_gemma_voice_handles_a_side_question_then_resumes_the_original_rem
             )
 
             await caller.say(phrases[900])
-            await hear_until(("friday",), phrases[900], latest=True)
+            await hear_until(("friday",), phrases[900], latest=True, confirmation=True)
             remote = state()["remote_agents"][peer.url]
             request = remote["tasks"][task_id]["input_requests"][request_id]
             assert request["response_message_id"] is not None

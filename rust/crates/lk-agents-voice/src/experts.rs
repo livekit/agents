@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
@@ -115,6 +115,13 @@ pub struct Experts {
     /// Admitted human responses awaiting an eligible live continuation; never persisted here.
     #[serde(skip)]
     responses: BTreeMap<InputRequestRef, lk_agents_abi::ChatMessage>,
+    /// Wake the frontend once per held occurrence, including after its tool becomes eligible.
+    #[serde(skip)]
+    prompted_responses: BTreeSet<InputRequestRef>,
+    /// A tool invocation handed this human turn to its existing body. This is local admission,
+    /// not wire acknowledgement; repeated calls in that same turn must not create new work.
+    #[serde(skip)]
+    forwarded_responses: BTreeMap<ExpertTool, String>,
 }
 
 impl Experts {
@@ -234,6 +241,7 @@ impl Experts {
                 !delegation.requests.values().any(|known| known.as_ref() == Some(reference))
                     || Some(reference) == current
             });
+            self.prompted_responses.retain(|reference| self.responses.contains_key(reference));
         }
         self.foreground.take_if(|f| f.call_id == call_id);
         self.queue
@@ -316,7 +324,13 @@ impl Experts {
         delegation.waiting = None;
         if let Some(Some(reference)) = delegation.requests.get(&request.request_id) {
             self.responses.remove(reference);
+            self.prompted_responses.remove(reference);
         }
+        self.queue.retain(|queued| {
+            queued.call_id != request.call_id
+                || !matches!(&queued.event, ExpertInboxEvent::Question { request_id, .. }
+                    if request_id == &request.request_id)
+        });
         self.foreground
             .take_if(|f| f.call_id == request.call_id && f.request_id == request.request_id);
         Ok(())
@@ -336,8 +350,46 @@ impl Experts {
                     .and_then(Option::as_ref)
                     == Some(&reference)
         }) {
+            self.prompted_responses.remove(&reference);
             self.responses.insert(reference, message);
         }
+    }
+
+    /// The recognized response was already handed to this tool in the current human turn.
+    pub fn response_forwarded(&self, tool: &ExpertTool, human_id: &str) -> bool {
+        self.forwarded_responses.get(tool).is_some_and(|id| id == human_id)
+    }
+
+    /// A live request belongs to this exact endpoint/tool pair, including across agent changes.
+    pub fn matches_tool(&self, request: &PendingRequest, tool: &ExpertTool) -> bool {
+        self.delegations.get(&request.call_id).is_some_and(|delegation| delegation.tool == *tool)
+    }
+
+    /// Claim before handing the response to its one live body. Reentrant tool calls in the
+    /// same human turn observe the admission rather than starting another remote interaction.
+    pub fn forward_response(
+        &mut self,
+        request: &PendingRequest,
+        human_id: String,
+    ) -> Result<(), Stale> {
+        let tool = self.delegations.get(&request.call_id).ok_or(Stale)?.tool.clone();
+        self.answer(request)?;
+        self.forwarded_responses.insert(tool, human_id);
+        Ok(())
+    }
+
+    /// An eligible agent gets one normal planning turn for responses retained while it was away.
+    pub fn prompt_responses(&mut self, floor: Floor<'_>) -> bool {
+        if !floor.free {
+            return false;
+        }
+        let mut prompt = false;
+        for (request, _) in self.responses(floor) {
+            if let Some(reference) = self.reference(&request).cloned() {
+                prompt |= self.prompted_responses.insert(reference);
+            }
+        }
+        prompt
     }
 
     /// Recognition is independent of the speaking agent; delivery still requires its tool.

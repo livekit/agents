@@ -65,6 +65,29 @@ they allow the model to choose natural wording. Keep failed runs when evaluating
 The voice case also needs `livekit-server` on PATH. It uses live frontend/routing models and
 deterministic tone STT/TTS, with actual worker/job processes and audio through the isolated SFU.
 Its `voice-observations.json` records the speech and audio received by the caller.
+The final received utterance must confirm the booking and date, alongside a completed
+original task and exactly one forwarded response; acknowledging the date alone is insufficient.
+
+Response recognition also has a labeled corpus in `cases/input_routing.json`. Development
+and held-out cases use an ordinary TextSession with a scripted frontend and the real
+routing model. Each case explains its expected source selection; the test checks both the raw
+model verdict and the native reservations, including the person's exact words. This separates
+classification quality from the frontend's later tool choices.
+
+```sh
+uv run --no-sync pytest tests/e2e/test_routing_eval_live_models.py --e2e --live-models \
+  -k development --basetemp /tmp/routing-development
+uv run --no-sync pytest tests/e2e/test_routing_eval_live_models.py --e2e --live-models \
+  -k heldout --basetemp /tmp/routing-heldout
+uv run --no-sync python -m tests.e2e.framework.routing /tmp/routing-heldout
+```
+
+Tune against development cases, freeze the prompt, then evaluate the held-out cases. Keep
+failures and labels unchanged after inspecting results. `E2E_ROUTING_PROMPT` optionally selects
+a prompt file for experiments; the native tool schema, validation and storage path stay in use.
+Reports retain the effective prompt and SHA-256, expected and observed selections, native input
+state and latency. Summaries include failed cases and cases without a verdict in the total.
+These are model-quality evaluations, not required correctness CI.
 
 ## Files
 
@@ -74,6 +97,7 @@ Its `voice-observations.json` records the speech and audio received by the calle
 | `test_stock_a2a.py` | Remote Message replies and input-required continuation after frontend restart | A stock A2A SDK server in a separate process; ordinary frontend, scripted model, real HTTP/SSE and SQLite |
 | `test_adk.py` | The same RemoteAgent frontend runs an ADK agent and its tool | Pinned ADK and A2A SDK in a separate environment/process; scripted inference, real server and HTTP transport |
 | `test_delegation_live_models.py` | Intent routing, grouped remote questions, partial responses and spoken continuation after a side question | Opt-in real frontend and routing models; stock A2A peer processes, real HTTP/SSE and isolated SFU audio |
+| `test_routing_eval_live_models.py` | Labeled response recognition, partial and grouped replies, refusals, side questions and ambiguity | Opt-in real routing model; scripted frontend through the production TextSession and native storage boundary |
 | `test_worker.py` | Job processes: IPC launch, health kill, wire faults, stress; a real worker's crashed, leaking, slow-initializing and orphaned jobs and their logs; a process that dies holding a storage turn; worker processes serving their text doors | Hermetic: real OS processes, local SQLite (AgentDB case skips without a project) |
 | `test_cli.py` | The CLI launcher: module launch, failure exits, one shutdown budget across drain and cleanup, signals while a real job process runs | Hermetic: real OS processes and signals |
 | `test_preload.py` | Application preloads before readiness, spawn and forkserver, copy-on-write, unsafe preloads refused | Hermetic; forkserver cases run on Linux only |

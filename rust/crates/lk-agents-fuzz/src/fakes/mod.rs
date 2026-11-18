@@ -502,7 +502,8 @@ impl Registry {
         self.stamps.ts()
     }
 
-    pub(super) fn session(&self) -> Option<&Arc<VoiceSession>> {
+    /// The production host port, also used by authored stories with typed command receipts.
+    pub fn session(&self) -> Option<&Arc<VoiceSession>> {
         self.session.get()
     }
 

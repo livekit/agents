@@ -1,0 +1,216 @@
+{
+  "scenarios": {
+    "date": {
+      "request": "Please arrange a flight for me.",
+      "questions": ["Which day would you like to fly?"],
+      "presentation": "Which day would you like to fly?"
+    },
+    "email": {
+      "request": "Send me a booking confirmation.",
+      "questions": ["Which email address should receive the confirmation?"],
+      "presentation": "Which email address should receive the confirmation?"
+    },
+    "approval": {
+      "request": "Help me cancel my flight.",
+      "questions": ["Please confirm: cancel flight LK123 for a $20 fee?"],
+      "presentation": "Please confirm: cancel flight LK123 for a $20 fee?"
+    },
+    "names": {
+      "request": "Check me in.",
+      "questions": ["What is your first name?", "What is your last name?"],
+      "presentation": "What are your first and last names?"
+    },
+    "dates": {
+      "request": "Arrange my flight and hotel independently.",
+      "questions": ["Which day should the flight depart?", "Which day should hotel check-in be?"],
+      "presentation": "Which day for the flight, and which day for hotel check-in?"
+    },
+    "approvals": {
+      "request": "Help me change my two separate bookings.",
+      "questions": ["Confirm canceling the flight?", "Confirm canceling the hotel?"],
+      "presentation": "Should I cancel the flight, and should I cancel the hotel?"
+    }
+  },
+  "cases": [
+    {
+      "id": "date-friday", "split": "development", "scenario": "date",
+      "human": "Friday", "matches": [0], "unclear": false,
+      "because": "A date directly answers the presented date request."
+    },
+    {
+      "id": "date-sentence", "split": "development", "scenario": "date",
+      "human": "I would like to fly on Friday.", "matches": [0], "unclear": false,
+      "because": "A complete sentence has the same destination as a short date."
+    },
+    {
+      "id": "date-explanation", "split": "development", "scenario": "date",
+      "human": "Why do you need the date?", "matches": [], "unclear": false,
+      "because": "The current agent handles the explanation; no date was supplied."
+    },
+    {
+      "id": "date-new-topic", "split": "development", "scenario": "date",
+      "human": "What can you help me with?", "matches": [], "unclear": false,
+      "because": "A new conversation topic leaves the date request open."
+    },
+    {
+      "id": "date-yes", "split": "development", "scenario": "date",
+      "human": "Yes.", "matches": [], "unclear": false,
+      "because": "An acknowledgement does not identify the requested date."
+    },
+    {
+      "id": "date-plus-topic", "split": "development", "scenario": "date",
+      "human": "Friday. And what time do you close?", "matches": [0], "unclear": false,
+      "because": "Recognize the date while retaining the whole message for the current agent."
+    },
+    {
+      "id": "date-change", "split": "development", "scenario": "date",
+      "human": "Actually, make it Tuesday instead.", "matches": [0], "unclear": false,
+      "because": "A change to the requested detail continues the same input occurrence."
+    },
+    {
+      "id": "email-address", "split": "development", "scenario": "email",
+      "human": "ada@example.test", "matches": [0], "unclear": false,
+      "because": "An address responds to the email request."
+    },
+    {
+      "id": "email-privacy", "split": "development", "scenario": "email",
+      "human": "What will you use my email address for?", "matches": [], "unclear": false,
+      "because": "A privacy question is not permission to forward it as the address."
+    },
+    {
+      "id": "approval-yes", "split": "development", "scenario": "approval",
+      "human": "Yes, cancel it.", "matches": [0], "unclear": false,
+      "because": "Recognition returns the response; the separate approval gate owns approval."
+    },
+    {
+      "id": "approval-no", "split": "development", "scenario": "approval",
+      "human": "No, keep my booking.", "matches": [0], "unclear": false,
+      "because": "A refusal is also a response, not a new request to guess about."
+    },
+    {
+      "id": "approval-fee-question", "split": "development", "scenario": "approval",
+      "human": "Why is there a fee?", "matches": [], "unclear": false,
+      "because": "A fee question does not answer the read-back."
+    },
+    {
+      "id": "names-full-explicit", "split": "development", "scenario": "names",
+      "human": "My first name is Ada and my last name is Lovelace.",
+      "matches": [0, 1], "unclear": false,
+      "because": "One human message identifies both independently tracked name fields."
+    },
+    {
+      "id": "names-first-only", "split": "development", "scenario": "names",
+      "human": "My first name is Ada.", "matches": [0], "unclear": false,
+      "because": "A first name does not silently fill the missing last name."
+    },
+    {
+      "id": "names-last-only", "split": "development", "scenario": "names",
+      "human": "My last name is Lovelace.", "matches": [1], "unclear": false,
+      "because": "A last-name response leaves the first-name source unresolved."
+    },
+    {
+      "id": "dates-flight-only", "split": "development", "scenario": "dates",
+      "human": "The flight should leave Friday.", "matches": [0], "unclear": false,
+      "because": "The person identifies which date request they are answering."
+    },
+    {
+      "id": "dates-hotel-only", "split": "development", "scenario": "dates",
+      "human": "Check me into the hotel on Saturday.", "matches": [1], "unclear": false,
+      "because": "A hotel detail must not be copied into the flight request."
+    },
+    {
+      "id": "dates-both", "split": "development", "scenario": "dates",
+      "human": "Friday for both the flight and the hotel.", "matches": [0, 1], "unclear": false,
+      "because": "An explicitly shared date can answer both sources."
+    },
+    {
+      "id": "dates-ambiguous", "split": "development", "scenario": "dates",
+      "human": "Friday.", "matches": [], "unclear": true,
+      "because": "The person has not said which of two independent dates they mean."
+    },
+    {
+      "id": "approvals-ambiguous", "split": "development", "scenario": "approvals",
+      "human": "Yes.", "matches": [], "unclear": true,
+      "because": "One yes cannot choose between independent cancellation requests."
+    },
+    {
+      "id": "approvals-flight-only", "split": "development", "scenario": "approvals",
+      "human": "Yes, cancel the flight.",
+      "matches": [0], "unclear": false,
+      "because": "A response identifying one action leaves the other read-back open."
+    },
+    {
+      "id": "approvals-both", "split": "development", "scenario": "approvals",
+      "human": "Yes, cancel both bookings.", "matches": [0, 1], "unclear": false,
+      "because": "The person explicitly responds to both read-backs."
+    },
+    {
+      "id": "date-next-tuesday", "split": "heldout", "scenario": "date",
+      "human": "Next Tuesday, please.", "matches": [0], "unclear": false,
+      "because": "Another date wording still identifies the same request."
+    },
+    {
+      "id": "date-side-question", "split": "heldout", "scenario": "date",
+      "human": "Are weekend flights usually more expensive?", "matches": [], "unclear": false,
+      "because": "A question about prices is not a selected departure date."
+    },
+    {
+      "id": "date-human-help", "split": "heldout", "scenario": "date",
+      "human": "Can I speak with a person?", "matches": [], "unclear": false,
+      "because": "A request for human help belongs to the current agent."
+    },
+    {
+      "id": "email-with-instructions", "split": "heldout", "scenario": "email",
+      "human": "Please send it to grace@example.test.", "matches": [0], "unclear": false,
+      "because": "Address recognition preserves the person's original whole message."
+    },
+    {
+      "id": "email-new-work", "split": "heldout", "scenario": "email",
+      "human": "Also find a hotel near the airport.", "matches": [], "unclear": false,
+      "because": "New travel work cannot consume an email request."
+    },
+    {
+      "id": "approval-refusal", "split": "heldout", "scenario": "approval",
+      "human": "Do not cancel that flight.", "matches": [0], "unclear": false,
+      "because": "A negative response must reach the request that asked for confirmation."
+    },
+    {
+      "id": "approval-alternative-question", "split": "heldout", "scenario": "approval",
+      "human": "Can I change the flight instead?", "matches": [], "unclear": false,
+      "because": "Asking about another option does not answer cancellation approval."
+    },
+    {
+      "id": "names-first-grace", "split": "heldout", "scenario": "names",
+      "human": "Grace is my first name.", "matches": [0], "unclear": false,
+      "because": "Field identification comes from the person's words, not list order."
+    },
+    {
+      "id": "names-full-grace", "split": "heldout", "scenario": "names",
+      "human": "My first name is Grace; my surname is Hopper.",
+      "matches": [0, 1], "unclear": false,
+      "because": "Surname and last name describe the same requested field."
+    },
+    {
+      "id": "dates-different-days", "split": "heldout", "scenario": "dates",
+      "human": "Fly out Wednesday and check into the hotel Thursday.",
+      "matches": [0, 1], "unclear": false,
+      "because": "The whole message can answer two different sources without splitting it."
+    },
+    {
+      "id": "dates-ambiguous-monday", "split": "heldout", "scenario": "dates",
+      "human": "Monday works.", "matches": [], "unclear": true,
+      "because": "A different weekday does not resolve the destination ambiguity."
+    },
+    {
+      "id": "approvals-hotel-only", "split": "heldout", "scenario": "approvals",
+      "human": "Cancel the hotel, but leave the flight as it is.",
+      "matches": [0, 1], "unclear": false,
+      "because": "The person gives a negative flight response and a positive hotel response."
+    },
+    {
+      "id": "approvals-refuse-both", "split": "heldout", "scenario": "approvals",
+      "human": "No to both cancellations.", "matches": [0, 1], "unclear": false,
+      "because": "Refusing both requests is an explicit response to each."
+    }
+  ]
+}

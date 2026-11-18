@@ -768,6 +768,17 @@ await session.start(front_desk, room=room)
 ```
 
 Without a binding, the same native communication state and admission path run in memory.
+A recognized human response reserves its original input occurrence before frontend planning.
+The frontend calls the matching remote tool to forward that response through the existing
+live interaction. That handoff uses the person's exact words, rather than rewritten tool
+arguments. Repeating the tool call in the same human turn observes the handoff instead of
+starting another remote task. Progress, the next question and the final result still arrive
+through the original interaction.
+
+If the speaking agent lacks that remote tool, recognition retains the response. When an
+eligible agent returns, the session gives it a normal planning turn to continue the request.
+This wake-up does not send anything on its own.
+
 A local `agent.as_tool()` on a call
 is an expert the same way: its child runs in process, and its progress,
 questions and result take this path ([local agents as tools](tools.md#local-agents-as-tools)).
@@ -806,9 +817,11 @@ can persist its own conversation independently without making this queue durable
 3. The session processes queued events when the active agent exposes the
    corresponding remote tool and speech, interruption, and frontend-task
    scheduling permits presentation.
-4. Useful progress may be combined; presenting progress or a question runs a
-   presentation-only fast-brain model reply to phrase it. Enqueueing alone does
-   not invoke the LLM.
+4. Useful progress may be combined. Presenting progress, a question or a result runs a
+   presentation-only fast-brain reply with that source's content and tools disabled.
+   A result is the subject of its own presentation, even when a newer tool output merely
+   acknowledged a response handoff. Ordinary conversation planning and held-response
+   wake-ups retain tool access. Enqueueing alone does not invoke the LLM.
 5. The native conversation retains the original input occurrence. Actual assistant output
    supplies its presentation receipt; queued or generated wording alone does not.
 

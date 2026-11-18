@@ -102,6 +102,18 @@ The name-collection journeys start two independent stock A2A services. They chec
 frontend groups their related questions, that a full name reaches both original tasks, and
 that a first-name-only response leaves the last-name task open until the next response.
 
+The response-recognition corpus isolates one model decision from those full journeys. Its
+human-readable cases are split into development and held-out cases before tuning. An
+ordinary TextSession presents known requests through a scripted frontend; the real routing
+model selects their sources through the production classifier. Assertions inspect its verdict,
+native reservations, untouched requests and exact retained human words. Reports preserve the
+effective prompt/hash and every failed case. The test-only RoutingCase, RoutingModel and
+_RoutingStream supply labels and observe the provider boundary; none implements routing or
+enters the SDK.
+Prompt experiments use the same native schema and parser. Freeze a candidate before held-out
+evaluation, and keep response-recognition scores separate from frontend tool-choice and RTC
+acceptance results.
+
 ## Shared resources and real boundaries
 
 Launch application modules with serializable configuration and service addresses. Construct

@@ -4,18 +4,22 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
+use lk_agents_abi::agent::VoiceAgent as _;
 use lk_agents_abi::delegation::DelegationOptions;
 use lk_agents_abi::delegation::remote::{InputRequest, RemoteAgentState, RemoteTaskState};
 use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::session::InputRequestRef;
 use lk_agents_abi::session::InputRequestState;
 use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::text_session::{SessionSnapshot, SessionStateSink as _};
+use lk_agents_abi::voice::session::VoiceSession as _;
 use lk_agents_abi::{BoxFuture, ChatMessage, ChatRequest, Llm, LlmStream, Role};
 use lk_agents_fuzz::check::check_all;
 use lk_agents_fuzz::drive::{OPENING_AGENT, Run, Setup, simulate};
 use lk_agents_fuzz::fakes::{FakeLlm, Registry};
 use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolArgs, TurnMode, UserText};
 use lk_agents_runtime::storage::session_binding::SessionBinding;
+use lk_agents_voice::tool_executor::{ToolOutcome, ToolReport, VoiceAgentFrame};
 use parking_lot::Mutex;
 use serde_json::json;
 
@@ -273,6 +277,219 @@ fn a_corrected_turn_is_classified_again_before_the_frontend_answers_it() {
                 .count(),
             1,
             "the revised verdict replaces its old private observation"
+        );
+        run.apply(&Input::Close { drain: false }).await;
+        run.apply(&Input::Advance { ms: Millis(5_000) }).await;
+        run.apply(&Input::AwaitExit {}).await;
+        let (failures, _) = check_all(&run.record);
+        assert!(failures.is_empty(), "{failures:?}");
+    });
+}
+
+#[test]
+fn recognition_retains_the_response_until_the_remote_tool_claims_it() {
+    let host = Arc::new(Mutex::new(None));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let binding = waiting_for_date();
+    simulate(async {
+        let mut run = Run::start_with(
+            &Setup { tools: vec!["travel".into()], tts: false, ..Default::default() },
+            0,
+            Default::default(),
+            |args, registry| {
+                args.session_sink = Some(binding.clone());
+                args.delegation =
+                    Some(DelegationOptions { routing_model: FakeLlm::new(registry.clone()) });
+                args.llm = Some(frontend(registry, requests.clone()));
+                let frame = args.voice_agent.as_ref().unwrap();
+                let mut definition = frame.definition().clone();
+                definition.tools[0].remote = Some(REMOTE.into());
+                let callbacks = lk_agents_fuzz::fakes::FakeTools::new(registry.clone());
+                args.tools = Some(definition.tools.clone());
+                args.voice_agent = Some(Arc::new(VoiceAgentFrame::new(
+                    definition,
+                    callbacks.clone(),
+                    frame.host_context().clone(),
+                    frame.toolset_scope(),
+                )));
+                *host.lock() = Some(callbacks);
+            },
+        )
+        .await;
+        for input in [
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(100) },
+            Input::LlmToolCall {
+                chat: Ref::new(0),
+                name: "travel".into(),
+                args: ToolArgs(r#"{"label":"book"}"#.into()),
+            },
+            Input::LlmEnd { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(100) },
+            Input::ToolUpdate {
+                tool: Ref::new(0),
+                progress: Some(AgentText("The request is with travel.".into())),
+                end: lk_agents_fuzz::input::ToolAnswer::Detached,
+            },
+            Input::Advance { ms: Millis(100) },
+            Input::LlmText { chat: Ref::new(1), text: AgentText("I am checking.".into()) },
+            Input::LlmEnd { chat: Ref::new(1) },
+            Input::Advance { ms: Millis(500) },
+        ] {
+            run.apply(&input).await;
+        }
+        let lk_agents_fuzz::record::Detail::Tool { invocation_id, operation, call_id, .. } =
+            run.record.resource(lk_agents_fuzz::record::Kind::Tool, 0).unwrap().detail()
+        else {
+            panic!("travel did not run");
+        };
+        run.registry
+            .session()
+            .unwrap()
+            .tool_update(
+                invocation_id.clone(),
+                *operation,
+                call_id.clone(),
+                ToolReport {
+                    outcome: ToolOutcome::InputRequired {
+                        question: "Which day?".into(),
+                        verbatim: true,
+                        tool: None,
+                    },
+                    input_request: Some(Box::new(InputRequestRef::RemoteTask {
+                        remote_id: REMOTE.into(),
+                        task: lk_agents_abi::delegation::remote::RemoteTaskRef {
+                            context_id: "trip".into(),
+                            task_id: "booking".into(),
+                        },
+                        request_id: "date-request".into(),
+                    })),
+                    transition: None,
+                },
+            )
+            .unwrap();
+        for input in [
+            Input::Advance { ms: Millis(500) },
+            Input::GenerateReply {
+                user_input: Some(UserText("Friday".into())),
+                instructions: None,
+                allow: None,
+            },
+            Input::Advance { ms: Millis(100) },
+            Input::LlmToolCall {
+                chat: Ref::new(2),
+                name: "route_input_response".into(),
+                args: ToolArgs(r#"{"candidates":[0],"unclear":false}"#.into()),
+            },
+            Input::LlmEnd { chat: Ref::new(2) },
+            Input::Advance { ms: Millis(100) },
+        ] {
+            run.apply(&input).await;
+        }
+        let callbacks = host.lock().clone().unwrap();
+        assert!(
+            callbacks.expert_answers.lock().unwrap().is_empty(),
+            "recognition dispatched before the tool invocation, allowing a second send"
+        );
+        let held = binding.restore().unwrap().unwrap();
+        assert_eq!(
+            held.remote_agents[REMOTE].tasks["booking"].input_requests["date-request"].state,
+            InputRequestState::Responding
+        );
+        // The frontend now calls the same public remote tool. Its rewritten arguments must not
+        // replace the original human message, and a repeated call must not send another answer.
+        for input in [
+            Input::LlmToolCall {
+                chat: Ref::new(3),
+                name: "travel".into(),
+                args: ToolArgs(r#"{"label":"the model rewrote Friday"}"#.into()),
+            },
+            Input::LlmEnd { chat: Ref::new(3) },
+            Input::Advance { ms: Millis(100) },
+        ] {
+            run.apply(&input).await;
+        }
+        let lk_agents_fuzz::record::Detail::Tool {
+            invocation_id,
+            operation,
+            call_id: continuation,
+            ..
+        } = run.record.resource(lk_agents_fuzz::record::Kind::Tool, 1).unwrap().detail()
+        else {
+            panic!("the continuation tool did not run");
+        };
+        let origin = lk_agents_abi::voice::session::VoiceCommandOrigin::Tool {
+            invocation_id: invocation_id.clone(),
+            operation: *operation,
+            call_id: continuation.clone(),
+        };
+        for attempt in 0..3 {
+            let receipt = run
+                .registry
+                .session()
+                .unwrap()
+                .continue_remote_tool(REMOTE.into(), "travel".into(), origin.clone())
+                .unwrap();
+            if attempt == 0 {
+                // The owner may accept a handoff even when its caller loses the local receipt.
+                drop(receipt);
+                run.apply(&Input::Advance { ms: Millis(100) }).await;
+                continue;
+            }
+            run.apply(&Input::Advance { ms: Millis(100) }).await;
+            use futures_util::FutureExt as _;
+            let report = receipt
+                .now_or_never()
+                .expect("the command receipt did not settle")
+                .unwrap()
+                .expect("the existing task was mistaken for new work");
+            assert!(matches!(report.outcome, ToolOutcome::Value { .. }));
+        }
+        let answers = callbacks.expert_answers.lock().unwrap().clone();
+        assert_eq!(
+            requests.lock().len(),
+            3,
+            "the pending foreground tool already owns a planning turn; do not wake another"
+        );
+        assert_eq!(answers.len(), 1, "two invocations sent the same human response twice");
+        assert_eq!(answers[0].1, "Friday", "model arguments replaced the person's actual words");
+        // As the real host callback does, return its handoff report and let the frontend finish.
+        for input in [
+            Input::ToolAnswered {
+                tool: Ref::new(1),
+                answer: lk_agents_fuzz::input::ToolAnswer::Value,
+                text: AgentText("The response is with the existing task.".into()),
+            },
+            Input::Advance { ms: Millis(100) },
+            Input::LlmText { chat: Ref::new(4), text: AgentText("I will let you know.".into()) },
+            Input::LlmEnd { chat: Ref::new(4) },
+            Input::Advance { ms: Millis(500) },
+        ] {
+            run.apply(&input).await;
+        }
+        // The completed original task must become the presentation's subject even though a
+        // newer tool output says only that the response was forwarded.
+        run.apply(&Input::ToolAnswered {
+            tool: Ref::new(0),
+            answer: lk_agents_fuzz::input::ToolAnswer::Value,
+            text: AgentText("Booked for Friday.".into()),
+        })
+        .await;
+        run.apply(&Input::Advance { ms: Millis(100) }).await;
+        let presentation = requests.lock().last().unwrap().clone();
+        assert_eq!(
+            presentation.tool_choice,
+            Some(lk_agents_abi::ToolChoice::Forbidden),
+            "a result presentation must not start new remote work"
+        );
+        assert!(
+            presentation.chat_ctx.items.iter().filter_map(|item| item.as_message()).any(
+                |message| message.role == Role::System
+                    && message
+                        .raw_text_content()
+                        .is_some_and(|text| text.contains("Booked for Friday."))
+            ),
+            "the presentation lost the result behind a newer handoff acknowledgement"
         );
         run.apply(&Input::Close { drain: false }).await;
         run.apply(&Input::Advance { ms: Millis(5_000) }).await;

@@ -21,7 +21,17 @@ indices. An utterance may answer one request and introduce another topic. Do not
 whether an answer satisfies business rules or approves an operation. Do not select a question \
 merely because it was the latest or the only question. A candidate may already have a held_response: \
 select it only when the latest message clearly corrects or replaces that response before sending. \
-A side question does not replace a held response. Consider only the supplied candidates.";
+A side question does not replace a held response. Consider only the supplied candidates. \
+A bare acknowledgement does not supply an open-ended detail: yes to which day selects no \
+candidate. Yes or no can answer a confirmation when its destination is unique. For several \
+independent confirmations, do not assume a bare yes or no answers all of them; return \
+unclear=true unless the person identifies a destination or explicitly says both or all. \
+Select several requests only when the words identify each requested detail or clearly address \
+them together. Do not reject a response just because its supplied detail may fail business \
+validation. Set unclear=true only for ambiguity between two or more plausible destinations, \
+never merely because an answer is missing or insufficiently specific. When there is no clearly \
+supplied response to any candidate, report candidates=[] and unclear=false; the current agent \
+can still ask for the missing detail.";
 
 pub fn tool() -> ToolSpec {
     ToolSpec {

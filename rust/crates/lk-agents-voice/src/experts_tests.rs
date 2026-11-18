@@ -32,6 +32,44 @@ fn pending(request_id: &str) -> PendingRequest {
 }
 
 #[test]
+fn an_answered_queued_question_is_withdrawn_without_losing_another_question() {
+    let tools = [refunds()];
+    let mut experts = opened();
+    let reference = InputRequestRef::RemoteTask {
+        remote_id: "refunds".into(),
+        task: lk_agents_abi::delegation::remote::RemoteTaskRef {
+            context_id: "conversation".into(),
+            task_id: "refund".into(),
+        },
+        request_id: "input_1".into(),
+    };
+    experts.ask("call_1", "r1", "Which day?".into(), false, Some(reference.clone()));
+    experts.open("call_2", refunds());
+    experts.ask("call_2", "r2", "Which seat?".into(), false, None);
+    // Shared admission can recognize an earlier presented occurrence before its live
+    // question regains the foreground. It must not be asked again after the handoff.
+    experts.reserve(
+        reference,
+        lk_agents_abi::ChatMessage::text(
+            "human",
+            lk_agents_abi::Role::User,
+            "Friday",
+            std::time::UNIX_EPOCH,
+        ),
+    );
+    experts.forward_response(&pending("r1"), "human".into()).unwrap();
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Question {
+            call_id: "call_2".into(),
+            request_id: "r2".into(),
+            question: "Which seat?".into(),
+            verbatim: false,
+        })
+    );
+}
+
+#[test]
 fn a_late_speech_receipt_keeps_the_occurrence_it_actually_presented() {
     let tools = [refunds()];
     let mut experts = opened();

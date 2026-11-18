@@ -131,6 +131,13 @@ class _RemoteTool(Toolset):
         assert agent._card is not None and self._tool is not None
         url = agent._url()
         if ctx._session is not None:
+            origin = ctx._origin
+            assert origin is not None
+            report = await ctx._session._running.continue_remote_tool(
+                url, ctx.function_call.name, origin=origin
+            )
+            if report is not None:
+                return report
             history = ctx._session.history
         else:
             assert ctx._run is not None

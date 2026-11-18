@@ -150,6 +150,12 @@ pub enum Answer {
     ToolGo(crate::tool_executor::ToolGo),
     /// A tool step's next step, decided by the driver.
     ToolStep(crate::tool_executor::StepNext),
+    RemoteTool(
+        Result<
+            Option<crate::tool_executor::ToolReport>,
+            lk_agents_abi::voice::session::SessionRefused,
+        >,
+    ),
     Interrupt(Result<(), InterruptRefusal>),
 
     Commit(Result<String, CommitSuperseded>),
@@ -193,6 +199,7 @@ answer_picks! {
     output_activated: OutputActivation(Result<Option<super::machine::output::SegmentBinding>, super::machine::output::OutputBindingError>),
     tool_go: ToolGo(crate::tool_executor::ToolGo),
     tool_step: ToolStep(crate::tool_executor::StepNext),
+    remote_tool: RemoteTool(Result<Option<crate::tool_executor::ToolReport>, lk_agents_abi::voice::session::SessionRefused>),
     interrupt: Interrupt(Result<(), InterruptRefusal>),
     commit: Commit(Result<String, CommitSuperseded>),
     user_turn: UserTurn(Box<UserTurnAnswer>),
@@ -317,6 +324,12 @@ impl From<DtmfCommand> for Command {
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 #[vocabulary(kind = SpeechCommandKind)]
 pub enum SpeechCommand {
+    /// A RemoteAgent invocation consumes a recognized response through the existing live body.
+    ContinueRemoteTool {
+        endpoint: String,
+        name: String,
+        call: RequestId,
+    },
     Say {
         /// A stream is one segment per chunk.
         text: SayText,

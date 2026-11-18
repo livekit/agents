@@ -865,9 +865,13 @@ a public Python export or an additional SDK constructor.
 | ConversationHistory and ConversationStateFailed | Internal voice effect/input; no Python types. | Publish core-accepted history through the native binding before host callbacks; preserve pending recognition and refreshed remote state. The core closes voice on a refused state publication. |
 | InputPresented and ToolReport.input_request | Reuse the shared InputRequestRef in a private voice effect and the existing host report. | A checkpointed A2A occurrence follows rephrasing into actual output delivery. The existing voice inbox holds transient speech correlation; a failed/unspoken presentation can be retried without creating another input occurrence. No new question or presentation class. |
 | RouteInput, InputRouted and InputReserved | Private voice effect/inputs extending the current driver. | The first frontend plan waits for classification and checkpoint admission. Saved reservations reach the conversation independently of the assistant waiter, including after interruption. No host export or new saved record. |
+| ContinueRemoteTool, Answer::RemoteTool and the native continue_remote_tool method | Private command/receipt variants and generated host adapter on the existing voice session. | A RemoteAgent invocation claims a reserved response through the original live body. Same-turn repeats observe the handoff; no second RemoteInteraction or result waiter is created. Closing settles the command's existing receipt. No public Python SDK method or task-argument requirement. |
+| Experts.prompted_responses and forwarded_responses | Transient fields on the existing frontend inbox. | Wake an eligible frontend once per held occurrence and remember a tool's handoff for the current human-message ID. These are local scheduling/admission facts, never wire acknowledgement or persisted command authority. |
 | VoiceDriver.input_plans and Experts.responses | Private maps on existing native owners. | Settle first-plan waiters across agent replacement; retain admitted responses for eligible live remote continuations. Source occurrence and current waiting request must still match. These maps never enter SessionState or the communication journal. |
 | Source::InputRouting | One private provenance variant on the existing voice chat record. | Retain the admitted destination in later model requests without adding human-facing dialogue or another state class. A revised verdict replaces the same message's private observation. |
 | Run.start_with and ObservedLlm, DST only | Configure the existing simulation runner and observe its fake model boundary. | Exercise ordinary native session arguments, the production binding and real executors. The observer records model requests; it does not implement routing or persistence. No SDK export. |
+| RoutingCase, RoutingModel and _RoutingStream, tests only | Labeled recognition cases, a provider observer and its stream adapter. | routing_cases/evaluate_routing/routing_summary run and report the production TextSession classifier, schema, parser and reservations with a scripted frontend. Optional prompt replacement is for experiments; there is no second routing implementation or SDK export. |
+| FakeTools.expert_answers and Registry.session, DST only | Extend the existing fake and expose its existing native session port to authored stories. | Observe exact local handoffs and exercise real command receipts, including a lost receipt. No replacement executor or SDK API. |
 | SessionBinding.memory() | Private factory on the existing storage binding type. | A default voice session uses the same native state, command admission and checkpoint implementation in memory. A supplied binding adds persistence; there is no separate public conversation controller. |
 | SessionCommand and CommandPort | Shared native runtime command queue in session/. | Text and voice use bounded command admission and producer-owned receipts. Voice checkpoints run on owned tasks alongside audio and interruption events. Ending the receiver settles received, queued and capacity-waiting requests; a client retains no execution authority after owner loss. No Python export. |
 | voice::conversation::{Work, ConversationWrite}, private runtime records | A voice command's acquisition/write phase and typed write receipt. | Retain the original command, outcome, ScopedTask and matching caller while media/events continue. A retry re-admits the original input; one command kind cannot resolve another kind's receipt. No second conversation snapshot or Python API. |
@@ -992,6 +996,44 @@ an authentication-contract mismatch with that deployment. Keep the single agreed
 do not add a legacy authorization shim to make this external gate pass. SQLite and lost-ack
 fault tests do not substitute for the remaining AgentDB gate.
 
+## Response-recognition evaluation
+
+The labeled corpus has 22 development and 13 held-out cases, authored before tuning. Cases
+cover direct and negative responses, partial/grouped details, mixed intent, side questions,
+new work and ambiguous destinations. For independent confirmations, a bare yes/no requires
+clarification unless the person identifies one destination or explicitly answers both/all.
+An ordinary TextSession uses a scripted frontend and a separate real Gemma routing model;
+both the raw verdict and the native reservations must match. This does not evaluate frontend
+tool choices or claim that business work was sent correctly.
+
+One sample per case with `google/gemma-4-31b-it` on 2026-11-17 produced:
+
+| Prompt / split | Exact verdicts | Source selections | Unexpected selections | Missed selections |
+| --- | --- | --- | --- | --- |
+| Baseline / development | 20/22 | 21/22 | 1 case | 0 |
+| Frozen candidate / development | 22/22 | 22/22 | 0 | 0 |
+| Baseline / held out | 11/13 | 11/13 | 1 case | 1 case |
+| Frozen candidate / held out | 12/13 | 12/13 | 0 | 1 case |
+
+The baseline's other development mismatch was `unclear=true` for yes to a date request; it
+selected no source and did not forward that message. The held-out miss remains in the corpus:
+"Cancel the hotel, but leave the flight as it is" selected the hotel request but missed the
+negative flight response. Labels and the frozen prompt were not changed after that result.
+The baseline held-out comparison ran after the candidate was frozen, without further tuning.
+The native prompt is byte-identical to that candidate (SHA-256
+`c072ffb77141846b1b13154c8602926bf62395408e79510171814d209e9516f4`).
+Keep every failed run and its effective prompt, native state and latency report. These small,
+single-sample results support the candidate; they do not establish robust routing reliability.
+
+The broader project E2E run is still a failing gate: 200 passed, 16 failed and 19 failed
+during setup. Eleven failures reached the configured AgentDB service's legacy
+`agent.databaseAdmin` permission requirement. Nineteen raw HTTP/WebSocket journeys timed out
+waiting for their first registered route. Four noise-cancellation compatibility cases missed
+their activation/noise assertions. One v1-to-2.0 avatar case missed received video in the full
+suite and passed unchanged in isolation. Keep these results separate from the seven passing
+Gemma journeys; investigate the route, provider and avatar baselines before attributing those
+failures to this slice. Do not add legacy grants or weaken assertions to make this gate pass.
+
 ## Questions retained during implementation
 
 Record unresolved contracts here while implementation proceeds on the agreed boundaries.
@@ -1000,14 +1042,6 @@ Routine private type layout and generator work do not require another public pri
 - Which AgentDB staging deployment supports the pinned SDK's `agentThread`/`agentDatabase`
   grants? The configured staging endpoint still requires `agent.databaseAdmin` when creating
   a thread, preventing the live cross-server storage acceptance story from reaching execution.
-
-- Keep one outbound dispatch path after input recognition. The person agreed that further
-  calls need a selected destination, which may come from detection rather than mandatory
-  model-supplied task arguments. Long resolves the task inside a delegate invocation and
-  removed automatic forwarding. Our voice admission currently forwards before that invocation;
-  real Gemma runs exposed a later tool call opening a second task even though recognition was
-  correct. Align reservation and actual dispatch before extending this path or tuning prompts
-  against an end-to-end result that conflates the two model decisions.
 
 - When interruption prevents complete `ctx.say()` delivery, should awaiting its receipt raise
   an existing delivery error or return an outcome the caller must inspect? Either way, the
@@ -1261,9 +1295,28 @@ passes deterministic stock-peer transport and failure tests.
   conversation acceptance gate; the earlier combined-turn failure remains retained above.
   Later runs passed the six text cases but exposed a repeat remote-tool invocation after the
   voice session had already forwarded Friday and completed the original task. Retaining the
-  admission observation in the model context did not reliably prevent a second task. Require
-  one selected continuation/new-work decision before dispatch; prompt instructions alone are
-  not an execution guard. The selection may be supplied by detection or an explicit reference.
+  admission observation in the model context did not reliably prevent a second task.
+  Live response dispatch now occurs inside the matching remote-tool invocation, using the
+  original body and canonical human words. Repeated calls in the same human turn observe the
+  local handoff instead of creating another interaction. The DST covers a lost local receipt,
+  repeated handoff commands, foreground ownership and the final result's presentation purpose;
+  SDK tests also repeat the frontend tool call across agent replacement and in-memory/bound use.
+  A subsequent real run kept one task and one response but failed to announce its completed
+  result. Result presentations now receive that exact outcome with tools disabled; ordinary
+  planning and held-response wake-ups retain tool access. All seven Gemma journeys then passed
+  together, with received audio confirming Friday and the original task completed. Keep the
+  failed runs: this remains sampled evidence, not a reliability or naturalness guarantee.
+  That trace still had redundant acknowledgements. A further DST regression caught an extra
+  planning wake-up while the foreground handoff tool was pending; the tool now keeps the
+  floor until its callback returns. Broader acknowledgement/pacing work remains open.
+  A native reservation also withdraws its exact queued question when handed off, preserving
+  other waiting questions; it need not wait for that occurrence to regain the foreground.
+  Proposed-call continuation/new-work classification when there is no reserved human response,
+  explicit references and complete recovery remain separate work; a no-match human verdict
+  must not silently authorize a new task for a later clarification call.
+  Audit correlation against reused provider call IDs: presentation must retain the unique
+  originating call/output item identities and the admitted invocation, rather than searching
+  history by a provider's raw call ID. Extend the model fake to reproduce that case first.
   Decision-model comparison and the remaining voice stories are not yet verified.
 - [ ] Route same-partition text into a call, preserving task/outcome and answered-by-voice attribution.
 - [ ] Cover agent/tool replacement, VoiceTasks, close, reconnect and independent room bindings.

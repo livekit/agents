@@ -835,6 +835,20 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(await)]
     fn drain(&self) -> Result<BoxFuture<'static, Option<DrainRefused>>, SessionRefused>;
 
+    /// A RemoteAgent host callback claims its admitted response through an existing live body.
+    /// `None` leaves the normal remote invocation path available. An admitted repeat returns
+    /// the same local handoff report, never authority to start a second remote request.
+    #[host(await)]
+    fn continue_remote_tool(
+        &self,
+        endpoint: String,
+        name: String,
+        #[host(kw)] origin: VoiceCommandOrigin,
+    ) -> Result<
+        BoxFuture<'static, Result<Option<crate::llm::tool_executor::ToolReport>, SessionRefused>>,
+        SessionRefused,
+    >;
+
     /// `VoiceSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`).
     #[host(await)]
     fn wait_for_idle(

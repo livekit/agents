@@ -10,14 +10,7 @@ use lk_agents_abi::{ChatMessage, Modality, Role};
 impl VoiceDriver {
     /// Admission belongs to the conversation. Later replies and agent changes must retain
     /// its destination, even after the assistant reply awaiting the detector was interrupted.
-    pub(crate) fn input_reserved(&mut self, message: ChatMessage, mut admission: InputAdmission) {
-        if !admission.requests.is_empty() {
-            admission.observation.push_str(
-                " The voice session forwards recognized responses to eligible running remote \
-                continuations. Do not start another remote call merely to repeat this answer. \
-                Continue handling the person's whole message, including any other topic.",
-            );
-        }
+    pub(crate) fn input_reserved(&mut self, message: ChatMessage, admission: InputAdmission) {
         if !admission.observation.is_empty() {
             let observation = ChatMessage::text(
                 format!("input_route/{}", message.id),

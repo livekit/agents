@@ -167,6 +167,16 @@ async def test_a_voice_side_question_leaves_the_remote_input_open_until_the_pers
         if latest == "Why do you need the date?":
             return "To check which coverage applies."
         if latest == "Friday":
+            # Even a frontend that repeats the tool call must continue the one remote task,
+            # including when the original body finished before the repeated invocation.
+            if (
+                sum(
+                    item.type == "function_call" and "Friday" in item.arguments
+                    for item in history.items
+                )
+                < 2
+            ):
+                return tool_call("coverage_expert", request="Friday, please.")
             if any(
                 item.type == "function_call_output" and "Confirmed" in item.output
                 for item in history.items

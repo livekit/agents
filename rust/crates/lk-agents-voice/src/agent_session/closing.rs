@@ -393,6 +393,13 @@ impl VoiceDriver {
                 self.answer(call, Answer::Interrupt(Ok(())));
                 return;
             }
+            Command::Speech(SpeechCommand::ContinueRemoteTool { call, .. }) => {
+                self.answer(
+                    Some(call),
+                    Answer::RemoteTool(Err(lk_agents_abi::voice::session::SessionRefused::Closed)),
+                );
+                return;
+            }
             Command::Speech(SpeechCommand::WaitForIdle { call, .. }) => {
                 self.record_trace(SpeechStep::IdleAnswered { hold: None, closing: true });
                 self.answer(call, Answer::Idle(Err(IdleRefused::Closing)));

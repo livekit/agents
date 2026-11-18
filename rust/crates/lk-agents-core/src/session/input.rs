@@ -175,6 +175,8 @@ pub fn route(
                     let observation = format!(
                         "This human message responds to these presented input requests: {}. \
                      The responses are reserved; they are not proof of remote delivery. \
+                     Use the matching remote tool to forward a reserved remote response \
+                     through its existing task; do not start it again as separate work. \
                      Continue handling the entire message, including any other topic. \
                      Recognition is not approval for a business operation.",
                         serde_json::to_string(&requests).expect("input references serialize"),

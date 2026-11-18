@@ -112,6 +112,10 @@ impl VoiceDriver {
             return self.activity.handoff.held_speech.push(cmd);
         }
         match cmd {
+            SpeechCommand::ContinueRemoteTool { endpoint, name, call } => {
+                let report = self.continue_remote_tool(&endpoint, &name);
+                self.answer(Some(call), Answer::RemoteTool(Ok(report)));
+            }
             SpeechCommand::GenerateReply(request) => self.generate_reply(now, request),
             // The model speaks a `say` only with no TTS. These arms must come before the pipeline
             // arm: a guarded arm after its unguarded twin is dead code.

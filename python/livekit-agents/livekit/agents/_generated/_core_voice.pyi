@@ -812,6 +812,17 @@ class VoiceSession:
         """`VoiceSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
         speech is left. Answers `None`, or why it was refused.
         """
+    async def continue_remote_tool(
+        self,
+        endpoint: str,
+        name: str,
+        *,
+        origin: VoiceCommandOrigin,
+    ) -> ToolReport | None:
+        """A RemoteAgent host callback claims its admitted response through an existing live body.
+        `None` leaves the normal remote invocation path available. An admitted repeat returns
+        the same local handoff report, never authority to start a second remote request.
+        """
     async def wait_for_idle(self, *, hold: int | None = None) -> None:
         """`VoiceSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`)."""
     async def wait_for_idle_and_hold(self, *, origin: VoiceCommandOrigin | None = None) -> int:

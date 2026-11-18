@@ -49,6 +49,8 @@ pub fn tool_spec(name: &str) -> ToolSpec {
 }
 
 pub struct FakeTools {
+    /// Replies delivered to a live remote body, in order, including their original call id.
+    pub expert_answers: Mutex<Vec<(String, String)>>,
     registry: Arc<Registry>,
     /// Prepared calls' speeches until the body takes them or the preparation drops.
     prepared: Arc<Mutex<Preparations>>,
@@ -69,6 +71,7 @@ impl FakeTools {
         let refs: Arc<dyn lk_agents_abi::RefRegistry> =
             Arc::new(PreparedRefs(Arc::clone(&prepared)));
         Arc::new(FakeTools {
+            expert_answers: Mutex::default(),
             registry,
             prepared,
             refs,
@@ -159,6 +162,10 @@ pub enum Body {
 }
 
 impl AgentCallbacks for FakeTools {
+    fn answer_expert(&self, invocation: &Invocation, answer: String) {
+        self.expert_answers.lock().unwrap().push((call_of(invocation).call_id.clone(), answer));
+    }
+
     fn render_instructions<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,

@@ -57,8 +57,8 @@ async def voice(ctx: JobContext) -> None:
             "owns flight work and follow-up questions. Delegate new flight requests immediately, "
             "even when details are missing; do not collect fields before asking travel. Present "
             "travel's actual questions. You can explain that a date is needed to check availability. "
-            "Answer side questions yourself. The session forwards recognized answers to an already "
-            "running travel call; do not start another call merely to repeat an answer. Explain "
+            "Answer side questions yourself. Call travel to forward a recognized response to its "
+            "existing request; do not repeat a response as new work. Explain "
             "the final confirmation only when travel confirms it, including the confirmed date."
         ),
         tools=[RemoteAgent(os.environ["E2E_PEER_URL"], name="travel").as_tool()],
