@@ -6,10 +6,13 @@ use lk_agents_abi::{FunctionToolCall, LlmChunk};
 pub(super) enum Purpose {
     /// The model's next step.
     Turn,
-    /// The facing agent words a question; `ask` is what it asks.
-    Phrase(lk_agents_abi::agent::run::RunQuestion),
+    /// The facing agent words a question; `ask` is what it asks. With `results`, the step that
+    /// asked also settled results the person has not heard, and the reply reports them first.
+    Phrase { ask: lk_agents_abi::agent::run::RunQuestion, results: bool },
     /// Select a manageable group and its wording together, retaining each source identity.
-    Present(Vec<lk_agents_abi::agent::run::RunInputRequirement>),
+    Present { candidates: Vec<lk_agents_abi::agent::run::RunInputRequirement>, results: bool },
+    /// The asking step's other results, reported before `ask`, which is said as written.
+    Report(lk_agents_abi::agent::run::RunQuestion),
 }
 
 #[derive(Debug)]
@@ -61,7 +64,7 @@ impl ModelStep {
                 added.calls.push((self.calls, call));
                 self.calls += 1;
             }
-        } else if matches!(self.purpose, Purpose::Present(_)) {
+        } else if matches!(self.purpose, Purpose::Present { .. }) {
             self.presentation.extend(delta.tool_calls);
             // The structured prompt is admitted before any of its words are delivered.
             return added;

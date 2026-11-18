@@ -726,11 +726,17 @@ impl AgentRun {
                 tools.extend(self.agent.tools.iter().map(|t| t.spec.clone()));
                 tools.extend(agent::final_result_tool(&self.agent));
             }
-            Purpose::Phrase(ask) => phrase = Some(format!("{ASK_IN_OWN_WORDS}{}", ask.question)),
-            Purpose::Present(candidates) => {
-                phrase = Some(presentation::prompt(candidates));
+            Purpose::Phrase { ask, results: false } => {
+                phrase = Some(format!("{ASK_IN_OWN_WORDS}{}", ask.question))
+            }
+            Purpose::Phrase { ask, results: true } => {
+                phrase = Some(format!("{}{}", presentation::REPORT_THEN_ASK, ask.question))
+            }
+            Purpose::Present { candidates, results } => {
+                phrase = Some(presentation::prompt(candidates, *results));
                 tools.push(presentation::tool());
             }
+            Purpose::Report(_) => phrase = Some(presentation::REPORT.into()),
         }
         if self.input.opening.coordinated() {
             let request = RequestId(self.mint());
@@ -851,19 +857,29 @@ impl AgentRun {
         let (message_id, purpose) = (step.message_id.clone(), step.purpose.clone());
         let response = step.end();
         self.ledger.finish(request.0, true);
-        if let Purpose::Present(candidates) = &purpose {
+        if let Purpose::Present { candidates, .. } = &purpose {
             return self.presented(candidates, response.presentation, now, fx);
         }
-        if let Purpose::Phrase(ask) = purpose {
+        if let Purpose::Phrase { ask, .. } = purpose {
             let text = response.text.trim();
             let question = if text.is_empty() { ask.question.clone() } else { text.to_owned() };
             return self.asked(
                 RunQuestion { question, ..ask },
                 (!text.is_empty()).then_some(message_id),
                 &[],
+                None,
                 now,
                 fx,
             );
+        }
+        if let Purpose::Report(ask) = purpose {
+            let report = response.text.trim().to_owned();
+            let lead = (!report.is_empty()).then(|| {
+                let at = self.stamp(now);
+                self.record(ChatMessage::text(message_id, Role::Assistant, &report, at).into());
+                report
+            });
+            return self.asked(ask, None, &[], lead, now, fx);
         }
         if !response.text.is_empty() {
             self.record(
@@ -891,7 +907,7 @@ impl AgentRun {
             // Conversational text where a typed output is expected asks the person.
             OutputSpec::Structured { .. } => {
                 let ask = RunQuestion { question: text, verbatim: false };
-                self.settle_ask(ask, fx)
+                self.settle_ask(ask, None, fx)
             }
             OutputSpec::Text { validated: true } => {
                 let validation = ValidationId(self.mint());
@@ -1001,9 +1017,17 @@ impl AgentRun {
     /// A tool's question: worded by the facing agent in one request without tools, unless it is
     /// verbatim or another agent asked this run; then it is said as written.
     /// Coordinated, the coordinator asks it.
-    fn ask_from_tool(&mut self, ask: RunQuestion, now: Ts, fx: &mut Vec<AgentRunEffect>) {
+    /// With `results`, the asking step also settled results the person has not heard: they
+    /// are reported before the question, never dropped.
+    fn ask_from_tool(
+        &mut self,
+        ask: RunQuestion,
+        results: bool,
+        now: Ts,
+        fx: &mut Vec<AgentRunEffect>,
+    ) {
         if self.input.opening.coordinated() {
-            return self.settle_ask(ask, fx);
+            return self.settle_ask(ask, None, fx);
         }
         if !ask.verbatim && !self.input.delegated {
             let dynamic = self.dynamic.clone();
@@ -1014,19 +1038,25 @@ impl AgentRun {
                 .cloned()
                 .collect();
             if candidates.len() > 1 {
-                return self.request(Purpose::Present(candidates), dynamic, now, fx);
+                return self.request(Purpose::Present { candidates, results }, dynamic, now, fx);
             }
-            return self.request(Purpose::Phrase(ask), dynamic, now, fx);
+            return self.request(Purpose::Phrase { ask, results }, dynamic, now, fx);
         }
-        self.asked(ask, None, &[], now, fx)
+        if results {
+            let dynamic = self.dynamic.clone();
+            return self.request(Purpose::Report(ask), dynamic, now, fx);
+        }
+        self.asked(ask, None, &[], None, now, fx)
     }
 
-    /// Records the question as the reply (`message_id` when a request streamed it) and settles.
+    /// Records the question as the reply (`message_id` when a request streamed it) and settles;
+    /// `lead` is the reported text the question follows.
     fn asked(
         &mut self,
         ask: RunQuestion,
         message_id: Option<String>,
         members: &[String],
+        lead: Option<String>,
         now: Ts,
         fx: &mut Vec<AgentRunEffect>,
     ) {
@@ -1056,12 +1086,17 @@ impl AgentRun {
                 interrupted: false,
             }));
         }
-        self.settle_ask(ask, fx)
+        self.settle_ask(ask, lead, fx)
     }
 
-    fn settle_ask(&mut self, ask: RunQuestion, fx: &mut Vec<AgentRunEffect>) {
-        let question = self.composed(Some(ask.question.clone())).unwrap_or_default();
-        let verbatim = if ask.verbatim { Some(question.clone()) } else { self.verbatim_text() };
+    fn settle_ask(&mut self, ask: RunQuestion, lead: Option<String>, fx: &mut Vec<AgentRunEffect>) {
+        let exact = ask.verbatim.then(|| self.composed(Some(ask.question.clone())));
+        let text = match lead {
+            Some(lead) => format!("{lead}\n\n{}", ask.question),
+            None => ask.question.clone(),
+        };
+        let question = self.composed(Some(text)).unwrap_or_default();
+        let verbatim = exact.flatten().or_else(|| self.verbatim_text());
         let outcome = RunOutcome::InputRequired(RunQuestion { question, ..ask });
         self.finish(Ok(self.result(outcome, verbatim)), fx)
     }

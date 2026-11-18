@@ -145,6 +145,8 @@ fn one_answer_grants_one_repeat_within_a_step() {
     let executed: Vec<CallId> = d.executes().iter().map(|(c, ..)| *c).collect();
     assert_eq!(executed, [calls[0].0]);
     d.run_tools(|_| value("cancelled"));
+    // The first call's result is reported before the second's read-back.
+    d.reply("Monday is cancelled.", &[]);
     assert!(matches!(&d.result().outcome, RunOutcome::InputRequired(ask) if ask.verbatim));
 }
 

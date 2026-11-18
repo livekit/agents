@@ -624,6 +624,63 @@ fn a_tool_question_is_worded_by_the_facing_agent_only() {
     );
 }
 
+// Catches: a sibling's finished result dropped when the same step ends on a question, so the
+// person hears only the question (look_up's documents never reported).
+#[test]
+fn a_sibling_result_reaches_the_person_with_the_question() {
+    let tools = || vec![string_tool("look_up", "topic"), string_tool("prepare_job", "priority")];
+    let outcome = |verbatim: bool| {
+        move |name: &str| match name {
+            "look_up" => value("3 documents about 'Q3 audit'"),
+            _ => {
+                ToolOutcome::InputRequired { question: "Export at high priority?".into(), verbatim }
+            }
+        }
+    };
+    let calls =
+        [("look_up", json!({"topic": "Q3 audit"})), ("prepare_job", json!({"priority": "high"}))];
+
+    // The facing agent words the result and the question in one reply.
+    let mut d = Driver::new(text_agent(tools()), "Q3 audit? and high priority", vec![]);
+    d.reply("", &calls);
+    d.run_tools(outcome(false));
+    let (_, ctx, tools_offered) = d.request();
+    assert!(tools_offered.is_empty());
+    let prompt = transcript(&ctx.items).last().unwrap().1.clone();
+    assert!(prompt.contains("results of the other tool calls"), "{prompt}");
+    assert!(prompt.ends_with("Export at high priority?"), "{prompt}");
+    d.reply("I found 3 documents on the Q3 audit. Export at high priority?", &[]);
+    assert!(matches!(&d.result().outcome,
+        RunOutcome::InputRequired(ask) if ask.question.starts_with("I found 3 documents")));
+
+    // A delegated run, or a verbatim question, reports the result, then asks as written.
+    for (delegated, verbatim) in [(true, false), (false, true)] {
+        let mut input = Driver::new(text_agent(vec![]), "x", vec![]).run.input.clone();
+        input.delegated = delegated;
+        input.opening = Opening::Message(Box::new(user("m", "Q3 audit? and high priority")));
+        let mut d = Driver::with_input(text_agent(tools()), input);
+        d.reply("", &calls);
+        d.run_tools(outcome(verbatim));
+        assert_eq!(d.requests(), 2, "the sibling result is reported");
+        d.reply("I found 3 documents on the Q3 audit.", &[]);
+        let result = d.result();
+        assert_eq!(
+            result.outcome,
+            RunOutcome::InputRequired(RunQuestion {
+                question: "I found 3 documents on the Q3 audit.\n\nExport at high priority?".into(),
+                verbatim,
+            })
+        );
+        assert_eq!(result.verbatim.as_deref(), verbatim.then_some("Export at high priority?"));
+        let said: Vec<_> = transcript(&result.all_messages)
+            .into_iter()
+            .filter(|(k, _)| k == "assistant")
+            .map(|(_, text)| text)
+            .collect();
+        assert_eq!(said, ["I found 3 documents on the Q3 audit.", "Export at high priority?"]);
+    }
+}
+
 #[test]
 fn an_empty_phrasing_reply_streams_the_original_question_before_settlement() {
     let mut driver = Driver::new(text_agent(vec![string_tool("photo", "x")]), "claim", vec![]);
