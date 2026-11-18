@@ -42,6 +42,18 @@ an ordinary RemoteAgent tool and resumes its input-required task after frontend 
 The shared `framework/media.py` also supplies the v1 compatibility speech fixtures.
 See the [framework design](../../docs/proposals/e2e.md) for provider and acceptance policies.
 
+An unmodified application, such as an example, runs under a provider mode:
+`start_app(module, path=example_dir, providers=Providers(script, config))` replaces
+`inference.LLM`, `llm="<model>"` strings, `inference.STT` and `inference.TTS` before the module is
+imported, in every process of the app (`framework/provider_site/sitecustomize.py`). The script
+module (`scripts/`) answers each model request from its content and tools and fails on anything
+it was not written for; its models' requests are journaled to the app's `models.jsonl`.
+`Providers(..., live_models=True)` keeps the application's own models and replaces only speech.
+`project=True` runs the app against the configured project (`LIVEKIT_URL`, key and secret)
+instead of the isolated SFU: its rooms, Cloud endpoint routing and AgentDB. An application
+whose voice job delegates to its own endpoints needs it, and a call's dispatch carries its
+thread with `voice_client(app, thread_id=...)`.
+
 The deterministic exact-output journey uses an explicit `ToneTTS` leg to own the requested
 words. Realtime sessions require an explicit TTS leg or registered custom TTS node for
 `ctx.say`; a generative realtime request cannot promise exact words. Ordinary `session.say`
@@ -101,6 +113,7 @@ These are model-quality evaluations, not required correctness CI.
 | --- | --- | --- |
 | `test_framework.py` | Conversation restart, received speech and interruption during actual audio playback | Scripted models and tone speech; real app processes, SQLite and isolated SFU |
 | `test_tool_delivery.py` | Unawaited exact output crosses two A2A hops into received voice audio once; silent Working status and one original business effect/result | Scripted LLM/routing with explicit tone TTS; real app processes, SQLite, HTTP/SSE and isolated SFU |
+| `test_delegation_voice.py` | `examples/delegation-voice` itself: progress, a question, read-back and the exact job ID heard once; small talk while a job works; ambiguous, partial and combined answers across concurrent tasks; corrections; a refused read-back; merged text messages; cancelling one task | The unmodified example under a provider mode (scripted models, tone speech); the configured project's rooms, endpoint routing and AgentDB |
 | `test_stock_a2a.py` | Remote Message replies and input-required continuation after frontend restart | A stock A2A SDK server in a separate process; ordinary frontend, scripted model, real HTTP/SSE and SQLite |
 | `test_adk.py` | The same RemoteAgent frontend runs an ADK agent and its tool | Pinned ADK and A2A SDK in a separate environment/process; scripted inference, real server and HTTP transport |
 | `test_delegation_live_models.py` | Intent routing, grouped remote questions, partial responses and spoken continuation after a side question | Opt-in real frontend and routing models; stock A2A peer processes, real HTTP/SSE and isolated SFU audio |
