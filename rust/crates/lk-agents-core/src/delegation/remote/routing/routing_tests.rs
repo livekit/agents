@@ -276,6 +276,23 @@ fn a_forwarded_answer_is_recognized_once_while_the_same_turn_can_still_start_new
 }
 
 #[test]
+fn a_spoken_correction_is_not_offered_the_answer_an_earlier_turn_already_sent() {
+    let (mut state, reference) = reserved();
+    apply(&mut state, send("answer", "Friday. Also find a hotel.", Some(reference.clone())));
+    apply(&mut state, RemoteInput::DispatchStarted { request_id: "answer".into() });
+    // A preemptive voice reply plans against words not yet committed to the snapshot.
+    let correction = message("correction", Role::User, "Actually make it Saturday");
+    assert!(
+        offered(&state).iter().any(|candidate| candidate.reference == reference),
+        "the snapshot's latest turn still recognizes its own forwarded answer"
+    );
+    assert!(
+        offered_to(&state, &correction).is_empty(),
+        "the correction travels as task work, not as a duplicate of the sent answer"
+    );
+}
+
+#[test]
 fn model_verdicts_can_select_only_offered_task_and_response_indices() {
     let (state, reference) = reserved();
     let request = routing(&state, "Friday");

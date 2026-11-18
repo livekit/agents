@@ -298,7 +298,11 @@ impl VoiceDriver {
                 request,
                 after: super::input::AfterCapture::Ready,
             };
-            self.record_effect(VoiceEffect::CaptureInputOffers { speech, request });
+            let human = match &reply.input_scope {
+                super::input::ReplyInputScope::Human(message) => Some(message.clone()),
+                _ => None,
+            };
+            self.record_effect(VoiceEffect::CaptureInputOffers { speech, request, human });
         }
         self.activity.tools.replies.insert(speech, reply);
         self.reply_effects(speech, startup);

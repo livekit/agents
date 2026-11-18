@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any
 
 import pytest_asyncio
@@ -30,7 +30,9 @@ class Peer:
         self.task_snapshot: Json | None = None
         self.new_task_id = "remote-task"
         """Task returned for unaddressed work; a continuation keeps its addressed ID."""
-        self.events: Callable[[Json], list[Json]] | None = None
+        self.events: Callable[[Json], Sequence[Json | asyncio.Event]] | None = None
+        """Scripted stream events per message; an ``asyncio.Event`` among them holds the stream
+        open there until it is set or the peer closes."""
         self.response_gate: asyncio.Event | None = None
         """An optional boundary holding a stream after its first admission event."""
         self.gated_after = 0
@@ -116,21 +118,27 @@ class Peer:
         self.messages.append(message)
         self.received.set()
         if self.events is not None:
-            events = [b"data: " + _envelope(rpc, event) + b"\n\n" for event in self.events(message)]
-            if self.response_gate is None:
-                await self._respond(writer, "text/event-stream", b"".join(events))
-            else:
-                writer.write(
-                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
-                    b"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
-                )
-                for index, event in enumerate(events):
-                    writer.write(f"{len(event):x}\r\n".encode() + event + b"\r\n")
-                    await writer.drain()
-                    if index == self.gated_after:
-                        await self.response_gate.wait()
-                writer.write(b"0\r\n\r\n")
+            scripted = list(self.events(message))
+            if self.response_gate is not None:
+                scripted.insert(self.gated_after + 1, self.response_gate)
+            if not any(isinstance(event, asyncio.Event) for event in scripted):
+                payload = b"".join(b"data: " + _envelope(rpc, e) + b"\n\n" for e in scripted)
+                await self._respond(writer, "text/event-stream", payload)
+                return
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                b"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+            )
+            await writer.drain()
+            for event in scripted:
+                if isinstance(event, asyncio.Event):
+                    await self._until(event)
+                    continue
+                data = b"data: " + _envelope(rpc, event) + b"\n\n"
+                writer.write(f"{len(data):x}\r\n".encode() + data + b"\r\n")
                 await writer.drain()
+            writer.write(b"0\r\n\r\n")
+            await writer.drain()
             return
         if self.direct_reply is not None:
             await self._respond(
@@ -174,6 +182,15 @@ class Peer:
             events.append(_status(task, "COMPLETED", ""))
         stream = b"".join(b"data: " + _envelope(rpc, event) + b"\n\n" for event in events)
         await self._respond(writer, "text/event-stream", stream)
+
+    async def _until(self, gate: asyncio.Event) -> None:
+        """Waits for ``gate``; closing the peer releases every held stream."""
+        waits = [asyncio.ensure_future(gate.wait()), asyncio.ensure_future(self._release.wait())]
+        try:
+            await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for wait in waits:
+                wait.cancel()
 
     def _card(self) -> Json:
         extension: Json = {"uri": URI}
@@ -221,9 +238,8 @@ def _status(task: dict[str, str], state: str, text: str) -> Json:
     }
 
 
-@contextlib.asynccontextmanager
-async def serving() -> AsyncIterator[Peer]:
-    """One peer on its own port, so its URL is a distinct endpoint."""
+@pytest_asyncio.fixture
+async def peer() -> AsyncIterator[Peer]:
     peer = Peer()
     server = await asyncio.start_server(peer.accept, "127.0.0.1", 0)
     peer.url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/expert"
@@ -233,9 +249,3 @@ async def serving() -> AsyncIterator[Peer]:
         server.close()
         await peer.close()
         await server.wait_closed()
-
-
-@pytest_asyncio.fixture
-async def peer() -> AsyncIterator[Peer]:
-    async with serving() as peer:
-        yield peer

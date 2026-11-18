@@ -46,9 +46,11 @@ pub enum VoiceEffect {
         message: lk_agents_abi::ChatMessage,
     },
     /// Freeze native occurrences before the frontend model turn can admit a remote call.
+    /// `human` is the turn's own words, which a preemptive reply plans before they are committed.
     CaptureInputOffers {
         speech: SpeechId,
         request: lk_agents_core::agent_run::RequestId,
+        human: Option<Box<lk_agents_abi::ChatMessage>>,
     },
     /// Canonical assistant words reached the output boundary for these native occurrences.
     InputPresented {
