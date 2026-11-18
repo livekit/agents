@@ -301,14 +301,21 @@ async def test_tts_interruption_cancels_the_reply_and_keeps_the_connection() -> 
     assert fake.connections == 1
 
 
-async def test_tts_refused_reply_keeps_the_connection() -> None:
-    error = {"code": "voice_unavailable", "message": "voice is not available on this model"}
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        ({"code": "voice_unavailable", "message": "voice is not available on this model"}, 422),
+        # A Free workspace's cloned voice past its trial: retrying cannot succeed.
+        ({"code": "free_clone_generation_limit", "message": "Upgrade to keep generating"}, 403),
+    ],
+)
+async def test_tts_refused_reply_keeps_the_connection(error: dict[str, Any], status: int) -> None:
     fake = FakeChariot(context_error=error)
     async with tts_server(fake) as tts:
         with pytest.raises(APIStatusError) as exc:
             await _speak(tts, "Hello there.")
         assert await _speak(tts, "Hello again.") > 0
-    assert (exc.value.status_code, exc.value.retryable) == (422, False)
+    assert (exc.value.status_code, exc.value.retryable) == (status, False)
     assert fake.connections == 1
 
 

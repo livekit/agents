@@ -43,6 +43,7 @@ _ERROR_STATUS = {
     "text_too_long": 400,
     "insufficient_credits": 402,
     "forbidden": 403,
+    "free_clone_generation_limit": 403,
     "idle_timeout": 408,
     "voice_unavailable": 422,
     "context_limit": 429,
