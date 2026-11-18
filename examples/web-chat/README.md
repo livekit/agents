@@ -35,6 +35,5 @@ With the environment of [`../README.md`](../README.md), from this directory:
 lk agent dev
 ```
 
-Then open `https://<project>.livekit.cloud/agents/web-chat/_/` (`.staging.livekit.cloud` on
-staging, where the threads API is `https://api.staging.livekit.cloud`). The browser calls the
-threads API cross-origin, so that API must answer CORS for the page's origin.
+Then open `https://<project>.livekit.cloud/agents/web-chat/_/`. The browser calls the threads
+API (`https://api.livekit.cloud`) cross-origin, so that API must answer CORS for the page's origin.

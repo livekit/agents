@@ -1,7 +1,6 @@
 import os
 import re
 from pathlib import Path
-from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from starlette.requests import Request
@@ -61,19 +60,8 @@ async def token(request: Request) -> Response:
             "token": credentials.thread_grant_token(grant, ttl_seconds=GRANT_TTL),
             "ttl": GRANT_TTL,
             "scope": grant.scope,
-            "api": public_api(os.environ["LIVEKIT_URL"]),
         }
     )
-
-
-def public_api(project_url: str) -> str:
-    """The LiveKit public API, where the browser reads its threads."""
-    host = urlparse(project_url).hostname or ""
-    if host.endswith(".staging.livekit.cloud"):
-        return "https://api.staging.livekit.cloud"
-    if host.endswith(".livekit.cloud"):
-        return "https://api.livekit.cloud"
-    return project_url.replace("ws", "http", 1)  # a self-hosted server
 
 
 if __name__ == "__main__":

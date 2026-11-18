@@ -17,9 +17,11 @@ async function auth() {
 }
 
 // The threads REST of LiveKit's public API; `p_` is the grant's own project.
+const API = "https://api.livekit.cloud";
+
 async function threadsApi(path) {
-  const { api, token } = await auth();
-  const res = await fetch(`${api}/v0/projects/p_/threads${path}`, {
+  const { token } = await auth();
+  const res = await fetch(`${API}/v0/projects/p_/threads${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error(`threads API: ${res.status}`);
