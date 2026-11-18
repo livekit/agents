@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+import anthropic
 import httpx2 as httpx
 import pytest
 
@@ -114,3 +117,90 @@ class TestAnthropicStreamRetry:
 
         assert calls == 2
         assert response.usage is not None
+
+
+class _FakeAnthropicStream:
+    """Replays a fixed list of stream events, like the SDK's message stream."""
+
+    def __init__(self, events: list[Any]) -> None:
+        self._events = iter(events)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._events)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+
+def _text_block(*parts: str) -> list[Any]:
+    """One text content block whose text arrives in the given deltas."""
+    return [
+        anthropic.types.RawContentBlockStartEvent(
+            type="content_block_start",
+            index=0,
+            content_block=anthropic.types.TextBlock(type="text", text=""),
+        ),
+        *(
+            anthropic.types.RawContentBlockDeltaEvent(
+                type="content_block_delta",
+                index=0,
+                delta=anthropic.types.TextDelta(type="text_delta", text=part),
+            )
+            for part in parts
+        ),
+        anthropic.types.RawContentBlockStopEvent(type="content_block_stop", index=0),
+    ]
+
+
+async def _reply_text(events: list[Any]) -> str:
+    async def open_stream():
+        return _FakeAnthropicStream(events)
+
+    stream = LLMStream(
+        _make_llm(),
+        create_anthropic_stream=open_stream,
+        chat_ctx=llm.ChatContext.empty(),
+        tools=[],
+        conn_options=APIConnectOptions(max_retry=0),
+    )
+    response = await stream.collect()
+    return response.text
+
+
+class TestThinkingTags:
+    @pytest.mark.asyncio
+    async def test_text_without_tags_is_unchanged(self) -> None:
+        assert await _reply_text(_text_block("Booking ", "it now.")) == "Booking it now."
+
+    @pytest.mark.asyncio
+    async def test_thinking_opened_and_closed_in_one_delta(self) -> None:
+        events = _text_block("<thinking>check the slot</thinking>", "Booking it now.")
+        assert await _reply_text(events) == "Booking it now."
+
+    @pytest.mark.asyncio
+    async def test_closing_tag_split_across_deltas(self) -> None:
+        events = _text_block("<thinking>check the slot", "</", "thinking>Booking it now.")
+        assert await _reply_text(events) == "Booking it now."
+
+    @pytest.mark.asyncio
+    async def test_opening_tag_split_across_deltas(self) -> None:
+        events = _text_block("<think", "ing>check the slot</thinking>", "Booking it now.")
+        assert await _reply_text(events) == "Booking it now."
+
+    @pytest.mark.asyncio
+    async def test_text_held_as_a_possible_tag_is_released_at_block_end(self) -> None:
+        assert await _reply_text(_text_block("Is 3 <")) == "Is 3 <"
+
+    @pytest.mark.asyncio
+    async def test_unclosed_thinking_does_not_silence_the_next_block(self) -> None:
+        events = [*_text_block("<thinking>check the slot"), *_text_block("Booking it now.")]
+        assert await _reply_text(events) == "Booking it now."

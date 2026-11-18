@@ -23,7 +23,7 @@ import httpx2 as httpx
 
 import anthropic
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
-from livekit.agents.llm import ToolChoice
+from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import Tool
 from livekit.agents.types import (
@@ -340,7 +340,9 @@ class LLMStream(llm.LLMStream):
         self._fnc_raw_arguments: str | None = None
 
         self._request_id: str = ""
-        self._ignoring_cot = False  # ignore chain of thought
+        # Claude may write its chain of thought in <thinking> tags (seen with tools attached);
+        # the filter keeps it out of the reply even when a tag is split across deltas
+        self._thinking_filter = llm_utils.ThinkingTokenFilter("<thinking>", "</thinking>")
         self._input_tokens = 0
         self._cache_creation_tokens = 0
         self._cache_read_tokens = 0
@@ -415,15 +417,10 @@ class LLMStream(llm.LLMStream):
                 text = delta.text
 
                 if self._tools is not None:
-                    # anthropic may inject COC when using functions
-                    if text.startswith("<thinking>"):
-                        self._ignoring_cot = True
-                    elif self._ignoring_cot and "</thinking>" in text:
-                        text = text.split("</thinking>")[-1]
-                        self._ignoring_cot = False
-
-                if self._ignoring_cot:
-                    return None
+                    visible = llm_utils.strip_thinking_tokens(text, self._thinking_filter)
+                    if visible is None:
+                        return None
+                    text = visible
 
                 return llm.ChatChunk(
                     id=self._request_id,
@@ -453,5 +450,15 @@ class LLMStream(llm.LLMStream):
                 )
                 self._tool_call_id = self._fnc_raw_arguments = self._fnc_name = None
                 return chat_chunk
+
+            if self._tools is not None:
+                # release text held back as a possible tag start, and drop a <thinking>
+                # block left open, so the next text block starts clean
+                held = llm_utils.strip_thinking_tokens(None, self._thinking_filter, final=True)
+                if held:
+                    return llm.ChatChunk(
+                        id=self._request_id,
+                        delta=llm.ChoiceDelta(content=held, role="assistant"),
+                    )
 
         return None
