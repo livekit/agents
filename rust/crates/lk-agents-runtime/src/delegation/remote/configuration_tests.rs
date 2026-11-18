@@ -5,7 +5,38 @@ fn project() -> Project {
         url: "wss://livekit.test/".into(),
         api_key: "key".into(),
         api_secret: "secret".into(),
+        endpoints: String::new(),
     }
+}
+
+// Catches: a self-hosted server delegating to its own endpoint on its listener without a token
+// (401), because only endpoints on LIVEKIT_URL's origin were signed for.
+#[test]
+fn the_servers_own_endpoints_are_signed_for_wherever_its_listener_is() {
+    let project = Project {
+        url: "ws://127.0.0.1:7880".into(),
+        endpoints: "http://127.0.0.1:8081/agents/desk/_".into(),
+        ..project()
+    };
+    let own = project.serving("http://127.0.0.1:8081/agents/desk/_/backend").unwrap().unwrap();
+    assert_eq!(
+        url::Url::parse(&own.url).unwrap().origin().ascii_serialization(),
+        "http://127.0.0.1:8081"
+    );
+    let configured =
+        Configuration::new("http://127.0.0.1:8081/agents/desk/_/backend", &project, None, None)
+            .unwrap();
+    assert!(matches!(configured.credential, Credential::Project { .. }));
+    for elsewhere in [
+        "http://127.0.0.1:8081/agents/desk/_backup/backend",
+        "http://127.0.0.1:8081/agents/other/_/backend",
+        "http://127.0.0.1:9000/agents/desk/_/backend",
+        "https://booking.test/agents/desk/_/backend",
+    ] {
+        assert!(project.serving(elsewhere).unwrap().is_none(), "{elsewhere} is not the server's");
+    }
+    let unsigned = Project { api_secret: String::new(), ..project };
+    assert!(unsigned.serving("http://127.0.0.1:8081/agents/desk/_/backend").unwrap().is_none());
 }
 
 #[test]
