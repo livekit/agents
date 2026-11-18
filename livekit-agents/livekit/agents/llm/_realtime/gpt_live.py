@@ -941,18 +941,20 @@ class GPTLiveSession(
         if not event.delta:
             return
         speech = self._speech.get(role)
+        ends = False
         if role == "user":
             # the caller's turn is everything they say until the model replies, however long they
-            # pause: a fragment from after the reply began starts the next one, unless the caller
-            # never paused, so the model was talking over them
-            ends = (
+            # pause. a fragment from after the reply starts the next turn if the caller paused
+            # there; if they talked through it, the model was talking over them and did not reply
+            if (
                 speech is not None
                 and (reply_time := self._turn_reply_time(speech)) is not None
-                and event.start_ms is not None
-                and event.start_ms > reply_time
-                and speech.end_ms is not None
-                and event.start_ms - speech.end_ms > _MIN_SILENCE_MS
-            )
+                and (start_time := event.start_ms) is not None
+                and start_time > reply_time
+            ):
+                ends = speech.end_ms is not None and start_time - speech.end_ms > _MIN_SILENCE_MS
+                if not ends:
+                    self._reply_times = [t for t in self._reply_times if t >= start_time]
         else:
             # a pause on the model's clock ends its message even when its fragments arrived
             # together, and so does the caller speaking within a silence of the model's
@@ -1001,7 +1003,12 @@ class GPTLiveSession(
             if role == "user":
                 self.emit("input_speech_started", llm.InputSpeechStartedEvent())
         speech.text += event.delta
-        speech.quiet_ms = 0
+        # the next fragment arrives only once its span ends, so the caller's quiet starts here
+        speech.quiet_ms = (
+            event.start_ms - event.end_ms
+            if event.start_ms is not None and event.end_ms is not None
+            else 0
+        )
         if event.end_ms is not None:
             speech.end_ms = max(speech.end_ms or 0, event.end_ms)
         if isinstance(message := self._history.get_by_id(speech.message_id), llm.ChatMessage):
