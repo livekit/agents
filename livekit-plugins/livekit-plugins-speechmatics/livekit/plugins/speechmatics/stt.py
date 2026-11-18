@@ -28,7 +28,6 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     LanguageCode,
-    inference,
     stt,
     utils,
     vad,
@@ -262,7 +261,7 @@ class STT(stt.STT):
                 Defaults to `AudioEncoding.PCM_S16LE`.
 
             vad: The plugin's local VAD for `EXTERNAL` mode. If omitted, the plugin
-                uses the bundled Silero VAD with a 550 ms silence threshold. To let
+                loads Silero from `livekit-plugins-silero` when installed. To let
                 `AgentSession` flush using its VAD and turn detector, pass `vad=None`
                 here. If you omit `vad` on `AgentSession`, it uses its bundled VAD.
                 Direct callers can pass `vad=None` and call `stream.flush()`.
@@ -274,9 +273,15 @@ class STT(stt.STT):
         # Normalize the deprecated modes away before anything reads the mode.
         turn_detection_mode = _resolve_turn_detection_mode(turn_detection_mode)
 
-        # Keep the 550 ms silence threshold for standalone streams.
+        # Load the plugin's local VAD by default so standalone streams can close turns.
         if turn_detection_mode == TurnDetectionMode.EXTERNAL and not is_given(vad):
-            vad = inference.VAD(model="silero", min_silence_duration=0.55)
+            vad = _load_default_vad()
+            if vad is None:
+                logger.warning(
+                    "Speechmatics STT could not load the optional Silero VAD in EXTERNAL mode. "
+                    "Use AgentSession turn handling, stream.flush(), or STT.finalize() "
+                    "to close turns."
+                )
 
         self._vad = vad if is_given(vad) else None
 
@@ -966,6 +971,24 @@ _DEPRECATED_TURN_DETECTION_MODES = frozenset(
         TurnDetectionMode.SMART_TURN,
     }
 )
+
+
+def _load_default_vad() -> vad.VAD | None:
+    """Load a local VAD to drive `finalize()` in `EXTERNAL` mode, or `None` if unavailable.
+
+    The pre-Agent-STT plugin raised `ImportError` without the optional Silero plugin.
+    Returning `None` lets `AgentSession` use its bundled VAD and turn detector to flush
+    the stream. Standalone callers can flush the stream directly.
+
+    Loading the bundled `inference.VAD` here would add a second VAD with independent
+    thresholds when `AgentSession` already supplies one.
+    """
+    try:
+        from livekit.plugins.silero import VAD as SileroVAD
+    except ImportError:
+        return None
+
+    return SileroVAD.load()
 
 
 def _normalize_additional_vocab(entries: list[Any]) -> list[AdditionalVocabEntry]:

@@ -34,7 +34,7 @@ from speechmatics.agent_stt import (
     TurnDetectionMode as AgentTurnDetectionMode,
 )
 
-from livekit.agents import APIError, inference, stt
+from livekit.agents import APIError, stt
 from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.agents.utils.audio import silence_frame
 from livekit.plugins.speechmatics import stt as speechmatics_stt
@@ -348,13 +348,26 @@ def test_turn_config_is_a_top_level_sibling() -> None:
 # --- VAD and finalize ----------------------------------------------------------------
 
 
-def test_external_uses_bundled_vad_by_default(monkeypatch) -> None:
-    monkeypatch.setitem(sys.modules, "livekit.plugins.silero", None)
+def test_bare_external_loads_a_vad() -> None:
+    """The plugin loads Silero so standalone `STT()` streams close turns automatically."""
+    pytest.importorskip("livekit.plugins.silero")
 
     instance = _stt()
-    assert isinstance(instance._vad, inference.VAD)
-    assert instance._vad.min_silence_duration == 0.55
+    assert instance._vad is not None
     assert not instance.capabilities.manual_flush
+
+
+def test_a_missing_silero_still_constructs(monkeypatch, caplog) -> None:
+    """The auto-load is best-effort: the old hard `ImportError` made the plugin unusable
+    wherever the optional package was absent."""
+    monkeypatch.setitem(sys.modules, "livekit.plugins.silero", None)
+
+    with caplog.at_level("WARNING"):
+        instance = _stt()
+
+    assert instance._vad is None
+    assert instance.capabilities.manual_flush
+    assert "could not load the optional Silero VAD" in caplog.text
 
 
 def test_explicit_none_vad_opts_out(caplog) -> None:
