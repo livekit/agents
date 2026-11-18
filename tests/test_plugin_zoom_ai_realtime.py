@@ -826,19 +826,38 @@ async def test_queued_reply_times_out_only_after_it_is_sent(
     await session.aclose()
 
 
-async def test_sent_reply_request_still_times_out(
+async def test_unanswered_reply_request_reconnects(
     server: tuple[FakeVoiceAgent, str],
     http: aiohttp.ClientSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(realtime_model, "_REPLY_TIMEOUT", 0.05)
     fake, url = server
-    session = await start(make_model(url, http))
+    session = await start(make_model(url, http, conn_options=FAST_RETRY))
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
     conn = await fake.conn()
-    fut = session.generate_reply()
+    first = session.generate_reply()
     await wait_for(lambda: conn.of_type("response.create"))
+    queued = session.generate_reply()
+    # Zoom never answers the first request: it times out, and the one queued behind it
+    # fails with the reconnect instead of waiting forever
     with pytest.raises(llm.RealtimeError, match="timed out"):
-        await asyncio.wait_for(fut, 2)
+        await asyncio.wait_for(first, 2)
+    with pytest.raises(llm.RealtimeError, match="reconnection"):
+        await asyncio.wait_for(queued, 2)
+    assert len(conn.of_type("response.create")) == 1
+    assert len(errors) == 1 and errors[0].recoverable
+    assert "didn't answer" in str(errors[0].error)
+
+    # the new connection takes requests again
+    new_conn = await fake.conn(1)
+    await wait_for(lambda: new_conn.of_type("session.update"))
+    fut = session.generate_reply()
+    await wait_for(lambda: new_conn.of_type("response.create"))
+    await reply(new_conn, response_id="resp_2")
+    gen = await asyncio.wait_for(fut, 2)
+    assert gen.response_id == "resp_2"
     await session.aclose()
 
 

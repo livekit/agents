@@ -280,6 +280,9 @@ class RealtimeSession(_engine.RealtimeSession):
         self._zoom_active_response: str | None = None
         # response-created timeouts of the requests in flight, started when each is sent
         self._zoom_reply_timers: dict[str, asyncio.TimerHandle] = {}
+        # the current connection, closed to reconnect when Zoom stops answering requests
+        self._zoom_ws: _ZoomSocket | None = None
+        self._zoom_abort_task: asyncio.Task[None] | None = None
         # the active response is already being cancelled, by us or by Zoom's barge-in
         self._zoom_active_cancelled = False
         self._zoom_sent_outputs: set[str] = set()
@@ -435,6 +438,8 @@ class RealtimeSession(_engine.RealtimeSession):
         # a failure that ended the session was already reported as an "error" event
         with contextlib.suppress(Exception):
             await super().aclose()
+        if self._zoom_abort_task:
+            await utils.aio.cancel_and_wait(self._zoom_abort_task)
 
     # ------------------------------------------------------------------ outgoing
 
@@ -687,6 +692,14 @@ class RealtimeSession(_engine.RealtimeSession):
                 # discard the response if Zoom still creates it after the timeout
                 self._discarded_event_ids.add(event_id)
                 fut.set_exception(llm.RealtimeError("generate_reply timed out."))
+            if event_id in self._zoom_inflight:
+                # Zoom answered neither with a response nor an error. Nothing tells a late
+                # response to this request from one to the next (Zoom echoes no client id),
+                # so the next request can't go out on this connection: start a new one. The
+                # reconnect fails the queued requests and replays the conversation.
+                self._zoom_reconnect(
+                    f"Zoom Voice Agent didn't answer a reply request within {_REPLY_TIMEOUT}s"
+                )
 
         self._zoom_stop_reply_timer(event_id)
         self._zoom_reply_timers[event_id] = asyncio.get_running_loop().call_later(
@@ -696,6 +709,17 @@ class RealtimeSession(_engine.RealtimeSession):
     def _zoom_stop_reply_timer(self, event_id: str) -> None:
         if handle := self._zoom_reply_timers.pop(event_id, None):
             handle.cancel()
+
+    def _zoom_reconnect(self, reason: str) -> None:
+        ws = self._zoom_ws
+        if (
+            self._closing
+            or ws is None
+            or (self._zoom_abort_task and not self._zoom_abort_task.done())
+        ):
+            return
+        logger.warning(f"{reason}; reconnecting")
+        self._zoom_abort_task = asyncio.create_task(ws.abort(reason))
 
     # ------------------------------------------------------------------ connection
 
@@ -741,7 +765,8 @@ class RealtimeSession(_engine.RealtimeSession):
         self._report_connection_acquired(time.perf_counter() - t0)
         self._zoom_awaiting_config_ack = True
         self._zoom_unconfigured_conns += 1
-        return cast(aiohttp.ClientWebSocketResponse, _ZoomSocket(ws))
+        self._zoom_ws = _ZoomSocket(ws)
+        return cast(aiohttp.ClientWebSocketResponse, self._zoom_ws)
 
     def _zoom_on_reconnected(self, _: llm.RealtimeSessionReconnectedEvent) -> None:
         # The engine failed the pending reply requests; what was in flight on the old
@@ -934,9 +959,18 @@ class _ZoomSocket:
     def __init__(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         self._ws = ws
         self._last_session_update: str | None = None
+        self._abort_reason: str | None = None
+
+    async def abort(self, reason: str) -> None:
+        """Close the connection so the engine reconnects, failing with ``reason``."""
+        self._abort_reason = reason
+        await self._ws.close()
 
     async def receive(self, timeout: float | None = None) -> aiohttp.WSMessage:
         msg = await self._ws.receive(timeout)
+        if self._abort_reason is not None:
+            # retryable: the engine reconnects
+            raise APIConnectionError(self._abort_reason)
         if msg.type != aiohttp.WSMsgType.TEXT:
             return msg
         try:
