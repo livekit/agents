@@ -946,6 +946,33 @@ async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
         await provider.aclose()
 
 
+async def test_recognize_sets_a_request_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    # without a timeout the request falls back to the session's 5 minute default
+    timeouts: list[aiohttp.ClientTimeout | None] = []
+    post = aiohttp.ClientSession.post
+
+    def recording_post(self: aiohttp.ClientSession, *args: Any, **kwargs: Any) -> Any:
+        timeouts.append(kwargs.get("timeout"))
+        return post(self, *args, **kwargs)
+
+    monkeypatch.setattr(aiohttp.ClientSession, "post", recording_post)
+
+    async def handler(request: web.Request) -> web.Response:
+        return web.json_response({"text": "hello", "words": []})
+
+    app = web.Application()
+    app.router.add_post("/speech-to-text", handler)
+    async with TestServer(app) as server, aiohttp.ClientSession() as session:
+        url = str(server.make_url(""))
+        batch_stt = elevenlabs_stt.STT(api_key="test-key", base_url=url, http_session=session)
+        await batch_stt.recognize(
+            [_frame(100)],
+            conn_options=dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, timeout=2.5),
+        )
+
+    assert timeouts == [aiohttp.ClientTimeout(total=30, sock_connect=2.5)]
+
+
 async def test_recognize_language_override_applies_to_one_call() -> None:
     # StreamAdapter passes its stream's language to every recognize() call, so an
     # override must not leak into the STT's own configuration
