@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -637,7 +638,7 @@ class _RecordingConnection(_FakeConnection):
         self.created_opts: list = []
 
     def create_context(self, emitter, opts) -> tuple[str, asyncio.Future[None]]:
-        self.created_opts.append(opts)
+        self.created_opts.append(dataclasses.replace(opts))  # a stream reuses its opts per attempt
         return f"ctx-{len(self.created_opts)}", self.waiter
 
     def close_context(self, context_id: str, *, cancel: bool = False) -> None:
@@ -735,3 +736,52 @@ async def test_one_reply_longer_than_the_limit_keeps_its_end():
 
     (only,) = conn.created_opts[1].previous_requests
     assert len(only) == 2000 and only.endswith("THE END")
+
+
+class _FlakyConnection(_RecordingConnection):
+    """Fails the first context before any audio, then serves the retry."""
+
+    def create_context(self, emitter, opts) -> tuple[str, asyncio.Future[None]]:
+        ctx_id, _ = super().create_context(emitter, opts)
+        waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        if len(self.created_opts) == 1:
+            # a handshake that fails after the stream has already read its text
+            asyncio.get_running_loop().call_later(0.05, waiter.set_exception, APIConnectionError())
+        else:
+            emitter.start_segment(segment_id=ctx_id)
+            emitter.push(b"\x00" * 48000)
+            emitter.end_segment()
+        self.waiter = waiter
+        return ctx_id, waiter
+
+    def close_context(self, context_id: str, *, cancel: bool = False) -> None:
+        # a real connection ends the waiter when the server does, not when the client closes
+        self.calls.append(("close_context", cancel))
+        if len(self.created_opts) > 1 and not self.waiter.done():
+            self.waiter.set_result(None)
+
+
+async def test_failed_attempt_is_not_added_to_the_context_and_the_retry_sees_the_same_replies():
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.inworld import TTS
+
+    tts = TTS(api_key="test-key", conversation_context=True)
+    conn = _FlakyConnection()
+    tts._get_connection = MagicMock(return_value=conn)  # type: ignore[method-assign]
+    tts._recent_replies.append("Hello.")
+
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0))
+    stream.push_text("How can I help?")
+    stream.end_input()
+
+    async def _drain() -> None:
+        async for _ in stream:
+            pass
+
+    await asyncio.wait_for(_drain(), timeout=5.0)
+    await stream.aclose()
+
+    assert len(conn.created_opts) == 2
+    # the failed attempt neither adds its own reply to the history nor shows up in the retry
+    assert [o.previous_requests for o in conn.created_opts] == [["Hello."], ["Hello."]]
+    assert tts._recent_replies == ["Hello.", "How can I help?"]

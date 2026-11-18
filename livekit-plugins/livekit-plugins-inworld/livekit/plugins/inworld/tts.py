@@ -1071,6 +1071,25 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
         if not tts._client_segmentation and _supports_sentence_boundary(self._opts.model):
             self._opts.auto_mode_strategy = "SENTENCE_BOUNDARY"
+        # taken once, so every retry of this reply sends the same earlier replies
+        if tts._conversation_context:
+            self._opts.previous_requests = _trim_context(tts._recent_replies)
+
+    async def _main_task(self) -> None:
+        try:
+            await super()._main_task()
+        except asyncio.CancelledError:
+            # an interrupted reply enters the context as generated, not as heard
+            self._remember_reply()
+            raise
+        else:
+            self._remember_reply()
+
+    def _remember_reply(self) -> None:
+        # once per reply, not per attempt: a reply whose synthesis failed never reaches here
+        if self._tts._conversation_context and (reply := self._pushed_text.strip()):
+            self._tts._recent_replies.append(reply)
+            del self._tts._recent_replies[:-MAX_CONTEXT_REPLIES]
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -1083,10 +1102,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             mime_type=self._opts.mime_type,
             stream=True,
         )
-
-        if self._tts._conversation_context:
-            self._opts.previous_requests = _trim_context(self._tts._recent_replies)
-        pushed: list[str] = []
 
         connection = self._tts._get_connection()
         context_id, waiter = connection.create_context(output_emitter, self._opts)
@@ -1102,7 +1117,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(data, self._FlushSentinel):
                     sent_tokenizer_stream.flush()
                     continue
-                pushed.append(data)
                 sent_tokenizer_stream.push_text(data)
             sent_tokenizer_stream.end_input()
 
@@ -1118,7 +1132,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(data, self._FlushSentinel):
                     connection.flush_context(context_id)
                 elif data:
-                    pushed.append(data)
                     _send_text(data)
             connection.close_context(context_id)
 
@@ -1154,9 +1167,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             await utils.aio.gracefully_cancel(*tasks)
             await sent_tokenizer_stream.aclose()
             output_emitter.end_input()
-            if self._tts._conversation_context and (reply := "".join(pushed).strip()):
-                self._tts._recent_replies.append(reply)
-                del self._tts._recent_replies[:-MAX_CONTEXT_REPLIES]
 
 
 def _parse_timestamp_info(
