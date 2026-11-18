@@ -943,12 +943,15 @@ class GPTLiveSession(
         speech = self._speech.get(role)
         if role == "user":
             # the caller's turn is everything they say until the model replies, however long they
-            # pause: a fragment from after the reply began starts the next one
+            # pause: a fragment from after the reply began starts the next one, unless the caller
+            # never paused, so the model was talking over them
             ends = (
                 speech is not None
                 and (reply_time := self._turn_reply_time(speech)) is not None
                 and event.start_ms is not None
                 and event.start_ms > reply_time
+                and speech.end_ms is not None
+                and event.start_ms - speech.end_ms > _MIN_SILENCE_MS
             )
         else:
             # a pause on the model's clock ends its message even when its fragments arrived
