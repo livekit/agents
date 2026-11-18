@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import importlib.machinery
 import importlib.metadata as metadata
 import importlib.util
 import inspect
@@ -161,6 +162,11 @@ def test_every_plugin_module_imports(package: str) -> None:
     root = importlib.import_module(f"livekit.plugins.{package}")
     failures = []
     for module in pkgutil.walk_packages(root.__path__, prefix=f"{root.__name__}."):
+        spec = importlib.util.find_spec(module.name)
+        # A native library shipped beside the sources (a uniffi `lib*.so`) is loaded with
+        # ctypes, not imported; the Python module that loads it is checked here.
+        if spec is not None and isinstance(spec.loader, importlib.machinery.ExtensionFileLoader):
+            continue
         try:
             importlib.import_module(module.name)
         except Exception as error:
