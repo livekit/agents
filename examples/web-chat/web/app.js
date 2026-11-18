@@ -1,26 +1,25 @@
-// The page's routes sit next to it: /agents/<agent>/<deployment>/{token, chat/v1}.
-const base = location.pathname.replace(/\/?$/, "/");
 const browser = (localStorage.browser ??= crypto.randomUUID());
 const $ = (id) => document.getElementById(id);
-let grant = null;
+const grants = {};
 let thread = null;
 
-// A thread grant for this browser's scope, renewed once it expires.
-async function auth() {
-  if (!grant || Date.now() > grant.expires) {
-    const res = await fetch(`${base}token?browser=${browser}`);
-    if (!res.ok) throw new Error(`token: ${res.status}`);
-    grant = await res.json();
-    grant.expires = Date.now() + (grant.ttl - 30) * 1000;
-  }
-  return grant;
+// A token from web.py, renewed once it expires: for one thread of this browser, or with
+// no thread, for listing and starting the browser's threads.
+async function auth(id = "") {
+  const grant = grants[id];
+  if (grant && Date.now() < grant.expires) return grant;
+  const res = await fetch(`token?browser=${browser}${id && `&thread=${id}`}`);
+  if (!res.ok) throw new Error(`token: ${res.status}`);
+  const fresh = await res.json();
+  fresh.expires = Date.now() + (fresh.ttl - 30) * 1000;
+  return (grants[id] = fresh);
 }
 
 // The threads REST of LiveKit's public API; `p_` is the grant's own project.
 const API = "https://api.livekit.cloud";
 
-async function threadsApi(path) {
-  const { token } = await auth();
+async function threadsApi(path, id = "") {
+  const { token } = await auth(id);
   const res = await fetch(`${API}/v0/projects/p_/threads${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -49,7 +48,7 @@ async function open(id) {
   const items = [];
   let cursor = "";
   do {
-    const page = await threadsApi(`/${id}/items?page.pageSize=100&page.cursor=${cursor}`);
+    const page = await threadsApi(`/${id}/items?page.pageSize=100&page.cursor=${cursor}`, id);
     items.push(...(page.items ?? []));
     cursor = page.pageInfo?.nextCursor ?? "";
   } while (cursor);
@@ -97,8 +96,8 @@ async function* events(res) {
 async function send(text) {
   bubble("user", text);
   const reply = bubble("assistant pending", "…");
-  const { token } = await auth();
-  const res = await fetch(`${base}chat/v1`, {
+  const { token, agent } = await auth(thread ?? "");
+  const res = await fetch(`${agent}/chat/v1`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
