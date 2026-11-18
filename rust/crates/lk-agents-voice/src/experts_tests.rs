@@ -1,7 +1,7 @@
 use super::*;
 
 fn refunds() -> ExpertTool {
-    ExpertTool::new("https://back.office/agents/refunds/", "refunds")
+    ExpertTool::remote("https://back.office/agents/refunds", "refunds")
 }
 
 fn floor(tools: &[ExpertTool]) -> Floor<'_> {
@@ -158,11 +158,11 @@ fn events_reach_only_an_agent_exposing_the_configured_remote_tool() {
     let mut experts = opened();
     assert!(experts.progress("call_1", 1, "Working on it".into()));
     // The same model-visible name on another endpoint is not this expert's tool.
-    let lookalike = [ExpertTool::new("https://elsewhere/agents/refunds", "refunds")];
+    let lookalike = [ExpertTool::remote("https://elsewhere/agents/refunds", "refunds")];
     assert_eq!(experts.next(floor(&lookalike)), None);
     assert_eq!(experts.next(floor(&[])), None);
     // A different configured agent exposing the same remote tool presents it.
-    let replacement = [ExpertTool::new("https://back.office/agents/refunds", "refunds")];
+    let replacement = [ExpertTool::remote("https://back.office/agents/refunds", "refunds")];
     assert!(matches!(experts.next(floor(&replacement)), Some(Presentation::Progress { .. })));
 }
 
@@ -183,7 +183,7 @@ fn a_question_owns_the_reply_destination_and_takes_exactly_one_answer() {
 
 #[test]
 fn only_one_expert_question_owns_the_reply_destination_at_a_time() {
-    let tools = [refunds(), ExpertTool::new("https://back.office/agents/baggage", "baggage")];
+    let tools = [refunds(), ExpertTool::remote("https://back.office/agents/baggage", "baggage")];
     let mut experts = opened();
     assert!(experts.open("call_2", tools[1].clone()));
     ask(&mut experts, "r1");
@@ -350,4 +350,102 @@ fn an_outcome_resolves_the_originating_call_only_once_its_pending_output_is_reco
             outcome: ToolOutcome::Failed("Refund declined".into())
         })
     );
+}
+
+#[test]
+fn exact_outputs_keep_order_and_receipts_when_later_progress_and_results_overtake_announcements() {
+    use crate::agent_session::{RequestId, SpeechCall};
+    let tools = [refunds()];
+    let mut experts = opened();
+    let first = SpeechCall { id: RequestId(50), speech: SpeechId(50) };
+    let second = SpeechCall { id: RequestId(51), speech: SpeechId(51) };
+    assert!(experts.exact("call_1", 1, "Reference ABC.".into(), Some(first.clone())));
+    for occurrence in 2..12 {
+        assert!(experts.progress("call_1", occurrence, format!("obsolete progress {occurrence}")));
+    }
+    assert!(experts.exact("call_1", 12, "Refund confirmed.".into(), Some(second.clone())));
+    assert!(ask(&mut experts, "question"));
+    let done = ToolOutcome::Value {
+        text: "The business task completed.".into(),
+        reply_required: true,
+        verbatim: false,
+        more: None,
+    };
+    assert!(experts.outcome("call_1", done.clone()));
+    assert_eq!(experts.next(floor(&tools)), None, "source ownership is not recorded yet");
+    experts.recorded("call_1");
+    assert_eq!(
+        experts.next(floor(&[])),
+        None,
+        "an unrelated agent cannot present exact expert output"
+    );
+    assert_eq!(
+        experts.next(Floor { tools: &tools, free: true, task: true }),
+        None,
+        "a foreground VoiceTask keeps its floor"
+    );
+    for (text, call) in [("Reference ABC.", first), ("Refund confirmed.", second)] {
+        assert_eq!(
+            experts.next(floor(&tools)),
+            Some(Presentation::Exact {
+                output_id: "call_1".into(),
+                text: text.into(),
+                call: Some(call),
+            })
+        );
+    }
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Outcome { output_id: "call_1".into(), outcome: done })
+    );
+    assert_eq!(experts.next(floor(&tools)), None, "an exact output cannot be presented twice");
+}
+
+#[test]
+fn stable_remote_identity_reaches_a_replacement_agent_after_its_model_tool_is_renamed() {
+    let mut experts = Experts::default();
+    experts.open("original-output", ExpertTool::remote("flights-primary", "old_flight_tool"));
+    assert!(experts.progress("original-output", 1, "Still searching".into()));
+    let other_config = [ExpertTool::remote("flights-backup", "old_flight_tool")];
+    assert_eq!(experts.next(floor(&other_config)), None);
+    let replacement = [ExpertTool::remote("flights-primary", "search_flights")];
+    assert!(matches!(experts.next(floor(&replacement)), Some(Presentation::Progress { .. })));
+}
+
+#[test]
+fn remote_ids_cannot_alias_local_agent_tool_identity() {
+    let mut experts = Experts::default();
+    experts.open("local-output", ExpertTool::local("helper", "help"));
+    assert!(experts.progress("local-output", 1, "Local work".into()));
+    let remote_lookalike = [ExpertTool::remote("agent:helper", "help")];
+    assert_eq!(experts.next(floor(&remote_lookalike)), None);
+    let local = [ExpertTool::local("helper", "help")];
+    assert!(matches!(experts.next(floor(&local)), Some(Presentation::Progress { .. })));
+}
+
+#[test]
+fn a_refused_verbatim_question_keeps_its_reference_and_retries_the_same_occurrence() {
+    let tools = [refunds()];
+    let mut experts = opened();
+    let reference =
+        InputRequestRef::Agent { agent_id: "root".into(), request_id: "native-question".into() };
+    assert!(experts.ask(
+        "call_1",
+        "r1",
+        "Confirm the exact action?".into(),
+        true,
+        Some(reference.clone())
+    ));
+    let first = experts.next(floor(&tools)).unwrap();
+    let request = pending("r1");
+    experts.defer_question(&request);
+    assert_eq!(experts.reference(&request), Some(&reference));
+    assert!(experts.waits_for(&reference));
+    assert!(
+        experts.collect(floor(&tools)).is_none(),
+        "an unheard question cannot own the next reply"
+    );
+    let second = experts.next(floor(&tools)).unwrap();
+    assert_eq!(first, second, "retry preserves exact source and question identity");
+    assert_eq!(experts.reference(&request), Some(&reference));
 }

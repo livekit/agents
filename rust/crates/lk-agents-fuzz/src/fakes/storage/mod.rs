@@ -18,6 +18,7 @@ use lk_agents_abi::storage::{StorageError, Unacknowledged};
 use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::{ChatItem, ChatMessage, Clock, Role, StreamInput, Ts};
 use lk_agents_runtime::net::owned::Background;
+use lk_agents_runtime::net::signal;
 use lk_agents_runtime::storage::backends::sqlite::{FileConnection, SqliteStorage, Workers};
 use lk_agents_runtime::storage::sql::{BatchResult, Row, SqlValue, Statement, StatementKind};
 use lk_agents_runtime::storage::testing::{Dying, TempDir, Wrapped, lessee};
@@ -169,6 +170,58 @@ impl FakeStore {
     pub fn read_unanswered(&self) -> bool {
         self.database.state.lock().reading > 0
     }
+
+    /// Hold one selected immutable read after SQLite returned its payload. Its receipt is
+    /// released by the authored story, independently of all provider/storage latency draws.
+    pub fn hold_next_read(&self) -> (signal::Cell<Option<()>>, signal::Producer<Option<()>>) {
+        let (entered, observed) = signal::once();
+        let (release, released) = signal::once();
+        let mut state = self.database.state.lock();
+        assert!(state.read_gate.is_none(), "one authored read is held at a time");
+        state.read_gate = Some(ReadGate { entered, release: released });
+        (observed, release)
+    }
+
+    /// An authored foreign writer controls its exact history, through a real fenced run over
+    /// the same database. Random foreign turns stop when this explicit schedule takes over.
+    pub async fn foreign_history(&self, items: Vec<ChatItem>) -> Result<(), StorageError> {
+        let serial = {
+            let mut state = self.database.state.lock();
+            state.text_turn_every = u32::MAX;
+            state.authored_history += 1;
+            state.authored_history
+        };
+        let thread = self.database.thread().await.ok_or_else(|| {
+            StorageError::Unavailable("the authored foreign thread could not open".into())
+        })?;
+        let result = async {
+            let mut options = RunOptions::new(format!("authored_foreign_{serial}"), "");
+            options.access = PartitionAccess::Exclusive(WhenHeld::Reject);
+            let mut run = thread
+                .partition(PARTITION_KEY)
+                .open(options, &Holder::new("authored_foreign"))
+                .await?;
+            let before = run
+                .history()
+                .iter()
+                .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
+                .collect::<Result<Vec<_>, _>>()?;
+            *run.history_mut() = items
+                .iter()
+                .map(|item| ItemRow {
+                    id: item.id().to_owned(),
+                    message_id: None,
+                    payload: encode_chat_item(item),
+                })
+                .collect();
+            run.commit(CommitOptions::default()).await?;
+            self.database.registry.record_storage(StorageStep::ForeignCommitted { before, items });
+            Ok(())
+        }
+        .await;
+        thread.close().await;
+        result
+    }
 }
 
 /// The thread's database as every connection to it meets it: seeded latency and faults, and what
@@ -189,7 +242,14 @@ struct FakeDatabase {
     _dir: TempDir,
 }
 
+struct ReadGate {
+    entered: signal::Producer<Option<()>>,
+    release: signal::Cell<Option<()>>,
+}
+
 struct State {
+    read_gate: Option<ReadGate>,
+    authored_history: u64,
     rng: fastrand::Rng,
     /// Faults and latency start once the store is open.
     armed: bool,
@@ -251,6 +311,8 @@ impl FakeDatabase {
             fastrand::Rng::with_seed((seed ^ 0x6c61_6e65).wrapping_mul(0x9e37_79b9_7f4a_7c15));
         let text_turn_every = rng.u32(2..=6);
         let state = State {
+            read_gate: None,
+            authored_history: 0,
             rng,
             armed: false,
             down_until: Ts::ZERO,
@@ -529,6 +591,14 @@ impl FakeConnection {
         } else {
             None
         };
+        let gate = session_read.then(|| db.state.lock().read_gate.take()).flatten();
+        if let Some(ReadGate { entered, release }) = gate {
+            entered.resolve(());
+            release
+                .wait()
+                .await
+                .map_err(|_| StorageError::Cancelled("the authored read owner ended".into()))?;
+        }
         if session_read
             && let Some(ms) = db.setup.session_read_answer_ms
             && !db.wait(Duration::from_millis(ms)).await

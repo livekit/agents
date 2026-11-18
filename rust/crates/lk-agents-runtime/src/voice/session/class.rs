@@ -516,7 +516,9 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     }
 
     fn push_video(&self, content: lk_agents_abi::ChatContent) -> Result<bool, NotAnImage> {
-        let lk_agents_abi::ChatContent::Image(image) = content else { return Err(NotAnImage) };
+        let lk_agents_abi::ChatContent::Image(image) = content else {
+            return Err(NotAnImage);
+        };
         Ok(VoiceSession::push_video(self, image))
     }
 
@@ -719,6 +721,29 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             origin,
             SpeechCommand::ToolUpdate { invocation_id, operation, call_id, update },
         )?)
+    }
+
+    fn tool_progress(
+        &self,
+        invocation_id: String,
+        operation: u64,
+        call_id: String,
+        report: lk_agents_abi::llm::tool_executor::ToolReport,
+    ) -> Result<BoxFuture<'static, Result<(), lk_agents_abi::errors::ProviderError>>, CommandRefused>
+    {
+        self.tool_update(invocation_id, operation, call_id, report)?;
+        Ok(Box::pin(async { Ok(()) }))
+    }
+
+    fn tool_say(
+        &self,
+        invocation_id: String,
+        operation: u64,
+        call_id: String,
+        text: String,
+    ) -> Result<BoxFuture<'static, Result<(), lk_agents_abi::errors::ProviderError>>, CommandRefused>
+    {
+        self.enqueue_tool_say(invocation_id, operation, call_id, text)
     }
 
     fn update_chat_ctx(&self, items: Vec<ChatItem>) -> Result<(), SessionRefused> {

@@ -553,11 +553,11 @@ impl StreamInput {
     }
 }
 
-/// Python interface: `livekit.agents.utils.aio`.
+/// Python interface: `livekit.agents._asyncio`.
 pub use crate::py_streams::interfaces::AioModule;
 impl AioModule {
     pub fn import(py: Python<'_>) -> PyResult<Bound<'_, pyo3::types::PyModule>> {
-        py.import("livekit.agents.utils.aio")
+        py.import("livekit.agents._asyncio")
     }
     pub fn _keep_closing<'py>(
         obj: &Bound<'py, impl pyo3::PyTypeInfo>,

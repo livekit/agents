@@ -1,5 +1,8 @@
+mod checkpoint;
+mod conversation;
 pub mod door;
 pub mod handler;
+mod live;
 
 use crate::telemetry;
 use handler::{Handler, Read};
@@ -35,7 +38,11 @@ struct Call {
     holder: Holder,
     run: Option<Run>,
     lease: Option<Lease>,
-    handler: Option<Handler>,
+    handlers: std::collections::BTreeMap<String, Handler>,
+    handler_id: Option<String>,
+    managed: Arc<handler::ManagedOwner>,
+    checkpoints: tokio::sync::mpsc::Receiver<checkpoint::Write>,
+    deferred: std::collections::VecDeque<Completion>,
     submitted: Option<Submitted>,
     /// Where the turn's background work (an unanswered task's cancel) runs.
     spawner: Arc<dyn Spawner>,
@@ -228,6 +235,25 @@ impl Turn {
         self
     }
 
+    /// Attach the production Publisher to a fake response transport in deterministic stories.
+    /// The leased execution still owns its work after this observer closes.
+    #[cfg(feature = "dst")]
+    pub fn with_stream_observer(
+        mut self,
+        request_id: a2a::JsonRpcId,
+        sender: lk_agents_net::outbox::Outbox<
+            Result<lk_agents_abi::a2a::door::DoorFrame, lk_agents_abi::a2a::door::DoorError>,
+        >,
+    ) -> Self {
+        self.publisher = Some(Arc::new(door::stream::Publisher::new(
+            request_id,
+            self.thread.id().to_owned(),
+            None,
+            Some(sender),
+        )));
+        self
+    }
+
     pub fn partition_key(&self) -> &str {
         &self.partition_key
     }
@@ -270,12 +296,17 @@ impl Turn {
         let holder = Holder::new(&self.holder);
         let spawner = (self.spawner)()
             .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
+        let (checkpoint, checkpoints) = checkpoint::channel();
         let mut call = Call {
             partition_key,
             holder,
             run: None,
             lease: None,
-            handler: None,
+            handlers: std::collections::BTreeMap::new(),
+            handler_id: None,
+            managed: Arc::new(handler::ManagedOwner::with_checkpoint(checkpoint)),
+            checkpoints,
+            deferred: std::collections::VecDeque::new(),
             submitted: None,
             spawner,
         };
@@ -293,6 +324,10 @@ impl Turn {
                     );
                 }
                 Some(A2aTaskEffect::Finished(answer)) => {
+                    if !call.managed.settled(answer.is_err()).await {
+                        log::warn!(target: lk_agents_abi::LOG_TARGET,
+                            "the managed text execution ended without its cleanup receipt");
+                    }
                     let now = elapsed();
                     let Call { holder, run, lease, mut submitted, .. } = call;
                     if let (Ok(_), Some(submitted)) = (&answer, submitted.as_mut()) {
@@ -322,6 +357,17 @@ impl Turn {
         operation: Operation,
     ) -> Result<Completion, StorageError> {
         Ok(match operation {
+            Operation::CancelLive(tasks) => self.cancel_live_tasks(call, tasks).await?,
+            Operation::CancelSource(source) => {
+                if let Some(handler) = call.handlers.get_mut(&source) {
+                    handler.cancel();
+                }
+                Completion::Done
+            }
+            Operation::PrepareDialogue { source, messages } => {
+                self.prepare_dialogue(call, source, messages).await?
+            }
+            Operation::CommitDialogue(source) => self.commit_dialogue(call, source).await?,
             Operation::FindReceipt(message_id) => {
                 Completion::Task(call.partition_key.task_for_message(&message_id).await?)
             }
@@ -372,12 +418,39 @@ impl Turn {
             }
             Operation::Stage(staged) => call.stage(*staged).await?,
             Operation::Handle(handle) => self.open_handler(call, *handle).await?,
+            Operation::NextAll { should_yield, pause } => {
+                self.next_all(call, should_yield, pause).await?
+            }
             Operation::Next(should_yield) => {
                 let event = self.next_event(call, should_yield).await?;
-                if !matches!(event, HandlerEvent::Checkpoint) {
+                if !matches!(event, HandlerEvent::Checkpoint | HandlerEvent::Managed(_)) {
                     self.close_handler(call).await;
                 }
                 Completion::Event(event)
+            }
+            Operation::NextSource { request_id, should_yield, pause } => {
+                call.handler_id = Some(request_id);
+                self.next_all(call, should_yield, pause).await?
+            }
+            Operation::LiveWait { pause } => self.wait_live(call, pause).await?,
+            Operation::AcknowledgeLive { request_id, turn } => {
+                let handler = call.handlers.get_mut(&request_id).ok_or_else(|| {
+                    StorageError::Invalid("a managed commit lost its original handler".into())
+                })?;
+                handler.commit_live(turn, Ok(()));
+                if handler.returned() {
+                    let handler =
+                        call.handlers.remove(&request_id).expect("selected handler exists");
+                    if !handler
+                        .close(&*self.clock, self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT))
+                        .await
+                    {
+                        return Err(StorageError::Invalid(
+                            "the final managed handler did not close".into(),
+                        ));
+                    }
+                }
+                Completion::Done
             }
             Operation::Checkpoint(task_ids) => call.checkpoint(&task_ids).await?,
             Operation::Commit { answer_task, lease, drained_id } => {
@@ -447,7 +520,9 @@ impl Turn {
         partition_key: &Partition,
         task_id: &str,
     ) -> Result<Completion, StorageError> {
-        let Some(publisher) = &self.publisher else { return Ok(Completion::Done) };
+        let Some(publisher) = &self.publisher else {
+            return Ok(Completion::Done);
+        };
         let task = partition_key
             .task(task_id)
             .await?
@@ -531,7 +606,23 @@ impl Turn {
             lease.check()?;
         }
         let cx = telemetry::Cx::NONE.continuing(self.span);
-        call.handler = Some(Handler::open(host, cx, host_ctx));
+        let policy = resolve_policy(
+            &self.opts.policy,
+            host_ctx.batch.last().and_then(|message| message.channel.as_deref()).unwrap_or("a2a"),
+        );
+        let id = host_ctx.message.id().to_owned();
+        call.handlers.insert(
+            id.clone(),
+            Handler::open_managed(
+                host,
+                cx,
+                host_ctx,
+                policy,
+                call.managed.clone(),
+                call.spawner.clone(),
+            ),
+        );
+        call.handler_id = Some(id);
         Ok(Completion::Done)
     }
 
@@ -544,8 +635,9 @@ impl Turn {
     ) -> Result<HandlerEvent, StorageError> {
         let lease = call.run.as_ref().and_then(Run::lease).cloned();
         let handler = call
-            .handler
-            .as_mut()
+            .handler_id
+            .as_ref()
+            .and_then(|id| call.handlers.get_mut(id))
             .ok_or_else(|| StorageError::Invalid("no A2A handler is open".into()))?;
         self.read_handler_event(handler, &mut call.run, lease.as_ref(), should_yield).await
     }
@@ -599,7 +691,19 @@ impl Turn {
                     let _ = write.reply.send(result.clone());
                     result?;
                 }
+                Some(Read::Live(report)) => {
+                    return Ok(HandlerEvent::Managed(Box::new(report)));
+                }
                 Some(Read::Checkpoint) => return Ok(HandlerEvent::Checkpoint),
+                Some(Read::Exact(output)) => {
+                    let result = match &self.publisher {
+                        Some(publisher) => publisher.exact(&output.task_id, &output.message).await,
+                        None => Err(lk_agents_abi::errors::HostError::new(
+                            "exact output requires a live A2A observer",
+                        )),
+                    };
+                    output.delivered.resolve(result);
+                }
                 Some(Read::Event(event)) => {
                     if let Some(publisher) = &self.publisher {
                         publisher.event(&event).await;
@@ -629,7 +733,8 @@ impl Turn {
     /// Closes the handler, if one is open: a running one is cancelled and its cleanup awaited
     /// within the host teardown bound.
     async fn close_handler(&self, call: &mut Call) {
-        let Some(handler) = call.handler.take() else { return };
+        let Some(id) = call.handler_id.take() else { return };
+        let Some(handler) = call.handlers.remove(&id) else { return };
         let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
         if !handler.close(self.clock.as_ref(), deadline).await {
             log::warn!(target: lk_agents_abi::LOG_TARGET, partition_key = self.partition_key.as_str(); "the handler did not settle within its deadline; its host task is still running");
@@ -756,13 +861,18 @@ mod lease_tests {
         let spawner = ProcessEnv::current_runtime().spawner;
         let turn =
             Turn::new(thread, "worker", "desk", host.clone(), clock, spawner, Default::default());
-        let handler = Handler::open(host, telemetry::Cx::NONE, context());
+        let handler = Handler::open(host, telemetry::Cx::NONE, context(), spawner().unwrap());
+        let (checkpoint, checkpoints) = checkpoint::channel();
         let mut call = Call {
             partition_key,
             holder,
             run: Some(run),
             lease: None,
-            handler: Some(handler),
+            handlers: [("test".into(), handler)].into(),
+            handler_id: Some("test".into()),
+            managed: Arc::new(handler::ManagedOwner::with_checkpoint(checkpoint)),
+            checkpoints,
+            deferred: std::collections::VecDeque::new(),
             submitted: None,
             spawner: spawner().unwrap(),
         };

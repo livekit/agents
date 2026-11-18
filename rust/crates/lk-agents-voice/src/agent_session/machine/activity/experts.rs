@@ -58,10 +58,16 @@ impl VoiceDriver {
             return false;
         }
         match update {
+            ToolUpdate::Progress { reply_required: false, .. } => return false,
             ToolUpdate::Progress { raw, .. } => {
                 running.updates += 1;
                 let occurrence = running.updates.into();
                 self.session.experts.progress(&output_id, occurrence, raw.clone());
+            }
+            ToolUpdate::Exact { text, call } => {
+                running.updates += 1;
+                let occurrence = running.updates.into();
+                self.session.experts.exact(&output_id, occurrence, text.clone(), call.clone());
             }
             ToolUpdate::Final { report } => match &report.outcome {
                 ToolOutcome::InputRequired { question, verbatim, .. } => {
@@ -126,15 +132,20 @@ impl VoiceDriver {
                 self.reply_to_held_responses(now);
                 return;
             }
-            let Some(presentation) = self.session.experts.next(floor) else { return };
+            let Some(presentation) = self.session.experts.next(floor) else {
+                return;
+            };
             match presentation {
                 Presentation::Progress { text, .. } => {
                     let instructions = format!("{PRESENT_PROGRESS}{text}");
                     self.reply_with_instructions(now, instructions, None, outside);
                 }
+                Presentation::Exact { text, call, .. } => {
+                    self.say_exact(now, text, call);
+                }
                 Presentation::Question { output_id, request_id, question, verbatim } => {
                     let speech = if verbatim {
-                        self.say_text(now, question, outside)
+                        self.say_tool_text(now, question, outside)
                     } else {
                         let instructions = format!("{ASK_IN_OWN_WORDS}{question}");
                         self.reply_with_instructions(now, instructions, None, outside)
@@ -145,6 +156,14 @@ impl VoiceDriver {
                             speech,
                             crate::experts::PendingRequest { output_id, request_id },
                         );
+                    } else if verbatim {
+                        self.session.experts.defer_question(&crate::experts::PendingRequest {
+                            output_id,
+                            request_id,
+                        });
+                        // The same unresolved occurrence may be retried after a TTS leg is
+                        // installed. Do not invent presentation or spin on this idle step.
+                        return;
                     }
                 }
                 Presentation::Outcome { output_id, outcome } => {
@@ -168,7 +187,9 @@ impl VoiceDriver {
             }
         }
         // The application replaced the record meanwhile: nothing is left to resolve.
-        let (Some(call), Some(pending)) = (call, pending) else { return };
+        let (Some(call), Some(pending)) = (call, pending) else {
+            return;
+        };
         let mut execution = answer(&call, outcome.into(), self.step.wall());
         let status = execution.end.unwrap_or(ToolEndStatus::Done);
         self.agent_turn_tool_ended(&call.call_id);
@@ -187,7 +208,7 @@ impl VoiceDriver {
         execution.output.id = pending;
         self.replace_items([ChatItem::FunctionCallOutput(execution.output)]);
         if let Some(Delivery::Say(text)) = execution.delivery {
-            self.say_text(now, text, VoiceRunParticipation::Outside);
+            self.say_tool_text(now, text, VoiceRunParticipation::Outside);
         } else if reply_required {
             self.reply_with_instructions(
                 now,
@@ -245,11 +266,17 @@ impl VoiceDriver {
 
 impl super::AgentActivity {
     pub(super) fn expert_tools(&self) -> Vec<ExpertTool> {
-        let Some(agent) = &self.toolset.agent else { return Vec::new() };
+        let Some(agent) = &self.toolset.agent else {
+            return Vec::new();
+        };
         let tools = &agent.definition().tools;
         tools
             .iter()
-            .filter_map(|t| Some(ExpertTool::new(t.remote.as_deref()?, &t.spec.name)))
+            .filter_map(|tool| match (&tool.remote, &tool.local_agent) {
+                (Some(id), None) => Some(ExpertTool::remote(id, &tool.spec.name)),
+                (None, Some(agent)) => Some(ExpertTool::local(agent, &tool.spec.name)),
+                _ => None,
+            })
             .collect()
     }
 }

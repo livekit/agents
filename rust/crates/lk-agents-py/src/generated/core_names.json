@@ -179,6 +179,7 @@
     "_core_playback_started",
     "_core_playback_withdraw_capture",
     "_core_realtime_connection_metrics",
+    "_core_remote_id",
     "_core_remote_token",
     "_core_room_connection_state_changed",
     "_core_room_disconnected",

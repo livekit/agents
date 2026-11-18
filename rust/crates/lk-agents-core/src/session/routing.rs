@@ -159,11 +159,25 @@ impl SessionConfig {
             }
             for item in &frame.history {
                 if let lk_agents_abi::ChatItem::FunctionCall(call) = item {
+                    if crate::tool_calls::provisional(call) {
+                        return Err(invalid(
+                            "a live local tool has no final outcome; its progress cannot be resumed",
+                        ));
+                    }
                     let completed = frame.history.iter().any(|item| matches!(item,
                         lk_agents_abi::ChatItem::FunctionCallOutput(output) if output.id == call.output_id()));
                     let local_child =
                         self.agents[&frame.agent_name].agent_tools.contains_key(&call.name);
-                    if !completed && !local_child {
+                    let remote_origin = frame.completed
+                        && frame.parent.is_some()
+                        && state.remote_agents.values().any(|remote| {
+                            remote.requests.values().any(|request| {
+                                request.origin.as_ref().is_some_and(|origin| {
+                                    origin.agent_id == frame.id.value && origin.call_id == call.id
+                                })
+                            })
+                        });
+                    if !completed && !local_child && !remote_origin {
                         return Err(invalid(
                             "an admitted tool has no recorded result; reconcile its outcome before resuming",
                         ));

@@ -177,6 +177,9 @@ pub mod diagnostics {
 
     /// A tool kept raising `ModelRetry` past its budget (`Retries.tools`): the reply ends.
     pub const TOOL_RETRIES_EXCEEDED: &str = "tool exceeded its max retries count, ending the reply";
+
+    pub const HISTORY_CONFLICT: &str = "voice history conflicts with storage";
+    pub const HISTORY_REBASED: &str = "voice history rebased from storage";
 }
 
 /// One session run, numbered by the driver; tags what the run owns.

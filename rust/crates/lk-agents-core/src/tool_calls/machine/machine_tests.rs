@@ -29,6 +29,7 @@ fn tool(mode: DuplicateMode, scope: DuplicateScope) -> FunctionToolInfo {
         duplicate_scope: scope,
         retries: None,
         remote: None,
+        local_agent: None,
     }
 }
 
@@ -145,7 +146,7 @@ fn cross_reply_requested_cancellation_does_not_become_an_unexpected_tool_cancel(
     let tools = [tool(DuplicateMode::Allow, DuplicateScope::Name)];
     let (mut calls, mut fx) = prepare(&tools, json!({}), json!({}), &[]);
     calls.request_cancellation(CallId(1));
-    assert!(!calls.body_settled(CallId(1), ToolOutcome::Cancelled, &mut fx));
+    assert!(!calls.body_settled(CallId(1), ToolOutcome::Cancelled.into(), &mut fx));
     assert!(calls.all_settled());
 }
 
@@ -165,6 +166,6 @@ fn requested_cancellation_does_not_authorize_a_sibling_with_a_reused_model_id() 
         &mut fx,
     ));
     calls.request_cancellation(CallId(1));
-    assert!(!calls.body_settled(CallId(1), ToolOutcome::Cancelled, &mut fx));
-    assert!(calls.body_settled(CallId(2), ToolOutcome::Cancelled, &mut fx));
+    assert!(!calls.body_settled(CallId(1), ToolOutcome::Cancelled.into(), &mut fx));
+    assert!(calls.body_settled(CallId(2), ToolOutcome::Cancelled.into(), &mut fx));
 }

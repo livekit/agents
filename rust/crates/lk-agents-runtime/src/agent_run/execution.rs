@@ -24,6 +24,17 @@ impl Reporter {
 
 pub(crate) enum Report {
     Core(AgentRunEvent),
+    Progress {
+        call: CallId,
+        message: String,
+        silent: bool,
+    },
+    ToolOutputRequested {
+        output: lk_agents_core::agent_run::ToolOutputId,
+        call: CallId,
+        text: String,
+        done: super::progress::Receipt,
+    },
     /// A failed model request, with the provider's error kept for the run's caller.
     LlmFailed {
         request: RequestId,
@@ -98,6 +109,10 @@ pub(crate) struct Execution {
     descriptions: BTreeMap<String, String>,
     pub outputs: BTreeMap<ValidationId, HostRef>,
     next_resource: u64,
+    pub(super) progress: super::Progress,
+    pub(super) tool_outputs:
+        BTreeMap<lk_agents_core::agent_run::ToolOutputId, super::output::Pending>,
+    pub(crate) output: Option<super::output::Target>,
     /// The provider error of the last failed model request.
     pub failure: Option<ProviderError>,
 }
@@ -108,6 +123,7 @@ impl Execution {
         spawner: Arc<dyn Spawner>,
         events_tx: Reporter,
         span: telemetry::ScopedSpan<telemetry::AgentRun>,
+        progress: super::Progress,
     ) -> Self {
         Self {
             invoker: HostInvoker::new(setup.entry.clone()),
@@ -123,21 +139,15 @@ impl Execution {
             descriptions: BTreeMap::new(),
             outputs: BTreeMap::new(),
             next_resource: 0,
+            progress,
+            tool_outputs: BTreeMap::new(),
+            output: None,
             failure: None,
         }
     }
 
     pub fn idle(&self) -> bool {
-        self.invoker.is_idle() && self.requests.is_empty()
-    }
-
-    pub fn progress(&self, operation: u64, message: String) -> Option<AgentRunEvent> {
-        self.operations.iter().find_map(|(work, op)| match work {
-            Work::Call(call) if *op == operation && self.invoker.live(*op).is_some() => {
-                Some(AgentRunEvent::ToolProgress { call: *call, message: message.clone() })
-            }
-            _ => None,
-        })
+        self.invoker.is_idle() && self.requests.is_empty() && self.tool_outputs.is_empty()
     }
 
     pub fn report(&mut self, report: Report) -> (AgentRunEvent, Option<serde_json::Value>) {
@@ -195,7 +205,19 @@ impl Execution {
             AgentRunEffect::ValidateOutput { validation, candidate } => {
                 self.validate_output(validation, candidate)
             }
+            AgentRunEffect::DeliverToolOutput { output, message } => {
+                self.deliver_output(output, *message)
+            }
+            AgentRunEffect::ToolOutputSettled { output, result } => {
+                self.settle_output(output, result)
+            }
             AgentRunEffect::Emit(event) => {
+                if let lk_agents_abi::agent::run::StreamEvent::Progress { message, silent, .. } =
+                    &event
+                    && let Some(target) = &self.output
+                {
+                    target.progress(message.clone(), *silent).await;
+                }
                 return Some(RunUpdate::Stream(event));
             }
             AgentRunEffect::ArgumentsRepaired { call_id, error, repaired } => {
@@ -334,6 +356,7 @@ impl Execution {
             function_call: function_call.clone(),
             call,
             started,
+            progress: self.progress.clone(),
         };
         self.invoke(Work::Call(call), Some(function_call), approval, move |inv, events| {
             run.run(inv, events)
@@ -403,6 +426,24 @@ impl Execution {
     pub(crate) fn adopt(&mut self, report: Report) -> (AgentRunEvent, Option<serde_json::Value>) {
         match report {
             Report::Core(event) => (event, None),
+            Report::Progress { call, message, silent } => {
+                (AgentRunEvent::ToolProgress { call, message, silent }, None)
+            }
+            Report::ToolOutputRequested { output, call, text, done } => {
+                let stream = self.output.as_ref().is_some_and(super::output::Target::is_stream);
+                if self.tool_outputs.contains_key(&output) {
+                    done.finish(Err(HostError::new(
+                        "the native exact-output identity is already admitted",
+                    )
+                    .into()));
+                    return (AgentRunEvent::Wake, None);
+                }
+                self.tool_outputs.insert(output, super::output::Pending::Admitted(done));
+                (
+                    AgentRunEvent::ToolOutputRequested { output, call: Some(call), text, stream },
+                    None,
+                )
+            }
             Report::LlmFailed { request, error } => {
                 self.failure = Some(error.clone());
                 (AgentRunEvent::LlmFailed { request, error }, None)
@@ -495,7 +536,9 @@ fn prepare_report(
     prepared: Result<Result<PreparedArguments, ToolArgumentError>, HostError>,
 ) -> Report {
     let failure = match prepared {
-        Ok(Ok(prepared)) => return Report::Prepared { call, resource, prepared },
+        Ok(Ok(prepared)) => {
+            return Report::Prepared { call, resource, prepared };
+        }
         Ok(Err(e)) => PrepareFailure::Refused(e.message),
         Err(e) => PrepareFailure::Host(e),
     };
@@ -525,13 +568,16 @@ struct ToolRun {
     call: CallId,
     /// When the span started, in its clock's nanoseconds.
     started: u64,
+    progress: super::Progress,
 }
 
 impl ToolRun {
     /// Ends the span before reporting; the call's update precedes its settlement.
     async fn run(self, inv: Invocation, events: Reporter) {
-        let Self { host, span, args, function_call, call, started } = self;
+        let Self { host, span, args, function_call, call, started, progress } = self;
+        let operation = progress.open(inv.operation, call);
         let ran = host.run_tool(span.cx(), &inv, &args).await;
+        operation.settle().await;
         match &ran {
             Ok(ran) => crate::telemetry::end_function_tool(
                 span,
@@ -547,7 +593,7 @@ impl ToolRun {
                 if let Some(usage) = usage {
                     events.send(Report::Core(AgentRunEvent::DelegateUsage { usage })).await;
                 }
-                AgentRunEvent::ToolSettled { call, outcome: report.outcome }
+                AgentRunEvent::ToolSettled { call, report }
             }
             Err(error) => AgentRunEvent::ToolLaunchFailed { call, error },
         };

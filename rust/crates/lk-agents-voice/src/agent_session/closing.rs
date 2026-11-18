@@ -130,7 +130,9 @@ impl VoiceDriver {
 
     /// The remaining agent's `on_exit`, then the drain.
     fn close_on_exit(&mut self, now: Ts, exit: Exit) {
-        let Some(hook) = exit.hook() else { return self.close_drain(now) };
+        let Some(hook) = exit.hook() else {
+            return self.close_drain(now);
+        };
         self.enter_close_phase(ClosePhase::Exiting { hook }, None, now);
     }
 
@@ -197,7 +199,9 @@ impl VoiceDriver {
     /// reported (or the bound released it), the trailing commit, the legs. Raised on each of those
     /// and on entering a phase, so each phase lands after the effects of the one before.
     pub(crate) fn advance_close(&mut self, now: Ts) {
-        let Some(Closing { phase, reason, .. }) = &self.session.closing else { return };
+        let Some(Closing { phase, reason, .. }) = &self.session.closing else {
+            return;
+        };
         match (*phase, *reason) {
             (ClosePhase::Draining, _) if self.activity.speech_queue_empty() => {
                 self.close_edge(now);
@@ -264,7 +268,9 @@ impl VoiceDriver {
 
     /// A close bound passed. `true` when the close moved to a later phase.
     pub(crate) fn close_tick(&mut self, now: Ts) -> bool {
-        let Some(phase) = self.session.close_phase() else { return false };
+        let Some(phase) = self.session.close_phase() else {
+            return false;
+        };
         match phase {
             ClosePhase::Draining => {
                 self.close_edge(now);
@@ -320,7 +326,9 @@ impl VoiceDriver {
         for &(leg, frames, silent, _) in &census.channels {
             self.record_trace(InputStep::LegFrames { leg, frames, silent });
         }
-        let Some((input, converted)) = census.input else { return };
+        let Some((input, converted)) = census.input else {
+            return;
+        };
         self.record_trace(InputStep::InputShape {
             sample_rate: input.sample_rate,
             num_channels: input.num_channels,
@@ -345,6 +353,14 @@ impl VoiceDriver {
             Command::Speech(SpeechCommand::Say { call, .. }) => (
                 SpeechKind::Say,
                 "a say() reached the session after it began closing: it never spoke",
+                call,
+            ),
+            Command::Speech(SpeechCommand::ToolUpdate {
+                update: crate::agent_session::ToolUpdate::Exact { call, .. },
+                ..
+            }) => (
+                SpeechKind::Say,
+                "an exact tool output reached the session after it began closing: it never spoke",
                 call,
             ),
             Command::Speech(SpeechCommand::GenerateReply(GenerateReplyRequest {

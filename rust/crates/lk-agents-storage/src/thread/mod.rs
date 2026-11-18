@@ -2,6 +2,8 @@ pub mod db;
 pub mod lease;
 mod partition;
 pub mod run;
+mod session_checkpoint;
+pub use session_checkpoint::SessionCheckpointData;
 pub mod schema;
 
 #[cfg(test)]

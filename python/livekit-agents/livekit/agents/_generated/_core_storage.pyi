@@ -178,7 +178,12 @@ class _core_ContextActivation:
     async def load_session(self) -> object | None:
         """A detached read of committed routing state; never starts an execution."""
     async def load_session_snapshot(self) -> str: ...
-    def declare_binding(self, context: object, store: object) -> BoundContext[object]: ...
+    def declare_binding(
+        self,
+        context: object,
+        store: object,
+        view: _core_PersistedSessionState | None,
+    ) -> BoundContext[object]: ...
     async def flush_bound_session(self, history: Sequence[ChatItem] | None) -> None: ...
     def set_session_sink(self, sink: _core_HandlerTurn) -> None:
         """The managed turn's checkpoint channel, owned by the run holding the lease."""

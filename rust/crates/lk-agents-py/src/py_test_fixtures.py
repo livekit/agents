@@ -78,6 +78,27 @@ def generated_module(name):
         return module
 
 
+def private_asyncio_module():
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    name = "livekit.agents._asyncio"
+    with _generated_fixture_lock:
+        module = sys.modules.get(name)
+        if module is None:
+            path = Path(__file__).parents[4] / "python/livekit-agents/livekit/agents/_asyncio.py"
+            spec = importlib.util.spec_from_file_location(name, path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            try:
+                spec.loader.exec_module(module)
+            except BaseException:
+                sys.modules.pop(name, None)
+                raise
+        return module
+
+
 def invocation():
     import asyncio
     import contextvars
@@ -225,6 +246,7 @@ def parentage():
 
 
 def streams():
+    closing = private_asyncio_module()
     import asyncio
     import contextvars
     import threading
@@ -282,6 +304,31 @@ def streams():
 
     tracked_returned = threading.Event()
     tracked_closed = threading.Event()
+    close_entered = threading.Event()
+    close_gate = asyncio.Event()
+    retained = []
+    callback_errors = []
+    loop.call_soon_threadsafe(
+        loop.set_exception_handler, lambda _loop, ctx: callback_errors.append(ctx)
+    )
+
+    class HeldClose:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            await gate.wait()
+            return "x"
+
+        async def aclose(self):
+            retained.append(asyncio.current_task() in closing._closing.get(loop, set()))
+            close_entered.set()
+            await close_gate.wait()
+            log.append("held closed")
+            tracked_closed.set()
+
+    def held_close():
+        return HeldClose()
 
     class Tracked:
         """A returned stream that records its close."""
@@ -373,6 +420,11 @@ def streams():
         open_tracked=open_tracked,
         tracked_returned=tracked_returned,
         tracked_closed=tracked_closed,
+        close_entered=close_entered,
+        close_gate=close_gate,
+        retained=retained,
+        callback_errors=callback_errors,
+        held_close=held_close,
         Duplex=Duplex,
         AsyncDuplex=AsyncDuplex,
         held_entered=held_entered,
@@ -911,6 +963,7 @@ def logging_handler():
 
 
 def install_node_types():
+    private_asyncio_module()
     import sys
     import types
 

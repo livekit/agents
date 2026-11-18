@@ -43,6 +43,14 @@ pub fn validate_voice(state: &SessionSnapshot, agent: &str) -> Result<(), Invali
 /// An unknown tool outcome cannot be made safe by changing the conversation's delivery mode.
 /// Reconcile the outcome before running a model against that saved context.
 pub fn validate_resume(history: &[ChatItem]) -> Result<(), Invalid> {
+    if history.iter().any(|item| {
+        matches!(item,
+        ChatItem::FunctionCall(call) if crate::tool_calls::provisional(call))
+    }) {
+        return Err(Invalid(
+            "a live local tool has no final outcome; its progress cannot be resumed".into(),
+        ));
+    }
     let facts: Vec<_> = history.iter().map(ItemFacts::of).collect();
     let answered: BTreeSet<_> = tool_pairs(&facts).into_iter().map(|(call, _)| call).collect();
     if facts.iter().enumerate().any(|(index, item)| {

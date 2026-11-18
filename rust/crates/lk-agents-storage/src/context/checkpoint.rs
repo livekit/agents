@@ -92,7 +92,7 @@ impl SessionCheckpoint for Checkpoint {
                     })
                 }
                 Scope::Voice { owner, released, history, .. } => {
-                    let written = owner.store.save_checkpoint(&owner.run_id, history.items).await;
+                    let written = owner.store.save_checkpoint(&owner.run_id, history).await;
                     let closed = owner.close().await;
                     let released = released.wait().await.map_err(|_| {
                         StorageError::Unavailable("the checkpoint release task ended".into())

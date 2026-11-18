@@ -82,6 +82,13 @@ pub fn validate(remote_id: &str, state: &RemoteAgentState) -> Result<(), RemoteE
         if id.is_empty() || id != &task.task.id || task.task.context_id.is_empty() {
             return Err(invalid("task index identity changed"));
         }
+        if task.terminal_event.is_some() {
+            super::observed(
+                state,
+                &RemoteTaskRef { task_id: id.clone(), context_id: task.task.context_id.clone() },
+            )?
+            .ok_or_else(|| invalid("accepted terminal observation is missing"))?;
+        }
         for input in task.input_requests.values() {
             if input.state == InputRequestState::Open
                 && task.task.status.state != lk_agents_abi::a2a_protocol::TaskState::InputRequired

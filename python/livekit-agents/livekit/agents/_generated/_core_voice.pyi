@@ -802,6 +802,17 @@ class VoiceSession:
         report: ToolReport,
     ) -> None:
         """`RunContext.update()` after the first (an `update` outcome), or a detached tool's end."""
+    async def tool_progress(
+        self,
+        invocation_id: str,
+        operation: int,
+        call_id: str,
+        report: ToolReport,
+    ) -> None: ...
+    async def tool_say(self, invocation_id: str, operation: int, call_id: str, text: str) -> None:
+        """Enqueue an exact output under the originating tool's native identity. The returned
+        awaitable only watches the independent say speech; dropping it never cancels that speech.
+        """
     def update_chat_ctx(self, items: Sequence[ChatItem]) -> None:
         """`Agent.update_chat_ctx()` on a running agent: replace the context."""
     async def interrupt(self, *, force: bool = False) -> None:

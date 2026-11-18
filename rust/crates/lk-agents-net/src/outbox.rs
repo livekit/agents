@@ -46,6 +46,12 @@ impl<T> Outbox<T> {
         !matches!(self.0.try_send(value), Err(mpsc::error::TrySendError::Full(_)))
     }
 
+    /// A checked output handoff. Unlike `try_send`, a receiver that left is not success.
+    /// This confirms only acceptance by this output boundary, never a later network/room peer.
+    pub fn try_handoff(&self, value: T) -> bool {
+        self.0.try_send(value).is_ok()
+    }
+
     /// The receiver left.
     pub fn is_closed(&self) -> bool {
         self.0.is_closed()

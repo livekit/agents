@@ -346,6 +346,7 @@ fn tool(name: &str) -> FunctionToolInfo {
         duplicate_scope: DuplicateScope::Name,
         retries: None,
         remote: None,
+        local_agent: None,
     }
 }
 
@@ -513,22 +514,27 @@ async fn a_tool_bodys_progress_streams_before_its_result() {
 }
 
 // Catches: pressure dropping progress, or an admission waiting forever after its run ends.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn progress_waits_for_capacity_and_ends_when_the_receiver_closes() {
     use futures_util::FutureExt as _;
     let (tx, mut rx) = mpsc::channel(1);
-    let progress = Progress(tx);
+    let owner = Arc::new(TaskSet::default());
+    let spawner: Arc<dyn Spawner> = Arc::new(lk_agents_net::task::TokioSpawner::current());
+    let progress = Progress::new("source".into(), tx, &owner, spawner);
+    let operation = progress.open(1, CallId(1));
     progress.report(1, "first".into()).await.unwrap();
-    let waiting = progress.report(1, "second".into());
-    tokio::pin!(waiting);
+    let mut waiting = progress.enqueue(1, "second".into(), false);
     assert!((&mut waiting).now_or_never().is_none());
-    assert_eq!(rx.recv().await.map(|(_, m)| m).as_deref(), Some("first"));
+    assert!(
+        matches!(rx.recv().await, Some((_, execution::Report::Progress { message, .. })) if message == "first")
+    );
     waiting.await.unwrap();
-    let waiting = progress.report(1, "after close".into());
-    tokio::pin!(waiting);
+    let mut waiting = progress.enqueue(1, "after close".into(), false);
     assert!((&mut waiting).now_or_never().is_none());
     drop(rx);
     assert!(waiting.await.is_err());
+    operation.settle().await;
+    assert!(owner.wait_empty(&RealClock::new(), None).await);
 }
 
 // Catches: a callback run without its call's invocation scope (or a scope leaking into another
@@ -715,6 +721,7 @@ async fn the_runner_refuses_an_invalid_definition_and_streams_a_run_to_its_resul
     .unwrap();
     let mut updates = runner
         .run(RunRequest {
+            output: None,
             tools_host: None,
             execution_id: None,
             invocation_id: "run_1".into(),

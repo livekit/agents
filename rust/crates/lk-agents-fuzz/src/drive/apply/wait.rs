@@ -181,7 +181,13 @@ impl Run {
                     }
                     one_task_turn().await;
                 }
-                return None;
+                // Session teardown can settle the exact receipt this caller awaits. Read
+                // that terminal value before reporting the owner gone.
+                return tokio::select! {
+                    biased;
+                    value = &mut done => Some(value),
+                    () = std::future::ready(()) => None,
+                };
             };
             if session.serving() {
                 while let Ok(event) = session.intake.try_recv() {

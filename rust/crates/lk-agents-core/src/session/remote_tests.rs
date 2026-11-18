@@ -30,6 +30,7 @@ fn working(state: &str) -> RemoteAgentState {
         request_id: "start".into(), request: A2ARequest::Send(serde_json::from_value(json!({
             "message":{"messageId":"business", "role":"ROLE_USER", "parts":[{"text":"Book a room"}]}
         })).unwrap()), streaming: true, origin: None, input_request: None,
+            control_scope: None,
     });
     apply(&mut remote, RemoteInput::DispatchStarted { request_id: "start".into() });
     observe(&mut remote, state);
@@ -51,6 +52,7 @@ fn prepare_cancel(remote: &mut RemoteAgentState) -> A2ARequest {
             streaming: false,
             origin: None,
             input_request: None,
+            control_scope: None,
         },
     );
     request
@@ -59,7 +61,7 @@ fn prepare_cancel(remote: &mut RemoteAgentState) -> A2ARequest {
 #[test]
 fn cancellation_recovery_reuses_the_exact_prepared_control_until_dispatch_may_have_started() {
     let mut remote = working("TASK_STATE_WORKING");
-    let target = SessionRecovery::Cancellation(task());
+    let target = SessionRecovery::Cancellation { task: task(), retry_after: None };
     assert_eq!(recover(&remote, &target).unwrap(), None);
     let request = prepare_cancel(&mut remote);
     apply(
@@ -70,6 +72,7 @@ fn cancellation_recovery_reuses_the_exact_prepared_control_until_dispatch_may_ha
             streaming: false,
             origin: None,
             input_request: None,
+            control_scope: None,
         },
     );
     let saved = remote.clone();
@@ -103,22 +106,40 @@ fn cancellation_recovery_checks_the_saved_context_and_never_starts_a_terminal_co
     let remote = working("TASK_STATE_WORKING");
     let mut foreign = task();
     foreign.context_id = "another-conversation".into();
-    assert!(recover(&remote, &SessionRecovery::Cancellation(foreign)).is_err());
+    assert!(
+        recover(&remote, &SessionRecovery::Cancellation { task: foreign, retry_after: None })
+            .is_err()
+    );
     let mut unknown = task();
     unknown.task_id = "another-task".into();
-    assert!(recover(&remote, &SessionRecovery::Cancellation(unknown)).is_err());
+    assert!(
+        recover(&remote, &SessionRecovery::Cancellation { task: unknown, retry_after: None })
+            .is_err()
+    );
     assert_eq!(
-        recover(&working("TASK_STATE_CANCELED"), &SessionRecovery::Cancellation(task())).unwrap(),
+        recover(
+            &working("TASK_STATE_CANCELED"),
+            &SessionRecovery::Cancellation { task: task(), retry_after: None }
+        )
+        .unwrap(),
         Some(RemoteRecovery::GetTask(task()))
     );
     assert!(
-        recover(&working("TASK_STATE_COMPLETED"), &SessionRecovery::Cancellation(task())).is_err()
+        recover(
+            &working("TASK_STATE_COMPLETED"),
+            &SessionRecovery::Cancellation { task: task(), retry_after: None }
+        )
+        .is_err()
     );
     let mut completed_after_prepare = working("TASK_STATE_WORKING");
     prepare_cancel(&mut completed_after_prepare);
     observe(&mut completed_after_prepare, "TASK_STATE_COMPLETED");
     assert_eq!(
-        recover(&completed_after_prepare, &SessionRecovery::Cancellation(task())).unwrap(),
+        recover(
+            &completed_after_prepare,
+            &SessionRecovery::Cancellation { task: task(), retry_after: None }
+        )
+        .unwrap(),
         Some(RemoteRecovery::GetTask(task()))
     );
 }
@@ -137,7 +158,11 @@ fn an_observed_cancellation_needs_no_control_but_still_requires_exact_task_ident
 #[test]
 fn terminal_observation_between_cancel_recovery_and_dispatch_prevents_a_control_send() {
     let mut remote = working("TASK_STATE_WORKING");
-    assert_eq!(recover(&remote, &SessionRecovery::Cancellation(task())).unwrap(), None);
+    assert_eq!(
+        recover(&remote, &SessionRecovery::Cancellation { task: task(), retry_after: None })
+            .unwrap(),
+        None
+    );
     observe(&mut remote, "TASK_STATE_COMPLETED");
     let mut state = SessionSnapshot::new("session".into(), "execution".into(), "desk".into());
     state.remote_agents.insert("booking".into(), remote);
@@ -156,6 +181,7 @@ fn terminal_observation_between_cancel_recovery_and_dispatch_prevents_a_control_
                     streaming: false,
                     origin: None,
                     input_request: None,
+                    control_scope: None,
                 },
             }
         )
@@ -180,4 +206,42 @@ fn terminal_observation_between_cancel_recovery_and_dispatch_prevents_a_control_
         .is_err()
     );
     assert_eq!(state, before, "terminal work cannot cross an unsent cancellation's I/O boundary");
+}
+
+#[test]
+fn observed_cancellation_blocks_a_prepared_task_message_before_its_first_dispatch() {
+    let mut remote = working("TASK_STATE_WORKING");
+    apply(
+        &mut remote,
+        RemoteInput::Prepare {
+            request_id: "correction".into(),
+            request: A2ARequest::Send(
+                serde_json::from_value(json!({
+                    "message":{"messageId":"correction", "role":"ROLE_USER", "taskId":"booking",
+                        "contextId":"trip", "parts":[{"text":"Actually Saturday"}]}
+                }))
+                .unwrap(),
+            ),
+            streaming: true,
+            origin: None,
+            input_request: None,
+            control_scope: None,
+        },
+    );
+    observe(&mut remote, "TASK_STATE_CANCELED");
+    let mut state = SessionSnapshot::new("session".into(), "execution".into(), "desk".into());
+    state.remote_agents.insert("booking".into(), remote);
+    let before = state.clone();
+    assert!(
+        super::apply(
+            &mut state,
+            RemoteCommand {
+                remote_id: "booking".into(),
+                endpoint: "https://booking.test".into(),
+                input: RemoteInput::DispatchStarted { request_id: "correction".into() },
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(state, before, "terminal work cannot cross a prepared message's I/O boundary");
 }

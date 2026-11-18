@@ -181,8 +181,12 @@ fn detached_tool_updates_get_distinct_provider_safe_call_ids() {
     };
 
     for update in [
-        ToolUpdate::Progress { message: "first".into(), raw: "first".into() },
-        ToolUpdate::Progress { message: "second".into(), raw: "second".into() },
+        ToolUpdate::Progress { message: "first".into(), raw: "first".into(), reply_required: true },
+        ToolUpdate::Progress {
+            message: "second".into(),
+            raw: "second".into(),
+            reply_required: true,
+        },
         ToolUpdate::Final { report: done.into() },
     ] {
         driver.on_tool_update(Ts::ZERO, "run".into(), 1, "reused".into(), update);
@@ -207,7 +211,11 @@ fn detached_tool_updates_get_distinct_provider_safe_call_ids() {
 fn queued_progress_and_final_reports_cannot_target_a_reused_call_id() {
     let mut driver = crate::agent_session::tests::driver();
     driver.activity.tools.running.push(running("new-run", 2));
-    let progress = || ToolUpdate::Progress { message: "working".into(), raw: "working".into() };
+    let progress = || ToolUpdate::Progress {
+        message: "working".into(),
+        raw: "working".into(),
+        reply_required: true,
+    };
     driver.on_tool_update(Ts::ZERO, "old-run".into(), 2, "reused".into(), progress());
     driver.on_tool_update(
         Ts::ZERO,
@@ -235,7 +243,7 @@ fn simultaneous_same_call_ids_use_the_exact_update_and_terminal_owner() {
         "new-run".into(),
         2,
         "reused".into(),
-        ToolUpdate::Progress { message: "new".into(), raw: "new".into() },
+        ToolUpdate::Progress { message: "new".into(), raw: "new".into(), reply_required: true },
     );
     assert!(driver.activity.tools.running[0].early.is_empty());
     assert_eq!(driver.activity.tools.running[1].early.len(), 1);
@@ -271,7 +279,7 @@ fn an_experts_question_keeps_the_exact_body_live_for_answer_progress_and_outcome
     let mut body = running("expert-run", 4);
     body.updates = 1;
     driver.activity.tools.running.push(body);
-    let tools = [ExpertTool::new("https://expert.invalid/agent", "lookup")];
+    let tools = [ExpertTool::remote("https://expert.invalid/agent", "lookup")];
     driver.session.experts.open("new-call-item_out", tools[0].clone());
     driver.session.experts.recorded("new-call-item_out");
     driver.on_tool_update(
@@ -300,7 +308,11 @@ fn an_experts_question_keeps_the_exact_body_live_for_answer_progress_and_outcome
         "expert-run".into(),
         4,
         "reused".into(),
-        ToolUpdate::Progress { message: "continued".into(), raw: "continued".into() },
+        ToolUpdate::Progress {
+            message: "continued".into(),
+            raw: "continued".into(),
+            reply_required: true,
+        },
     );
     assert!(
         matches!(driver.session.experts.next(floor()), Some(Presentation::Progress { text, .. }) if text == "continued")

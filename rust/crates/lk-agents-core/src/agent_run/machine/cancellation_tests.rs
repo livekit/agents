@@ -27,17 +27,22 @@ fn siblings_are_recognised_on_arrival_and_recorded_in_model_order() {
     d.reply("", &[("slow", json!({"x": "1"})), ("fast", json!({"x": "2"}))]);
     prepare_all(&mut d);
     let calls: Vec<CallId> = d.executes().iter().map(|(c, ..)| *c).collect();
-    let fx = d.send(AgentRunEvent::ToolProgress { call: calls[1], message: "halfway".into() });
+    let fx = d.send(AgentRunEvent::ToolProgress {
+        call: calls[1],
+        message: "halfway".into(),
+        silent: false,
+    });
     assert!(
         matches!(&fx[..], [AgentRunEffect::Emit(StreamEvent::Progress { tool_name, .. })] if tool_name == "fast")
     );
-    let fx = d.send(AgentRunEvent::ToolSettled { call: calls[1], outcome: value("fast done") });
+    let fx =
+        d.send(AgentRunEvent::ToolSettled { call: calls[1], report: (value("fast done")).into() });
     assert!(
         matches!(&fx[..], [AgentRunEffect::Emit(StreamEvent::ToolResult { tool_name, output, .. })]
         if tool_name == "fast" && output == "fast done")
     );
     assert_eq!(d.requests(), 1, "the step waits for its stalled sibling");
-    d.send(AgentRunEvent::ToolSettled { call: calls[0], outcome: value("slow done") });
+    d.send(AgentRunEvent::ToolSettled { call: calls[0], report: (value("slow done")).into() });
     let (_, ctx, _) = d.request();
     assert_eq!(
         transcript(&ctx.items)[2..],
@@ -87,7 +92,7 @@ fn duplicate_calls_follow_the_tool_policy() {
     let (calls, executed, _, mut d) =
         run(DuplicateMode::Reject, DuplicateScope::Name, same.clone());
     assert_eq!(executed, [calls[0]]);
-    d.send(AgentRunEvent::ToolSettled { call: calls[0], outcome: value("found") });
+    d.send(AgentRunEvent::ToolSettled { call: calls[0], report: (value("found")).into() });
     d.send(AgentRunEvent::ToolHandlingTemplateRendered { call: calls[1], text: Ok(None) });
     let (_, ctx, _) = d.request();
     assert!(
@@ -111,7 +116,7 @@ fn duplicate_calls_follow_the_tool_policy() {
         Some(ToolTemplate::DuplicateReject { function_name, fnc_calls_json, .. })
             if function_name == "lookup" && fnc_calls_json.len() == 1
     ));
-    d.send(AgentRunEvent::ToolSettled { call: calls[0], outcome: value("found") });
+    d.send(AgentRunEvent::ToolSettled { call: calls[0], report: (value("found")).into() });
     d.send(AgentRunEvent::ToolHandlingTemplateRendered {
         call: calls[1],
         text: Ok(Some("Still looking.".into())),
@@ -122,8 +127,8 @@ fn duplicate_calls_follow_the_tool_policy() {
     let (calls, executed, cancelled, mut d) =
         run(DuplicateMode::Replace, DuplicateScope::Name, same.clone());
     assert_eq!((executed, cancelled), (calls.clone(), vec![calls[0]]));
-    d.send(AgentRunEvent::ToolSettled { call: calls[0], outcome: ToolOutcome::Cancelled });
-    d.send(AgentRunEvent::ToolSettled { call: calls[1], outcome: value("found") });
+    d.send(AgentRunEvent::ToolSettled { call: calls[0], report: (ToolOutcome::Cancelled).into() });
+    d.send(AgentRunEvent::ToolSettled { call: calls[1], report: (value("found")).into() });
     assert_eq!(d.requests(), 2, "the replaced original settles before the step continues");
 
     let (calls, executed, ..) = run(DuplicateMode::Confirm, DuplicateScope::Name, same.clone());
@@ -155,7 +160,10 @@ fn cancel_settles_once_started_work_reports_back() {
         ]
     );
     assert!(d.finished().is_none());
-    d.send(AgentRunEvent::ToolSettled { call: calls[0].0, outcome: ToolOutcome::Cancelled });
+    d.send(AgentRunEvent::ToolSettled {
+        call: calls[0].0,
+        report: (ToolOutcome::Cancelled).into(),
+    });
     let fx = d.send(AgentRunEvent::ToolPrepared {
         call: calls[1].0,
         prepared: ResourceId(99),
@@ -171,7 +179,8 @@ fn cancel_settles_once_started_work_reports_back() {
     );
     assert!(d.executes().len() == 1 && d.run.wake_at().is_none());
     assert!(
-        d.send(AgentRunEvent::ToolSettled { call: calls[0].0, outcome: value("late") }).is_empty()
+        d.send(AgentRunEvent::ToolSettled { call: calls[0].0, report: (value("late")).into() })
+            .is_empty()
     );
 }
 
@@ -203,7 +212,11 @@ fn every_arrival_order_settles_the_same_history_once() {
                     d.prepared(call, json!({}));
                 }
                 1 => {
-                    d.send(AgentRunEvent::ToolProgress { call, message: "working".into() });
+                    d.send(AgentRunEvent::ToolProgress {
+                        call,
+                        message: "working".into(),
+                        silent: false,
+                    });
                 }
                 _ => {
                     let outcome = if call.0 % 2 == 0 {
@@ -211,7 +224,7 @@ fn every_arrival_order_settles_the_same_history_once() {
                     } else {
                         value(&format!("r{}", call.0))
                     };
-                    d.send(AgentRunEvent::ToolSettled { call, outcome });
+                    d.send(AgentRunEvent::ToolSettled { call, report: outcome.into() });
                 }
             }
             if stage == 2 {
@@ -277,7 +290,7 @@ fn waiting_for_refusal_template() -> (Driver, CallId) {
         effect,
         AgentRunEffect::RenderToolHandlingTemplate { call, .. } if *call == calls[1].0
     )));
-    driver.send(AgentRunEvent::ToolSettled { call: calls[0].0, outcome: value("found") });
+    driver.send(AgentRunEvent::ToolSettled { call: calls[0].0, report: (value("found")).into() });
     (driver, calls[1].0)
 }
 
@@ -361,7 +374,7 @@ fn interrupted_snapshots_preserve_tool_pairs() {
     d.reply("On it.", &[("charge", json!({"x": "1"})), ("ship", json!({"x": "2"}))]);
     prepare_all(&mut d);
     let calls: Vec<CallId> = d.executes().iter().map(|(c, ..)| *c).collect();
-    d.send(AgentRunEvent::ToolSettled { call: calls[0], outcome: value("charged") });
+    d.send(AgentRunEvent::ToolSettled { call: calls[0], report: (value("charged")).into() });
 
     let snapshot = d.run.progress_history();
     assert_eq!(
@@ -375,7 +388,7 @@ fn interrupted_snapshots_preserve_tool_pairs() {
         "the finished pair and the running call, with no invented result"
     );
     d.send(AgentRunEvent::Cancel);
-    d.send(AgentRunEvent::ToolSettled { call: calls[1], outcome: ToolOutcome::Cancelled });
+    d.send(AgentRunEvent::ToolSettled { call: calls[1], report: (ToolOutcome::Cancelled).into() });
     assert_eq!(d.finished(), Some(&Err(RunError::Cancelled)));
 
     let resumed = Driver::new(text_agent(tools()), "did it go through?", snapshot);

@@ -47,11 +47,24 @@ struct Service {
     invalid_unary_delta: bool,
     cancel_reply: CancelReply,
     cancellations: Mutex<u32>,
+    gets: Mutex<u32>,
+    context_id: Option<String>,
+    unknown_cancel: bool,
+    authorizations: Mutex<Vec<String>>,
+    gated_reconciliation: Mutex<Option<CancelGate>>,
+    gated_card: Mutex<Option<CancelGate>>,
+    task_snapshot: Mutex<Option<a2a::Task>>,
     canceled: Mutex<bool>,
     gated_cancel: Mutex<Option<CancelGate>>,
     /// Recovery may remain unavailable until a fresh caller acquires the conversation.
     fail_reconciliation: Mutex<bool>,
     stalled_reconciliation: Mutex<Option<lk_agents_runtime::net::signal::Producer<Option<()>>>>,
+}
+
+impl Service {
+    fn context(&self) -> &str {
+        self.context_id.as_deref().unwrap_or("trip")
+    }
 }
 
 impl HttpExchangePort for Service {
@@ -64,9 +77,19 @@ impl HttpExchangePort for Service {
         attempt: u32,
     ) -> BoxFuture<'a, Result<HttpResponse, AttemptFailure>> {
         Box::pin(async move {
+            if let Some((_, token)) =
+                request.headers.iter().find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            {
+                self.authorizations.lock().push(token.clone());
+            }
             reporter.report((attempt, Sent::Connected)).await;
             reporter.report((attempt, Sent::RequestWritten)).await;
             let payload = if method == Method::GET {
+                let gate = self.gated_card.lock().take();
+                if let Some(gate) = gate {
+                    gate.started.resolve(());
+                    gate.release.wait().await.unwrap();
+                }
                 json!({"name":"booking","description":"Book a seat","version":"1",
                     "supportedInterfaces":[{"url":format!("{ENDPOINT}/rpc"),"protocolBinding":"JSONRPC","protocolVersion":"1.0"}],
                     "capabilities":{"streaming":!self.invalid_unary_delta},"defaultInputModes":["text/plain"],"defaultOutputModes":["text/plain"],"skills":[]})
@@ -92,7 +115,7 @@ impl HttpExchangePort for Service {
                         self.messages.lock().push(send.message);
                         if self.invalid_unary_delta {
                             json!({"jsonrpc":"2.0","id":rpc.id,"result":{"statusUpdate":{
-                                "taskId":"booking","contextId":"trip","status":{"state":"TASK_STATE_COMPLETED"}
+                                "taskId":"booking","contextId":self.context(),"status":{"state":"TASK_STATE_COMPLETED"}
                             }}})
                         } else if self.direct_reply {
                             json!({"jsonrpc":"2.0","id":rpc.id,"result":{"message":{
@@ -107,12 +130,18 @@ impl HttpExchangePort for Service {
                                 ));
                             }
                             json!({"jsonrpc":"2.0","id":rpc.id,"result":{"task":{
-                                "id":"booking","contextId":"trip","status":{"state":"TASK_STATE_INPUT_REQUIRED",
+                                "id":"booking","contextId":self.context(),"status":{"state":"TASK_STATE_INPUT_REQUIRED",
                                 "message":{"messageId":"date","role":"ROLE_AGENT","parts":[{"text":"Which day?"}]}}
                             }}})
                         }
                     }
                     a2a::methods::GET_TASK => {
+                        *self.gets.lock() += 1;
+                        let gate = self.gated_reconciliation.lock().take();
+                        if let Some(gate) = gate {
+                            gate.started.resolve(());
+                            gate.release.wait().await.unwrap();
+                        }
                         let stalled = self.stalled_reconciliation.lock().take();
                         if let Some(started) = stalled {
                             started.resolve(());
@@ -131,22 +160,27 @@ impl HttpExchangePort for Service {
                         } else {
                             "TASK_STATE_INPUT_REQUIRED"
                         };
-                        json!({"jsonrpc":"2.0","id":rpc.id,"result":{
-                            "id":"booking","contextId":"trip","status":{"state":state},
-                            "history":self.messages.lock().clone(),"artifacts":booked.then(|| json!([{"artifactId":"receipt","parts":[{"text":"Booked"}]}]))
-                        }})
+                        let snapshot = self.task_snapshot.lock().clone();
+                        if let Some(task) = snapshot {
+                            json!({"jsonrpc":"2.0","id":rpc.id,"result":task})
+                        } else {
+                            json!({"jsonrpc":"2.0","id":rpc.id,"result":{
+                                "id":"booking","contextId":self.context(),"status":{"state":state},
+                                "history":self.messages.lock().clone(),"artifacts":booked.then(|| json!([{"artifactId":"receipt","parts":[{"text":"Booked"}]}]))
+                            }})
+                        }
                     }
                     a2a::methods::CANCEL_TASK => {
                         let params = rpc.params.unwrap();
                         assert_eq!(params["id"], "booking");
-                        assert_eq!(params["contextId"], "trip");
+                        assert_eq!(params["contextId"], self.context());
                         *self.cancellations.lock() += 1;
                         match self.cancel_reply {
                             CancelReply::Refused => json!({"jsonrpc":"2.0","id":rpc.id,
                                 "error":{"code":a2a::error_code::TASK_NOT_CANCELABLE,
                                     "message":"Booking is protected","data":{"stage":"booking"}}}),
                             CancelReply::Confirmed | CancelReply::Lost => {
-                                *self.canceled.lock() = true;
+                                *self.canceled.lock() = !self.unknown_cancel;
                                 let gate = self.gated_cancel.lock().take();
                                 if let Some(gate) = gate {
                                     gate.started.resolve(());
@@ -159,7 +193,7 @@ impl HttpExchangePort for Service {
                                     ));
                                 }
                                 json!({"jsonrpc":"2.0","id":rpc.id,"result":{
-                                    "id":"booking","contextId":"trip",
+                                    "id":"booking","contextId":self.context(),
                                     "status":{"state":"TASK_STATE_CANCELED"}
                                 }})
                             }
@@ -393,7 +427,12 @@ fn message(id: &str, text: &str, task: bool) -> a2a::Message {
 }
 
 fn environment(clock: Arc<dyn Clock>) -> Arc<Env> {
-    super::environment(clock, vec![(Callback::LlmOpen, Fault::Hang)])
+    let mut env = super::environment(clock, vec![(Callback::LlmOpen, Fault::Hang)]);
+    Arc::get_mut(&mut env)
+        .expect("the fixture has not published its environment")
+        .process
+        .remote_control = Some(lk_agents_runtime::delegation::remote::control::cancel);
+    env
 }
 
 async fn owner(
@@ -431,6 +470,7 @@ async fn owner(
     );
     let updates = runner
         .run(TextSessionRequest {
+            output: None,
             session_sink: Some(binding.clone()),
             session_id: "conversation".into(),
             id_seed: Some(23),
@@ -463,6 +503,7 @@ impl lk_agents_abi::a2a::remote::DelegationHost for Presenter {
         _: &'a lk_agents_abi::invoke::CallContext,
         _: Option<String>,
         _: serde_json::Map<String, Value>,
+        _: bool,
     ) -> BoxFuture<'a, Result<(), HostError>> {
         Box::pin(async { Ok(()) })
     }
@@ -574,6 +615,7 @@ async fn interact(
                 structured: false,
                 history: Vec::new(),
                 shared: None,
+                configured_token: None,
                 live: presenter.answer.is_some(),
                 host: Arc::new(presenter),
                 context: Default::default(),
@@ -588,23 +630,27 @@ async fn interact(
     result
 }
 
+fn call() -> ChatItem {
+    ChatItem::FunctionCall(lk_agents_abi::FunctionCall {
+        id: origin().call_id,
+        call_id: "provider-call".into(),
+        name: "booking".into(),
+        arguments: "{}".into(),
+        created_at: std::time::UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    })
+}
+
 fn interaction() -> lk_agents_runtime::delegation::remote::RemoteInteraction {
     use lk_agents_abi::a2a::remote::RemoteInteraction as _;
     lk_agents_runtime::delegation::remote::RemoteInteraction::new(
         ENDPOINT.into(),
-        "booking".into(),
-        ChatItem::FunctionCall(lk_agents_abi::FunctionCall {
-            id: origin().call_id,
-            call_id: "provider-call".into(),
-            name: "booking".into(),
-            arguments: "{}".into(),
-            created_at: std::time::UNIX_EPOCH,
-            extra: Default::default(),
-            group_id: None,
-        }),
+        call(),
         String::new(),
         String::new(),
         String::new(),
+        None,
     )
     .unwrap()
 }
@@ -645,6 +691,7 @@ async fn a_fresh_owner_dispatches_an_unsent_intent_once_with_its_original_messag
                 streaming: true,
                 origin: Some(origin()),
                 input_request: None,
+                control_scope: None,
             },
         })
         .await
@@ -746,6 +793,7 @@ async fn owner_shutdown_releases_a_stalled_reconciliation_without_canceling_busi
             structured: false,
             history: Vec::new(),
             shared: None,
+            configured_token: None,
             live: true,
             host: Arc::new(Presenter {
                 answer: Some("Friday".into()),
@@ -898,13 +946,19 @@ async fn reconcile_cancellation(cancel_reply: CancelReply) {
     .unwrap();
     let (second, updates, binding, view) = owner(&env, store.clone()).await;
     let restored = view._snapshot_data().unwrap().unwrap();
-    assert_eq!(
-        recovery(&restored.remote_agents[ENDPOINT], "cancel").unwrap(),
-        RemoteRecovery::GetTask(RemoteTaskRef {
-            task_id: task.id.clone(),
-            context_id: task.context_id.clone()
-        })
-    );
+    let recovered = recovery(&restored.remote_agents[ENDPOINT], "cancel").unwrap();
+    match cancel_reply {
+        CancelReply::Confirmed => assert!(matches!(recovered,
+            RemoteRecovery::Observed(response) if matches!(response.as_ref(),
+                a2a::SendMessageResponse::Task(task) if task.status.state == a2a::TaskState::Canceled))),
+        CancelReply::Refused | CancelReply::Lost => assert_eq!(
+            recovered,
+            RemoteRecovery::GetTask(RemoteTaskRef {
+                task_id: task.id.clone(),
+                context_id: task.context_id.clone()
+            })
+        ),
+    }
     let client = AgentClient::with_transport(
         ENDPOINT.into(),
         None,
@@ -1058,3 +1112,9 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
 
 #[path = "remote_cancel_tests.rs"]
 mod bound_cancellation;
+
+#[path = "remote_terminal_tests.rs"]
+mod terminal_observation;
+
+#[path = "remote_child_tests.rs"]
+mod completed_child;

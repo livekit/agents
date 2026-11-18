@@ -20,14 +20,14 @@ pub mod remote;
 mod tests;
 mod views;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct Envelope {
     version: u32,
     #[serde(flatten)]
     state: State,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum State {
     Empty,
@@ -42,11 +42,25 @@ enum State {
 pub struct SessionState(
     Arc<Mutex<Envelope>>,
     Arc<Mutex<Option<Weak<dyn lk_agents_abi::session::SessionCommands>>>>,
+    Arc<Mutex<Option<crate::context::store::ContextStore>>>,
+    lk_agents_net::env::ProcessStamp,
 );
 
 impl SessionState {
     pub(crate) fn from_value(value: Value) -> Result<Self, StorageError> {
-        Ok(Self(Arc::new(Mutex::new(decode(value)?)), Arc::default()))
+        Ok(Self(
+            Arc::new(Mutex::new(decode(value)?)),
+            Arc::default(),
+            Arc::default(),
+            lk_agents_net::env::ProcessStamp::current(),
+        ))
+    }
+
+    /// Read before touching any inherited mutex or native control handle.
+    pub(crate) fn ensure_control_process(&self) -> Result<(), StorageError> {
+        self.3.check().map_err(|_| invalid(
+            "an inherited session view cannot control tasks; reconstruct it from a detached snapshot and bind a current-process store",
+        ))
     }
 
     pub(crate) fn assign(&self, other: &Self) {
@@ -69,10 +83,67 @@ impl SessionState {
         Arc::ptr_eq(&self.0, &other.0)
     }
 
+    /// A late old control cannot publish over a view explicitly rebound to a new store.
+    pub(crate) fn publish_control(
+        &self,
+        store: &crate::context::store::ContextStore,
+        checked: &Self,
+    ) {
+        if self.ensure_control_process().is_err() || store.ensure_control_process().is_err() {
+            return;
+        }
+        let next = checked.0.lock().clone();
+        let bound = self.2.lock();
+        if !bound.as_ref().is_some_and(|bound| bound.same_activation(store)) {
+            return;
+        }
+        let previous = std::mem::replace(&mut *self.0.lock(), next);
+        drop(bound);
+        drop(previous);
+    }
+
+    fn control_unchanged(
+        &self,
+        store: &crate::context::store::ContextStore,
+        expected: &Envelope,
+    ) -> bool {
+        if self.ensure_control_process().is_err() || store.ensure_control_process().is_err() {
+            return false;
+        }
+        let bound = self.2.lock();
+        bound.as_ref().is_some_and(|bound| bound.same_activation(store))
+            && *self.0.lock() == *expected
+    }
+
+    /// A joined caller adopts committed readback only while its exact original data and
+    /// store binding remain unchanged. A newer owner checkpoint or explicit edit wins.
+    fn publish_control_if(
+        &self,
+        store: &crate::context::store::ContextStore,
+        expected: &Envelope,
+        checked: &Self,
+    ) {
+        if self.ensure_control_process().is_err() || store.ensure_control_process().is_err() {
+            return;
+        }
+        let next = checked.0.lock().clone();
+        let bound = self.2.lock();
+        if !bound.as_ref().is_some_and(|bound| bound.same_activation(store)) {
+            return;
+        }
+        let mut current = self.0.lock();
+        let previous =
+            if *current == *expected { Some(std::mem::replace(&mut *current, next)) } else { None };
+        drop(current);
+        drop(bound);
+        drop(previous);
+    }
+
     pub(crate) fn bind_commands(
         &self,
         commands: Weak<dyn lk_agents_abi::session::SessionCommands>,
     ) -> Result<(), StorageError> {
+        self.ensure_control_process()?;
         let mut bound = self.1.lock();
         if let Some(previous) = bound.as_ref()
             && previous.strong_count() != 0
@@ -84,8 +155,41 @@ impl SessionState {
         Ok(())
     }
 
-    pub(crate) fn unbind_commands(&self) {
-        self.1.lock().take();
+    pub(crate) fn commands(
+        &self,
+    ) -> Result<Option<Arc<dyn lk_agents_abi::session::SessionCommands>>, StorageError> {
+        self.ensure_control_process()?;
+        Ok(self.1.lock().as_ref().and_then(Weak::upgrade))
+    }
+
+    pub(crate) fn bind_control(
+        &self,
+        store: crate::context::store::ContextStore,
+    ) -> Result<(), StorageError> {
+        self.ensure_control_process()?;
+        store.ensure_control_process()?;
+        let mut bound = self.2.lock();
+        if let Some(previous) = bound.as_ref()
+            && !previous.same_activation(&store)
+            && previous.ensure_control_process().is_ok()
+            && !lk_agents_abi::storage::context::ContextActivation::closed(previous)
+        {
+            return Err(invalid("this session view is already bound to another context store"));
+        }
+        let previous = bound.replace(store);
+        drop(bound);
+        drop(previous);
+        Ok(())
+    }
+
+    pub(crate) fn unbind_commands(&self, store: &crate::context::store::ContextStore) {
+        if self.ensure_control_process().is_err() || store.ensure_control_process().is_err() {
+            return;
+        }
+        let bound = self.2.lock();
+        if bound.as_ref().is_some_and(|bound| bound.same_activation(store)) {
+            self.1.lock().take();
+        }
     }
 }
 
@@ -120,7 +224,7 @@ fn decode(value: Value) -> Result<Envelope, StorageError> {
     Ok(envelope)
 }
 
-pub(crate) fn snapshot_value(state: SessionSnapshot) -> Result<Value, StorageError> {
+pub fn snapshot_value(state: SessionSnapshot) -> Result<Value, StorageError> {
     serde_json::to_value(Envelope {
         version: 1,
         state: State::Conversation { state: Box::new(state), pending_user_turns: Vec::new() },

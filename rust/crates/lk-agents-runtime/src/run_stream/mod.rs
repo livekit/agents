@@ -13,17 +13,21 @@ use lk_agents_abi::errors::{HostError, Invalid};
 use lk_agents_abi::text_session::TextSessionDelivery;
 use lk_agents_abi::usage::Usage;
 use lk_agents_abi::{BoxFuture, Spawner};
+use lk_agents_abi::{ChatMessage, errors::ProviderError};
 use lk_agents_core::run_stream::{
     Stream as Policy, View,
     projection::{Item, Projection},
 };
 use lk_agents_net::{env::ProcessEnv, signal, task::TaskSet};
 use parking_lot::Mutex;
-use std::sync::{Arc, OnceLock};
+use std::collections::BTreeMap;
+use std::sync::{Arc, OnceLock, Weak};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
 type Outcome = Result<StreamOutcome, StreamError>;
+type ExactDelivery = signal::Producer<Option<Result<(), ProviderError>>>;
+
 pub struct RunStream(Arc<Inner>);
 
 struct Inner {
@@ -40,9 +44,46 @@ struct Inner {
     settle: Mutex<Option<signal::Producer<Option<()>>>>,
     closed: signal::Cell<Option<()>>,
     tasks: Arc<TaskSet>,
+    exact_outputs: Mutex<BTreeMap<String, ExactDelivery>>,
+}
+
+/// Weak adapter to this stream's existing accepted-read boundary, never a second consumer.
+#[derive(Clone)]
+pub(crate) struct Output(Weak<Inner>);
+impl Output {
+    pub(crate) fn prepare(
+        &self,
+        message: ChatMessage,
+    ) -> BoxFuture<'static, Result<(), ProviderError>> {
+        let Some(inner) = self.0.upgrade() else {
+            return Box::pin(async { Err(output_ended()) });
+        };
+        let (done, receipt) = signal::once();
+        {
+            let mut outputs = inner.exact_outputs.lock();
+            if !inner.policy.lock().accepts_output() {
+                return Box::pin(async {
+                    Err(HostError::new(
+                        "exact tool output requires a live voice, text stream or A2A output",
+                    )
+                    .into())
+                });
+            }
+            let previous = outputs.insert(message.id, done);
+            assert!(previous.is_none(), "core exact output IDs are unique within their source");
+        }
+        Box::pin(async move { receipt.wait().await.unwrap_or_else(|_| Err(output_ended())) })
+    }
+}
+fn output_ended() -> ProviderError {
+    HostError::new("the exact output's stream delivery boundary has ended").into()
 }
 
 impl RunStream {
+    pub(crate) fn output(&self) -> crate::agent_run::output::Target {
+        crate::agent_run::output::Target::Stream(Output(Arc::downgrade(&self.0)))
+    }
+
     /// Reserve the binding before starting a runner. Failure still owns resource settlement.
     pub(crate) fn bind(
         &self,
@@ -71,12 +112,35 @@ impl RunStream {
 }
 
 impl Inner {
+    fn fail_outputs(&self) {
+        let pending = std::mem::take(&mut *self.exact_outputs.lock());
+        for (_, done) in pending {
+            done.resolve(Err(output_ended()));
+        }
+    }
+    fn accept_output(&self, id: &str, accepted: bool) {
+        let done = self.exact_outputs.lock().remove(id);
+        if let Some(done) = done {
+            done.resolve(if accepted {
+                Ok(())
+            } else {
+                Err(HostError::new(
+                    "exact tool output requires a live voice, text stream or A2A output",
+                )
+                .into())
+            });
+        }
+    }
+
     fn finish(self: &Arc<Self>, outcome: Outcome) {
         if !self.policy.lock().close() {
             return;
         }
         self.closing.cancel();
-        let Some(settle) = self.settle.lock().take() else { return };
+        self.fail_outputs();
+        let Some(settle) = self.settle.lock().take() else {
+            return;
+        };
         let inner = self.clone();
         let spawner = self.spawner.get().expect("bound stream owns its spawner");
         self.tasks.spawn_settling(&**spawner, "run stream settlement", settle, async move {
@@ -164,6 +228,13 @@ impl Inner {
             };
             match next {
                 Ok(Some(Message::Event(event))) => {
+                    if matches!(view, View::Result)
+                        && let lk_agents_abi::agent::run::StreamEvent::TextDelta {
+                            message_id, ..
+                        } = &event.event
+                    {
+                        self.accept_output(message_id, false);
+                    }
                     let selected = self.projection.lock().select(event, view, consumer);
                     if selected.is_some() {
                         return Ok(selected);
@@ -242,6 +313,7 @@ impl stream::RunStream for RunStream {
             settle: Mutex::new(Some(settle)),
             closed,
             tasks: Arc::default(),
+            exact_outputs: Mutex::default(),
         }))
     }
     fn enter(&self) -> Result<(), StreamRefused> {
@@ -321,6 +393,7 @@ impl Cursor {
     fn close(&self) {
         self.closed.cancel();
         self.inner.release(self.consumer);
+        self.inner.fail_outputs();
     }
     fn begin_read(&self) -> Result<bool, StreamError> {
         if self.closed.is_cancelled() {
@@ -330,12 +403,16 @@ impl Cursor {
         Ok(true)
     }
     fn end_read(&self, accepted: bool) {
-        self.inner.projection.lock().acknowledge(self.consumer, accepted);
+        let delivered = self.inner.projection.lock().acknowledge(self.consumer, accepted);
+        if let Some(id) = delivered {
+            self.inner.accept_output(&id, true);
+        }
         self.inner.policy.lock().end_read(self.consumer);
     }
     fn close_idle(&self) -> Result<(), StreamError> {
         self.inner.policy.lock().close_cursor(self.consumer)?;
         self.closed.cancel();
+        self.inner.fail_outputs();
         Ok(())
     }
     async fn next(&self) -> Result<Option<Item>, StreamError> {

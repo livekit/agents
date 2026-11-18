@@ -95,7 +95,7 @@ class _TurnHost:
         hooks = RunHooks(
             checkpoint=reports.checkpoint,
             on_result=results.append,
-            on_update=context.update,
+            output=reports,
             on_token=reports.token,
             thread=thread,
             task_id=ctx.task_id,

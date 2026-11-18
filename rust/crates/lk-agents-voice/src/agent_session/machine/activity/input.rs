@@ -31,14 +31,7 @@ impl ReplyInputScope {
     }
 }
 
-/// Transcript enrichment and storage normalization do not create another human answer.
-/// Every authored content part and its interruption boundary still select an exact version.
-pub(super) fn same_human_version(left: &ChatMessage, right: &ChatMessage) -> bool {
-    left.id == right.id
-        && left.role == right.role
-        && left.content == right.content
-        && left.interrupted == right.interrupted
-}
+pub(super) use lk_agents_core::session::input::same_human_version;
 
 #[derive(Debug)]
 pub(super) enum AfterCapture {

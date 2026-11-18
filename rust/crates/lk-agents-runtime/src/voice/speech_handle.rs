@@ -282,10 +282,12 @@ impl SpeechHandle {
 
     /// The cell waiters watch, then the view.
     fn publish(&self, signals: Option<&SpeechSignals>, view: SpeechView) {
+        // Publish the matching outcome before waking its readers. The completion mark and
+        // failure must describe the same core view even on a multithreaded executor.
+        self.inner.lock().view = view.clone();
         if let Some(signals) = signals {
             signals.lifecycle.modify(|lifecycle| lifecycle.publish(&view));
         }
-        self.inner.lock().view = view;
     }
 
     /// The loop answered the host's call: with the speech it created over this handle, or, when
@@ -454,6 +456,16 @@ impl SpeechHandle {
         self.wait(|l| l.done).await;
     }
 
+    /// An exact tool output waits on this independent `say` speech, never on the speech whose
+    /// tool is still running. Reading a receipt does not own or cancel the speech. Completion
+    /// requires its output boundary and the complete canonical words, rather than only the
+    /// ordinary playout wait (which also settles on interruption and owner death).
+    pub(crate) async fn exact_delivery(&self, expected: &str) -> Result<(), ProviderError> {
+        self.wait(|l| l.done || l.creation == Creation::Detached).await;
+        let inner = self.inner.lock();
+        inner.view.exact_delivery(expected, &inner.chat_items)
+    }
+
     /// Whether step `step` (counting as [`num_steps`](Self::num_steps) does) was authorized to
     /// play.
     pub fn step_authorized(&self, step: u32) -> bool {
@@ -517,7 +529,9 @@ impl SpeechHandle {
     /// Awaiting a speech from its own blocking callback would wait forever. Reused call IDs
     /// from a different invocation do not own this speech's wait.
     fn self_wait(&self, origin: Option<&VoiceCommandOrigin>) -> Result<(), SpeechRefused> {
-        let Some(origin @ VoiceCommandOrigin::Tool { .. }) = origin else { return Ok(()) };
+        let Some(origin @ VoiceCommandOrigin::Tool { .. }) = origin else {
+            return Ok(());
+        };
         match self.inner.lock().blocking_tools.iter().find(|(owned, _)| owned == origin) {
             Some((_, name)) => Err(SpeechRefused::SelfWait { name: name.clone() }),
             None => Ok(()),

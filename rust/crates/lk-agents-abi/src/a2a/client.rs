@@ -147,7 +147,7 @@ pub struct AgentCard {
     pub structured_input: bool,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 #[crate::host(error(kind = "RuntimeError"))]
 pub enum AgentClientError {
     #[error("{0}")]

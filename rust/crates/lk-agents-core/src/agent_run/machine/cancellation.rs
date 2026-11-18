@@ -54,7 +54,7 @@ impl Acting {
             if let Some(requirement) = super::step_outcome::input_requirement(
                 invocation_id,
                 &recorded.item,
-                &recorded.settled.outcome,
+                &recorded.settled,
             ) {
                 input_requirements.push(requirement);
             }

@@ -298,7 +298,8 @@ impl VoiceDriver {
         // against what still runs. A call answered for a task that never did (aborted, or
         // stopped by the close) is not the run's to settle.
         match call {
-            Some(call) => self.reply_event(speech, AgentRunEvent::ToolSettled { call, outcome }),
+            Some(call) => self
+                .reply_event(speech, AgentRunEvent::ToolSettled { call, report: outcome.into() }),
             None => self.reply_call_lost(speech, &call_id, outcome),
         }
         self.record_trace(TraceToolStep::CallEnded { speech, call_id: call_id.clone(), end });
@@ -479,6 +480,13 @@ impl VoiceDriver {
         let Some(running) = self.activity.tools.update_owner(&invocation_id, operation, &call_id)
         else {
             self.record_trace(TraceToolStep::UpdateRefused { call_id });
+            if let ToolUpdate::Exact { call, .. } = update {
+                self.fail_waiter(
+                    call,
+                    SpeechKind::Say,
+                    "the exact output's originating tool is no longer live",
+                );
+            }
             return;
         };
         if !running.detached() {
@@ -492,7 +500,7 @@ impl VoiceDriver {
         // Restart a pending filler dwell so it can't race the update.
         self.fillers_reset_dwell(now, &call_id);
         match update {
-            ToolUpdate::Progress { message, raw } => {
+            ToolUpdate::Progress { message, raw, reply_required } => {
                 let r = self
                     .activity
                     .tools
@@ -503,7 +511,7 @@ impl VoiceDriver {
                 let running = r.clone();
                 let progress = ToolOutcome::Value {
                     text: message,
-                    reply_required: true,
+                    reply_required,
                     verbatim: false,
                     more: None,
                 };
@@ -521,6 +529,9 @@ impl VoiceDriver {
                     message: raw,
                 }));
                 self.commit_pair(&running, id, pair);
+            }
+            ToolUpdate::Exact { text, call } => {
+                self.say_exact(now, text, call);
             }
             ToolUpdate::Final { report } => {
                 let running = self
@@ -603,7 +614,7 @@ impl VoiceDriver {
         };
         match delivery {
             Delivery::Say(text) => {
-                self.say_text(now, text, voice_run);
+                self.say_tool_text(now, text, voice_run);
             }
             Delivery::Complete(value) => self.end_voice_task(now, speech, Ok(value)),
             Delivery::Fail(reason) => {
@@ -614,7 +625,7 @@ impl VoiceDriver {
                 let output = crate::events::RunOutcome::InputRequired(ask.clone());
                 self.session.runs.outputs.insert(speech, output.clone());
                 let asking = if ask.verbatim {
-                    self.say_text(now, ask.question.clone(), voice_run)
+                    self.say_tool_text(now, ask.question.clone(), voice_run)
                 } else {
                     let instructions = format!(
                         "{}{}",
@@ -708,7 +719,9 @@ impl VoiceDriver {
         let last_record = self.session.chat_ctx.last_agent_item_id().map(str::to_owned);
         let at_tail = last_pending.is_some() && last_pending == last_record;
         // The instructions are the templates of the latest update's call.
-        let Some(mut hosted) = batch.0.last().map(|p| p.hosted.clone()) else { return };
+        let Some(mut hosted) = batch.0.last().map(|p| p.hosted.clone()) else {
+            return;
+        };
         let render = self.activity.tools.mint_operation();
         hosted.invocation.operation = render;
         let call_ids = batch.call_ids();
@@ -815,7 +828,9 @@ impl VoiceDriver {
     }
 
     pub(crate) fn end_filler(&mut self, id: FillerId, cause: FillerEnd) {
-        let Some(run) = self.activity.tools.fillers.remove(&id) else { return };
+        let Some(run) = self.activity.tools.fillers.remove(&id) else {
+            return;
+        };
         if run.armed.is_some() {
             self.clear_deadline(Timer::Filler(id));
         }
@@ -860,7 +875,9 @@ impl VoiceDriver {
     /// The dwell or cooldown is over. A deadline in the same wake as a speaking edge counts as busy.
     pub(crate) fn on_filler_timer(&mut self, now: Ts, id: FillerId) {
         let busy = self.session.states.someone_speaking();
-        let Some(action) = self.activity.tools.filler_timer(id, busy, now) else { return };
+        let Some(action) = self.activity.tools.filler_timer(id, busy, now) else {
+            return;
+        };
         self.perform_filler(now, id, action);
     }
 
@@ -870,7 +887,9 @@ impl VoiceDriver {
         hook: HookId,
         answered: Option<lk_agents_abi::voice::session_effects::FillerReply>,
     ) {
-        let Some((id, step)) = self.activity.tools.filler_answered(hook) else { return };
+        let Some((id, step)) = self.activity.tools.filler_answered(hook) else {
+            return;
+        };
         // The callable raised: the filler ends.
         let Some(reply) = answered else {
             self.end_filler(id, FillerEnd::Refused);
@@ -943,7 +962,9 @@ impl VoiceDriver {
             self.end_filler(id, FillerEnd::Refused);
             return;
         }
-        let Some(run) = self.activity.tools.fillers.get_mut(&id) else { return };
+        let Some(run) = self.activity.tools.fillers.get_mut(&id) else {
+            return;
+        };
         let action = run.sched.fired(now, produced);
         self.perform_filler(now, id, action);
     }
@@ -965,7 +986,9 @@ impl VoiceDriver {
 
     /// A wait: until idle (`None`) or until `until`.
     fn arm_filler_timer(&mut self, id: FillerId, until: Option<Ts>) {
-        let Some(timer) = self.activity.tools.filler_wait(id, until) else { return };
+        let Some(timer) = self.activity.tools.filler_wait(id, until) else {
+            return;
+        };
         if timer.cancel {
             self.clear_deadline(Timer::Filler(id));
         }
@@ -977,7 +1000,9 @@ impl VoiceDriver {
     fn fire_filler_step(&mut self, now: Ts, id: FillerId, step: u32) {
         // A second fire in the instant of the last would loop forever with `interval=0` and no
         // dwell: the filler ends.
-        let Some(run) = self.activity.tools.fillers.get_mut(&id) else { return };
+        let Some(run) = self.activity.tools.fillers.get_mut(&id) else {
+            return;
+        };
         if run.fired_at.replace(now) == Some(now) {
             self.end_filler(id, FillerEnd::Refused);
             return;

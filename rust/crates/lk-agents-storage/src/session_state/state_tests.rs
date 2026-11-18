@@ -2,6 +2,20 @@ use super::*;
 use std::time::UNIX_EPOCH;
 
 #[test]
+fn dropping_an_unclosed_binding_releases_its_native_state_and_control_store() {
+    use lk_agents_abi::storage::context::ContextActivation as _;
+    use lk_agents_abi::storage::session::SessionBinding as _;
+
+    let view = SessionState::new(None).unwrap();
+    let weak = Arc::downgrade(&view.0);
+    let store = crate::context::store::ContextStore::new(Vec::new(), None, false).unwrap();
+    let binding = crate::session_binding::SessionBinding::new(store, view).unwrap();
+    assert!(weak.upgrade().is_some());
+    drop(binding);
+    assert!(weak.upgrade().is_none(), "abandoned startup must not retain the view/store cycle");
+}
+
+#[test]
 fn text_to_voice_projection_retains_identity_and_private_remote_state() {
     let first =
         ChatItem::Message(ChatMessage::text("human", Role::User, "Remember Alice.", UNIX_EPOCH));
@@ -65,6 +79,7 @@ fn remote_views_group_observations_and_keep_their_bound_or_detached_owner() {
             input_requests: BTreeMap::new(),
             cancel_requested: false,
             next_input: 0,
+            terminal_event: None,
         },
     );
     let mut initial = initial_voice("desk".into(), Vec::new());
@@ -101,4 +116,51 @@ fn remote_views_group_observations_and_keep_their_bound_or_detached_owner() {
     let mut value = task.task().unwrap();
     value.id = "changed by reader".into();
     assert_eq!(task.task().unwrap().id, "booking", "observed protocol values are detached copies");
+}
+
+#[test]
+fn joined_control_readback_never_replaces_newer_local_progress_or_a_rebound_view() {
+    use lk_agents_abi::storage::context::ContextActivation as _;
+    let original = snapshot_value(initial_voice("desk".into(), vec![])).unwrap();
+    let store =
+        crate::context::store::ContextStore::new(vec![], Some(original.clone()), false).unwrap();
+    let view = SessionState::from_value(original.clone()).unwrap();
+    view.bind_control(store.clone()).unwrap();
+    let expected = view.0.lock().clone();
+    let local = SessionState::from_value(
+        voice_value(
+            "desk".into(),
+            vec![
+                ChatMessage::text("local-edit", Role::User, "Keep this newer draft", UNIX_EPOCH)
+                    .into(),
+            ],
+            Some(&original),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    view.assign(&local);
+    let mut saved = initial_voice("desk".into(), vec![]);
+    saved.remote_agents.insert(
+        "remote".into(),
+        lk_agents_abi::delegation::remote::RemoteAgentState::new("https://remote.test".into()),
+    );
+    let saved = SessionState::from_value(snapshot_value(saved).unwrap()).unwrap();
+    view.publish_control_if(&store, &expected, &saved);
+    assert_eq!(view._to_json(), local._to_json(), "a newer explicit edit wins over readback");
+    let unchanged = SessionState::from_value(original).unwrap();
+    unchanged.bind_control(store.clone()).unwrap();
+    let expected = unchanged.0.lock().clone();
+    unchanged.publish_control_if(&store, &expected, &saved);
+    assert_eq!(unchanged._to_json(), saved._to_json(), "an unchanged joined view may advance");
+    let expected = unchanged.0.lock().clone();
+    store.close();
+    let next = crate::context::store::ContextStore::new(vec![], None, false).unwrap();
+    unchanged.bind_control(next).unwrap();
+    unchanged.publish_control_if(&store, &expected, &local);
+    assert_eq!(
+        unchanged._to_json(),
+        saved._to_json(),
+        "old-store readback cannot publish after rebind"
+    );
 }

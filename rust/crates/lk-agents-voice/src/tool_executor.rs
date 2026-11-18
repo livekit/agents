@@ -477,7 +477,7 @@ impl ToolExecution {
 /// `_apply_transition`), once the call's output is committed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Delivery {
-    /// A verbatim result: said as written, the model reads that it was delivered.
+    /// A verbatim result whose exact words are owned by the separate output path.
     Say(String),
     /// `InputRequired`: a question whose exact occurrence may later receive a matched response.
     Ask { question: RunQuestion, call_id: String },
@@ -679,7 +679,7 @@ impl PartialEq for HostedTool {
 }
 
 /// The one formatter: every committed `FunctionCallOutput` comes through here, from the one
-/// decision table (`lk_agents_core::tool_outcome`), a verbatim result rewritten as delivered.
+/// decision table (`lk_agents_core::tool_outcome`); exact wording is not a delivery receipt.
 pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolExecution {
     let ToolReport { outcome, transition, .. } = report;
     let shape =
@@ -687,7 +687,7 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
     let mut output = FunctionCallOutput::new(
         call.output_id(),
         call.call_id.clone(),
-        lk_agents_core::tool_outcome::delivered(&outcome).unwrap_or(shape.text),
+        lk_agents_core::tool_outcome::exact_output_note(&outcome).unwrap_or(shape.text),
         shape.is_error,
         now,
     );

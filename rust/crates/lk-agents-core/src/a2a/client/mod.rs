@@ -131,7 +131,11 @@ impl Client {
             ));
         }
         Ok(Self {
-            endpoint: endpoint.trim_end_matches('/').to_owned(),
+            endpoint: if endpoint.contains('?') {
+                endpoint
+            } else {
+                endpoint.trim_end_matches('/').to_owned()
+            },
             token,
             card: None,
             rpc_url: None,
@@ -157,9 +161,18 @@ impl Client {
 
     pub fn card_request(&self) -> Result<Request, ClientError> {
         self.ensure_open()?;
+        let (path, query) = self
+            .endpoint
+            .split_once('?')
+            .map_or((self.endpoint.as_str(), None), |(path, query)| (path, Some(query)));
+        let mut url = format!("{}/.well-known/agent-card.json", path.trim_end_matches('/'));
+        if let Some(query) = query {
+            url.push('?');
+            url.push_str(query);
+        }
         Ok(Request {
             method: HttpMethod::Get,
-            url: format!("{}/.well-known/agent-card.json", self.endpoint),
+            url,
             headers: self.headers(false),
             body: Vec::new(),
             id: None,
@@ -479,6 +492,8 @@ pub struct TaskUpdate {
     pub context_id: String,
     pub metadata: Map<String, Value>,
     pub artifacts: Vec<Artifact>,
+    /// Original SDK direct reply or status message, without flattening data/file parts.
+    pub message: Option<Message>,
     pub follow_task: Option<TaskRef>,
 }
 
@@ -586,7 +601,9 @@ impl ReplyState {
         match event {
             StreamResponse::Task(task) => {
                 self.identify(&task.id, &task.context_id)?;
-                self.artifacts = task.artifacts.unwrap_or_default();
+                if let Some(artifacts) = task.artifacts {
+                    self.artifacts = artifacts;
+                }
                 self.status(
                     task.status,
                     task.metadata.map(|m| m.into_iter().collect()).unwrap_or_default(),
@@ -637,24 +654,17 @@ impl ReplyState {
         }
         self.settled = true;
         let text = parts_text(&message.parts);
-        let artifacts = vec![Artifact {
-            artifact_id: message.message_id,
-            name: None,
-            description: None,
-            parts: message.parts,
-            metadata: None,
-            extensions: None,
-        }];
         Ok(Some(TaskUpdate {
             state: TaskState::Completed,
             text,
             progress: false,
-            task_id: message.task_id.unwrap_or_default(),
-            context_id: message.context_id.unwrap_or_default(),
+            task_id: message.task_id.clone().unwrap_or_default(),
+            context_id: message.context_id.clone().unwrap_or_default(),
             metadata: short_metadata(
-                message.metadata.map(|m| m.into_iter().collect()).unwrap_or_default(),
+                message.metadata.clone().map(|m| m.into_iter().collect()).unwrap_or_default(),
             ),
-            artifacts,
+            artifacts: Vec::new(),
+            message: Some(message),
             follow_task: None,
         }))
     }
@@ -738,6 +748,7 @@ impl ReplyState {
             context_id: task.context_id.clone(),
             metadata: short_metadata(metadata),
             artifacts: self.artifacts.clone(),
+            message: status.message,
             follow_task,
         }))
     }

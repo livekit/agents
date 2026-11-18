@@ -22,6 +22,7 @@ from ._generated._core_a2a import (
     _core_delegation_chain as _core_delegation_chain,
     _core_delegation_tool as _core_delegation_tool,
     _core_HandlerTurn as _core_HandlerTurn,
+    _core_remote_id as _core_remote_id,
     _core_remote_token as _core_remote_token,
     _core_RemoteInteraction as _core_RemoteInteraction,
     _core_unauthenticated_principal as _core_unauthenticated_principal,

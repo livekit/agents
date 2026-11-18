@@ -123,7 +123,10 @@ pub trait Implementations: 'static {
             ContextActivation = Self::ContextActivation,
             ThreadServer = Self::ThreadServer,
         >;
-    type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation<Transaction = Self::AppTransaction>;
+    type ContextActivation: ::lk_agents_abi::storage::context::ContextActivation<
+            Transaction = Self::AppTransaction,
+            View = Self::PersistedSessionState,
+        >;
     type AppTransaction: ::lk_agents_abi::storage::context::AppTransaction;
     type Thread: ::lk_agents_abi::storage::handles::Thread<Run = Self::Run>;
     type Run: ::lk_agents_abi::storage::handles::Run;
@@ -288,6 +291,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<a2a::AgentClient>()?;
     m.add_class::<a2a::CoreA2ADoor>()?;
     m.add_class::<a2a::CoreRemoteInteraction>()?;
+    m.add_function(wrap_pyfunction!(a2a::_core_remote_id, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_delegation_chain, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_delegation_tool, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_remote_token, m)?)?;

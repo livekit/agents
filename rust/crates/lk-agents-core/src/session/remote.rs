@@ -67,13 +67,24 @@ pub fn apply(
             }
             (None, Some(request)) if !request.dispatch_started => {
                 let remote = remote.expect("the request belongs to this saved remote");
-                if let Some(A2AJournalPayload::Request(A2ARequest::Cancel(cancel))) =
-                    remote.events.get(request.request_event as usize).map(|event| &event.payload)
+                let addressed = match remote
+                    .events
+                    .get(request.request_event as usize)
+                    .map(|event| &event.payload)
                 {
-                    let target = task(remote, &cancel.id)?;
+                    Some(A2AJournalPayload::Request(A2ARequest::Cancel(cancel))) => {
+                        Some(cancel.id.as_str())
+                    }
+                    Some(A2AJournalPayload::Request(A2ARequest::Send(send))) => {
+                        send.message.task_id.as_deref()
+                    }
+                    _ => None,
+                };
+                if let Some(task_id) = addressed {
+                    let target = task(remote, task_id)?;
                     if request.task.as_ref() != Some(&target) {
                         return Err(StorageError::Invalid(
-                            "the cancellation task context changed".into(),
+                            "the addressed task context changed".into(),
                         ));
                     }
                 }
@@ -182,9 +193,16 @@ pub fn recover(
     remote: &RemoteAgentState,
     target: &SessionRecovery,
 ) -> Result<Option<RemoteRecovery>, StorageError> {
-    let target = match target {
+    let (target, retry_after) = match target {
         SessionRecovery::Call(origin) => return recovery(remote, origin),
-        SessionRecovery::Cancellation(task) => task,
+        SessionRecovery::Observation(task) => {
+            return crate::delegation::remote::journal::observed(remote, task)
+                .map(|response| {
+                    response.map(|response| RemoteRecovery::Observed(Box::new(response)))
+                })
+                .map_err(|error| StorageError::Invalid(error.to_string()));
+        }
+        SessionRecovery::Cancellation { task, retry_after } => (task, retry_after.as_deref()),
     };
     let saved = remote.tasks.get(&target.task_id).ok_or_else(|| {
         StorageError::Invalid("the task is unknown on this remote in this conversation".into())
@@ -207,6 +225,15 @@ pub fn recover(
             })
     }).max_by_key(|(_, request)| request.request_event);
     if let Some((id, _)) = previous {
+        if retry_after == Some(id.as_str())
+            && crate::delegation::remote::cancel::retry_after(remote, target).as_deref()
+                == Some(id.as_str())
+            && !saved.task.status.state.is_terminal()
+        {
+            // Only an intent admitted after this exact refusal can start another request.
+            // A concurrent intent frozen before the refusal still recovers the old one.
+            return Ok(None);
+        }
         if saved.task.status.state.is_terminal() {
             return Ok(Some(RemoteRecovery::GetTask(target.clone())));
         }

@@ -1,5 +1,6 @@
 //! Read-only conversation views; execution resources and command capabilities are not stored.
 
+pub mod control;
 pub mod remote;
 pub mod snapshot;
 
@@ -96,13 +97,21 @@ pub struct InputAdmission {
 #[derive(Debug, Clone)]
 pub enum SessionRecovery {
     Call(ToolCallRef),
-    Cancellation(crate::delegation::remote::RemoteTaskRef),
+    /// Read conclusive accepted task evidence after checkpointing an observation. No I/O.
+    Observation(crate::delegation::remote::RemoteTaskRef),
+    Cancellation {
+        task: crate::delegation::remote::RemoteTaskRef,
+        /// Fresh dispatch is allowed only after this exact, definitely refused control.
+        retry_after: Option<String>,
+    },
 }
 
 /// Serialized conversation authority. No host policy callback or saved command capability.
 #[crate::host(native(refused = "expected the active native conversation owner"))]
-pub trait SessionCommands: Send + Sync {
+pub trait SessionCommands: std::any::Any + Send + Sync {
     fn checkpoint(&self) -> crate::BoxFuture<'_, Result<Value, crate::storage::StorageError>>;
+    /// Safe lifetime signal for I/O already admitted by this serialized owner.
+    fn ended(&self) -> crate::BoxFuture<'_, ()>;
 
     /// Read the proposed call against this owner's state; input occurrences were frozen when
     /// the frontend model turn began, rather than looked up when its tool finally runs.
@@ -159,14 +168,18 @@ pub trait SessionCommands: Send + Sync {
         >,
     >;
 
-    /// Cancel through the task's configured live driver. Saved or detached observations do
-    /// not supply credentials, and no idle owner is activated by this command.
+    /// Admit cancellation against this owner's current state. Configured clients keep their
+    /// authority; a retained task requires a freshly checked bound delegation scope.
     fn cancel_remote<'a>(
         &'a self,
-        remote_id: &'a str,
-        endpoint: &'a str,
-        task: &'a crate::delegation::remote::RemoteTaskRef,
-    ) -> crate::BoxFuture<'a, Result<(), crate::a2a::client::AgentClientError>>;
+        target: &'a control::RemoteControlRef,
+        scope: Option<&'a crate::delegation::remote::RemoteControlScope>,
+        candidate: std::sync::Arc<dyn control::RemoteCancellation>,
+        retry_after: Option<&'a str>,
+    ) -> crate::BoxFuture<
+        'a,
+        Result<control::RemoteCancellationAdmission, crate::a2a::client::AgentClientError>,
+    >;
 
     /// Validate the offered occurrences and checkpoint their reservations before continuation.
     fn admit_input(

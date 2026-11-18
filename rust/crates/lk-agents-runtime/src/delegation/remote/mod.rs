@@ -3,7 +3,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use lk_agents_abi::a2a::client::{
-    self as port, AgentClientError, Message, MessageInput, MessagePart, TaskUpdate,
+    self as port, AgentClientError, Message, MessageInput, MessagePart,
 };
 use lk_agents_abi::a2a::remote::{
     DelegationHost, DelegationInput, RemoteEvent, RemoteInteraction as Port, RemoteResponseClaim,
@@ -21,7 +21,7 @@ use lk_agents_core::delegation::remote::{
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use lk_agents_core::a2a::client::message_from_wire;
+use lk_agents_core::a2a::client::{TaskUpdate, message_from_wire};
 use lk_agents_net::a2a_client::{AgentClient, Reply};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::owned::{Background, Owned};
@@ -29,6 +29,8 @@ use lk_agents_net::signal;
 use lk_agents_net::task::Cancellation;
 use lk_agents_telemetry as telemetry;
 mod cancel;
+mod configuration;
+pub mod control;
 mod driver;
 mod exchange;
 pub mod journal;
@@ -62,6 +64,7 @@ struct State {
     livekit: bool,
     project: Project,
     partition_chain: Vec<lk_agents_abi::a2a::remote::DelegationPartition>,
+    control_scope: Option<lk_agents_abi::delegation::remote::RemoteControlScope>,
 }
 
 #[derive(Deserialize)]
@@ -75,23 +78,20 @@ impl Port for RemoteInteraction {
 
     fn new(
         endpoint: String,
-        tool_id: String,
         function_call: ChatItem,
         project_url: String,
         api_key: String,
         api_secret: String,
+        remote_id: Option<String>,
     ) -> Result<Self, AgentClientError> {
         let ChatItem::FunctionCall(function_call) = function_call else {
             return Err(AgentClientError::InvalidInput(
                 "a remote interaction needs its parent function call".into(),
             ));
         };
-        let id = InteractionId {
-            delegation_id: lk_agents_net::strings::shortuuid("dlg_"),
-            endpoint: endpoint.trim_end_matches('/').into(),
-            tool_id,
-            parent_call_id: function_call.id.clone(),
-        };
+        let endpoint = configuration::endpoint(&endpoint)?;
+        let remote_id = configuration::remote_id(&endpoint, remote_id)?;
+        let id = InteractionId { remote_id, endpoint, parent_call_id: function_call.id.clone() };
         let policy = Policy::new(id).map_err(protocol)?;
         let project = Project { url: project_url, api_key, api_secret };
         let state = State {
@@ -100,6 +100,7 @@ impl Port for RemoteInteraction {
             livekit: false,
             project,
             partition_chain: Vec::new(),
+            control_scope: None,
         };
         Ok(Self { inner: Interaction(Arc::new(Mutex::new(state))), running: Mutex::new(None) })
     }
@@ -128,7 +129,6 @@ impl Port for RemoteInteraction {
         thread_id: Option<String>,
         token: Option<String>,
     ) -> Result<Message, AgentClientError> {
-        self.inner.restore_unbound(&history)?;
         self.inner.message(
             arguments,
             structured,
@@ -155,7 +155,24 @@ impl Port for RemoteInteraction {
         context: CallContext,
         cx: telemetry::Cx,
     ) -> Result<RemoteEvent, AgentClientError> {
-        let endpoint = self.inner.0.lock().policy.snapshot().id.endpoint;
+        let (endpoint, project) = {
+            let state = self.inner.0.lock();
+            (state.policy.snapshot().id.endpoint, state.project.clone())
+        };
+        let configured_token = token.clone();
+        let token = <Self as lk_agents_abi::a2a::remote::RemoteConfiguration>::_core_remote_token(
+            endpoint.clone(),
+            project.url,
+            project.api_key,
+            project.api_secret,
+            token,
+            thread_id.clone(),
+        )?;
+        let shared = if configured_token.is_none() && token.is_some() {
+            thread_id.map(|thread| (thread, token.clone()))
+        } else {
+            None
+        };
         let conn_options = conn_options.unwrap_or_default();
         let client = AgentClient::new(env, endpoint, token.clone(), conn_options)?;
         let result = self
@@ -166,7 +183,8 @@ impl Port for RemoteInteraction {
                     arguments,
                     structured,
                     history,
-                    shared: thread_id.map(|thread| (thread, token)),
+                    shared,
+                    configured_token,
                     live,
                     host,
                     context,
@@ -215,6 +233,8 @@ pub struct RemoteInvocation {
     pub structured: bool,
     pub history: Vec<ChatItem>,
     pub shared: Option<(String, Option<String>)>,
+    /// The application's original custom credential; default minting stays native.
+    pub configured_token: Option<String>,
     pub live: bool,
     pub host: Arc<dyn DelegationHost>,
     pub context: CallContext,
@@ -238,7 +258,6 @@ impl RemoteInteraction {
         let (done, settled) = signal::once::<()>();
         *self.running.lock() =
             Some(Running { stop: stop.clone(), settled, clock: Arc::clone(&background.clock) });
-        let (driver, commands) = driver::Driver::channel();
         let close_clock = background.clock.clone();
         let client = Owned::new(
             &background,
@@ -252,6 +271,16 @@ impl RemoteInteraction {
                 })
             }),
         );
+        let configuration = {
+            let state = self.inner.0.lock();
+            configuration::Configuration::new(
+                &state.policy.snapshot().id.endpoint,
+                &state.project,
+                request.configured_token.as_deref(),
+                request.shared.as_ref().map(|(thread, _)| thread.as_str()),
+            )?
+        };
+        let (driver, commands) = driver::Driver::channel(&background, configuration);
         let delegation = Delegation {
             interaction: self.inner.clone(),
             client,
@@ -329,14 +358,20 @@ impl Delegation {
             }
             return Ok(Some(Prepared::Message { arguments, structured: self.request.structured }));
         };
-        let endpoint = self.interaction.0.lock().policy.snapshot().id.endpoint;
+        let identity = self.interaction.0.lock().policy.snapshot().id;
         let offered = {
             let state = self.interaction.0.lock();
             lk_agents_core::delegation::remote::routing::captured_offers(&state.call)
                 .map_err(input_error)?
         };
         let routing = owner
-            .routing_context(&endpoint, &endpoint, arguments.clone(), task_id.as_deref(), &offered)
+            .routing_context(
+                &identity.remote_id,
+                &identity.endpoint,
+                arguments.clone(),
+                task_id.as_deref(),
+                &offered,
+            )
             .await
             .map_err(input_error)?;
         let (verdict, usage) = match owner.routing_model() {
@@ -417,6 +452,13 @@ impl Delegation {
                 }
             }
         };
+        self.commands.close();
+        while let Some(command) = self.commands.recv().await {
+            command.done.resolve(Err(AgentClientError::InvalidInput(
+                "the remote task observer ended before this command ran".into(),
+            )));
+        }
+        self.driver.close().await;
         if let Some(reply) = reply
             && close_observation(reply).await.is_err()
         {
@@ -433,16 +475,13 @@ impl Delegation {
         reply: &mut Option<Owned<Reply>>,
         stop: &Cancellation,
     ) -> Result<RemoteEvent, AgentClientError> {
-        if self.request.owner.is_none() {
-            self.interaction.restore_unbound(&self.request.history)?;
-        }
         let recovery = match (&self.request.owner, &self.request.origin) {
             (Some(owner), Some(origin)) => {
-                let endpoint = self.interaction.0.lock().policy.snapshot().id.endpoint;
+                let identity = self.interaction.0.lock().policy.snapshot().id;
                 owner
                     .recover(
-                        &endpoint,
-                        &endpoint,
+                        &identity.remote_id,
+                        &identity.endpoint,
                         &lk_agents_abi::session::SessionRecovery::Call(origin.clone()),
                     )
                     .await
@@ -481,6 +520,23 @@ impl Delegation {
         if stop.is_cancelled() {
             return Ok(cancelled());
         }
+        let mut recovered = None;
+        if let Some(RemoteRecovery::Observed(response)) = &recovery {
+            let response = match response.as_ref() {
+                a2a::SendMessageResponse::Task(task) => a2a::StreamResponse::Task(task.clone()),
+                a2a::SendMessageResponse::Message(message) => {
+                    a2a::StreamResponse::Message(message.clone())
+                }
+            };
+            let mut event = self.interaction.reconciled(response)?;
+            if matches!(event, RemoteEvent::Outcome { .. }) {
+                self.progress(&mut event).await?;
+                return Ok(event);
+            }
+            // A completed merged task still follows its replacement through the ordinary
+            // owner loop; terminal protocol status alone is not a business answer.
+            recovered = Some(event);
+        }
         port::AgentClient::connect(self.client.as_ref()).await?;
         self.interaction.0.lock().livekit = self.client.offers_extension();
         let mut accepted = true;
@@ -517,9 +573,7 @@ impl Delegation {
                     .await?;
                 Some(self.interaction.reconciled(a2a::StreamResponse::Task(task))?)
             }
-            Some(RemoteRecovery::Observed(message)) => {
-                Some(self.interaction.reconciled(a2a::StreamResponse::Message(*message))?)
-            }
+            Some(RemoteRecovery::Observed(_)) => recovered.take(),
             Some(RemoteRecovery::Uncertain) => {
                 return Err(protocol(
                     "the remote request may have been accepted, but no task or reply was observed; clarify its outcome before starting new work",
@@ -531,9 +585,9 @@ impl Delegation {
                 };
                 let default_context = match &self.request.owner {
                     Some(owner) => {
-                        let endpoint = self.interaction.0.lock().policy.snapshot().id.endpoint;
+                        let identity = self.interaction.0.lock().policy.snapshot().id;
                         owner
-                            .default_context(&endpoint, &endpoint)
+                            .default_context(&identity.remote_id, &identity.endpoint)
                             .await
                             .map_err(|error| AgentClientError::Protocol(error.to_string()))?
                     }
@@ -575,7 +629,7 @@ impl Delegation {
                 .map_err(host_error)?;
         }
         loop {
-            let event = if let Some(event) = initial.take() {
+            let mut event = if let Some(event) = initial.take() {
                 event
             } else {
                 // Only reads race here. A consumed update's host delivery and journal write
@@ -583,7 +637,7 @@ impl Delegation {
                 let next = match reply.as_ref().map(|current| &**current) {
                     Some(current) => tokio::select! {
                         biased;
-                        update = port::Reply::next(current) => Next::Update(update),
+                        update = next_update(current) => Next::Update(update),
                         command = self.commands.recv() => Next::Command(command),
                         () = stop.cancelled() => Next::Stop,
                     },
@@ -607,9 +661,10 @@ impl Delegation {
                     Next::Stop => return Ok(cancelled()),
                 }
             };
-            self.progress(&event).await?;
+            self.progress(&mut event).await?;
             match event {
-                RemoteEvent::Pending | RemoteEvent::Progress { .. } => {}
+                RemoteEvent::Pending | RemoteEvent::Progress { .. } | RemoteEvent::Exact { .. } => {
+                }
                 RemoteEvent::Follow { task_id, thread_id } => {
                     if let Some(done) = reply.take() {
                         close_observation(done).await?;
@@ -637,7 +692,9 @@ impl Delegation {
                         return Ok(forwarded());
                     }
                 }
-                RemoteEvent::InputRequired { question, verbatim_full, .. } if self.request.live => {
+                RemoteEvent::InputRequired { question, verbatim_full, input_request, .. }
+                    if self.request.live =>
+                {
                     if let Some(done) = reply.take() {
                         close_observation(done).await?;
                     }
@@ -648,7 +705,7 @@ impl Delegation {
                             &self.request.context,
                             question,
                             verbatim_full,
-                            self.journal.as_ref().and_then(|journal| journal.observed_input()),
+                            input_request,
                         )
                         .await
                         .map_err(host_error)?;
@@ -660,27 +717,51 @@ impl Delegation {
         }
     }
 
-    async fn progress(&mut self, event: &RemoteEvent) -> Result<(), AgentClientError> {
-        if matches!(event, RemoteEvent::InputRequired { .. }) {
+    async fn progress(&mut self, event: &mut RemoteEvent) -> Result<(), AgentClientError> {
+        if let RemoteEvent::InputRequired { input_request, .. } = event {
             let reference = self.journal.as_ref().and_then(|journal| journal.observed_input());
             if self.request.owner.is_some() && reference.is_none() {
                 return Err(protocol(
                     "the remote input request is not open; reconcile its earlier response before asking again",
                 ));
             }
-            self.interaction.0.lock().policy.retain_input_request(reference).map_err(protocol)?;
+            self.interaction
+                .0
+                .lock()
+                .policy
+                .retain_input_request(reference.clone())
+                .map_err(protocol)?;
+            *input_request = reference;
+        }
+        let extra = self.interaction.extra()?;
+        if let RemoteEvent::Exact { text } = event {
+            return self
+                .request
+                .host
+                .say(&self.request.cx, &self.request.context, text.clone(), extra)
+                .await
+                .map_err(host_error);
         }
         let text = match event {
             RemoteEvent::Progress { text } => Some(text.clone()),
             _ => None,
         };
-        let extra = self.interaction.extra()?;
         self.request
             .host
-            .progress(&self.request.cx, &self.request.context, text, extra)
+            .progress(&self.request.cx, &self.request.context, text, extra, true)
             .await
             .map_err(host_error)
     }
+}
+
+/// The native path preserves original SDK messages/artifacts; host normalization is only
+/// for its convenience API. The source pull owns a cancellation-safe read position.
+async fn next_update(reply: &Reply) -> Result<Option<TaskUpdate>, AgentClientError> {
+    let pull = reply.try_pull().ok_or(AgentClientError::Overlap)?;
+    Ok(match pull.await? {
+        lk_agents_net::source::Pulled::Item(update) => Some(update),
+        lk_agents_net::source::Pulled::End | lk_agents_net::source::Pulled::Cancelled => None,
+    })
 }
 
 async fn close_observation(reply: Owned<Reply>) -> Result<(), AgentClientError> {
@@ -693,15 +774,6 @@ async fn close_observation(reply: Owned<Reply>) -> Result<(), AgentClientError> 
 }
 
 impl Interaction {
-    fn restore_unbound(&self, history: &[ChatItem]) -> Result<(), AgentClientError> {
-        let mut state = self.0.lock();
-        let snapshot = state.policy.snapshot();
-        if snapshot.phase == lk_agents_core::delegation::remote::InteractionPhase::Ready {
-            state.policy = retained::for_call(snapshot.id, history).map_err(protocol)?;
-        }
-        Ok(())
-    }
-
     fn message(
         &self,
         arguments: Value,
@@ -738,6 +810,23 @@ impl Interaction {
                 )
             }
             _ => None,
+        };
+        state.control_scope = if authority.is_some() {
+            let project = state
+                .project
+                .serving(&state.policy.snapshot().id.endpoint)?
+                .expect("verified authority was restricted to this project");
+            Some(lk_agents_abi::delegation::remote::RemoteControlScope {
+                project_origin: url::Url::parse(&project.url)
+                    .map_err(protocol)?
+                    .origin()
+                    .ascii_serialization(),
+                project_issuer: project.api_key,
+                caller_identity: DELEGATE.into(),
+                thread_id: thread_id.clone().expect("verified sharing has a caller thread"),
+            })
+        } else {
+            None
         };
         if !arguments.is_object() {
             return Err(AgentClientError::InvalidInput(
@@ -827,7 +916,6 @@ impl Interaction {
 
     fn update(&self, update: TaskUpdate) -> Result<RemoteEvent, AgentClientError> {
         let mut state = self.0.lock();
-        let update = retained::update_from_host(update).map_err(protocol)?;
         let event = state.policy.update(&update).map_err(protocol)?;
         Ok(state.event(event))
     }
@@ -840,7 +928,7 @@ impl Interaction {
 
     fn extra(&self) -> Result<Map<String, Value>, AgentClientError> {
         let state = self.0.lock();
-        retained::call_extra(&state.policy, &state.call, state.livekit).map_err(protocol)
+        Ok(retained::call_extra(&state.policy, &state.call, state.livekit))
     }
 }
 
@@ -849,14 +937,15 @@ impl State {
         match event {
             DelegationUpdate::Pending => RemoteEvent::Pending,
             DelegationUpdate::Progress(text) => RemoteEvent::Progress { text },
-            DelegationUpdate::InputRequired { request_id, question, verbatim } => {
+            DelegationUpdate::Exact(text) => RemoteEvent::Exact { text },
+            DelegationUpdate::InputRequired { question, verbatim } => {
                 let verbatim_full = verbatim.as_deref() == Some(question.as_str());
                 let outcome = ToolOutcome::InputRequired {
                     question: question.clone(),
                     verbatim: verbatim_full,
                 };
                 RemoteEvent::InputRequired {
-                    request_id,
+                    input_request: self.policy.snapshot().input_request,
                     question,
                     verbatim,
                     verbatim_full,
@@ -919,6 +1008,10 @@ impl lk_agents_abi::a2a::client::MessageContent for RemoteInteraction {
 }
 
 impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
+    fn _core_remote_id(endpoint: String, id: Option<String>) -> Result<String, AgentClientError> {
+        configuration::remote_id(&configuration::endpoint(&endpoint)?, id)
+    }
+
     fn _core_delegation_chain(
         metadata: Map<String, Value>,
     ) -> Result<Vec<lk_agents_abi::a2a::remote::DelegationPartition>, AgentClientError> {
@@ -946,7 +1039,9 @@ impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
             return Ok(token);
         }
         let project = Project { url: project_url, api_key, api_secret };
-        let Some(project) = project.serving(&endpoint)? else { return Ok(None) };
+        let Some(project) = project.serving(&endpoint)? else {
+            return Ok(None);
+        };
         let credentials =
             lk_agents_net::a2a_auth::Credentials::new(project.api_key, project.api_secret);
         match thread_id.filter(|id| !id.is_empty()) {
@@ -973,6 +1068,7 @@ impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
 const DELEGATE: &str = "delegate";
 
 /// The server's LiveKit project as the host passes it; empty values when there is none.
+#[derive(Clone, PartialEq, Eq)]
 struct Project {
     url: String,
     api_key: String,
@@ -987,7 +1083,9 @@ impl Project {
             return Ok(None);
         }
         let (api_key, api_secret) = (api_key.clone(), api_secret.clone());
-        let Ok(mut project) = url::Url::parse(url) else { return Ok(None) };
+        let Ok(mut project) = url::Url::parse(url) else {
+            return Ok(None);
+        };
         let scheme = match project.scheme() {
             "ws" | "http" => "http",
             "wss" | "https" => "https",

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
-    from livekit.agents._core import _core_SessionBinding
+    from livekit.agents._core import _core_HandlerTurn, _core_SessionBinding
     from livekit.agents.llm import LLM
     from livekit.agents.voice.agent_run import AgentCallbacks
 
@@ -49,6 +49,7 @@ class TextSessionAgent:
 
 @dataclass(kw_only=True, slots=True)
 class TextSessionRequest:
+    output: _core_HandlerTurn | None = None
     session_sink: _core_SessionBinding | None = None
     session_id: str
     id_seed: int | None = None

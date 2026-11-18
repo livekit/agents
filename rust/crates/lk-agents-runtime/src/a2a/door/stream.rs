@@ -64,11 +64,59 @@ impl Publisher {
         self.emit(announced.into_iter().collect(), task_id).await;
     }
 
+    /// A source-owned exact output. Success means this local A2A observer boundary accepted
+    /// the frame, not that a frontend spoke it. Missing or detached observers are failures.
+    pub async fn exact(
+        &self,
+        task_id: &str,
+        message: &lk_agents_abi::ChatMessage,
+    ) -> Result<(), lk_agents_abi::errors::HostError> {
+        let event =
+            TurnEvent::Exact { task_id: task_id.into(), message: Box::new(message.clone()) };
+        let mut state = self.state.lock().await;
+        let published = state
+            .0
+            .event(&event, &self.context, shortuuid("msg_"), unix_now_ms())
+            .ok_or_else(|| {
+                lk_agents_abi::errors::HostError::new(
+                    "the exact A2A output is not admitted for this task",
+                )
+            })?;
+        let frame = wire::success(self.request_id.clone(), published, None);
+        let Some(sender) = state.1.as_ref() else {
+            return Err(lk_agents_abi::errors::HostError::new(
+                "the exact A2A output has no live observer",
+            ));
+        };
+        let delivered = match wire::deliver(self.request_id.clone(), frame, sender.capacity()) {
+            Delivery::Send(frame) => sender.try_handoff(Ok(frame)),
+            Delivery::Detach(failure) => {
+                let sent = sender.try_send(Ok(failure));
+                debug_assert!(sent, "the last slot is kept for the detaching error");
+                false
+            }
+        };
+        if delivered {
+            Ok(())
+        } else {
+            state.1 = None;
+            Err(lk_agents_abi::errors::HostError::new(
+                "the exact A2A output observer detached before handoff",
+            ))
+        }
+    }
+
     /// A handler's progress or answer token.
     pub async fn event(&self, event: &TurnEvent) {
-        let (TurnEvent::Progress { task_id, .. } | TurnEvent::Token { task_id, .. }) = event;
+        let (TurnEvent::Progress { task_id, .. }
+        | TurnEvent::Exact { task_id, .. }
+        | TurnEvent::Token { task_id, .. }) = event;
         let published =
             self.state.lock().await.0.event(event, &self.context, shortuuid("msg_"), unix_now_ms());
         self.emit(published.into_iter().collect(), task_id).await;
     }
 }
+
+#[cfg(test)]
+#[path = "stream_tests.rs"]
+mod tests;

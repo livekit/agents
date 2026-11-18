@@ -76,6 +76,7 @@ class ProgressEvent:
     message: str
     call_id: str | None
     tool_name: str | None
+    silent: bool = False
     type: Literal["progress"] = "progress"
 
 

@@ -53,7 +53,7 @@ impl AgentRun {
             let (id, item) = (*id, item.clone());
             let outcome = &settled.outcome;
             let shape = tool_outcome::shape(outcome, self.input.mode);
-            let text = tool_outcome::delivered(outcome).unwrap_or(shape.text);
+            let text = tool_outcome::exact_output_note(outcome).unwrap_or(shape.text);
             let reply_required = shape.reply_required;
             if let Some(said) = tool_outcome::verbatim(outcome) {
                 self.verbatim.push(said.to_owned());
@@ -61,7 +61,7 @@ impl AgentRun {
             let this = match outcome {
                 _ if accepted.is_some_and(|(call, _)| call == id) => Some(Terminal::Output),
                 ToolOutcome::InputRequired { question, verbatim } => {
-                    let requirement = input_requirement(&self.input.invocation_id, &item, outcome)
+                    let requirement = input_requirement(&self.input.invocation_id, &item, settled)
                         .expect("an InputRequired outcome retains its call identity");
                     if terminal.is_none() {
                         self.pending_call = Some(requirement.call.clone());
@@ -114,6 +114,15 @@ impl AgentRun {
             (None, None) if !replies => Next::Stop,
             (None, None) => Next::Continue,
         };
+        if self.reconciliation.is_some() {
+            for item in items {
+                lk_agents_abi::llm::chat_context::ordering::commit_by_instant(
+                    &mut self.history,
+                    item,
+                );
+            }
+            return self.proceed(next, now, fx);
+        }
         if !self.input.opening.coordinated() {
             self.history.extend(items);
             return self.proceed(next, now, fx);
@@ -140,6 +149,7 @@ impl AgentRun {
             Next::Output(validation) => self.complete(Output::Validated(validation), fx),
             Next::Ask(ask) => self.ask_from_tool(ask, now, fx),
             Next::Stop => self.end_without_output(fx),
+            Next::Continue if self.reconciliation.is_some() => self.end_without_output(fx),
             Next::Continue => self.next_step(now, fx),
         }
     }
@@ -150,20 +160,9 @@ impl AgentRun {
 pub(super) fn input_requirement(
     invocation_id: &str,
     item: &FunctionCall,
-    outcome: &ToolOutcome,
+    settled: &crate::tool_calls::Settled,
 ) -> Option<lk_agents_abi::agent::run::RunInputRequirement> {
-    let ToolOutcome::InputRequired { question, verbatim } = outcome else { return None };
-    Some(lk_agents_abi::agent::run::RunInputRequirement {
-        invocation_id: invocation_id.to_owned(),
-        call: lk_agents_abi::a2a::turn::PendingCall {
-            id: item.id.clone(),
-            name: item.name.clone(),
-            call_id: item.call_id.clone(),
-        },
-        question: question.clone(),
-        verbatim: *verbatim,
-        presentation_message_id: None,
-    })
+    settled.input_requirement(invocation_id, item)
 }
 
 /// What a settled step leads to.

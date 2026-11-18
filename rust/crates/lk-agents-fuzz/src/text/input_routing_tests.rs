@@ -84,6 +84,7 @@ async fn turn(
     }
     let mut updates = runner
         .run(TextSessionRequest {
+            output: None,
             session_sink: Some(binding.clone()),
             session_id: "conversation".into(),
             id_seed: Some(23),

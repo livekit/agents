@@ -32,7 +32,7 @@ pub mod interfaces {
 
     /// Keeps a close nobody awaits until it finishes; the loop's teardown awaits it.
     #[lk_agents_host_derive::host(interface(
-        module = "livekit.agents.utils.aio",
+        module = "livekit.agents._asyncio",
         attrs(_keep_closing)
     ))]
     pub struct AioModule;

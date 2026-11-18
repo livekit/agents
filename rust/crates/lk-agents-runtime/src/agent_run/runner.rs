@@ -14,7 +14,7 @@ use lk_agents_core::{Opening, RunInput};
 use lk_agents_net::signal;
 use tokio::sync::mpsc;
 
-use super::{ActiveRun, Progress, RunSetup, start};
+use super::{ActiveRun, Progress, RunSetup};
 use crate::telemetry;
 use lk_agents_net::env::ProcessEnv;
 
@@ -59,6 +59,80 @@ impl AgentRunner for Runner {
     }
 
     fn run(&self, request: RunRequest) -> Result<Updates, Invalid> {
+        self.start(request, None)
+    }
+
+    fn run_stream(
+        &self,
+        request: RunRequest,
+        stream: Arc<Self::Stream>,
+        resources: Arc<Self::Resources>,
+    ) -> Result<(), Invalid> {
+        stream.bind(resources, || {
+            let invocation = request.invocation_id.clone();
+            let updates = self.start(request, Some(stream.output()))?;
+            let usage = updates.run.usage();
+            Ok(Box::new(crate::run_stream::input::Direct {
+                source: Box::new(updates),
+                usage,
+                agent: self.definition.name.clone(),
+                invocation,
+            }))
+        })
+    }
+
+    fn usage(&self, invocation_id: &str) -> Result<Usage, Invalid> {
+        let running = self.running.lock();
+        let usage = running.iter().find(|(id, ..)| id == invocation_id).map(|(.., u)| u);
+        let usage = usage.ok_or_else(|| Invalid(format!("no invocation {invocation_id}")))?;
+        Ok(usage.get())
+    }
+
+    fn progress(
+        &self,
+        invocation_id: &str,
+        operation: u64,
+        message: String,
+        silent: bool,
+    ) -> lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>> {
+        self.port(invocation_id).map_or_else(
+            |error| Box::pin(async move { Err(error) }) as _,
+            |port| port.enqueue(operation, message, silent),
+        )
+    }
+    fn say(
+        &self,
+        invocation_id: &str,
+        operation: u64,
+        message: String,
+    ) -> lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>> {
+        self.port(invocation_id).map_or_else(
+            |error| Box::pin(async move { Err(error) }) as _,
+            |port| port.say(operation, message),
+        )
+    }
+}
+
+impl Runner {
+    fn port(&self, invocation: &str) -> Result<Progress, ProviderError> {
+        self.running
+            .lock()
+            .iter()
+            .find(|(id, ..)| id == invocation)
+            .map(|(_, port, _)| port.clone())
+            .ok_or_else(|| {
+                lk_agents_abi::errors::HostError::new(format!(
+                    "invocation {invocation} is not running"
+                ))
+                .into()
+            })
+    }
+    fn start(
+        &self,
+        request: RunRequest,
+        fallback: Option<super::output::Target>,
+    ) -> Result<Updates, Invalid> {
+        let target = request.output.clone().map(super::output::Target::Handler).or(fallback);
         let ChatItem::Message(mut message) = request.message else {
             return Err(Invalid("a run's message is a chat message".into()));
         };
@@ -114,57 +188,20 @@ impl AgentRunner for Runner {
             },
         };
         let invocation_id = input.invocation_id.clone();
-        let (handle, updates) =
-            start(&spawner, self.definition.clone(), input, setup, span, UPDATE_QUEUE)
-                .map_err(|e| Invalid(e.to_string()))?;
+        let (handle, updates) = super::start_with_output(
+            &spawner,
+            self.definition.clone(),
+            input,
+            setup,
+            span,
+            UPDATE_QUEUE,
+            target,
+        )
+        .map_err(|e| Invalid(e.to_string()))?;
         let mut running = self.running.lock();
         running.retain(|(_, progress, _)| !progress.ended());
         running.push((invocation_id, handle.progress(), handle.usage()));
         Ok(Updates { run: handle, updates, clock: self.clock.clone() })
-    }
-
-    fn run_stream(
-        &self,
-        request: RunRequest,
-        stream: Arc<Self::Stream>,
-        resources: Arc<Self::Resources>,
-    ) -> Result<(), Invalid> {
-        stream.bind(resources, || {
-            let invocation = request.invocation_id.clone();
-            let updates = self.run(request)?;
-            let usage = updates.run.usage();
-            Ok(Box::new(crate::run_stream::input::Direct {
-                source: Box::new(updates),
-                usage,
-                agent: self.definition.name.clone(),
-                invocation,
-            }))
-        })
-    }
-
-    fn usage(&self, invocation_id: &str) -> Result<Usage, Invalid> {
-        let running = self.running.lock();
-        let usage = running.iter().find(|(id, ..)| id == invocation_id).map(|(.., u)| u);
-        let usage = usage.ok_or_else(|| Invalid(format!("no invocation {invocation_id}")))?;
-        Ok(usage.get())
-    }
-
-    async fn progress(
-        &self,
-        invocation_id: &str,
-        operation: u64,
-        message: String,
-    ) -> Result<(), Invalid> {
-        let progress = {
-            let running = self.running.lock();
-            let progress = running.iter().find(|(id, ..)| id == invocation_id).map(|(_, p, _)| p);
-            progress.cloned()
-        }
-        .ok_or_else(|| Invalid(format!("invocation {invocation_id} is not running")))?;
-        progress
-            .report(operation, message)
-            .await
-            .map_err(|_| Invalid(format!("invocation {invocation_id} is not running")))
     }
 }
 

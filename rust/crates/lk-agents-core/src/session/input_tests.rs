@@ -145,6 +145,35 @@ fn closing_a_dead_bodys_occurrence_preserves_other_local_questions() {
 }
 
 #[test]
+fn storage_normalization_does_not_turn_a_recognized_response_into_unrelated_input() {
+    let mut state = state();
+    let request = reference(&state, "first");
+    let retain = registration(&state, "first", Some("call"));
+    apply(&mut state, vec![retain]).unwrap();
+    present(&mut state, vec![request.clone()]);
+    let human = message("human", Role::User, "Friday");
+    let mut stored = human.clone();
+    stored.created_at += std::time::Duration::from_nanos(1);
+    stored.transcript_confidence = Some(0.9);
+    state.chat_history.push(stored);
+    let offered = candidates(&state);
+    let admitted =
+        route(&mut state, &human, &offered, Some(Ok(InputRoute::Matched(vec![request.clone()]))))
+            .unwrap();
+    assert_eq!(admitted.requests.as_slice(), std::slice::from_ref(&request));
+    state.chat_history.last_mut().unwrap().transcript_confidence = None;
+    apply(
+        &mut state,
+        vec![SessionInputCommand::Delivered { requests: vec![request], message_id: human.id }],
+    )
+    .unwrap();
+    assert_eq!(
+        state.frames[&state.root_frame_id].input_requests["first"].state,
+        InputRequestState::Responded
+    );
+}
+
+#[test]
 fn a_same_id_transcript_revision_requires_correction_before_local_delivery() {
     let mut state = state();
     let request = reference(&state, "first");

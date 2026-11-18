@@ -25,7 +25,7 @@ impl TurnHost for Script {
     }
 }
 
-fn open(
+pub(super) fn open(
     run: impl Fn(
         Arc<dyn HandlerPort>,
         Arc<dyn lk_agents_abi::invoke::Cancellation>,
@@ -55,11 +55,12 @@ fn open(
         caller_history: None,
         host_context: None,
     };
-    Handler::open(Arc::new(Script(Box::new(run))), crate::telemetry::Cx::NONE, ctx)
+    let spawner = (lk_agents_net::env::ProcessEnv::current_runtime().spawner)().unwrap();
+    Handler::open(Arc::new(Script(Box::new(run))), crate::telemetry::Cx::NONE, ctx, spawner)
 }
 
 fn progress(text: &str) -> TurnEvent {
-    TurnEvent::Progress { task_id: "task".into(), text: text.into() }
+    TurnEvent::Progress { task_id: "task".into(), text: text.into(), reply_required: true }
 }
 
 // Catches: a report overtaken by the output, or a verdict not reaching the checkpoint.
@@ -156,4 +157,52 @@ async fn reports_after_the_turn_closed_are_dropped_and_checkpoints_yield() {
         turn.progress(format!("{n}")).await;
     }
     assert!(turn.checkpoint().await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn admitted_native_report_outlives_its_commit_waiter_and_precedes_handler_return() {
+    let mut handler = open(|turn, _| {
+        Box::pin(async move {
+            let state = lk_agents_abi::session::snapshot::SessionSnapshot::new(
+                "session".into(),
+                "task".into(),
+                "desk".into(),
+            );
+            let report = lk_agents_abi::text_session::LiveTurnReport {
+                turn: 7,
+                origin: lk_agents_abi::text_session::LiveTurnOrigin {
+                    request_id: "message".into(),
+                    execution_id: "task".into(),
+                    task_ids: vec!["task".into()],
+                },
+                result: Box::new(Ok(lk_agents_abi::text_session::TextSessionTurn {
+                    result: lk_agents_abi::agent::run::RunResult {
+                        outcome: lk_agents_abi::agent::run::RunOutcome::NoOutput,
+                        interrupted: false,
+                        new_messages: Vec::new(),
+                        all_messages: Vec::new(),
+                        usage: Default::default(),
+                        verbatim: None,
+                        pending_call: None,
+                        input_requirements: Vec::new(),
+                    },
+                    state,
+                })),
+                working: false,
+            };
+            let committed = turn.live_turn(report).await.unwrap();
+            // Admission belongs to the endpoint owner, even if this waiter goes away.
+            drop(committed);
+            Ok(HandlerOutput::default())
+        })
+    });
+    assert!(matches!(handler.next().await, Some(Read::Live(report)) if report.turn == 7));
+    let clock = RealClock::new();
+    let output = lk_agents_abi::timeout(&clock, Duration::from_secs(1), handler.next())
+        .await
+        .expect("admission must not hold the handler until the commit it enables");
+    assert!(matches!(output, Some(Read::Output(output)) if output.is_ok()));
+    assert!(handler.awaiting_live_commit());
+    handler.commit_live(7, Ok(()));
+    assert!(!handler.awaiting_live_commit());
 }

@@ -138,7 +138,8 @@ impl Rule for ToolOutputFollowsOutcome {
             if *answer == ToolAnswer::Completed && in_task(speech) || over && !detached {
                 shape.reply_required = false;
             }
-            let want = lk_agents_core::tool_outcome::delivered(&outcome).unwrap_or(shape.text);
+            let want =
+                lk_agents_core::tool_outcome::exact_output_note(&outcome).unwrap_or(shape.text);
             let subject = Subject::Resource(Kind::Tool, tool.nth);
             check.expect_with(subject.clone(), output.output == want, || {
                 format!(

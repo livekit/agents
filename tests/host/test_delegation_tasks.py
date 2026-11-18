@@ -60,7 +60,7 @@ async def test_a_bound_task_cancels_through_its_live_owner_while_a_snapshot_cann
         assert task.task.status.state == pb.TASK_STATE_WORKING
 
         detached = await store.load_session()
-        with pytest.raises(ValueError, match="active bound conversation owner"):
+        with pytest.raises(ValueError, match="explicitly bound context store"):
             await detached.remote_agents[peer.url].tasks["remote-task"].cancel()
         assert not peer.cancelled
 
@@ -81,7 +81,8 @@ async def test_a_bound_task_cancels_through_its_live_owner_while_a_snapshot_cann
         ]
         assert len(requests) == 1
         assert requests[0].payload.id == "remote-task"
-    with pytest.raises(ValueError, match="owner"):
+    # Between runs, cancellation goes through the thread database; this store has none.
+    with pytest.raises(ValueError, match="bound thread database"):
         await task.cancel()
     assert peer.cancelled == ["remote-task"], (
         "closing the frontend must not send another cancellation"

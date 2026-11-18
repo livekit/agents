@@ -11,24 +11,36 @@ impl Session {
         now: lk_agents_abi::Ts,
         effects: &mut Vec<super::SessionEffect>,
     ) {
-        let candidates = self.input_candidates();
+        let human = crate::session::live::FrozenHuman {
+            message,
+            candidates: self.input_candidates(),
+            offered: crate::delegation::remote::routing::offered(&self.state),
+            history: self.state.chat_history.clone(),
+        };
+        self.route_frozen_input(human, now, effects);
+    }
+
+    /// Input received behind a live body keeps the occurrences the person could actually
+    /// answer then. A question presented while it waited cannot become a new answer target.
+    pub(super) fn route_frozen_input(
+        &mut self,
+        human: crate::session::live::FrozenHuman,
+        now: lk_agents_abi::Ts,
+        effects: &mut Vec<super::SessionEffect>,
+    ) {
+        let crate::session::live::FrozenHuman { message, candidates, offered, history } = human;
         if candidates.is_empty() || message.raw_text_content().unwrap_or_default().trim().is_empty()
         {
-            self.invoke(Some(message), now, effects);
+            self.invoke_offered(Some(message), Some(offered), Vec::new(), now, effects);
         } else {
             let request_id = self.mint("input_route");
             effects.push(super::SessionEffect::RouteInput(crate::session::InputRoutingRequest {
                 request_id: request_id.clone(),
                 message: message.clone(),
-                history: self.state.chat_history.clone(),
+                history,
                 candidates: candidates.clone(),
             }));
-            self.phase = Phase::Routing {
-                request_id,
-                message,
-                candidates,
-                offered: crate::delegation::remote::routing::offered(&self.state),
-            };
+            self.phase = Phase::Routing { request_id, message, candidates, offered };
         }
     }
 
@@ -83,7 +95,7 @@ impl Session {
         frame.history.push(observation.into());
         self.phase = Phase::NotStarted;
         let offered = crate::delegation::remote::routing::refresh_offered(&self.state, &offered);
-        self.invoke_offered(Some(message), Some(offered), now, effects);
+        self.invoke_offered(Some(message), Some(offered), Vec::new(), now, effects);
     }
 
     pub fn input(&mut self, command: SessionInputCommand) -> Result<(), StorageError> {

@@ -31,8 +31,6 @@ use execution::{Execution, Reporter};
 
 /// Events the work in flight may report ahead of the driver.
 const EVENT_QUEUE: usize = 64;
-/// Progress updates not yet taken by the driver; it takes them ahead of every other report.
-const PROGRESS_QUEUE: usize = 32;
 
 /// What a run executes against.
 #[derive(Clone)]
@@ -60,26 +58,9 @@ pub struct ActiveRun {
     _driver: Arc<TaskSet>,
 }
 
-/// Where a tool body's `ctx.update(message)` reaches its run: the host operation running the body
-/// and the message. Admission waits while the bounded queue is full; the owning tool cannot
-/// finish ahead of an awaited update. Closing the invocation ends every waiting admission.
-#[derive(Clone)]
-pub struct Progress(mpsc::Sender<(u64, String)>);
-
-impl Progress {
-    /// Wait for capacity without dropping the update. An ended run closes the admission port.
-    pub async fn report(
-        &self,
-        operation: u64,
-        message: String,
-    ) -> Result<(), mpsc::error::SendError<(u64, String)>> {
-        self.0.send((operation, message)).await
-    }
-
-    pub fn ended(&self) -> bool {
-        self.0.is_closed()
-    }
-}
+pub(crate) mod output;
+mod progress;
+pub use progress::Progress;
 
 impl ActiveRun {
     /// Where the run's tool bodies report their progress.
@@ -120,6 +101,18 @@ pub fn start(
     span: telemetry::ScopedSpan<telemetry::AgentRun>,
     updates: usize,
 ) -> Result<(ActiveRun, mpsc::Receiver<RunUpdate>), AgentError> {
+    start_with_output(spawner, agent, input, setup, span, updates, None)
+}
+
+pub(crate) fn start_with_output(
+    spawner: &Arc<dyn Spawner>,
+    agent: AgentDefinition,
+    input: RunInput,
+    setup: RunSetup,
+    span: telemetry::ScopedSpan<telemetry::AgentRun>,
+    updates: usize,
+    output: Option<output::Target>,
+) -> Result<(ActiveRun, mpsc::Receiver<RunUpdate>), AgentError> {
     let input_id = input.invocation_id.clone();
     let run = AgentRun::new(agent, input)?
         .with_input_answers(setup.input_answers.clone())
@@ -127,10 +120,11 @@ pub fn start(
     let cancel = CancellationToken::new();
     let (update_tx, update_rx) = outbox(updates.max(1));
     let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
-    let (progress_tx, progress) = mpsc::channel(PROGRESS_QUEUE);
+    let driving = Arc::new(TaskSet::default());
+    let progress = Progress::new(input_id.clone(), events_tx.clone(), &driving, spawner.clone());
     let (usage_tx, usage) = signal::signal(run.usage());
     let accepted = Accepted::default();
-    let driver = Driver {
+    let mut driver = Driver {
         usage: usage_tx,
         accepted: accepted.clone(),
         run,
@@ -139,15 +133,15 @@ pub fn start(
             spawner.clone(),
             Reporter { id: input_id, tx: events_tx },
             span,
+            progress.clone(),
         ),
         updates: update_tx,
         published: 0,
         finished: false,
     };
-    let driving = Arc::new(TaskSet::default());
-    driving.spawn(&**spawner, "agent run", driver.drive(events, progress, cancel.clone()));
-    let handle =
-        ActiveRun { cancel, progress: Progress(progress_tx), usage, accepted, _driver: driving };
+    driver.work.output = output;
+    driving.spawn(&**spawner, "agent run", driver.drive(events, cancel.clone()));
+    let handle = ActiveRun { cancel, progress, usage, accepted, _driver: driving };
     Ok((handle, update_rx))
 }
 
@@ -168,7 +162,6 @@ impl Driver {
     async fn drive(
         mut self,
         mut events: mpsc::Receiver<(String, execution::Report)>,
-        mut progress: mpsc::Receiver<(u64, String)>,
         cancelled: CancellationToken,
     ) {
         let mut cancel_seen = false;
@@ -194,12 +187,6 @@ impl Driver {
                 biased;
                 () = wait(clock.as_ref(), wake) => AgentRunEvent::Wake,
                 () = cancelled.cancelled(), if !cancel_seen => { cancel_seen = true; AgentRunEvent::Cancel }
-                Some((operation, message)) = progress.recv() => {
-                    match self.work.progress(operation, message) {
-                        Some(event) => event,
-                        None => continue,
-                    }
-                }
                 Some((_, report)) = events.recv() => {
                     let (event, serialized) = self.work.report(report);
                     if let (AgentRunEvent::OutputValidated { validation, .. }, Some(value)) =
@@ -209,7 +196,7 @@ impl Driver {
                     }
                     event
                 }
-                _ = self.work.invoker.settled() => continue,
+                event = self.work.settled() => match event { Some(event) => event, None => continue },
             };
             effects = self.run.handle(event, self.work.setup.clock.now());
         }

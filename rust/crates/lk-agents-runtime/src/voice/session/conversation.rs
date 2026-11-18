@@ -14,6 +14,15 @@ impl VoiceSession {
 }
 
 impl SessionCommands for VoiceSession {
+    fn ended(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        let owner = self.conversation();
+        Box::pin(async move {
+            if let Ok(owner) = owner {
+                owner.ended().await;
+            }
+        })
+    }
+
     fn routing_context<'a>(
         &'a self,
         remote_id: &'a str,
@@ -92,16 +101,22 @@ impl SessionCommands for VoiceSession {
 
     fn cancel_remote<'a>(
         &'a self,
-        remote_id: &'a str,
-        endpoint: &'a str,
-        task: &'a lk_agents_abi::delegation::remote::RemoteTaskRef,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<(), lk_agents_abi::a2a::client::AgentClientError>>
-    {
+        target: &'a lk_agents_abi::session::control::RemoteControlRef,
+        scope: Option<&'a lk_agents_abi::delegation::remote::RemoteControlScope>,
+        candidate: std::sync::Arc<dyn lk_agents_abi::session::control::RemoteCancellation>,
+        retry_after: Option<&'a str>,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            lk_agents_abi::session::control::RemoteCancellationAdmission,
+            lk_agents_abi::a2a::client::AgentClientError,
+        >,
+    > {
         Box::pin(async move {
             let commands = self.conversation().map_err(|error| {
                 lk_agents_abi::a2a::client::AgentClientError::InvalidInput(error.to_string())
             })?;
-            commands.cancel_remote(remote_id, endpoint, task).await
+            commands.cancel_remote(target, scope, candidate, retry_after).await
         })
     }
 

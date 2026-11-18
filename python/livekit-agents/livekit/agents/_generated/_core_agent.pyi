@@ -120,11 +120,19 @@ class AgentRunner:
     ) -> None: ...
     def usage(self, invocation_id: str) -> Usage:
         """The latest usage snapshot of invocation `invocation_id`; never advances it."""
-    async def progress(self, invocation_id: str, operation: int, message: str) -> None:
+    async def progress(
+        self,
+        invocation_id: str,
+        operation: int,
+        message: str,
+        silent: bool = False,
+    ) -> None:
         """`ctx.update(message)` from the tool body running as host `operation` of invocation
         `invocation_id`: the run streams it as progress. Waits for queue admission rather than
         dropping an update under pressure. Refused once this runner no longer owns the invocation.
         """
+    async def say(self, invocation_id: str, operation: int, message: str) -> None:
+        """Enqueue exact text now; the private reader confirms the source's local output boundary."""
 
 class AgentRunUpdates:
     async def recv(self) -> RunUpdate | None: ...

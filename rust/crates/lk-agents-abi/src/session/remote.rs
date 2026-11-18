@@ -58,6 +58,9 @@ pub trait RemoteContextView: Clone + Send + Sync + Sized + 'static {
     pid = false
 ))]
 pub trait RemoteTaskView: Clone + Send + Sync + Sized + 'static {
+    #[host(env)]
+    type Env;
+
     /// The observed SDK Task, including an unspecified status when only deltas were received.
     #[host(getter)]
     fn task(&self) -> Result<Task, StorageError>;
@@ -68,9 +71,10 @@ pub trait RemoteTaskView: Clone + Send + Sync + Sized + 'static {
     #[host(getter)]
     fn cancel_requested(&self) -> Result<bool, StorageError>;
 
-    /// Request cancellation through the current bound native owner and its configured
-    /// remote client. Detached views and tasks without a live driver cannot dispatch.
+    /// Request cancellation through the explicitly bound store. Current configured clients
+    /// retain their authority; idle LiveKit control uses the current server and bound thread.
+    /// Detached and load-only views cannot dispatch.
     /// Success requires persisted observation of the canceled task state.
     #[host(await)]
-    async fn cancel(&self) -> Result<(), crate::a2a::client::AgentClientError>;
+    async fn cancel(&self, env: &Self::Env) -> Result<(), crate::a2a::client::AgentClientError>;
 }

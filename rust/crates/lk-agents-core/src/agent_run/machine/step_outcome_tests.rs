@@ -476,7 +476,11 @@ fn a_reported_question_with_a_pending_sibling(
     let question_call = driver.executes()[0].2.call_id.clone();
     driver.send(AgentRunEvent::ToolSettled {
         call: calls[0].0,
-        outcome: ToolOutcome::InputRequired { question: "Which city?".into(), verbatim: true },
+        report: lk_agents_abi::llm::tool_executor::ToolReport {
+            outcome: ToolOutcome::InputRequired { question: "Which city?".into(), verbatim: true },
+            input_request: Some(Box::new(remote_input())),
+            transition: None,
+        },
     });
     assert!(driver.finished().is_none(), "the sibling still owns work");
     (driver, request, calls[1].0, question_call)
@@ -500,6 +504,18 @@ fn assert_reported_question(effects: &[AgentRunEffect], call_id: &str) {
     assert_eq!(requirement.call.name, "hotel");
     assert_eq!(requirement.question, "Which city?");
     assert!(requirement.verbatim);
+    assert_eq!(requirement.input_request, Some(remote_input()));
+}
+
+fn remote_input() -> lk_agents_abi::session::InputRequestRef {
+    lk_agents_abi::session::InputRequestRef::RemoteTask {
+        remote_id: "hotel".into(),
+        task: lk_agents_abi::delegation::remote::RemoteTaskRef {
+            context_id: "trip".into(),
+            task_id: "booking".into(),
+        },
+        request_id: "booking/input_0".into(),
+    }
 }
 
 #[test]
@@ -507,8 +523,10 @@ fn cancellation_retains_a_reported_question_before_its_sibling_settles() {
     let (mut driver, _, sibling, call_id) = a_reported_question_with_a_pending_sibling(false);
     driver.send(AgentRunEvent::Cancel);
     driver.send(AgentRunEvent::Cancel); // A repeated cancellation must not duplicate the question.
-    let effects =
-        driver.send(AgentRunEvent::ToolSettled { call: sibling, outcome: ToolOutcome::Cancelled });
+    let effects = driver.send(AgentRunEvent::ToolSettled {
+        call: sibling,
+        report: (ToolOutcome::Cancelled).into(),
+    });
     assert_reported_question(&effects, &call_id);
 }
 
@@ -521,8 +539,10 @@ fn model_failure_retains_a_reported_question_before_the_stream_ends() {
     )
     .into();
     driver.send(AgentRunEvent::LlmFailed { request, error });
-    let effects =
-        driver.send(AgentRunEvent::ToolSettled { call: sibling, outcome: ToolOutcome::Cancelled });
+    let effects = driver.send(AgentRunEvent::ToolSettled {
+        call: sibling,
+        report: (ToolOutcome::Cancelled).into(),
+    });
     assert_reported_question(&effects, &call_id);
 }
 

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
+from collections.abc import Awaitable
 
 # the generated event models resolve their string annotations in this module's namespace
 from datetime import timedelta as timedelta
-from typing import TYPE_CHECKING, Annotated as Annotated, Any, Literal as Literal
+from typing import TYPE_CHECKING, Annotated as Annotated, Any, Literal as Literal, cast
 
 from pydantic import Field as Field, TypeAdapter
 from typing_extensions import TypeVar
@@ -192,43 +192,71 @@ class RunContext(_facades.RunContext[Context_T]):
             call_id=self._function_call.call_id,
         )
 
-    async def update(self, message: str) -> None:
-        """Report progress while the tool runs: a ``working`` frame on A2A, speech on a call.
+    def say(self, text: str) -> Awaitable[None]:
+        """Enqueue exact text. Await its local output boundary, without canceling queued output
+        when its reader is canceled. A voice receipt confirms playout; text confirms its own
+        live output handoff, which does not acknowledge audio on a remote frontend.
+        """
+        invocation = self._invocation
+        if invocation is None:
+            raise RuntimeError("exact tool output outside its captured invocation")
+        if self._session is not None:
+            receipt = self._session._core.tool_say(
+                invocation.invocation_id, invocation.operation, self.function_call.call_id, text
+            )
+        else:
+            if self._run is None or self._run.runner is None:
+                raise RuntimeError("the tool's native report owner has ended")
+            receipt = self._run.runner.say(invocation.invocation_id, invocation.operation, text)
+        # Retrieving a completed failure suppresses an unobserved-future warning. Awaiting the
+        # same private native reader still raises it; the queued work has a separate owner.
+        future = cast(asyncio.Future[None], receipt)
+        future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        return future
 
-        On a call, the first update releases control to the model with ``message`` as the
-        tool's interim return; later ones are coalesced into a deferred reply.
+    def update(self, message: str, *, silent: bool = False) -> Awaitable[None]:
+        """Enqueue progress now; awaiting confirms framework admission.
+
+        A silent update remains observable status without requesting spoken acknowledgement.
+        Losing the private reader does not cancel an admitted update.
         """
         from .._generated.tool_context import UPDATE_TEMPLATE
         from . import _BindingContextVar, _VoiceBinding
         from .agent_run import _template_tools, render_template
 
+        invocation = self._invocation
+        if invocation is None:
+            raise RuntimeError("tool update outside its captured invocation")
         fnc_call = self.function_call
         if self._session is None:
-            if (
-                self._run is not None
-                and self._run.runner is not None
-                and self._invocation is not None
-            ):
-                await self._run.runner.progress(
-                    self._invocation.invocation_id, self._invocation.operation, message
-                )
-            hooks = self._run.hooks if self._run is not None else None
-            if hooks is not None and hooks.on_update is not None:
-                out = hooks.on_update(message)
-                if inspect.isawaitable(out):
-                    await out
-            return
-
-        args = {"function_name": fnc_call.name, "call_id": fnc_call.call_id, "message": message}
-        binding = _BindingContextVar.get(None)
-        rendered = None
-        if isinstance(binding, _VoiceBinding):
-            options = binding.agent._tool_handling
-            tools = _template_tools(binding.agent, binding)
-            rendered = render_template(options, tools, fnc_call.name, "update_template", args)
-        if rendered is None:
-            rendered = UPDATE_TEMPLATE.format(**args)
-        self._tool_update(ToolReport(outcome=ToolOutcomeUpdate(message=rendered, raw=message)))
+            if self._run is None or self._run.runner is None:
+                raise RuntimeError("the tool's native report owner has ended")
+            receipt = self._run.runner.progress(
+                invocation.invocation_id, invocation.operation, message, silent
+            )
+        else:
+            args = {"function_name": fnc_call.name, "call_id": fnc_call.call_id, "message": message}
+            binding = _BindingContextVar.get(None)
+            rendered = None
+            if isinstance(binding, _VoiceBinding):
+                options = binding.agent._tool_handling
+                tools = _template_tools(binding.agent, binding)
+                rendered = render_template(options, tools, fnc_call.name, "update_template", args)
+            if rendered is None:
+                rendered = UPDATE_TEMPLATE.format(**args)
+            receipt = self._session._core.tool_progress(
+                invocation.invocation_id,
+                invocation.operation,
+                fnc_call.call_id,
+                ToolReport(
+                    outcome=ToolOutcomeUpdate(
+                        message=rendered, raw=message, reply_required=not silent
+                    )
+                ),
+            )
+        future = cast(asyncio.Future[None], receipt)
+        future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        return future
 
     def _tool_update(self, report: ToolReport) -> None:
         invocation = self._invocation

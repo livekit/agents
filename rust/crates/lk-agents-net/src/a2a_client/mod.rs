@@ -771,9 +771,13 @@ impl<'a> ReplyReader<'a> {
         // The peer has sent content: a checkpoint or normalization failure cannot make this
         // business request safe to repeat. Record the raw SDK value before normalization.
         exchange.delivered();
-        if let Some(observer) = &updates.observer {
-            observer.response(self.request, response.clone()).await?;
-        }
+        let accepted = match &updates.observer {
+            Some(observer) => observer.response(self.request, response.clone()).await?,
+            None => response.clone(),
+        };
+        // Canonicalization cannot make an invalid raw SDK operation shape valid.
+        self.request.validate_response(&response)?;
+        let response = accepted;
         self.request.validate_response(&response)?;
         let update = self.state.accept(response.clone())?;
         Ok(ReplyEvent { response, update })

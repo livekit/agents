@@ -23,7 +23,12 @@ fn reloading_history_does_not_publish_a_private_realtime_placeholder() {
     driver.take_outbox();
     driver.storage_reloaded(
         Vec::new(),
-        VoiceHistory { items: vec![foreign.clone()], stored: vec![foreign], revision: (1, 1) },
+        VoiceHistory {
+            items: vec![foreign.clone()],
+            stored: vec![foreign],
+            revision: (1, 1),
+            ..Default::default()
+        },
     );
     let effects = driver.settle_step();
     let history = effects
@@ -224,6 +229,7 @@ fn an_older_receipt_cannot_replace_the_conversation_or_its_read_baseline() {
             items: vec![current.clone()],
             stored: vec![current.clone()],
             revision: (1, 2),
+            ..Default::default()
         },
     );
     driver.take_outbox();
@@ -231,10 +237,68 @@ fn an_older_receipt_cannot_replace_the_conversation_or_its_read_baseline() {
     assert!(expected.contains(&current), "the newer receipt was accepted");
     driver.storage_reloaded(
         vec![current.clone()],
-        VoiceHistory { items: vec![original.clone()], stored: vec![original], revision: (1, 1) },
+        VoiceHistory {
+            items: vec![original.clone()],
+            stored: vec![original],
+            revision: (1, 1),
+            ..Default::default()
+        },
     );
     assert_eq!(driver.checkpoint_history().items, expected);
     assert_eq!(driver.checkpoint_history().stored, [current]);
     assert_eq!(driver.checkpoint_history().revision, (1, 2));
     assert!(driver.take_outbox().is_empty(), "an old receipt publishes no replacement history");
+}
+
+#[test]
+fn a_late_foreign_collision_keeps_local_history_and_refuses_its_next_control_write() {
+    use crate::agent::{Source, Visibility};
+    let item = |text: &str| {
+        ChatItem::Message(ChatMessage::text(
+            "conflicting-item",
+            Role::User,
+            text,
+            std::time::UNIX_EPOCH,
+        ))
+    };
+    let original = item("original");
+    let local = item("local intent");
+    let foreign = item("foreign intent");
+    let mut driver = driver();
+    driver.storage_reloaded(
+        Vec::new(),
+        VoiceHistory {
+            items: vec![original.clone()],
+            stored: vec![original.clone()],
+            revision: (3, 1),
+            partition_key: Some("voice".into()),
+            ..Default::default()
+        },
+    );
+    let read = driver.checkpoint_history().items;
+    driver.commit_item(local.clone(), Source::HostCtx, Visibility::Both);
+    driver.take_outbox();
+    driver.storage_reloaded(
+        read,
+        VoiceHistory {
+            items: vec![foreign.clone()],
+            stored: vec![foreign],
+            revision: (4, 2),
+            partition_key: Some("voice".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        driver.admit_conversation(),
+        Err(StorageError::VersionConflict { partition_key: "voice".into(), expected: 3 })
+    );
+    let retained = driver.checkpoint_history();
+    assert!(retained.items.contains(&local));
+    assert_eq!(retained.stored, [original], "the local intent retains its original database base");
+    assert_eq!(retained.revision, (3, 1));
+    assert!(driver.settle_step().iter().any(|effect| matches!(effect,
+        VoiceEffect::Emit(SessionEvent::Diagnostic(diagnostic))
+            if diagnostic.message == crate::events::diagnostics::HISTORY_CONFLICT
+                && diagnostic.fields.contains(&("item_ids", "conflicting-item".into()))
+    )));
 }

@@ -51,8 +51,8 @@ class TurnOptionsKwargs(TypedDict, total=False):
     """
 
 
-Policy: TypeAlias = Literal["batch", "queue", "concurrent", "reject"]
-"""A message during a run: one of the four policies."""
+Policy: TypeAlias = Literal["batch", "queue", "concurrent", "reject", "live"]
+"""What owns a message arriving while work is running."""
 
 
 PolicySpec: TypeAlias = Policy | dict[str, Policy] | None

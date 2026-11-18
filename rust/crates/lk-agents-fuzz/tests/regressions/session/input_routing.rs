@@ -32,11 +32,16 @@ const REMOTE: &str = "https://travel.test";
 struct AdmissionCandidate;
 
 impl RemoteTaskDriver for AdmissionCandidate {
-    fn cancel<'a>(
-        &'a self,
+    fn same_configuration(&self, other: &dyn RemoteTaskDriver) -> bool {
+        (other as &dyn std::any::Any).is::<Self>()
+    }
+
+    fn cancellation(
+        &self,
         _task: lk_agents_abi::delegation::remote::RemoteTaskRef,
-    ) -> BoxFuture<'a, Result<(), AgentClientError>> {
-        Box::pin(async { Ok(()) })
+        _retry_after: Option<String>,
+    ) -> Arc<dyn lk_agents_abi::session::control::RemoteCancellation> {
+        panic!("this admission fixture never dispatches a task control")
     }
 
     fn is_live(&self) -> bool {
@@ -133,6 +138,7 @@ fn waiting_for_date() -> Arc<SessionBinding> {
             )]),
             cancel_requested: false,
             next_input: 1,
+            terminal_event: None,
         },
     );
     state.remote_agents.insert(REMOTE.into(), remote);
@@ -598,6 +604,7 @@ fn response_handoff(reused_call_ids: bool) {
                 streaming: true,
                 origin: Some(origin.clone()),
                 input_request: Some(reference),
+                control_scope: None,
             },
         };
         // This is the journal command used by the native transport driver. Enqueue it, then

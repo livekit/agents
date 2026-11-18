@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
-    from livekit.agents._core import SpeechHandle
+    from livekit.agents._core import SpeechHandle, _core_HandlerTurn
 
     from .chat_items import ChatItem, FunctionCall
     from .connect import APIConnectOptions
@@ -250,10 +250,9 @@ class FunctionToolInfo:
     retries: int | None = None
     """`retries=` on the tool: its own budget in place of the run's `Retries.tools`."""
     remote: str | None = None
-    """A delegate's identity, a `RemoteAgent(...).as_tool()`'s endpoint or an `agent.as_tool()`'s
-    `agent:<name>`: with the tool's name, its configured identity as an expert on a voice
-    session.
-    """
+    """A RemoteAgent's stable configured identity, independent of its model-visible name."""
+    local_agent: str | None = None
+    """A transient local agent tool's child identity, kept separate from remote IDs."""
 
 
 ReadBack: TypeAlias = Literal["default", "function"]
@@ -376,6 +375,7 @@ class StreamEventProgress:
     call_id: str
     tool_name: str
     message: str
+    silent: bool = False
 
 
 StreamEvent: TypeAlias = (
@@ -399,6 +399,8 @@ class RunRequest:
     captured at the `run()` entry (a `(loop, contextvars.Context)` pair) its callbacks run in.
     """
 
+    output: _core_HandlerTurn | None = None
+    """Native output capability captured by this source; never reconstructed from saved data."""
     invocation_id: str
     """Prefixes every id the invocation mints."""
     execution_id: str | None = None

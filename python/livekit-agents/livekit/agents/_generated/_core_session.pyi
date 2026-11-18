@@ -46,7 +46,8 @@ class RemoteTask:
     def cancel_requested(self) -> bool:
         """Explicit local intent; only an observed task state confirms remote cancellation."""
     async def cancel(self) -> None:
-        """Request cancellation through the current bound native owner and its configured
-        remote client. Detached views and tasks without a live driver cannot dispatch.
+        """Request cancellation through the explicitly bound store. Current configured clients
+        retain their authority; idle LiveKit control uses the current server and bound thread.
+        Detached and load-only views cannot dispatch.
         Success requires persisted observation of the canceled task state.
         """

@@ -2,6 +2,7 @@
 //! Decisions remain in the core; the receiving driver checkpoints before acknowledging writes.
 
 mod drivers;
+mod live;
 
 use std::sync::{Arc, Weak};
 
@@ -16,6 +17,7 @@ pub(crate) type Receipt<T> =
     signal::Producer<Option<Result<T, lk_agents_abi::storage::StorageError>>>;
 
 pub(crate) enum SessionCommand {
+    LiveInput(Box<crate::text_session::live::LiveInput>),
     RoutingContext {
         remote_id: String,
         endpoint: String,
@@ -40,12 +42,12 @@ pub(crate) enum SessionCommand {
         done: Receipt<Option<Arc<dyn RemoteTaskDriver>>>,
     },
     CancelRemote {
-        remote_id: String,
-        endpoint: String,
-        task: lk_agents_abi::delegation::remote::RemoteTaskRef,
+        target: lk_agents_abi::session::control::RemoteControlRef,
+        scope: Option<lk_agents_abi::delegation::remote::RemoteControlScope>,
+        candidate: Arc<dyn lk_agents_abi::session::control::RemoteCancellation>,
+        retry_after: Option<String>,
         drivers: Arc<drivers::Drivers>,
-        /// None is the core's already-observed cancellation, with no control I/O needed.
-        done: Receipt<Option<Arc<dyn RemoteTaskDriver>>>,
+        done: Receipt<lk_agents_abi::session::control::RemoteCancellationAdmission>,
     },
     AdmitInput {
         request: Box<lk_agents_abi::session::InputRoutingRequest>,
@@ -105,6 +107,11 @@ pub(crate) enum SessionCommand {
 impl SessionCommand {
     pub(crate) fn fail(self, error: lk_agents_abi::storage::StorageError) {
         match self {
+            Self::LiveInput(input) => {
+                // Dropping the producer closes this per-turn observer. It cannot retain a
+                // success receipt after the sole conversation owner has died.
+                drop(input);
+            }
             Self::RoutingContext { done, .. } => done.resolve(Err(error)),
             Self::AdmitCall { done, .. } => done.resolve(Err(error)),
             Self::RemoteDriver { done, .. } => done.resolve(Err(error)),
@@ -123,6 +130,7 @@ impl SessionCommand {
 /// ending it drops queued producers and settles every caller, even if another sender survives.
 #[derive(Clone)]
 pub(crate) struct CommandPort {
+    pub(crate) live: Option<Arc<crate::text_session::live::LiveControl>>,
     sender: mpsc::Sender<SessionCommand>,
     drivers: Arc<drivers::Drivers>,
     routing_model: Option<Arc<dyn lk_agents_abi::Llm>>,
@@ -134,11 +142,39 @@ impl CommandPort {
         routing_model: Option<Arc<dyn lk_agents_abi::Llm>>,
     ) -> (Self, mpsc::Receiver<SessionCommand>) {
         let (sender, receiver) = mpsc::channel(capacity);
-        (Self { sender, drivers: Arc::new(drivers::Drivers::default()), routing_model }, receiver)
+        (
+            Self {
+                sender,
+                drivers: Arc::new(drivers::Drivers::default()),
+                routing_model,
+                live: None,
+            },
+            receiver,
+        )
+    }
+
+    pub(crate) fn enqueue_live(
+        &self,
+        input: crate::text_session::live::LiveInput,
+    ) -> Result<(), StorageError> {
+        self.sender.try_send(SessionCommand::LiveInput(Box::new(input))).map_err(
+            |error| match error {
+                mpsc::error::TrySendError::Full(_) => {
+                    StorageError::Unavailable("the live conversation inbox is full".into())
+                }
+                mpsc::error::TrySendError::Closed(_) => {
+                    StorageError::Invalid("the live conversation owner ended".into())
+                }
+            },
+        )
     }
 }
 
 impl lk_agents_abi::session::SessionCommands for CommandPort {
+    fn ended(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        Box::pin(self.sender.closed())
+    }
+
     fn routing_context<'a>(
         &'a self,
         remote_id: &'a str,
@@ -238,19 +274,26 @@ impl lk_agents_abi::session::SessionCommands for CommandPort {
 
     fn cancel_remote<'a>(
         &'a self,
-        remote_id: &'a str,
-        endpoint: &'a str,
-        task: &'a lk_agents_abi::delegation::remote::RemoteTaskRef,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<(), lk_agents_abi::a2a::client::AgentClientError>>
-    {
+        target: &'a lk_agents_abi::session::control::RemoteControlRef,
+        scope: Option<&'a lk_agents_abi::delegation::remote::RemoteControlScope>,
+        candidate: Arc<dyn lk_agents_abi::session::control::RemoteCancellation>,
+        retry_after: Option<&'a str>,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            lk_agents_abi::session::control::RemoteCancellationAdmission,
+            lk_agents_abi::a2a::client::AgentClientError,
+        >,
+    > {
         Box::pin(async move {
             use lk_agents_abi::a2a::client::AgentClientError;
             let (done, result) = signal::once();
             self.sender
                 .send(SessionCommand::CancelRemote {
-                    remote_id: remote_id.into(),
-                    endpoint: endpoint.into(),
-                    task: task.clone(),
+                    target: target.clone(),
+                    scope: scope.cloned(),
+                    candidate,
+                    retry_after: retry_after.map(str::to_owned),
                     drivers: self.drivers.clone(),
                     done,
                 })
@@ -258,7 +301,7 @@ impl lk_agents_abi::session::SessionCommands for CommandPort {
                 .map_err(|_| {
                     AgentClientError::InvalidInput("the conversation owner ended".into())
                 })?;
-            let driver = result
+            result
                 .wait()
                 .await
                 .map_err(|_| {
@@ -269,20 +312,7 @@ impl lk_agents_abi::session::SessionCommands for CommandPort {
                 .map_err(|error| match error {
                     StorageError::Invalid(message) => AgentClientError::InvalidInput(message),
                     error => AgentClientError::Protocol(error.to_string()),
-                })?;
-            let Some(driver) = driver else { return Ok(()) };
-            // The owner loop has released this read receipt before the driver can journal
-            // its cancellation. Awaiting control I/O inside that loop would deadlock it.
-            // Dropping this waiter leaves any enqueued control with its original driver.
-            let cancel = driver.cancel(task.clone());
-            tokio::pin!(cancel);
-            tokio::select! {
-                biased;
-                result = &mut cancel => result,
-                () = self.sender.closed() => Err(AgentClientError::InvalidInput(
-                    "the conversation owner ended before remote cancellation was confirmed".into(),
-                )),
-            }
+                })
         })
     }
 
@@ -425,6 +455,41 @@ impl lk_agents_abi::session::SessionCommands for CommandPort {
                 StorageError::Invalid("the conversation owner ended before checkpointing".into())
             })?
         })
+    }
+}
+
+pub(crate) fn admit_cancellation(
+    state: &lk_agents_abi::session::snapshot::SessionSnapshot,
+    drivers: &drivers::Drivers,
+    target: lk_agents_abi::session::control::RemoteControlRef,
+    scope: Option<&lk_agents_abi::delegation::remote::RemoteControlScope>,
+    candidate: Arc<dyn lk_agents_abi::session::control::RemoteCancellation>,
+    retry_after: Option<&str>,
+) -> Result<lk_agents_abi::session::control::RemoteCancellationAdmission, StorageError> {
+    use lk_agents_abi::session::control::RemoteCancellationAdmission;
+    use lk_agents_core::delegation::remote::cancel::{self, CancellationRoute};
+    let remote =
+        lk_agents_core::session::remote::state(state, &target.remote_id, &target.endpoint)?
+            .ok_or_else(|| StorageError::Invalid("this remote has no known tasks".into()))?;
+    let driver = drivers.get(state, &target.remote_id, &target.endpoint, &target.task)?;
+    let route = cancel::route(remote, &target.task, driver.is_some(), scope, retry_after)?;
+    if matches!(route, CancellationRoute::Confirmed) {
+        return Ok(RemoteCancellationAdmission::Confirmed);
+    }
+    let tracked = drivers.claim_cancellation(&target, candidate.clone())?;
+    if !Arc::ptr_eq(&tracked, &candidate) {
+        return Ok(RemoteCancellationAdmission::Pending(tracked));
+    }
+    match route {
+        CancellationRoute::Confirmed => unreachable!("confirmed controls need no resource claim"),
+        CancellationRoute::Configured => Ok(RemoteCancellationAdmission::Pending(
+            driver
+                .expect("the core selected the supplied configured resource")
+                .cancellation(target.task, retry_after.map(str::to_owned)),
+        )),
+        CancellationRoute::Retained { recovery } => {
+            Ok(RemoteCancellationAdmission::Retained { recovery })
+        }
     }
 }
 

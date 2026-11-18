@@ -192,6 +192,7 @@ ignore = ["E501"]
 "python/livekit-agents/livekit/agents/cli.py" = ["UP041"]
 # TaskSet is built on the raw asyncio primitives. Tests, benchmarks and examples are not the
 # framework: they drive it from outside, as an application would.
+"python/livekit-agents/livekit/agents/_asyncio.py" = ["TID251"]
 "python/livekit-agents/livekit/agents/utils/aio.py" = ["TID251"]
 "{tests,bench,examples}/**" = ["TID251"]
 "rust/crates/lk-agents-py/src/*_tests.py" = ["TID251"]

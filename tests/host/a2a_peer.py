@@ -28,6 +28,8 @@ class Peer:
         self.question: str | None = None
         self.direct_reply: Json | None = None
         self.task_snapshot: Json | None = None
+        self.new_task_id = "remote-task"
+        """Task returned for unaddressed work; a continuation keeps its addressed ID."""
         self.events: Callable[[Json], list[Json]] | None = None
         self.response_gate: asyncio.Event | None = None
         """An optional boundary holding a stream after its first admission event."""
@@ -134,7 +136,7 @@ class Peer:
             )
             return
         context = message.get("contextId", "remote-context")
-        task = {"id": "remote-task", "contextId": context}
+        task = {"id": message.get("taskId", self.new_task_id), "contextId": context}
         events: list[Json] = [
             {"task": {**task, "status": {"state": "TASK_STATE_SUBMITTED"}}},
             _status(task, "WORKING", "Checking"),
@@ -161,7 +163,7 @@ class Peer:
             events.append(
                 {
                     "artifactUpdate": {
-                        "taskId": "remote-task",
+                        "taskId": task["id"],
                         "contextId": context,
                         "artifact": answer,
                     }
@@ -204,7 +206,7 @@ def _envelope(rpc: Json, result: Json) -> bytes:
 
 def _status(task: dict[str, str], state: str, text: str) -> Json:
     message: Json = {
-        "messageId": f"status-{state}",
+        "messageId": f"status-{task['id']}-{state}",
         "role": "ROLE_AGENT",
         "parts": [{"text": text}],
     }

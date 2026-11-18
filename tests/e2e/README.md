@@ -42,6 +42,12 @@ an ordinary RemoteAgent tool and resumes its input-required task after frontend 
 The shared `framework/media.py` also supplies the v1 compatibility speech fixtures.
 See the [framework design](../../docs/proposals/e2e.md) for provider and acceptance policies.
 
+The deterministic exact-output journey uses an explicit `ToneTTS` leg to own the requested
+words. Realtime sessions require an explicit TTS leg or registered custom TTS node for
+`ctx.say`; a generative realtime request cannot promise exact words. Ordinary `session.say`
+keeps its separate realtime convenience behavior. The correctness journey runs without
+`--live-models`; real-model conversational acceptance remains an additional run.
+
 ## Live conversation evaluations
 
 Real models are an explicit additional run:
@@ -94,6 +100,7 @@ These are model-quality evaluations, not required correctness CI.
 | File | Journey | Live or scripted |
 | --- | --- | --- |
 | `test_framework.py` | Conversation restart, received speech and interruption during actual audio playback | Scripted models and tone speech; real app processes, SQLite and isolated SFU |
+| `test_tool_delivery.py` | Unawaited exact output crosses two A2A hops into received voice audio once; silent Working status and one original business effect/result | Scripted LLM/routing with explicit tone TTS; real app processes, SQLite, HTTP/SSE and isolated SFU |
 | `test_stock_a2a.py` | Remote Message replies and input-required continuation after frontend restart | A stock A2A SDK server in a separate process; ordinary frontend, scripted model, real HTTP/SSE and SQLite |
 | `test_adk.py` | The same RemoteAgent frontend runs an ADK agent and its tool | Pinned ADK and A2A SDK in a separate environment/process; scripted inference, real server and HTTP transport |
 | `test_delegation_live_models.py` | Intent routing, grouped remote questions, partial responses and spoken continuation after a side question | Opt-in real frontend and routing models; stock A2A peer processes, real HTTP/SSE and isolated SFU audio |

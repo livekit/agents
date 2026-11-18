@@ -288,3 +288,56 @@ async fn a_hung_resource_close_is_bounded_by_the_teardown_deadline() {
     let closed = tokio::time::timeout(limit, stream.aclose()).await;
     assert!(matches!(closed, Ok(Err(_))), "the close outlived its deadline: {closed:?}");
 }
+
+#[tokio::test(start_paused = true)]
+async fn exact_output_waits_for_the_accepted_stream_read_and_survives_reader_loss() {
+    use futures_util::FutureExt as _;
+    let (stream, _resources, _state, send) = owner(false).await;
+    let output = Output(Arc::downgrade(&stream.0));
+    let message = lk_agents_abi::ChatMessage::text(
+        "message",
+        lk_agents_abi::Role::Assistant,
+        "Reference ABC.",
+        std::time::UNIX_EPOCH,
+    );
+    let discarded = output.prepare(message.clone());
+    drop(discarded);
+    send.send(text("Reference ABC.")).await.unwrap();
+    let events = stream.events().unwrap();
+    events.begin_read().unwrap();
+    assert!(events.recv().await.unwrap().is_some());
+    assert!(stream.0.exact_outputs.lock().contains_key("message"));
+    events.end_read(false);
+    assert!(
+        stream.0.exact_outputs.lock().contains_key("message"),
+        "a canceled bridge read is retried, not claimed delivered"
+    );
+    events.begin_read().unwrap();
+    assert!(events.recv().await.unwrap().is_some());
+    events.end_read(true);
+    assert!(stream.0.exact_outputs.lock().is_empty());
+    let mut second = output.prepare(lk_agents_abi::ChatMessage { id: "next".into(), ..message });
+    assert!((&mut second).now_or_never().is_none());
+    events.aclose().await.unwrap();
+    let error = second.await.unwrap_err();
+    assert!(!error.cancelled());
+    stream.aclose().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn result_draining_refuses_exact_output_without_waiting_for_its_own_final_result() {
+    let (stream, _resources, _state, send) = owner(false).await;
+    let output = Output(Arc::downgrade(&stream.0));
+    let receipt = output.prepare(lk_agents_abi::ChatMessage::text(
+        "message",
+        lk_agents_abi::Role::Assistant,
+        "Reference ABC.",
+        std::time::UNIX_EPOCH,
+    ));
+    send.send(text("Reference ABC.")).await.unwrap();
+    send.send(finished()).await.unwrap();
+    let consumer = stream.begin_result().unwrap();
+    stream.result(consumer).await.unwrap();
+    stream.end_result(consumer, true);
+    assert!(receipt.await.is_err());
+}

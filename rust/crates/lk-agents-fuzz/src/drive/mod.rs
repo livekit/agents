@@ -820,6 +820,38 @@ impl Run {
         self.store.as_ref().is_some_and(fakes::FakeStore::read_unanswered)
     }
 
+    /// An authored boundary wait pumps this same real executor until its native signal.
+    pub async fn until<T>(&mut self, what: &str, done: impl std::future::Future<Output = T>) -> T {
+        let answer = self.drive(Some(self.budget()), done).await.expect(what);
+        self.collect();
+        answer
+    }
+
+    pub fn speech_handle(&self, nth: u32) -> Arc<SpeechHandle> {
+        let resource =
+            self.record.resource(Kind::Speech, nth).expect("the host created this speech");
+        let Id::Speech(id) = resource.id() else {
+            unreachable!("a speech resource has its native identity")
+        };
+        self.handles.get(&id.0).expect("the host retains its speech handle").clone()
+    }
+
+    pub fn hold_next_history_read(
+        &self,
+    ) -> (
+        lk_agents_runtime::net::signal::Cell<Option<()>>,
+        lk_agents_runtime::net::signal::Producer<Option<()>>,
+    ) {
+        self.store.as_ref().expect("this authored story has storage").hold_next_read()
+    }
+
+    pub async fn foreign_history(
+        &self,
+        history: Vec<ChatItem>,
+    ) -> Result<(), lk_agents_abi::storage::StorageError> {
+        self.store.as_ref().expect("this authored story has storage").foreign_history(history).await
+    }
+
     /// The text streams the agent has sent into the room, in the order it opened them.
     pub fn room_text_streams(&self) -> Vec<fakes::room::RecordedTextStream> {
         self.room.local_participant().text_streams()

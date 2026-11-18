@@ -1,13 +1,13 @@
 use lk_agents_abi::a2a_protocol as a2a;
 pub mod cancel;
 pub mod journal;
+mod result;
 pub mod retained;
 pub mod routing;
 
 use a2a::{Message, Part, Role, TaskState};
 use lk_agents_abi::a2a::metadata::KIND_KEY;
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
-use serde::{Deserialize, Serialize};
 
 use crate::a2a::caller_history::CallerHistory;
 use crate::a2a::client::TaskUpdate;
@@ -43,33 +43,29 @@ impl VerifiedAuthority {
 pub enum DelegationError {
     #[error("the authority does not cover this delegation's destination, thread and caller")]
     InvalidAuthority,
-    #[error("the delegation is not waiting for a reply")]
-    NotWaiting,
     #[error("the remote update belongs to another task or context")]
     WrongTask,
     #[error("the local interaction is already running or settled")]
     Settled,
     #[error("the remote task ended without a result")]
     MissingOutcome,
-    #[error("the retained interaction does not match its tool, call or destination")]
+    #[error("the remote interaction or captured input identity is invalid")]
     InvalidState,
     #[error(transparent)]
     History(#[from] crate::a2a::caller_history::HistoryError),
 }
 
 /// The original parent call and remote destination, retained independently of presentation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InteractionId {
-    pub delegation_id: String,
-    pub tool_id: String,
+    /// Stable configured remote identity; the endpoint remains independently pinned.
+    pub remote_id: String,
     /// Canonical originating FunctionCall.id; provider wire IDs can repeat.
     pub parent_call_id: String,
     pub endpoint: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Local observation lifetime. Remote task status and cancellation belong to task state.
 pub enum InteractionPhase {
     Ready,
@@ -78,25 +74,23 @@ pub enum InteractionPhase {
     Settled,
 }
 
-/// Only data is saved. No queue, transport, credential proof or live await is serialized.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// Transient observation state. Durable tasks and exact input occurrences live in the journal.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InteractionState {
     pub id: InteractionId,
     pub context_id: Option<String>,
     pub pending_task_id: Option<String>,
     pub phase: InteractionPhase,
-    pub request_id: Option<String>,
     /// The checkpointed input occurrence this presentation asks the person to answer.
     pub input_request: Option<lk_agents_abi::delegation::remote::InputRequestRef>,
-    pub question_sequence: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DelegationUpdate {
     Progress(String),
+    /// Exact working output has no business-terminal meaning.
+    Exact(String),
     InputRequired {
-        request_id: String,
         question: String,
         verbatim: Option<String>,
     },
@@ -116,10 +110,7 @@ pub struct RemoteInteraction {
 
 impl RemoteInteraction {
     pub fn new(id: InteractionId) -> Result<Self, DelegationError> {
-        if id.delegation_id.is_empty()
-            || id.tool_id.is_empty()
-            || id.parent_call_id.is_empty()
-            || id.endpoint.is_empty()
+        if id.remote_id.trim().is_empty() || id.parent_call_id.is_empty() || id.endpoint.is_empty()
         {
             return Err(DelegationError::InvalidState);
         }
@@ -129,33 +120,9 @@ impl RemoteInteraction {
                 context_id: None,
                 pending_task_id: None,
                 phase: InteractionPhase::Ready,
-                request_id: None,
                 input_request: None,
-                question_sequence: 0,
             },
         })
-    }
-
-    pub fn restore(state: InteractionState, id: &InteractionId) -> Result<Self, DelegationError> {
-        Self::new(state.id.clone())?;
-        if &state.id != id
-            || state.context_id.as_deref() == Some("")
-            || state.pending_task_id.as_deref() == Some("")
-            || state.pending_task_id.is_some() && state.context_id.is_none()
-            || state.phase == InteractionPhase::InputRequired
-                && (state.pending_task_id.is_none() || state.request_id.is_none())
-            || state.input_request.as_ref().is_some_and(|reference| {
-                reference.remote().is_none_or(|(owner, task, occurrence)| {
-                    owner.is_empty()
-                        || occurrence.is_empty()
-                        || Some(&task.task_id) != state.pending_task_id.as_ref()
-                        || Some(&task.context_id) != state.context_id.as_ref()
-                })
-            })
-        {
-            return Err(DelegationError::InvalidState);
-        }
-        Ok(Self { state })
     }
 
     pub fn snapshot(&self) -> InteractionState {
@@ -189,7 +156,7 @@ impl RemoteInteraction {
         let Some((remote_id, task, request_id)) = reference.remote() else {
             return Err(DelegationError::InvalidState);
         };
-        if remote_id.is_empty() || request_id.is_empty() {
+        if remote_id != self.state.id.remote_id || request_id.is_empty() {
             return Err(DelegationError::InvalidState);
         }
         self.target_task(task.clone())?;
@@ -289,36 +256,7 @@ impl RemoteInteraction {
         };
         self.state.context_id = message.context_id.clone();
         self.state.phase = InteractionPhase::Running;
-        self.state.request_id = None;
         Ok(message)
-    }
-
-    /// An answer addresses the exact retained input request; presentation cannot change it.
-    pub fn accepts_reply(&self, request_id: &str) -> Result<(), DelegationError> {
-        if self.state.phase != InteractionPhase::InputRequired
-            || self.state.request_id.as_deref() != Some(request_id)
-        {
-            return Err(DelegationError::NotWaiting);
-        }
-        Ok(())
-    }
-
-    /// A clarification continues the task without consuming its question. An admitted answer
-    /// must retain the exact occurrence captured by this waiter, never the task's latest one.
-    pub fn continue_input(
-        &mut self,
-        request_id: &str,
-        reference: Option<lk_agents_abi::session::InputRequestRef>,
-    ) -> Result<(), DelegationError> {
-        self.accepts_reply(request_id)?;
-        if reference
-            .as_ref()
-            .is_some_and(|reference| self.state.input_request.as_ref() != Some(reference))
-        {
-            return Err(DelegationError::InvalidState);
-        }
-        self.state.input_request = reference;
-        Ok(())
     }
 
     /// Bind the observation's committed occurrence before presenting it. A later status may
@@ -330,7 +268,7 @@ impl RemoteInteraction {
         if self.state.phase != InteractionPhase::InputRequired
             || reference.as_ref().is_some_and(|reference| {
                 reference.remote().is_none_or(|(owner, task, occurrence)| {
-                    owner.is_empty()
+                    owner != self.state.id.remote_id
                         || occurrence.is_empty()
                         || Some(&task.task_id) != self.state.pending_task_id.as_ref()
                         || Some(&task.context_id) != self.state.context_id.as_ref()
@@ -356,26 +294,18 @@ impl RemoteInteraction {
                 {
                     DelegationUpdate::Pending
                 } else {
-                    DelegationUpdate::Progress(update.text.clone())
+                    match exact {
+                        Some(text) => DelegationUpdate::Exact(text.to_owned()),
+                        None => DelegationUpdate::Progress(update.text.clone()),
+                    }
                 }
             }
             TaskState::InputRequired => {
                 if update.task_id.is_empty() || update.context_id.is_empty() {
                     return Err(DelegationError::InvalidState);
                 }
-                self.state.question_sequence = self
-                    .state
-                    .question_sequence
-                    .checked_add(1)
-                    .ok_or(DelegationError::InvalidState)?;
-                let request_id = format!(
-                    "{}:{}:{}",
-                    self.state.id.delegation_id, update.task_id, self.state.question_sequence
-                );
-                self.state.request_id = Some(request_id.clone());
                 self.state.phase = InteractionPhase::InputRequired;
                 DelegationUpdate::InputRequired {
-                    request_id,
                     question: update.text.clone(),
                     verbatim: exact
                         .filter(|s| !s.is_empty() && update.text.starts_with(s))
@@ -388,7 +318,7 @@ impl RemoteInteraction {
                     return Ok(DelegationUpdate::Follow(task.clone()));
                 }
                 self.state.phase = InteractionPhase::Settled;
-                DelegationUpdate::Completed(answer(&update.text, exact))
+                DelegationUpdate::Completed(result::completed(update, &self.state.id.remote_id))
             }
             TaskState::Failed | TaskState::Rejected => {
                 self.state.phase = InteractionPhase::Settled;
@@ -428,16 +358,15 @@ impl RemoteInteraction {
             .map_err(|_| DelegationError::InvalidState)?
             .ok_or(DelegationError::InvalidState)?;
         let mut restored = Self::new(self.state.id.clone())?;
-        restored.state.question_sequence = self.state.question_sequence;
         let event = restored.update(&update)?;
         self.state = restored.state;
         Ok(match event {
-            DelegationUpdate::Pending | DelegationUpdate::Progress(_) => {
-                DelegationUpdate::Follow(TaskRef {
-                    id: update.task_id,
-                    context_id: update.context_id,
-                })
-            }
+            DelegationUpdate::Pending
+            | DelegationUpdate::Progress(_)
+            | DelegationUpdate::Exact(_) => DelegationUpdate::Follow(TaskRef {
+                id: update.task_id,
+                context_id: update.context_id,
+            }),
             event => event,
         })
     }

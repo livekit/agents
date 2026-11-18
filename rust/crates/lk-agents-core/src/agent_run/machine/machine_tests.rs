@@ -30,6 +30,7 @@ pub(super) fn tool(name: &str, description: &str, schema: Value) -> FunctionTool
         duplicate_scope: DuplicateScope::Name,
         retries: None,
         remote: None,
+        local_agent: None,
     }
 }
 
@@ -215,7 +216,7 @@ impl Driver {
             if !self.settled(call) {
                 self.send(AgentRunEvent::ToolSettled {
                     call,
-                    outcome: outcome(&function_call.name),
+                    report: (outcome(&function_call.name)).into(),
                 });
             }
         }
@@ -439,7 +440,7 @@ fn none_return_continues() {
     );
 }
 
-// Catches: `StopResponse` continuing the loop, or a verbatim result losing its delivered text or
+// Catches: `StopResponse` continuing the loop, or a verbatim result losing its separately delivered text or
 // its exact words on the result.
 #[test]
 fn stop_response_and_verbatim_results_end_or_lead_the_turn() {
@@ -459,7 +460,7 @@ fn stop_response_and_verbatim_results_end_or_lead_the_turn() {
     let (_, ctx, _) = d.request();
     assert_eq!(
         ctx.items.last().map(|i| transcript(std::slice::from_ref(i))[0].1.clone()).unwrap(),
-        "delivered to the person as written: Your code is 1234."
+        "exact text supplied for separate framework delivery: Your code is 1234."
     );
     d.reply("Anything else?", &[]);
     let result = d.result();
@@ -730,7 +731,8 @@ fn tool_metadata_is_recorded_with_its_original_call() {
     });
     driver.send(AgentRunEvent::ToolSettled {
         call,
-        outcome: ToolOutcome::InputRequired { question: "Which payer?".into(), verbatim: false },
+        report: (ToolOutcome::InputRequired { question: "Which payer?".into(), verbatim: false })
+            .into(),
     });
     driver.reply("Which payer?", &[]);
     let call = driver

@@ -2,6 +2,8 @@
 #[path = "machine_tests.rs"]
 mod tests;
 
+mod recovery;
+
 use super::effects::ToolCallEffect;
 use std::collections::BTreeSet;
 
@@ -103,6 +105,7 @@ struct Call {
     item: FunctionCall,
     phase: Phase,
     cancellation_requested: bool,
+    reports_remote: bool,
 }
 
 #[derive(Debug)]
@@ -111,6 +114,9 @@ enum Phase {
     Preparing {
         confirmed: bool,
     },
+    /// The native conversation already admitted this exact remote operation. Preparation
+    /// validates the current callable; its existing journal decides dispatch/reconciliation.
+    Recovering,
     /// Prepared; waits until every earlier call of the same tool is decided.
     Admitting {
         prepared: ResourceId,
@@ -138,6 +144,8 @@ enum Phase {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settled {
     pub outcome: ToolOutcome,
+    /// The body's native occurrence, retained even when a sibling fails before step assembly.
+    pub input_request: Option<lk_agents_abi::session::InputRequestRef>,
     /// Feedback that counts against the tool's retry budget: invalid or unknown arguments,
     /// `ModelRetry`.
     pub retry: bool,
@@ -175,9 +183,17 @@ impl ToolCalls {
     ) -> Option<FinalCandidate> {
         if item.name == FINAL_RESULT_TOOL && matches!(agent.output, OutputSpec::Structured { .. }) {
             item.extra.remove(crate::delegation::remote::routing::INPUT_OFFERS_KEY);
+            item.extra.remove(lk_agents_abi::llm::tool_executor::LIVE_LOCAL_PENDING_KEY);
+            item.extra.remove(lk_agents_abi::llm::tool_executor::REMOTE_REPORT_KEY);
             let candidate = FinalCandidate { call: id, value: final_value(agent, &item.arguments) };
             let phase = Phase::Validating;
-            self.calls.push(Call { id, item, phase, cancellation_requested: false });
+            self.calls.push(Call {
+                id,
+                item,
+                phase,
+                cancellation_requested: false,
+                reports_remote: false,
+            });
             return Some(candidate);
         }
         self.add_with_offers(id, item, &agent.tools, offered, fx);
@@ -218,8 +234,16 @@ impl ToolCalls {
         offered: Option<&[lk_agents_abi::session::InputCandidate]>,
         fx: &mut Vec<E>,
     ) {
+        let remote = find(tools, &item.name)
+            .is_some_and(|tool| tool.remote.is_some() && tool.local_agent.is_none());
         let phase = start(id, &mut item, tools, offered, fx);
-        self.calls.push(Call { id, item, phase, cancellation_requested: false });
+        self.calls.push(Call {
+            id,
+            item,
+            phase,
+            cancellation_requested: false,
+            reports_remote: remote,
+        });
     }
 
     /// The host prepared the call's arguments; `history` is what approval reads, the calls
@@ -233,8 +257,25 @@ impl ToolCalls {
         running: &[RunningToolExecution],
         fx: &mut Vec<E>,
     ) -> bool {
-        let Some(call) = self.call_mut(id) else { return false };
-        let Phase::Preparing { confirmed } = call.phase else { return false };
+        let Some(call) = self.call_mut(id) else {
+            return false;
+        };
+        if matches!(call.phase, Phase::Recovering) {
+            fx.push(
+                ToolCallEffect::Execute {
+                    call: id,
+                    prepared,
+                    function_call: call.item.clone(),
+                    approval: approval::mark(&call.item),
+                }
+                .into(),
+            );
+            call.phase = Phase::Running { identity: approval::canonical(&identity) };
+            return true;
+        }
+        let Phase::Preparing { confirmed } = call.phase else {
+            return false;
+        };
         call.phase = Phase::Admitting { prepared, identity, confirmed };
         self.admit(tools, history, running, fx);
         true
@@ -250,8 +291,10 @@ impl ToolCalls {
         running: &[RunningToolExecution],
         fx: &mut Vec<E>,
     ) {
-        let Some(call) = self.call_mut(id) else { return };
-        if !matches!(call.phase, Phase::Preparing { .. }) {
+        let Some(call) = self.call_mut(id) else {
+            return;
+        };
+        if !matches!(call.phase, Phase::Preparing { .. } | Phase::Recovering) {
             return;
         }
         let outcome = match failure {
@@ -277,9 +320,11 @@ impl ToolCalls {
         running: &[RunningToolExecution],
         fx: &mut Vec<E>,
     ) -> bool {
-        let Some(call) = self.call_mut(id) else { return false };
+        let Some(call) = self.call_mut(id) else {
+            return false;
+        };
         match call.phase {
-            Phase::Preparing { .. } => {
+            Phase::Preparing { .. } | Phase::Recovering => {
                 self.prepare_failed(id, PrepareFailure::Internal, tools, history, running, fx)
             }
             Phase::ReadingBack { .. } => {
@@ -313,8 +358,12 @@ impl ToolCalls {
         running: &[RunningToolExecution],
         fx: &mut Vec<E>,
     ) {
-        let Some(call) = self.call_mut(id) else { return };
-        let Phase::ReadingBack { prepared, ref identity } = call.phase else { return };
+        let Some(call) = self.call_mut(id) else {
+            return;
+        };
+        let Phase::ReadingBack { prepared, ref identity } = call.phase else {
+            return;
+        };
         let canonical = approval::canonical(identity);
         fx.push(ToolCallEffect::ReleaseArguments { prepared }.into());
         let outcome = match answer {
@@ -340,8 +389,12 @@ impl ToolCalls {
         rendered: Result<Option<String>, HostError>,
         fx: &mut Vec<E>,
     ) {
-        let Some(call) = self.call_mut(id) else { return };
-        let Phase::Refusing { template } = &call.phase else { return };
+        let Some(call) = self.call_mut(id) else {
+            return;
+        };
+        let Phase::Refusing { template } = &call.phase else {
+            return;
+        };
         let text = rendered_template(rendered).unwrap_or_else(|| duplicate_text(template));
         settle(call, ToolOutcome::ToolError(text), false, fx);
     }
@@ -350,6 +403,7 @@ impl ToolCalls {
         &mut self,
         id: CallId,
         message: String,
+        silent: bool,
         fx: &mut Vec<E>,
     ) {
         if let Some(call) = self.call_mut(id).filter(|c| matches!(c.phase, Phase::Running { .. })) {
@@ -358,14 +412,18 @@ impl ToolCalls {
                     call_id: call.item.call_id.clone(),
                     tool_name: call.item.name.clone(),
                     message,
+                    silent,
                 })
                 .into(),
             );
         }
     }
 
-    pub fn update_extra(&mut self, id: CallId, extra: Map<String, Value>) {
-        let Some(call) = self.call_mut(id) else { return };
+    pub fn update_extra(&mut self, id: CallId, mut extra: Map<String, Value>) {
+        extra.remove(lk_agents_abi::llm::tool_executor::REMOTE_REPORT_KEY);
+        let Some(call) = self.call_mut(id) else {
+            return;
+        };
         if matches!(call.phase, Phase::Running { .. }) {
             call.item.extra.extend(extra);
         }
@@ -386,20 +444,26 @@ impl ToolCalls {
     pub fn body_settled<E: From<ToolCallEffect>>(
         &mut self,
         id: CallId,
-        outcome: ToolOutcome,
+        report: lk_agents_abi::llm::tool_executor::ToolReport,
         fx: &mut Vec<E>,
     ) -> bool {
-        if let ToolOutcome::Update { raw, .. } = outcome {
-            self.progress(id, raw, fx);
+        let lk_agents_abi::llm::tool_executor::ToolReport { outcome, input_request, .. } = report;
+        if let ToolOutcome::Update { raw, reply_required, .. } = outcome {
+            self.progress(id, raw, !reply_required, fx);
             return false;
         }
-        let Some(call) = self.call_mut(id) else { return false };
+        let Some(call) = self.call_mut(id) else {
+            return false;
+        };
         if !matches!(call.phase, Phase::Running { .. }) {
             return false;
         }
+        if call.reports_remote {
+            crate::tool_calls::record_remote_report(&mut call.item, &outcome);
+        }
         let cancelled = matches!(outcome, ToolOutcome::Cancelled) && !call.cancellation_requested;
         let retry = matches!(outcome, ToolOutcome::ModelRetry(_));
-        settle(call, outcome, retry, fx);
+        settle_reported(call, outcome, input_request.map(|reference| *reference), retry, fx);
         cancelled
     }
 
@@ -411,7 +475,9 @@ impl ToolCalls {
         update: ToolOutcome,
         fx: &mut Vec<E>,
     ) {
-        let Some(call) = self.call_mut(id) else { return };
+        let Some(call) = self.call_mut(id) else {
+            return;
+        };
         if matches!(call.phase, Phase::Running { .. }) {
             settle(call, update, false, fx);
         }
@@ -424,7 +490,9 @@ impl ToolCalls {
         rejection: Option<String>,
         fx: &mut Vec<E>,
     ) {
-        let Some(call) = self.call_mut(id) else { return };
+        let Some(call) = self.call_mut(id) else {
+            return;
+        };
         if !matches!(call.phase, Phase::Validating) {
             return;
         }
@@ -443,6 +511,7 @@ impl ToolCalls {
         for call in &mut self.calls {
             match call.phase {
                 Phase::Preparing { .. }
+                | Phase::Recovering
                 | Phase::ReadingBack { .. }
                 | Phase::Running { .. }
                 | Phase::Refusing { .. } => {
@@ -465,6 +534,13 @@ impl ToolCalls {
     }
 
     /// The call as recorded so far, its approval marks included.
+    pub(crate) fn running_call(&self, id: CallId) -> Option<&FunctionCall> {
+        self.calls
+            .iter()
+            .find(|call| call.id == id && matches!(call.phase, Phase::Running { .. }))
+            .map(|call| &call.item)
+    }
+
     pub fn item(&self, id: CallId) -> Option<&FunctionCall> {
         self.calls.iter().find(|c| c.id == id).map(|c| &c.item)
     }
@@ -609,7 +685,9 @@ impl ToolCalls {
         external: &[RunningToolExecution],
         fx: &mut Vec<E>,
     ) {
-        let Some(tool) = find(tools, &self.calls[index].item.name) else { return };
+        let Some(tool) = find(tools, &self.calls[index].item.name) else {
+            return;
+        };
         let Phase::Admitting { prepared, ref identity, confirmed } = self.calls[index].phase else {
             return;
         };
@@ -781,6 +859,8 @@ fn start<E: From<ToolCallEffect>>(
 ) -> Phase {
     use crate::delegation::remote::routing;
     item.extra.remove(routing::INPUT_OFFERS_KEY);
+    item.extra.remove(lk_agents_abi::llm::tool_executor::LIVE_LOCAL_PENDING_KEY);
+    item.extra.remove(lk_agents_abi::llm::tool_executor::REMOTE_REPORT_KEY);
     let tool = find(tools, &item.name);
     if tool.is_some_and(|tool| tool.remote.is_some()) {
         match offered {
@@ -790,10 +870,22 @@ fn start<E: From<ToolCallEffect>>(
             }
         }
     }
+    prepare(id, item, tools, fx)
+}
+
+// Host binding is shared by fresh calls and journal-authorized original-call recovery.
+// Only fresh calls capture offers and remove provider-supplied native provenance above.
+fn prepare<E: From<ToolCallEffect>>(
+    id: CallId,
+    item: &FunctionCall,
+    tools: &[FunctionToolInfo],
+    fx: &mut Vec<E>,
+) -> Phase {
+    let tool = find(tools, &item.name);
     let failed = |text: String, fx: &mut Vec<E>| {
         let outcome = ToolOutcome::ToolError(text);
         fx.push(result_event(item, &outcome).into());
-        Phase::Settled(Settled { outcome, retry: true })
+        Phase::Settled(Settled { outcome, input_request: None, retry: true })
     };
     let Some(tool) = tool else {
         return failed(format!("unknown tool `{}`", item.name), fx);
@@ -868,8 +960,20 @@ fn settle<E: From<ToolCallEffect>>(
     retry: bool,
     fx: &mut Vec<E>,
 ) {
+    settle_reported(call, outcome, None, retry, fx);
+}
+
+fn settle_reported<E: From<ToolCallEffect>>(
+    call: &mut Call,
+    outcome: ToolOutcome,
+    input_request: Option<lk_agents_abi::session::InputRequestRef>,
+    retry: bool,
+    fx: &mut Vec<E>,
+) {
+    let input_request =
+        matches!(outcome, ToolOutcome::InputRequired { .. }).then_some(input_request).flatten();
     fx.push(result_event(&call.item, &outcome).into());
-    call.phase = Phase::Settled(Settled { outcome, retry });
+    call.phase = Phase::Settled(Settled { outcome, input_request, retry });
 }
 
 /// The call's result as it is recognised, before any model-order assembly.

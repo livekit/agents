@@ -184,13 +184,15 @@ impl RemoteTask {
         ::pyo3::PyResult::Ok(out)
     }
 
-    /// Request cancellation through the current bound native owner and its configured
-    /// remote client. Detached views and tasks without a live driver cannot dispatch.
+    /// Request cancellation through the explicitly bound store. Current configured clients
+    /// retain their authority; idle LiveKit control uses the current server and bound thread.
+    /// Detached and load-only views cannot dispatch.
     /// Success requires persisted observation of the canceled task state.
     fn cancel<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let env = crate::process::env();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let () = <RemoteTaskImpl as ::lk_agents_abi::session::remote::RemoteTaskView>::cancel(&this, )
+            let () = <RemoteTaskImpl as ::lk_agents_abi::session::remote::RemoteTaskView>::cancel(&this, &env)
                 .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })

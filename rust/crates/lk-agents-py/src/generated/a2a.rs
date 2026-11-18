@@ -588,20 +588,20 @@ impl CoreRemoteInteraction {
     /// `project_url`, `api_key` and `api_secret` are the server's LiveKit project, which grants
     /// and verifies a shared thread; empty when there is none.
     #[new]
-    #[pyo3(signature = (endpoint, tool_id, function_call, project_url, api_key, api_secret))]
+    #[pyo3(signature = (endpoint, function_call, project_url, api_key, api_secret, remote_id = None))]
     fn new(
         py: Python<'_>,
         endpoint: ::std::string::String,
-        tool_id: ::std::string::String,
         function_call: Bound<'_, PyAny>,
         project_url: ::std::string::String,
         api_key: ::std::string::String,
         api_secret: ::std::string::String,
+        remote_id: ::std::option::Option<::std::string::String>,
     ) -> PyResult<CoreRemoteInteraction> {
         crate::py_calls::check_pid()?;
         let function_call =
             crate::generated::records::chat_items::chat_item_from_py(function_call.as_any())?;
-        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::new(endpoint, tool_id, function_call, project_url, api_key, api_secret)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::new(endpoint, function_call, project_url, api_key, api_secret, remote_id)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(CoreRemoteInteraction(::std::sync::Arc::new(out)))
     }
 
@@ -749,6 +749,19 @@ impl CoreRemoteInteraction {
 type RemoteConfigurationImpl =
     <crate::generated::implementations::Selected as super::Implementations>::RemoteConfiguration;
 type RemoteConfigurationCoreRemoteTokenOutput = ::std::option::Option<::std::string::String>;
+
+/// Configured state identity; an omitted identity uses the canonical destination URL.
+#[pyfunction]
+#[pyo3(signature = (endpoint, id = None))]
+pub fn _core_remote_id(
+    py: Python<'_>,
+    endpoint: ::std::string::String,
+    id: ::std::option::Option<::std::string::String>,
+) -> PyResult<::std::string::String> {
+    crate::py_calls::check_pid()?;
+    let out = py.detach(|| <RemoteConfigurationImpl as ::lk_agents_abi::a2a::remote::RemoteConfiguration>::_core_remote_id(endpoint, id)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
+    ::pyo3::PyResult::Ok(out)
+}
 
 #[pyfunction]
 #[pyo3(signature = (metadata))]
@@ -1090,6 +1103,54 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
         context: &::lk_agents_abi::invoke::CallContext,
         text: ::std::option::Option<::std::string::String>,
         extra: ::serde_json::Map<::std::string::String, ::serde_json::Value>,
+        reply_required: bool,
+    ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
+    {
+        let host = ::std::clone::Clone::clone(&self.host);
+        let text_arg = text;
+        let extra_arg = extra;
+        let reply_required_arg = reply_required;
+        let started = ::lk_agents_runtime::host::call(
+            &crate::py_calls::Entry,
+            "DelegationHost._core_progress",
+            context,
+            &[],
+            cx,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?,
+                    crate::py_values::extra_to_py(py, &extra_arg)?.into_any(),
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(reply_required_arg, py)?,
+                ];
+                Ok((
+                    host.bind(py)?.getattr("_core_progress")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(())
+            })
+        })
+    }
+
+    fn say<'a>(
+        &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+        context: &::lk_agents_abi::invoke::CallContext,
+        text: ::std::string::String,
+        extra: ::serde_json::Map<::std::string::String, ::serde_json::Value>,
     ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::clone::Clone::clone(&self.host);
@@ -1097,7 +1158,7 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
         let extra_arg = extra;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "DelegationHost._core_progress",
+            "DelegationHost._core_say",
             context,
             &[],
             cx,
@@ -1107,7 +1168,7 @@ impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
                     crate::py_values::extra_to_py(py, &extra_arg)?.into_any(),
                 ];
                 Ok((
-                    host.bind(py)?.getattr("_core_progress")?,
+                    host.bind(py)?.getattr("_core_say")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))

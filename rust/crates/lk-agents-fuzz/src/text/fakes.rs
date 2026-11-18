@@ -148,6 +148,7 @@ pub fn tool() -> FunctionToolInfo {
         duplicate_scope: DuplicateScope::Name,
         retries: None,
         remote: None,
+        local_agent: None,
     }
 }
 

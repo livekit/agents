@@ -3,8 +3,7 @@ use serde_json::{Map, json};
 
 fn identity(conversation: &str) -> InteractionId {
     InteractionId {
-        delegation_id: format!("delegation-{conversation}"),
-        tool_id: "reusable-expert".into(),
+        remote_id: "remote".into(),
         parent_call_id: format!("call-{conversation}"),
         endpoint: "https://example.test/expert".into(),
     }
@@ -23,6 +22,7 @@ fn update(state: TaskState, context: &str, task: &str, text: &str) -> TaskUpdate
         context_id: context.into(),
         metadata: Map::new(),
         artifacts: vec![],
+        message: None,
         follow_task: None,
     }
 }
@@ -61,11 +61,9 @@ fn an_answer_retains_its_checkpointed_occurrence_until_the_next_peer_observation
     remote.message("Friday".into(), "response".into(), None, "", None, false, None, None).unwrap();
     let saved = remote.snapshot();
     assert_eq!(saved.input_request, Some(reference.clone()));
-    let mut restored = RemoteInteraction::restore(saved.clone(), &saved.id).unwrap();
-    assert_eq!(restored.snapshot().input_request, Some(reference));
-    restored.update(&update(TaskState::Working, "trip", "booking", "Checking.")).unwrap();
+    remote.update(&update(TaskState::Working, "trip", "booking", "Checking.")).unwrap();
     assert_eq!(
-        restored.snapshot().input_request,
+        remote.snapshot().input_request,
         None,
         "the new observation cannot reuse an earlier answer selection"
     );
@@ -83,15 +81,6 @@ fn a_task_clarification_does_not_claim_the_waiters_input_occurrence() {
         request_id: "booking/input_3".into(),
     };
     remote.retain_input_request(Some(reference.clone())).unwrap();
-    let request_id = remote.snapshot().request_id.unwrap();
-    let mut stale = reference.clone();
-    let InputRequestRef::RemoteTask { request_id: occurrence, .. } = &mut stale else {
-        unreachable!()
-    };
-    *occurrence = "booking/input_2".into();
-    assert!(remote.continue_input(&request_id, Some(stale)).is_err());
-    assert_eq!(remote.snapshot().input_request, Some(reference));
-    remote.continue_input(&request_id, None).unwrap();
     let message = remote
         .message(
             "Why do you need the date?".into(),
@@ -106,7 +95,7 @@ fn a_task_clarification_does_not_claim_the_waiters_input_occurrence() {
         .unwrap();
     assert_eq!(message.task_id.as_deref(), Some("booking"));
     assert_eq!(message.context_id.as_deref(), Some("trip"));
-    assert_eq!(remote.snapshot().input_request, None);
+    assert_eq!(remote.snapshot().input_request, Some(reference));
 }
 
 #[test]
@@ -308,10 +297,10 @@ fn arbitrary_peer_receives_text_only_and_keeps_its_own_remote_task_context() {
 }
 
 #[test]
-fn remote_interaction_continuation_is_isolated_and_restores_the_exact_pending_task() {
+fn live_remote_interactions_keep_their_exact_pending_tasks_isolated() {
     let mut first = interaction("first");
     let mut second = interaction("second");
-    assert_eq!(first.snapshot().id.tool_id, second.snapshot().id.tool_id);
+    assert_eq!(first.snapshot().id.remote_id, second.snapshot().id.remote_id);
     begin(&mut first, true);
     begin(&mut second, true);
     let first_question =
@@ -321,14 +310,9 @@ fn remote_interaction_continuation_is_isolated_and_restores_the_exact_pending_ta
     assert!(matches!(first_question, DelegationUpdate::InputRequired { .. }));
     assert!(matches!(second_question, DelegationUpdate::InputRequired { .. }));
     for (original, context, task) in
-        [(&first, "context-a", "task-a"), (&second, "context-b", "task-b")]
+        [(&mut first, "context-a", "task-a"), (&mut second, "context-b", "task-b")]
     {
-        let state =
-            serde_json::from_value(serde_json::to_value(original.snapshot()).unwrap()).unwrap();
-        let mut restored = RemoteInteraction::restore(state, &original.snapshot().id).unwrap();
-        let request = restored.snapshot().request_id.unwrap();
-        restored.accepts_reply(&request).unwrap();
-        let answer = restored
+        let answer = original
             .message(
                 "answer".into(),
                 format!("message-{task}"),
@@ -344,28 +328,6 @@ fn remote_interaction_continuation_is_isolated_and_restores_the_exact_pending_ta
         assert_eq!(answer.task_id.as_deref(), Some(task));
         assert_eq!(answer.metadata.as_ref().unwrap()[KIND_KEY], "delegation");
     }
-    assert!(RemoteInteraction::restore(first.snapshot(), &second.snapshot().id).is_err());
-}
-
-#[test]
-fn a_new_question_on_the_same_task_rejects_a_late_reply_to_the_previous_question() {
-    let mut remote = interaction("questions");
-    begin(&mut remote, true);
-    let DelegationUpdate::InputRequired { request_id: first, .. } =
-        remote.update(&update(TaskState::InputRequired, "context", "task", "Account?")).unwrap()
-    else {
-        panic!()
-    };
-    remote.accepts_reply(&first).unwrap();
-    remote.message("42".into(), "answer-1".into(), None, "caller", None, true, None, None).unwrap();
-    let DelegationUpdate::InputRequired { request_id: second, .. } =
-        remote.update(&update(TaskState::InputRequired, "context", "task", "Date?")).unwrap()
-    else {
-        panic!()
-    };
-    assert_ne!(first, second);
-    assert_eq!(remote.accepts_reply(&first), Err(DelegationError::NotWaiting));
-    remote.accepts_reply(&second).unwrap();
 }
 
 #[test]
@@ -418,14 +380,12 @@ fn an_ended_observation_does_not_cancel_work_or_turn_progress_into_an_answer() {
     progress.progress = true;
     assert_eq!(remote.update(&progress).unwrap(), DelegationUpdate::Progress("Checking".into()));
     assert_eq!(remote.ended(), Err(DelegationError::MissingOutcome));
-    let saved = remote.snapshot();
-    let mut restored = RemoteInteraction::restore(saved.clone(), &saved.id).unwrap();
-    assert_eq!(restored.snapshot().phase, InteractionPhase::Running);
+    assert_eq!(remote.snapshot().phase, InteractionPhase::Running);
     assert!(matches!(
-        restored.update(&update(TaskState::Completed, "context", "task", "late answer")).unwrap(),
+        remote.update(&update(TaskState::Completed, "context", "task", "late answer")).unwrap(),
         DelegationUpdate::Completed(ToolOutcome::Value { text, .. }) if text == "late answer"
     ));
-    assert!(restored.ended().is_ok());
+    assert!(remote.ended().is_ok());
 }
 
 #[test]
@@ -464,33 +424,6 @@ fn input_required_retains_an_exact_prefix_while_the_rest_can_be_rephrased() {
 }
 
 #[test]
-fn restoring_a_pending_question_preserves_the_sequence_and_rejects_previous_round_replies() {
-    let mut remote = interaction("restored-question-sequence");
-    begin(&mut remote, true);
-    let DelegationUpdate::InputRequired { request_id: first, .. } =
-        remote.update(&update(TaskState::InputRequired, "context", "task", "Account?")).unwrap()
-    else {
-        panic!()
-    };
-    let saved = serde_json::to_value(remote.snapshot()).unwrap();
-    let saved = serde_json::from_value(saved).unwrap();
-    let mut restored = RemoteInteraction::restore(saved, &remote.snapshot().id).unwrap();
-    restored.accepts_reply(&first).unwrap();
-    restored
-        .message("42".into(), "answer-first".into(), None, "caller", None, true, None, None)
-        .unwrap();
-    let DelegationUpdate::InputRequired { request_id: second, .. } =
-        restored.update(&update(TaskState::InputRequired, "context", "task", "Date?")).unwrap()
-    else {
-        panic!()
-    };
-    assert_ne!(first, second);
-    assert_eq!(restored.accepts_reply(&first), Err(DelegationError::NotWaiting));
-    restored.accepts_reply(&second).unwrap();
-    assert_eq!(restored.snapshot().question_sequence, remote.snapshot().question_sequence + 1);
-}
-
-#[test]
 fn delegation_rejects_an_owned_partition_including_default_keys_and_ancestors() {
     use lk_agents_abi::a2a::metadata::PARTITION_CHAIN_KEY;
     use lk_agents_abi::a2a::remote::DelegationPartition;
@@ -524,4 +457,77 @@ fn delegation_rejects_an_owned_partition_including_default_keys_and_ancestors() 
         validate_partition_delegation(&Map::new(), &caller).is_ok(),
         "ordinary independent requests are legal"
     );
+}
+
+#[test]
+fn exact_working_output_survives_two_native_hops_without_settling_the_business_task() {
+    let text = "Your booking reference is ABC-123.";
+    let mut exact = text.to_owned();
+    for hop in 0..2 {
+        let mut remote = interaction(&format!("exact-hop-{hop}"));
+        begin(&mut remote, false);
+        let wire = crate::a2a::wire::exact_progress(
+            "booking",
+            "trip",
+            exact,
+            format!("exact-{hop}"),
+            1000,
+        );
+        let encoded = serde_json::to_vec(&wire).unwrap();
+        let decoded = serde_json::from_slice(&encoded).unwrap();
+        let mut reader = crate::a2a::client::ReplyState::default();
+        let observed = reader.accept(decoded).unwrap().unwrap();
+        assert_eq!(observed.state, TaskState::Working);
+        assert!(observed.progress);
+        assert_eq!(observed.text, text);
+        assert_eq!(observed.metadata["livekit/verbatim"], text);
+        let DelegationUpdate::Exact(words) = remote.update(&observed).unwrap() else {
+            panic!("an exact Working message was rephrased or interpreted as a final result")
+        };
+        exact = words;
+        assert_eq!(remote.snapshot().phase, InteractionPhase::Running);
+        assert!(remote.snapshot().input_request.is_none(), "exact progress cannot ask for input");
+
+        let ordinary = crate::a2a::wire::progress(
+            "booking",
+            "trip",
+            "Still checking.".into(),
+            format!("progress-{hop}"),
+            1001,
+        );
+        let ordinary = reader.accept(ordinary).unwrap().unwrap();
+        assert_eq!(
+            remote.update(&ordinary).unwrap(),
+            DelegationUpdate::Progress("Still checking.".into())
+        );
+        let final_update =
+            update(TaskState::Completed, "trip", "booking", "Reservation confirmed.");
+        assert!(
+            matches!(
+                remote.update(&final_update).unwrap(),
+                DelegationUpdate::Completed(ToolOutcome::Value { text, verbatim: false, .. })
+                    if text == "Reservation confirmed."
+            ),
+            "progress exactness leaked into another event or settled the business task early"
+        );
+    }
+    assert_eq!(exact, text);
+}
+
+#[test]
+fn matching_task_names_cannot_move_an_input_occurrence_between_remote_ids() {
+    let mut remote = interaction("scoped");
+    begin(&mut remote, false);
+    remote.update(&update(TaskState::InputRequired, "trip", "booking", "Which day?")).unwrap();
+    let foreign = lk_agents_abi::session::InputRequestRef::RemoteTask {
+        remote_id: "different-configured-id".into(),
+        task: lk_agents_abi::delegation::remote::RemoteTaskRef {
+            context_id: "trip".into(),
+            task_id: "booking".into(),
+        },
+        request_id: "booking/input_3".into(),
+    };
+    assert!(remote.retain_input_request(Some(foreign.clone())).is_err());
+    let mut replacement = interaction("replacement");
+    assert!(replacement.respond_to(foreign).is_err());
 }

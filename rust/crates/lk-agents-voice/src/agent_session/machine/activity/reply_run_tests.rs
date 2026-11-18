@@ -24,6 +24,7 @@ fn offered_schema_changes_preserve_installed_policies() {
         duplicate_scope: DuplicateScope::NameAndArgs,
         retries: Some(2),
         remote: Some("https://expert.invalid/lookup".into()),
+        local_agent: None,
     };
     let mut offered = installed.spec.clone();
     offered.description = "custom model-node description".into();
@@ -230,6 +231,7 @@ fn failed_reply_keeps_correlated_input_requirements_in_the_voice_run_failure() {
         .replies
         .insert(speech, ReplyRun::new(run, None, PlanSpec::default(), false, None));
     let requirement = RunInputRequirement {
+        input_request: None,
         invocation_id: "failed-reply".into(),
         call: lk_agents_abi::a2a::turn::PendingCall {
             id: "item-1".into(),
@@ -283,6 +285,7 @@ fn tool_reply(
         duplicate_scope: DuplicateScope::Name,
         retries: None,
         remote: None,
+        local_agent: None,
     };
     let mut run = AgentRun::new(
         AgentDefinition {

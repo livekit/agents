@@ -589,17 +589,25 @@ impl CoreContextActivation {
         })
     }
 
-    #[pyo3(signature = (context, store))]
+    #[pyo3(signature = (context, store, view))]
     fn declare_binding<'py>(
         &self,
         py: Python<'py>,
         context: Bound<'_, PyAny>,
         store: Bound<'_, PyAny>,
+        view: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let context = crate::py_objects::object_ref_from_py(context.as_any())?;
         let store = crate::py_objects::object_ref_from_py(store.as_any())?;
-        let out = py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::declare_binding(&self.0, context, store));
+        let view = view
+            .map(|v| {
+                v.cast::<super::storage::CorePersistedSessionState>()
+                    .map(|value| value.get().0.as_ref().clone())
+                    .map_err(::pyo3::PyErr::from)
+            })
+            .transpose()?;
+        let out = py.detach(|| <CoreContextActivationImpl as ::lk_agents_abi::storage::context::ContextActivation>::declare_binding(&self.0, context, store, view)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
         crate::generated::records::storage_session::bound_context_to_py(py, out)
     }
 

@@ -140,11 +140,11 @@ class _core_RemoteInteraction:
     def __new__(
         cls,
         endpoint: str,
-        tool_id: str,
         function_call: ChatItem,
         project_url: str,
         api_key: str,
         api_secret: str,
+        remote_id: str | None = None,
     ) -> Self:
         """`project_url`, `api_key` and `api_secret` are the server's LiveKit project, which grants
         and verifies a shared thread; empty when there is none.
@@ -189,6 +189,9 @@ class _core_RemoteInteraction:
         """After `cancelled()`: the running delegation's cleanup, bounded by the teardown limit."""
     @property
     def extra(self) -> dict[str, object]: ...
+
+def _core_remote_id(endpoint: str, id: str | None = None) -> str:
+    """Configured state identity; an omitted identity uses the canonical destination URL."""
 
 def _core_delegation_chain(metadata: dict[str, object]) -> list[DelegationPartition]: ...
 

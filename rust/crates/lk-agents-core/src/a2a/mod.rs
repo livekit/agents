@@ -199,6 +199,15 @@ pub fn host_error(e: ProviderError) -> StorageError {
     }
 }
 
+/// A live handler's explicit cancellation ends only its admitted source. Storage/lease failures
+/// still leave through the typed owner-failure path.
+pub fn live_handler_error(error: ProviderError) -> Result<HandlerOutput, StorageError> {
+    match host_error(error) {
+        StorageError::Cancelled(_) => Ok(HandlerOutput { interrupted: true, ..Default::default() }),
+        error => Err(error),
+    }
+}
+
 /// What the handler is opened on: the message, the batch, the history, the state, the task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 

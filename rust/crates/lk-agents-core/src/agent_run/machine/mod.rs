@@ -31,8 +31,11 @@ mod checkpoint;
 mod coordinated;
 mod model_step;
 mod presentation;
+mod remote_resume;
 mod step_outcome;
 mod text_session;
+mod tool_output;
+mod tool_settlement;
 
 #[cfg(test)]
 #[path = "input_offers_tests.rs"]
@@ -139,10 +142,23 @@ pub enum AgentRunEvent {
         call: CallId,
         text: Result<Option<String>, HostError>,
     },
+    /// A captured tool operation requests an ordered exact output. Missing source is a lost
+    /// operation, never permission to attach it to another current call.
+    ToolOutputRequested {
+        output: super::ToolOutputId,
+        call: Option<CallId>,
+        text: String,
+        stream: bool,
+    },
+    ToolOutputDelivered {
+        output: super::ToolOutputId,
+        result: Result<(), ProviderError>,
+    },
     /// `ctx.update(text)`.
     ToolProgress {
         call: CallId,
         message: String,
+        silent: bool,
     },
     ToolCallUpdated {
         call: CallId,
@@ -150,7 +166,7 @@ pub enum AgentRunEvent {
     },
     ToolSettled {
         call: CallId,
-        outcome: ToolOutcome,
+        report: lk_agents_abi::llm::tool_executor::ToolReport,
     },
     /// A delegate the call ran in process (an agent tool) consumed `usage`; the run counts it.
     DelegateUsage {
@@ -230,6 +246,8 @@ pub struct AgentRun {
     history: Vec<ChatItem>,
     /// Index of the incoming message in `history`: `new_messages` start there.
     first_new: usize,
+    /// Other owned turns may add context, never output or input authority for this invocation.
+    context_items: BTreeSet<String>,
     next_id: u64,
     /// This invocation's requests and tool bodies.
     ledger: Ledger,
@@ -247,6 +265,12 @@ pub struct AgentRun {
     input_answers: BTreeSet<String>,
     /// Only these owner-captured occurrences were offered to this frontend invocation.
     input_offers: FrozenInputOffers,
+    /// The surrounding native owner retains identified bodies after their first update.
+    live_tools: bool,
+    /// Native saved-origin reconciliation prepares only those original remote calls.
+    reconciliation: Option<remote_resume::Reconciliation>,
+    /// Standalone output ownership. A Session owns this table itself when it coordinates runs.
+    tool_outputs: BTreeMap<super::ToolOutputId, (ChatMessage, bool)>,
     checkpoints: bool,
     /// Coordinated: the history up to here was handed to the coordinator's planner.
     planned: usize,
@@ -338,7 +362,12 @@ impl AgentRun {
             for item in
                 acting.calls.checkpoint_items(self.input.mode, self.stamp(self.input.wall.at))
             {
-                if !history.iter().any(|existing| existing.id() == item.id()) {
+                if self.reconciliation.is_some() {
+                    lk_agents_abi::llm::chat_context::ordering::commit_by_instant(
+                        &mut history,
+                        item,
+                    );
+                } else if !history.iter().any(|existing| existing.id() == item.id()) {
                     history.push(item);
                 }
             }
@@ -349,7 +378,12 @@ impl AgentRun {
     /// This invocation's accepted and in-flight items. Supplied model context may contain
     /// private reminders or rewritten history; it is not a new conversation revision.
     pub fn progress_new_items(&self) -> Vec<ChatItem> {
-        self.progress_history().into_iter().skip(self.first_new).collect()
+        self.progress_history()
+            .into_iter()
+            .enumerate()
+            .filter(|(at, item)| self.recorded_here(*at, item))
+            .map(|(_, item)| item)
+            .collect()
     }
 
     pub fn new(agent: AgentDefinition, mut input: RunInput) -> Result<AgentRun, AgentError> {
@@ -361,6 +395,7 @@ impl AgentRun {
             agent,
             history: Vec::new(),
             first_new: 0,
+            context_items: BTreeSet::new(),
             input,
             next_id: 0,
             ledger: Ledger::default(),
@@ -373,6 +408,9 @@ impl AgentRun {
             approval_answers: BTreeSet::new(),
             input_answers: BTreeSet::new(),
             input_offers: FrozenInputOffers::Captured(Vec::new()),
+            live_tools: false,
+            reconciliation: None,
+            tool_outputs: BTreeMap::new(),
             checkpoints: false,
             planned: 0,
             tools_forbidden: false,
@@ -387,8 +425,6 @@ impl AgentRun {
         }
     }
 
-    /// Shared owners provide correlation; invocation startup must not consume another pending
-    /// question simply because a new human message arrived. Approval still requires a repeat.
     pub fn with_input_answers(mut self, answered: BTreeSet<String>) -> Self {
         self.input_answers = answered;
         self
@@ -451,14 +487,6 @@ impl AgentRun {
         fx
     }
 
-    /// A session-wide duplicate replacement requested cancellation of this run's body.
-    /// Mark it before cancellation can return, so the expected outcome does not abort the run.
-    pub fn tool_cancellation_requested(&mut self, call: CallId) {
-        if let Some(acting) = self.phase.acting() {
-            acting.calls.request_cancellation(call);
-        }
-    }
-
     fn step(
         &mut self,
         event: AgentRunEvent,
@@ -467,6 +495,12 @@ impl AgentRun {
     ) -> Vec<AgentRunEffect> {
         let mut fx = Vec::new();
         match event {
+            AgentRunEvent::ToolOutputRequested { output, call, text, stream } => {
+                self.request_tool_output(output, call, text, stream, now, &mut fx);
+            }
+            AgentRunEvent::ToolOutputDelivered { output, result } => {
+                self.delivered_tool_output(output, result, &mut fx);
+            }
             AgentRunEvent::Start => self.start(now, &mut fx),
             AgentRunEvent::Cancel => self.abort(RunError::Cancelled, now, &mut fx),
             AgentRunEvent::Wake => self.wake(now, &mut fx),
@@ -562,9 +596,22 @@ impl AgentRun {
                 }
                 self.step_settled(now, &mut fx);
             }
-            AgentRunEvent::ToolProgress { call, message } => {
+            AgentRunEvent::ToolProgress { call, message, silent } => {
                 if let Some(a) = self.phase.acting() {
-                    a.calls.progress(call, message, &mut fx);
+                    a.calls.progress(call, message.clone(), silent, &mut fx);
+                }
+                if self.live_tools {
+                    self.tool_settled(
+                        call,
+                        ToolOutcome::Update {
+                            raw: message.clone(),
+                            message,
+                            reply_required: !silent,
+                        }
+                        .into(),
+                        now,
+                        &mut fx,
+                    );
                 }
             }
             AgentRunEvent::ToolCallUpdated { call, extra } => {
@@ -573,8 +620,8 @@ impl AgentRun {
                 }
             }
             AgentRunEvent::DelegateUsage { usage } => self.ledger.add(&usage),
-            AgentRunEvent::ToolSettled { call, outcome } => {
-                self.tool_settled(call, outcome, now, &mut fx)
+            AgentRunEvent::ToolSettled { call, report } => {
+                self.tool_settled(call, report, now, &mut fx)
             }
             AgentRunEvent::CallLost { call, outcome } => {
                 let body = match self.phase.acting() {
@@ -584,16 +631,13 @@ impl AgentRun {
                     None => false,
                 };
                 if body {
-                    self.tool_settled(call, outcome, now, &mut fx);
+                    self.tool_settled(call, outcome.into(), now, &mut fx);
                 } else {
                     self.step_settled(now, &mut fx);
                 }
             }
-            AgentRunEvent::ToolLaunchFailed { call, .. } => {
-                if let Some(a) = self.phase.acting() {
-                    a.calls.body_settled(call, ToolOutcome::Internal, &mut fx);
-                }
-                self.step_settled(now, &mut fx);
+            AgentRunEvent::ToolLaunchFailed { call, error } => {
+                self.tool_settled(call, tool_outcome::host_failure(&error).into(), now, &mut fx);
             }
             AgentRunEvent::OutputValidated { validation, verdict } => {
                 self.validated(validation, verdict, now, &mut fx)
@@ -605,36 +649,6 @@ impl AgentRun {
             AgentRunEvent::Recorded { item } => self.history.push(*item),
         }
         fx
-    }
-
-    fn tool_settled(
-        &mut self,
-        call: CallId,
-        outcome: ToolOutcome,
-        now: Ts,
-        fx: &mut Vec<AgentRunEffect>,
-    ) {
-        // On a call, the body's first update answers its step; the body runs on detached.
-        let detaches = self.input.mode == tool_outcome::Mode::Voice
-            && matches!(outcome, ToolOutcome::Update { .. });
-        let cancelled = match self.phase.acting() {
-            Some(a) if detaches => {
-                a.calls.detached(call, outcome, fx);
-                false
-            }
-            Some(a) => a.calls.body_settled(call, outcome, fx),
-            None => false,
-        };
-        if cancelled {
-            self.abort(RunError::Cancelled, now, fx);
-        } else {
-            self.step_settled(now, fx);
-        }
-    }
-
-    fn mint(&mut self) -> u64 {
-        self.next_id += 1;
-        self.next_id
     }
 
     /// `item_<12 hex>`, as v1: each step's message is its own provider group, and its calls,
@@ -769,7 +783,9 @@ impl AgentRun {
         now: Ts,
         fx: &mut Vec<AgentRunEffect>,
     ) {
-        let Phase::Requesting(step, _) = &mut self.phase else { return };
+        let Phase::Requesting(step, _) = &mut self.phase else {
+            return;
+        };
         if step.request != request {
             return;
         }
@@ -803,7 +819,9 @@ impl AgentRun {
             FrozenInputOffers::Captured(offered) => Some(offered.as_slice()),
             FrozenInputOffers::Unavailable => None,
         };
-        let Some(acting) = self.phase.acting() else { return };
+        let Some(acting) = self.phase.acting() else {
+            return;
+        };
         let Some(FinalCandidate { call, value }) =
             acting.calls.add_step_call(id, call, &self.agent, offered, fx)
         else {
@@ -926,7 +944,9 @@ impl AgentRun {
                 }
             }
             Phase::Requesting(_, acting) | Phase::Acting(acting) => {
-                let Some(call) = acting.finals.remove(&validation) else { return };
+                let Some(call) = acting.finals.remove(&validation) else {
+                    return;
+                };
                 let rejection = match verdict {
                     OutputVerdict::Accepted { .. } => {
                         acting.accepted.insert(call, validation);
@@ -1103,7 +1123,12 @@ impl AgentRun {
             },
             outcome,
             interrupted: false,
-            new_messages: history[self.first_new..].to_vec(),
+            new_messages: history
+                .iter()
+                .enumerate()
+                .filter(|(at, item)| self.recorded_here(*at, item))
+                .map(|(_, item)| item.clone())
+                .collect(),
             all_messages: all.items,
             usage: self.ledger.snapshot(),
             verbatim,

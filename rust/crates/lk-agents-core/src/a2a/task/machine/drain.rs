@@ -29,6 +29,9 @@ impl TaskMachine {
         let rows: Vec<_> = routed
             .into_iter()
             .take_while(|entry| entry.endpoint == self.drain_endpoint)
+            // Live begins with one received message per turn. It must not inherit Batch's
+            // mergedInto behavior simply because both use the durable inbox.
+            .take(if self.policy == crate::a2a::Policy::Live { 1 } else { usize::MAX })
             .map(|entry| entry.row)
             .collect();
         if rows.is_empty() && !self.leased {

@@ -14,7 +14,9 @@ impl Session {
             let parent_id = self.state.active_frame_id.clone();
             let parent = &self.state.frames[&parent_id];
             let pending = parent.history.iter().find_map(|item| {
-                let ChatItem::FunctionCall(call) = item else { return None };
+                let ChatItem::FunctionCall(call) = item else {
+                    return None;
+                };
                 parent
                     .pending_calls
                     .iter()
@@ -121,6 +123,79 @@ impl Session {
         effects: &mut Vec<SessionEffect>,
     ) {
         let active_id = self.state.active_frame_id.clone();
+        let live_pending =
+            self.live.as_ref().is_some_and(|live| live.pending_for_frame(&active_id))
+                || self.output_pending_for_frame(&active_id);
+        let frame = self.active_frame_mut();
+        frame.history = result.all_messages.clone();
+        let mut pending = approvals;
+        retain_approvals(&mut pending, &frame.pending_calls);
+        frame.pending_calls = pending;
+        let accepted = output.clone().or_else(|| match &result.outcome {
+            RunOutcome::Completed { output: lk_agents_abi::agent::run::Output::Text(text) } => {
+                Some(Value::String(text.clone()))
+            }
+            _ => None,
+        });
+        frame.completed =
+            matches!(result.outcome, RunOutcome::Completed { .. }) && accepted.is_some();
+        if accepted.is_some() || frame.parent.is_none() {
+            frame.output = accepted;
+        }
+        frame.error = None;
+        if let Err(error) = self.retain_settled_inputs(&result, now) {
+            self.finish(Err(TextSessionError::Storage(error)), effects);
+            return;
+        }
+        let frame = self.active_frame_mut();
+        if frame.completed && frame.parent.is_some() && !live_pending {
+            for request in frame.input_requests.values_mut() {
+                if matches!(request.state, lk_agents_abi::session::InputRequestState::Open) {
+                    request.state = lk_agents_abi::session::InputRequestState::Closed;
+                }
+            }
+        }
+        let parent_call = match frame.parent.clone() {
+            Some(parent)
+                if !result.interrupted
+                    && !live_pending
+                    && !matches!(result.outcome, RunOutcome::InputRequired { .. }) =>
+            {
+                parent
+            }
+            _ => {
+                self.finish(Ok(TextSessionTurn { result, state: self.state.clone() }), effects);
+                return;
+            }
+        };
+        let output = output.or_else(|| match &result.outcome {
+            RunOutcome::Completed { output: lk_agents_abi::agent::run::Output::Text(text) } => {
+                Some(Value::String(text.clone()))
+            }
+            _ => None,
+        });
+        let Some(output) = output else {
+            self.finish(
+                Err(TextSessionError::Routing(RoutingError::MissingAcceptedOutput)),
+                effects,
+            );
+            return;
+        };
+        if let Err(error) = self.propagate_child(parent_call, output, now, effects) {
+            self.finish(Err(TextSessionError::Routing(error)), effects);
+            return;
+        }
+        self.next_child(now, effects);
+    }
+
+    /// Retain input occurrences independently of whether this result ends the human turn.
+    /// A recovery observation cannot consume the human input that arrived before it.
+    pub(super) fn retain_settled_inputs(
+        &mut self,
+        result: &RunResult,
+        now: Ts,
+    ) -> Result<(), lk_agents_abi::storage::StorageError> {
+        let active_id = self.state.active_frame_id.clone();
         let stamp = self.stamp(now);
         let fallback = match &result.outcome {
             RunOutcome::InputRequired(_)
@@ -134,19 +209,6 @@ impl Session {
         };
         let mut presentations = Vec::new();
         let frame = self.active_frame_mut();
-        frame.history = result.all_messages.clone();
-        let mut pending = approvals;
-        retain_approvals(&mut pending, &frame.pending_calls);
-        frame.pending_calls = pending;
-        frame.output = output.clone().or_else(|| match &result.outcome {
-            RunOutcome::Completed { output: lk_agents_abi::agent::run::Output::Text(text) } => {
-                Some(Value::String(text.clone()))
-            }
-            _ => None,
-        });
-        frame.completed =
-            matches!(result.outcome, RunOutcome::Completed { .. }) && frame.output.is_some();
-        frame.error = None;
         let delivered_question = match &result.outcome {
             RunOutcome::InputRequired(question) => result.new_messages.iter().find_map(|item| {
                 let message = item.as_message()?;
@@ -216,54 +278,16 @@ impl Session {
                 ));
             }
         }
-        if frame.completed && frame.parent.is_some() {
-            for request in frame.input_requests.values_mut() {
-                if matches!(request.state, lk_agents_abi::session::InputRequestState::Open) {
-                    request.state = lk_agents_abi::session::InputRequestState::Closed;
-                }
-            }
+        for (reference, message_id) in presentations {
+            crate::session::input::apply(
+                &mut self.state,
+                vec![lk_agents_abi::session::SessionInputCommand::Presented {
+                    requests: vec![reference],
+                    message_id,
+                }],
+            )?;
         }
-        let parent_call = match frame.parent.clone() {
-            Some(parent)
-                if !result.interrupted
-                    && !matches!(result.outcome, RunOutcome::InputRequired { .. }) =>
-            {
-                parent
-            }
-            _ => {
-                for (reference, message_id) in presentations {
-                    if let Err(error) =
-                        self.input(lk_agents_abi::session::SessionInputCommand::Presented {
-                            requests: vec![reference],
-                            message_id,
-                        })
-                    {
-                        self.finish(Err(TextSessionError::Storage(error)), effects);
-                        return;
-                    }
-                }
-                self.finish(Ok(TextSessionTurn { result, state: self.state.clone() }), effects);
-                return;
-            }
-        };
-        let output = output.or_else(|| match &result.outcome {
-            RunOutcome::Completed { output: lk_agents_abi::agent::run::Output::Text(text) } => {
-                Some(Value::String(text.clone()))
-            }
-            _ => None,
-        });
-        let Some(output) = output else {
-            self.finish(
-                Err(TextSessionError::Routing(RoutingError::MissingAcceptedOutput)),
-                effects,
-            );
-            return;
-        };
-        if let Err(error) = self.propagate_child(parent_call, output, now, effects) {
-            self.finish(Err(TextSessionError::Routing(error)), effects);
-            return;
-        }
-        self.next_child(now, effects);
+        Ok(())
     }
 
     /// A restored accepted child returns its retained value, never another model invocation.
@@ -277,13 +301,32 @@ impl Session {
             if !child.completed {
                 return Ok(());
             }
-            let Some(parent) = child.parent.clone() else { return Ok(()) };
-            let output = child.output.clone().unwrap_or(Value::Null);
+            let Some(parent) = child.parent.clone() else {
+                return Ok(());
+            };
+            if self.live.as_ref().is_some_and(|live| live.pending_for_frame(&child.id))
+                || self.output_pending_for_frame(&child.id)
+            {
+                return Ok(());
+            }
+            if child.history.iter().any(|item| {
+                matches!(item,
+                ChatItem::FunctionCall(call) if crate::tool_calls::provisional(call))
+            }) {
+                return Err(RoutingError::InvalidState(
+                    "a child still owns a local tool with no final outcome".into(),
+                ));
+            }
+            if self.resume_child_remotes(now, effects)? {
+                return Ok(());
+            }
+            let child = &self.state.frames[&self.state.active_frame_id];
+            let output = child.output.clone().ok_or(RoutingError::MissingAcceptedOutput)?;
             self.propagate_child(parent, output, now, effects)?;
         }
     }
 
-    fn propagate_child(
+    pub(super) fn propagate_child(
         &mut self,
         parent_call: super::ParentCall,
         output: Value,
@@ -291,6 +334,13 @@ impl Session {
         effects: &mut Vec<SessionEffect>,
     ) -> Result<(), RoutingError> {
         let active_id = self.state.active_frame_id.clone();
+        if self.live.as_ref().is_some_and(|live| live.pending_for_frame(&active_id))
+            || self.output_pending_for_frame(&active_id)
+        {
+            return Err(RoutingError::InvalidState(
+                "a child still owns unsettled live tool bodies".into(),
+            ));
+        }
         let pending = self.state.frames[&parent_call.frame_id]
             .pending_calls
             .iter()
@@ -384,17 +434,7 @@ pub(super) fn retain_input(
     requirement: &lk_agents_abi::agent::run::RunInputRequirement,
     stamp: std::time::SystemTime,
 ) -> lk_agents_abi::session::InputRequestRef {
-    let remote = frame.history.iter().find_map(|item| {
-        let ChatItem::FunctionCall(call) = item else { return None };
-        if call.id != requirement.call.id {
-            return None;
-        }
-        let value = call.extra.get(crate::delegation::remote::retained::STATE_KEY)?;
-        let state: crate::delegation::remote::InteractionState =
-            serde_json::from_value(value.clone()).ok()?;
-        state.input_request
-    });
-    remote.unwrap_or_else(|| {
+    requirement.input_request.clone().unwrap_or_else(|| {
         let id = format!("{}/input/{}", requirement.invocation_id, requirement.call.id);
         frame.input_requests.entry(id.clone()).or_insert_with(|| {
             lk_agents_abi::session::AgentInputRequest {

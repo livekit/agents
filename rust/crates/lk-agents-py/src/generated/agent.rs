@@ -545,6 +545,13 @@ fn _extract_agent_runner_progress_operation(
 }
 type AgentRunnerProgressOperationInput = u64;
 
+fn _extract_agent_runner_say_operation(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<AgentRunnerSayOperationInput> {
+    crate::py_values::number_from_py::<u64>(obj.as_any(), "operation")
+}
+type AgentRunnerSayOperationInput = u64;
+
 /// Runs invocations of one agent definition: each `run` streams its updates, then its settled
 /// result; closing the stream cancels the invocation, whose work still settles.
 #[pyclass(frozen, name = "AgentRunner", module = "livekit.agents._core")]
@@ -650,7 +657,7 @@ impl AgentRunner {
     /// `ctx.update(message)` from the tool body running as host `operation` of invocation
     /// `invocation_id`: the run streams it as progress. Waits for queue admission rather than
     /// dropping an update under pressure. Refused once this runner no longer owns the invocation.
-    #[pyo3(signature = (invocation_id, operation, message))]
+    #[pyo3(signature = (invocation_id, operation, message, silent = false))]
     fn progress<'py>(
         &self,
         py: Python<'py>,
@@ -658,20 +665,45 @@ impl AgentRunner {
         #[pyo3(from_py_with = _extract_agent_runner_progress_operation)]
         operation: AgentRunnerProgressOperationInput,
         message: ::std::string::String,
+        silent: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let this = ::std::sync::Arc::clone(&self.0);
+        let call = py.detach(|| {
+            <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::progress(
+                &self.0,
+                &invocation_id,
+                operation,
+                message,
+                silent,
+            )
+        });
         crate::py_calls::future_into_py(py, async move {
-            let () = <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::progress(
-                &this,
+            let () = call.await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+
+    /// Enqueue exact text now; the private reader confirms the source's local output boundary.
+    #[pyo3(signature = (invocation_id, operation, message))]
+    fn say<'py>(
+        &self,
+        py: Python<'py>,
+        invocation_id: ::std::string::String,
+        #[pyo3(from_py_with = _extract_agent_runner_say_operation)]
+        operation: AgentRunnerSayOperationInput,
+        message: ::std::string::String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let call = py.detach(|| {
+            <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::say(
+                &self.0,
                 &invocation_id,
                 operation,
                 message,
             )
-            .await
-            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
-                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
-            })?;
+        });
+        crate::py_calls::future_into_py(py, async move {
+            let () = call.await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }

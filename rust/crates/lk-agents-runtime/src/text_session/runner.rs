@@ -4,18 +4,18 @@ use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
 use lk_agents_abi::text_session::{TextSessionDelivery, TextSessionRunner};
-use lk_agents_abi::{ChatItem, Closed, StreamOutput, Ts};
+use lk_agents_abi::{ChatItem, Closed, SpawnerExt, StreamOutput, Ts};
 use lk_agents_core::session::SessionAgent;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
 use parking_lot::Mutex;
 
 #[derive(Clone)]
-struct Control {
-    release: mpsc::Sender<Release>,
-    progress: mpsc::Sender<(String, u64, String)>,
-    usage: signal::Cell<Usage>,
-    commands: CommandPort,
+pub(super) struct Control {
+    pub(super) release: mpsc::Sender<Release>,
+    pub(super) progress: crate::agent_run::Progress,
+    pub(super) usage: signal::Cell<Usage>,
+    pub(super) commands: CommandPort,
 }
 
 impl Runner {
@@ -29,6 +29,15 @@ impl Runner {
 }
 
 impl lk_agents_abi::session::SessionCommands for Runner {
+    fn ended(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        let owner = self.commands();
+        Box::pin(async move {
+            if let Ok(owner) = owner {
+                owner.ended().await;
+            }
+        })
+    }
+
     fn routing_context<'a>(
         &'a self,
         remote_id: &'a str,
@@ -107,16 +116,22 @@ impl lk_agents_abi::session::SessionCommands for Runner {
 
     fn cancel_remote<'a>(
         &'a self,
-        remote_id: &'a str,
-        endpoint: &'a str,
-        task: &'a lk_agents_abi::delegation::remote::RemoteTaskRef,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<(), lk_agents_abi::a2a::client::AgentClientError>>
-    {
+        target: &'a lk_agents_abi::session::control::RemoteControlRef,
+        scope: Option<&'a lk_agents_abi::delegation::remote::RemoteControlScope>,
+        candidate: std::sync::Arc<dyn lk_agents_abi::session::control::RemoteCancellation>,
+        retry_after: Option<&'a str>,
+    ) -> lk_agents_abi::BoxFuture<
+        'a,
+        Result<
+            lk_agents_abi::session::control::RemoteCancellationAdmission,
+            lk_agents_abi::a2a::client::AgentClientError,
+        >,
+    > {
         Box::pin(async move {
             let commands = self.commands().map_err(|error| {
                 lk_agents_abi::a2a::client::AgentClientError::InvalidInput(error.to_string())
             })?;
-            commands.cancel_remote(remote_id, endpoint, task).await
+            commands.cancel_remote(target, scope, candidate, retry_after).await
         })
     }
 
@@ -245,13 +260,7 @@ impl TextSessionRunner for Runner {
     }
 
     fn run(&self, request: TextSessionRequest) -> Result<Updates, Invalid> {
-        let spawner = (self.spawner)().map_err(|error| Invalid(error.to_string()))?;
-        let mut current = self.control.lock();
-        let agents =
-            self.agents.lock().take().ok_or_else(|| Invalid("this runner already ran".into()))?;
-        let (updates, control) = start(self, spawner, agents, request)?;
-        *current = Some(control);
-        Ok(updates)
+        self.run_with_output(request, None)
     }
 
     fn run_stream(
@@ -261,7 +270,7 @@ impl TextSessionRunner for Runner {
         resources: Arc<Self::Resources>,
     ) -> Result<(), Invalid> {
         stream.bind(resources, || {
-            let updates = self.run(request)?;
+            let updates = self.run_with_output(request, Some(stream.output()))?;
             let control =
                 self.control.lock().as_ref().cloned().expect("started session owns control");
             Ok(Box::new(crate::run_stream::input::Session {
@@ -298,22 +307,77 @@ impl TextSessionRunner for Runner {
             .map_err(|e| Invalid(e.to_string()))
     }
 
-    async fn progress(
+    fn progress(
         &self,
         invocation_id: &str,
         operation: u64,
         message: String,
-    ) -> Result<(), Invalid> {
-        let progress = self
-            .control
-            .lock()
+        silent: bool,
+    ) -> lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>> {
+        match self.control.lock().as_ref() {
+            Some(control) => control
+                .progress
+                .for_invocation(invocation_id.into())
+                .enqueue(operation, message, silent),
+            None => Box::pin(async {
+                Err(lk_agents_abi::errors::HostError::new(
+                    "the conversation report owner has ended",
+                )
+                .into())
+            }),
+        }
+    }
+    fn say(
+        &self,
+        invocation_id: &str,
+        operation: u64,
+        message: String,
+    ) -> lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>> {
+        match self.control.lock().as_ref() {
+            Some(control) => {
+                control.progress.for_invocation(invocation_id.into()).say(operation, message)
+            }
+            None => Box::pin(async {
+                Err(lk_agents_abi::errors::HostError::new(
+                    "the conversation report owner has ended",
+                )
+                .into())
+            }),
+        }
+    }
+}
+
+impl Runner {
+    fn run_with_output(
+        &self,
+        request: TextSessionRequest,
+        fallback: Option<crate::agent_run::output::Target>,
+    ) -> Result<Updates, Invalid> {
+        let output =
+            request.output.clone().map(crate::agent_run::output::Target::Handler).or(fallback);
+        let spawner = (self.spawner)().map_err(|error| Invalid(error.to_string()))?;
+        let mut current = self.control.lock();
+        let agents =
+            self.agents.lock().take().ok_or_else(|| Invalid("this runner already ran".into()))?;
+        let active = request
+            .session_sink
             .as_ref()
-            .map(|control| control.progress.clone())
-            .ok_or_else(|| Invalid("session request is not running".into()))?;
-        progress
-            .send((invocation_id.into(), operation, message))
-            .await
-            .map_err(|e| Invalid(e.to_string()))
+            .filter(|sink| sink.inbox_policy() == lk_agents_abi::a2a::options::Policy::Live)
+            .map(|sink| sink.commands())
+            .transpose()
+            .map_err(|error| Invalid(error.to_string()))?
+            .flatten();
+        let (updates, control) = if let Some(active) = active {
+            let port =
+                (active.as_ref() as &dyn std::any::Any).downcast_ref::<CommandPort>().ok_or_else(
+                    || Invalid("the live binding has a different native execution owner".into()),
+                )?;
+            live::attach(port, request, agents, self.clock.clone(), output)?
+        } else {
+            start(self, spawner, agents, request, output)?
+        };
+        *current = Some(control);
+        Ok(updates)
     }
 }
 
@@ -322,6 +386,7 @@ fn start(
     spawner: Arc<dyn Spawner>,
     agents: BTreeMap<String, TextSessionAgent>,
     request: TextSessionRequest,
+    output_target: Option<crate::agent_run::output::Target>,
 ) -> Result<(Updates, Control), Invalid> {
     let clock = runner.clock.clone();
     let ChatItem::Message(message) = request.message.clone() else {
@@ -354,23 +419,79 @@ fn start(
     if request.session_sink.is_some() {
         session = session.with_persistence();
     }
+    let live_origin = request
+        .session_sink
+        .as_ref()
+        .filter(|sink| sink.inbox_policy() == lk_agents_abi::a2a::options::Policy::Live)
+        .map(|sink| {
+            sink.live_origin()
+                .ok_or_else(|| Invalid("the live binding has no admitted endpoint request".into()))
+        })
+        .transpose()?;
+    if let Some(origin) = &live_origin {
+        session = session.with_live(origin.clone());
+    }
     let cancel = CancellationToken::new();
     let (updates, receiver) = lk_agents_net::outbox::outbox(UPDATE_QUEUE);
     let (events_tx, events) = mpsc::channel(64);
-    let (progress_tx, progress) = mpsc::channel(32);
+    let driving = Arc::new(TaskSet::default());
+    let progress = crate::agent_run::Progress::new(
+        String::new(),
+        events_tx.clone(),
+        &driving,
+        spawner.clone(),
+    );
     let (release_tx, releases) = mpsc::channel(1);
-    let (commands_tx, commands) = CommandPort::channel(
+    let (owner_tx, owner_commands) = mpsc::channel(2);
+    let (mut commands_tx, commands) = CommandPort::channel(
         32,
         runner.delegation.as_ref().and_then(|options| options.routing_model.clone()),
     );
+    let (usage_tx, usage) = signal::signal(session.usage());
+    if live_origin.is_some() {
+        commands_tx.live = Some(Arc::new(live::LiveControl {
+            owner: owner_tx,
+            cancel: cancel.clone(),
+            release: release_tx.clone(),
+            progress: progress.clone(),
+            usage: usage.clone(),
+        }));
+    }
     let bound_commands: Arc<dyn lk_agents_abi::session::SessionCommands> =
         Arc::new(commands_tx.clone());
     if let Some(sink) = &request.session_sink {
         sink.bind_commands(Arc::downgrade(&bound_commands))
             .map_err(|error| Invalid(error.to_string()))?;
     }
-    let (usage_tx, usage) = signal::signal(session.usage());
+    let live_requests = live_origin
+        .as_ref()
+        .map(|origin| {
+            (
+                origin.request_id.clone(),
+                live::LiveRequest {
+                    output: output_target.clone(),
+                    request: request.clone(),
+                    agents: agents.clone(),
+                    updates: updates.clone(),
+                },
+            )
+        })
+        .into_iter()
+        .collect();
+    let request_sink = request.session_sink.clone();
+    let checkpoint_port = request_sink
+        .as_ref()
+        .map(|sink| sink.checkpoint_port())
+        .transpose()
+        .map_err(|error| Invalid(error.to_string()))?
+        .flatten();
     let driver = Driver {
+        checkpoint_port,
+        owner_close: if live_origin.is_some() {
+            live::OwnerClose::Open
+        } else {
+            live::OwnerClose::Closed
+        },
         _bound_commands: bound_commands,
         delegation: runner.delegation.clone(),
         routing: None,
@@ -388,37 +509,70 @@ fn start(
         cx: runner.tracer.root(),
         spawner: spawner.clone(),
         events_tx,
+        progress: progress.clone(),
+        output_target,
         updates,
         work: BTreeMap::new(),
+        live_requests,
+        invocation_requests: BTreeMap::new(),
+        live_commit: None,
         pending: BTreeMap::new(),
         releases: VecDeque::new(),
         output: None,
         finished: false,
     };
-    let driving = Arc::new(TaskSet::default());
     driving.spawn(
         &*spawner,
         "text session",
-        driver.drive(message, events, progress, releases, commands, cancel.clone()),
+        driver.drive(
+            message,
+            DriverChannels { events, releases, commands, owner_commands },
+            cancel.clone(),
+        ),
     );
+    let driver_owner = if live_origin.is_some() {
+        let owned = driving.clone();
+        let owner_clock = clock.clone();
+        let task = spawner.spawn(async move {
+            let settled = owned.wait_empty(&*owner_clock, None).await;
+            debug_assert!(settled, "an unbounded task-set join ends only after settlement");
+        });
+        request_sink
+            .as_ref()
+            .expect("live endpoint has an explicit binding")
+            .retain_session(task)
+            .map_err(|error| Invalid(error.to_string()))?;
+        None
+    } else {
+        Some(driving)
+    };
     Ok((
-        Updates { cancel, receiver, clock, _driver: driving },
-        Control { release: release_tx, progress: progress_tx, usage, commands: commands_tx },
+        Updates {
+            cancel,
+            receiver,
+            clock,
+            _driver: driver_owner,
+            cancel_on_drop: live_origin.is_none(),
+        },
+        Control { release: release_tx, progress, usage, commands: commands_tx },
     ))
 }
 
 pub struct Updates {
-    cancel: CancellationToken,
-    receiver: mpsc::Receiver<TextSessionUpdate>,
-    clock: Arc<dyn Clock>,
+    pub(super) cancel: CancellationToken,
+    pub(super) receiver: mpsc::Receiver<TextSessionUpdate>,
+    pub(super) clock: Arc<dyn Clock>,
+    pub(super) cancel_on_drop: bool,
     /// The driver's owner: dropping the updates cancels the session through `cancel`, and the
     /// driver ends after its cleanup.
-    _driver: Arc<TaskSet>,
+    pub(super) _driver: Option<Arc<TaskSet>>,
 }
 
 impl Drop for Updates {
     fn drop(&mut self) {
-        self.cancel.cancel();
+        if self.cancel_on_drop {
+            self.cancel.cancel();
+        }
     }
 }
 
@@ -433,6 +587,10 @@ impl StreamOutput<TextSessionUpdate> for Updates {
     }
     fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
         Box::pin(async move {
+            if !self.cancel_on_drop {
+                self.receiver.close();
+                return Closed::Clean;
+            }
             self.cancel.cancel();
             let clock = self.clock.clone();
             Closed::bounded(&*clock, deadline, async move {

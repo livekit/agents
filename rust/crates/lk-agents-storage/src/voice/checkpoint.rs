@@ -10,69 +10,102 @@ impl VoiceStore {
         local: VoiceHistory,
     ) -> Result<Arc<dyn SessionCheckpoint>, StorageError> {
         let mut state = self.state.lock().await;
-        let history = self
-            .begin_locked(&mut state, None, local, crate::thread::run::PartitionKind::Context)
-            .await?;
-        let active = state.active.as_mut().expect("acquisition installed the run");
-        active.controls += 1;
-        let run_id = active.run.id().to_owned();
-        let background = Background::new(
-            Arc::clone(&self.tasks),
-            Arc::clone(&self.background.spawner),
-            Arc::clone(&self.background.clock),
-        );
-        Ok(Arc::new(crate::context::checkpoint::Checkpoint::voice(
-            Arc::clone(self),
-            run_id,
-            history,
-            &background,
-        )))
+        let result: Result<Arc<dyn SessionCheckpoint>, StorageError> = async {
+            let history = self
+                .begin_locked(&mut state, None, local, crate::thread::run::PartitionKind::Context)
+                .await?;
+            let active = state.active.as_mut().expect("acquisition installed the run");
+            active.controls += 1;
+            let run_id = active.run.id().to_owned();
+            let background = Background::new(
+                Arc::clone(&self.tasks),
+                Arc::clone(&self.background.spawner),
+                Arc::clone(&self.background.clock),
+            );
+            let checkpoint: Arc<dyn SessionCheckpoint> =
+                Arc::new(crate::context::checkpoint::Checkpoint::voice(
+                    Arc::clone(self),
+                    run_id,
+                    history,
+                    &background,
+                ));
+            Ok(checkpoint)
+        }
+        .await;
+        let diagnostics = std::mem::take(&mut state.diagnostics);
+        drop(state);
+        self.log_history(diagnostics);
+        result
     }
 
     pub(crate) async fn save_checkpoint(
         &self,
         run_id: &str,
-        history: Vec<ChatItem>,
+        mut history: VoiceHistory,
     ) -> Result<Value, StorageError> {
         let mut state = self.state.lock().await;
-        let active = state
-            .active
-            .as_mut()
-            .filter(|active| active.run.id() == run_id && active.controls > 0)
-            .ok_or_else(|| {
-                StorageError::Cancelled(
-                    "the acquired voice checkpoint ended before its write".into(),
-                )
+        let result = async {
+            let active = state
+                .active
+                .as_ref()
+                .filter(|active| active.run.id() == run_id && active.controls > 0)
+                .ok_or_else(|| {
+                    StorageError::Cancelled(
+                        "the acquired voice checkpoint ended before its write".into(),
+                    )
+                })?;
+            let stored = active
+                .run
+                .history()
+                .iter()
+                .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
+                .collect::<Result<Vec<_>, _>>()?;
+            let current = self.activation.session_state();
+            let routing = current.as_ref().ok_or_else(|| {
+                StorageError::Invalid("the voice conversation has no state".into())
             })?;
-        let current = self.activation.session_state();
-        let routing = current
-            .as_ref()
-            .ok_or_else(|| StorageError::Invalid("the voice conversation has no state".into()))?;
-        let agent = crate::session_state::agent_name(routing)?
-            .ok_or_else(|| StorageError::Invalid("voice checkpoint has no current agent".into()))?;
-        // Keep an already delivered prefix and incorporate words admitted while this writer
-        // waited. A checkpoint does not infer deletions from an earlier caller's history.
-        let mut merged = active
-            .run
-            .history()
-            .iter()
-            .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
-            .collect::<Result<Vec<_>, _>>()?;
-        let latest = self.activation.bound_history()?.unwrap_or_default();
-        for item in history.into_iter().chain(latest).filter(conversational) {
-            match merged.iter_mut().find(|held| held.id() == item.id()) {
-                Some(held) => *held = item,
-                None => merged.push(item),
+            let agent = crate::session_state::agent_name(routing)?.ok_or_else(|| {
+                StorageError::Invalid("voice checkpoint has no current agent".into())
+            })?;
+            // Keep the acquired snapshot's immutable baseline while including newly admitted
+            // canonical words. The latest view is not permission to overwrite an unread row.
+            for item in self
+                .activation
+                .bound_history()?
+                .unwrap_or_default()
+                .into_iter()
+                .filter(conversational)
+            {
+                match history.items.iter_mut().find(|held| held.id() == item.id()) {
+                    Some(held) => *held = item,
+                    None => history.items.push(item),
+                }
             }
+            let merged: Vec<_> = state
+                .reconcile(stored, history, &self.partition_key)?
+                .into_iter()
+                .filter(conversational)
+                .collect();
+            let routing = crate::session_state::voice_value(agent, merged.clone(), Some(routing))?;
+            let rows: Vec<_> = merged.iter().map(encode_chat_item).collect();
+            state
+                .active
+                .as_mut()
+                .expect("the reconciled checkpoint retains its run")
+                .run
+                .checkpoint_session(routing.clone(), rows.clone())
+                .await?;
+            state.wrote(&rows)?;
+            state.version =
+                state.active.as_ref().expect("the checkpoint retains its run").run.version();
+            self.activation.checkpointed_session(current, routing.clone())?;
+            Ok(routing)
         }
-        let routing = crate::session_state::voice_value(agent, merged.clone(), Some(routing))?;
-        let rows: Vec<_> = merged.iter().map(encode_chat_item).collect();
-        active.run.checkpoint_session(routing.clone(), rows.clone()).await?;
-        state.wrote(&rows)?;
-        state.version =
-            state.active.as_ref().expect("the checkpoint retains its run").run.version();
-        self.activation.checkpointed_session(current, routing.clone())?;
-        Ok(routing)
+        .await;
+        let diagnostics = std::mem::take(&mut state.diagnostics);
+        drop(state);
+        self.log_history(diagnostics);
+        result
     }
 
     pub(crate) async fn release_checkpoint(&self, run_id: &str) -> Result<(), StorageError> {

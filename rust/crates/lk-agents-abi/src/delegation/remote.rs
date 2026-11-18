@@ -120,6 +120,27 @@ pub struct RemoteTaskRef {
     pub task_id: String,
 }
 
+/// A caller's immutable observation before waiting for an owner or fence. This is raw
+/// journal evidence, not permission to retry or a second cancellation state machine.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteCancellationEvidence {
+    pub request_id: String,
+    pub dispatch_started: bool,
+    pub ended: bool,
+    pub failure: Option<RemoteFailure>,
+}
+
+/// Credential-free evidence that the original send used a verified project delegation grant.
+/// It cannot mint authority by itself: control rechecks the current bound thread and project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteControlScope {
+    pub project_origin: String,
+    /// Public JWT issuer identifier; never a bearer token or signing secret.
+    pub project_issuer: String,
+    pub caller_identity: String,
+    pub thread_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[crate::host(record(module = "delegation_remote", emit, extract))]
 pub struct RemoteRequestState {
@@ -138,6 +159,9 @@ pub struct RemoteRequestState {
     pub origin: Option<ToolCallRef>,
     /// A selected input occurrence, if this operation sends its response.
     pub input_request: Option<InputRequestRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[host(skip)]
+    pub control_scope: Option<RemoteControlScope>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -150,6 +174,11 @@ pub struct RemoteTaskState {
     pub cancel_requested: bool,
     /// Monotonic local occurrence identity, independent of question wording or stream order.
     pub next_input: u64,
+    /// First successfully projected terminal status; raw stale/rejected responses are not
+    /// outcome authority. The journal supplies its exact status metadata and stream prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[host(skip)]
+    pub terminal_event: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -168,6 +197,38 @@ pub struct RemoteAgentState {
 }
 
 impl RemoteAgentState {
+    /// Read only the latest cancellation's recorded facts. The core decides whether its
+    /// typed failure proves refusal; callers never infer that from error wording.
+    pub fn cancellation_evidence(
+        &self,
+        target: &RemoteTaskRef,
+    ) -> Option<RemoteCancellationEvidence> {
+        let (id, request) = self
+            .requests
+            .iter()
+            .filter(|(_, request)| {
+                request.task.as_ref() == Some(target)
+                && self.events.get(request.request_event as usize).is_some_and(|event| {
+                    matches!(&event.payload, A2AJournalPayload::Request(A2ARequest::Cancel(cancel))
+                        if cancel.id == target.task_id)
+                })
+            })
+            .max_by_key(|(_, request)| request.request_event)?;
+        let failure =
+            self.events.iter().rev().filter(|event| event.request_id == *id).find_map(|event| {
+                match &event.payload {
+                    A2AJournalPayload::Error(error) => Some(error.clone()),
+                    _ => None,
+                }
+            });
+        Some(RemoteCancellationEvidence {
+            request_id: id.clone(),
+            dispatch_started: request.dispatch_started,
+            ended: request.ended,
+            failure,
+        })
+    }
+
     pub fn new(endpoint: String) -> Self {
         Self {
             endpoint,
@@ -189,6 +250,7 @@ pub enum RemoteInput {
         streaming: bool,
         origin: Option<ToolCallRef>,
         input_request: Option<InputRequestRef>,
+        control_scope: Option<Box<RemoteControlScope>>,
     },
     DispatchStarted {
         request_id: String,
@@ -225,8 +287,8 @@ pub enum RemoteRecovery {
     },
     /// A send may have reached the peer. Read this task; never repeat its business message.
     GetTask(RemoteTaskRef),
-    /// The peer already supplied an accepted message-only reply.
-    Observed(Box<crate::a2a::protocol::Message>),
+    /// An accepted final task observation or direct message; never a cached nonterminal poll.
+    Observed(Box<crate::a2a::protocol::SendMessageResponse>),
     /// Dispatch may have happened, but no accepted task or reply identifies its outcome.
     Uncertain,
 }

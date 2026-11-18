@@ -27,6 +27,7 @@ fn send(id: &str, text: &str, task: Option<(&str, &str)>) -> RemoteInput {
         streaming: true,
         origin: None,
         input_request: None,
+        control_scope: None,
     }
 }
 
@@ -143,6 +144,7 @@ fn an_unconfirmed_response_does_not_make_the_same_question_available_for_another
                 streaming: false,
                 origin: None,
                 input_request: None,
+                control_scope: None,
             },
         );
         let mut observed = state.tasks["booking"].task.clone();
@@ -368,6 +370,7 @@ fn a_lost_input_response_is_reconciled_from_the_same_task_without_another_send()
             streaming: false,
             origin: None,
             input_request: None,
+            control_scope: None,
         },
     );
     let task = serde_json::from_value(json!({"id":"booking","contextId":"trip",
@@ -509,6 +512,7 @@ fn a_replaced_input_request_retires_an_unsent_response_but_keeps_dispatch_uncert
                 streaming: true,
                 origin: None,
                 input_request: None,
+                control_scope: None,
             },
         );
         let mut next = input_task();
@@ -549,7 +553,7 @@ fn direct_contextless_messages_and_several_tasks_are_independent_exchanges() {
     );
     assert!(state.tasks.is_empty());
     assert!(
-        matches!(recovery(&state, "hello").unwrap(), RemoteRecovery::Observed(message) if message.message_id == "hello_reply")
+        matches!(recovery(&state, "hello").unwrap(), RemoteRecovery::Observed(response) if matches!(response.as_ref(), a2a::SendMessageResponse::Message(message) if message.message_id == "hello_reply"))
     );
     for id in ["first", "second"] {
         observe(
@@ -606,4 +610,165 @@ fn interleaved_artifacts_and_auth_required_survive_limited_task_snapshots() {
     assert_eq!(task.status.state, a2a::TaskState::AuthRequired);
     assert_eq!(task.artifacts.as_ref().unwrap()[0].parts.len(), 2);
     assert_eq!(task.artifacts.as_ref().unwrap()[1].parts[0].as_text(), Some("other"));
+}
+
+#[test]
+fn limited_task_snapshots_preserve_optional_content_and_explicit_empty_fields_replace_it() {
+    let mut state = RemoteAgentState::new("https://booking.test".into());
+    dispatched(&mut state, "start", send("start", "Prepare receipt", None));
+    observe(
+        &mut state,
+        "start",
+        json!({"task": {
+            "id":"booking", "contextId":"trip", "status":{"state":"TASK_STATE_WORKING"},
+            "history":[{"messageId":"receipt-note", "role":"ROLE_AGENT", "parts":[
+                {"data":{"receipt":42}},
+                {"url":"https://example.test/receipt.pdf", "mediaType":"application/pdf", "filename":"receipt.pdf"}
+            ], "extensions":["https://example.test/receipt-extension"], "metadata":{"note":"kept"}}],
+            "artifacts":[{"artifactId":"receipt", "parts":[{"text":"Confirmed"}],
+                "extensions":["https://example.test/receipt-extension"]}],
+            "metadata":{"custom":{"revision":1}}
+        }}),
+    );
+    let prior = state.tasks["booking"].task.clone();
+    observe(
+        &mut state,
+        "start",
+        json!({"task": {
+            "id":"booking", "contextId":"trip", "status":{"state":"TASK_STATE_COMPLETED"}
+        }}),
+    );
+    let limited = &state.tasks["booking"].task;
+    assert_eq!(limited.history, prior.history);
+    assert_eq!(limited.artifacts, prior.artifacts);
+    assert_eq!(limited.metadata, prior.metadata);
+    let A2AJournalPayload::Response(raw) = &state.events.last().unwrap().payload else {
+        panic!("the original response is retained")
+    };
+    let A2AResponse::Stream(a2a::StreamResponse::Task(raw)) = raw.as_ref() else {
+        panic!("the original SDK Task is retained")
+    };
+    assert!(
+        raw.history.is_none() && raw.artifacts.is_none() && raw.metadata.is_none(),
+        "projection never rewrites the journal's original SDK appearance"
+    );
+    observe(
+        &mut state,
+        "start",
+        json!({"task": {
+            "id":"booking", "contextId":"trip", "status":{"state":"TASK_STATE_COMPLETED"},
+            "history":[], "artifacts":[], "metadata":{}
+        }}),
+    );
+    let replaced = &state.tasks["booking"].task;
+    assert!(replaced.history.as_ref().unwrap().is_empty());
+    assert!(replaced.artifacts.as_ref().unwrap().is_empty());
+    assert!(replaced.metadata.as_ref().unwrap().is_empty());
+    assert_eq!(
+        state.messages["receipt-note"].extensions.as_ref().unwrap(),
+        &["https://example.test/receipt-extension"]
+    );
+}
+
+fn task_poll(state: &mut RemoteAgentState, id: &str) {
+    dispatched(
+        state,
+        id,
+        RemoteInput::Prepare {
+            request_id: id.into(),
+            request: A2ARequest::Get(serde_json::from_value(json!({"id":"booking"})).unwrap()),
+            streaming: false,
+            origin: None,
+            input_request: None,
+            control_scope: None,
+        },
+    );
+}
+
+#[test]
+fn a_late_nonterminal_task_poll_cannot_reopen_a_completed_task_for_continuation() {
+    let mut state = RemoteAgentState::new("https://booking.test".into());
+    dispatched(&mut state, "start", send("start", "Book a room", None));
+    observe(
+        &mut state,
+        "start",
+        json!({"task": {
+            "id":"booking", "contextId":"trip", "status":{
+                "state":"TASK_STATE_COMPLETED", "timestamp":"2026-11-18T00:00:02Z"
+            }, "artifacts":[{"artifactId":"receipt", "parts":[{"text":"Booked"}]}]
+        }}),
+    );
+    let terminal = state.tasks["booking"].clone();
+    task_poll(&mut state, "old-poll");
+    let stale: a2a::Task = serde_json::from_value(json!({
+        "id":"booking", "contextId":"trip", "status":{
+            "state":"TASK_STATE_WORKING", "timestamp":"2026-11-18T00:00:01Z"
+        }, "artifacts":[]
+    }))
+    .unwrap();
+    apply(
+        &mut state,
+        RemoteInput::Response {
+            request_id: "old-poll".into(),
+            response: Box::new(A2AResponse::Task(stale.clone())),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        state.tasks["booking"], terminal,
+        "a stale poll cannot replace terminal status, input state or final artifacts"
+    );
+    assert!(
+        crate::session::remote::task(&state, "booking").is_err(),
+        "explicit task_id continuation stays refused after completion"
+    );
+    assert!(
+        matches!(&state.events.last().unwrap().payload,
+            A2AJournalPayload::Response(response) if response.as_ref() == &A2AResponse::Task(stale)
+        ),
+        "the exact raw stale evidence remains in communication history"
+    );
+    validate(&state).unwrap();
+}
+
+#[test]
+fn conflicting_terminal_observations_keep_the_first_terminal_state_and_fail_protocol_projection() {
+    for first in
+        ["TASK_STATE_COMPLETED", "TASK_STATE_CANCELED", "TASK_STATE_FAILED", "TASK_STATE_REJECTED"]
+    {
+        let mut state = RemoteAgentState::new("https://booking.test".into());
+        dispatched(&mut state, "start", send("start", "Request", None));
+        observe(
+            &mut state,
+            "start",
+            json!({"task": {
+                "id":"booking", "contextId":"trip", "status":{"state":first}
+            }}),
+        );
+        let terminal = state.tasks["booking"].clone();
+        task_poll(&mut state, "conflict-poll");
+        let second = if first == "TASK_STATE_COMPLETED" {
+            "TASK_STATE_CANCELED"
+        } else {
+            "TASK_STATE_COMPLETED"
+        };
+        let observed: a2a::Task = serde_json::from_value(json!({
+            "id":"booking", "contextId":"trip", "status":{"state":second}
+        }))
+        .unwrap();
+        let result = apply(
+            &mut state,
+            RemoteInput::Response {
+                request_id: "conflict-poll".into(),
+                response: Box::new(A2AResponse::Task(observed.clone())),
+            },
+        );
+        assert!(result.is_err(), "conflicting terminal evidence requires protocol reconciliation");
+        assert_eq!(state.tasks["booking"], terminal);
+        assert!(crate::session::remote::task(&state, "booking").is_err());
+        assert!(matches!(&state.events.last().unwrap().payload,
+            A2AJournalPayload::Response(response) if response.as_ref() == &A2AResponse::Task(observed)
+        ));
+        validate(&state).unwrap();
+    }
 }

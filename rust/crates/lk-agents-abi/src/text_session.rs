@@ -114,9 +114,91 @@ use crate::utils::stream::StreamOutput;
 use crate::{ApiConnectOptions, HostRef, Llm};
 use std::sync::Arc;
 
+/// Native transport ownership captured before a managed turn starts. Request receipts and
+/// business tasks stay separate; a result delivery reuses its original business task IDs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveTurnOrigin {
+    pub request_id: String,
+    pub execution_id: String,
+    pub task_ids: Vec<String>,
+}
+
+/// Native result propagation to the endpoint's existing leased owner. A managed handler may
+/// still be awaiting its final result when an intermediate turn is committed as Working.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveTurnReport {
+    pub turn: u64,
+    pub origin: LiveTurnOrigin,
+    pub result: Box<Result<TextSessionTurn, TextSessionError>>,
+    pub working: bool,
+}
+
+/// Native commit receipt, admitted separately from a handler's eventual return.
+pub type LiveTurnCommit = crate::BoxFuture<'static, Result<(), crate::storage::StorageError>>;
+
+/// Framework checkpoints belong to the leased endpoint owner, rather than any one handler.
+/// This native sender writes no application fields and grants no new execution authority.
+pub trait SessionCheckpointPort: Send + Sync {
+    fn publish(
+        &self,
+        state: SessionSnapshot,
+    ) -> crate::BoxFuture<'_, Result<Value, crate::storage::StorageError>>;
+}
+
 /// Receives accepted session transitions before dependent execution proceeds.
 #[crate::host(native(refused = "expected a native session binding"))]
 pub trait SessionStateSink: Send + Sync {
+    /// The explicit binding lends its current owner; saved snapshots never install one.
+    fn commands(
+        &self,
+    ) -> Result<Option<Arc<dyn crate::session::SessionCommands>>, crate::storage::StorageError>
+    {
+        Ok(None)
+    }
+
+    fn checkpoint_port(
+        &self,
+    ) -> Result<Option<Arc<dyn SessionCheckpointPort>>, crate::storage::StorageError> {
+        Ok(None)
+    }
+
+    /// Refresh a still-open bound view after the endpoint acknowledged its framework write.
+    /// An expired handler view owes no update; it never becomes the checkpoint owner.
+    fn acknowledge_checkpoint(&self, _state: Value) -> Result<(), crate::storage::StorageError> {
+        Ok(())
+    }
+
+    /// Only a configured endpoint can opt managed execution into live scheduling.
+    fn inbox_policy(&self) -> crate::a2a::options::Policy {
+        crate::a2a::options::Policy::Queue
+    }
+
+    fn live_origin(&self) -> Option<LiveTurnOrigin> {
+        None
+    }
+
+    /// Transfer this managed driver's task to the endpoint owner before any observer can
+    /// drop it. The task retains its TaskSet and joins all of the driver's acquired work.
+    fn retain_session(&self, _task: crate::OwnedTask) -> Result<(), crate::storage::StorageError> {
+        Err(crate::storage::StorageError::Invalid("this binding has no live task owner".into()))
+    }
+
+    /// The outer future admits the report before its handler is allowed to finish. The
+    /// returned owned receipt resolves only after the endpoint commits that exact turn.
+    /// The endpoint owner commits this report before the conversation advances to another
+    /// model turn. A binding outside a managed endpoint does not grant live scheduling.
+    fn live_turn(
+        &self,
+        _cx: &crate::telemetry::Cx,
+        _report: LiveTurnReport,
+    ) -> crate::BoxFuture<'_, Result<LiveTurnCommit, crate::storage::StorageError>> {
+        Box::pin(async {
+            Err(crate::storage::StorageError::Invalid(
+                "this binding has no live endpoint owner".into(),
+            ))
+        })
+    }
+
     /// A live native executor lends a weak command capability separately from saved data.
     /// The binding clears it on close; decoding or assigning a snapshot never installs it.
     fn bind_commands(
@@ -163,6 +245,8 @@ pub struct TextSessionAgent {
 #[crate::host(record(module = "text_session", extract))]
 #[derive(Clone)]
 pub struct TextSessionRequest {
+    #[host(default = None)]
+    pub output: Option<Arc<dyn crate::a2a::turn::HandlerPort>>,
     #[host(default = None)]
     pub session_sink: Option<Arc<dyn SessionStateSink>>,
     pub session_id: String,
@@ -279,12 +363,22 @@ pub trait TextSessionRunner: Send + Sync + Sized + 'static {
     fn release(&self, delivery: TextSessionDelivery) -> Result<(), Invalid>;
 
     #[host(await)]
-    async fn progress(
+    fn progress(
         &self,
         invocation_id: &str,
         operation: u64,
         message: String,
-    ) -> Result<(), Invalid>;
+        #[host(default = false)] silent: bool,
+    ) -> crate::BoxFuture<'static, Result<(), crate::errors::ProviderError>>;
+
+    /// Enqueue exact text now; the private reader confirms the source's local output boundary.
+    #[host(await)]
+    fn say(
+        &self,
+        invocation_id: &str,
+        operation: u64,
+        message: String,
+    ) -> crate::BoxFuture<'static, Result<(), crate::errors::ProviderError>>;
 }
 
 /// One call of an agent tool outside a TextSession: the child agent runs in process as a delegate
@@ -342,10 +436,20 @@ pub trait LocalInteraction: Send + Sync + Sized + 'static {
 
     /// `ctx.update(message)` from a tool body of the child's invocation `invocation_id`.
     #[host(await)]
-    async fn progress(
+    fn progress(
         &self,
         invocation_id: &str,
         operation: u64,
         message: String,
-    ) -> Result<(), Invalid>;
+        #[host(default = false)] silent: bool,
+    ) -> crate::BoxFuture<'static, Result<(), crate::errors::ProviderError>>;
+
+    /// Enqueue exact text now; the private reader confirms the source's local output boundary.
+    #[host(await)]
+    fn say(
+        &self,
+        invocation_id: &str,
+        operation: u64,
+        message: String,
+    ) -> crate::BoxFuture<'static, Result<(), crate::errors::ProviderError>>;
 }

@@ -416,6 +416,7 @@ fn scoped_approval_proposal(realtime: bool, revoke: bool) {
             duplicate_scope: DuplicateScope::Name,
             retries: None,
             remote: None,
+            local_agent: None,
         }],
         output: OutputSpec::Text { validated: false },
         retries: Retries::default(),
@@ -599,7 +600,8 @@ fn body_question_driver() -> VoiceDriver {
             on_duplicate: DuplicateMode::Allow,
             duplicate_scope: DuplicateScope::Name,
             retries: None,
-            remote: Some(endpoint.into()),
+            remote: None,
+            local_agent: Some(endpoint.into()),
         }],
         output: OutputSpec::Text { validated: false },
         retries: Retries::default(),
@@ -610,7 +612,7 @@ fn body_question_driver() -> VoiceDriver {
     driver
         .session
         .experts
-        .open("body-output", crate::experts::ExpertTool::new(endpoint, "booking"));
+        .open("body-output", crate::experts::ExpertTool::local(endpoint, "booking"));
     driver.session.experts.ask("body-output", "body-question", "Which date?".into(), true, None);
     driver
 }

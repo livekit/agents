@@ -3096,6 +3096,20 @@ fn _extract_voice_session_tool_update_operation(
 }
 type VoiceSessionToolUpdateOperationInput = u64;
 
+fn _extract_voice_session_tool_progress_operation(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<VoiceSessionToolProgressOperationInput> {
+    crate::py_values::number_from_py::<u64>(obj.as_any(), "operation")
+}
+type VoiceSessionToolProgressOperationInput = u64;
+
+fn _extract_voice_session_tool_say_operation(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<VoiceSessionToolSayOperationInput> {
+    crate::py_values::number_from_py::<u64>(obj.as_any(), "operation")
+}
+type VoiceSessionToolSayOperationInput = u64;
+
 fn _extract_voice_session_wait_for_idle_hold(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<VoiceSessionWaitForIdleHoldInput> {
@@ -3896,6 +3910,45 @@ impl VoiceSession {
         let report = crate::generated::records::tool_report::tool_report_from_py(report.as_any())?;
         py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::tool_update(&self.0, invocation_id, operation, call_id, report)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
+    }
+
+    #[pyo3(signature = (invocation_id, operation, call_id, report))]
+    fn tool_progress<'py>(
+        &self,
+        py: Python<'py>,
+        invocation_id: ::std::string::String,
+        #[pyo3(from_py_with = _extract_voice_session_tool_progress_operation)]
+        operation: VoiceSessionToolProgressOperationInput,
+        call_id: ::std::string::String,
+        report: Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let report = crate::generated::records::tool_report::tool_report_from_py(report.as_any())?;
+        let call = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::tool_progress(&self.0, invocation_id, operation, call_id, report)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        crate::py_calls::future_into_py(py, async move {
+            let () = call.await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+
+    /// Enqueue an exact output under the originating tool's native identity. The returned
+    /// awaitable only watches the independent say speech; dropping it never cancels that speech.
+    #[pyo3(signature = (invocation_id, operation, call_id, text))]
+    fn tool_say<'py>(
+        &self,
+        py: Python<'py>,
+        invocation_id: ::std::string::String,
+        #[pyo3(from_py_with = _extract_voice_session_tool_say_operation)]
+        operation: VoiceSessionToolSayOperationInput,
+        call_id: ::std::string::String,
+        text: ::std::string::String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let call = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::tool_say(&self.0, invocation_id, operation, call_id, text)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        crate::py_calls::future_into_py(py, async move {
+            let () = call.await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
     }
 
     /// `Agent.update_chat_ctx()` on a running agent: replace the context.

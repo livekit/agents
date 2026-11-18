@@ -29,4 +29,6 @@ ids! {
     CheckpointId,
     /// One settled model step a coordinator decides the continuation of.
     StepId,
+    /// One source-owned exact tool output, independent of its optional receipt reader.
+    ToolOutputId,
 }

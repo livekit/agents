@@ -15,6 +15,11 @@ mod input;
 #[path = "settlement_tests.rs"]
 mod settlement;
 
+#[path = "live_control_tests.rs"]
+mod live_control;
+#[path = "live_session_tests.rs"]
+mod live_session;
+
 mod checkpoints {
 
     use super::*;
@@ -108,6 +113,7 @@ fn closing_refuses_remote_dispatch_even_before_invocation_cleanup_finishes() {
             streaming: false,
             origin: None,
             input_request: None,
+            control_scope: None,
         },
     };
     assert!(session.remote(command).is_err());
@@ -165,6 +171,7 @@ fn config(approval: bool, mode: ChatHistory, merge: bool) -> SessionConfig {
         duplicate_scope: DuplicateScope::Name,
         retries: None,
         remote: None,
+        local_agent: None,
     };
     let agent = |name: &str, tools, output| SessionAgent {
         definition: AgentDefinition {
@@ -1048,7 +1055,7 @@ fn parking_waits_for_host_siblings_and_cancellation_settles_only_owned_child_wor
             assert!(!cancellation.iter().any(|e| matches!(e, SessionEffect::Finished { .. })));
             driver.run(agent_run::AgentRunEvent::ToolSettled {
                 call: lookup,
-                outcome: lk_agents_abi::llm::tool_executor::ToolOutcome::Cancelled,
+                report: (lk_agents_abi::llm::tool_executor::ToolOutcome::Cancelled).into(),
             });
             assert!(driver.effects.iter().any(|e| matches!(
                 e,
@@ -1065,10 +1072,11 @@ fn parking_waits_for_host_siblings_and_cancellation_settles_only_owned_child_wor
         } else {
             driver.run(agent_run::AgentRunEvent::ToolSettled {
                 call: lookup,
-                outcome: lk_agents_abi::llm::tool_executor::ToolOutcome::Completed {
+                report: (lk_agents_abi::llm::tool_executor::ToolOutcome::Completed {
                     text: "available".into(),
                     verbatim: false,
-                },
+                })
+                .into(),
             });
             assert_ne!(driver.session.state.active_frame_id, root);
             driver.reply("Which date?", &[]);
@@ -1183,3 +1191,6 @@ fn late_prepared_arguments_are_released_even_after_the_session_settles() {
     )));
     assert!(!effects.iter().any(|e| matches!(e, SessionEffect::Finished { .. })));
 }
+
+#[path = "remote_resume_tests.rs"]
+mod remote_resume;

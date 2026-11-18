@@ -4,6 +4,7 @@ pub mod effects;
 pub mod history;
 pub mod input;
 pub mod input_routing;
+mod live;
 mod machine;
 pub mod remote;
 mod resume;
@@ -55,7 +56,17 @@ pub struct SessionInput {
 #[derive(Clone)]
 pub enum SessionEvent {
     PersistenceFailed(lk_agents_abi::storage::StorageError),
+    ToolOutputCommitted {
+        invocation_id: String,
+        output: crate::agent_run::ToolOutputId,
+        result: Result<(), lk_agents_abi::storage::StorageError>,
+    },
     Start(ChatMessage),
+    /// The exact turn's task/history propagation, not a reader dropping its stream.
+    LiveTurnCommitted {
+        turn: u64,
+        result: Result<(), lk_agents_abi::storage::StorageError>,
+    },
     InputRouted {
         request_id: String,
         /// Dropping the producer reports task death; it cannot leave admission waiting.
@@ -111,6 +122,19 @@ enum Child {
 enum InvocationRelease {
     Settled(Box<RunResult>, Option<Value>, Vec<PendingChildCall>),
     Parked,
+    Recovered(Box<RunResult>),
+}
+
+struct RemoteOrigin {
+    remote_id: String,
+    call_id: String,
+}
+
+struct RemoteResume {
+    origins: Vec<RemoteOrigin>,
+    incoming: Option<Box<live::FrozenHuman>>,
+    /// A prior final question/error cannot authorize the older accepted child value.
+    invalidated: bool,
 }
 
 struct Invocation {
@@ -119,6 +143,7 @@ struct Invocation {
     run: AgentRun,
     children: BTreeMap<CallId, Child>,
     outputs: BTreeMap<ValidationId, Value>,
+    recovery: Option<RemoteResume>,
 }
 
 enum Phase {
@@ -152,6 +177,7 @@ impl Phase {
 
 pub struct Session {
     failure_input_requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
+    tool_outputs: BTreeMap<(String, crate::agent_run::ToolOutputId), machine::tool_output::Pending>,
     config: SessionConfig,
     state: SessionSnapshot,
     id_seed: u64,
@@ -165,6 +191,7 @@ pub struct Session {
     checkpoint_due: Option<Ts>,
     checkpoint_bytes: usize,
     phase: Phase,
+    live: Option<live::Live>,
     /// A parent may receive human input while its previously accepted child is propagated.
     /// Remaining siblings cannot widen the occurrences offered to that deferred model turn.
     deferred_input_offers: BTreeMap<FrameId, Vec<InputCandidate>>,

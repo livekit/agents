@@ -102,6 +102,16 @@ pub enum AgentRunEffect {
         /// None when no call is terminal or a retry-budget failure takes precedence.
         terminal_call: Option<String>,
     },
+    /// Deliver this exact core-minted message at this invocation's already-bound output.
+    DeliverToolOutput {
+        output: super::ToolOutputId,
+        message: Box<lk_agents_abi::ChatMessage>,
+    },
+    /// Settle only this native request's private receipt after canonical acceptance.
+    ToolOutputSettled {
+        output: super::ToolOutputId,
+        result: Result<(), lk_agents_abi::errors::ProviderError>,
+    },
     Emit(StreamEvent),
     /// Diagnostic: malformed model arguments were repaired.
     ArgumentsRepaired {

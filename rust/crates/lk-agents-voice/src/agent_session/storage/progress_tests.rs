@@ -37,6 +37,7 @@ fn a_waiting_checkpoint_uses_the_reconciled_conversation() {
             items: vec![updated.clone()],
             stored: vec![updated.clone()],
             revision: (1, 1),
+            ..Default::default()
         }),
     );
     let next = driver

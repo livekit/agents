@@ -104,15 +104,15 @@ class RunHooks:
     """What a door installs around the ``agent.run()`` calls made inside its turn.
 
     ``checkpoint`` is awaited before model requests and result delivery; ``True`` yields there
-    and marks ``interrupted``. ``on_result`` receives every result. ``on_update`` receives a
-    tool's ``ctx.update(text)``; ``on_token`` the model's text from ``run()`` (``run_stream()``
+    and marks ``interrupted``. ``on_result`` receives every result. ``output`` lends the native
+    local output boundary; ``on_token`` forwards the model's text from ``run()`` (``run_stream()``
     leaves delivery to its consumer). ``delegated`` marks a message from another agent: the run
     does not phrase its questions, the agent facing the person does.
     """
 
     checkpoint: Callable[[], Awaitable[bool]] | None = None
     on_result: Callable[[RunResult[Any]], None] | None = None
-    on_update: Callable[[str], Any] | None = None
+    output: _core._core_HandlerTurn | None = None
     on_token: Callable[[str], Awaitable[None]] | None = None
     thread: Thread | None = None
     task_id: str | None = None
@@ -271,6 +271,7 @@ async def start_run(
         run.runner = runner
         runner.run_stream(
             RunRequest(
+                output=hooks.output if hooks is not None else None,
                 invocation_id=run.id,
                 execution_id=hooks.task_id if hooks is not None else None,
                 message=message,
@@ -315,7 +316,8 @@ def tool_infos(tools: ToolContext) -> list[FunctionToolInfo]:
                 on_duplicate=tool.info.on_duplicate,
                 duplicate_scope=tool.info.duplicate_scope,
                 retries=tool.info.retries,
-                remote=tool.endpoint if isinstance(tool, (_ExpertTool, _LocalAgentTool)) else None,
+                remote=tool.remote_id if isinstance(tool, _ExpertTool) else None,
+                local_agent=tool.agent.name if isinstance(tool, _LocalAgentTool) else None,
             )
         )
     return infos

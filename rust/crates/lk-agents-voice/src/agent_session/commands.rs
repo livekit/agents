@@ -122,7 +122,7 @@ impl RequestId {
 
 /// A `say()` / `generate_reply()` the host awaits: its call, and the id its handle already has,
 /// which the loop creates the speech under.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpeechCall {
     pub id: RequestId,
     pub speech: SpeechId,
@@ -439,7 +439,9 @@ pub use lk_agents_abi::voice::session::FillerSource;
 #[derive(Debug, Clone)]
 pub enum ToolUpdate {
     /// `raw` as written; `message` rendered by the host.
-    Progress { message: String, raw: String },
+    Progress { message: String, raw: String, reply_required: bool },
+    /// Exact output is ordered independently of ordinary progress and keeps its own speech.
+    Exact { text: String, call: Option<SpeechCall> },
     /// Decided like a blocking tool's, except a silent return voices nothing.
     Final { report: crate::tool_executor::ToolReport },
 }
@@ -448,8 +450,8 @@ impl From<crate::tool_executor::ToolReport> for ToolUpdate {
     /// A later `ctx.update()` is progress; any other outcome is the tool's end.
     fn from(report: crate::tool_executor::ToolReport) -> Self {
         match report.outcome {
-            crate::tool_executor::ToolOutcome::Update { message, raw } => {
-                ToolUpdate::Progress { message, raw }
+            crate::tool_executor::ToolOutcome::Update { message, raw, reply_required } => {
+                ToolUpdate::Progress { message, raw, reply_required }
             }
             _ => ToolUpdate::Final { report },
         }

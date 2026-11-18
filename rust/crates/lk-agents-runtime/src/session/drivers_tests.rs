@@ -12,11 +12,12 @@ const ENDPOINT: &str = "https://booking.test";
 
 struct Driver {
     live: AtomicBool,
+    credential: &'static str,
 }
 
 impl Driver {
     fn new() -> Self {
-        Self { live: AtomicBool::new(true) }
+        Self { live: AtomicBool::new(true), credential: "default" }
     }
 
     fn close(&self) {
@@ -25,11 +26,18 @@ impl Driver {
 }
 
 impl RemoteTaskDriver for Driver {
-    fn cancel<'a>(
-        &'a self,
+    fn same_configuration(&self, other: &dyn RemoteTaskDriver) -> bool {
+        (other as &dyn std::any::Any)
+            .downcast_ref::<Self>()
+            .is_some_and(|other| self.credential == other.credential)
+    }
+
+    fn cancellation(
+        &self,
         _task: RemoteTaskRef,
-    ) -> lk_agents_abi::BoxFuture<'a, Result<(), AgentClientError>> {
-        Box::pin(async { Ok(()) })
+        _retry_after: Option<String>,
+    ) -> Arc<dyn lk_agents_abi::session::control::RemoteCancellation> {
+        panic!("this admission fixture never dispatches a task control")
     }
 
     fn is_live(&self) -> bool {
@@ -70,6 +78,7 @@ fn operation(sequence: u64, task: Option<RemoteTaskRef>) -> RemoteRequestState {
         task,
         origin: None,
         input_request: None,
+        control_scope: None,
     }
 }
 
@@ -272,4 +281,120 @@ fn a_late_merged_task_association_cannot_replace_its_live_result_owner() {
     drop(second);
     let owner = drivers.get(&state, "booking", "https://booking.test", &task).unwrap().unwrap();
     assert!(Arc::ptr_eq(&owner, &first));
+}
+
+struct CancellationReceipt(lk_agents_net::signal::Cell<Option<Result<(), AgentClientError>>>);
+impl lk_agents_abi::session::control::RemoteCancellation for CancellationReceipt {
+    fn pending(&self) -> bool {
+        self.0.with(Option::is_none) && !self.0.ended()
+    }
+    fn wait(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), AgentClientError>> {
+        Box::pin(async move {
+            self.0.wait().await.map_err(|_| AgentClientError::InvalidInput("ended".into()))?
+        })
+    }
+}
+
+#[test]
+fn retained_cancellation_claims_join_before_prepare_and_old_receipts_cannot_erase_replacement() {
+    use lk_agents_abi::session::control::{RemoteCancellation, RemoteControlRef};
+    let (_, task) = booking();
+    let target = RemoteControlRef { remote_id: REMOTE.into(), endpoint: ENDPOINT.into(), task };
+    let registry = Drivers::default();
+    let (first_done, first) = lk_agents_net::signal::once();
+    let first: Arc<dyn RemoteCancellation> = Arc::new(CancellationReceipt(first));
+    let work = registry.claim_cancellation(&target, first.clone()).unwrap();
+    drop(first);
+    let (second_done, second) = lk_agents_net::signal::once();
+    let second: Arc<dyn RemoteCancellation> = Arc::new(CancellationReceipt(second));
+    let joined = registry.claim_cancellation(&target, second.clone()).unwrap();
+    assert!(
+        Arc::ptr_eq(&work, &joined),
+        "concrete work retains the pending receipt after caller loss"
+    );
+    first_done.resolve(Err(AgentClientError::Protocol("definite refusal".into())));
+    let replacement = registry.claim_cancellation(&target, second.clone()).unwrap();
+    assert!(Arc::ptr_eq(&replacement, &second));
+    drop(work);
+    drop(joined);
+    let (later_done, later) = lk_agents_net::signal::once();
+    let later: Arc<dyn RemoteCancellation> = Arc::new(CancellationReceipt(later));
+    assert!(Arc::ptr_eq(&replacement, &registry.claim_cancellation(&target, later).unwrap()));
+    second_done.resolve(Ok(()));
+    drop(later_done);
+}
+
+#[test]
+fn distinct_remote_ids_at_one_endpoint_keep_live_drivers_isolated() {
+    let (mut state, task) = booking();
+    state.remote_agents.insert("backup".into(), state.remote_agents[REMOTE].clone());
+    let registry = Drivers::default();
+    let first: Arc<dyn RemoteTaskDriver> = Arc::new(Driver::new());
+    let second: Arc<dyn RemoteTaskDriver> =
+        Arc::new(Driver { live: AtomicBool::new(true), credential: "other" });
+    let first_admitted = registry
+        .admit(
+            &state,
+            REMOTE,
+            ENDPOINT,
+            CallAdmission::Continue(task.clone()),
+            Arc::downgrade(&first),
+        )
+        .unwrap();
+    let second_admitted = registry
+        .admit(
+            &state,
+            "backup",
+            ENDPOINT,
+            CallAdmission::Continue(task.clone()),
+            Arc::downgrade(&second),
+        )
+        .unwrap();
+    assert!(Arc::ptr_eq(first_admitted.driver.as_ref().unwrap(), &first));
+    assert!(Arc::ptr_eq(second_admitted.driver.as_ref().unwrap(), &second));
+    assert!(Arc::ptr_eq(&registry.get(&state, REMOTE, ENDPOINT, &task).unwrap().unwrap(), &first));
+    assert!(Arc::ptr_eq(
+        &registry.get(&state, "backup", ENDPOINT, &task).unwrap().unwrap(),
+        &second
+    ));
+}
+
+#[test]
+fn conflicting_live_configuration_is_refused_before_prepare_and_does_not_claim_the_id() {
+    let state = SessionSnapshot::new("conversation".into(), "run".into(), "desk".into());
+    let registry = Drivers::default();
+    let first: Arc<dyn RemoteTaskDriver> = Arc::new(Driver::new());
+    let other: Arc<dyn RemoteTaskDriver> =
+        Arc::new(Driver { live: AtomicBool::new(true), credential: "other" });
+    registry.admit(&state, REMOTE, ENDPOINT, CallAdmission::New, Arc::downgrade(&first)).unwrap();
+    assert!(
+        registry
+            .admit(&state, REMOTE, ENDPOINT, CallAdmission::New, Arc::downgrade(&other))
+            .is_err()
+    );
+    assert!(
+        registry
+            .admit(
+                &state,
+                REMOTE,
+                "https://elsewhere.test",
+                CallAdmission::New,
+                Arc::downgrade(&first)
+            )
+            .is_err()
+    );
+    drop(first);
+    assert!(
+        registry
+            .admit(&state, REMOTE, ENDPOINT, CallAdmission::New, Arc::downgrade(&other))
+            .is_ok()
+    );
+}
+
+#[test]
+fn saved_identity_does_not_restore_a_native_driver_or_credential() {
+    let (state, task) = booking();
+    let saved = serde_json::to_vec(&state).unwrap();
+    let restored: SessionSnapshot = serde_json::from_slice(&saved).unwrap();
+    assert!(Drivers::default().get(&restored, REMOTE, ENDPOINT, &task).unwrap().is_none());
 }

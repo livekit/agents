@@ -65,6 +65,8 @@ pub struct ContextValues {
 pub trait ContextActivation: Send + Sync + Sized + 'static {
     #[host(class(name = "_core_AppTransaction"))]
     type Transaction: Send + Sync + 'static;
+    #[host(class(name = "_core_PersistedSessionState"))]
+    type View: super::session::PersistedSessionState;
 
     #[host(new)]
     fn new(
@@ -106,7 +108,8 @@ pub trait ContextActivation: Send + Sync + Sized + 'static {
         &self,
         context: crate::HostRef,
         store: crate::HostRef,
-    ) -> super::session::BoundContext;
+        view: Option<Self::View>,
+    ) -> Result<super::session::BoundContext, StorageError>;
 
     #[host(await)]
     async fn flush_bound_session(
@@ -246,12 +249,14 @@ pub trait ContextStoreFacade {
     /// Declare live updates without performing I/O. Execution activates the binding and
     /// tools receive the original context. Ordinary application fields still require saves.
     /// Omit context when the session has no application data.
-    #[host(via = Activation, native = declare_binding, bind(store = "self"),
+    #[host(via = Activation, native = declare_binding, bind(store = "self", view = "_binding_view(context)"),
         annotation(context = ".storage_session.Context_T | None", ret = ".storage_session.BoundContext[Context_T] | .storage_session.BoundContext[None]"),
         overloads(with_context(context = ".storage_session.Context_T", ret = ".storage_session.BoundContext[Context_T]"),
         without_context(ret = ".storage_session.BoundContext[None]")))]
-    fn bind(&self, #[host(default = None)] context: crate::HostRef)
-    -> super::session::BoundContext;
+    fn bind(
+        &self,
+        #[host(default = None)] context: crate::HostRef,
+    ) -> Result<super::session::BoundContext, StorageError>;
 
     /// Return a detached snapshot of committed conversation state.
     #[host(via = Activation, native = load_session_snapshot, returns = "..storage.session_state.SessionState")]

@@ -15,6 +15,10 @@ pub struct VoiceHistory {
     pub stored: Vec<ChatItem>,
     /// Partition fence and local receipt order; older observations cannot rebase newer ones.
     pub revision: (i64, u64),
+    /// Native storage identity for a late local conflict; never restored as execution authority.
+    pub partition_key: Option<String>,
+    /// Exact observed rows last changed by this live store, retained only while still unchanged.
+    pub own_writes: std::collections::BTreeSet<String>,
 }
 
 impl VoiceHistory {

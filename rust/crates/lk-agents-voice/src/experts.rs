@@ -7,17 +7,31 @@ use serde::{Deserialize, Serialize};
 
 // Owned by the session, not the agent: replacing the speaking agent keeps the queue.
 
-/// A remote tool's configured identity: its endpoint and tool name, never a similar
-/// model-visible name alone.
+/// Remote identity survives a model-facing tool rename. A local body is eligible only
+/// through the same configured child/tool pair; strings from those domains never alias.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+enum ExpertKey {
+    RemoteId(String),
+    LocalTool { agent: String, tool: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ExpertTool {
-    pub endpoint: String,
+    key: ExpertKey,
+    /// Used to select a newly detached call from the current installed model tools.
     pub name: String,
 }
 
 impl ExpertTool {
-    pub fn new(endpoint: &str, name: &str) -> Self {
-        Self { endpoint: endpoint.trim_end_matches('/').to_owned(), name: name.to_owned() }
+    pub fn remote(remote_id: &str, name: &str) -> Self {
+        Self { key: ExpertKey::RemoteId(remote_id.into()), name: name.into() }
+    }
+
+    pub fn local(agent: &str, name: &str) -> Self {
+        Self {
+            key: ExpertKey::LocalTool { agent: agent.into(), tool: name.into() },
+            name: name.into(),
+        }
     }
 }
 
@@ -34,7 +48,7 @@ pub struct Floor<'a> {
 
 impl Floor<'_> {
     fn reaches(&self, tool: &ExpertTool) -> bool {
-        !self.task && self.tools.contains(tool)
+        !self.task && self.tools.iter().any(|candidate| candidate.key == tool.key)
     }
 }
 
@@ -43,6 +57,8 @@ impl Floor<'_> {
 pub enum Presentation {
     /// The delegation's latest progress; older progress was superseded.
     Progress { output_id: String, text: String },
+    /// Exact text is never coalesced, rephrased or withdrawn by a later question or result.
+    Exact { output_id: String, text: String, call: Option<crate::agent_session::SpeechCall> },
     /// A question selected for presentation. Native response admission supplies its answers;
     /// presentation priority alone never selects a remote reply destination.
     Question { output_id: String, request_id: String, question: String, verbatim: bool },
@@ -79,7 +95,17 @@ struct Delegation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum ExpertInboxEvent {
     Progress(String),
-    Question { request_id: String, question: String, verbatim: bool },
+    Exact {
+        text: String,
+        /// A live speech promise is never recovered as a new caller's authority.
+        #[serde(skip)]
+        call: Option<crate::agent_session::SpeechCall>,
+    },
+    Question {
+        request_id: String,
+        question: String,
+        verbatim: bool,
+    },
     Outcome(ToolOutcome),
 }
 
@@ -163,7 +189,7 @@ impl Experts {
         if text.trim().is_empty() {
             return false;
         }
-        let queued = self.queue.iter_mut().find(|q| q.output_id == output_id);
+        let queued = self.queue.iter_mut().rfind(|q| q.output_id == output_id);
         match queued {
             Some(Queued { event: ExpertInboxEvent::Progress(old), .. }) => *old = text,
             Some(_) | None => self.queue.push_back(Queued {
@@ -171,6 +197,29 @@ impl Experts {
                 event: ExpertInboxEvent::Progress(text),
             }),
         }
+        true
+    }
+
+    /// Exact output keeps its place even when later progress or a result supersedes ordinary
+    /// announcements. Its native call is only a live delivery receipt, never business control.
+    pub fn exact(
+        &mut self,
+        output_id: &str,
+        occurrence: u64,
+        text: String,
+        call: Option<crate::agent_session::SpeechCall>,
+    ) -> bool {
+        let Some(d) = self.delegations.get_mut(output_id).filter(|d| !d.settled) else {
+            return false;
+        };
+        if occurrence <= d.progress_seen {
+            return false;
+        }
+        d.progress_seen = occurrence;
+        self.queue.push_back(Queued {
+            output_id: output_id.into(),
+            event: ExpertInboxEvent::Exact { text, call },
+        });
         true
     }
 
@@ -224,7 +273,9 @@ impl Experts {
         d.settled = true;
         d.waiting = None;
         self.withdraw(output_id);
-        self.queue.retain(|q| q.output_id != output_id);
+        self.queue.retain(|q| {
+            q.output_id != output_id || matches!(q.event, ExpertInboxEvent::Exact { .. })
+        });
         true
     }
 
@@ -244,13 +295,16 @@ impl Experts {
         }
         self.foreground.take_if(|f| f.output_id == output_id);
         self.queue.retain(|q| {
-            q.output_id != output_id || matches!(q.event, ExpertInboxEvent::Outcome(_))
+            q.output_id != output_id
+                || matches!(q.event, ExpertInboxEvent::Outcome(_) | ExpertInboxEvent::Exact { .. })
         });
     }
 
     /// Suspend a presented question the active agent can no longer interact with.
     pub fn observe(&mut self, floor: Floor<'_>) {
-        let Some(fg) = &mut self.foreground else { return };
+        let Some(fg) = &mut self.foreground else {
+            return;
+        };
         let tool = &self.delegations[&fg.output_id].tool;
         if !floor.reaches(tool) {
             fg.suspended = true;
@@ -281,13 +335,14 @@ impl Experts {
             floor.reaches(&d.tool)
                 && match q.event {
                     ExpertInboxEvent::Question { .. } => self.foreground.is_none(),
-                    ExpertInboxEvent::Outcome(_) => d.recorded,
+                    ExpertInboxEvent::Outcome(_) | ExpertInboxEvent::Exact { .. } => d.recorded,
                     ExpertInboxEvent::Progress(_) => true,
                 }
         })?;
         let Queued { output_id, event } = self.queue.remove(at)?;
         Some(match event {
             ExpertInboxEvent::Progress(text) => Presentation::Progress { output_id, text },
+            ExpertInboxEvent::Exact { text, call } => Presentation::Exact { output_id, text, call },
             ExpertInboxEvent::Question { request_id, question, verbatim } => {
                 self.foreground = Some(Foreground {
                     output_id: output_id.clone(),
@@ -300,6 +355,16 @@ impl Experts {
             }
             ExpertInboxEvent::Outcome(outcome) => Presentation::Outcome { output_id, outcome },
         })
+    }
+
+    /// Scheduling refused this exact foreground question before any presentation began.
+    /// Keep its source and native reference; another eligible delivery can retry it later.
+    pub(crate) fn defer_question(&mut self, request: &PendingRequest) {
+        if let Some(foreground) = self.foreground.as_mut().filter(|foreground| {
+            foreground.output_id == request.output_id && foreground.request_id == request.request_id
+        }) {
+            foreground.suspended = true;
+        }
     }
 
     /// Collection: the request a person's reply answers now, if any. Nothing is forwarded while

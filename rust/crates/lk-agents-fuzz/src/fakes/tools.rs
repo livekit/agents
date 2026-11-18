@@ -116,6 +116,7 @@ fn tool_info(name: &str) -> FunctionToolInfo {
         duplicate_scope: DuplicateScope::Name,
         retries: None,
         remote: None,
+        local_agent: None,
     }
 }
 
@@ -413,7 +414,9 @@ impl FakeTools {
 
 /// One answer to a registered tool body. False when the body was already cancelled.
 pub(super) fn deliver(sender: oneshot::Sender<Body>, what: &Input) -> bool {
-    let Input::ToolAnswered { answer, text: AgentText(text), .. } = what else { return false };
+    let Input::ToolAnswered { answer, text: AgentText(text), .. } = what else {
+        return false;
+    };
     match answer {
         Answer::AfterIdle => sender.send(Body::AfterIdle(ToolOutcome::Nothing)).is_ok(),
         Answer::AwaitOwnSpeech => sender.send(Body::AwaitOwnSpeech(ToolOutcome::Nothing)).is_ok(),
@@ -439,7 +442,9 @@ pub fn outcome_of(answer: Answer, text: &str) -> ToolOutcome {
         Answer::Error => ToolOutcome::ToolError(text),
         Answer::StopResponse => ToolOutcome::StopResponse,
         Answer::Cancelled => ToolOutcome::Cancelled,
-        Answer::Detached => ToolOutcome::Update { message: text.clone(), raw: text },
+        Answer::Detached => {
+            ToolOutcome::Update { message: text.clone(), raw: text, reply_required: true }
+        }
         Answer::Completed => ToolOutcome::Completed { text, verbatim: false },
         Answer::Failed => ToolOutcome::Failed(text),
         Answer::Rejected => ToolOutcome::Rejected(text),
@@ -452,7 +457,11 @@ pub fn outcome_of(answer: Answer, text: &str) -> ToolOutcome {
 /// What the host reports for a `ToolUpdate`: its progress message, or its end answered as `end`.
 pub fn update_outcome(progress: Option<&str>, end: Answer) -> ToolOutcome {
     match progress {
-        Some(message) => ToolOutcome::Update { message: message.into(), raw: message.into() },
+        Some(message) => ToolOutcome::Update {
+            message: message.into(),
+            raw: message.into(),
+            reply_required: true,
+        },
         None if end == Answer::Detached => ToolOutcome::Nothing,
         None => outcome_of(end, "the tool finished"),
     }

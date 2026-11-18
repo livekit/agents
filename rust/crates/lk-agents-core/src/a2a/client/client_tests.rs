@@ -18,6 +18,15 @@ fn connected() -> Client {
 }
 
 #[test]
+fn discovery_appends_its_path_without_rewriting_the_endpoints_query() {
+    let client = Client::new("https://example.test/agent/?route=team/".into(), None).unwrap();
+    assert_eq!(
+        client.card_request().unwrap().url,
+        "https://example.test/agent/.well-known/agent-card.json?route=team/"
+    );
+}
+
+#[test]
 fn resuming_an_unsent_intent_preserves_its_sdk_body_method_and_explicit_routing() {
     let mut client = connected();
     client.acknowledge_context("unrelated-last-context").unwrap();
@@ -347,7 +356,10 @@ fn arbitrary_peer_message_answers_preserve_data_and_files_without_inventing_a_ta
     assert_eq!(update.text, "receipt {\"id\":42}");
     assert!(update.task_id.is_empty());
     assert!(update.context_id.is_empty());
-    assert!(matches!(update.artifacts[0].parts[2].content, PartContent::Url(_)));
+    assert!(update.artifacts.is_empty(), "a direct message is not a synthetic task artifact");
+    let message = update.message.unwrap();
+    assert_eq!(message.message_id, "reply");
+    assert!(matches!(message.parts[2].content, PartContent::Url(_)));
     assert_eq!(reply.task_ref(), None);
 }
 
@@ -412,4 +424,34 @@ fn opening_a_new_task_cannot_change_the_explicitly_requested_thread() {
     foreign.context_id = Some("foreign-context".into());
     assert!(message_only.accept(StreamResponse::Message(foreign)).is_err());
     assert!(!message_only.settled());
+}
+
+#[test]
+fn a_completed_task_omitting_artifacts_keeps_already_observed_chunks() {
+    let mut reply = ReplyState::default();
+    reply.accept(chunk("answer", json!([{"text":"Booked"}]), false)).unwrap();
+    let done = reply.accept(task("task", "context", "TASK_STATE_COMPLETED")).unwrap().unwrap();
+    assert_eq!(done.text, "Booked");
+    assert_eq!(
+        done.artifacts.len(),
+        1,
+        "an omitted optional snapshot field is not an empty replacement"
+    );
+}
+
+#[test]
+fn an_explicit_empty_artifact_snapshot_replaces_prior_chunks() {
+    let mut reply = ReplyState::default();
+    reply.accept(chunk("answer", json!([{"text":"An earlier draft"}]), false)).unwrap();
+    let done = reply
+        .accept(event(json!({"task": {
+            "id":"task", "contextId":"context", "artifacts":[],
+            "status":{"state":"TASK_STATE_COMPLETED", "message":{
+                "messageId":"final-message", "role":"ROLE_AGENT", "parts":[{"text":"No attachment"}]
+            }}
+        }})))
+        .unwrap()
+        .unwrap();
+    assert!(done.artifacts.is_empty());
+    assert_eq!(done.text, "No attachment");
 }

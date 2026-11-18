@@ -27,6 +27,13 @@ fn _extract_text_session_runner_progress_operation(
 }
 type TextSessionRunnerProgressOperationInput = u64;
 
+fn _extract_text_session_runner_say_operation(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<TextSessionRunnerSayOperationInput> {
+    crate::py_values::number_from_py::<u64>(obj.as_any(), "operation")
+}
+type TextSessionRunnerSayOperationInput = u64;
+
 #[pyclass(frozen, name = "TextSessionRunner", module = "livekit.agents._core")]
 pub struct TextSessionRunner(pub(crate) ::std::sync::Arc<TextSessionRunnerImpl>);
 
@@ -154,7 +161,7 @@ impl TextSessionRunner {
         Ok(())
     }
 
-    #[pyo3(signature = (invocation_id, operation, message))]
+    #[pyo3(signature = (invocation_id, operation, message, silent = false))]
     fn progress<'py>(
         &self,
         py: Python<'py>,
@@ -162,12 +169,45 @@ impl TextSessionRunner {
         #[pyo3(from_py_with = _extract_text_session_runner_progress_operation)]
         operation: TextSessionRunnerProgressOperationInput,
         message: ::std::string::String,
+        silent: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let this = ::std::sync::Arc::clone(&self.0);
+        let call = py.detach(|| {
+            <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::progress(
+                &self.0,
+                &invocation_id,
+                operation,
+                message,
+                silent,
+            )
+        });
         crate::py_calls::future_into_py(py, async move {
-            let () = <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::progress(&this, &invocation_id, operation, message)
-                .await.map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
+            let () = call.await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+
+    /// Enqueue exact text now; the private reader confirms the source's local output boundary.
+    #[pyo3(signature = (invocation_id, operation, message))]
+    fn say<'py>(
+        &self,
+        py: Python<'py>,
+        invocation_id: ::std::string::String,
+        #[pyo3(from_py_with = _extract_text_session_runner_say_operation)]
+        operation: TextSessionRunnerSayOperationInput,
+        message: ::std::string::String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let call = py.detach(|| {
+            <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::say(
+                &self.0,
+                &invocation_id,
+                operation,
+                message,
+            )
+        });
+        crate::py_calls::future_into_py(py, async move {
+            let () = call.await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
@@ -228,6 +268,13 @@ fn _extract_local_interaction_progress_operation(
     crate::py_values::number_from_py::<u64>(obj.as_any(), "operation")
 }
 type LocalInteractionProgressOperationInput = u64;
+
+fn _extract_local_interaction_say_operation(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<LocalInteractionSayOperationInput> {
+    crate::py_values::number_from_py::<u64>(obj.as_any(), "operation")
+}
+type LocalInteractionSayOperationInput = u64;
 
 /// One call of an agent tool outside a TextSession: the child agent runs in process as a delegate
 /// of the call (tools.md "Agents as tools"). Its decisions are `lk_agents_core::agent_tool`'s.
@@ -358,7 +405,7 @@ impl CoreLocalInteraction {
     }
 
     /// `ctx.update(message)` from a tool body of the child's invocation `invocation_id`.
-    #[pyo3(signature = (invocation_id, operation, message))]
+    #[pyo3(signature = (invocation_id, operation, message, silent = false))]
     fn progress<'py>(
         &self,
         py: Python<'py>,
@@ -366,12 +413,45 @@ impl CoreLocalInteraction {
         #[pyo3(from_py_with = _extract_local_interaction_progress_operation)]
         operation: LocalInteractionProgressOperationInput,
         message: ::std::string::String,
+        silent: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let this = ::std::sync::Arc::clone(&self.0);
+        let call = py.detach(|| {
+            <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::progress(
+                &self.0,
+                &invocation_id,
+                operation,
+                message,
+                silent,
+            )
+        });
         crate::py_calls::future_into_py(py, async move {
-            let () = <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::progress(&this, &invocation_id, operation, message)
-                .await.map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
+            let () = call.await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+
+    /// Enqueue exact text now; the private reader confirms the source's local output boundary.
+    #[pyo3(signature = (invocation_id, operation, message))]
+    fn say<'py>(
+        &self,
+        py: Python<'py>,
+        invocation_id: ::std::string::String,
+        #[pyo3(from_py_with = _extract_local_interaction_say_operation)]
+        operation: LocalInteractionSayOperationInput,
+        message: ::std::string::String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let call = py.detach(|| {
+            <CoreLocalInteractionImpl as ::lk_agents_abi::text_session::LocalInteraction>::say(
+                &self.0,
+                &invocation_id,
+                operation,
+                message,
+            )
+        });
+        crate::py_calls::future_into_py(py, async move {
+            let () = call.await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }

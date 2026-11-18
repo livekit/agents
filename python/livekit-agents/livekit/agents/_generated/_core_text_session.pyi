@@ -45,7 +45,15 @@ class TextSessionRunner:
         """The latest usage snapshot of the turn, across its local invocations; never advances it."""
     def release(self, delivery: TextSessionDelivery) -> None:
         """Acknowledge selected presentation before the child can release its parent."""
-    async def progress(self, invocation_id: str, operation: int, message: str) -> None: ...
+    async def progress(
+        self,
+        invocation_id: str,
+        operation: int,
+        message: str,
+        silent: bool = False,
+    ) -> None: ...
+    async def say(self, invocation_id: str, operation: int, message: str) -> None:
+        """Enqueue exact text now; the private reader confirms the source's local output boundary."""
 
 class TextSessionUpdates:
     async def recv(self) -> TextSessionUpdate | None: ...
@@ -88,5 +96,13 @@ class _core_LocalInteraction:
     @property
     def usage(self) -> Usage:
         """What the child consumed across its invocations, the running one included."""
-    async def progress(self, invocation_id: str, operation: int, message: str) -> None:
+    async def progress(
+        self,
+        invocation_id: str,
+        operation: int,
+        message: str,
+        silent: bool = False,
+    ) -> None:
         """`ctx.update(message)` from a tool body of the child's invocation `invocation_id`."""
+    async def say(self, invocation_id: str, operation: int, message: str) -> None:
+        """Enqueue exact text now; the private reader confirms the source's local output boundary."""

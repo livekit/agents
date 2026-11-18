@@ -818,6 +818,26 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         report: crate::llm::tool_executor::ToolReport,
     ) -> Result<(), CommandRefused>;
 
+    #[host(await)]
+    fn tool_progress(
+        &self,
+        invocation_id: String,
+        operation: u64,
+        call_id: String,
+        report: crate::llm::tool_executor::ToolReport,
+    ) -> Result<BoxFuture<'static, Result<(), crate::errors::ProviderError>>, CommandRefused>;
+
+    /// Enqueue an exact output under the originating tool's native identity. The returned
+    /// awaitable only watches the independent say speech; dropping it never cancels that speech.
+    #[host(await)]
+    fn tool_say(
+        &self,
+        invocation_id: String,
+        operation: u64,
+        call_id: String,
+        text: String,
+    ) -> Result<BoxFuture<'static, Result<(), crate::errors::ProviderError>>, CommandRefused>;
+
     /// `Agent.update_chat_ctx()` on a running agent: replace the context.
     #[host(call)]
     fn update_chat_ctx(&self, items: Vec<ChatItem>) -> Result<(), SessionRefused>;

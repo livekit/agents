@@ -149,25 +149,45 @@ impl Port for LocalInteraction {
         usage.snapshot()
     }
 
-    async fn progress(
+    fn progress(
         &self,
         invocation_id: &str,
         operation: u64,
         message: String,
-    ) -> Result<(), Invalid> {
-        let progress = {
-            let shared = self.shared.lock();
-            shared
-                .live
-                .as_ref()
-                .filter(|(id, ..)| id == invocation_id)
-                .map(|(_, progress, _)| progress.clone())
+        silent: bool,
+    ) -> lk_agents_abi::BoxFuture<'static, Result<(), lk_agents_abi::errors::ProviderError>> {
+        match self.port(invocation_id) {
+            Some(port) => port.enqueue(operation, message, silent),
+            None => Box::pin(async {
+                Err(lk_agents_abi::errors::HostError::new("the local tool report owner has ended")
+                    .into())
+            }),
         }
-        .ok_or_else(|| Invalid(format!("invocation {invocation_id} is not running")))?;
-        progress
-            .report(operation, message)
-            .await
-            .map_err(|_| Invalid(format!("invocation {invocation_id} is not running")))
+    }
+    fn say(
+        &self,
+        invocation_id: &str,
+        operation: u64,
+        message: String,
+    ) -> lk_agents_abi::BoxFuture<'static, Result<(), lk_agents_abi::errors::ProviderError>> {
+        match self.port(invocation_id) {
+            Some(port) => port.say(operation, message),
+            None => Box::pin(async {
+                Err(lk_agents_abi::errors::HostError::new("the local tool report owner has ended")
+                    .into())
+            }),
+        }
+    }
+}
+
+impl LocalInteraction {
+    fn port(&self, invocation_id: &str) -> Option<Progress> {
+        self.shared
+            .lock()
+            .live
+            .as_ref()
+            .filter(|(id, ..)| id == invocation_id)
+            .map(|(_, port, _)| port.clone())
     }
 }
 
@@ -287,9 +307,20 @@ impl Delegate {
         let operation = telemetry::GenAiOperation::InvokeAgent;
         let span = telemetry::start(&self.cx, telemetry::AgentRun { operation, agent_name });
         let definition = self.child.definition.clone();
-        let (active, mut updates) =
-            crate::agent_run::start(&self.spawner, definition, input, setup, span, UPDATE_QUEUE)
-                .map_err(|e| e.to_string())?;
+        let (active, mut updates) = crate::agent_run::start_with_output(
+            &self.spawner,
+            definition,
+            input,
+            setup,
+            span,
+            UPDATE_QUEUE,
+            Some(crate::agent_run::output::Target::Delegate {
+                host: self.host.clone(),
+                cx: self.cx.clone(),
+                context: self.context.clone(),
+            }),
+        )
+        .map_err(|e| e.to_string())?;
         self.shared.lock().live = Some((invocation_id, active.progress(), active.usage()));
         let mut cancelling = false;
         let settled = loop {
@@ -303,10 +334,10 @@ impl Delegate {
                 update = updates.recv() => update,
             };
             match update {
-                Some(RunUpdate::Stream(StreamEvent::Progress { message, .. })) => {
+                Some(RunUpdate::Stream(StreamEvent::Progress { message, silent, .. })) => {
                     let extra = self.shared.lock().extra.clone();
                     let reported =
-                        self.host.progress(&self.cx, &self.context, Some(message), extra);
+                        self.host.progress(&self.cx, &self.context, Some(message), extra, !silent);
                     if let Err(error) = reported.await {
                         log::warn!(target: lk_agents_abi::LOG_TARGET, "an agent tool's progress was not delivered: {error}");
                     }

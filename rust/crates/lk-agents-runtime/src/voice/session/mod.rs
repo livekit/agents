@@ -3,6 +3,7 @@ pub(super) mod calls;
 mod class;
 mod conversation;
 pub mod delivered;
+mod delivery;
 mod host_drain;
 mod options;
 pub mod owner;
@@ -668,7 +669,9 @@ impl VoiceSession {
         let stage = Arc::clone(&self.stage);
         let time = self.time.clone();
         async move {
-            let Some((api, drained, remote, session)) = running else { return };
+            let Some((api, drained, remote, session)) = running else {
+                return;
+            };
             // A stopped receiver has already closed the session.
             let _ = api.send(Command::Close(Close { reason, drain: options.drain, error }));
             if time.timeout(CLOSE_WATCHDOG, api.closed()).await.is_err() {

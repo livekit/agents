@@ -10,6 +10,7 @@ from typing import (
     Self,
     TypeAlias,
     TypeVar,
+    cast,
     get_args,
     get_type_hints,
     overload,
@@ -18,7 +19,7 @@ from typing import (
 
 from pydantic import JsonValue, TypeAdapter
 
-from .._core import _core_ContextActivation, _core_SessionBinding
+from .._core import _core_ContextActivation, _core_PersistedSessionState, _core_SessionBinding
 from .._generated import facades_storage_context as _context_facades
 from .._generated.facades_storage import Transaction
 from .._generated.storage_context import AppStatement, ContextField, ContextScope, ContextScopeWrite
@@ -169,7 +170,20 @@ class ContextStore(_context_facades.ContextStore):
         binding = self._session_binding
         return binding._history() if binding is not None else None
 
-    def _bind_session(self, context: T) -> _SessionBinding:
+    def _binding_view(self, context: object) -> _core_PersistedSessionState | None:
+        self._ensure_open()
+        name = _session_field(context)
+        if name is None:
+            return None
+        hydrated = self._sessions.get(id(context))
+        if hydrated is None or hydrated[0] is not context:
+            raise ValueError("load_context must hydrate the session field before binding")
+        state = hydrated[1]
+        if getattr(context, name) is not state:
+            raise ValueError("the hydrated session field was replaced")
+        return cast("_core_PersistedSessionState", state._native)
+
+    def _bind_session(self, context: object) -> _SessionBinding:
         self._ensure_open()
         name = _session_field(context)
         state = SessionState()

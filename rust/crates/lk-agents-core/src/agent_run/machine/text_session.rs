@@ -15,7 +15,12 @@ impl AgentRun {
     /// Starts a fresh invocation from a history whose pending calls have already been answered.
     /// This appends no synthetic user message and infers no human answer from history. Origins
     /// already admitted by the conversation owner still authorize a validated approval repeat.
-    pub fn continue_from_history(&mut self, now: Ts) -> Vec<AgentRunEffect> {
+    /// A detached body's native requirements use the same terminal-question presentation path.
+    pub fn continue_from_history(
+        &mut self,
+        requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
+        now: Ts,
+    ) -> Vec<AgentRunEffect> {
         if !matches!(self.phase, Phase::Idle) {
             return Vec::new();
         }
@@ -23,8 +28,32 @@ impl AgentRun {
         self.approval_answers = std::mem::take(&mut self.input_answers);
         self.first_new = self.history.len();
         let mut effects = Vec::new();
-        self.next_step(now, &mut effects);
+        if let Some(first) = requirements.first() {
+            self.pending_call = Some(first.call.clone());
+            let ask = lk_agents_abi::agent::run::RunQuestion {
+                question: first.question.clone(),
+                verbatim: first.verbatim,
+            };
+            self.input_requirements = requirements;
+            self.ask_from_tool(ask, now, &mut effects);
+        } else {
+            self.next_step(now, &mut effects);
+        }
         effects
+    }
+
+    /// Import acknowledged dialogue as context without crediting it to this invocation's
+    /// output or granting approval/input authority. Existing own messages keep their boundary.
+    pub fn observe_context(&mut self, messages: &[lk_agents_abi::ChatMessage]) {
+        for message in messages {
+            if !self.history.iter().any(|item| item.id() == message.id) {
+                self.context_items.insert(message.id.clone());
+                self.history.push(message.clone().into());
+            }
+        }
+        if let Phase::Checkpoint(pending) = &mut self.phase {
+            pending.observe_context(messages);
+        }
     }
 
     /// Returns a checkpoint only when the named local child calls are the sole unfinished

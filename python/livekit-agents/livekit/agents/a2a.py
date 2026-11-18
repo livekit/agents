@@ -41,17 +41,23 @@ class RemoteAgent:
 
     ``name`` and ``description`` override the endpoint's own. A URL given without both reads
     them, and the tool's input schema, from the remote card when a run first sets the tool up.
+    ``id`` is the stable saved-state and voice eligibility key; it defaults to the canonical URL.
+    Give distinct IDs to configurations with different credentials at the same URL.
     """
 
     def __init__(
         self,
         target: A2AEndpoint | str,
         *,
+        id: str | None = None,
         name: str | None = None,
         description: str | None = None,
         token: str | None = None,
         conn_options: APIConnectOptions | None = None,
     ) -> None:
+        if id is not None and not id.strip():
+            raise ValueError("a remote agent id must be nonempty")
+        self._id = id
         self._token = token
         self._conn_options = conn_options
         self._name = name
@@ -68,6 +74,11 @@ class RemoteAgent:
                 name or target.name, description or target.description
             )
             _referenced.add(target)
+
+    @property
+    def id(self) -> str:
+        """The stable identity used by saved remote state and voice eligibility."""
+        return _core._core_remote_id(self._url(), self._id)
 
     async def _resolved_card(self) -> AgentCard:
         """The tool's card: declared in code, else the remote card's, read once."""
@@ -93,13 +104,13 @@ _referenced: weakref.WeakSet[A2AEndpoint] = weakref.WeakSet()
 
 
 class _ExpertTool(RawFunctionTool):
-    def __init__(self, tool: RawFunctionTool, url: Callable[[], str]) -> None:
+    def __init__(self, tool: RawFunctionTool, agent: RemoteAgent) -> None:
         super().__init__(tool._func, tool.info)
-        self._url = url
+        self._agent = agent
 
     @property
-    def endpoint(self) -> str:
-        return self._url()
+    def remote_id(self) -> str:
+        return self._agent.id
 
 
 class _RemoteTool(Toolset):
@@ -119,7 +130,7 @@ class _RemoteTool(Toolset):
                 "parameters": card.input_schema,
             },
         )
-        self._tool = _ExpertTool(tool, self._agent._url)
+        self._tool = _ExpertTool(tool, self._agent)
 
     async def setup(self) -> Self:
         if self._tool is None:
@@ -143,9 +154,9 @@ class _RemoteTool(Toolset):
         project = _server_credentials()
         interaction = _core._core_RemoteInteraction(
             url,
-            agent._card.name,
             ctx.function_call,
             *project,
+            agent.id,
         )
         # with no token of its own, the call shares its thread under a grant minted for it
         thread = ctx._run.thread if ctx._run is not None else ctx._call().thread
@@ -164,16 +175,14 @@ class _RemoteTool(Toolset):
             )
             interaction.set_partition_chain(chain)
         thread_id = thread.id if agent._token is None and thread is not None else None
-        token = _core._core_remote_token(url, *project, agent._token, thread_id)
-        shared = thread_id if agent._token is None and token is not None else None
         try:
             event = await interaction.run(
                 _Delegation(ctx),
                 raw_arguments,
                 agent._card.structured_input,
                 history.items,
-                token,
-                shared,
+                agent._token,
+                thread_id,
                 agent._conn_options,
                 ctx._session is not None,
                 ctx._session._running
@@ -193,7 +202,9 @@ class _RemoteTool(Toolset):
             raise
         if isinstance(event, RemoteEventInputRequired):
             transition = InputRequired(event.question, verbatim=event.verbatim_full)
-            return ToolReport(outcome=event.outcome, transition=transition)
+            return ToolReport(
+                outcome=event.outcome, input_request=event.input_request, transition=transition
+            )
         assert isinstance(event, RemoteEventOutcome)
         return ToolReport(outcome=event.outcome)
 
@@ -205,10 +216,18 @@ class _Delegation:
     def __init__(self, ctx: RunContext) -> None:
         self._ctx = ctx
 
-    async def _core_progress(self, text: str | None, extra: dict[str, object]) -> None:
+    async def _core_progress(
+        self, text: str | None, extra: dict[str, object], reply_required: bool = True
+    ) -> None:
         self._ctx.function_call.extra.update(_json_object(extra))
         if text is not None:
-            await self._ctx.update(text)
+            await self._ctx.update(text, silent=not reply_required)
+
+    async def _core_say(self, text: str, extra: dict[str, object]) -> None:
+        self._ctx.function_call.extra.update(_json_object(extra))
+        # Admission at this hop is enough to keep observing the business task. The native say
+        # owner retains its exact delivery; stock A2A provides no end-to-end audio receipt.
+        self._ctx.say(text)
 
     async def _core_delegated(self) -> None:
         # Release the tool's step with a fact for normal planning, without queuing an

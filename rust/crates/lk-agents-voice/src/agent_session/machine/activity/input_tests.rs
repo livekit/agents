@@ -73,6 +73,7 @@ fn realtime_calls_wait_for_exact_capture_and_response_admission_in_both_transcri
                 duplicate_scope: DuplicateScope::Name,
                 retries: None,
                 remote: Some("https://travel.test".into()),
+                local_agent: None,
             }],
             output: OutputSpec::Text { validated: false },
             retries: Retries::default(),

@@ -1,3 +1,20 @@
+/// Private refusal marker: a live local body released its step, but has not reported its final
+/// outcome. It grants no replay or input authority and only an actual final report clears it.
+pub const LIVE_LOCAL_PENDING_KEY: &str = "lk.live.local_pending";
+
+/// Native report provenance, never authority to restore a tool or its credentials.
+pub const REMOTE_REPORT_KEY: &str = "lk.remote.report";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteReport {
+    Pending,
+    Completed,
+    InputRequired,
+    Failed,
+    Cancelled,
+}
+
 /// `make_function_call_output`'s text for an unexpected exception; says nothing about it.
 pub const INTERNAL_ERROR_OUTPUT: &str = "An internal error occurred";
 
@@ -8,7 +25,7 @@ pub const INVALID_OUTPUT: &str = "the tool returned an invalid output";
 pub const WAITING_PREFIX: &str = "waiting for the person's answer to: ";
 
 /// What the model reads as the output of a verbatim result it did not write.
-pub const DELIVERED: &str = "delivered to the person as written: ";
+pub const EXACT_OUTPUT_PREFIX: &str = "exact text supplied for separate framework delivery: ";
 
 /// How the agent facing the person is told to ask a question that is not verbatim.
 pub const ASK_IN_OWN_WORDS: &str =
@@ -49,7 +66,13 @@ pub enum ToolOutcome {
     /// The host cancelled the body.
     Cancelled,
     /// `ctx.update(message)`: `message` rendered, `raw` as written; the tool runs on.
-    Update { message: String, raw: String },
+    Update {
+        message: String,
+        raw: String,
+        /// Whether progress needs a model continuation; exact output owns its own delivery.
+        #[host(default = true)]
+        reply_required: bool,
+    },
     /// `Completed(value)`: the value as text (`completed` for `None`).
     Completed {
         text: String,

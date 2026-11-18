@@ -27,6 +27,21 @@ impl From<ProcessError> for lk_agents_abi::errors::ApiError {
     }
 }
 
+/// Immutable provenance for native capabilities which may be reached through a detached-safe
+/// view. A new runtime cannot make inherited storage or command handles current again.
+#[derive(Clone, Copy)]
+pub struct ProcessStamp(u32);
+
+impl ProcessStamp {
+    pub fn current() -> Self {
+        Self(std::process::id())
+    }
+
+    pub fn check(self) -> Result<(), ProcessError> {
+        if self.0 == std::process::id() { Ok(()) } else { Err(ProcessError::Inherited) }
+    }
+}
+
 /// What the hosting process lends a declared class: the generated bindings pass
 /// it to each declared constructor that takes it, and Rust callers and tests build their own.
 /// Handles bound to the process runtime are read on use, so constructing a client starts
@@ -46,7 +61,18 @@ pub struct ProcessEnv {
     /// The process's own tasks: work no session owns (a node the host calls outside a session,
     /// a handler span the SDK cancelled), each bounded and ending on its own.
     pub tasks: Arc<crate::task::TaskSet>,
+    /// The runtime's executor for an explicitly bound state-only control operation. The
+    /// callback depends only on ABI ports, so storage never depends on runtime decisions.
+    pub remote_control: Option<RemoteControlExecutor>,
 }
+
+pub type RemoteControlExecutor = fn(
+    ProcessEnv,
+    Arc<dyn lk_agents_abi::session::control::BoundSessionControl>,
+    lk_agents_abi::session::control::RemoteControlRef,
+    Option<lk_agents_abi::delegation::remote::RemoteCancellationEvidence>,
+)
+    -> Arc<dyn lk_agents_abi::session::control::RemoteCancellation>;
 
 impl ProcessEnv {
     /// Where work no session owns runs: the process's tasks, on its executor and clock.
@@ -82,6 +108,7 @@ impl ProcessEnv {
             tracer: lk_agents_telemetry::Tracer::disabled(clock.clone()),
             clock,
             tasks: Arc::default(),
+            remote_control: None,
             http: || {
                 GatewayHttp::new().map(Arc::new).map_err(|e| ProcessError::Start(e.to_string()))
             },
@@ -130,4 +157,17 @@ pub fn server_setting(name: &str) -> Option<String> {
     let registered =
         SERVER_SETTINGS.read().iter().find(|(n, _)| *n == name).map(|(_, v)| v.clone());
     registered.or_else(|| std::env::var(name).ok())
+}
+
+#[cfg(test)]
+mod stamp_tests {
+    use super::*;
+
+    #[test]
+    fn a_capability_stamp_accepts_only_its_creator_process() {
+        ProcessStamp::current().check().unwrap();
+        let inherited = ProcessStamp(std::process::id() ^ u32::MAX);
+        assert_eq!(inherited.check(), Err(ProcessError::Inherited));
+        assert_eq!(inherited.check(), Err(ProcessError::Inherited), "the stamp is immutable");
+    }
 }

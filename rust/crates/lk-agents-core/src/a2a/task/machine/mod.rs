@@ -1,4 +1,5 @@
 mod drain;
+mod live;
 #[cfg(test)]
 #[path = "machine_tests.rs"]
 mod tests;
@@ -20,6 +21,7 @@ use crate::a2a::{
     failed_message, python_reason, resolve_debounce, resolve_policy, result_for,
     unpersisted_failed,
 };
+use live::{LiveSchedule, LiveStep};
 use lk_agents_abi::storage::context::{AppStatement, ContextScopeWrite};
 use lk_agents_abi::storage::thread::ItemRow;
 use lk_agents_abi::storage::thread::{LeaseAfterCommit, TaskPickup, WhenHeld};
@@ -40,6 +42,32 @@ pub enum A2aTaskEvent {
 /// `CloseRun` end it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operation {
+    PrepareDialogue {
+        source: String,
+        messages: Vec<lk_agents_abi::ChatMessage>,
+    },
+    CommitDialogue(String),
+    CancelLive(Vec<String>),
+    CancelSource(String),
+    /// A live foreground wait continues servicing every retained source's reports.
+    NextAll {
+        should_yield: Option<bool>,
+        pause: Duration,
+    },
+    /// Read owned handler reports while waiting for durable inbox notification/polling.
+    LiveWait {
+        pause: Duration,
+    },
+    /// Commit one managed turn before letting the same Session advance to its next turn.
+    AcknowledgeLive {
+        request_id: String,
+        turn: u64,
+    },
+    NextSource {
+        request_id: String,
+        should_yield: Option<bool>,
+        pause: Duration,
+    },
     /// The task an earlier send of this `messageId` created on the partition.
     FindReceipt(String),
     /// The task a continuation names, on any partition of the thread.
@@ -166,13 +194,25 @@ const TASKS_IN_CONTEXT: i64 = 50;
 /// What the handler's stream says next.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HandlerEvent {
+    LiveCheckpoint {
+        request_id: String,
+    },
     /// It asks whether to go on.
     Checkpoint,
     Output(Box<HandlerOutput>),
+    LiveOutput {
+        request_id: String,
+        output: Box<HandlerOutput>,
+    },
+    /// The native bound AgentRun's result, held separately from an opaque handler's eventual
+    /// return value. Its task identity was captured before the identified body started.
+    Managed(Box<lk_agents_abi::text_session::LiveTurnReport>),
 }
 
 #[derive(Debug)]
 pub enum Completion {
+    DialoguePrepared(Value),
+    CancelledLive(Vec<String>),
     Task(Option<TaskRow>),
     Tasks(Vec<TaskRow>),
     Submitted(bool),
@@ -252,6 +292,7 @@ enum After {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Phase {
+    Live(LiveStep),
     New,
     Receipt,
     Target,
@@ -350,6 +391,7 @@ enum RunStep {
 /// id with a private counter. All live resources belong to the executor.
 #[derive(Debug)]
 pub struct TaskMachine {
+    live: LiveSchedule,
     endpoint: Option<String>,
     drain_endpoint: Option<String>,
     partition_key: String,
@@ -419,6 +461,7 @@ impl TaskMachine {
     ) -> Self {
         let policy = resolve_policy(&options.policy, &message.channel);
         Self {
+            live: LiveSchedule::default(),
             endpoint: None,
             drain_endpoint: None,
             partition_key,
@@ -563,7 +606,7 @@ impl TaskMachine {
                 let (access, pickup) = match self.policy {
                     Policy::Concurrent => (Access::Concurrent, TaskPickup::Claim),
                     Policy::Reject => (Access::Exclusive(WhenHeld::Reject), TaskPickup::Leave),
-                    Policy::Queue | Policy::Batch => {
+                    Policy::Queue | Policy::Batch | Policy::Live => {
                         (Access::Exclusive(WhenHeld::Wait), TaskPickup::Claim)
                     }
                 };
@@ -606,7 +649,7 @@ impl TaskMachine {
                     return Some(self.answer_task(None));
                 }
                 let waiting = self.waiter_gone_at.is_some_and(|gone| now < gone);
-                let stale = self.policy != Policy::Batch && !waiting;
+                let stale = !matches!(self.policy, Policy::Batch | Policy::Live) && !waiting;
                 let wake = if stale { PollWake::RecoverStale } else { PollWake::Observe };
                 (now + PARTITION_POLL_PAUSE, wake)
             }
@@ -677,7 +720,10 @@ impl TaskMachine {
     }
 
     /// Fails a dead holder's `working` rows `worker-lost`, but `skip`; `then` follows.
-    fn fail_orphans(&mut self, skip: Vec<String>, then: Phase) -> Operation {
+    fn fail_orphans(&mut self, mut skip: Vec<String>, then: Phase) -> Operation {
+        if self.policy == Policy::Live {
+            skip.extend(self.live.turns.values().map(|turn| turn.answer_task.clone()));
+        }
         self.phase = Phase::Failing;
         let target = FailTarget::Orphans { skip };
         self.failing = Some(Failing { reason: TaskReason::WorkerLost, then, target });
@@ -736,6 +782,7 @@ impl TaskMachine {
             self.history_end = history_end;
         }
         match self.phase {
+            Phase::Live(step) => self.live_step(step, completion, now),
             Phase::Turn(step) => self.turn_step(step, completion, now),
             Phase::Failing => self.failing_step(completion, now),
             Phase::Receipt => self.on_receipt(completion),
@@ -868,7 +915,7 @@ impl TaskMachine {
     ) -> Result<Option<Operation>, Finish> {
         match (self.phase, completion) {
             (Phase::Accepted(_), Completion::Done)
-                if self.policy == Policy::Batch && !self.leased =>
+                if matches!(self.policy, Policy::Batch | Policy::Live) && !self.leased =>
             {
                 Ok(Some(self.observe()))
             }
@@ -1038,7 +1085,7 @@ impl TaskMachine {
         let submitted = row.as_ref().is_some_and(|r| r.status == TaskState::Submitted);
         let gone = now + self.debounce + self.wait_timeout + PARTITION_POLL_PAUSE;
         self.waiter_gone_at = submitted.then(|| self.waiter_gone_at.unwrap_or(gone));
-        if self.policy == Policy::Batch {
+        if matches!(self.policy, Policy::Batch | Policy::Live) {
             return Ok(Some(self.read_inbox()));
         }
         if row.as_ref().is_some_and(|r| r.status == TaskState::Working)
@@ -1076,7 +1123,7 @@ impl TaskMachine {
 
     fn arrive(&mut self) -> Operation {
         match self.policy {
-            Policy::Batch => {
+            Policy::Batch | Policy::Live => {
                 self.phase = Phase::Receive;
                 Operation::Receive {
                     message: self.message.received_message(),
@@ -1193,6 +1240,7 @@ fn answered(row: &TaskRow) -> bool {
         || row.internal.as_ref().is_some_and(|i| i.answered)
 }
 
+#[derive(Debug)]
 enum Finish {
     Answer(Box<Answer>),
     Error(StorageError),

@@ -254,7 +254,11 @@ impl VoiceDriver {
     ) -> Result<Vec<LocalInputDelivery>, lk_agents_abi::storage::StorageError> {
         delivered.retain(|delivery| self.local_delivery_alive(delivery));
         for delivery in &delivered {
-            if !state.chat_history.iter().any(|message| message == &delivery.message) {
+            if !state
+                .chat_history
+                .iter()
+                .any(|message| same_human_version(message, &delivery.message))
+            {
                 return Err(lk_agents_abi::storage::StorageError::Invalid(
                     "the admitted local response changed before its checkpoint retry".into(),
                 ));

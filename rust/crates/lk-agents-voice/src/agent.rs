@@ -101,9 +101,24 @@ pub struct Committed {
     pub source: Source,
     pub visibility: Visibility,
     pub agent: String,
-    /// This exact revision was observed in storage. A newer read can rebase it even when that
-    /// read's request predates the row; a local replacement clears the observation.
-    stored_revision: bool,
+    /// A local replacement retains the exact database value it edited until it rebases.
+    revision: HistoryRevision,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum HistoryRevision {
+    Stored,
+    Local { base: Option<Box<ChatItem>> },
+}
+
+#[derive(Debug)]
+pub(crate) struct HistoryConflict {
+    pub(crate) items: Vec<String>,
+}
+
+fn same_payload(left: &ChatItem, right: &ChatItem) -> bool {
+    use lk_agents_abi::llm::chat_context::protocol::encode_chat_item;
+    encode_chat_item(left) == encode_chat_item(right)
 }
 
 /// One edit the end-of-turn hook asks for, applied to that turn's request.
@@ -231,8 +246,13 @@ impl SessionChatCtx {
         visibility: Visibility,
         agent: &str,
     ) -> (Committed, CommitOutcome) {
-        let mut entry =
-            Committed { item, source, visibility, agent: agent.to_owned(), stored_revision: false };
+        let mut entry = Committed {
+            item,
+            source,
+            visibility,
+            agent: agent.to_owned(),
+            revision: HistoryRevision::Local { base: None },
+        };
         if entry.item.id() == INSTRUCTIONS_MESSAGE_ID {
             return (entry, CommitOutcome::Filtered);
         }
@@ -270,8 +290,18 @@ impl SessionChatCtx {
                 .iter()
                 .position(|c| c.item.id() == id)
                 .expect("an id in the set is on the record");
-            entry.stored_revision =
-                self.items[idx].stored_revision && self.items[idx].item == entry.item;
+            entry.revision = if same_payload(&self.items[idx].item, &entry.item) {
+                self.items[idx].revision.clone()
+            } else {
+                match &self.items[idx].revision {
+                    HistoryRevision::Stored => HistoryRevision::Local {
+                        base: Some(Box::new(self.items[idx].item.clone())),
+                    },
+                    HistoryRevision::Local { base } => {
+                        HistoryRevision::Local { base: base.clone() }
+                    }
+                }
+            };
             // A replaced item keeps every projection it was in and gains the replacement's.
             let was = self.items[idx].visibility;
             let visibility =
@@ -289,7 +319,6 @@ impl SessionChatCtx {
                     self.items[idx] = Committed { visibility, ..entry.clone() };
                 } else {
                     self.items.remove(idx);
-                    entry.stored_revision = false;
                     if let Source::ToolCall { speech, .. } = entry.source {
                         let held = self.items.iter().map(|c| (&c.item, c.source.speech()));
                         with_its_turn(&mut entry.item, speech, held);
@@ -314,17 +343,47 @@ impl SessionChatCtx {
     /// the turn did not read stay unless their exact current revision was already observed in
     /// storage: a newer observation can update those too. Local edits remain protected. New
     /// stored rows keep their neighbors when those neighbors agree with the record;
-    /// without that anchor they join by instant. True when the record changed.
+    /// without that anchor they join by instant. A divergent foreign/local row is refused
+    /// before mutation, preserving the exact local intent and its original base.
     pub(crate) fn reload_transport(
         &mut self,
         read: &[ChatItem],
         items: Vec<ChatItem>,
         stored: &[ChatItem],
+        own_writes: &BTreeSet<String>,
         agent: &str,
-    ) -> bool {
+    ) -> Result<bool, HistoryConflict> {
         let read: BTreeMap<&str, &ChatItem> = read.iter().map(|item| (item.id(), item)).collect();
         let stored: BTreeMap<&str, &ChatItem> =
             stored.iter().map(|item| (item.id(), item)).collect();
+        let conflicts: Vec<_> = self
+            .items
+            .iter()
+            .filter_map(|entry| {
+                let HistoryRevision::Local { base } = &entry.revision else { return None };
+                let id = entry.item.id();
+                if own_writes.contains(id) {
+                    return None;
+                }
+                let current = stored.get(id).copied();
+                if current.is_some_and(|row| same_payload(&entry.item, row)) {
+                    return None;
+                }
+                let observed_base = base.is_some();
+                let base = base.as_deref().or_else(|| read.get(id).copied());
+                let local_changed = base.is_none_or(|before| !same_payload(before, &entry.item));
+                let foreign_changed = match (base, current) {
+                    (Some(before), Some(row)) => !same_payload(before, row),
+                    (_, None) if !observed_base => false,
+                    (None, None) => false,
+                    _ => true,
+                };
+                (local_changed && foreign_changed).then(|| id.to_owned())
+            })
+            .collect();
+        if !conflicts.is_empty() {
+            return Err(HistoryConflict { items: conflicts });
+        }
         let before: Vec<ChatItem> = self.items.iter().map(|entry| entry.item.clone()).collect();
         let order: Vec<_> = items
             .iter()
@@ -344,7 +403,7 @@ impl SessionChatCtx {
             let id = entry.item.id().to_owned();
             let row = take(&id);
             let observed = stored.get(id.as_str()).copied();
-            if entry.stored_revision && !unsaved.contains_key(&id) {
+            if matches!(entry.revision, HistoryRevision::Stored) {
                 let Some(observed) = observed else { return false };
                 // Rendered items can contain unsaved proposals from an older request. Only
                 // the actual database observation supersedes a previously stored revision.
@@ -365,7 +424,11 @@ impl SessionChatCtx {
                     (None, Some(_)) => {}
                 }
             }
-            entry.stored_revision = observed == Some(&entry.item);
+            entry.revision = if observed.is_some_and(|row| same_payload(row, &entry.item)) {
+                HistoryRevision::Stored
+            } else {
+                HistoryRevision::Local { base: observed.cloned().map(Box::new) }
+            };
             true
         });
         self.ids = self.items.iter().map(|entry| entry.item.id().to_owned()).collect();
@@ -376,7 +439,7 @@ impl SessionChatCtx {
         for (index, row) in partition.into_iter().enumerate() {
             let Some(row) = row.filter(|row| !read.contains_key(row.id())) else { continue };
             let mut entry = Committed {
-                stored_revision: false,
+                revision: HistoryRevision::Local { base: None },
                 item: row,
                 source: Source::HostCtx,
                 visibility: Visibility::Both,
@@ -398,7 +461,10 @@ impl SessionChatCtx {
             } else {
                 anchor.unwrap_or_else(|| self.find_insertion_index(&mut entry.item))
             };
-            entry.stored_revision = stored.get(entry.item.id()).copied() == Some(&entry.item);
+            entry.revision = match stored.get(entry.item.id()).copied() {
+                Some(row) if same_payload(row, &entry.item) => HistoryRevision::Stored,
+                observed => HistoryRevision::Local { base: observed.cloned().map(Box::new) },
+            };
             self.ids.insert(entry.item.id().to_owned());
             self.items.insert(at, entry);
         }
@@ -407,7 +473,7 @@ impl SessionChatCtx {
             self.version += 1;
             self.view_revision += 1;
         }
-        changed
+        Ok(changed)
     }
 
     /// `agent`'s view becomes exactly `items` (the version is kept).
@@ -564,8 +630,10 @@ mod tests {
                 &[said("book a table for two")],
                 vec![said("book a table")],
                 &[],
+                &Default::default(),
                 "agent",
             )
+            .unwrap()
         };
         let mut ctx = SessionChatCtx::new("agent");
         let _ = ctx.commit(said("book a table"), Source::HostCtx, Visibility::Both, "agent");
@@ -598,12 +666,15 @@ mod tests {
         });
         let mut context = SessionChatCtx::new("agent");
         let _ = context.commit(call.clone(), Source::HostCtx, Visibility::Both, "agent");
-        context.reload_transport(
-            std::slice::from_ref(&call),
-            vec![prefix, call.clone()],
-            &[],
-            "agent",
-        );
+        context
+            .reload_transport(
+                std::slice::from_ref(&call),
+                vec![prefix, call.clone()],
+                &[],
+                &Default::default(),
+                "agent",
+            )
+            .unwrap();
         let ids: Vec<_> = context.history().map(ChatItem::id).collect();
         assert_eq!(
             ids,
@@ -622,17 +693,20 @@ mod tests {
         let mut context = SessionChatCtx::new("agent");
         let _ = context.commit(read.clone(), Source::HostCtx, Visibility::Both, "agent");
         let _ = context.commit(final_input.clone(), Source::HostCtx, Visibility::Both, "agent");
-        context.reload_transport(
-            std::slice::from_ref(&read),
-            vec![item("an older foreign edit")],
-            &[],
-            "agent",
-        );
+        context
+            .reload_transport(
+                std::slice::from_ref(&read),
+                vec![item("an older foreign edit")],
+                &[],
+                &Default::default(),
+                "agent",
+            )
+            .unwrap();
         assert_eq!(
             context.history().cloned().collect::<Vec<_>>(),
             std::slice::from_ref(&final_input)
         );
-        context.reload_transport(&[read], Vec::new(), &[], "agent");
+        context.reload_transport(&[read], Vec::new(), &[], &Default::default(), "agent").unwrap();
         assert_eq!(context.history().cloned().collect::<Vec<_>>(), [final_input]);
     }
 
@@ -647,11 +721,27 @@ mod tests {
             ))
         };
         let mut context = SessionChatCtx::new("agent");
-        context.reload_transport(&[], vec![item("Sent.")], &[item("Sent.")], "agent");
+        context
+            .reload_transport(
+                &[],
+                vec![item("Sent.")],
+                &[item("Sent.")],
+                &Default::default(),
+                "agent",
+            )
+            .unwrap();
         // Both reads began before this row arrived. The second observes its foreign edit.
-        context.reload_transport(&[], vec![item("Edited.")], &[item("Edited.")], "agent");
+        context
+            .reload_transport(
+                &[],
+                vec![item("Edited.")],
+                &[item("Edited.")],
+                &Default::default(),
+                "agent",
+            )
+            .unwrap();
         assert_eq!(context.history().cloned().collect::<Vec<_>>(), [item("Edited.")]);
-        context.reload_transport(&[], Vec::new(), &[], "agent");
+        context.reload_transport(&[], Vec::new(), &[], &Default::default(), "agent").unwrap();
         assert_eq!(context.history().count(), 0, "a later foreign deletion is also observed");
     }
 
@@ -666,14 +756,26 @@ mod tests {
             ))
         };
         let mut context = SessionChatCtx::new("agent");
-        context.reload_transport(&[], vec![item("Stored.")], &[item("Stored.")], "agent");
+        context
+            .reload_transport(
+                &[],
+                vec![item("Stored.")],
+                &[item("Stored.")],
+                &Default::default(),
+                "agent",
+            )
+            .unwrap();
         let _ = context.commit(item("New words."), Source::HostCtx, Visibility::Both, "agent");
-        context.reload_transport(
-            &[],
-            vec![item("Foreign edit.")],
-            &[item("Foreign edit.")],
-            "agent",
-        );
+        let conflict = context
+            .reload_transport(
+                &[],
+                vec![item("Foreign edit.")],
+                &[item("Foreign edit.")],
+                &Default::default(),
+                "agent",
+            )
+            .unwrap_err();
+        assert_eq!(conflict.items, ["text"]);
         assert_eq!(context.history().cloned().collect::<Vec<_>>(), [item("New words.")]);
     }
 
@@ -719,12 +821,16 @@ mod tests {
         let _ = ctx.commit(output("Monday"), Source::HostCtx, Visibility::History, "agent");
         let _ = ctx.commit(said("hello"), Source::HostCtx, Visibility::Both, "caller");
         let read = [said("hello")];
-        assert!(ctx.reload_transport(
-            &read,
-            vec![output("waiting"), said("hello, edited")],
-            &[],
-            "caller"
-        ));
+        assert!(
+            ctx.reload_transport(
+                &read,
+                vec![output("waiting"), said("hello, edited")],
+                &[],
+                &Default::default(),
+                "caller"
+            )
+            .unwrap()
+        );
         let items: Vec<_> = ctx.items().cloned().collect();
         assert_eq!(items, [output("Monday"), said("hello, edited")]);
     }
@@ -743,7 +849,9 @@ mod tests {
         }
         let read = [said("asked", 1), said("reply", 3)];
         let partition = vec![said("reply", 3), said("text", 2), said("asked", 1)];
-        assert!(ctx.reload_transport(&read, partition, &[], "caller"));
+        assert!(
+            ctx.reload_transport(&read, partition, &[], &Default::default(), "caller").unwrap()
+        );
         let ids: Vec<_> = ctx.items().map(|item| item.id().to_owned()).collect();
         assert_eq!(ids, ["asked", "text", "reply"]);
     }
@@ -821,7 +929,8 @@ mod tests {
         let words =
             ChatItem::Message(ChatMessage::text("words", Role::Assistant, "Checking.", heard));
         let mut ctx = SessionChatCtx::new("agent");
-        ctx.reload_transport(&[], vec![words, call(heard)], &[], "agent");
+        ctx.reload_transport(&[], vec![words, call(heard)], &[], &Default::default(), "agent")
+            .unwrap();
         let _ = ctx.commit(
             call(started),
             Source::ToolCall { speech, step: 1 },
@@ -844,7 +953,15 @@ mod tests {
             ))
         };
         let mut context = SessionChatCtx::new("agent");
-        context.reload_transport(&[], vec![output(heard)], &[output(heard)], "agent");
+        context
+            .reload_transport(
+                &[],
+                vec![output(heard)],
+                &[output(heard)],
+                &Default::default(),
+                "agent",
+            )
+            .unwrap();
         let _ = context.commit(
             output(finished),
             Source::ToolOutput { speech, step: 1 },
@@ -902,5 +1019,97 @@ mod tests {
         assert!(
             ctx.history().zip(ctx.history().skip(1)).all(|(a, b)| a.created_at() <= b.created_at())
         );
+    }
+    #[test]
+    fn a_late_foreign_read_rebases_disjoint_local_intent_atomically() {
+        let item = |id: &str, text: &str| {
+            ChatItem::Message(ChatMessage::text(id, Role::User, text, SystemTime::UNIX_EPOCH))
+        };
+        let before = vec![item("foreign", "old foreign"), item("local", "old local")];
+        let mut context = SessionChatCtx::new("agent");
+        context
+            .reload_transport(&[], before.clone(), &before, &Default::default(), "agent")
+            .unwrap();
+        let _ =
+            context.commit(item("local", "new local"), Source::HostCtx, Visibility::Both, "agent");
+        let remote = vec![
+            item("foreign", "new foreign"),
+            item("local", "old local"),
+            item("new", "foreign addition"),
+        ];
+        assert!(
+            context
+                .reload_transport(&before, remote.clone(), &remote, &Default::default(), "agent")
+                .unwrap()
+        );
+        let held: Vec<_> = context.history().cloned().collect();
+        assert!(held.contains(&item("foreign", "new foreign")));
+        assert!(held.contains(&item("local", "new local")));
+        assert!(held.contains(&item("new", "foreign addition")));
+    }
+
+    #[test]
+    fn a_late_foreign_collision_keeps_the_local_intent_and_its_original_base() {
+        let item = |text: &str| {
+            ChatItem::Message(ChatMessage::text("item", Role::User, text, SystemTime::UNIX_EPOCH))
+        };
+        let original = item("original");
+        let mut context = SessionChatCtx::new("agent");
+        context
+            .reload_transport(
+                &[],
+                vec![original.clone()],
+                std::slice::from_ref(&original),
+                &Default::default(),
+                "agent",
+            )
+            .unwrap();
+        let _ = context.commit(item("local intent"), Source::HostCtx, Visibility::Both, "agent");
+        let before = context.clone();
+        let foreign = item("foreign intent");
+        let conflict = context
+            .reload_transport(
+                std::slice::from_ref(&original),
+                vec![foreign.clone()],
+                &[foreign],
+                &Default::default(),
+                "agent",
+            )
+            .unwrap_err();
+        assert_eq!(conflict.items, ["item"]);
+        assert_eq!(
+            context, before,
+            "a refused rebase cannot relabel or partially mutate the local intent"
+        );
+    }
+
+    #[test]
+    fn an_own_checkpoint_receipt_does_not_conflict_with_later_local_final_words() {
+        let item = |text: &str| {
+            ChatItem::Message(ChatMessage::text("input", Role::User, text, SystemTime::UNIX_EPOCH))
+        };
+        let original = item("draft");
+        let mut context = SessionChatCtx::new("agent");
+        context
+            .reload_transport(
+                &[],
+                vec![original.clone()],
+                std::slice::from_ref(&original),
+                &Default::default(),
+                "agent",
+            )
+            .unwrap();
+        let _ = context.commit(item("final words"), Source::HostCtx, Visibility::Both, "agent");
+        let ours = item("intermediate draft");
+        context
+            .reload_transport(
+                &[original],
+                vec![ours.clone()],
+                &[ours],
+                &BTreeSet::from(["input".into()]),
+                "agent",
+            )
+            .unwrap();
+        assert_eq!(context.history().cloned().collect::<Vec<_>>(), [item("final words")]);
     }
 }

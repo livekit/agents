@@ -49,9 +49,15 @@ class RemoteEventProgress:
 
 
 @dataclass(kw_only=True, slots=True)
+class RemoteEventExact:
+    text: str
+
+
+@dataclass(kw_only=True, slots=True)
 class RemoteEventInputRequired:
+    input_request: InputRequestRef | None
+    """Native occurrence observed by this operation, never reconstructed from model history."""
     question: str
-    request_id: str
     verbatim: str | None
     verbatim_full: bool
     outcome: ToolOutcome
@@ -71,6 +77,7 @@ class RemoteEventFollow:
 RemoteEvent: TypeAlias = (
     RemoteEventPending
     | RemoteEventProgress
+    | RemoteEventExact
     | RemoteEventInputRequired
     | RemoteEventOutcome
     | RemoteEventFollow

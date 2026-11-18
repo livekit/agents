@@ -128,6 +128,17 @@ impl Stream {
     pub fn settled(&mut self) {
         self.done = true;
     }
+    /// Exact output can wait for an unclaimed consumer, but never for a result drain or a
+    /// permanently closed iterator. This is the same single-consumer admission decision.
+    pub fn accepts_output(&self) -> bool {
+        !self.closing
+            && !self.done
+            && match self.consumer {
+                Some((_, View::Result)) => false,
+                Some(_) => true,
+                None => !self.viewed,
+            }
+    }
     pub fn done(&self) -> bool {
         self.done
     }

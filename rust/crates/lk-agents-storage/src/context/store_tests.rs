@@ -436,3 +436,72 @@ crate::contract!(
     application_transactions_commit_on_exit_or_with_the_turn,
     a_turns_application_writes_never_apply_after_a_takeover,
 );
+
+#[tokio::test]
+async fn an_idle_control_checkpoints_only_session_state_and_releases_its_short_owner() {
+    use lk_agents_abi::session::control::ControlOwner;
+    use lk_agents_abi::storage::session::{PersistedSessionState as _, SessionBinding as _};
+    let fixture = Backend::Sqlite.fixture(None).await;
+    let store = ContextStore::bound(
+        fixture.storage.clone(),
+        fixture.thread_id.clone(),
+        "desk".into(),
+        Cx::NONE,
+    )
+    .await
+    .unwrap();
+    let values = store
+        .load("root:desk".into(), "App".into(), vec![field("draft", json!("initial"))])
+        .await
+        .unwrap();
+    store
+        .save(
+            "root:desk".into(),
+            "App".into(),
+            values.revision,
+            vec![field("draft", json!("saved"))],
+            None,
+        )
+        .await
+        .unwrap();
+    let item: lk_agents_abi::ChatItem = lk_agents_abi::ChatMessage::text(
+        "delivered",
+        lk_agents_abi::Role::User,
+        "Book a seat",
+        std::time::UNIX_EPOCH,
+    )
+    .into();
+    store.begin_session().await.unwrap();
+    store
+        .stage_session(
+            crate::session_state::voice_value("desk".into(), vec![item.clone()], None).unwrap(),
+        )
+        .unwrap();
+    store.flush_session(vec![item]).await.unwrap();
+    store.finish_session(false).await.unwrap();
+    let view =
+        crate::session_state::SessionState::new(Some(store.load_session_snapshot().await.unwrap()))
+            .unwrap();
+    let binding = crate::session_binding::SessionBinding::new(store.clone(), view.clone()).unwrap();
+    binding.close();
+    let control = store.control_binding(view.clone());
+    let thread = fixture.thread().await;
+    let before_scopes = thread.context_scopes("desk").await.unwrap();
+    let before_history = thread.list_items(Some("desk"), None, 100).await.unwrap();
+    let ControlOwner::Fenced(mut scope) = control.acquire().await.unwrap() else {
+        panic!("an idle binding acquires one fenced state-only owner")
+    };
+    let mut snapshot = scope.snapshot().clone();
+    snapshot.remote_agents.insert(
+        "remote".into(),
+        lk_agents_abi::delegation::remote::RemoteAgentState::new("https://remote.test".into()),
+    );
+    scope.checkpoint(snapshot).await.unwrap();
+    scope.close().await.unwrap();
+    assert!(view.remote_agents().contains_key("remote"), "the original bound view advances");
+    assert_eq!(thread.context_scopes("desk").await.unwrap(), before_scopes);
+    assert_eq!(thread.list_items(Some("desk"), None, 100).await.unwrap(), before_history);
+    assert_eq!(thread.partition("desk").info().await.unwrap().unwrap().lease_expires_at_ms, 0);
+    store.close();
+    fixture.cleanup(&[&thread]).await;
+}

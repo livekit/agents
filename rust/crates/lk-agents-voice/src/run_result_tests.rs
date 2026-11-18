@@ -251,6 +251,7 @@ fn rejected_speech_is_attributed_before_its_immediate_terminal_release() {
 fn retained_requirements_survive_result_precedence_and_close() {
     let mut runs = capture();
     let requirement = RunInputRequirement {
+        input_request: None,
         invocation_id: "speech-1".into(),
         call: lk_agents_abi::a2a::turn::PendingCall {
             id: "item-1".into(),

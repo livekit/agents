@@ -135,6 +135,8 @@ pub struct ProgressEvent {
     pub message: String,
     pub call_id: Option<String>,
     pub tool_name: Option<String>,
+    #[host(default = false)]
+    pub silent: bool,
 }
 
 #[crate::host(record(module = "run_stream_events", emit, transparent))]

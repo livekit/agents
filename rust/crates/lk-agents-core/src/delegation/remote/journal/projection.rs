@@ -26,7 +26,7 @@ pub(super) fn response(
         }
         (methods::LIST_TASKS, A2AResponse::List(list)) => {
             for observed in list.tasks {
-                task(state, observed)?;
+                task(state, observed, true)?;
             }
             return Ok(None);
         }
@@ -108,11 +108,11 @@ pub(super) fn response(
             }
             message(&mut state.messages, observed)?;
         }
-        a2a::StreamResponse::Task(observed) => task(state, observed)?,
+        a2a::StreamResponse::Task(observed) => task(state, observed, true)?,
         a2a::StreamResponse::StatusUpdate(update) => {
             let mut observed = current_task(state, &update.task_id, &update.context_id)?;
             observed.status = update.status;
-            task(state, observed)?;
+            task(state, observed, true)?;
         }
         a2a::StreamResponse::ArtifactUpdate(update) => {
             let mut observed = current_task(state, &update.task_id, &update.context_id)?;
@@ -129,7 +129,7 @@ pub(super) fn response(
             } else {
                 artifacts.push(update.artifact);
             }
-            task(state, observed)?;
+            task(state, observed, false)?;
         }
     }
     if state.default_context_id.is_none() {
@@ -169,15 +169,39 @@ fn current_task(
     })
 }
 
-fn task(state: &mut RemoteAgentState, observed: a2a::Task) -> Result<(), RemoteError> {
+fn task(
+    state: &mut RemoteAgentState,
+    observed: a2a::Task,
+    status_event: bool,
+) -> Result<(), RemoteError> {
     if observed.id.is_empty() || observed.context_id.is_empty() {
         return Err(invalid("a task needs its task and context IDs"));
     }
+    let stale = if let Some(saved) = state.tasks.get(&observed.id) {
+        if saved.task.context_id != observed.context_id {
+            return Err(conflict(&observed.id));
+        }
+        let terminal = saved.task.status.state.is_terminal();
+        if terminal
+            && observed.status.state.is_terminal()
+            && saved.task.status.state != observed.status.state
+        {
+            return Err(invalid("a terminal task reported a conflicting terminal state"));
+        }
+        terminal && !observed.status.state.is_terminal()
+    } else {
+        false
+    };
     for item in observed.history.iter().flatten().chain(observed.status.message.iter()) {
         let mut item = item.clone();
         enrich(&mut item.context_id, Some(observed.context_id.clone()), &item.message_id)?;
         enrich(&mut item.task_id, Some(observed.id.clone()), &item.message_id)?;
         message(&mut state.messages, item)?;
+    }
+    if stale {
+        // A late nonterminal snapshot remains raw journal evidence and can add canonical
+        // messages, but cannot reopen the task or replace its accepted terminal content.
+        return Ok(());
     }
     let dispatched: BTreeSet<_> = state
         .requests
@@ -188,12 +212,18 @@ fn task(state: &mut RemoteAgentState, observed: a2a::Task) -> Result<(), RemoteE
         .filter(|(_, task, _)| task.task_id == observed.id)
         .map(|(_, _, occurrence)| occurrence)
         .collect();
+    let terminal_event = (status_event && observed.status.state.is_terminal())
+        .then(|| state.events.last().expect("projection follows its recorded response").sequence);
     let saved = state.tasks.entry(observed.id.clone()).or_insert_with(|| RemoteTaskState {
         task: observed.clone(),
         input_requests: BTreeMap::new(),
         cancel_requested: false,
         next_input: 0,
+        terminal_event: None,
     });
+    if saved.terminal_event.is_none() {
+        saved.terminal_event = terminal_event;
+    }
     if saved.task.context_id != observed.context_id {
         return Err(conflict(&observed.id));
     }
@@ -260,6 +290,9 @@ fn task(state: &mut RemoteAgentState, observed: a2a::Task) -> Result<(), RemoteE
     }
     if observed.artifacts.is_none() {
         observed.artifacts = saved.task.artifacts.clone();
+    }
+    if observed.metadata.is_none() {
+        observed.metadata = saved.task.metadata.clone();
     }
     saved.task = observed;
     Ok(())

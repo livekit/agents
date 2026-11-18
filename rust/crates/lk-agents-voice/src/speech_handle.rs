@@ -161,6 +161,33 @@ impl SpeechView {
         }
     }
 
+    /// Exact output requires the complete output boundary and its canonical words. A settled
+    /// ordinary wait alone also admits interrupted, refused and owner-lost speeches.
+    pub fn exact_delivery(&self, expected: &str, items: &[ChatItem]) -> Result<(), ProviderError> {
+        if let Some(error) = self.error() {
+            return Err(error.clone().into_final());
+        }
+        let complete = self.done()
+            && self.scheduled()
+            && !self.interrupted()
+            && (expected.is_empty()
+                || items.iter().any(|item| {
+                    item.as_message().is_some_and(|message| {
+                        message.role == lk_agents_abi::Role::Assistant
+                            && !message.interrupted
+                            && message.raw_text_content().as_deref() == Some(expected)
+                    })
+                }));
+        if complete {
+            Ok(())
+        } else {
+            Err(lk_agents_abi::errors::HostError::new(
+                "the exact tool output was not delivered completely",
+            )
+            .into())
+        }
+    }
+
     fn scheduling(&self) -> Scheduling {
         match &self.phase {
             SpeechPhase::Pending => Scheduling::Pending,

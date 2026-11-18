@@ -177,6 +177,10 @@ impl VoiceRuntime {
                 if let Some(history) = scope.history() {
                     self.handle(VoiceEvent::StorageReloaded { read, history }.into(), now);
                 }
+                if let Err(error) = self.driver.admit_conversation() {
+                    command.fail(error);
+                    return;
+                }
                 // A lease reload can replace the binding even when the core's chat revision
                 // stays equal. Re-publish the accepted words against that fresh native state.
                 let effect = self.driver.conversation_history();
@@ -252,6 +256,11 @@ impl VoiceRuntime {
             }
         };
         let write = match command {
+            SessionCommand::LiveInput(input) => {
+                SessionCommand::LiveInput(input)
+                    .fail(StorageError::Invalid("this owner is not a live text endpoint".into()));
+                return;
+            }
             SessionCommand::RoutingContext {
                 remote_id,
                 endpoint,
@@ -290,20 +299,22 @@ impl VoiceRuntime {
                 done.resolve(drivers.get(&state, &remote_id, &endpoint, &task));
                 return;
             }
-            SessionCommand::CancelRemote { remote_id, endpoint, task, drivers, done } => {
-                done.resolve(remote::state(&state, &remote_id, &endpoint).and_then(|remote| {
-                    let remote = remote.ok_or_else(|| {
-                        StorageError::Invalid("this remote has no known tasks".into())
-                    })?;
-                    if !remote::cancel_required(remote, &task)? {
-                        return Ok(None);
-                    }
-                    drivers.get(&state, &remote_id, &endpoint, &task)?.map(Some).ok_or_else(|| {
-                        StorageError::Invalid(
-                            "this task has no configured live driver in the conversation".into(),
-                        )
-                    })
-                }));
+            SessionCommand::CancelRemote {
+                target,
+                scope,
+                candidate,
+                retry_after,
+                drivers,
+                done,
+            } => {
+                done.resolve(crate::session::admit_cancellation(
+                    &state,
+                    &drivers,
+                    target,
+                    scope.as_ref(),
+                    candidate,
+                    retry_after.as_deref(),
+                ));
                 return;
             }
             SessionCommand::DefaultContext { remote_id, endpoint, done } => {

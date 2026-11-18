@@ -39,7 +39,10 @@ pub struct RemoteCallAdmission {
 
 /// The one live native owner of a task's messages and observations. A conversation retains
 /// weak handles only; a restored task reference is never authority to revive an old driver.
-pub trait RemoteTaskDriver: Send + Sync {
+pub trait RemoteTaskDriver: std::any::Any + Send + Sync {
+    /// Resource identity only: another configuration cannot borrow this task's credentials.
+    fn same_configuration(&self, other: &dyn RemoteTaskDriver) -> bool;
+
     /// A sender retained by another caller cannot keep a dead command consumer eligible.
     fn is_live(&self) -> bool;
 
@@ -65,10 +68,11 @@ pub trait RemoteTaskDriver: Send + Sync {
 
     /// An explicit task control, serialized with its messages and observations. Success
     /// requires checkpointed evidence of cancellation, rather than dispatch alone.
-    fn cancel<'a>(
-        &'a self,
+    fn cancellation(
+        &self,
         task: crate::delegation::remote::RemoteTaskRef,
-    ) -> crate::BoxFuture<'a, Result<(), AgentClientError>>;
+        retry_after: Option<String>,
+    ) -> std::sync::Arc<dyn crate::session::control::RemoteCancellation>;
 
     /// Reconcile already-admitted work through this task's original observer. Observation
     /// failure is delivered to its original call; the accepted duplicate must not fail or
@@ -83,9 +87,13 @@ pub enum RemoteEvent {
     Progress {
         text: String,
     },
+    Exact {
+        text: String,
+    },
     InputRequired {
+        /// Native occurrence observed by this operation, never reconstructed from model history.
+        input_request: Option<crate::session::InputRequestRef>,
         question: String,
-        request_id: String,
         verbatim: Option<String>,
         verbatim_full: bool,
         outcome: ToolOutcome,
@@ -99,11 +107,11 @@ pub enum RemoteEvent {
     },
 }
 
-/// What a delegation runs on the host: its tool call's progress and retained state and, on a
-/// call, the person's answers to the expert. Each runs in the tool call's context.
+/// Host progress, transport correlation and, on a call, the person's answers to the remote.
+/// Each runs in the originating tool call's context.
 #[crate::host(proxy(host = "livekit.agents.a2a._Delegation", owns))]
 pub trait DelegationHost: Send + Sync {
-    /// The interaction changed: `extra` is the function call's retained state, `text` a
+    /// The interaction changed: `extra` is the function call's transport correlation, `text` a
     /// progress message for the person (`ctx.update()`).
     #[host(await, name = "_core_progress")]
     fn progress<'a>(
@@ -112,7 +120,25 @@ pub trait DelegationHost: Send + Sync {
         #[host(context)] context: &'a crate::invoke::CallContext,
         text: Option<String>,
         extra: Map<String, Value>,
+        reply_required: bool,
     ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
+    /// Preserve exact working output at this hop. This callback admits local owned delivery;
+    /// it does not acknowledge speech on another hop or settle remote business work.
+    #[host(await, name = "_core_say")]
+    fn say<'a>(
+        &'a self,
+        cx: &crate::telemetry::Cx,
+        #[host(context)] context: &'a crate::invoke::CallContext,
+        text: String,
+        extra: Map<String, Value>,
+    ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>> {
+        let _ = (cx, context, text, extra);
+        Box::pin(async {
+            Err(crate::errors::HostError::new(
+                "this delegation adapter has no exact output boundary",
+            ))
+        })
+    }
     /// On a call, the request reached the expert: the conversation goes on while it works.
     #[host(await, name = "_core_delegated")]
     fn delegated<'a>(
@@ -154,11 +180,11 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(
         endpoint: String,
-        tool_id: String,
         function_call: ChatItem,
         project_url: String,
         api_key: String,
         api_secret: String,
+        #[host(default = None)] remote_id: Option<String>,
     ) -> Result<Self, AgentClientError>;
 
     /// Caller identities carried to the receiving endpoint for partition re-entry checks.
@@ -217,6 +243,13 @@ pub trait RemoteInteraction: Send + Sync + Sized + 'static {
 
 #[crate::host(functions)]
 pub trait RemoteConfiguration: Send + Sync + Sized + 'static {
+    /// Configured state identity; an omitted identity uses the canonical destination URL.
+    #[host(function)]
+    fn _core_remote_id(
+        endpoint: String,
+        #[host(default = None)] id: Option<String>,
+    ) -> Result<String, AgentClientError>;
+
     #[host(function)]
     fn _core_delegation_chain(
         metadata: Map<String, Value>,

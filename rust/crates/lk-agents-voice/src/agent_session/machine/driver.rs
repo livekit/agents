@@ -272,6 +272,9 @@ impl VoiceDriver {
 
     /// Durable commands have the voice owner's lifetime; no saved voice-local agent stack.
     pub fn admit_conversation(&self) -> Result<(), lk_agents_abi::storage::StorageError> {
+        if let Some(error) = self.conversation_failure() {
+            return Err(error.clone());
+        }
         if self.stopped() {
             return Err(lk_agents_abi::storage::StorageError::Invalid(
                 "the conversation owner has ended".into(),

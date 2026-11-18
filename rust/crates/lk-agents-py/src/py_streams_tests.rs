@@ -89,6 +89,24 @@ async fn a_stream_dropped_unclosed_is_closed_on_its_loop() {
     signalled(&g, "tracked_closed", "['tracked closed']");
 }
 
+// A cleanup task is strongly retained even in the native-only interpreter bootstrap.
+#[tokio::test]
+async fn an_abandoned_streams_held_close_is_retained_without_callback_import_errors() {
+    Python::initialize();
+    let (g, context) = Python::attach(setup);
+    let stream = open(&g, &context, "held_close");
+    drop(stream);
+    signalled(&g, "close_entered", "[]");
+    Python::attach(|py| {
+        let fixture = g.bind(py);
+        assert_eq!(fixture.getattr("retained").unwrap().extract::<Vec<bool>>().unwrap(), [true]);
+        assert!(fixture.getattr("callback_errors").unwrap().len().unwrap() == 0);
+        let set = fixture.getattr("close_gate").unwrap().getattr("set").unwrap();
+        fixture.getattr("loop").unwrap().call_method1("call_soon_threadsafe", (set,)).unwrap();
+    });
+    signalled(&g, "tracked_closed", "['held closed']");
+}
+
 // Catches: a host open whose caller was cancelled before it took the returned stream,
 // discarding that stream unclosed.
 #[tokio::test]

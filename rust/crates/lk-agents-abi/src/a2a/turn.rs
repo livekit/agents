@@ -80,14 +80,68 @@ pub struct TurnResult {
 /// What a handler reports while it runs, for the turn's response stream.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TurnEvent {
-    Progress { task_id: String, text: String },
-    Token { task_id: String, delta: String },
+    Progress {
+        task_id: String,
+        text: String,
+        reply_required: bool,
+    },
+    /// A source-owned canonical assistant message; exact output does not end the business task.
+    Exact {
+        task_id: String,
+        message: Box<crate::ChatMessage>,
+    },
+    Token {
+        task_id: String,
+        delta: String,
+    },
 }
 
 /// The handler's side of one turn:
 /// what it reports, in the order it awaited each report.
 #[crate::host(native(refused = "expected a native handler turn"))]
 pub trait HandlerPort: std::any::Any + Send + Sync {
+    fn inbox_policy(&self) -> crate::a2a::options::Policy {
+        crate::a2a::options::Policy::Queue
+    }
+
+    fn live_origin(&self) -> Option<crate::text_session::LiveTurnOrigin> {
+        None
+    }
+
+    fn retain_session(&self, _task: crate::OwnedTask) -> Result<(), StorageError> {
+        Err(StorageError::Invalid("this handler has no live task owner".into()))
+    }
+
+    /// One weak owner shared by managed handlers under this partition lease. It is not
+    /// serialized, resolved from a task ID, or replaced by a second runner.
+    fn session_commands(
+        &self,
+    ) -> Result<Option<Arc<dyn crate::session::SessionCommands>>, StorageError> {
+        Ok(None)
+    }
+
+    fn session_checkpoint_port(
+        &self,
+    ) -> Result<Option<Arc<dyn crate::text_session::SessionCheckpointPort>>, StorageError> {
+        Ok(None)
+    }
+
+    fn attach_session(
+        &self,
+        _commands: std::sync::Weak<dyn crate::session::SessionCommands>,
+    ) -> Result<(), StorageError> {
+        Ok(())
+    }
+
+    fn live_turn(
+        &self,
+        _report: crate::text_session::LiveTurnReport,
+    ) -> crate::BoxFuture<'_, Result<crate::text_session::LiveTurnCommit, StorageError>> {
+        Box::pin(async {
+            Err(StorageError::Invalid("this handler has no live endpoint owner".into()))
+        })
+    }
+
     fn acquire_session_checkpoint(
         &self,
         _history: crate::storage::voice::VoiceHistory,
@@ -111,6 +165,24 @@ pub trait HandlerPort: std::any::Any + Send + Sync {
     }
     /// A progress message for the client; waits while the turn's queue is full.
     fn progress(&self, text: String) -> crate::BoxFuture<'_, ()>;
+    fn progress_with_policy(
+        &self,
+        text: String,
+        _reply_required: bool,
+    ) -> crate::BoxFuture<'_, ()> {
+        self.progress(text)
+    }
+    /// Enqueue exact output under the source's existing canonical message identity. A private
+    /// reader confirms this text/A2A output handoff only; dropping it cannot cancel admission.
+    /// The source coordinator records the message only after this succeeds.
+    fn say(
+        &self,
+        _message: crate::ChatMessage,
+    ) -> crate::BoxFuture<'static, Result<(), crate::errors::HostError>> {
+        Box::pin(async {
+            Err(crate::errors::HostError::new("this handler has no live exact output boundary"))
+        })
+    }
     /// One piece of the reply; waits while the turn's queue is full.
     fn token(&self, delta: String) -> crate::BoxFuture<'_, ()>;
 }

@@ -36,6 +36,9 @@ const PARTITION_KEY: &str = "front-desk";
 #[path = "input_routing_tests.rs"]
 mod input_routing_tests;
 #[cfg(test)]
+#[path = "live_inbox_tests.rs"]
+mod live_inbox_tests;
+#[cfg(test)]
 #[path = "remote_tests.rs"]
 mod remote_tests;
 /// How long a client waits on its turn before giving up on it.
@@ -51,6 +54,7 @@ fn environment(clock: Arc<dyn Clock>, forced: Vec<(Callback, Fault)>) -> Arc<Env
         http: || Err(ProcessError::Start("the DST has no sockets".into())),
         tracer: tracer.clone(),
         tasks: Arc::default(),
+        remote_control: None,
     };
     Arc::new(Env {
         clock,
@@ -345,6 +349,7 @@ impl Env {
         )
         .expect("a valid session");
         let request = TextSessionRequest {
+            output: None,
             session_sink: None,
             session_id: format!("session_{id}"),
             id_seed: Some(id.into()),
@@ -467,7 +472,9 @@ impl Env {
 /// A client's A2A cancel, as the door sends it: a terminal task stays as it is.
 async fn cancel_task(thread: &lk_agents_runtime::storage::Thread, message_id: &str) {
     let partition_key = thread.partition(PARTITION_KEY);
-    let Ok(Some(row)) = partition_key.task_for_message(message_id).await else { return };
+    let Ok(Some(row)) = partition_key.task_for_message(message_id).await else {
+        return;
+    };
     let reason = Some("the client cancelled".to_owned());
     if let Some(metadata) = lk_agents_core::a2a::rpc::cancellation(&row, reason) {
         let _ = partition_key.cancel_task(&row.task_id, metadata).await;
@@ -520,6 +527,7 @@ async fn simulate(scenario: Scenario) -> (TextRecording, u64) {
         http: || Err(ProcessError::Start("the DST has no HTTP".into())),
         tracer: lk_agents_telemetry::Tracer::disabled(clock.clone()),
         tasks: Arc::default(),
+        remote_control: None,
     };
     let env = Arc::new(Env {
         clock: clock.clone(),

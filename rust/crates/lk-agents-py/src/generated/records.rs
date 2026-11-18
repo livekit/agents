@@ -1446,6 +1446,8 @@ pub mod a2a_remote {
         ::pyo3::sync::PyOnceLock::new();
     static REMOTE_EVENT_PROGRESS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
+    static REMOTE_EVENT_EXACT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
     static REMOTE_EVENT_INPUT_REQUIRED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
     static REMOTE_EVENT_OUTCOME: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -1476,21 +1478,39 @@ pub mod a2a_remote {
                     Some(&kwargs),
                 )
             }
+            ::lk_agents_abi::a2a::remote::RemoteEvent::Exact { text } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+                crate::py_calls::call(
+                    REMOTE_EVENT_EXACT
+                        .import(py, "livekit.agents._generated.a2a_remote", "RemoteEventExact")?
+                        .as_any(),
+                    (),
+                    Some(&kwargs),
+                )
+            }
             ::lk_agents_abi::a2a::remote::RemoteEvent::InputRequired {
+                input_request,
                 question,
-                request_id,
                 verbatim,
                 verbatim_full,
                 outcome,
             } => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
                 kwargs.set_item(
-                    "question",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(question, py)?,
+                    "input_request",
+                    match input_request {
+                        None => py.None().into_bound(py),
+                        Some(x) => {
+                            crate::generated::records::session_input::input_request_ref_to_py(
+                                py, x,
+                            )?
+                        }
+                    },
                 )?;
                 kwargs.set_item(
-                    "request_id",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id, py)?,
+                    "question",
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(question, py)?,
                 )?;
                 kwargs.set_item(
                     "verbatim",
@@ -2572,6 +2592,18 @@ pub mod agent_run {
                     (v.extract::<::std::string::String>()).map(Some)
                 }
             })?,
+            local_agent: crate::py_values::attr_with(
+                obj,
+                "FunctionToolInfo",
+                "local_agent",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (v.extract::<::std::string::String>()).map(Some)
+                    }
+                },
+            )?,
         })
     }
 
@@ -2788,6 +2820,7 @@ pub mod agent_run {
             call,
             question,
             verbatim,
+            input_request: _,
             presentation_message_id,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
@@ -2919,7 +2952,12 @@ pub mod agent_run {
                     Some(&kwargs),
                 )
             }
-            ::lk_agents_abi::agent::run::StreamEvent::Progress { call_id, tool_name, message } => {
+            ::lk_agents_abi::agent::run::StreamEvent::Progress {
+                call_id,
+                tool_name,
+                message,
+                silent,
+            } => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
                 kwargs.set_item(
                     "call_id",
@@ -2933,6 +2971,8 @@ pub mod agent_run {
                     "message",
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?,
                 )?;
+                kwargs
+                    .set_item("silent", ::pyo3::IntoPyObjectExt::into_bound_py_any(silent, py)?)?;
                 crate::py_calls::call(
                     STREAM_EVENT_PROGRESS
                         .import(py, "livekit.agents._generated.agent_run", "StreamEventProgress")?
@@ -2974,6 +3014,24 @@ pub mod agent_run {
             return Err(super::not_a(obj, "RunRequest"));
         }
         Ok(::lk_agents_abi::agent::run::RunRequest {
+            output: crate::py_values::attr_with(obj, "RunRequest", "output", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_objects::native::<dyn ::lk_agents_abi::a2a::turn::HandlerPort>(
+                        v.as_any(),
+                    )
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "RunRequest.output",
+                                ": expected a native handler turn"
+                            ))
+                        })
+                    }))
+                    .map(Some)
+                }
+            })?,
             invocation_id: crate::py_values::attr_with(obj, "RunRequest", "invocation_id", |v| {
                 v.extract::<::std::string::String>()
             })?,
@@ -6734,6 +6792,7 @@ pub mod delegation_remote {
                     }
                 },
             )?,
+            control_scope: ::std::default::Default::default(),
         })
     }
 
@@ -6749,6 +6808,7 @@ pub mod delegation_remote {
             task,
             origin,
             input_request,
+            control_scope: _,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("method", ::pyo3::IntoPyObjectExt::into_bound_py_any(method, py)?)?;
@@ -6831,6 +6891,7 @@ pub mod delegation_remote {
             next_input: crate::py_values::attr_with(obj, "RemoteTaskState", "next_input", |v| {
                 crate::py_values::number_from_py::<u64>(v, "RemoteTaskState.next_input")
             })?,
+            terminal_event: ::std::default::Default::default(),
         })
     }
 
@@ -6843,6 +6904,7 @@ pub mod delegation_remote {
             input_requests,
             cancel_requested,
             next_input,
+            terminal_event: _,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("task", crate::py_protocol::a2a_task_to_py(py, task)?)?;
@@ -16721,6 +16783,7 @@ pub mod run_stream_events {
             message,
             call_id,
             tool_name,
+            silent,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("sequence", ::pyo3::IntoPyObjectExt::into_bound_py_any(sequence, py)?)?;
@@ -16752,6 +16815,7 @@ pub mod run_stream_events {
                 Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
             },
         )?;
+        kwargs.set_item("silent", ::pyo3::IntoPyObjectExt::into_bound_py_any(silent, py)?)?;
         crate::py_calls::call(
             PROGRESS_EVENT
                 .import(py, "livekit.agents._generated.run_stream_events", "ProgressEvent")?
@@ -21334,8 +21398,9 @@ pub mod storage_options {
             "queue" => Ok(::lk_agents_abi::a2a::options::Policy::Queue),
             "concurrent" => Ok(::lk_agents_abi::a2a::options::Policy::Concurrent),
             "reject" => Ok(::lk_agents_abi::a2a::options::Policy::Reject),
+            "live" => Ok(::lk_agents_abi::a2a::options::Policy::Live),
             other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
-                "Policy: {other:?} is not one of 'batch', 'queue', 'concurrent', 'reject'"
+                "Policy: {other:?} is not one of 'batch', 'queue', 'concurrent', 'reject', 'live'"
             ))),
         }
     }
@@ -21349,6 +21414,7 @@ pub mod storage_options {
             ::lk_agents_abi::a2a::options::Policy::Queue => "queue",
             ::lk_agents_abi::a2a::options::Policy::Concurrent => "concurrent",
             ::lk_agents_abi::a2a::options::Policy::Reject => "reject",
+            ::lk_agents_abi::a2a::options::Policy::Live => "live",
         };
         ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
@@ -24245,6 +24311,24 @@ pub mod text_session {
             return Err(super::not_a(obj, "TextSessionRequest"));
         }
         Ok(::lk_agents_abi::text_session::TextSessionRequest {
+            output: crate::py_values::attr_with(obj, "TextSessionRequest", "output", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_objects::native::<dyn ::lk_agents_abi::a2a::turn::HandlerPort>(
+                        v.as_any(),
+                    )
+                    .and_then(|native| {
+                        native.ok_or_else(|| {
+                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                                "TextSessionRequest.output",
+                                ": expected a native handler turn"
+                            ))
+                        })
+                    }))
+                    .map(Some)
+                }
+            })?,
             session_sink: crate::py_values::attr_with(
                 obj,
                 "TextSessionRequest",
@@ -25066,6 +25150,12 @@ pub mod tool_report {
                 raw: crate::py_values::attr_with(obj, "ToolOutcomeUpdate", "raw", |v| {
                     v.extract::<::std::string::String>()
                 })?,
+                reply_required: crate::py_values::attr_with(
+                    obj,
+                    "ToolOutcomeUpdate",
+                    "reply_required",
+                    |v| v.extract::<bool>(),
+                )?,
             });
         }
         if obj.is_instance(TOOL_OUTCOME_COMPLETED.import(
@@ -25261,13 +25351,21 @@ pub mod tool_report {
                 (),
                 None,
             ),
-            ::lk_agents_abi::llm::tool_executor::ToolOutcome::Update { message, raw } => {
+            ::lk_agents_abi::llm::tool_executor::ToolOutcome::Update {
+                message,
+                raw,
+                reply_required,
+            } => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
                 kwargs.set_item(
                     "message",
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?,
                 )?;
                 kwargs.set_item("raw", ::pyo3::IntoPyObjectExt::into_bound_py_any(raw, py)?)?;
+                kwargs.set_item(
+                    "reply_required",
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(reply_required, py)?,
+                )?;
                 crate::py_calls::call(
                     TOOL_OUTCOME_UPDATE
                         .import(py, "livekit.agents._generated.tool_report", "ToolOutcomeUpdate")?

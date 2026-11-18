@@ -132,6 +132,7 @@ class TextSession(Generic[Context_T, Output_T]):
                     run.runner = runner
                 runner.run_stream(
                     records.TextSessionRequest(
+                        output=hooks.output if hooks is not None else None,
                         session_sink=binding._native if binding is not None else None,
                         session_id=utils.shortuuid("session_"),
                         execution_id=utils.shortuuid("execution_"),

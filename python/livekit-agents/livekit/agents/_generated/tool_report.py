@@ -95,6 +95,8 @@ class ToolOutcomeUpdate:
 
     message: str
     raw: str
+    reply_required: bool = True
+    """Whether progress needs a model continuation; exact output owns its own delivery."""
 
 
 @dataclass(kw_only=True, slots=True)

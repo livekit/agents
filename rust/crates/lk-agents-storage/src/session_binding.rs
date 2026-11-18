@@ -25,6 +25,8 @@ impl SessionBinding {
     }
 
     fn ensure_open(&self) -> Result<(), StorageError> {
+        self.store.ensure_control_process()?;
+        self.view.ensure_control_process()?;
         if self.closed.load(Ordering::Acquire) || self.store.closed() {
             return Err(StorageError::Invalid("the session binding has ended".into()));
         }
@@ -36,11 +38,14 @@ impl HostBinding for SessionBinding {
     type Activation = ContextStore;
     type View = SessionState;
     fn new(store: ContextStore, view: SessionState) -> Result<Self, StorageError> {
+        store.ensure_control_process()?;
+        view.ensure_control_process()?;
         let current = store
             .session_state()
             .unwrap_or_else(|| serde_json::json!({"version":1,"kind":"empty"}));
         // Validate the activation and envelope before claiming the binding.
         let checked = SessionState::from_value(current.clone())?;
+        view.bind_control(store.clone())?;
         store.stage_session(current)?;
         {
             let mut active = store.session_view.lock();
@@ -73,8 +78,13 @@ impl HostBinding for SessionBinding {
         self.closed.load(Ordering::Acquire)
     }
     fn close(&self) {
+        if self.store.ensure_control_process().is_err()
+            || self.view.ensure_control_process().is_err()
+        {
+            return;
+        }
         if !self.closed.swap(true, Ordering::AcqRel) {
-            self.view.unbind_commands();
+            self.view.unbind_commands(&self.store);
             let mut active = self.store.session_view.lock();
             if active.as_ref().is_some_and(|view| view.same_view(&self.view)) {
                 *active = None;
@@ -84,11 +94,66 @@ impl HostBinding for SessionBinding {
 }
 
 impl SessionStateSink for SessionBinding {
+    fn commands(
+        &self,
+    ) -> Result<Option<std::sync::Arc<dyn lk_agents_abi::session::SessionCommands>>, StorageError>
+    {
+        self.ensure_open()?;
+        // Every live control and queued turn resolves through the explicit binding's owner.
+        self.view
+            .commands()?
+            .map_or_else(|| self.store.session_commands(), |commands| Ok(Some(commands)))
+    }
+
+    fn checkpoint_port(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn lk_agents_abi::text_session::SessionCheckpointPort>>,
+        StorageError,
+    > {
+        self.ensure_open()?;
+        self.store.session_checkpoint_port()
+    }
+
+    fn acknowledge_checkpoint(&self, state: serde_json::Value) -> Result<(), StorageError> {
+        self.store.ensure_control_process()?;
+        self.view.ensure_control_process()?;
+        if self.closed.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.store.acknowledge_session_checkpoint(state)
+    }
+
+    fn inbox_policy(&self) -> lk_agents_abi::a2a::options::Policy {
+        self.store.session_inbox_policy()
+    }
+
+    fn live_origin(&self) -> Option<lk_agents_abi::text_session::LiveTurnOrigin> {
+        self.store.live_origin()
+    }
+
+    fn retain_session(&self, task: lk_agents_abi::OwnedTask) -> Result<(), StorageError> {
+        self.ensure_open()?;
+        self.store.retain_session(task)
+    }
+
+    fn live_turn<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        report: lk_agents_abi::text_session::LiveTurnReport,
+    ) -> BoxFuture<'a, Result<lk_agents_abi::text_session::LiveTurnCommit, StorageError>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            self.store.live_turn(report).await
+        })
+    }
+
     fn bind_commands(
         &self,
         commands: std::sync::Weak<dyn lk_agents_abi::session::SessionCommands>,
     ) -> Result<(), StorageError> {
         self.ensure_open()?;
+        self.store.attach_session_commands(commands.clone())?;
         self.view.bind_commands(commands)
     }
 

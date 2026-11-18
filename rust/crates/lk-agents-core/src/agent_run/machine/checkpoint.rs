@@ -11,6 +11,18 @@ enum Next {
     Finish(Box<RunResult>),
 }
 
+impl Pending {
+    pub(super) fn observe_context(&mut self, messages: &[lk_agents_abi::ChatMessage]) {
+        if let Next::Finish(result) = &mut self.next {
+            for message in messages {
+                if !result.all_messages.iter().any(|item| item.id() == message.id) {
+                    result.all_messages.push(message.clone().into());
+                }
+            }
+        }
+    }
+}
+
 impl AgentRun {
     /// The runtime supplies a managed host checkpoint capability; pure callers can omit it.
     pub fn with_checkpoints(mut self) -> Self {
@@ -77,5 +89,18 @@ impl AgentRun {
         };
         self.agent.tools = tools;
         crate::agent::validate(&self.agent).map_err(|error| RunError::Host(error.to_string()))
+    }
+}
+
+impl Pending {
+    pub(super) fn record_tool_output(&mut self, message: &lk_agents_abi::ChatMessage) {
+        if let Next::Finish(result) = &mut self.next {
+            if !result.all_messages.iter().any(|item| item.id() == message.id) {
+                result.all_messages.push(message.clone().into());
+            }
+            if !result.new_messages.iter().any(|item| item.id() == message.id) {
+                result.new_messages.push(message.clone().into());
+            }
+        }
     }
 }

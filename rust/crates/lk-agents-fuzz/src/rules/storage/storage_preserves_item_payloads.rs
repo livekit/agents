@@ -497,7 +497,7 @@ fn edited_private_context() -> Authored {
         .journal(Step::Generation(GenerationStep::ChatCtxUpdated {
             history: lk_agents_abi::storage::voice::VoiceHistory {
                 items: vec![message("private edit", false)],
-                stored: vec![message("stored", false)], revision: (1, 1),
+                stored: vec![message("stored", false)], revision: (1, 1), ..Default::default()
             },
         }))
         // Replacing the public history does not expose the private edit as human dialogue.
@@ -575,7 +575,7 @@ fn an_edit_based_on_an_older_read(public: bool) -> Authored {
         before: vec![original.clone()], items: vec![message("unread foreign edit", false)],
     }).journal(Step::Generation(GenerationStep::ChatCtxUpdated {
         history: lk_agents_abi::storage::voice::VoiceHistory {
-            items: vec![edited.clone()], stored: vec![original], revision: (1, 1),
+            items: vec![edited.clone()], stored: vec![original], revision: (1, 1), ..Default::default()
         },
     })).session(SessionEvent::HistoryReloaded { items: if public { vec![edited] } else { Vec::new() } })
 }

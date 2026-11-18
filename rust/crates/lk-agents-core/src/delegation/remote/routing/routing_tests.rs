@@ -36,6 +36,7 @@ fn send(id: &str, text: &str, reference: Option<InputRequestRef>) -> RemoteInput
         streaming: true,
         origin: None,
         input_request: reference,
+        control_scope: None,
     }
 }
 

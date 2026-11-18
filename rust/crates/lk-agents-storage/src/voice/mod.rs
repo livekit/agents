@@ -25,6 +25,8 @@ use crate::telemetry::Cx;
 use crate::{CommitOptions, Holder, Lease, Run, RunOptions, Storage, Thread, shortuuid};
 
 mod checkpoint;
+mod history;
+pub(crate) use history::reconcile as reconcile_history;
 
 #[cfg(test)]
 mod checkpoint_tests;
@@ -59,6 +61,7 @@ struct State {
     /// Observed database values returned in receipts. Decisions compare the requesting
     /// snapshot's own baseline, never this mutable cache shared by overlapping turns.
     known: Vec<ChatItem>,
+    diagnostics: Vec<HistoryDiagnostic>,
     /// Rows changed by our writes, stamped with the receipt that first exposes that change.
     /// A later submission can supersede one even if it missed the receipt and the lease ended.
     own_writes: BTreeMap<String, u64>,
@@ -71,6 +74,13 @@ struct State {
     /// remains with the core even when individual speeches release their database run.
     recover_pending: bool,
     active: Option<Active>,
+}
+
+struct HistoryDiagnostic {
+    conflict: bool,
+    expected: i64,
+    observed: i64,
+    items: Vec<String>,
 }
 
 struct Active {
@@ -90,86 +100,65 @@ fn conversational(item: &ChatItem) -> bool {
 }
 
 impl State {
-    fn snapshot(&mut self, items: Vec<ChatItem>) -> VoiceHistory {
+    fn snapshot(&mut self, items: Vec<ChatItem>, partition_key: &str) -> VoiceHistory {
         self.observed = self.observed.checked_add(1).expect("voice observations fit u64");
-        VoiceHistory { items, stored: self.known.clone(), revision: (self.version, self.observed) }
+        VoiceHistory {
+            items,
+            stored: self.known.clone(),
+            revision: (self.version, self.observed),
+            partition_key: Some(partition_key.to_owned()),
+            own_writes: self.own_writes.keys().cloned().collect(),
+        }
     }
 
-    /// Reconcile against rows actually read or written, never treating a local omission as
-    /// deletion of an unseen item. Only the database baseline can retire a previously known row.
-    fn reconcile(&mut self, stored: Vec<ChatItem>, local: VoiceHistory) -> Vec<ChatItem> {
+    /// Reconcile without relabeling a local edit with a baseline it never read.
+    fn reconcile(
+        &mut self,
+        stored: Vec<ChatItem>,
+        local: VoiceHistory,
+        partition_key: &str,
+    ) -> Result<Vec<ChatItem>, StorageError> {
         let rows: BTreeMap<_, _> = stored.iter().map(|item| (item.id(), item)).collect();
         let known: BTreeMap<_, _> = self.known.iter().map(|item| (item.id(), item)).collect();
-        // An intervening writer's changed or removed row is no longer our write. Unchanged
-        // neighbors keep their provenance across an unrelated append or lease reacquisition.
-        self.own_writes.retain(|id, _| {
-            rows.get(id.as_str())
-                .zip(known.get(id.as_str()))
-                .is_some_and(|(row, known)| encode_chat_item(row) == encode_chat_item(known))
-        });
-        let baseline: BTreeMap<_, _> =
-            local.stored.iter().map(|item| (item.id(), encode_chat_item(item))).collect();
-        // A snapshot that observed this fence already rebased against its foreign writers.
-        // Further database changes under the same exclusive lease are our own checkpoints;
-        // the caller's submission sequence decides which of those snapshots is newer.
-        let owns_baseline = local.revision.0 == self.version && local.revision.1 > 0;
-        let (mut instructions, pending): (Vec<_>, Vec<_>) =
-            local.items.into_iter().partition(|item| !conversational(item));
-        let mut merged = Vec::new();
-        for item in pending {
-            match rows.get(item.id()) {
-                Some(row)
-                    if !owns_baseline
-                        && !self
-                            .own_writes
-                            .get(item.id())
-                            .is_some_and(|written| *written > local.revision.1)
-                        && baseline.get(item.id()) != Some(&encode_chat_item(row)) =>
-                {
-                    merged.push((*row).clone());
+        // A changed or removed foreign row invalidates our earlier write's ownership proof.
+        let own_writes: BTreeMap<_, _> = self
+            .own_writes
+            .iter()
+            .filter(|(id, _)| {
+                rows.get(id.as_str())
+                    .zip(known.get(id.as_str()))
+                    .is_some_and(|(row, known)| encode_chat_item(row) == encode_chat_item(known))
+            })
+            .map(|(id, sequence)| (id.clone(), *sequence))
+            .collect();
+        let expected = local.revision.0;
+        match history::reconcile(&stored, local, &own_writes) {
+            Ok(merged) => {
+                if !merged.rebased.is_empty() {
+                    self.diagnostics.push(HistoryDiagnostic {
+                        conflict: false,
+                        expected,
+                        observed: self.version,
+                        items: merged.rebased,
+                    });
                 }
-                Some(_) => merged.push(item),
-                None if baseline.get(item.id()) != Some(&encode_chat_item(&item)) => {
-                    merged.push(item);
-                }
-                // A previously observed row absent from the owned baseline was removed by
-                // another writer; its unchanged stale copy cannot resurrect it. An explicit
-                // new revision under that identity is still a local edit to persist.
-                None => {}
+                self.own_writes = own_writes;
+                self.known = stored;
+                Ok(merged.items)
             }
-        }
-        if !merged.iter().any(|item| rows.contains_key(item.id())) {
-            // With no shared anchor, the database rows precede equally stamped local
-            // additions: they existed before this snapshot was introduced.
-            let additions = std::mem::replace(&mut merged, stored.clone());
-            for item in additions {
-                lk_agents_abi::llm::chat_context::ordering::commit_by_instant(&mut merged, item);
-            }
-        }
-        // A model view omits history-only records (handoffs, another agent's items). Preserve
-        // those rows' stored neighbors instead of moving them behind timestamp ties in the
-        // narrower view. Local new items keep the session ledger's relative order.
-        for (index, row) in stored.iter().enumerate() {
-            if !merged.iter().any(|item| item.id() == row.id()) {
-                let next = stored[index + 1..]
-                    .iter()
-                    .find_map(|neighbor| merged.iter().position(|item| item.id() == neighbor.id()));
-                let previous = stored[..index].iter().rev().find_map(|neighbor| {
-                    merged.iter().position(|item| item.id() == neighbor.id()).map(|at| at + 1)
+            Err(items) => {
+                self.diagnostics.push(HistoryDiagnostic {
+                    conflict: true,
+                    expected,
+                    observed: self.version,
+                    items,
                 });
-                if let Some(at) = next.or(previous) {
-                    merged.insert(at, row.clone());
-                } else {
-                    lk_agents_abi::llm::chat_context::ordering::commit_by_instant(
-                        &mut merged,
-                        row.clone(),
-                    );
-                }
+                Err(StorageError::VersionConflict {
+                    partition_key: partition_key.to_owned(),
+                    expected,
+                })
             }
         }
-        self.known = stored.clone();
-        instructions.extend(merged);
-        instructions
     }
 
     /// The partition acknowledged these rows in this order.
@@ -197,6 +186,20 @@ impl State {
 }
 
 impl VoiceStore {
+    fn log_history(&self, diagnostics: Vec<HistoryDiagnostic>) {
+        for diagnostic in diagnostics {
+            if diagnostic.conflict {
+                log::warn!(target: lk_agents_abi::LOG_TARGET,
+                    "voice history conflict on partition {:?}, base {}, observed {}, items {:?}",
+                    self.partition_key, diagnostic.expected, diagnostic.observed, diagnostic.items);
+            } else {
+                log::info!(target: lk_agents_abi::LOG_TARGET,
+                    "voice history rebased on partition {:?}, base {}, observed {}, items {:?}",
+                    self.partition_key, diagnostic.expected, diagnostic.observed, diagnostic.items);
+            }
+        }
+    }
+
     pub async fn bound(
         backend: Arc<dyn Storage>,
         thread_id: String,
@@ -280,6 +283,7 @@ impl VoiceStore {
             initial: explicit_history.is_none().then_some(items),
             state: tokio::sync::Mutex::new(State {
                 known,
+                diagnostics: Vec::new(),
                 own_writes: BTreeMap::new(),
                 version: 0,
                 observed: 0,
@@ -314,7 +318,13 @@ impl VoiceStore {
         local: VoiceHistory,
     ) -> Result<VoiceHistory, StorageError> {
         let mut state = self.state.lock().await;
-        self.begin_locked(&mut state, speech, local, crate::thread::run::PartitionKind::Voice).await
+        let result = self
+            .begin_locked(&mut state, speech, local, crate::thread::run::PartitionKind::Voice)
+            .await;
+        let diagnostics = std::mem::take(&mut state.diagnostics);
+        drop(state);
+        self.log_history(diagnostics);
+        result
     }
 
     async fn begin_locked(
@@ -330,7 +340,15 @@ impl VoiceStore {
         if self.lease_lost() {
             return Err(StorageError::LeaseLost("the voice partition_key lease was lost".into()));
         }
-        if let Some(active) = &mut state.active {
+        if let Some(active) = &state.active {
+            let stored = active
+                .run
+                .history()
+                .iter()
+                .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
+                .collect::<Result<Vec<_>, _>>()?;
+            let history = state.reconcile(stored, local, &self.partition_key)?;
+            let active = state.active.as_mut().expect("the existing run was reconciled");
             if kind == crate::thread::run::PartitionKind::Voice
                 && let Some(operation) = active.operation.take()
             {
@@ -338,14 +356,7 @@ impl VoiceStore {
                 drop(operation);
             }
             active.speeches.extend(speech);
-            let stored = active
-                .run
-                .history()
-                .iter()
-                .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
-                .collect::<Result<Vec<_>, _>>()?;
-            let history = state.reconcile(stored, local);
-            return Ok(state.snapshot(history));
+            return Ok(state.snapshot(history, &self.partition_key));
         }
         // Exclude direct saves before taking the partition, avoiding the inverse lock/lease order.
         let fields = self.activation.lock_managed().await;
@@ -390,7 +401,7 @@ impl VoiceStore {
                         }
                     }
                 }
-                state.reconcile(stored, local)
+                state.reconcile(stored, local, &self.partition_key)?
             };
             // A new lease reads the latest framework state, including remote work committed
             // by another frontend. Only a partition without saved state needs the locally
@@ -452,7 +463,7 @@ impl VoiceStore {
             state.wrote(&rows)?;
             state.version = state.active.as_ref().expect("turn was installed").run.version();
         }
-        Ok(state.snapshot(merged))
+        Ok(state.snapshot(merged, &self.partition_key))
     }
 
     async fn finish(
@@ -464,10 +475,17 @@ impl VoiceStore {
         let mut state = self.state.lock().await;
         // Acquire and save are one operation: another speech cannot retire this run between
         // them and turn a successful receipt into an acknowledgement of nothing.
-        let history = self
-            .begin_locked(&mut state, speech, history, crate::thread::run::PartitionKind::Voice)
-            .await?;
-        self.finish_locked(&mut state, speech, sequence, history).await
+        let result = async {
+            let history = self
+                .begin_locked(&mut state, speech, history, crate::thread::run::PartitionKind::Voice)
+                .await?;
+            self.finish_locked(&mut state, speech, sequence, history).await
+        }
+        .await;
+        let diagnostics = std::mem::take(&mut state.diagnostics);
+        drop(state);
+        self.log_history(diagnostics);
+        result
     }
 
     async fn finish_locked(
@@ -495,7 +513,7 @@ impl VoiceStore {
         }
         if !active.speeches.is_empty() || active.controls > 0 {
             if !newer {
-                return Ok(state.snapshot(history.items));
+                return Ok(state.snapshot(history.items, &self.partition_key));
             }
             // Another speech keeps the database run open, but this speech's successful receipt
             // must already protect its final item revisions. A subsequent abort retains this
@@ -600,9 +618,9 @@ impl VoiceStore {
             state.version = version;
             state.history_sequence =
                 Some(state.history_sequence.map_or(sequence, |held| held.max(sequence)));
-            Ok(state.snapshot(rendered))
+            Ok(state.snapshot(rendered, &self.partition_key))
         } else {
-            result.map(|_| state.snapshot(rendered))
+            result.map(|_| state.snapshot(rendered, &self.partition_key))
         }
     }
 
@@ -623,7 +641,7 @@ impl VoiceStore {
             .iter()
             .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
             .collect::<Result<Vec<_>, _>>()?;
-        let rendered = state.reconcile(stored, history.clone());
+        let rendered = state.reconcile(stored, history.clone(), &self.partition_key)?;
         let history: Vec<_> =
             rendered.iter().filter(|item| conversational(item)).cloned().collect();
         state
@@ -651,7 +669,7 @@ impl VoiceStore {
         state.wrote(&rows)?;
         state.version = state.active.as_ref().expect("checkpoint kept its run").run.version();
         self.activation.checkpointed_session(expected, routing)?;
-        Ok(state.snapshot(rendered))
+        Ok(state.snapshot(rendered, &self.partition_key))
     }
 
     /// A failed commit stopped renewal but may not have released its fence. Both speech and
@@ -779,44 +797,53 @@ impl VoiceStorage for VoiceStore {
         Box::pin(async move {
             use lk_agents_abi::storage::voice::VoiceConversationBoundary;
             let mut state = self.state.lock().await;
-            let mut history = self
-                .begin_locked(
-                    &mut state,
-                    None,
-                    progress.history,
-                    crate::thread::run::PartitionKind::Voice,
-                )
-                .await?;
-            let newer_history = state.history_sequence.is_none_or(|held| progress.sequence > held);
-            let newer_inputs = state.input_sequence.is_none_or(|held| progress.sequence > held);
-            let active = state
-                .active
-                .as_mut()
-                .ok_or_else(|| StorageError::Invalid("the voice conversation has ended".into()))?;
-            if !newer_history {
-                history.items = active
-                    .run
-                    .history()
-                    .iter()
-                    .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
-                    .collect::<Result<Vec<_>, _>>()?;
+            let result = async {
+                let mut history = self
+                    .begin_locked(
+                        &mut state,
+                        None,
+                        progress.history,
+                        crate::thread::run::PartitionKind::Voice,
+                    )
+                    .await?;
+                let newer_history =
+                    state.history_sequence.is_none_or(|held| progress.sequence > held);
+                let newer_inputs = state.input_sequence.is_none_or(|held| progress.sequence > held);
+                let active = state.active.as_mut().ok_or_else(|| {
+                    StorageError::Invalid("the voice conversation has ended".into())
+                })?;
+                if !newer_history {
+                    history.items = active
+                        .run
+                        .history()
+                        .iter()
+                        .map(|row| {
+                            decode_chat_item(row.payload.clone()).map_err(StorageError::from)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                }
+                if newer_inputs {
+                    active.pending_user_turns = progress.pending_user_turns;
+                    state.input_sequence = Some(progress.sequence);
+                }
+                if progress.boundary == VoiceConversationBoundary::Progress {
+                    history = self.checkpoint_history(&mut state, progress.agent, &history).await?;
+                    state.history_sequence = Some(
+                        state
+                            .history_sequence
+                            .map_or(progress.sequence, |held| held.max(progress.sequence)),
+                    );
+                }
+                if progress.boundary == VoiceConversationBoundary::UserTurnCompleted {
+                    return self.finish_locked(&mut state, None, progress.sequence, history).await;
+                }
+                Ok(history)
             }
-            if newer_inputs {
-                active.pending_user_turns = progress.pending_user_turns;
-                state.input_sequence = Some(progress.sequence);
-            }
-            if progress.boundary == VoiceConversationBoundary::Progress {
-                history = self.checkpoint_history(&mut state, progress.agent, &history).await?;
-                state.history_sequence = Some(
-                    state
-                        .history_sequence
-                        .map_or(progress.sequence, |held| held.max(progress.sequence)),
-                );
-            }
-            if progress.boundary == VoiceConversationBoundary::UserTurnCompleted {
-                return self.finish_locked(&mut state, None, progress.sequence, history).await;
-            }
-            Ok(history)
+            .await;
+            let diagnostics = std::mem::take(&mut state.diagnostics);
+            drop(state);
+            self.log_history(diagnostics);
+            result
         })
     }
     fn checkpoint(
@@ -828,26 +855,35 @@ impl VoiceStorage for VoiceStore {
     ) -> StorageWork<'_, VoiceHistory> {
         Box::pin(async move {
             let mut state = self.state.lock().await;
-            let newer = state.history_sequence.is_none_or(|accepted| sequence > accepted);
-            let active = state
-                .active
-                .as_mut()
-                .filter(|active| active.speeches.contains(&speech))
-                .ok_or_else(|| {
-                StorageError::Invalid("the turn does not own the partition".into())
-            })?;
-            if !newer {
-                let history = active
-                    .run
-                    .history()
-                    .iter()
-                    .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
-                    .collect::<Result<Vec<_>, _>>()?;
-                return Ok(state.snapshot(history));
+            let result = async {
+                let newer = state.history_sequence.is_none_or(|accepted| sequence > accepted);
+                let active = state
+                    .active
+                    .as_mut()
+                    .filter(|active| active.speeches.contains(&speech))
+                    .ok_or_else(|| {
+                        StorageError::Invalid("the turn does not own the partition".into())
+                    })?;
+                if !newer {
+                    let history = active
+                        .run
+                        .history()
+                        .iter()
+                        .map(|row| {
+                            decode_chat_item(row.payload.clone()).map_err(StorageError::from)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    return Ok(state.snapshot(history, &self.partition_key));
+                }
+                let history = self.checkpoint_history(&mut state, agent, &history).await?;
+                state.history_sequence = Some(sequence);
+                Ok(history)
             }
-            let history = self.checkpoint_history(&mut state, agent, &history).await?;
-            state.history_sequence = Some(sequence);
-            Ok(history)
+            .await;
+            let diagnostics = std::mem::take(&mut state.diagnostics);
+            drop(state);
+            self.log_history(diagnostics);
+            result
         })
     }
 

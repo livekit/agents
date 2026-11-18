@@ -73,12 +73,25 @@ pub fn progress(
     message_id: String,
     now_ms: i64,
 ) -> StreamResponse {
+    progress_with_policy(id, context, text, message_id, now_ms, true)
+}
+
+fn progress_with_policy(
+    id: &str,
+    context: &str,
+    text: String,
+    message_id: String,
+    now_ms: i64,
+    reply_required: bool,
+) -> StreamResponse {
     let mut message = a2a::Message::new(a2a::Role::Agent, vec![Part::text(text)]);
     message.message_id = message_id;
     message.task_id = Some(id.to_owned());
     message.context_id = Some(context.to_owned());
-    message.metadata =
-        Some([(lk_agents_abi::a2a::metadata::PROGRESS_KEY.into(), true.into())].into());
+    if reply_required {
+        message.metadata =
+            Some([(lk_agents_abi::a2a::metadata::PROGRESS_KEY.into(), true.into())].into());
+    }
     StreamResponse::StatusUpdate(a2a::TaskStatusUpdateEvent {
         task_id: id.to_owned(),
         context_id: context.into(),
@@ -89,6 +102,31 @@ pub fn progress(
         },
         metadata: None,
     })
+}
+
+/// Exact progress uses the same SDK Working status message as ordinary progress. It neither
+/// appends to the answer artifact nor marks the business task terminal.
+pub fn exact_progress(
+    id: &str,
+    context: &str,
+    text: String,
+    message_id: String,
+    now_ms: i64,
+) -> StreamResponse {
+    let mut event = progress(id, context, text.clone(), message_id, now_ms);
+    let StreamResponse::StatusUpdate(update) = &mut event else {
+        unreachable!("progress is a Working status update")
+    };
+    update
+        .status
+        .message
+        .as_mut()
+        .expect("progress has a message")
+        .metadata
+        .as_mut()
+        .expect("progress metadata")
+        .insert(lk_agents_abi::a2a::metadata::VERBATIM_KEY.into(), text.into());
+    event
 }
 
 pub fn artifact(
@@ -211,9 +249,19 @@ impl Publication {
         now_ms: i64,
     ) -> Option<StreamResponse> {
         match event {
-            TurnEvent::Progress { task_id, text } if self.announced(task_id) => {
-                Some(progress(task_id, context, text.clone(), message_id, now_ms))
+            TurnEvent::Progress { task_id, text, reply_required } if self.announced(task_id) => {
+                Some(progress_with_policy(
+                    task_id,
+                    context,
+                    text.clone(),
+                    message_id,
+                    now_ms,
+                    *reply_required,
+                ))
             }
+            TurnEvent::Exact { task_id, message } if self.announced(task_id) => message
+                .raw_text_content()
+                .map(|text| exact_progress(task_id, context, text, message.id.clone(), now_ms)),
             TurnEvent::Token { task_id, delta } if self.announced(task_id) && !delta.is_empty() => {
                 let append = !self.text.is_empty();
                 self.text.push_str(delta);
@@ -265,3 +313,7 @@ impl Publication {
         events
     }
 }
+
+#[cfg(test)]
+#[path = "progress_tests.rs"]
+mod progress_tests;

@@ -683,11 +683,6 @@ class _LocalAgentTool(FunctionTool[..., Awaitable[object]]):
             ),
         )
 
-    @property
-    def endpoint(self) -> str:
-        """The child's identity as an expert on a voice session."""
-        return f"agent:{self.agent.name}"
-
     def validate(self, arguments: dict[str, Any]) -> dict[str, Any]:
         if self.parameters is None:
             if arguments:

@@ -42,6 +42,7 @@ class ContextStore:
         return cast("BoundContext[Context_T] | BoundContext[None]", self._activation.declare_binding(
             context,
             self,
+            cast(Any, self)._binding_view(context),
         ))
 
     async def load_session(self) -> SessionState:

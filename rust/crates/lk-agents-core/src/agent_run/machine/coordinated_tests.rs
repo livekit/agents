@@ -184,10 +184,11 @@ fn terminal_tool_selection_and_canonical_items_follow_model_order_not_completion
         for (call, _, item) in calls {
             d.send(AgentRunEvent::ToolSettled {
                 call,
-                outcome: ToolOutcome::InputRequired {
+                report: (ToolOutcome::InputRequired {
                     question: format!("{}?", item.name),
                     verbatim: true,
-                },
+                })
+                .into(),
             });
         }
         let (step, items, continues) = d.step_settled();
@@ -380,6 +381,7 @@ fn a_call_detaching_with_its_first_update_settles_its_step() {
     d.run_tools(|_| ToolOutcome::Update {
         message: "Still looking.".into(),
         raw: "looking".into(),
+        reply_required: true,
     });
     let (_, items, continues) = d.step_settled();
     assert!(continues);

@@ -25,7 +25,7 @@ pub(super) struct ConversationSaves {
     state: SaveState,
     last: Option<Version>,
     inputs: BTreeMap<TurnId, ChatMessage>,
-    failed: bool,
+    failure: Option<StorageError>,
     dirty: bool,
 }
 
@@ -47,8 +47,12 @@ enum SaveState {
 }
 
 impl VoiceDriver {
+    pub(crate) fn conversation_failure(&self) -> Option<&StorageError> {
+        self.session.storage.conversation.failure.as_ref()
+    }
+
     pub(crate) fn conversation_changed(&mut self) {
-        if self.session.storage.enabled && !self.session.storage.conversation.failed {
+        if self.session.storage.enabled && self.session.storage.conversation.failure.is_none() {
             self.session.storage.conversation.dirty = true;
         }
     }
@@ -76,7 +80,9 @@ impl VoiceDriver {
     }
 
     pub(crate) fn checkpoint_conversation(&mut self) {
-        if !self.session.storage.enabled || self.session.storage.conversation.failed || self.stopped
+        if !self.session.storage.enabled
+            || self.session.storage.conversation.failure.is_some()
+            || self.stopped
         {
             return;
         }
@@ -148,7 +154,7 @@ impl VoiceDriver {
 
     pub(crate) fn conversation_save_pending(&self) -> bool {
         self.session.storage.enabled
-            && !self.session.storage.conversation.failed
+            && self.session.storage.conversation.failure.is_none()
             && (self.session.storage.conversation.dirty
                 || matches!(self.session.storage.conversation.state, SaveState::InFlight { .. }))
     }
@@ -184,7 +190,7 @@ impl VoiceDriver {
     }
 
     pub(crate) fn conversation_state_failed(&mut self, now: Ts, error: StorageError) {
-        self.session.storage.conversation.failed = true;
+        self.session.storage.conversation.failure = Some(error.clone());
         let error = crate::events::ErrorEvent::provider(
             lk_agents_abi::voice::events::ErrorSource::Storage,
             false,

@@ -5,6 +5,8 @@ use lk_agents_abi::delegation::remote::*;
 use lk_agents_abi::session::InputRequestState;
 
 mod projection;
+mod terminal;
+pub use terminal::observed;
 mod validation;
 pub use validation::validate;
 #[cfg(test)]
@@ -23,7 +25,15 @@ pub fn apply(
     input: RemoteInput,
 ) -> Result<Option<InputRequestRef>, RemoteError> {
     match input {
-        RemoteInput::Prepare { request_id, request, streaming, origin, input_request } => {
+        RemoteInput::Prepare {
+            request_id,
+            request,
+            streaming,
+            origin,
+            input_request,
+            control_scope,
+        } => {
+            let control_scope = control_scope.map(|scope| *scope);
             if request_id.is_empty() {
                 return Err(invalid("request identity is empty"));
             }
@@ -40,6 +50,7 @@ pub fn apply(
                     && (existing.input_request.is_none() || response_reserved(state, existing))
                     && (input_request.is_none() || input_request == existing.input_request)
                     && (origin.is_none() || origin == existing.origin)
+                    && (control_scope.is_none() || control_scope == existing.control_scope)
                 {
                     // Before dispatch, a fresh observer may retry this exact prepared body.
                     // Retain its original content and errors rather than recording it twice.
@@ -51,6 +62,19 @@ pub fn apply(
             let mut next = state.clone();
             let method = request.method(streaming).to_owned();
             let task = request_task(&next, &request)?;
+            if let Some(scope) = &control_scope {
+                let A2ARequest::Send(send) = &request else {
+                    return Err(invalid("only a verified send can establish control scope"));
+                };
+                if scope.project_origin.is_empty()
+                    || scope.project_issuer.is_empty()
+                    || scope.caller_identity.is_empty()
+                    || scope.thread_id.is_empty()
+                    || send.message.context_id.as_deref() != Some(scope.thread_id.as_str())
+                {
+                    return Err(invalid("the verified control scope does not address this send"));
+                }
+            }
             if let A2ARequest::Send(send) = &request {
                 projection::message(&mut next.messages, send.message.clone())?;
             }
@@ -97,6 +121,7 @@ pub fn apply(
                     task,
                     origin,
                     input_request,
+                    control_scope,
                 },
             );
             *state = next;
@@ -191,6 +216,11 @@ pub fn apply(
 /// Recovery never replays a send merely to discover the task it may have created.
 pub fn recovery(state: &RemoteAgentState, request_id: &str) -> Result<RemoteRecovery, RemoteError> {
     let request = state.requests.get(request_id).ok_or_else(|| invalid("unknown request"))?;
+    if let Some(target) = &request.task
+        && let Some(response) = observed(state, target)?
+    {
+        return Ok(RemoteRecovery::Observed(Box::new(response)));
+    }
     if !request.dispatch_started {
         if let Some(reference) = &request.input_request
             && !response_reserved(state, request)
@@ -240,7 +270,9 @@ pub fn recovery(state: &RemoteAgentState, request_id: &str) -> Result<RemoteReco
         // Rejected protocol evidence is still journaled. Only the accepted projection can
         // settle a restored call; merely observing a malformed response proves no outcome.
         if state.messages.get(&message.message_id) == Some(message) {
-            return Ok(RemoteRecovery::Observed(Box::new(message.clone())));
+            return Ok(RemoteRecovery::Observed(Box::new(a2a::SendMessageResponse::Message(
+                message.clone(),
+            ))));
         }
     }
     Ok(RemoteRecovery::Uncertain)

@@ -297,10 +297,13 @@ async def test_voice_context_updates_use_the_captured_tool_invocation() -> None:
     delivered: list[tuple[str, int, str, ToolReport]] = []
 
     class Port:
-        def tool_update(
+        def tool_progress(
             self, invocation_id: str, operation: int, call_id: str, report: ToolReport
-        ) -> None:
+        ) -> asyncio.Future[None]:
             delivered.append((invocation_id, operation, call_id, report))
+            admitted: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            admitted.set_result(None)
+            return admitted
 
     call = FunctionCall(call_id="reused", arguments="{}", name="lookup")
     ctx = RunContext(function_call=call, session=SimpleNamespace(_core=Port()))

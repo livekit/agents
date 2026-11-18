@@ -8,6 +8,15 @@ use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::{ChatMessage, Role};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Transcript enrichment and storage normalization do not create another human answer.
+/// Authored content, identity and the interruption boundary still select an exact version.
+pub fn same_human_version(left: &ChatMessage, right: &ChatMessage) -> bool {
+    left.id == right.id
+        && left.role == right.role
+        && left.content == right.content
+        && left.interrupted == right.interrupted
+}
+
 /// Only actually presented, unresolved inputs justify a classifier request. Executors perform
 /// this plan without inventing candidates or substituting the frontend's private history.
 pub fn routing_request(
@@ -101,7 +110,7 @@ pub fn route(
     result: Option<Result<InputRoute, lk_agents_abi::errors::ProviderError>>,
 ) -> Result<InputAdmission, Invalid> {
     if message.role == Role::User
-        && !matches!(canonical(&state.chat_history, &message.id, Role::User), Ok(current) if current == message)
+        && !matches!(canonical(&state.chat_history, &message.id, Role::User), Ok(current) if same_human_version(current, message))
     {
         return Err(Invalid(
             "the human message changed while response routing was in progress".into(),
@@ -205,7 +214,10 @@ pub fn apply(
                 for reference in requests {
                     match target(&mut next, &reference)? {
                         Target::Agent(input) => {
-                            if input.response_message.as_ref().is_some_and(|held| held == &response)
+                            if input
+                                .response_message
+                                .as_ref()
+                                .is_some_and(|held| same_human_version(held, &response))
                             {
                                 continue;
                             }
@@ -230,9 +242,10 @@ pub fn apply(
                     return Err(invalid("an empty message cannot replace an input response"));
                 }
                 let repeated = match target(&mut next, &request)? {
-                    Target::Agent(input) => {
-                        input.response_message.as_ref().is_some_and(|held| held == &response)
-                    }
+                    Target::Agent(input) => input
+                        .response_message
+                        .as_ref()
+                        .is_some_and(|held| same_human_version(held, &response)),
                     Target::Remote(input) => {
                         input.human_response_id.as_deref() == Some(message_id.as_str())
                     }
@@ -296,7 +309,10 @@ pub fn apply(
                     if !matches!(
                         input.state,
                         InputRequestState::Responding | InputRequestState::Responded
-                    ) || input.response_message.as_ref() != Some(&response)
+                    ) || !input
+                        .response_message
+                        .as_ref()
+                        .is_some_and(|held| same_human_version(held, &response))
                     {
                         return Err(invalid(
                             "the selected local response changed or was not admitted",

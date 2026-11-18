@@ -114,6 +114,7 @@ async fn held_local_response(revise: bool) {
                 items: history.clone(),
                 stored: history,
                 revision: (1, 1),
+                ..Default::default()
             },
         }
         .into(),

@@ -1,3 +1,4 @@
+use super::PARTITION_POLL_PAUSE;
 use std::time::Duration;
 
 use lk_agents_abi::storage::thread::{ItemRow, TaskRow};
@@ -31,7 +32,7 @@ pub(super) enum Step {
 }
 
 /// One turn's inputs and what it learned so far.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct Turning {
     batch: Vec<Message>,
     /// One received task per message, in order.
@@ -40,14 +41,14 @@ pub(super) struct Turning {
     pub(super) drain: bool,
     /// Unix seconds: after everything the run loaded.
     at: f64,
-    answer_task: String,
+    pub(super) answer_task: String,
     /// The question of the task the message continues.
     continued: Option<Ask>,
     /// The pending question's settlement, staged before the handler runs.
     staged: Stage,
-    user_message: Option<ItemRow>,
-    stop: Option<Stop>,
-    output: Option<HandlerOutput>,
+    pub(super) user_message: Option<ItemRow>,
+    pub(super) stop: Option<Stop>,
+    pub(super) output: Option<HandlerOutput>,
 }
 
 impl TaskMachine {
@@ -97,6 +98,11 @@ impl TaskMachine {
         now: Duration,
     ) -> Result<Option<Operation>, Finish> {
         let operation = match (step, completion) {
+            (Step::Next, Completion::Event(HandlerEvent::Managed(report)))
+                if self.policy == Policy::Live =>
+            {
+                return self.managed_turn(*report, now);
+            }
             // the named question was answered meanwhile: the message answers the one waiting now
             (Step::Pending { named: true }, Completion::Task(None)) => {
                 self.phase = Phase::Turn(Step::Pending { named: false });
@@ -106,7 +112,20 @@ impl TaskMachine {
             (Step::Prepare, Completion::Done) => self.open_handler(),
             (Step::Handle, Completion::Done) => {
                 self.phase = Phase::Turn(Step::Next);
-                Operation::Next(None)
+                if self.policy == Policy::Live {
+                    Operation::NextAll { should_yield: None, pause: PARTITION_POLL_PAUSE }
+                } else {
+                    Operation::Next(None)
+                }
+            }
+            (Step::Next, Completion::Inbox(rows)) if self.policy == Policy::Live => {
+                return self.poll_live_tasks(rows, true);
+            }
+            (Step::Next, Completion::Event(HandlerEvent::LiveCheckpoint { request_id })) => {
+                return self.live_checkpoint(request_id, false);
+            }
+            (Step::Next, Completion::Event(HandlerEvent::LiveOutput { request_id, output })) => {
+                return self.live_output(request_id, output, now);
             }
             (Step::Next, Completion::Event(HandlerEvent::Checkpoint)) => {
                 if self.turning().stop.is_some() {
@@ -126,9 +145,30 @@ impl TaskMachine {
                 turn.stop = canceled.then_some(Stop::ClientCanceled);
                 let should_yield = turn.stop.is_some();
                 self.phase = Phase::Turn(Step::Next);
-                Operation::Next(Some(should_yield))
+                if self.policy == Policy::Live {
+                    Operation::NextAll {
+                        should_yield: Some(should_yield),
+                        pause: PARTITION_POLL_PAUSE,
+                    }
+                } else {
+                    Operation::Next(Some(should_yield))
+                }
             }
-            (Step::Next, Completion::Event(HandlerEvent::Output(output))) => {
+            (Step::Next, Completion::Event(HandlerEvent::Output(mut output))) => {
+                if self.policy == Policy::Live && self.live.managed {
+                    // Once attached, only the serialized native Session can replace this
+                    // state. An opaque handler still owns its explicit scope/app writes.
+                    output.state = None;
+                }
+                if self.policy == Policy::Live
+                    && let Some(id) = self
+                        .turn
+                        .as_ref()
+                        .and_then(|turn| turn.user_message.as_ref())
+                        .map(|item| item.id.clone())
+                {
+                    self.live.turns.remove(&id);
+                }
                 let turn = self.turning();
                 let stopped = turn.stop.is_some() || output.interrupted;
                 turn.output = Some(*output);
@@ -144,6 +184,9 @@ impl TaskMachine {
                 return self.settle_turn(canceled, now);
             }
             (Step::Settle, Completion::Done) => {
+                if self.policy == Policy::Live {
+                    return Ok(Some(self.commit_live_turn()));
+                }
                 let turn = self.turn.take().expect("a turn is running");
                 if turn.drain {
                     self.drain_commit()
@@ -191,9 +234,11 @@ impl TaskMachine {
         } else {
             self.endpoint.clone()
         };
+        let live = self.policy == Policy::Live;
         let turn = self.turning();
         let message = batch_to_chat_message(&turn.batch, turn.at, id);
         turn.user_message = Some(message.clone());
+        let saved = live.then(|| (message.id.clone(), turn.clone()));
         let handle = Handle {
             endpoint,
             context_scope_id: format!("root:{partition_key}"),
@@ -204,12 +249,15 @@ impl TaskMachine {
             batch: turn.batch.clone(),
             task_id: turn.answer_task.clone(),
         };
+        if let Some((id, turn)) = saved {
+            self.live.turns.insert(id, turn);
+        }
         self.phase = Phase::Turn(Step::Handle);
         Operation::Handle(Box::new(handle))
     }
 
     /// What the handler's output makes of the rows and the history, staged with the run's end.
-    fn settle_turn(
+    pub(super) fn settle_turn(
         &mut self,
         answer_canceled: bool,
         now: Duration,
@@ -220,13 +268,18 @@ impl TaskMachine {
             artifact: self.mint("art"),
         };
         let partition_question = self.policy != Policy::Concurrent;
+        let live = self.policy == Policy::Live;
         let turn = self.turning();
         let out = turn.output.take().unwrap_or_default();
         let settled = settle(Settle {
             batch: &turn.batch,
             task_ids: &turn.task_ids,
             answer_task: &turn.answer_task,
-            user_message: turn.user_message.take().expect("the handler was opened"),
+            user_message: if live {
+                turn.user_message.clone().expect("the live handler was opened")
+            } else {
+                turn.user_message.take().expect("the handler was opened")
+            },
             out: &out,
             stop: turn.stop,
             answer_canceled,
@@ -248,8 +301,7 @@ impl TaskMachine {
             scope_writes.clear();
             app_writes.clear();
         }
-        self.phase = Phase::Turn(Step::Settle);
-        Ok(Some(Operation::Stage(Box::new(Stage {
+        let stage = Box::new(Stage {
             edits: settled.edits,
             transitions: settled.transitions,
             events: settled.events,
@@ -261,6 +313,11 @@ impl TaskMachine {
                 app_writes,
                 usage,
             }),
-        }))))
+        });
+        if live && self.live.managed && self.live.report.is_none() {
+            return self.prepare_opaque_dialogue(stage);
+        }
+        self.phase = Phase::Turn(Step::Settle);
+        Ok(Some(Operation::Stage(stage)))
     }
 }

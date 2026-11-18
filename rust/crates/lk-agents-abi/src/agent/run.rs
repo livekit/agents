@@ -20,6 +20,9 @@ pub struct RunInputRequirement {
     pub call: crate::a2a::turn::PendingCall,
     pub question: String,
     pub verbatim: bool,
+    /// Native occurrence reported by the body; model history cannot reconstruct its authority.
+    #[host(skip)]
+    pub input_request: Option<crate::session::InputRequestRef>,
     /// The prompt selected to include this requirement, not proof it reached the person.
     /// The conversation owner checks that message's actual output receipt before routing.
     #[host(default = None)]
@@ -276,6 +279,8 @@ pub enum StreamEvent {
         call_id: String,
         tool_name: String,
         message: String,
+        #[host(default = false)]
+        silent: bool,
     },
 }
 
@@ -290,8 +295,11 @@ pub enum ToolResultStatus {
 /// What one invocation is asked: the message, the history it continues, and the host context
 /// captured at the `run()` entry (a `(loop, contextvars.Context)` pair) its callbacks run in.
 #[crate::host(record(module = "agent_run", extract))]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RunRequest {
+    /// Native output capability captured by this source; never reconstructed from saved data.
+    #[host(default = None)]
+    pub output: Option<Arc<dyn crate::a2a::turn::HandlerPort>>,
     /// Prefixes every id the invocation mints.
     pub invocation_id: String,
     /// The transport task id, when this invocation belongs to an A2A task.
@@ -438,10 +446,20 @@ pub trait AgentRunner: Send + Sync + Sized + 'static {
     /// `invocation_id`: the run streams it as progress. Waits for queue admission rather than
     /// dropping an update under pressure. Refused once this runner no longer owns the invocation.
     #[host(await)]
-    async fn progress(
+    fn progress(
         &self,
         invocation_id: &str,
         operation: u64,
         message: String,
-    ) -> Result<(), Invalid>;
+        #[host(default = false)] silent: bool,
+    ) -> crate::BoxFuture<'static, Result<(), crate::errors::ProviderError>>;
+
+    /// Enqueue exact text now; the private reader confirms the source's local output boundary.
+    #[host(await)]
+    fn say(
+        &self,
+        invocation_id: &str,
+        operation: u64,
+        message: String,
+    ) -> crate::BoxFuture<'static, Result<(), crate::errors::ProviderError>>;
 }

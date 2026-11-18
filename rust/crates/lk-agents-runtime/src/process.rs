@@ -120,6 +120,7 @@ pub fn env() -> lk_agents_net::env::ProcessEnv {
         http: || with_started(|started| started.http.clone()),
         tracer: crate::telemetry::tracer(),
         tasks: Arc::clone(state().tasks.get_or_insert_with(Arc::default)),
+        remote_control: Some(crate::delegation::remote::control::cancel),
     }
 }
 

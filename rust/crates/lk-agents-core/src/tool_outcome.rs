@@ -1,8 +1,9 @@
 use lk_agents_abi::agent::FunctionToolInfo;
 use lk_agents_abi::agent::run::RunError;
 use lk_agents_abi::llm::tool_executor::{
-    CompletedReturn, DELIVERED, INTERNAL_ERROR_OUTPUT, INVALID_OUTPUT, InputRequiredReturn,
-    ToolOutcome, ToolReport, ToolResultReturn, ToolReturn, ToolText, WAITING_PREFIX,
+    CompletedReturn, EXACT_OUTPUT_PREFIX, INTERNAL_ERROR_OUTPUT, INVALID_OUTPUT,
+    InputRequiredReturn, ToolOutcome, ToolReport, ToolResultReturn, ToolReturn, ToolText,
+    WAITING_PREFIX,
 };
 use std::collections::BTreeMap;
 
@@ -46,6 +47,16 @@ impl lk_agents_abi::llm::tool_executor::ToolReports for ToolReports {
     }
 }
 
+/// A callback failure still settles its admitted body. Cancellation stays typed; other
+/// host diagnostics never become user-visible tool output.
+pub fn host_failure(error: &lk_agents_abi::errors::HostError) -> ToolOutcome {
+    if error.kind == lk_agents_abi::errors::HostErrorKind::Cancelled {
+        ToolOutcome::Cancelled
+    } else {
+        ToolOutcome::Internal
+    }
+}
+
 /// The output a [`ToolOutcome`] records, and whether it asks the model for a reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolShape {
@@ -63,8 +74,8 @@ pub enum Mode {
     Voice,
 }
 
-/// `make_tool_output` and the transitions as one table. A verbatim result's delivery is the
-/// coordinator's: [`delivered`] is what the model reads once it was said.
+/// `make_tool_output` and the transitions as one table. A verbatim result's delivery belongs
+/// to its coordinator; [`exact_output_note`] formats model context without confirming output.
 pub fn shape(outcome: &ToolOutcome, mode: Mode) -> ToolShape {
     let shape = |text: &str, is_error: bool, reply_required: bool| ToolShape {
         text: text.to_owned(),
@@ -82,7 +93,9 @@ pub fn shape(outcome: &ToolOutcome, mode: Mode) -> ToolShape {
         }
         ToolOutcome::Internal => shape(INTERNAL_ERROR_OUTPUT, true, true),
         ToolOutcome::Invalid => shape(INVALID_OUTPUT, true, true),
-        ToolOutcome::Update { message, .. } => shape(message, false, true),
+        ToolOutcome::Update { message, reply_required, .. } => {
+            shape(message, false, *reply_required)
+        }
         ToolOutcome::Completed { text, .. } => shape(text, false, true),
         ToolOutcome::Failed(text) | ToolOutcome::Rejected(text) => shape(text, true, true),
         // The question is asked, not replied to; the person's answer replaces it.
@@ -104,12 +117,15 @@ pub fn verbatim(outcome: &ToolOutcome) -> Option<&str> {
     }
 }
 
-/// What the model reads once the verbatim text was said, then a delegate's note for the model.
-pub fn delivered(outcome: &ToolOutcome) -> Option<String> {
+/// Format the supplied exact text and optional model note. This is not a playout receipt and
+/// cannot establish perceived history; only the owning output's real delivery evidence can.
+pub fn exact_output_note(outcome: &ToolOutcome) -> Option<String> {
     let text = verbatim(outcome)?;
     Some(match outcome {
-        ToolOutcome::Value { more: Some(more), .. } => format!("{DELIVERED}{text}\n{more}"),
-        _ => format!("{DELIVERED}{text}"),
+        ToolOutcome::Value { more: Some(more), .. } => {
+            format!("{EXACT_OUTPUT_PREFIX}{text}\n{more}")
+        }
+        _ => format!("{EXACT_OUTPUT_PREFIX}{text}"),
     })
 }
 
@@ -194,10 +210,10 @@ mod tests {
         }
     }
 
-    // Catches: a verbatim result's model text not saying it was delivered, or the delegate's note
-    // dropped.
+    // Catches: model context claiming delivery before output evidence, dropping business text,
+    // or losing the optional follow-up note.
     #[test]
-    fn a_verbatim_result_reads_as_delivered() {
+    fn exact_output_context_preserves_the_result_without_claiming_delivery() {
         let v = ToolOutcome::Value {
             text: "Your code is 1234.".into(),
             reply_required: true,
@@ -205,9 +221,56 @@ mod tests {
             more: Some("ask if they need more".into()),
         };
         assert_eq!(verbatim(&v), Some("Your code is 1234."));
-        let want = "delivered to the person as written: Your code is 1234.\nask if they need more";
-        assert_eq!(delivered(&v).as_deref(), Some(want));
-        assert_eq!(delivered(&ToolOutcome::Nothing), None);
+        let want = "exact text supplied for separate framework delivery: Your code is 1234.\nask if they need more";
+        assert_eq!(exact_output_note(&v).as_deref(), Some(want));
+        assert_eq!(exact_output_note(&ToolOutcome::Nothing), None);
         assert!(!shape(&ToolOutcome::Nothing, Mode::Voice).reply_required);
+    }
+
+    #[test]
+    fn exact_output_formatting_never_changes_business_success_reply_policy_or_followup() {
+        for reply_required in [false, true] {
+            for more in [None, Some("Ask whether they need directions.".to_owned())] {
+                let result = ToolOutcome::Value {
+                    text: "Reservation R-204 is confirmed.".into(),
+                    verbatim: true,
+                    reply_required,
+                    more: more.clone(),
+                };
+                let before = result.clone();
+                let note = exact_output_note(&result).unwrap();
+                assert!(note.starts_with("exact text supplied for separate framework delivery: Reservation R-204 is confirmed."));
+                assert_eq!(note.split_once('\n').map(|(_, text)| text), more.as_deref());
+                for mode in [Mode::Text, Mode::Voice] {
+                    let shape = shape(&result, mode);
+                    assert!(
+                        !shape.is_error,
+                        "delivery uncertainty is not a failed business effect"
+                    );
+                    assert_eq!(shape.text, "Reservation R-204 is confirmed.");
+                    assert_eq!(shape.reply_required, reply_required);
+                }
+                assert_eq!(result, before);
+            }
+        }
+        let result = ToolOutcome::Completed {
+            text: "Reservation R-204 is confirmed.".into(),
+            verbatim: true,
+        };
+        assert_eq!(
+            exact_output_note(&result).as_deref(),
+            Some(
+                "exact text supplied for separate framework delivery: Reservation R-204 is confirmed."
+            )
+        );
+        assert_eq!(
+            exact_output_note(&ToolOutcome::Value {
+                text: "ordinary result".into(),
+                verbatim: false,
+                reply_required: true,
+                more: None
+            }),
+            None
+        );
     }
 }

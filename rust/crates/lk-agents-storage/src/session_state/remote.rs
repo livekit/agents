@@ -146,27 +146,76 @@ impl RemoteTaskView for RemoteTask {
         self.read(|state| state.cancel_requested)
     }
 
-    async fn cancel(&self) -> Result<(), lk_agents_abi::a2a::client::AgentClientError> {
+    type Env = lk_agents_net::env::ProcessEnv;
+
+    async fn cancel(
+        &self,
+        env: &Self::Env,
+    ) -> Result<(), lk_agents_abi::a2a::client::AgentClientError> {
         use lk_agents_abi::a2a::client::AgentClientError;
-        let task = self
-            .read(|state| lk_agents_abi::delegation::remote::RemoteTaskRef {
-                task_id: state.task.id.clone(),
-                context_id: state.task.context_id.clone(),
-            })
+        use lk_agents_abi::session::control::RemoteControlRef;
+        self.remote
+            .state
+            .ensure_control_process()
             .map_err(|error| AgentClientError::InvalidInput(error.to_string()))?;
-        let endpoint = self
-            .remote
-            .read(|state| state.endpoint.clone())
-            .map_err(|error| AgentClientError::InvalidInput(error.to_string()))?;
-        let owner =
-            self.remote.state.1.lock().as_ref().and_then(std::sync::Weak::upgrade).ok_or_else(
-                || {
-                    AgentClientError::InvalidInput(
-                        "remote task cancellation requires an active bound conversation owner"
-                            .into(),
-                    )
+        let expected = self.remote.state.0.lock().clone();
+        let super::State::Conversation { state, .. } = &expected.state else {
+            return Err(AgentClientError::InvalidInput(
+                "the conversation no longer retains this task".into(),
+            ));
+        };
+        let remote = state.remote_agents.get(&self.remote.remote_id).ok_or_else(|| {
+            AgentClientError::InvalidInput(
+                "the conversation no longer retains this remote agent".into(),
+            )
+        })?;
+        let saved = remote.tasks.get(&self.task_id).ok_or_else(|| {
+            AgentClientError::InvalidInput("the conversation no longer retains this task".into())
+        })?;
+        let task = lk_agents_abi::delegation::remote::RemoteTaskRef {
+            task_id: saved.task.id.clone(),
+            context_id: saved.task.context_id.clone(),
+        };
+        let evidence = remote.cancellation_evidence(&task);
+        let target = RemoteControlRef {
+            remote_id: self.remote.remote_id.clone(),
+            endpoint: remote.endpoint.clone(),
+            task,
+        };
+        let store = self.remote.state.2.lock().clone().ok_or_else(|| {
+            AgentClientError::InvalidInput(
+                "remote task cancellation requires an explicitly bound context store".into(),
+            )
+        })?;
+        let control = env.remote_control.ok_or_else(|| {
+            AgentClientError::InvalidInput("this runtime cannot execute bound task controls".into())
+        })?;
+        let result = control(
+            env.clone(),
+            store.control_binding(self.remote.state.clone()),
+            target,
+            evidence,
+        )
+        .wait()
+        .await;
+        // A separate managed activation may have joined another binding's receipt. Read the
+        // committed framework state without a lease/write, then publish only by exact-view
+        // CAS. Neither newer live progress nor local edits can be rolled back by this read.
+        if !self.remote.state.control_unchanged(&store, &expected) {
+            return result;
+        }
+        let refreshed =
+            match lk_agents_abi::storage::context::ContextActivation::load_session(&store).await {
+                Ok(Some(value)) => match super::SessionState::from_value(value) {
+                    Ok(checked) => {
+                        self.remote.state.publish_control_if(&store, &expected, &checked);
+                        Ok(())
+                    }
+                    Err(error) => Err(AgentClientError::Protocol(error.to_string())),
                 },
-            )?;
-        owner.cancel_remote(&self.remote.remote_id, &endpoint, &task).await
+                Ok(None) => Ok(()),
+                Err(error) => Err(AgentClientError::Protocol(error.to_string())),
+            };
+        result.and(refreshed)
     }
 }

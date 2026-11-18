@@ -1,4 +1,5 @@
 mod input;
+pub(crate) mod live;
 mod runner;
 pub use runner::{Runner, Updates};
 
@@ -34,13 +35,16 @@ pub(super) struct Release {
 }
 
 enum DriverEvent {
+    Owner(live::OwnerCommand),
     Core(Option<Box<SessionEvent>>),
     Routed(Box<SessionEvent>),
     Command(Box<SessionCommand>),
+    Committed(Box<SessionEvent>),
 }
 
 /// What opens an invocation: the core's `InvocationStarted`.
 struct InvocationStart {
+    origin: Option<lk_agents_abi::text_session::LiveTurnOrigin>,
     frame_id: FrameId,
     agent_name: String,
     invocation_id: String,
@@ -48,7 +52,15 @@ struct InvocationStart {
     history: Vec<lk_agents_abi::ChatItem>,
 }
 
+pub(super) struct DriverChannels {
+    events: mpsc::Receiver<(String, Report)>,
+    releases: mpsc::Receiver<Release>,
+    commands: mpsc::Receiver<SessionCommand>,
+    owner_commands: mpsc::Receiver<live::OwnerCommand>,
+}
+
 pub(super) struct Driver {
+    owner_close: live::OwnerClose,
     /// The execution owns this weak binding's life, independently of the saved view.
     _bound_commands: Arc<dyn lk_agents_abi::session::SessionCommands>,
     delegation: Option<lk_agents_abi::delegation::DelegationOptions>,
@@ -65,26 +77,31 @@ pub(super) struct Driver {
     cx: telemetry::Cx,
     spawner: Arc<dyn Spawner>,
     events_tx: mpsc::Sender<(String, Report)>,
+    progress: crate::agent_run::Progress,
+    output_target: Option<crate::agent_run::output::Target>,
     /// Dropping the receiver cancels the session, so nobody needs what follows.
     updates: lk_agents_net::outbox::Outbox<TextSessionUpdate>,
     work: BTreeMap<String, Execution>,
+    live_requests: BTreeMap<String, live::LiveRequest>,
+    invocation_requests: BTreeMap<String, String>,
+    live_commit: Option<live::CommitWork>,
     /// Settled or parked invocations awaiting release, with their accepted output.
     pending: BTreeMap<String, Option<ValidationId>>,
     releases: VecDeque<Release>,
     output: Option<HostRef>,
     finished: bool,
+    checkpoint_port: Option<Arc<dyn lk_agents_abi::text_session::SessionCheckpointPort>>,
 }
 
 impl Driver {
     async fn drive(
         mut self,
         message: lk_agents_abi::ChatMessage,
-        mut events: mpsc::Receiver<(String, Report)>,
-        mut progress: mpsc::Receiver<(String, u64, String)>,
-        mut releases: mpsc::Receiver<Release>,
-        mut commands: mpsc::Receiver<SessionCommand>,
+        channels: DriverChannels,
         cancelled: CancellationToken,
     ) {
+        let DriverChannels { mut events, mut releases, mut commands, mut owner_commands } =
+            channels;
         let mut cancel_seen = false;
         let mut effects: VecDeque<_> =
             self.session.handle(SessionEvent::Start(message), self.clock.now()).into();
@@ -93,53 +110,71 @@ impl Driver {
             self.publish_usage();
             while let Some(effect) = effects.pop_front() {
                 if let SessionEffect::Checkpoint(state) = effect {
-                    if let Some(sink) = &self.request.session_sink
-                        && let Err(error) = sink.publish(&self.cx, *state).await
-                    {
+                    if let Err(error) = self.publish_snapshot(*state).await {
                         effects = self
                             .session
                             .handle(SessionEvent::PersistenceFailed(error), self.clock.now())
                             .into();
                     }
                 } else {
-                    self.execute(effect).await;
+                    effects.extend(self.execute(effect).await);
                 }
             }
-            if let Some(released) = self.take_release() {
+            if !self.session.live_dialogue_pending()
+                && let Some(released) = self.take_release()
+            {
                 effects.extend(released);
                 continue;
             }
             // Retain work after a core cleanup deadline: its callbacks and provider requests
             // remain owned until their real settlement, including late prepared resources.
             self.work.retain(|id, work| self.pending.contains_key(id) || !work.idle());
+            if self.live_requests.is_empty()
+                && self.session.live_idle()
+                && !matches!(self.owner_close, live::OwnerClose::Open)
+            {
+                self.finished = true;
+            }
             if self.finished && self.work.is_empty() && self.routing_background.tasks.is_empty() {
+                if let live::OwnerClose::Requested(done) =
+                    std::mem::replace(&mut self.owner_close, live::OwnerClose::Closed)
+                {
+                    done.resolve(Ok(()));
+                }
                 return;
             }
             let clock = self.clock.clone();
             let wake = self.session.wake_at();
+            // Prepare runs only after preceding writes/effects complete. The priority lane is
+            // the same owner's ACK/close path; normal bounded channels retain their inputs.
+            let paused = self.session.live_dialogue_pending();
             let ready = tokio::select! {
                 biased;
-                () = crate::agent_run::wait(&*clock, wake) => DriverEvent::Core(Some(Box::new(SessionEvent::Wake))),
+                Some(command) = owner_commands.recv() => DriverEvent::Owner(command),
+                () = crate::agent_run::wait(&*clock, wake), if !paused => DriverEvent::Core(Some(Box::new(SessionEvent::Wake))),
                 () = cancelled.cancelled(), if !cancel_seen => {
                     cancel_seen = true;
+                    self.owner_close = live::OwnerClose::Closed;
                     DriverEvent::Core(Some(Box::new(SessionEvent::Cancel)))
                 }
-                Some(release) = releases.recv() => {
+                Some(release) = releases.recv(), if !paused => {
                     self.releases.push_back(release);
                     DriverEvent::Core(None)
                 }
-                Some(command) = commands.recv() => DriverEvent::Command(Box::new(command)),
-                Some((invocation_id, operation, message)) = progress.recv() => {
-                    DriverEvent::Core(self.progress_event(invocation_id, operation, message).map(Box::new))
-                }
-                Some((invocation_id, report)) = events.recv() => {
+                Some(command) = commands.recv(), if !paused => DriverEvent::Command(Box::new(command)),
+                Some((invocation_id, report)) = events.recv(), if !paused => {
                     DriverEvent::Core(self.report_event(invocation_id, report).map(Box::new))
                 }
-                event = input::routed(&self.routing) => DriverEvent::Routed(Box::new(event)),
-                _ = settle_work(&mut self.work) => DriverEvent::Core(None),
-                _ = self.routing_background.tasks.wait_empty(&*clock, None), if self.finished => DriverEvent::Core(None),
+                event = input::routed(&self.routing), if !paused => DriverEvent::Routed(Box::new(event)),
+                event = live::committed(&self.live_commit), if !paused => DriverEvent::Committed(Box::new(event)),
+                settled = settle_work(&mut self.work), if !paused => DriverEvent::Core(settled.map(|(invocation_id, event)| Box::new(SessionEvent::Run { invocation_id, event }))),
+                _ = self.routing_background.tasks.wait_empty(&*clock, None), if self.finished && !paused => DriverEvent::Core(None),
             };
             let event = match ready {
+                DriverEvent::Owner(command) => {
+                    self.owner_command(command, &mut effects);
+                    continue;
+                }
                 DriverEvent::Command(command) => {
                     self.command(*command, &mut effects).await;
                     continue;
@@ -149,14 +184,32 @@ impl Driver {
                     self.routing.take();
                     Some(*event)
                 }
+                DriverEvent::Committed(event) => {
+                    if let Some(work) = self.live_commit.take()
+                        && !work.working
+                    {
+                        self.live_requests.remove(&work.request_id);
+                    }
+                    Some(*event)
+                }
             };
             let Some(event) = event else { continue };
             effects.extend(self.session.handle(event, self.clock.now()));
+            if self.live_requests.is_empty()
+                && self.session.live_idle()
+                && !matches!(self.owner_close, live::OwnerClose::Open)
+            {
+                self.finished = true;
+            }
         }
     }
 
     async fn command(&mut self, command: SessionCommand, effects: &mut VecDeque<SessionEffect>) {
         let (command, done) = match command {
+            SessionCommand::LiveInput(input) => {
+                self.admit_live(*input, effects).await;
+                return;
+            }
             SessionCommand::RoutingContext {
                 remote_id,
                 endpoint,
@@ -196,23 +249,28 @@ impl Driver {
                 done.resolve(drivers.get(&self.session.snapshot(), &remote_id, &endpoint, &task));
                 return;
             }
-            SessionCommand::CancelRemote { remote_id, endpoint, task, drivers, done } => {
-                done.resolve(self.session.cancel_required(&remote_id, &endpoint, &task).and_then(
-                    |required| {
-                        if !required {
-                            return Ok(None);
-                        }
-                        drivers
-                            .get(&self.session.snapshot(), &remote_id, &endpoint, &task)?
-                            .map(Some)
-                            .ok_or_else(|| {
-                                lk_agents_abi::storage::StorageError::Invalid(
-                                    "this task has no configured live driver in the conversation"
-                                        .into(),
-                                )
-                            })
-                    },
-                ));
+            SessionCommand::CancelRemote {
+                target,
+                scope,
+                candidate,
+                retry_after,
+                drivers,
+                done,
+            } => {
+                let result = self
+                    .session
+                    .cancel_required(&target.remote_id, &target.endpoint, &target.task)
+                    .and_then(|_| {
+                        crate::session::admit_cancellation(
+                            &self.session.snapshot(),
+                            &drivers,
+                            target,
+                            scope.as_ref(),
+                            candidate,
+                            retry_after.as_deref(),
+                        )
+                    });
+                done.resolve(result);
                 return;
             }
             SessionCommand::AdmitInput { request, verdict, done } => {
@@ -271,8 +329,8 @@ impl Driver {
         &mut self,
         effects: &mut VecDeque<SessionEffect>,
     ) -> Result<Option<serde_json::Value>, lk_agents_abi::storage::StorageError> {
-        if let Some(sink) = &self.request.session_sink {
-            return match sink.publish(&self.cx, self.session.snapshot()).await {
+        if self.request.session_sink.is_some() {
+            return match self.publish_snapshot(self.session.snapshot()).await {
                 Ok(state) => Ok(Some(state)),
                 Err(error) => {
                     effects.extend(
@@ -288,6 +346,25 @@ impl Driver {
         Ok(None)
     }
 
+    async fn publish_snapshot(
+        &mut self,
+        state: lk_agents_abi::text_session::SessionSnapshot,
+    ) -> Result<serde_json::Value, lk_agents_abi::storage::StorageError> {
+        if let Some(port) = &self.checkpoint_port {
+            let committed = port.publish(state).await?;
+            for request in self.live_requests.values() {
+                if let Some(sink) = &request.request.session_sink {
+                    sink.acknowledge_checkpoint(committed.clone())?;
+                }
+            }
+            return Ok(committed);
+        }
+        match &self.request.session_sink {
+            Some(sink) => sink.publish(&self.cx, state).await,
+            None => lk_agents_storage::session_state::snapshot_value(state),
+        }
+    }
+
     /// Republishes the turn's usage when it moved.
     fn publish_usage(&mut self) {
         if self.session.usage_revision() != self.published {
@@ -299,22 +376,13 @@ impl Driver {
     /// The next release's effects; a release whose invocation still has work in flight waits.
     fn take_release(&mut self) -> Option<Vec<SessionEffect>> {
         let release = self.releases.pop_front()?;
-        if self.work.get(&release.invocation_id).is_some_and(|w| !w.idle()) {
+        if !self.session.allows_live_release(&release.invocation_id)
+            && self.work.get(&release.invocation_id).is_some_and(|w| !w.idle())
+        {
             self.releases.push_front(release);
             return None;
         }
         Some(self.release(release))
-    }
-
-    /// A tool body's progress update, while its call is still live.
-    fn progress_event(
-        &self,
-        invocation_id: String,
-        operation: u64,
-        message: String,
-    ) -> Option<SessionEvent> {
-        let event = self.work.get(&invocation_id)?.progress(operation, message)?;
-        Some(SessionEvent::Run { invocation_id, event })
     }
 
     /// An invocation's report as the session's event; a validated output keeps its value.
@@ -328,19 +396,31 @@ impl Driver {
         })
     }
 
-    async fn execute(&mut self, effect: SessionEffect) {
+    async fn execute(&mut self, effect: SessionEffect) -> Vec<SessionEffect> {
         match effect {
+            SessionEffect::LiveTurnFinished { turn, origin, result, working } => {
+                return self.live_finished(turn, origin, result, working).await;
+            }
             SessionEffect::Checkpoint(_) => {
                 unreachable!("checkpoints execute before dependent effects")
             }
+            SessionEffect::ToolOutputCheckpoint { invocation_id, output, state } => {
+                let result = self.publish_snapshot(*state).await.map(|_| ());
+                return self.session.handle(
+                    SessionEvent::ToolOutputCommitted { invocation_id, output, result },
+                    self.clock.now(),
+                );
+            }
             SessionEffect::RouteInput(input) => self.route(input),
             SessionEffect::InvocationStarted {
+                origin,
                 frame_id,
                 agent_name,
                 invocation_id,
                 execution_id,
                 history,
             } => self.start_invocation(InvocationStart {
+                origin,
                 frame_id,
                 agent_name,
                 invocation_id,
@@ -355,15 +435,24 @@ impl Driver {
                 }
             }
             SessionEffect::Emit { sequence, frame_id, agent_name, invocation_id, event } => {
-                self.updates
-                    .send(TextSessionUpdate::Stream {
+                if let lk_agents_abi::agent::run::StreamEvent::Progress { message, silent, .. } =
+                    &event
+                    && let Some(target) =
+                        self.work.get(&invocation_id).and_then(|work| work.output.as_ref())
+                {
+                    target.progress(message.clone(), *silent).await;
+                }
+                self.send_invocation(
+                    &invocation_id,
+                    TextSessionUpdate::Stream {
                         sequence,
                         frame_id,
                         agent_name,
-                        invocation_id,
+                        invocation_id: invocation_id.clone(),
                         event,
-                    })
-                    .await;
+                    },
+                )
+                .await;
             }
             SessionEffect::InvocationSettled { invocation_id, result, .. } => {
                 let output = match result.outcome {
@@ -371,23 +460,40 @@ impl Driver {
                     _ => None,
                 };
                 self.pending.insert(invocation_id.clone(), output);
-                self.updates.send(TextSessionUpdate::InvocationSettled(invocation_id)).await;
+                self.send_invocation(
+                    &invocation_id,
+                    TextSessionUpdate::InvocationSettled(invocation_id.clone()),
+                )
+                .await;
             }
             SessionEffect::InvocationParked { invocation_id, .. } => {
                 self.pending.insert(invocation_id.clone(), None);
-                self.updates.send(TextSessionUpdate::Parked(invocation_id)).await;
+                self.send_invocation(
+                    &invocation_id,
+                    TextSessionUpdate::Parked(invocation_id.clone()),
+                )
+                .await;
             }
             SessionEffect::RoutingRefused { .. } => {} // The core records the typed refusal in the original call.
             SessionEffect::Finished { invocation_id, result, input_requirements } => {
                 self.finish(invocation_id, result, input_requirements).await
             }
         }
+        Vec::new()
     }
 
     /// Opens the invocation's `agent_run` span and its execution.
     fn start_invocation(&mut self, start: InvocationStart) {
-        let InvocationStart { frame_id, agent_name, invocation_id, execution_id, history } = start;
-        let agent = &self.agents[&agent_name];
+        let InvocationStart { origin, frame_id, agent_name, invocation_id, execution_id, history } =
+            start;
+        if let Some(origin) = &origin {
+            self.invocation_requests.insert(invocation_id.clone(), origin.request_id.clone());
+        }
+        let agent = origin
+            .as_ref()
+            .and_then(|origin| self.live_requests.get(&origin.request_id))
+            .and_then(|request| request.agents.get(&agent_name))
+            .unwrap_or(&self.agents[&agent_name]);
         let span = telemetry::start(
             &self.cx,
             telemetry::AgentRun {
@@ -417,7 +523,18 @@ impl Driver {
             entry,
         };
         let reporter = Reporter { id: invocation_id.clone(), tx: self.events_tx.clone() };
-        let execution = Execution::new(setup, self.spawner.clone(), reporter, span);
+        let mut execution = Execution::new(
+            setup,
+            self.spawner.clone(),
+            reporter,
+            span,
+            self.progress.for_invocation(invocation_id.clone()),
+        );
+        execution.output = origin
+            .as_ref()
+            .and_then(|origin| self.live_requests.get(&origin.request_id))
+            .and_then(|request| request.output.clone())
+            .or_else(|| self.output_target.clone());
         self.work.insert(invocation_id, execution);
     }
 
@@ -474,15 +591,19 @@ impl Driver {
     }
 }
 
-async fn settle_work(work: &mut BTreeMap<String, Execution>) {
+async fn settle_work(
+    work: &mut BTreeMap<String, Execution>,
+) -> Option<(String, agent_run::AgentRunEvent)> {
     let futures: Vec<_> = work
-        .values_mut()
-        .filter(|w| !w.invoker.is_idle())
-        .map(|w| Box::pin(w.invoker.settled()))
+        .iter_mut()
+        .filter(|(_, work)| !work.idle())
+        .map(|(id, work)| {
+            Box::pin(async move { work.settled().await.map(|event| (id.clone(), event)) })
+        })
         .collect();
     if futures.is_empty() {
-        std::future::pending::<()>().await;
+        std::future::pending().await
     } else {
-        futures_util::future::select_all(futures).await;
+        futures_util::future::select_all(futures).await.0
     }
 }

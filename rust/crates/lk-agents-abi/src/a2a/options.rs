@@ -28,7 +28,7 @@ impl TurnOptions {
     }
 }
 
-/// A message during a run: one of the four policies.
+/// What owns a message arriving while work is running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[crate::host(record(module = "storage_options", emit, extract))]
 #[crate::host(wire_strs)]
@@ -43,6 +43,9 @@ pub enum Policy {
     Concurrent,
     #[host(rename = "reject")]
     Reject,
+    /// Managed tools may continue while one native owner serializes later turns.
+    #[host(rename = "live")]
+    Live,
 }
 
 impl Policy {

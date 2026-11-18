@@ -5,6 +5,21 @@ use lk_agents_abi::agent::run::{RunResult, StreamEvent};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionEffect {
+    /// Native managed-turn handoff. The original task stays Working while its identified
+    /// bodies remain owned; runtime acknowledges only after its fenced task commit.
+    LiveTurnFinished {
+        turn: u64,
+        origin: lk_agents_abi::text_session::LiveTurnOrigin,
+        result: Box<Result<TextSessionTurn, TextSessionError>>,
+        working: bool,
+    },
+    /// This exact source's canonical delivered message must be checkpointed before its
+    /// private reader is acknowledged. A failed write returns through ToolOutputCommitted.
+    ToolOutputCheckpoint {
+        invocation_id: String,
+        output: crate::agent_run::ToolOutputId,
+        state: Box<super::SessionSnapshot>,
+    },
     /// A consistent accepted state before subsequent model/tool work.
     Checkpoint(Box<super::SessionSnapshot>),
     /// Classify presented questions before starting the current agent's turn. The runtime
@@ -12,6 +27,7 @@ pub enum SessionEffect {
     RouteInput(super::InputRoutingRequest),
     /// The runtime binds this invocation to its frame and execution identity.
     InvocationStarted {
+        origin: Option<lk_agents_abi::text_session::LiveTurnOrigin>,
         frame_id: FrameId,
         agent_name: String,
         invocation_id: String,

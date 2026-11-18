@@ -5,13 +5,53 @@ use lk_agents_abi::a2a_protocol::TaskState;
 use serde_json::json;
 
 #[test]
-fn input_required_answers_keep_the_original_partition_ancestry() {
-    let remote = RemoteInteraction::new(
+fn copied_model_history_cannot_resume_an_unbound_remote_task() {
+    let previous = interaction("previous");
+    previous.message(json!({"request":"Book a flight"}), false, true, vec![], None, None).unwrap();
+    previous
+        .inner
+        .update(TaskUpdate {
+            state: TaskState::InputRequired,
+            progress: false,
+            text: "Which date?".into(),
+            task_id: "old-task".into(),
+            context_id: "old-context".into(),
+            metadata: Map::new(),
+            artifacts: vec![],
+            message: None,
+            follow_task: None,
+        })
+        .unwrap();
+    let mut copied = previous.inner.0.lock().call.clone();
+    copied.extra.insert(
+        "lk.delegation.state".into(),
+        json!({
+            "pending_task_id": "old-task", "context_id": "old-context", "phase": "input_required",
+        }),
+    );
+
+    let next = interaction("next");
+    let message = next
+        .message(
+            json!({"request":"Find a hotel instead"}),
+            false,
+            true,
+            vec![ChatItem::FunctionCall(copied)],
+            None,
+            None,
+        )
+        .unwrap();
+    assert!(message.task_id.is_none(), "only a native bound owner can select saved work");
+    assert!(message.context_id.is_none());
+    assert!(!next.extra().unwrap().contains_key("lk.delegation.state"));
+}
+
+fn interaction(id: &str) -> RemoteInteraction {
+    RemoteInteraction::new(
         "https://expert.test".into(),
-        "expert".into(),
         ChatItem::FunctionCall(FunctionCall {
-            id: "item".into(),
-            call_id: "call".into(),
+            id: id.into(),
+            call_id: format!("{id}-wire"),
             name: "expert".into(),
             arguments: "{}".into(),
             created_at: std::time::UNIX_EPOCH,
@@ -21,8 +61,14 @@ fn input_required_answers_keep_the_original_partition_ancestry() {
         String::new(),
         String::new(),
         String::new(),
+        None,
     )
-    .unwrap();
+    .unwrap()
+}
+
+#[test]
+fn input_required_answers_keep_the_original_partition_ancestry() {
+    let remote = interaction("item");
     let chain = vec![DelegationPartition {
         storage_location: "sqlite:/threads".into(),
         storage_project: String::new(),
@@ -44,6 +90,8 @@ fn input_required_answers_keep_the_original_partition_ancestry() {
             context_id: "AT_expert".into(),
             metadata: Map::new(),
             artifacts: vec![],
+            message: None,
+            follow_task: None,
         })
         .unwrap();
     let RemoteEvent::InputRequired { .. } = event else { panic!("expected input request") };

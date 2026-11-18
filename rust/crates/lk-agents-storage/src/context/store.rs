@@ -18,6 +18,8 @@ use crate::thread::schema::{RecordAppliedWrite, SelectAppliedWrite};
 use crate::{CommitOptions, Holder, RunOptions, Storage, StorageError, Thread, shortuuid};
 use lk_agents_abi::storage::thread::AbandonReason;
 
+#[path = "store_control.rs"]
+mod control;
 #[path = "store_session.rs"]
 mod session;
 
@@ -47,6 +49,14 @@ impl Drop for SessionSinkGuard {
 pub struct ContextStore {
     pub(crate) session_view: Arc<Mutex<Option<crate::session_state::SessionState>>>,
     owned_session: Arc<tokio::sync::Mutex<Option<session::OwnedSession>>>,
+    control_attempts: Arc<
+        Mutex<
+            std::collections::BTreeMap<
+                lk_agents_abi::session::control::RemoteControlRef,
+                std::sync::Weak<dyn lk_agents_abi::session::control::RemoteCancellation>,
+            >,
+        >,
+    >,
     session_sink: Arc<Mutex<Option<SessionSink>>>,
     /// Serializes caller flushes; the owning transport serializes its actual database writes.
     session_flush: Arc<tokio::sync::Mutex<()>>,
@@ -54,6 +64,8 @@ pub struct ContextStore {
     /// returning from that transport must not acknowledge over a later checkpoint or reload.
     session_receipts: Arc<AtomicU64>,
     activation: Arc<Mutex<Activation>>,
+    control_closed: Arc<lk_agents_net::signal::Producer<bool>>,
+    control_process: lk_agents_net::env::ProcessStamp,
     database: Option<Database>,
     operation: Arc<tokio::sync::Mutex<()>>,
     managed: Arc<AtomicBool>,
@@ -201,8 +213,102 @@ impl Database {
 }
 
 impl ContextStore {
+    pub(crate) fn ensure_control_process(&self) -> Result<(), StorageError> {
+        self.control_process.check().map_err(|_| StorageError::Invalid(
+            "an inherited context store cannot control tasks; create and bind a current-process store".into(),
+        ))
+    }
+
+    pub(crate) fn same_activation(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.activation, &other.activation)
+    }
+
     pub(crate) fn committed_session(&self) -> Option<Value> {
         self.activation.lock().committed_session()
+    }
+
+    pub(crate) fn session_commands(
+        &self,
+    ) -> Result<Option<Arc<dyn lk_agents_abi::session::SessionCommands>>, StorageError> {
+        self.activation.lock().ensure_open()?;
+        let sink = self.session_sink.lock().clone();
+        sink.map(|sink| sink.session_commands()).transpose().map(Option::flatten)
+    }
+
+    pub(crate) fn session_checkpoint_port(
+        &self,
+    ) -> Result<Option<Arc<dyn lk_agents_abi::text_session::SessionCheckpointPort>>, StorageError>
+    {
+        self.ensure_control_process()?;
+        self.activation.lock().ensure_open()?;
+        let sink = self.session_sink.lock().clone();
+        sink.map(|sink| sink.session_checkpoint_port()).transpose().map(Option::flatten)
+    }
+
+    pub(crate) fn acknowledge_session_checkpoint(&self, state: Value) -> Result<(), StorageError> {
+        self.ensure_control_process()?;
+        let checked = crate::session_state::SessionState::from_value(state.clone())?;
+        let view = self.session_view.lock().clone();
+        let mut activation = self.activation.lock();
+        if activation.closed() {
+            return Ok(());
+        }
+        activation.stage_session(state.clone())?;
+        activation.acknowledge_session(Some(state));
+        self.session_receipts.fetch_add(1, Ordering::AcqRel);
+        drop(activation);
+        if let Some(view) = view {
+            view.assign(&checked);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn session_inbox_policy(&self) -> lk_agents_abi::a2a::options::Policy {
+        self.session_sink
+            .lock()
+            .as_ref()
+            .map_or(lk_agents_abi::a2a::options::Policy::Queue, |sink| sink.inbox_policy())
+    }
+
+    pub(crate) fn live_origin(&self) -> Option<lk_agents_abi::text_session::LiveTurnOrigin> {
+        self.session_sink.lock().as_ref().and_then(|sink| sink.live_origin())
+    }
+
+    pub(crate) fn retain_session(
+        &self,
+        task: lk_agents_abi::OwnedTask,
+    ) -> Result<(), StorageError> {
+        self.activation.lock().ensure_open()?;
+        let sink =
+            self.session_sink.lock().clone().ok_or_else(|| {
+                StorageError::Invalid("the managed execution sink has ended".into())
+            })?;
+        sink.retain_session(task)
+    }
+
+    pub(crate) fn attach_session_commands(
+        &self,
+        commands: std::sync::Weak<dyn lk_agents_abi::session::SessionCommands>,
+    ) -> Result<(), StorageError> {
+        self.activation.lock().ensure_open()?;
+        let sink = self.session_sink.lock().clone();
+        if let Some(sink) = sink {
+            sink.attach_session(commands)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn live_turn(
+        &self,
+        report: lk_agents_abi::text_session::LiveTurnReport,
+    ) -> Result<lk_agents_abi::text_session::LiveTurnCommit, StorageError> {
+        self.activation.lock().ensure_open()?;
+        let sink = self
+            .session_sink
+            .lock()
+            .clone()
+            .ok_or_else(|| StorageError::Invalid("the live execution sink has ended".into()))?;
+        sink.live_turn(report).await
     }
 
     pub(crate) async fn voice_checkpoint(
@@ -242,7 +348,9 @@ impl ContextStore {
         let value = self.activation.lock().session_state();
         let Some(value) = value else { return Ok(None) };
         let view = crate::session_state::SessionState::from_value(value)?;
-        let Some(agent) = view.current_agent()? else { return Ok(None) };
+        let Some(agent) = view.current_agent()? else {
+            return Ok(None);
+        };
         Ok(Some(agent.chat_ctx))
     }
 
@@ -279,10 +387,13 @@ impl ContextStore {
         Self {
             session_view: Arc::default(),
             owned_session: Arc::default(),
+            control_attempts: Arc::default(),
             session_sink: Arc::default(),
             session_flush: Arc::default(),
             session_receipts: Arc::default(),
             activation: Arc::new(Mutex::new(activation)),
+            control_closed: Arc::new(lk_agents_net::signal::signal(false).0),
+            control_process: lk_agents_net::env::ProcessStamp::current(),
             database,
             operation: Arc::new(tokio::sync::Mutex::new(())),
             managed: Arc::new(AtomicBool::new(managed)),
@@ -427,6 +538,7 @@ impl ContextStore {
 
 impl HostContextActivation for ContextStore {
     type Transaction = Transaction;
+    type View = crate::session_state::SessionState;
 
     fn new(
         scopes: Vec<ContextScope>,
@@ -522,8 +634,17 @@ impl HostContextActivation for ContextStore {
         &self,
         context: lk_agents_abi::HostRef,
         store: lk_agents_abi::HostRef,
-    ) -> lk_agents_abi::storage::session::BoundContext {
-        lk_agents_abi::storage::session::BoundContext { context, store }
+        view: Option<Self::View>,
+    ) -> Result<lk_agents_abi::storage::session::BoundContext, StorageError> {
+        self.ensure_control_process()?;
+        if let Some(view) = &view {
+            view.ensure_control_process()?;
+        }
+        self.activation.lock().ensure_open()?;
+        if let Some(view) = view {
+            view.bind_control(self.clone())?;
+        }
+        Ok(lk_agents_abi::storage::session::BoundContext { context, store })
     }
 
     async fn flush_bound_session(
@@ -632,6 +753,7 @@ impl HostContextActivation for ContextStore {
 
     fn close(&self) {
         self.activation.lock().close();
+        self.control_closed.set(true);
     }
 }
 

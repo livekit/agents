@@ -36,6 +36,7 @@ fn send(id: &str, text: &str, selected: Option<InputRequestRef>) -> RemoteInput 
         streaming: true,
         origin: None,
         input_request: selected,
+        control_scope: None,
     }
 }
 
@@ -227,6 +228,7 @@ fn task_continuation_uses_saved_context_without_consuming_a_question() {
                     "parts": [{"text": "Actually Saturday"}], "taskId": "flight", "contextId": "trip"}
             })).unwrap()),
             streaming: true, origin: None, input_request: None,
+                    control_scope: None,
         },
     };
     assert!(

@@ -48,9 +48,9 @@ impl Projection {
         let pending = self.pending.take()?;
         self.select(pending.envelope, view, consumer)
     }
-    pub fn acknowledge(&mut self, consumer: u64, accepted: bool) {
+    pub fn acknowledge(&mut self, consumer: u64, accepted: bool) -> Option<String> {
         if !accepted || !self.pending.as_ref().is_some_and(|pending| pending.consumer == consumer) {
-            return;
+            return None;
         }
         let pending = self.pending.take().expect("delivery identity checked");
         self.sequence = pending.envelope.sequence.unwrap_or(self.sequence + 1);
@@ -58,12 +58,14 @@ impl Projection {
             self.presented.entry(message_id.clone()).or_default().push_str(&delta);
             if matches!(pending.view, View::Text { delta: false }) {
                 if self.message.as_ref() != Some(&message_id) {
-                    self.message = Some(message_id);
+                    self.message = Some(message_id.clone());
                     self.text.clear();
                 }
                 self.text.push_str(&delta);
             }
+            return Some(message_id);
         }
+        None
     }
     /// A text view shows only deltas: each fragment, or the message's text so far.
     fn render(&self, envelope: Envelope, view: View) -> Option<Item> {
@@ -138,7 +140,7 @@ fn present(envelope: Envelope, sequence: u64) -> PresentedEvent {
                 error: failed.then_some(output),
             })
         }
-        StreamEvent::Progress { call_id, tool_name, message } => {
+        StreamEvent::Progress { call_id, tool_name, message, silent } => {
             PresentedEvent::Progress(ProgressEvent {
                 sequence,
                 agent_name,
@@ -147,6 +149,7 @@ fn present(envelope: Envelope, sequence: u64) -> PresentedEvent {
                 call_id: Some(call_id),
                 tool_name: Some(tool_name),
                 message,
+                silent,
             })
         }
     }
@@ -171,16 +174,16 @@ mod tests {
         assert!(
             matches!(p.select(text("a", "hello"), snapshot, 1), Some(Item::Text(t)) if t == "hello")
         );
-        p.acknowledge(1, true);
+        assert!(p.acknowledge(1, true).is_some());
         assert!(
             matches!(p.select(text("a", " world"), snapshot, 1), Some(Item::Text(t)) if t == "hello world")
         );
-        p.acknowledge(1, true);
+        assert!(p.acknowledge(1, true).is_some());
         assert!(p.select(text("a", " hidden"), View::Result, 1).is_none());
         assert!(
             matches!(p.select(text("b", "next"), snapshot, 1), Some(Item::Text(t)) if t == "next")
         );
-        p.acknowledge(1, true);
+        assert!(p.acknowledge(1, true).is_some());
         assert_eq!(
             p.release(),
             BTreeMap::from([("a".into(), "hello world".into()), ("b".into(), "next".into())])

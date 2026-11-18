@@ -17,6 +17,7 @@ pub struct Journal {
     origin: Option<ToolCallRef>,
     input_request: Option<InputRequestRef>,
     observed_input: Mutex<Option<InputRequestRef>>,
+    control_scope: Option<RemoteControlScope>,
 }
 
 impl Journal {
@@ -36,7 +37,13 @@ impl Journal {
             origin,
             input_request,
             observed_input: Mutex::new(None),
+            control_scope: None,
         }
+    }
+
+    pub(super) fn with_control_scope(mut self, scope: Option<RemoteControlScope>) -> Self {
+        self.control_scope = scope;
+        self
     }
 
     /// Only this exchange's acknowledged observation can be attached to its presentation.
@@ -91,12 +98,15 @@ impl RequestObserver for Journal {
             };
             let input_request =
                 matches!(body, A2ARequest::Send(_)).then(|| self.input_request.clone()).flatten();
+            let control_scope =
+                matches!(body, A2ARequest::Send(_)).then(|| self.control_scope.clone()).flatten();
             self.apply(RemoteInput::Prepare {
                 request_id: self.request_id.clone(),
                 request: body,
                 streaming: request.streaming,
                 origin: self.origin.clone(),
                 input_request,
+                control_scope: control_scope.map(Box::new),
             })
             .await
             .map(|_| ())
@@ -115,8 +125,9 @@ impl RequestObserver for Journal {
         &'a self,
         request: &'a Request,
         response: a2a::StreamResponse,
-    ) -> BoxFuture<'a, Result<(), ClientError>> {
+    ) -> BoxFuture<'a, Result<a2a::StreamResponse, ClientError>> {
         Box::pin(async move {
+            let raw = response.clone();
             let response = if request.task_response {
                 match response {
                     a2a::StreamResponse::Task(task) => A2AResponse::Task(task),
@@ -144,7 +155,48 @@ impl RequestObserver for Journal {
                 })
                 .await?;
             *self.observed_input.lock() = input;
-            Ok(())
+            let target = match &raw {
+                a2a::StreamResponse::Task(task) => Some(RemoteTaskRef {
+                    task_id: task.id.clone(),
+                    context_id: task.context_id.clone(),
+                }),
+                a2a::StreamResponse::StatusUpdate(update) => Some(RemoteTaskRef {
+                    task_id: update.task_id.clone(),
+                    context_id: update.context_id.clone(),
+                }),
+                a2a::StreamResponse::ArtifactUpdate(update) => Some(RemoteTaskRef {
+                    task_id: update.task_id.clone(),
+                    context_id: update.context_id.clone(),
+                }),
+                // A direct message remains a message, never a synthetic task result.
+                a2a::StreamResponse::Message(_) => None,
+            };
+            let Some(target) = target else { return Ok(raw) };
+            let accepted = self
+                .owner
+                .recover(
+                    &self.remote_id,
+                    &self.endpoint,
+                    &lk_agents_abi::session::SessionRecovery::Observation(target),
+                )
+                .await
+                .map_err(|error| ClientError::Protocol(error.to_string()))?;
+            match accepted {
+                None => Ok(raw),
+                Some(RemoteRecovery::Observed(response)) => {
+                    let a2a::SendMessageResponse::Task(task) = *response else {
+                        return Err(ClientError::Protocol(
+                            "task observation recovery returned a direct message".into(),
+                        ));
+                    };
+                    // A late input-required poll cannot bind or present a retired question.
+                    *self.observed_input.lock() = None;
+                    Ok(a2a::StreamResponse::Task(task))
+                }
+                Some(_) => Err(ClientError::Protocol(
+                    "task observation recovery returned a transport operation".into(),
+                )),
+            }
         })
     }
 

@@ -328,3 +328,114 @@ async fn a_session_ending_mid_generation_resolves_its_generation_and_authorizati
     let ended = tokio::time::timeout(std::time::Duration::from_secs(1), waits).await;
     assert!(ended.is_ok(), "a wait on the ended session's speech hung");
 }
+
+#[tokio::test]
+async fn exact_output_waits_for_its_playout_boundary_and_retains_its_words_once() {
+    let mut speech = Speech::created(true);
+    let handle = speech.handle();
+    speech.state.mark_scheduled();
+    speech.state.authorize_generation();
+    speech.publish();
+    let receipt = handle.exact_delivery("Your booking reference is ABC.");
+    tokio::pin!(receipt);
+    assert!(futures_util::poll!(receipt.as_mut()).is_pending());
+
+    let words = ChatItem::Message(lk_agents_abi::ChatMessage::text(
+        "exact-output",
+        lk_agents_abi::Role::Assistant,
+        "Your booking reference is ABC.",
+        std::time::UNIX_EPOCH,
+    ));
+    speech.state.item_added(&words);
+    speech.state.mark_generation_done().unwrap();
+    speech.publish();
+    assert!(
+        futures_util::poll!(receipt.as_mut()).is_pending(),
+        "a generation mark is not delivery"
+    );
+
+    speech.state.mark_done(None);
+    speech.publish();
+    receipt.await.unwrap();
+    handle.exact_delivery("Your booking reference is ABC.").await.unwrap();
+    assert_eq!(handle.chat_items(), vec![words], "reading a receipt cannot append history");
+}
+
+#[tokio::test]
+async fn interrupted_or_unheard_exact_output_cannot_report_success() {
+    for interrupted in [false, true] {
+        let mut speech = Speech::created(true);
+        let handle = speech.handle();
+        speech.state.mark_scheduled();
+        let mut message = lk_agents_abi::ChatMessage::text(
+            "partial-output",
+            lk_agents_abi::Role::Assistant,
+            "Your booking reference is",
+            std::time::UNIX_EPOCH,
+        );
+        message.interrupted = interrupted;
+        speech.state.item_added(&ChatItem::Message(message));
+        if interrupted {
+            assert!(speech.state.force_interrupt());
+        }
+        speech.state.mark_done(None);
+        speech.publish();
+        let error = handle.exact_delivery("Your booking reference is ABC.").await.unwrap_err();
+        assert!(!error.cancelled(), "delivery failure cannot cancel business work");
+        assert!(!error.retryable(), "a partial exact output cannot be safely replayed");
+    }
+}
+
+#[tokio::test]
+async fn exact_output_receipts_settle_on_output_failure_or_owner_loss() {
+    let mut failed = Speech::created(true);
+    let failure = ProviderError::from(lk_agents_abi::errors::ApiError::connection(Some(
+        "speaker failed".into(),
+    )));
+    failed.state.mark_scheduled();
+    failed.state.mark_done(Some(failure.clone()));
+    failed.publish();
+    assert_eq!(failed.handle().exact_delivery("ABC").await, Err(failure.into_final()));
+
+    let mut lost = Speech::created(true);
+    lost.state.mark_scheduled();
+    lost.publish();
+    let handle = lost.handle();
+    let receipt = handle.exact_delivery("ABC");
+    tokio::pin!(receipt);
+    assert!(futures_util::poll!(receipt.as_mut()).is_pending());
+    drop(lost);
+    assert!(!receipt.await.unwrap_err().cancelled());
+
+    let (not_created, signals) = pending_speech(SpeechId(99), true);
+    drop(signals);
+    assert!(
+        !not_created.exact_delivery("ABC").await.unwrap_err().cancelled(),
+        "never-created output cannot manufacture business cancellation"
+    );
+}
+
+#[tokio::test]
+async fn losing_an_exact_output_waiter_does_not_cancel_or_replay_its_speech() {
+    let mut speech = Speech::created(true);
+    let handle = speech.handle();
+    speech.state.mark_scheduled();
+    speech.publish();
+    {
+        let receipt = handle.exact_delivery("ABC");
+        tokio::pin!(receipt);
+        assert!(futures_util::poll!(receipt.as_mut()).is_pending());
+    }
+    assert!(!handle.interrupted(), "a receipt reader owns no cancellation authority");
+    let words = ChatItem::Message(lk_agents_abi::ChatMessage::text(
+        "exact-output",
+        lk_agents_abi::Role::Assistant,
+        "ABC",
+        std::time::UNIX_EPOCH,
+    ));
+    speech.state.item_added(&words);
+    speech.state.mark_done(None);
+    speech.publish();
+    handle.exact_delivery("ABC").await.unwrap();
+    assert_eq!(handle.chat_items(), vec![words]);
+}

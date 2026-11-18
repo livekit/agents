@@ -233,7 +233,9 @@ pub fn admit(
             let current = state.chat_history.iter().find(|message| {
                 message.id == offered.id && message.role == lk_agents_abi::Role::User
             });
-            if current != Some(offered) {
+            if !current
+                .is_some_and(|current| crate::session::input::same_human_version(current, offered))
+            {
                 return Err(invalid(
                     "the reserved human response changed; route the current words again",
                 ));
@@ -243,7 +245,7 @@ pub fn admit(
             }
             validate_task(remote, request, task)?;
             let message = crate::session::input::response(state, &reference)?;
-            if &message != offered {
+            if !crate::session::input::same_human_version(&message, offered) {
                 return Err(invalid(
                     "the reserved human response changed; route the current words again",
                 ));

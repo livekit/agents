@@ -2,9 +2,13 @@ use super::*;
 
 mod continuation;
 mod input;
+mod live;
+mod live_control;
+mod remote_resume;
 #[cfg(test)]
 #[path = "machine_tests.rs"]
 mod tests;
+pub(super) mod tool_output;
 
 impl Session {
     pub fn new(config: SessionConfig, input: SessionInput) -> Result<Self, RoutingError> {
@@ -57,6 +61,7 @@ impl Session {
         config.validate_state(&state)?;
         Ok(Self {
             failure_input_requirements: Vec::new(),
+            tool_outputs: BTreeMap::new(),
             config,
             state,
             id_seed: input.id_seed,
@@ -70,6 +75,7 @@ impl Session {
             checkpoint_due: None,
             checkpoint_bytes: 0,
             phase: Phase::NotStarted,
+            live: None,
             deferred_input_offers: BTreeMap::new(),
             usage: Ledger::default(),
             sequence: 0,
@@ -193,6 +199,25 @@ impl Session {
             });
             return effects;
         }
+        // Source output receipts must resolve even after the current foreground run ended.
+        match event {
+            SessionEvent::Run {
+                invocation_id,
+                event: agent_run::AgentRunEvent::ToolOutputRequested { output, call, text, stream },
+            } => {
+                return self.request_tool_output(invocation_id, output, call, text, stream, now);
+            }
+            SessionEvent::Run {
+                invocation_id,
+                event: agent_run::AgentRunEvent::ToolOutputDelivered { output, result },
+            } => {
+                return self.delivered_tool_output(invocation_id, output, result, now);
+            }
+            SessionEvent::ToolOutputCommitted { invocation_id, output, result } => {
+                return self.committed_tool_output(invocation_id, output, result, now);
+            }
+            _ => {}
+        }
         if matches!(self.phase, Phase::Done) {
             return effects;
         }
@@ -202,17 +227,50 @@ impl Session {
                 return self.handle(SessionEvent::Cancel, now);
             }
             SessionEvent::Start(message) if matches!(self.phase, Phase::NotStarted) => {
+                self.record_dialogue(message.clone());
                 if let Err(error) = self.restore_completed(now, &mut effects) {
                     self.finish(Err(TextSessionError::Routing(error)), &mut effects);
                     return effects;
                 }
-                self.record_dialogue(message.clone());
-                // Receipt and human input precede classification. The detector never sees
-                // a queued question or an agent's private model history.
-                self.route_input(message, now, &mut effects);
+                // Capture the actual offered occurrences before recovery can observe a new
+                // question. Later observations cannot turn this human message into its answer.
+                let human = crate::session::live::FrozenHuman {
+                    message,
+                    candidates: self.input_candidates(),
+                    offered: crate::delegation::remote::routing::offered(&self.state),
+                    history: self.state.chat_history.clone(),
+                };
+                if let Some(resume) =
+                    self.phase.invocation_mut().and_then(|invocation| invocation.recovery.as_mut())
+                {
+                    resume.incoming = Some(Box::new(human));
+                } else {
+                    self.route_frozen_input(human, now, &mut effects);
+                }
+            }
+            SessionEvent::LiveTurnCommitted { turn, result } => {
+                if !self.live.as_ref().is_some_and(|live| live.awaiting_commit(turn)) {
+                    return effects;
+                }
+                match result {
+                    Ok(()) => {
+                        if self.live.as_mut().is_some_and(|live| live.committed(turn)) {
+                            self.next_live(now, &mut effects);
+                        }
+                    }
+                    Err(error) => {
+                        self.persistence_failure = Some(error);
+                        return self.handle(SessionEvent::Cancel, now);
+                    }
+                }
             }
             SessionEvent::InputRouted { request_id, result, usage } => {
                 self.input_routed(request_id, result, usage, now, &mut effects);
+            }
+            SessionEvent::Run { invocation_id, event }
+                if self.detached_live_event(&invocation_id, &event) =>
+            {
+                self.settle_live_event(&invocation_id, event, now, &mut effects);
             }
             SessionEvent::Run { invocation_id, event } if self.is_current(&invocation_id) => {
                 self.run_event(event, now, &mut effects);
@@ -243,7 +301,12 @@ impl Session {
                 // Release has ended this invocation, not the owner. Its delivery receipts
                 // still admit presented input occurrences before settlement or continuation.
                 let phase = std::mem::replace(&mut self.phase, Phase::NotStarted);
-                let Phase::Releasing(invocation, release) = phase else { return effects };
+                let Phase::Releasing(invocation, release) = phase else {
+                    return effects;
+                };
+                if let Some(live) = self.live.as_mut() {
+                    live.forget_invocation_preparations(&invocation.id);
+                }
                 self.usage.absorb(invocation.run.ledger());
                 match release {
                     InvocationRelease::Settled(result, output, approvals) => {
@@ -251,6 +314,16 @@ impl Session {
                     }
                     InvocationRelease::Parked => {
                         self.next_child(now, &mut effects);
+                    }
+                    InvocationRelease::Recovered(result) => {
+                        self.remote_released(
+                            *result,
+                            invocation
+                                .recovery
+                                .expect("native recovery retains its original sources"),
+                            now,
+                            &mut effects,
+                        );
                     }
                 }
             }
@@ -262,6 +335,14 @@ impl Session {
                 self.settled(result, output, Vec::new(), now, &mut effects);
             }
             SessionEvent::Cancel => {
+                if let Some(live) = self.live.as_mut() {
+                    for (invocation_id, call) in live.close() {
+                        effects.push(SessionEffect::Run {
+                            invocation_id,
+                            effect: agent_run::AgentRunEffect::ToolCancel { call },
+                        });
+                    }
+                }
                 if matches!(self.phase, Phase::Releasing(..)) {
                     self.end_invocation();
                     self.finish(Err(TextSessionError::Run(RunError::Cancelled)), &mut effects);
@@ -308,6 +389,7 @@ impl Session {
                             | SessionEffect::InvocationParked { .. }
                             | SessionEffect::InvocationSettled { .. }
                             | SessionEffect::Finished { result: Ok(_), .. }
+                            | SessionEffect::LiveTurnFinished { .. }
                             | SessionEffect::Run {
                                 effect: agent_run::AgentRunEffect::ToolExecute { .. }
                                     | agent_run::AgentRunEffect::HostCheckpoint { .. },
@@ -339,18 +421,29 @@ impl Session {
     }
 
     fn invoke(&mut self, message: Option<ChatMessage>, now: Ts, effects: &mut Vec<SessionEffect>) {
-        self.invoke_offered(message, None, now, effects);
+        self.invoke_offered(message, None, Vec::new(), now, effects);
     }
 
     fn invoke_offered(
         &mut self,
         message: Option<ChatMessage>,
         offered: Option<Vec<super::InputCandidate>>,
+        requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
         now: Ts,
         effects: &mut Vec<SessionEffect>,
     ) {
         let active = self.state.active_frame_id.clone();
         let frame = &self.state.frames[&active];
+        if frame.history.iter().any(|item| {
+            matches!(item, ChatItem::FunctionCall(call)
+            if crate::tool_calls::provisional(call)
+                && self.live.as_ref().is_none_or(|live| !live.owns_call(&active, &call.id)))
+        }) {
+            self.finish(Err(TextSessionError::Routing(RoutingError::InvalidState(
+                "a local tool lost its final outcome; its progress cannot authorize continuation".into(),
+            ))), effects);
+            return;
+        }
         if frame.pending_calls.iter().any(|call| call.status != ChildCallStatus::Approval) {
             let offered =
                 offered.unwrap_or_else(|| crate::delegation::remote::routing::offered(&self.state));
@@ -377,13 +470,17 @@ impl Session {
         let mut notices = Vec::new();
         let frame = self.active_frame_mut();
         frame.completed = false;
-        frame.output = None;
+        if frame.parent.is_none() {
+            frame.output = None;
+        }
         frame.error = None;
         for request in frame.input_requests.values_mut() {
             if request.state != lk_agents_abi::session::InputRequestState::Responding {
                 continue;
             }
-            let Some(response) = &request.response_message else { continue };
+            let Some(response) = &request.response_message else {
+                continue;
+            };
             if let Some(origin) = &request.origin {
                 answered.insert(origin.call_id.clone());
                 if let Some(call) = frame.history.iter().find_map(|item| match item {
@@ -461,6 +558,7 @@ impl Session {
                     run.with_input_answers(answered).with_input_offers(offered.unwrap_or_else(
                         || crate::delegation::remote::routing::offered(&self.state),
                     ));
+                let run = if self.live.is_some() { run.with_live_tools() } else { run };
                 if self.checkpoints { run.with_checkpoints() } else { run }
             }
             Err(error) => {
@@ -469,14 +567,18 @@ impl Session {
             }
         };
         effects.push(SessionEffect::InvocationStarted {
+            origin: self.live.as_ref().and_then(|live| live.origin().cloned()),
             frame_id: frame.id.clone(),
             agent_name: frame.agent_name.clone(),
             invocation_id: invocation_id.clone(),
-            execution_id: self.state.execution_id.clone(),
+            execution_id: self.live.as_ref().and_then(|live| live.origin()).map_or_else(
+                || self.state.execution_id.clone(),
+                |origin| origin.execution_id.clone(),
+            ),
             history,
         });
         let run_effects = if resume {
-            run.continue_from_history(now)
+            run.continue_from_history(requirements, now)
         } else {
             run.handle(agent_run::AgentRunEvent::Start, now)
         };
@@ -486,6 +588,7 @@ impl Session {
             run,
             children: BTreeMap::new(),
             outputs: BTreeMap::new(),
+            recovery: None,
         });
         self.run_effects(run_effects, now, effects);
     }
@@ -496,6 +599,12 @@ impl Session {
         now: Ts,
         effects: &mut Vec<SessionEffect>,
     ) {
+        let Some(invocation_id) = self.phase.invocation().map(|invocation| invocation.id.clone())
+        else {
+            return;
+        };
+        self.observe_live_event(&invocation_id, &event);
+        let running = self.live.as_ref().map_or_else(Vec::new, |live| live.running(&invocation_id));
         let Some(invocation) = self.phase.invocation_mut() else {
             return;
         };
@@ -514,7 +623,7 @@ impl Session {
                 }
             }
         }
-        let run_effects = invocation.run.handle(event, now);
+        let run_effects = invocation.run.handle_with_running_tools(event, now, &running);
         self.run_effects(run_effects, now, effects);
     }
 
@@ -543,10 +652,53 @@ impl Session {
                 } if invocation.children.contains_key(&call) => {
                     self.execute_child(call, function_call, invocation_id, prepared, effects)
                 }
+                agent_run::AgentRunEffect::ToolExecute {
+                    call,
+                    prepared,
+                    ref function_call,
+                    ..
+                } if self.live.is_some() && invocation.recovery.is_none() => {
+                    let started = self.live.as_mut().expect("guarded live owner").start_body(
+                        (invocation_id.clone(), call),
+                        frame_id,
+                        function_call.clone(),
+                    );
+                    match started {
+                        Ok(()) => effects.push(SessionEffect::Run { invocation_id, effect }),
+                        Err(error) => {
+                            effects.push(SessionEffect::Run {
+                                invocation_id,
+                                effect: agent_run::AgentRunEffect::ToolArgumentsRelease {
+                                    prepared,
+                                },
+                            });
+                            self.run_event(
+                                agent_run::AgentRunEvent::ToolLaunchFailed {
+                                    call,
+                                    error: lk_agents_abi::errors::HostError::new(error.to_string()),
+                                },
+                                now,
+                                effects,
+                            );
+                        }
+                    }
+                }
                 agent_run::AgentRunEffect::ToolCancel { call }
                     if matches!(invocation.children.get(&call), Some(Child::Executing(_))) =>
                 {
                     self.cancel_child(call, now, effects)
+                }
+                agent_run::AgentRunEffect::CancelToolExecution { execution }
+                    if self.live.is_some() =>
+                {
+                    if let Some((invocation_id, call)) =
+                        self.live.as_ref().and_then(|live| live.cancellation(execution))
+                    {
+                        effects.push(SessionEffect::Run {
+                            invocation_id,
+                            effect: agent_run::AgentRunEffect::ToolCancel { call },
+                        });
+                    }
                 }
                 agent_run::AgentRunEffect::Finished { result, input_requirements } => self
                     .invocation_finished(
@@ -601,8 +753,12 @@ impl Session {
         prepared: ResourceId,
         effects: &mut Vec<SessionEffect>,
     ) {
-        let Some(invocation) = self.phase.invocation_mut() else { return };
-        let Some(child) = invocation.children.remove(&call) else { return };
+        let Some(invocation) = self.phase.invocation_mut() else {
+            return;
+        };
+        let Some(child) = invocation.children.remove(&call) else {
+            return;
+        };
         let child = match child {
             Child::Prepared(mut child) | Child::Executing(mut child) => {
                 child.function_call = function_call;
@@ -621,13 +777,17 @@ impl Session {
     }
 
     fn cancel_child(&mut self, call: CallId, now: Ts, effects: &mut Vec<SessionEffect>) {
-        let Some(invocation) = self.phase.invocation_mut() else { return };
-        let Some(Child::Executing(child)) = invocation.children.remove(&call) else { return };
+        let Some(invocation) = self.phase.invocation_mut() else {
+            return;
+        };
+        let Some(Child::Executing(child)) = invocation.children.remove(&call) else {
+            return;
+        };
         invocation.children.insert(call, Child::Prepared(child));
         let settled = invocation.run.handle(
             agent_run::AgentRunEvent::ToolSettled {
                 call,
-                outcome: lk_agents_abi::llm::tool_executor::ToolOutcome::Cancelled,
+                report: (lk_agents_abi::llm::tool_executor::ToolOutcome::Cancelled).into(),
             },
             now,
         );
@@ -643,6 +803,17 @@ impl Session {
         now: Ts,
         effects: &mut Vec<SessionEffect>,
     ) {
+        if self.phase.invocation().is_some_and(|invocation| invocation.recovery.is_some()) {
+            self.remote_invocation_finished(
+                frame_id,
+                invocation_id,
+                result,
+                input_requirements,
+                now,
+                effects,
+            );
+            return;
+        }
         let result = match result {
             Ok(result) => result,
             Err(error) => {
@@ -663,7 +834,9 @@ impl Session {
             }
         };
         let phase = std::mem::replace(&mut self.phase, Phase::Done);
-        let (Phase::Running(invocation) | Phase::Releasing(invocation, _)) = phase else { return };
+        let (Phase::Running(invocation) | Phase::Releasing(invocation, _)) = phase else {
+            return;
+        };
         let output = validated_output(&invocation, &result.outcome);
         let approvals = self.approvals(&invocation, &result.all_messages);
         if let Some(output) = &output {
@@ -759,10 +932,11 @@ impl Session {
                     self.run_event(
                         agent_run::AgentRunEvent::ToolSettled {
                             call,
-                            outcome: lk_agents_abi::llm::tool_executor::ToolOutcome::Rejected(
+                            report: (lk_agents_abi::llm::tool_executor::ToolOutcome::Rejected(
                                 "child was not started because a sibling ended this invocation"
                                     .into(),
-                            ),
+                            ))
+                            .into(),
                         },
                         now,
                         effects,
@@ -772,12 +946,16 @@ impl Session {
             }
             agent_run::DelegationCheckpoint::Ready { history } => history,
         };
-        let Phase::Running(invocation) = &self.phase else { return };
+        let Phase::Running(invocation) = &self.phase else {
+            return;
+        };
         let mut pending: Vec<_> = invocation
             .children
             .values()
             .filter_map(|child| {
-                let Child::Executing(child) = child else { return None };
+                let Child::Executing(child) = child else {
+                    return None;
+                };
                 Some(self.pending(
                     &invocation.frame_id,
                     &invocation.id,
@@ -816,14 +994,20 @@ impl Session {
     /// The released invocation's dialogue as the person received it: a message cut short reads
     /// as interrupted, with the text that reached them.
     fn receipts(&mut self, delivered: &BTreeMap<String, String>) {
-        let Phase::Releasing(invocation, release) = &self.phase else { return };
+        let Phase::Releasing(invocation, release) = &self.phase else {
+            return;
+        };
         let items = match release {
-            InvocationRelease::Settled(result, ..) => &result.new_messages,
+            InvocationRelease::Settled(result, ..) | InvocationRelease::Recovered(result) => {
+                &result.new_messages
+            }
             InvocationRelease::Parked => &self.state.frames[&invocation.frame_id].history,
         };
         let received: Vec<ChatMessage> = (items.iter())
             .filter_map(|item| {
-                let ChatItem::Message(message) = item else { return None };
+                let ChatItem::Message(message) = item else {
+                    return None;
+                };
                 let text = delivered.get(&message.id)?;
                 let mut message = message.clone();
                 message.interrupted |= message.raw_text_content().as_deref() != Some(text.as_str());
@@ -901,12 +1085,21 @@ impl Session {
                 frame.history = history;
             }
             if !frame.completed {
-                frame.output = None;
+                if frame.parent.is_none() {
+                    frame.output = None;
+                }
                 frame.error = Some(error.to_string());
             }
             if self.checkpoints && !matches!(error, TextSessionError::Storage(_)) {
                 effects.push(SessionEffect::Checkpoint(Box::new(self.state.clone())));
             }
+        }
+        if self.live.is_some()
+            && !self.closing
+            && !matches!(result, Err(TextSessionError::Storage(_)))
+        {
+            self.finish_live(result, effects);
+            return;
         }
         self.end_invocation();
         self.usage.settle();

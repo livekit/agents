@@ -105,6 +105,10 @@ pub(crate) struct StorageTurns {
     pub enabled: bool,
     stored: Vec<ChatItem>,
     revision: (i64, u64),
+    /// Identity from the native storage receipt, used when reporting a late edit conflict.
+    partition_key: Option<String>,
+    /// Rows still equal to this store's acknowledged writes, not a general overwrite grant.
+    own_writes: BTreeSet<String>,
     next_checkpoint: u64,
     next_turn: u64,
     /// Each started speech's turn until its save is answered, numbered in the order the speeches
@@ -122,7 +126,13 @@ impl StorageTurns {
     }
 
     pub(crate) fn capture(&self, items: Vec<ChatItem>) -> VoiceHistory {
-        VoiceHistory { items, stored: self.stored.clone(), revision: self.revision }
+        VoiceHistory {
+            items,
+            stored: self.stored.clone(),
+            revision: self.revision,
+            partition_key: self.partition_key.clone(),
+            own_writes: self.own_writes.clone(),
+        }
     }
 
     fn turn_of(&self, speech: SpeechId) -> Option<u64> {
@@ -424,19 +434,75 @@ impl VoiceDriver {
         if history.revision < self.session.storage.revision {
             return;
         }
-        self.session.storage.revision = history.revision;
-        self.session.storage.stored = history.stored;
-        if !self.session.chat_ctx.reload_transport(
+        let read_rows: BTreeMap<_, _> = read.iter().map(|item| (item.id(), item)).collect();
+        let stored: BTreeMap<_, _> = history.stored.iter().map(|item| (item.id(), item)).collect();
+        let same = |left: &ChatItem, right: &ChatItem| {
+            use lk_agents_abi::llm::chat_context::protocol::encode_chat_item;
+            encode_chat_item(left) == encode_chat_item(right)
+        };
+        let recovered: BTreeSet<String> = read_rows
+            .iter()
+            .filter(|&(id, before)| {
+                !history.own_writes.contains(*id)
+                    && !stored.get(*id).is_some_and(|row| same(before, row))
+            })
+            .map(|(id, _)| (*id).to_owned())
+            .chain(
+                stored
+                    .iter()
+                    .filter(|&(id, row)| {
+                        !history.own_writes.contains(*id)
+                            && !read_rows.get(*id).is_some_and(|before| same(before, row))
+                    })
+                    .map(|(id, _)| (*id).to_owned()),
+            )
+            .collect();
+        let changed = match self.session.chat_ctx.reload_transport(
             &read,
             history.items,
-            &self.session.storage.stored,
+            &history.stored,
+            &history.own_writes,
             self.activity.agent_name(),
         ) {
-            return;
+            Ok(changed) => changed,
+            Err(conflict) => {
+                self.publish_event(crate::events::SessionEvent::Diagnostic(
+                    crate::events::DiagnosticEvent::warning(
+                        crate::events::diagnostics::HISTORY_CONFLICT,
+                    )
+                    .with("item_ids", conflict.items.join(","))
+                    .with("base_revision", self.session.storage.revision.0.to_string())
+                    .with("observed_revision", history.revision.0.to_string()),
+                ));
+                let error = StorageError::VersionConflict {
+                    partition_key: history
+                        .partition_key
+                        .or_else(|| self.session.storage.partition_key.clone())
+                        .unwrap_or_default(),
+                    expected: self.session.storage.revision.0,
+                };
+                // Keep both the local intent and its original base. No later capture can
+                // relabel that edit as one accepted after the unread foreign revision.
+                self.conversation_state_failed(self.step.now, error);
+                return;
+            }
+        };
+        self.session.storage.revision = history.revision;
+        self.session.storage.stored = history.stored;
+        self.session.storage.partition_key = history.partition_key;
+        self.session.storage.own_writes = history.own_writes;
+        if !recovered.is_empty() {
+            self.publish_event(crate::events::SessionEvent::Diagnostic(
+                crate::events::DiagnosticEvent::info(crate::events::diagnostics::HISTORY_REBASED)
+                    .with("item_ids", recovered.into_iter().collect::<Vec<_>>().join(","))
+                    .with("revision", history.revision.0.to_string()),
+            ));
         }
-        let agent = self.activity.agent_name().to_owned();
-        self.local_history_observed(&agent);
-        self.publish_history();
+        if changed {
+            let agent = self.activity.agent_name().to_owned();
+            self.local_history_observed(&agent);
+            self.publish_history();
+        }
     }
 
     /// A started speech takes the partition: it holds it until its turn's save is answered.

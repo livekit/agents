@@ -69,3 +69,15 @@ fn opaque_results_allow_sequential_provider_reuse_but_not_overlapping_ambiguity(
         [history[0].clone(), history[2].clone(), history[1].clone(), history[3].clone()];
     assert!(validate_resume(&overlapping).is_err());
 }
+
+#[test]
+fn a_progress_result_does_not_prove_the_live_local_body_finished() {
+    let mut history = [call("provisional"), output("provisional_out")];
+    let ChatItem::FunctionCall(call) = &mut history[0] else { unreachable!() };
+    call.extra
+        .insert(lk_agents_abi::llm::tool_executor::LIVE_LOCAL_PENDING_KEY.into(), true.into());
+    assert!(validate_resume(&history).is_err());
+    let ChatItem::FunctionCall(call) = &mut history[0] else { unreachable!() };
+    call.extra.remove(lk_agents_abi::llm::tool_executor::LIVE_LOCAL_PENDING_KEY);
+    assert!(validate_resume(&history).is_ok());
+}

@@ -477,7 +477,9 @@ impl VoiceDriver {
                     pending.join(", ")
                 ),
                 // Handled elsewhere in the voice lifecycle.
-                AgentRunEffect::ToolArgumentsRelease { .. }
+                AgentRunEffect::DeliverToolOutput { .. }
+                | AgentRunEffect::ToolOutputSettled { .. }
+                | AgentRunEffect::ToolArgumentsRelease { .. }
                 | AgentRunEffect::Emit(_)
                 | AgentRunEffect::ArgumentsRepaired { .. }
                 | AgentRunEffect::HostCheckpoint { .. }
@@ -694,7 +696,10 @@ impl VoiceDriver {
         let Some(reply) = self.activity.tools.replies.get(&speech) else { return true };
         let remote = reply.agent.as_ref().is_some_and(|agent| {
             agent.definition().tools.iter().any(|tool| {
-                tool.spec.name == name && (tool.remote.is_some() || tool.needs_approval.is_some())
+                tool.spec.name == name
+                    && (tool.remote.is_some()
+                        || tool.local_agent.is_some()
+                        || tool.needs_approval.is_some())
             })
         });
         !remote || matches!(reply.input_gate, super::input::ReplyInputGate::Ready)

@@ -48,8 +48,7 @@ fn delegation_authority_matrix_shares_only_after_local_grant_verification() {
     let valid = token(KEY, SECRET, CALLER, grants(), Duration::from_secs(3600));
     let proof = verify(ENDPOINT, THREAD, CALLER, assertion(&valid), SystemTime::now()).unwrap();
     let mut interaction = RemoteInteraction::new(InteractionId {
-        delegation_id: "delegation-1".into(),
-        tool_id: "expert".into(),
+        remote_id: "remote".into(),
         parent_call_id: "call-1".into(),
         endpoint: ENDPOINT.into(),
     })
@@ -116,8 +115,7 @@ fn configured_delegation_trust_covers_exact_canonical_destination_thread_and_ide
     let canonical = "https://PROJECT.livekit.cloud:443/agents/expert/production/help/";
     let proof = verify(canonical, THREAD, CALLER, assertion(), SystemTime::now()).unwrap();
     let mut interaction = RemoteInteraction::new(InteractionId {
-        delegation_id: "delegation-1".into(),
-        tool_id: "expert".into(),
+        remote_id: "remote".into(),
         parent_call_id: "call-1".into(),
         endpoint: canonical.into(),
     })

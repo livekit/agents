@@ -111,8 +111,12 @@ fn late_old_progress_cannot_consume_a_replacement_invocations_sender() {
                 &old.invocation_id,
                 old.operation,
                 "reused-call",
-                ToolOutcome::Update { message: "old cleanup".into(), raw: "old cleanup".into() }
-                    .into()
+                ToolOutcome::Update {
+                    message: "old cleanup".into(),
+                    raw: "old cleanup".into(),
+                    reply_required: true
+                }
+                .into()
             )
             .is_err(),
         "old progress is routed only to its captured core owner"
@@ -127,7 +131,12 @@ fn late_old_progress_cannot_consume_a_replacement_invocations_sender() {
                 &new.invocation_id,
                 new.operation,
                 "reused-call",
-                ToolOutcome::Update { message: "new work".into(), raw: "new work".into() }.into()
+                ToolOutcome::Update {
+                    message: "new work".into(),
+                    raw: "new work".into(),
+                    reply_required: true
+                }
+                .into()
             )
             .is_ok()
     );
@@ -140,7 +149,11 @@ fn updates_after_the_first_keep_their_owner_until_the_actual_body_finishes() {
     let bodies = ToolBodies::default();
     let invocation = invocation(1);
     let mut first = bodies.tool_body(&invocation);
-    let report = || ToolOutcome::Update { message: "working".into(), raw: "working".into() };
+    let report = || ToolOutcome::Update {
+        message: "working".into(),
+        raw: "working".into(),
+        reply_required: true,
+    };
     assert!(
         bodies
             .first_tool_progress(

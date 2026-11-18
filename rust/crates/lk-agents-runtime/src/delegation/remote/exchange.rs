@@ -3,6 +3,15 @@
 use super::*;
 
 impl Delegation {
+    fn check_configuration(&self, existing: &dyn RemoteTaskDriver) -> Result<(), AgentClientError> {
+        if !existing.same_configuration(self.driver.as_ref()) {
+            return Err(AgentClientError::InvalidInput(
+                "this remote id has a different live configuration; use distinct remote ids".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) async fn send(
         &mut self,
         message: Message,
@@ -50,10 +59,13 @@ impl Delegation {
         task: &lk_agents_abi::delegation::remote::RemoteTaskRef,
     ) -> Result<Option<Arc<dyn RemoteTaskDriver>>, AgentClientError> {
         if let Some(owner) = &self.request.owner {
-            let endpoint = self.interaction.0.lock().policy.snapshot().id.endpoint;
-            if let Some(existing) =
-                owner.remote_driver(&endpoint, &endpoint, task).await.map_err(input_error)?
+            let identity = self.interaction.0.lock().policy.snapshot().id;
+            if let Some(existing) = owner
+                .remote_driver(&identity.remote_id, &identity.endpoint, task)
+                .await
+                .map_err(input_error)?
             {
+                self.check_configuration(existing.as_ref())?;
                 let ours: Arc<dyn RemoteTaskDriver> = self.driver.clone();
                 if !Arc::ptr_eq(&existing, &ours) {
                     return Ok(Some(existing));
@@ -68,8 +80,10 @@ impl Delegation {
         command: driver::Command,
         reply: &mut Option<Owned<Reply>>,
     ) -> Result<Option<RemoteEvent>, AgentClientError> {
-        if let driver::Message::Cancel(task) = &command.message {
-            return self.cancel_command(task.clone(), command.done, reply).await;
+        if let driver::Message::Cancel { task, retry_after } = &command.message {
+            return self
+                .cancel_command(task.clone(), retry_after.clone(), command.done, reply)
+                .await;
         }
         let response_claim = command.response_claim;
         let message = match &command.message {
@@ -82,7 +96,9 @@ impl Delegation {
                 }
             },
             driver::Message::Resume { .. } | driver::Message::Reconcile => None,
-            driver::Message::Cancel(_) => unreachable!("task controls are handled before messages"),
+            driver::Message::Cancel { .. } => {
+                unreachable!("task controls are handled before messages")
+            }
         };
         // The old source is fully closed before another exchange starts, so an artifact delta
         // can never be observed by two local response streams for this task.
@@ -117,7 +133,9 @@ impl Delegation {
                 command.done.resolve(Ok(()));
                 return event.map(Some);
             }
-            driver::Message::Cancel(_) => unreachable!("task controls are handled before messages"),
+            driver::Message::Cancel { .. } => {
+                unreachable!("task controls are handled before messages")
+            }
         };
         drop(response_claim);
         match sent {
@@ -166,12 +184,15 @@ impl Delegation {
             RemoteRecovery::Observed(_) | RemoteRecovery::Uncertain => return Ok(false),
         };
         let Some(owner) = &self.request.owner else { return Ok(false) };
-        let endpoint = self.interaction.0.lock().policy.snapshot().id.endpoint;
-        let Some(driver) =
-            owner.remote_driver(&endpoint, &endpoint, &task).await.map_err(input_error)?
+        let identity = self.interaction.0.lock().policy.snapshot().id;
+        let Some(driver) = owner
+            .remote_driver(&identity.remote_id, &identity.endpoint, &task)
+            .await
+            .map_err(input_error)?
         else {
             return Ok(false);
         };
+        self.check_configuration(driver.as_ref())?;
         match recovery {
             RemoteRecovery::Dispatch { request_id, request, streaming, input_request } => {
                 let A2ARequest::Send(send) = request.as_ref() else {
@@ -246,17 +267,26 @@ impl Delegation {
     ) -> Option<Arc<dyn lk_agents_net::a2a_client::observer::RequestObserver>> {
         let owner = self.request.owner.clone()?;
         let state = self.interaction.0.lock().policy.snapshot();
-        let endpoint = state.id.endpoint;
+        let identity = state.id;
         let driver: Arc<dyn RemoteTaskDriver> = self.driver.clone();
-        owner.register_remote_driver(&endpoint, &endpoint, &request_id, Arc::downgrade(&driver));
-        let journal = Arc::new(journal::Journal::new(
-            owner,
-            endpoint.clone(),
-            endpoint,
-            request_id,
-            origin,
-            input_request,
-        ));
+        owner.register_remote_driver(
+            &identity.remote_id,
+            &identity.endpoint,
+            &request_id,
+            Arc::downgrade(&driver),
+        );
+        let control_scope = self.interaction.0.lock().control_scope.clone();
+        let journal = Arc::new(
+            journal::Journal::new(
+                owner,
+                identity.endpoint,
+                identity.remote_id,
+                request_id,
+                origin,
+                input_request,
+            )
+            .with_control_scope(control_scope),
+        );
         self.journal = Some(journal.clone());
         Some(journal)
     }
