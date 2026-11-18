@@ -26,7 +26,7 @@ from tests.fakes import (
 from .a2a_peer import Peer
 
 ASK = "Ask the person this, in your own words, as your whole reply, and add nothing else: "
-PROGRESS = "Tell the person how their request with the expert is going"
+PROGRESS = "Tell the person how their request is going"
 OUTCOME = "Present this remote tool outcome to the person"
 
 

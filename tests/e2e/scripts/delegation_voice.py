@@ -49,7 +49,7 @@ PHRASES = {
 }
 
 # The framework's turn instructions and notes the models answer.
-PROGRESS = "Tell the person how their request with the expert is going"
+PROGRESS = "Tell the person how their request is going"
 ASK = "Ask the person this, in your own words"
 OUTCOME = "Present this remote tool outcome to the person"
 RESUME = "Continue the recognized human responses reserved for your remote tools"
@@ -70,8 +70,10 @@ def reply(request: Request) -> Any:
         return route(request)
     if "prepare_job" in request.tools:
         return backend(request.chat_ctx)
-    if len(request.tools) == 1:
-        return frontend(request.chat_ctx, request.tools[0])
+    # The frontend's remote tool, beside the framework's cancel_<tool> sibling.
+    remote = [tool for tool in request.tools if not tool.startswith("cancel_")]
+    if len(remote) == 1:
+        return frontend(request.chat_ctx, remote[0])
     raise Unexpected(f"no role offers the tools {request.tools}")
 
 
