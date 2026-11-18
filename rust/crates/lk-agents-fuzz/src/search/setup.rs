@@ -10,7 +10,8 @@ use crate::{
     input::{AGENT_TURNS, DELAYS_MS, NAMES, TurnMode},
 };
 
-// A new switch is drawn after all existing ones, so every seed keeps the setup it drew before.
+// Draw new switches after the existing ones. Replaying an archived campaign still requires
+// its original source and configuration; new provider requests change a seed's execution.
 
 /// How often, in a hundred sessions, the pipeline has a recogniser, and has a voice.
 const VOICED: u8 = 90;
@@ -38,6 +39,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         turn,
         preemptive: rng.bool(),
         tools: if rng.bool() { names(rng) } else { vec![] },
+        input_routing: false,
         max_tool_steps: rng.bool().then(|| rng.u32(0..4)),
         instructions: AGENT_TURNS[rng.usize(0..AGENT_TURNS.len())].to_owned(),
         max_unrecoverable_errors: rng.u32(0..4),
@@ -224,6 +226,9 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     if let Some(seed) = setup.stress {
         misbehaving_sink(&mut setup, &mut Rng::with_seed(seed ^ 0x7369_6e6b));
     }
+    // Cover enabled correlation alongside the deliberately disabled path. This model has
+    // its own request stream; the frontend never acquires implicit response authority.
+    setup.input_routing = rng.u8(0..100) < 70;
     setup
 }
 

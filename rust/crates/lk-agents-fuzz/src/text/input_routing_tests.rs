@@ -137,11 +137,7 @@ async fn a_presented_question_survives_a_side_question_restart_and_lost_checkpoi
         &database,
         "Book a room",
         vec![call("lookup", json!({"q":"room"}))],
-        vec![ToolOutcome::InputRequired {
-            question: "Which day?".into(),
-            verbatim: true,
-            tool: None,
-        }],
+        vec![ToolOutcome::InputRequired { question: "Which day?".into(), verbatim: true }],
         None,
         false,
     )

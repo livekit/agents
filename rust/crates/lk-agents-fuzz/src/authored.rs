@@ -133,7 +133,12 @@ impl Authored {
     pub fn chat(self, speech: u64) -> Self {
         self.opens(
             Kind::Chat,
-            Detail::Chat { ctx_ids: vec![], speech: Some(speech), tools: vec![] },
+            Detail::Chat {
+                ctx_ids: vec![],
+                speech: Some(speech),
+                tools: vec![],
+                input_candidates: None,
+            },
         )
     }
 

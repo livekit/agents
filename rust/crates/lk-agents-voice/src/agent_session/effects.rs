@@ -27,6 +27,18 @@ pub enum SpeechHistory {
 /// significant. Driver-owned deadlines and deferred callbacks never cross this boundary.
 #[derive(Debug)]
 pub enum VoiceEffect {
+    /// Retain a local occurrence on the native root before scheduling its presentation.
+    RetainLocalInput {
+        request_id: String,
+        call_id: String,
+        source: lk_agents_abi::ChatMessage,
+    },
+    /// A transient body or task ended; only its own exact occurrences close.
+    CloseLocalInputs {
+        requests: Vec<lk_agents_abi::session::InputRequestRef>,
+    },
+    /// An eligible local owner can consume a held response under the serialized checkpoint.
+    CheckpointLocalInputs,
     /// Classify committed human input before planning its frontend reply.
     RouteInput {
         speech: SpeechId,

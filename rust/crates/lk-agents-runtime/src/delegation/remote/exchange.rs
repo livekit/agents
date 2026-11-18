@@ -68,6 +68,9 @@ impl Delegation {
         command: driver::Command,
         reply: &mut Option<Owned<Reply>>,
     ) -> Result<Option<RemoteEvent>, AgentClientError> {
+        if let driver::Message::Cancel(task) = &command.message {
+            return self.cancel_command(task.clone(), command.done, reply).await;
+        }
         let response_claim = command.response_claim;
         let message = match &command.message {
             driver::Message::Input(input) => match self.interaction.task_message(input) {
@@ -79,6 +82,7 @@ impl Delegation {
                 }
             },
             driver::Message::Resume { .. } | driver::Message::Reconcile => None,
+            driver::Message::Cancel(_) => unreachable!("task controls are handled before messages"),
         };
         // The old source is fully closed before another exchange starts, so an artifact delta
         // can never be observed by two local response streams for this task.
@@ -113,6 +117,7 @@ impl Delegation {
                 command.done.resolve(Ok(()));
                 return event.map(Some);
             }
+            driver::Message::Cancel(_) => unreachable!("task controls are handled before messages"),
         };
         drop(response_claim);
         match sent {
@@ -221,6 +226,24 @@ impl Delegation {
         origin: Option<lk_agents_abi::session::ToolCallRef>,
         input_request: Option<lk_agents_abi::session::InputRequestRef>,
     ) -> Option<Arc<dyn lk_agents_net::a2a_client::observer::RequestObserver>> {
+        self.journal_for(request_id, origin.or_else(|| self.request.origin.clone()), input_request)
+    }
+
+    pub(super) fn observer_for_control(
+        &mut self,
+        request_id: String,
+    ) -> Option<Arc<dyn lk_agents_net::a2a_client::observer::RequestObserver>> {
+        // An application task control has no business-call origin. Omitting it also retains
+        // the original provenance when reopening an undispatched saved control request.
+        self.journal_for(request_id, None, None)
+    }
+
+    fn journal_for(
+        &mut self,
+        request_id: String,
+        origin: Option<lk_agents_abi::session::ToolCallRef>,
+        input_request: Option<lk_agents_abi::session::InputRequestRef>,
+    ) -> Option<Arc<dyn lk_agents_net::a2a_client::observer::RequestObserver>> {
         let owner = self.request.owner.clone()?;
         let state = self.interaction.0.lock().policy.snapshot();
         let endpoint = state.id.endpoint;
@@ -231,7 +254,7 @@ impl Delegation {
             endpoint.clone(),
             endpoint,
             request_id,
-            origin.or_else(|| self.request.origin.clone()),
+            origin,
             input_request,
         ));
         self.journal = Some(journal.clone());

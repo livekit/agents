@@ -100,7 +100,6 @@ class _TurnHost:
             thread=thread,
             task_id=ctx.task_id,
             store=context.store,
-            answer_tool=ctx.answer_tool,
             delegated=ctx.delegated,
             delegation_chain=tuple(
                 entry

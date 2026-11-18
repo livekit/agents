@@ -5,7 +5,7 @@ use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::delegation::remote::RemoteRecovery;
 use lk_agents_abi::delegation::remote::{RemoteCommand, RemoteInput, RemoteTaskRef};
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::session::SessionCommands;
+use lk_agents_abi::session::{SessionCommands, SessionRecovery};
 use lk_agents_abi::storage::context::ContextActivation as _;
 use lk_agents_abi::storage::session::{PersistedSessionState as _, SessionBinding as _};
 use lk_agents_abi::{BoxFuture, Closed};
@@ -33,6 +33,11 @@ enum CancelReply {
     Lost,
 }
 
+struct CancelGate {
+    started: lk_agents_runtime::net::signal::Producer<Option<()>>,
+    release: lk_agents_runtime::net::signal::Cell<Option<()>>,
+}
+
 #[derive(Default)]
 struct Service {
     messages: Mutex<Vec<a2a::Message>>,
@@ -43,6 +48,7 @@ struct Service {
     cancel_reply: CancelReply,
     cancellations: Mutex<u32>,
     canceled: Mutex<bool>,
+    gated_cancel: Mutex<Option<CancelGate>>,
     /// Recovery may remain unavailable until a fresh caller acquires the conversation.
     fail_reconciliation: Mutex<bool>,
     stalled_reconciliation: Mutex<Option<lk_agents_runtime::net::signal::Producer<Option<()>>>>,
@@ -141,6 +147,11 @@ impl HttpExchangePort for Service {
                                     "message":"Booking is protected","data":{"stage":"booking"}}}),
                             CancelReply::Confirmed | CancelReply::Lost => {
                                 *self.canceled.lock() = true;
+                                let gate = self.gated_cancel.lock().take();
+                                if let Some(gate) = gate {
+                                    gate.started.resolve(());
+                                    gate.release.wait().await.unwrap();
+                                }
                                 if matches!(self.cancel_reply, CancelReply::Lost) {
                                     return Err(AttemptFailure::Connection(
                                         "the cancellation was applied before its reply was lost"
@@ -285,11 +296,16 @@ async fn a_fresh_owner_returns_an_observed_message_reply_without_another_busines
     let mut another_call = origin();
     another_call.call_id = "another-local-call".into();
     assert_eq!(
-        second.recover(ENDPOINT, ENDPOINT, &another_call).await.unwrap(),
+        second.recover(ENDPOINT, ENDPOINT, &SessionRecovery::Call(another_call)).await.unwrap(),
         None,
         "new work does not consume a different local call's receipt"
     );
-    assert!(second.recover(ENDPOINT, "https://another.test", &origin()).await.is_err());
+    assert!(
+        second
+            .recover(ENDPOINT, "https://another.test", &SessionRecovery::Call(origin()))
+            .await
+            .is_err()
+    );
     assert!(matches!(resume(&env, service.clone(), second.clone()).await.unwrap(),
         RemoteEvent::Outcome { outcome: ToolOutcome::Value { text, .. } } if text == "Booked"));
     assert_eq!(service.messages.lock().len(), 1, "the original business message was not resent");
@@ -1039,3 +1055,6 @@ async fn reconcile_a_booked_task(lose_intent_write_ack: bool) {
     fresh_store.finish_session(false).await.unwrap();
     assert!(!database.held(PARTITION_KEY).await);
 }
+
+#[path = "remote_cancel_tests.rs"]
+mod bound_cancellation;

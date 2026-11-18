@@ -197,6 +197,14 @@ impl VoiceTasks {
         !self.stack.is_empty()
     }
 
+    pub(crate) fn contains(&self, id: VoiceTaskId) -> bool {
+        self.stack.iter().any(|task| task.id == id)
+    }
+
+    pub(crate) fn of_agent(&self, agent: &str) -> Option<VoiceTaskId> {
+        self.stack.iter().rev().find(|task| task.agent == agent).map(|task| task.id)
+    }
+
     /// A task waits on this speech's tool.
     pub(crate) fn awaits(&self, speech: SpeechId) -> bool {
         self.stack.iter().any(|t| t.awaiting == speech)
@@ -375,6 +383,7 @@ impl VoiceDriver {
         let mut end = Some(end);
         while self.activity.voice_tasks.stack.len() > from {
             let task = self.activity.voice_tasks.stack.pop().expect("stack longer than from");
+            self.close_task_inputs(task.id);
             if task.dtmf {
                 self.dtmf_step(crate::workflows::machine::dtmf::DtmfTaskEvent::Stop);
             }

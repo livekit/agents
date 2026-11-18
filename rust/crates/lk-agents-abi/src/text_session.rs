@@ -117,6 +117,13 @@ use std::sync::Arc;
 /// Receives accepted session transitions before dependent execution proceeds.
 #[crate::host(native(refused = "expected a native session binding"))]
 pub trait SessionStateSink: Send + Sync {
+    /// A live native executor lends a weak command capability separately from saved data.
+    /// The binding clears it on close; decoding or assigning a snapshot never installs it.
+    fn bind_commands(
+        &self,
+        commands: std::sync::Weak<dyn crate::session::SessionCommands>,
+    ) -> Result<(), crate::storage::StorageError>;
+
     fn checkpoint_voice<'a>(
         &'a self,
         history: crate::storage::voice::VoiceHistory,

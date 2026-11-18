@@ -158,6 +158,10 @@ pub struct Recorded {
 }
 
 impl ToolCalls {
+    pub(crate) fn input_answers(&self) -> &BTreeSet<String> {
+        &self.approval_answers
+    }
+
     /// Starts one call of an `AgentRun` step as the model makes it. A call that cannot run
     /// settles at once; a `final_result` call is returned as a candidate for the parent's output
     /// acceptance.
@@ -316,11 +320,11 @@ impl ToolCalls {
         let outcome = match answer {
             Some(ReadBackAnswer::Question(question)) => {
                 approval::set_mark(&mut call.item, Approval::Asked, &canonical);
-                ToolOutcome::InputRequired { question, verbatim: true, tool: None }
+                ToolOutcome::InputRequired { question, verbatim: true }
             }
             // Something is missing before there is anything to approve: not a read-back.
             Some(ReadBackAnswer::InputRequired { question, verbatim }) => {
-                ToolOutcome::InputRequired { question, verbatim, tool: None }
+                ToolOutcome::InputRequired { question, verbatim }
             }
             None => ToolOutcome::Internal,
         };
@@ -619,8 +623,10 @@ impl ToolCalls {
             let call = &mut self.calls[index];
             // Shorten history references to the lifetime of this step's local decisions.
             let decided = history.map(|item| -> &ChatItem { item }).chain(&earlier);
-            if approval::granted(decided, &self.approval_answers, &call.item.name, &canonical) {
-                approval::set_mark(&mut call.item, Approval::Granted, &canonical);
+            if let Some(source) =
+                approval::granted(decided, &self.approval_answers, &call.item.name, &canonical)
+            {
+                approval::set_grant(&mut call.item, &canonical, source);
             } else if read_back == ReadBack::Function {
                 fx.push(
                     ToolCallEffect::ReadBack {
@@ -636,7 +642,7 @@ impl ToolCalls {
                 approval::set_mark(&mut call.item, Approval::Asked, &canonical);
                 fx.push(ToolCallEffect::ReleaseArguments { prepared }.into());
                 let question = approval::read_back(&tool.spec.description, &identity);
-                let outcome = ToolOutcome::InputRequired { question, verbatim: true, tool: None };
+                let outcome = ToolOutcome::InputRequired { question, verbatim: true };
                 return settle(call, outcome, false, fx);
             }
         }
@@ -737,15 +743,8 @@ impl Admission {
 }
 
 /// The model's call as a streaming step takes it: arguments a model template leaked into are
-/// repaired in place (the history keeps the repaired form a provider accepts), and a call of the
-/// tool an `InputRequired(tool=)` claimed (`answering`: the tool and the person's words) takes the
-/// words as its first string parameter.
-pub fn admit(
-    call: &mut FunctionCall,
-    offered: &[ToolSpec],
-    forbidden: bool,
-    answering: Option<(&str, &str)>,
-) -> Admission {
+/// repaired in place, preserving the repaired form in provider-compatible history.
+pub fn admit(call: &mut FunctionCall, offered: &[ToolSpec], forbidden: bool) -> Admission {
     // Recorded as JSON: repaired when malformed, `{}` when streamed empty.
     if serde_json::from_str::<Value>(&call.arguments).is_err()
         && let Ok(parsed) = tool_arguments::parse(&call.arguments)
@@ -753,13 +752,6 @@ pub fn admit(
         call.arguments = Value::Object(parsed.arguments).to_string();
     }
     let spec = offered.iter().find(|t| t.name == call.name);
-    if let (Some((tool, said)), Some(spec)) = (answering, spec)
-        && tool == call.name
-        && let Some(parameter) = crate::agent::first_string_parameter(spec)
-    {
-        let arguments = Map::from_iter([(parameter.to_owned(), Value::from(said))]);
-        call.arguments = Value::Object(arguments).to_string();
-    }
     match (forbidden, spec) {
         (true, spec) => Admission::Forbidden { offered: spec.is_some() },
         (false, Some(_)) => Admission::Offered,
@@ -911,7 +903,7 @@ mod admit_tests {
             extra: Default::default(),
             group_id: None,
         };
-        admit(&mut call, &[], false, None);
+        admit(&mut call, &[], false);
         call.arguments
     }
 

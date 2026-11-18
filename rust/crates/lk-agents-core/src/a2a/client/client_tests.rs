@@ -38,6 +38,27 @@ fn resuming_an_unsent_intent_preserves_its_sdk_body_method_and_explicit_routing(
     assert!(!request.replay_safe, "an unsent intent does not grant transport retry permission");
 }
 
+#[test]
+fn resuming_an_undispatched_cancellation_keeps_its_sdk_control_and_context() {
+    let client = connected();
+    let task = TaskRef { id: "booking".into(), context_id: "trip".into() };
+    let body: a2a::CancelTaskRequest = serde_json::from_value(json!({
+        "id":"booking", "metadata":{"reason":"requested by the person"}, "tenant":"tenant"
+    }))
+    .unwrap();
+    let request = client.resume_cancel(&task, body.clone(), JsonRpcId::Number(9)).unwrap();
+    let rpc: JsonRpcRequest = serde_json::from_slice(&request.body).unwrap();
+    let mut expected = serde_json::to_value(body.clone()).unwrap();
+    expected["contextId"] = json!("trip");
+    assert_eq!(rpc.method, a2a::methods::CANCEL_TASK);
+    assert_eq!(rpc.params, Some(expected));
+    assert_eq!(request.task.as_ref(), Some(&task));
+    assert!(!request.replay_safe, "a control write does not acquire transport retries");
+    assert!(request.task_response);
+    let other = TaskRef { id: "different".into(), context_id: "trip".into() };
+    assert!(client.resume_cancel(&other, body, JsonRpcId::Number(10)).is_err());
+}
+
 fn message(id: &str) -> Message {
     Message {
         message_id: id.into(),

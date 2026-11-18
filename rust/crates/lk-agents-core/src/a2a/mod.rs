@@ -227,9 +227,6 @@ pub struct TurnContext {
     /// A delegating caller's conversation when the message carried a `chat_ctx` data part, as the
     /// part's `data`.
     pub caller_history: Option<Value>,
-    /// The tool the message is handed to before the model runs: an `InputRequired(tool=)` of
-    /// the last turn named it, and this message is its answer.
-    pub answer_tool: Option<String>,
 }
 
 /// What the turn reads from the handler's results: the `RunResult` fields and the context's

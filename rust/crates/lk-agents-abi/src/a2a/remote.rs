@@ -63,6 +63,13 @@ pub trait RemoteTaskDriver: Send + Sync {
         origin: Option<crate::session::ToolCallRef>,
     ) -> crate::BoxFuture<'a, Result<(), AgentClientError>>;
 
+    /// An explicit task control, serialized with its messages and observations. Success
+    /// requires checkpointed evidence of cancellation, rather than dispatch alone.
+    fn cancel<'a>(
+        &'a self,
+        task: crate::delegation::remote::RemoteTaskRef,
+    ) -> crate::BoxFuture<'a, Result<(), AgentClientError>>;
+
     /// Reconcile already-admitted work through this task's original observer. Observation
     /// failure is delivered to its original call; the accepted duplicate must not fail or
     /// suggest retrying business work. The wait also ends when the observer dies.

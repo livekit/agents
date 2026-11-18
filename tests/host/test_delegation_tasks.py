@@ -4,18 +4,88 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
 from a2a.types import a2a_pb2 as pb
 
-from livekit.agents import Agent, DelegationOptions, TextSession, VoiceSession
+from livekit.agents import (
+    Agent,
+    DelegationOptions,
+    SessionState,
+    TextSession,
+    VoiceSession,
+    persisted,
+)
 from livekit.agents.a2a import RemoteAgent
 from livekit.agents.llm import ChatContext, FunctionToolCall
 from livekit.agents.storage import ContextStore
 from tests.fakes import FakeAudioInput, FakeLLM, FakeSTT, FakeVAD, last_input, tool_call, until
 
 from .a2a_peer import Peer
+
+
+@dataclass
+class _Conversation:
+    session: SessionState = persisted(default_factory=SessionState)
+
+
+async def test_a_bound_task_cancels_through_its_live_owner_while_a_snapshot_cannot(
+    peer: Peer,
+) -> None:
+    peer.hold = True
+    remote = RemoteAgent(peer.url, name="travel", description="Book flights.")
+    agent = Agent(
+        name="desk",
+        instructions="Help.",
+        tools=[remote.as_tool()],
+        llm=FakeLLM(
+            [tool_call("travel", request="Find a flight"), "I'm checking.", "The search stopped."]
+        ),
+    )
+    store = ContextStore()
+    app = await store.load_context(_Conversation())
+    async with VoiceSession(context=store.bind(app), vad=None) as session:
+        await session.start(agent)
+        await session.generate_reply(user_input="Find a flight")
+        await until(
+            lambda: (
+                peer.url in app.session.remote_agents
+                and "remote-task" in app.session.remote_agents[peer.url].tasks
+            ),
+            "the remote working task was not retained",
+        )
+        task = app.session.remote_agents[peer.url].tasks["remote-task"]
+        assert task.task.status.state == pb.TASK_STATE_WORKING
+
+        detached = await store.load_session()
+        with pytest.raises(ValueError, match="active bound conversation owner"):
+            await detached.remote_agents[peer.url].tasks["remote-task"].cancel()
+        assert not peer.cancelled
+
+        await asyncio.gather(task.cancel(), task.cancel())
+
+        assert peer.cancelled == ["remote-task"]
+        assert task.cancel_requested
+        assert task.task.status.state == pb.TASK_STATE_CANCELED
+        saved = await store.load_session()
+        assert (
+            saved.remote_agents[peer.url].tasks["remote-task"].task.status.state
+            == pb.TASK_STATE_CANCELED
+        )
+        requests = [
+            entry
+            for entry in app.session.remote_agents[peer.url].events
+            if entry.kind == "request_recorded" and isinstance(entry.payload, pb.CancelTaskRequest)
+        ]
+        assert len(requests) == 1
+        assert requests[0].payload.id == "remote-task"
+    with pytest.raises(ValueError, match="owner"):
+        await task.cancel()
+    assert peer.cancelled == ["remote-task"], (
+        "closing the frontend must not send another cancellation"
+    )
 
 
 def routing_input(history: ChatContext) -> dict[str, Any]:
@@ -249,7 +319,23 @@ async def test_reused_provider_call_ids_do_not_recover_an_earlier_business_reque
 async def test_voice_clarification_reuses_the_live_task_without_claiming_a_response(
     peer: Peer, structured: bool, acknowledge: bool
 ) -> None:
-    peer.events = waiting_task
+    def events(message: dict[str, Any]) -> list[dict[str, Any]]:
+        result = waiting_task(message)
+        if "taskId" not in message:
+            result.insert(
+                0,
+                {
+                    "task": {
+                        "id": "booking-42",
+                        "contextId": "trip",
+                        "status": {"state": "TASK_STATE_WORKING"},
+                    }
+                },
+            )
+        return result
+
+    peer.events = events
+    peer.response_gate = asyncio.Event()
     if structured:
         peer.input_schema = {
             "type": "object",
@@ -257,6 +343,7 @@ async def test_voice_clarification_reuses_the_live_task_without_claiming_a_respo
             "required": ["destination"],
         }
     remote = RemoteAgent(peer.url, name="flights")
+    initial_reply = asyncio.Event()
 
     def frontend(history: ChatContext) -> str | FunctionToolCall:
         latest = next(
@@ -295,6 +382,7 @@ async def test_voice_clarification_reuses_the_live_task_without_claiming_a_respo
         ):
             return "Which date?"
         if calls:
+            initial_reply.set()
             return "I'm checking." if acknowledge else ""
         return tool_call(
             "flights", **({"destination": "Paris"} if structured else {"request": "Book"})
@@ -329,6 +417,20 @@ async def test_voice_clarification_reuses_the_live_task_without_claiming_a_respo
             )
         )
         microphone.speak(0.4)
+        try:
+            await until(
+                initial_reply.is_set, "the frontend did not take its initial reply opportunity"
+            )
+            if acknowledge:
+                await until(
+                    lambda: any(
+                        item.type == "message" and item.text_content == "I'm checking."
+                        for item in session.history.items
+                    ),
+                    "the frontend's acknowledgement was not delivered",
+                )
+        finally:
+            peer.response_gate.set()
         await until(
             lambda: any(
                 item.type == "message"

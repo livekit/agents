@@ -19,12 +19,14 @@ use serde_json::Value;
 pub(super) enum Work {
     Opening {
         command: SessionCommand,
+        local: Vec<lk_agents_voice::agent_session::LocalInputDelivery>,
         read: Vec<lk_agents_abi::ChatItem>,
         _task: ScopedTask,
         result: signal::Cell<Option<Result<Arc<dyn SessionCheckpoint>, StorageError>>>,
     },
     Writing {
         write: ConversationWrite,
+        local: Vec<lk_agents_voice::agent_session::LocalInputDelivery>,
         _task: ScopedTask,
         result: signal::Cell<Option<Result<Value, StorageError>>>,
     },
@@ -114,6 +116,8 @@ impl VoiceRuntime {
         })();
         if let Err(error) = result {
             let _ = self.reports.send(VoiceEvent::ConversationStateFailed(error));
+        } else {
+            self.publish_local_input_candidates();
         }
     }
 
@@ -148,13 +152,14 @@ impl VoiceRuntime {
                 complete.resolve(sink.checkpoint_voice(history).await);
             },
         );
-        self.conversation_work = Some(Work::Opening { command, read, _task: task, result });
+        self.conversation_work =
+            Some(Work::Opening { command, local: Vec::new(), read, _task: task, result });
     }
 
     pub(super) fn conversation_advanced(&mut self, advance: Advance, now: Now) {
         let work = self.conversation_work.take().expect("a receipt has an owning operation");
         match (work, advance) {
-            (Work::Opening { command, read, .. }, Advance::Opened(opened)) => {
+            (Work::Opening { command, local, read, .. }, Advance::Opened(opened)) => {
                 let scope = match opened {
                     Ok(scope) => scope,
                     Err(error) => {
@@ -176,16 +181,28 @@ impl VoiceRuntime {
                 // stays equal. Re-publish the accepted words against that fresh native state.
                 let effect = self.driver.conversation_history();
                 self.perform_voice(vec![effect]);
-                self.apply_conversation_command(command, scope);
+                self.apply_conversation_command(command, scope, local);
             }
-            (Work::Writing { write, .. }, Advance::Written(saved)) => {
+            (Work::Writing { write, local, .. }, Advance::Written(saved)) => {
                 if let Err(error) = &saved
                     && self.driver.retry_conversation_checkpoint(error)
                 {
                     self.conversation_command(write.into_command());
+                    if let Some(Work::Opening { local: retained, .. }) = &mut self.conversation_work
+                    {
+                        *retained = local;
+                    }
                     return;
                 }
                 let failed = saved.as_ref().err().cloned();
+                if saved.is_ok() {
+                    for delivery in local {
+                        self.handle(
+                            VoiceEvent::LocalInputDelivered(Box::new(delivery)).into(),
+                            now,
+                        );
+                    }
+                }
                 if saved.is_ok()
                     && let ConversationWrite::Admission { request, outcome: Ok(admission), .. } =
                         &write
@@ -220,10 +237,11 @@ impl VoiceRuntime {
         }
     }
 
-    fn apply_conversation_command(
+    pub(super) fn apply_conversation_command(
         &mut self,
         command: SessionCommand,
         scope: Arc<dyn SessionCheckpoint>,
+        local: Vec<lk_agents_voice::agent_session::LocalInputDelivery>,
     ) {
         let mut state = match self.conversation_snapshot() {
             Ok(state) => state,
@@ -272,32 +290,20 @@ impl VoiceRuntime {
                 done.resolve(drivers.get(&state, &remote_id, &endpoint, &task));
                 return;
             }
-            SessionCommand::HeldInput { remote_id, endpoint, task_id, done } => {
-                let result = remote::state(&state, &remote_id, &endpoint).and_then(|remote| {
-                    remote
-                        .map(|remote| {
-                            input::held_remote_input(&remote_id, remote, task_id.as_deref())
-                        })
-                        .transpose()
-                        .map(Option::flatten)
-                });
-                done.resolve(result);
-                return;
-            }
-            SessionCommand::Task { remote_id, endpoint, task_id, done } => {
-                let result = remote::state(&state, &remote_id, &endpoint).and_then(|saved| {
-                    let saved = saved.ok_or_else(|| {
-                        lk_agents_abi::storage::StorageError::Invalid(
-                            "this remote has no known tasks".into(),
-                        )
+            SessionCommand::CancelRemote { remote_id, endpoint, task, drivers, done } => {
+                done.resolve(remote::state(&state, &remote_id, &endpoint).and_then(|remote| {
+                    let remote = remote.ok_or_else(|| {
+                        StorageError::Invalid("this remote has no known tasks".into())
                     })?;
-                    remote::task(saved, &task_id)
-                });
-                done.resolve(result);
-                return;
-            }
-            SessionCommand::Response { reference, done } => {
-                done.resolve(input::response(&state, &reference));
+                    if !remote::cancel_required(remote, &task)? {
+                        return Ok(None);
+                    }
+                    drivers.get(&state, &remote_id, &endpoint, &task)?.map(Some).ok_or_else(|| {
+                        StorageError::Invalid(
+                            "this task has no configured live driver in the conversation".into(),
+                        )
+                    })
+                }));
                 return;
             }
             SessionCommand::DefaultContext { remote_id, endpoint, done } => {
@@ -306,10 +312,10 @@ impl VoiceRuntime {
                 done.resolve(result);
                 return;
             }
-            SessionCommand::Recover { remote_id, endpoint, origin, done } => {
+            SessionCommand::Recover { remote_id, endpoint, target, done } => {
                 let result = remote::state(&state, &remote_id, &endpoint).and_then(|remote| {
                     remote
-                        .map(|remote| remote::recovery(remote, &origin))
+                        .map(|remote| remote::recover(remote, &target))
                         .transpose()
                         .map(Option::flatten)
                 });
@@ -339,6 +345,14 @@ impl VoiceRuntime {
             }
             SessionCommand::Flush { done } => ConversationWrite::Flush { done },
         };
+        let local = match self.driver.readmit_local_responses(&mut state, local) {
+            Ok(local) => local,
+            Err(error) => {
+                write.into_command().fail(error.clone());
+                let _ = self.reports.send(VoiceEvent::ConversationStateFailed(error));
+                return;
+            }
+        };
         // A refused projection can retain valid protocol evidence. Persist that evidence
         // before acknowledging either outcome, as the text owner does.
         if let Err(error) =
@@ -356,7 +370,7 @@ impl VoiceRuntime {
                 complete.resolve(scope.commit().await);
             },
         );
-        self.conversation_work = Some(Work::Writing { write, _task: task, result });
+        self.conversation_work = Some(Work::Writing { write, local, _task: task, result });
     }
 
     pub(super) fn close_conversation(&mut self) {

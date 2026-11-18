@@ -53,7 +53,6 @@ fn open(
         task_id: "task".into(),
         tasks: Vec::new(),
         caller_history: None,
-        answer_tool: None,
         host_context: None,
     };
     Handler::open(Arc::new(Script(Box::new(run))), crate::telemetry::Cx::NONE, ctx)

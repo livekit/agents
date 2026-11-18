@@ -23,6 +23,7 @@ pub(super) struct Command {
 
 pub(super) enum Message {
     Input(DelegationInput),
+    Cancel(lk_agents_abi::delegation::remote::RemoteTaskRef),
     Reconcile,
     Resume {
         request_id: String,
@@ -105,6 +106,13 @@ impl RemoteTaskDriver for Driver {
         ))
     }
 
+    fn cancel<'a>(
+        &'a self,
+        task: lk_agents_abi::delegation::remote::RemoteTaskRef,
+    ) -> BoxFuture<'a, Result<(), AgentClientError>> {
+        Box::pin(self.submit(Message::Cancel(task), None, None))
+    }
+
     fn reconcile(&self) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             // This command observes work already admitted by a duplicate exchange. Its
@@ -118,7 +126,7 @@ impl RemoteTaskDriver for Driver {
 
 fn ended() -> AgentClientError {
     AgentClientError::InvalidInput(
-        "the remote task's live observer ended before acknowledging this message; reconcile its saved task before continuing".into(),
+        "the remote task's live observer ended before this command settled; inspect its saved task before continuing".into(),
     )
 }
 

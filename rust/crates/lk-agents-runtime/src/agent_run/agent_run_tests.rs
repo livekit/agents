@@ -397,7 +397,6 @@ fn setup(
             std::time::UNIX_EPOCH,
         ))),
         history: vec![],
-        answer_tool: None,
         delegated: false,
         mode: Mode::Text,
         llm: Some(LlmRef { id: ResourceId(1), provider: ProviderId::of_label("scripted") }),
@@ -417,6 +416,7 @@ fn setup(
         host_context: Some(HostRef::new(0, &registry)),
     };
     let setup = RunSetup {
+        input_answers: Default::default(),
         tools_host: None,
         llm,
         host: host.clone(),
@@ -725,7 +725,6 @@ async fn the_runner_refuses_an_invalid_definition_and_streams_a_run_to_its_resul
                 std::time::UNIX_EPOCH,
             )),
             history: vec![],
-            answer_tool: None,
             delegated: false,
             conn_options: Default::default(),
             host_context: HostRef::new(0, &registry),

@@ -13,6 +13,7 @@ mod io;
 mod ivr;
 mod keyterm_detection;
 mod legs;
+mod local_input;
 pub mod nodes;
 pub mod playback;
 mod recorder;
@@ -64,9 +65,10 @@ pub struct VoiceRuntime {
     storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     session_sink: Option<Arc<dyn lk_agents_abi::text_session::SessionStateSink>>,
     delegation: Option<lk_agents_abi::delegation::DelegationOptions>,
-    conversation_port: crate::session::CommandPort,
+    conversation_port: Arc<crate::session::CommandPort>,
     conversation: tokio::sync::mpsc::Receiver<crate::session::SessionCommand>,
     conversation_work: Option<conversation::Work>,
+    local_inputs_checkpoint_pending: bool,
     shared: Arc<SessionShared>,
     /// Where host events and taps go.
     peer: PeerHandle,
@@ -273,6 +275,7 @@ impl VoiceRuntime {
             conversation_port,
             conversation,
             conversation_work: None,
+            local_inputs_checkpoint_pending: false,
             shared,
             peer,
             forwarder,
@@ -350,6 +353,13 @@ impl VoiceRuntime {
         let time = self.shared.time.clone();
         self.open(time.read());
         while !self.driver.stopped() {
+            if self.conversation_work.is_none()
+                && std::mem::take(&mut self.local_inputs_checkpoint_pending)
+            {
+                let (done, _receipt) = lk_agents_net::signal::once();
+                self.conversation_command(crate::session::SessionCommand::Flush { done });
+                continue;
+            }
             let wake_at = self.driver.wake_at();
             if wake_at.is_some_and(|at| at <= time.now()) {
                 self.handle(VoiceRuntimeEvent::Wake, time.read());

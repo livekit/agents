@@ -360,6 +360,7 @@ impl VoiceDriver {
         match chat_ctx {
             Some(items) => {
                 self.session.chat_ctx.update_agent_chat_ctx(items, &agent);
+                self.local_history_observed(&agent);
             }
             None => {
                 let from = self.session.chat_ctx.agent().to_owned();

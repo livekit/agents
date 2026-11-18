@@ -97,35 +97,80 @@ fn answer(session: &mut Session, requests: Vec<InputRequestRef>, text: &str) {
 }
 
 #[test]
-fn held_responses_can_cross_agent_contexts_but_never_guess_between_two_tasks() {
+fn held_remote_responses_remain_distinct_until_a_proposed_call_selects_one() {
+    use crate::delegation::remote::routing;
+    use lk_agents_abi::delegation::routing::{CallAdmission, CallRoute};
     let mut driver = Driver::new(config(false, ChatHistory::Fresh, false), None, "Find flights");
     let first = question(&mut driver.session);
     let second = question_for(&mut driver.session, "another", "return-flight", "return-date");
     present(&mut driver, vec![first.clone(), second.clone()]);
     answer(&mut driver.session, vec![second.clone()], "Friday");
+    let before = driver.session.snapshot();
+    let offered = routing::offered(&before);
+    let request = routing::request(
+        &before,
+        "flights",
+        "https://flights.test",
+        json!({"request":"Friday"}),
+        None,
+        &offered,
+    )
+    .unwrap();
     assert_eq!(
-        driver.session.held_remote_input("flights", "https://flights.test", None).unwrap(),
-        Some(second),
-        "an unanswered earlier task does not override the selected response"
+        request.candidates.iter().map(|candidate| candidate.responses.len()).sum::<usize>(),
+        1
     );
-    assert!(driver.session.held_remote_input("flights", "https://another.test", None).is_err());
+    let admitted =
+        routing::admit(&before, &request, Some(Ok(CallRoute::Respond(second.clone())))).unwrap();
+    assert!(matches!(admitted, CallAdmission::Respond {request, ..} if request == second));
+    assert!(
+        routing::request(&before, "flights", "https://another.test", json!({}), None, &offered)
+            .is_err()
+    );
+
     answer(&mut driver.session, vec![first.clone()], "Friday");
     let before = driver.session.snapshot();
-    assert!(driver.session.held_remote_input("flights", "https://flights.test", None).is_err());
-    assert_eq!(driver.session.snapshot(), before, "ambiguous selection cannot reserve either task");
+    let offered = routing::offered(&before);
+    let request = routing::request(
+        &before,
+        "flights",
+        "https://flights.test",
+        json!({"request":"Friday"}),
+        None,
+        &offered,
+    )
+    .unwrap();
+    assert!(routing::admit(&before, &request, Some(Ok(CallRoute::Unclear))).is_err());
+    let explicit = routing::request(
+        &before,
+        "flights",
+        "https://flights.test",
+        json!({"request":"Why is the date needed?"}),
+        Some("flight"),
+        &offered,
+    )
+    .unwrap();
+    let task = first.remote().unwrap().1.clone();
+    assert_eq!(routing::without_classifier(&explicit), CallRoute::Continue(task.clone()));
     assert_eq!(
-        driver
-            .session
-            .held_remote_input("flights", "https://flights.test", Some("flight"))
-            .unwrap(),
-        Some(first),
-        "the public task ID selects its held response without exposing an occurrence ID"
+        routing::admit(&before, &explicit, Some(Ok(CallRoute::Continue(task.clone())))).unwrap(),
+        CallAdmission::Continue(task)
+    );
+    assert_eq!(
+        driver.session.snapshot(),
+        before,
+        "classification never reserves a response itself"
     );
     assert!(
-        driver
-            .session
-            .held_remote_input("flights", "https://flights.test", Some("unknown"))
-            .is_err()
+        routing::request(
+            &before,
+            "flights",
+            "https://flights.test",
+            json!({}),
+            Some("unknown"),
+            &offered
+        )
+        .is_err()
     );
 }
 
@@ -442,7 +487,7 @@ fn a_correction_between_reading_the_response_and_preparation_refuses_the_stale_s
     let reference = question(&mut driver.session);
     present(&mut driver, vec![reference.clone()]);
     answer(&mut driver.session, vec![reference.clone()], "Friday");
-    let human = driver.session.input_response(&reference).unwrap();
+    let human = crate::session::input::response(&driver.session.state, &reference).unwrap();
     let stale = send("stale", &human.raw_text_content().unwrap(), Some(reference.clone()));
     driver.session.record_dialogue(message("correction", Role::User, "Saturday"));
     driver
@@ -589,7 +634,10 @@ fn routing_exposes_reservations_only_after_the_whole_group_is_accepted() {
         } else {
             assert_eq!(admission.requests, selected);
             for reference in &admission.requests {
-                assert_eq!(driver.session.input_response(reference).unwrap().id, human.id);
+                assert_eq!(
+                    crate::session::input::response(&driver.session.state, reference).unwrap().id,
+                    human.id
+                );
             }
         }
     }

@@ -1,5 +1,5 @@
-mod input_required_tool_takes_the_answer {
-    //! `InputRequired(tool=)`: the person's next turn is a call of that tool, with their words.
+mod input_required_preserves_model_arguments {
+    //! A human message cannot silently replace the arguments of a later tool call.
     use lk_agents_abi::ChatItem;
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
     use lk_agents_fuzz::input::{
@@ -7,10 +7,10 @@ mod input_required_tool_takes_the_answer {
     };
     use lk_agents_voice::events::SessionEvent;
 
-    // Catches: the claim never made on a call: the person's answer went to the model to interpret,
-    // and the tool that asked was called with the model's arguments.
+    // Catches: legacy named-answer injection rewriting the first string argument merely because
+    // the person spoke while an earlier question was open.
     #[test]
-    fn the_claimed_tool_takes_the_persons_words() {
+    fn a_pending_question_does_not_rewrite_a_later_tools_arguments() {
         let setup = Setup {
             vad: true,
             stt: true,
@@ -46,7 +46,7 @@ mod input_required_tool_takes_the_answer {
             Input::SttEnd { utterance: Ref::new(0) },
             Input::VadEnd { vad: Ref::new(0), silence_ms: Millis(500) },
             Input::Advance { ms: Millis(3_000) },
-            // The turn's reply: the model calls the claimed tool with arguments of its own.
+            // The next turn's explicit call retains the arguments the model supplied.
             call(1),
             Input::LlmEnd { chat: Ref::new(1) },
             Input::Advance { ms: Millis(100) },
@@ -77,7 +77,7 @@ mod input_required_tool_takes_the_answer {
                 _ => None,
             })
             .collect();
-        assert_eq!(calls, [r#"{"label":"guess"}"#, r#"{"label":"Monday"}"#], "calls: {calls:?}");
+        assert_eq!(calls, [r#"{"label":"guess"}"#, r#"{"label":"guess"}"#], "calls: {calls:?}");
     }
 }
 
@@ -137,8 +137,8 @@ mod ordinary_completed_replies {
     }
 }
 
-mod stored_answer_reaches_the_read_back {
-    //! On a stored partition, the person's answer to a read-back is recorded as that call's output.
+mod stored_response_keeps_the_read_back {
+    //! Human words and the original approval question are distinct stored records.
     use lk_agents_abi::ChatItem;
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
     use lk_agents_fuzz::input::{Input, Millis, Ref, ToolArgs, TurnMode, UserText};
@@ -147,11 +147,9 @@ mod stored_answer_reaches_the_read_back {
     /// The fixture tool the runs declare with `needs_approval=True`.
     const APPROVAL_TOOL: &str = "transfer";
 
-    // Catches: the preemptive reply's rendering of the answer, given back by the partition's store, taken
-    // as the partition's edit, so the stored output was the model's rendering, never the person's words
-    // (`tool_output_follows_outcome`, survey seed 21687).
+    // Catches: a preemptive or final transcript replacing a waiting tool's original read-back.
     #[test]
-    fn the_answer_is_the_read_backs_output() {
+    fn the_human_response_does_not_replace_the_read_back() {
         // A store that keeps its lease for the whole call.
         let setup = Setup {
             tools: vec![APPROVAL_TOOL.into()],
@@ -210,12 +208,22 @@ mod stored_answer_reaches_the_read_back {
             .collect();
         let asked = outputs.iter().any(|o| o.starts_with("waiting for the person's answer"));
         assert!(asked, "the scenario: the call waits on its read-back: {outputs:?}");
-        assert_eq!(outputs.last().map(String::as_str), Some("yes please"), "{outputs:?}");
+        assert!(
+            outputs.iter().all(|output| output.starts_with("waiting for the person's answer")),
+            "human words must not replace the approval outcome: {outputs:?}"
+        );
+        let heard = run.record.host_view().events().into_iter().any(|(_, event)| {
+            matches!(event, SessionEvent::ConversationItemAdded { item, .. }
+                if matches!(&**item, ChatItem::Message(message)
+                    if message.role == lk_agents_abi::Role::User
+                        && message.raw_text_content().as_deref() == Some("yes please")))
+        });
+        assert!(heard, "the canonical human response was lost");
     }
 }
 
 mod cut_question {
-    //! A question its speech was cut before putting is not the one the person's words answer.
+    //! A later human turn cannot consume an unheard question without exact response admission.
     use lk_agents_abi::ChatItem;
     use lk_agents_abi::llm::tool_executor::WAITING_PREFIX;
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
@@ -224,10 +232,10 @@ mod cut_question {
     };
     use lk_agents_voice::events::SessionEvent;
 
-    // Catches: a step whose speech was cut before its tools settled kept its question selected,
-    // so the person's next words answered a question never put instead of the one asked.
+    // Catches: a step whose speech was cut keeping an implicit answer claim. No routing model
+    // is configured here, so neither pending source outcome may be replaced by the next turn.
     #[test]
-    fn the_next_words_answer_the_question_asked() {
+    fn an_unmatched_turn_preserves_both_questions() {
         let setup = Setup {
             vad: true,
             stt: true,
@@ -301,15 +309,14 @@ mod cut_question {
             [
                 ("lookup".to_owned(), waiting("Which day?")),
                 ("reserve".to_owned(), waiting("Which city?")),
-                ("reserve".to_owned(), "Paris".to_owned()),
             ],
-            "the answer goes to the question put, never to the cut one"
+            "human input cannot implicitly resolve either source question"
         );
     }
 }
 
 mod questions_in_recorded_order {
-    //! Questions wait in the order the session recorded them.
+    //! Recorded question order cannot implicitly select a response destination.
     use lk_agents_abi::ChatItem;
     use lk_agents_abi::llm::tool_executor::WAITING_PREFIX;
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
@@ -318,11 +325,10 @@ mod questions_in_recorded_order {
     };
     use lk_agents_voice::events::SessionEvent;
 
-    // Catches: an output stamped from its run's anchor, before an output the session recorded
-    // ahead of it, so the history put the later question first and the person's words answered
-    // it.
+    // Catches: an output stamped from its run's anchor reordering recorded questions, or the
+    // next human message implicitly consuming whichever question that order happens to select.
     #[test]
-    fn the_next_words_answer_the_question_recorded_first() {
+    fn recorded_question_order_does_not_choose_an_unmatched_responses_destination() {
         let setup = Setup {
             vad: true,
             stt: true,
@@ -395,9 +401,8 @@ mod questions_in_recorded_order {
             [
                 ("lookup".to_owned(), waiting("Which day?")),
                 ("reserve".to_owned(), waiting("Which city?")),
-                ("lookup".to_owned(), "Monday".to_owned()),
             ],
-            "the answer goes to the question recorded first"
+            "unmatched human input preserves the recorded questions and their order"
         );
     }
 }

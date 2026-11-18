@@ -21,7 +21,7 @@ macro_rules! ids {
 ids! {
     /// One model request.
     RequestId,
-    /// One tool call the model made (or an answer handed to a tool), from preparation to settlement.
+    /// One tool call the model made, from preparation to settlement.
     CallId,
     /// One rendering of the dynamic instructions.
     RenderId,

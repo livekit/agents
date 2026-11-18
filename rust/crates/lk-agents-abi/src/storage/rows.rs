@@ -29,7 +29,7 @@ impl TaskState {
     }
 }
 
-/// What a task waiting on the person holds: the question and the call that takes the answer.
+/// A transport task's waiting question and diagnostic provenance, never response authority.
 #[crate::host(record(module = "storage_class", emit))]
 #[derive(Debug, Clone, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -39,14 +39,10 @@ pub struct Ask {
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     #[host(default = None)]
     pub tool: Option<String>,
-    /// The asking call, whose output the answer becomes.
+    /// The asking call's provider wire label; it does not select a continuation.
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     #[host(default = None)]
     pub call_id: Option<String>,
-    /// The tool that takes the answer before the model runs.
-    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
-    #[host(default = None)]
-    pub answer_tool: Option<String>,
 }
 
 /// A task's pending question and handler settlement.

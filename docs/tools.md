@@ -116,11 +116,13 @@ The tool works wherever its parent runs:
 | Parent | The child | A question the child asks |
 | --- | --- | --- |
 | `TextSession` or bound `agent.run()` | a local agent context with private history, retained through the binding | the turn ends on it; the next bound request resumes that child. See [text-session execution](text-session.md#local-agents-as-tools) |
-| `agent.run()` | a delegate of the call, run in process | ends the call as `InputRequired`, passed up as asked; the turn ends `input_required`. The child's own history is kept on the call's `extra`, and the tool's next call in the supplied history resumes it |
+| Unbound `agent.run()` | a delegate of the call, run in process | ends the run as `InputRequired`, passed up as asked; use a binding from the first turn when the child must resume on a later request |
 | `VoiceSession` | a delegate of the call, run in process, as a remote expert is: the frontend can acknowledge it and the conversation goes on while it works | put to the person, verbatim when the child asked verbatim; their reply resumes the same child, and the call settles when the child does |
 
-A child's own approvals work on all three: its read-back passes up verbatim and
-the answer reaches the child that asked. Cancelling the tool call cancels the
+A child's read-back passes up verbatim. A bound conversation retains the exact
+waiting call; a live voice interaction retains it in memory. A recognized response
+reaches that owner, while a side question stays with the frontend. Supplied history
+alone cannot resume the child or approve its tool. Cancelling the tool call cancels the
 child, which settles before the cancellation propagates. Its model usage counts
 once in the parent's (`agent.run()`, `TextSession`), its `agent_run` span nests
 under the call's `function_tool` span, and its tools' `ctx.update()` progress
@@ -371,8 +373,11 @@ arguments, made after the person answered its read-back. A first call, a
 call with other arguments, or a second repeat asks again. The calls carry
 `lk.approval` (`asked`, `granted`) in `FunctionCall.extra`, with
 `lk.approval_identity`, the canonical form of the validated arguments the call
-was decided on; the next call reads them from the history. The model receives a private
-framework observation with the person's response and how to proceed; answer correlation does
+was decided on. A granted call records `lk.approval_source`, the canonical call item of
+the read-back it consumed. Independent matched read-backs keep separate grants, even
+when they use the same tool or validated arguments. The conversation owner admits a response to that exact read-back;
+history alone cannot provide that admission. The model receives a private framework
+observation with the person's response and how to proceed; answer correlation does
 not itself approve or invoke the operation. A raw-schema tool cannot require approval.
 
 `needs_approval=` also takes a read-back function. It takes the tool's

@@ -221,7 +221,6 @@ impl Env {
             id_seed: id.into(),
             opening: Opening::Message(Box::new(self.message(&format!("m_{id}")))),
             history: Vec::new(),
-            answer_tool: None,
             delegated: false,
             mode: Mode::Text,
             llm: Some(LlmRef { id: ResourceId(0), provider: llm.id() }),
@@ -229,6 +228,7 @@ impl Env {
             cleanup_timeout: lk_agents_abi::HOST_TEARDOWN_TIMEOUT,
         };
         let setup = RunSetup {
+            input_answers: Default::default(),
             llm,
             tools_host: None,
             host: Arc::new(FakeHost(fakes)),

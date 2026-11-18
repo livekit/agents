@@ -84,7 +84,6 @@ fn realtime_calls_wait_for_exact_capture_and_response_admission_in_both_transcri
                 id_seed: 0,
                 opening: Opening::Coordinated { approval_answers: Default::default() },
                 history: vec![],
-                answer_tool: None,
                 delegated: false,
                 mode: lk_agents_core::tool_outcome::Mode::Voice,
                 llm: None,
@@ -122,7 +121,7 @@ fn realtime_calls_wait_for_exact_capture_and_response_admission_in_both_transcri
         driver.on_tool_made(
             Ts::ZERO,
             (speech, 1),
-            MadeCall { call, spec: Some(spec), forbidden: false, answering: None, agent: None },
+            MadeCall { call, spec: Some(spec), forbidden: false, agent: None },
             crate::agent_session::RequestId(700),
         );
         assert_eq!(

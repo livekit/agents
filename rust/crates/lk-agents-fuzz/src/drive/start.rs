@@ -264,6 +264,9 @@ impl Run {
             keyterm_llm: setup
                 .keyterm_detection
                 .map(|_| fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
+            delegation: setup.input_routing.then(|| lk_agents_abi::delegation::DelegationOptions {
+                routing_model: Some(fakes::FakeLlm::new(registry.clone()) as Arc<Llm>),
+            }),
             session_id: Some("AS_fuzz".into()),
             id_seed: Some(0x5eed),
             // `ConsoleCall`: the session hosts the CLI's requests on the console's socket.

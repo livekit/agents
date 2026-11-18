@@ -183,4 +183,16 @@ impl RemoteTask {
         let out = py.detach(|| <RemoteTaskImpl as ::lk_agents_abi::session::remote::RemoteTaskView>::cancel_requested(&self.0)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(out)
     }
+
+    /// Request cancellation through the current bound native owner and its configured
+    /// remote client. Detached views and tasks without a live driver cannot dispatch.
+    /// Success requires persisted observation of the canceled task state.
+    fn cancel<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <RemoteTaskImpl as ::lk_agents_abi::session::remote::RemoteTaskView>::cancel(&this, )
+                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
 }

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from typing import Any
 
-    from ..llm.tool_context import FunctionTool, RawFunctionTool, ReadBack
+    from ..llm.tool_context import ReadBack
     from .tool_context import DuplicateMode, DuplicateScope
     from .tool_flags import ToolFlag
 
@@ -25,12 +25,11 @@ class InputRequired:
     """The turn or task waits on the person for an answer to ``question``.
 
         The agent facing the person asks it in its own words, or exactly as written with
-        ``verbatim=True``. From a conversation tool the next message is written as this call's
-        output. ``tool`` names the tool that takes the answer.
+        ``verbatim=True``. The conversation owner correlates a response to the exact pending
+        occurrence before continuing its originating call.
     """
 
     question: str
-    tool: FunctionTool | RawFunctionTool | None = None
     verbatim: bool = False
 
 

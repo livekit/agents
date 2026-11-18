@@ -463,8 +463,8 @@ async def test_each_call_in_a_step_keeps_its_own_reply_required() -> None:
     assert (outputs["lookup-1"].output, outputs["lookup-1"].reply_required) == ("Found", True)
 
 
-# Catches: a resumed call given a new execution id, or a new call reusing the old one.
-async def test_an_execution_id_survives_an_input_required_resume_and_not_a_new_call() -> None:
+# Catches: supplied history losing its execution correlation, or reusing a completed execution.
+async def test_history_keeps_execution_identity_only_while_input_is_pending() -> None:
     identities: list[str] = []
     model = FakeLLM(
         [

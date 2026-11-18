@@ -919,6 +919,7 @@ impl VoiceDriver {
         // The leaving agent starts none, including during its `on_exit` before the pause.
         } else if self.activity.in_window()
             || self.session.experts.needs_input_routing()
+            || self.needs_local_input_routing()
             || s.authorization_paused
             || s.is_paused()
             || self.session.closing_past_edge()

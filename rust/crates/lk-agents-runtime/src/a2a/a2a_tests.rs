@@ -318,7 +318,6 @@ impl Fake {
                         id: item_id,
                         name: "request_photo".into(),
                         call_id: "p1".into(),
-                        answer_tool: None,
                     }),
                     ..HandlerOutput::default()
                 })
@@ -626,7 +625,6 @@ async fn input_required_task_correlation_does_not_fabricate_a_tools_output(backe
             question: "Could you send a photo?".into(),
             tool: Some("request_photo".into()),
             call_id: Some("p1".into()),
-            answer_tool: None,
         })
     );
     let sm = json_of(&first.task.data.status_message);

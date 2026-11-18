@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use lk_agents_abi::{
     ChatItem, FunctionCall, FunctionCallOutput, llm::tool_executor::WAITING_PREFIX,
@@ -10,6 +10,8 @@ use lk_agents_voice::{
     trace::{Step, ToolStep},
 };
 
+use lk_agents_core::approval::{APPROVAL_IDENTITY_KEY, APPROVAL_SOURCE_KEY};
+
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
@@ -17,302 +19,522 @@ use crate::{
     record::Recording,
 };
 
-// A `needs_approval` tool runs once per answer, when the model repeats the answered call with the
-// same arguments in the reply to that answer. An answer the person moved on from grants nothing,
-// nor does one that came after the repeat's step began calling tools (its request had not read
-// it). Judged on what the host was told: calls as announced, outputs as last announced.
+// Each model decision names the exact canonical read-backs its owning invocation admitted.
+// A validated repeat spends one of those independently delivered occurrences and records its
+// source. Native admission and committed approval marks are claims checked against that evidence.
 
 pub struct ApprovalRunsOnTheAnswer;
 
 impl Rule for ApprovalRunsOnTheAnswer {
     const CONTRACT: Contract = Contract {
         id: "approval_runs_on_the_answer",
-        guarantee: "A tool that requires approval runs on the repeat of a call whose read-back the person answered, before they speak again, once per answer, and asks its read-back otherwise.",
-        examples: &[asked_then_granted, answered_then_moved_on_asks_again, a_restored_call_spends_its_grant],
+        guarantee: "A tool requiring approval runs only when its decision scope explicitly admits an answered canonical read-back with the same validated identity, once per occurrence, and records exactly which read-back it spent.",
+        examples: &[
+            asked_then_granted,
+            a_new_invocation_without_admitted_origins_asks_again,
+            two_matched_confirmations_grant_different_validated_arguments,
+            an_identical_sibling_can_be_answered_after_the_first_was_granted,
+            a_restored_call_spends_its_grant,
+            a_reused_provider_id_keeps_the_asking_item_distinct,
+        ],
         counterexamples: &[
             asked_again_after_the_answer,
             granted_unasked,
             granted_to_an_earlier_step,
             granted_twice_for_one_answer,
+            a_grant_names_an_unmatched_canonical_readback,
         ],
         probe: None,
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
         let journal = r.journal();
-        let key = |args: &str| {
-            serde_json::from_str::<serde_json::Value>(if args.is_empty() { "{}" } else { args })
-                .map(|v| v.to_string())
-                .unwrap_or_else(|_| args.to_owned())
-        };
-        let mark = |c: &FunctionCall| {
-            c.extra.get(APPROVAL_KEY).and_then(|v| v.as_str()).map(str::to_owned)
-        };
-        // Each approval call as committed, where its body started, and every output announcement.
-        let mut calls: Vec<(usize, FunctionCall)> = Vec::new();
-        let mut started: BTreeMap<String, usize> = BTreeMap::new();
-        let mut announced: BTreeMap<String, FunctionCall> = BTreeMap::new();
-        let mut admitted: BTreeMap<String, usize> = BTreeMap::new();
-        // Each call's step, and where each step started its first call.
-        let mut step_of: BTreeMap<String, (u64, u32)> = BTreeMap::new();
-        let mut step_open: BTreeMap<(u64, u32), usize> = BTreeMap::new();
-        let mut outputs: Vec<(usize, &FunctionCallOutput)> = Vec::new();
-        // The person's messages: the one after an answer is the answering one, and the next ends
-        // what that answer can grant.
-        let mut said: Vec<usize> = Vec::new();
+        let mut calls: BTreeMap<String, (usize, &FunctionCall)> = BTreeMap::new();
+        let mut started: BTreeMap<String, &FunctionCall> = BTreeMap::new();
+        let mut proposals = BTreeMap::new();
+        let mut admitted = BTreeMap::new();
+        let mut asked = BTreeMap::new();
+        let mut outputs = BTreeMap::new();
+        let mut responses: BTreeMap<String, Vec<(usize, &str)>> = BTreeMap::new();
+        let mut humans = BTreeMap::new();
+        let mut scopes = BTreeMap::new();
         for (n, (_, step)) in journal.iter().enumerate() {
             match step {
-                Step::Emitted(SessionEvent::ConversationItemAdded { item, source, .. }) => {
-                    if let ChatItem::FunctionCall(c) = &**item
-                        && let Source::ToolCall { speech, step }
-                        | Source::ToolOutput { speech, step } = source
-                    {
-                        step_of.insert(c.call_id.clone(), (speech.0, *step));
-                    }
-                    match &**item {
-                        ChatItem::FunctionCall(c) if c.name == APPROVAL_TOOL => {
-                            calls.push((n, c.clone()))
-                        }
-                        ChatItem::FunctionCallOutput(o) => outputs.push((n, o)),
-                        ChatItem::Message(m) if m.role == lk_agents_abi::Role::User => said.push(n),
-                        _ => {}
-                    }
+                Step::Tool(ToolStep::Calls { item_id, speech, step, input_answers, .. }) => {
+                    proposals.entry(item_id.clone()).or_insert(Proposal {
+                        at: n,
+                        scope: (speech.0, *step),
+                        answers: input_answers,
+                    });
+                }
+                Step::Tool(ToolStep::CallAdmitted {
+                    item_id, speech, identity, source, ..
+                }) => {
+                    admitted.entry(item_id.clone()).or_insert(Admission {
+                        at: n,
+                        speech: speech.0,
+                        identity: identity.as_deref(),
+                        source: source.as_deref(),
+                    });
+                }
+                Step::Tool(ToolStep::InputResponseDelivered {
+                    request: lk_agents_abi::session::InputRequestRef::Agent { .. },
+                    call_id: Some(call_id),
+                    message_id,
+                }) => {
+                    responses.entry(call_id.clone()).or_default().push((n, message_id));
                 }
                 Step::Emitted(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started {
                     call,
                 })) => {
-                    started.entry(call.call_id.clone()).or_insert(n);
-                    announced.insert(call.call_id.clone(), call.clone());
+                    started.insert(call.id.clone(), call);
                 }
-                Step::Tool(ToolStep::CallAdmitted { call_id, .. }) => {
-                    admitted.insert(call_id.clone(), n);
-                }
-                Step::Tool(ToolStep::CallStarted { call_id, .. }) => {
-                    started.entry(call_id.clone()).or_insert(n);
+                Step::Emitted(SessionEvent::ConversationItemAdded { item, source, .. }) => {
+                    match &**item {
+                        ChatItem::FunctionCall(call) => {
+                            if let Source::ToolCall { speech, step }
+                            | Source::ToolOutput { speech, step } = source
+                            {
+                                scopes.insert(call.id.clone(), (speech.0, *step));
+                            }
+                            if mark(call) == Some("asked") {
+                                asked.entry(call.id.clone()).or_insert(n);
+                            }
+                            if mark(call).is_some() {
+                                calls
+                                    .entry(call.id.clone())
+                                    .and_modify(|(_, stored)| *stored = call)
+                                    .or_insert((n, call));
+                            }
+                        }
+                        ChatItem::FunctionCallOutput(output)
+                            if output.output.starts_with(WAITING_PREFIX) =>
+                        {
+                            outputs.entry(output.id.clone()).or_insert(n);
+                        }
+                        ChatItem::Message(message)
+                            if message.role == lk_agents_abi::Role::User
+                                && message
+                                    .raw_text_content()
+                                    .is_some_and(|text| !text.trim().is_empty()) =>
+                        {
+                            humans.entry(message.id.clone()).or_insert(n);
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             }
         }
-        for (call_id, step) in &step_of {
-            if let Some(&n) = started.get(call_id) {
-                step_open.entry(*step).and_modify(|o| *o = (*o).min(n)).or_insert(n);
-            }
-        }
-        // When a read-back was put to the person, and when they answered it.
-        let asked_at = |call_id: &str| {
-            outputs
-                .iter()
-                .find(|(_, o)| o.call_id == call_id && o.output.starts_with(WAITING_PREFIX))
-                .map(|(n, _)| *n)
-        };
-        let answered_at = |call_id: &str| {
-            outputs
-                .iter()
-                .find(|(_, o)| o.call_id == call_id && !o.output.starts_with(WAITING_PREFIX))
-                .map(|(n, _)| *n)
-        };
-        for (_, call) in &calls {
-            let (Some(m), Some(&start)) = (mark(call), started.get(&call.call_id)) else {
-                continue;
+        // Actual body admission spends its grant even when interruption prevented a final
+        // ConversationItemAdded. A committed Granted mark has the same once-only obligation.
+        let ids: BTreeSet<_> = calls.keys().chain(admitted.keys()).cloned().collect();
+        let mut decisions: Vec<_> = ids
+            .into_iter()
+            .filter_map(|id| {
+                let committed = calls.get(&id);
+                let admission = admitted.get(&id);
+                let call =
+                    committed.map(|(_, call)| *call).or_else(|| started.get(&id).copied())?;
+                if call.name != APPROVAL_TOOL {
+                    return None;
+                }
+                let at = committed
+                    .map(|(n, _)| *n)
+                    .into_iter()
+                    .chain(admission.map(|admission| admission.at))
+                    .min()?;
+                Some((at, id, call))
+            })
+            .collect();
+        decisions.sort_by_key(|(at, id, _)| (*at, id.clone()));
+        let mut spent = BTreeSet::new();
+        for (_, id, call) in decisions {
+            let admission = admitted.get(&id);
+            let proposal = proposals.get(&id);
+            let recorded_source =
+                call.extra.get(APPROVAL_SOURCE_KEY).and_then(serde_json::Value::as_str);
+            let identity = match admission {
+                Some(admission) => admission.identity.map(str::to_owned),
+                None => validated_identity(call),
             };
-            let same = |c: &FunctionCall| {
-                c.call_id != call.call_id && key(&c.arguments) == key(&call.arguments)
+            let source = match admission {
+                Some(admission) => admission.source,
+                None => recorded_source,
             };
-            // The tool's latest read-back before this call, whatever its arguments: an answer is
-            // to the question asked last. A read-back of the same step counts from its call's
-            // start, as the tool machine decides a step's calls in the model's order; one of
-            // another step counts once its output is committed, when the question is put.
-            let step = step_of.get(&call.call_id);
-            let latest = calls
-                .iter()
-                .filter(|(_, c)| c.call_id != call.call_id && mark(c).as_deref() == Some("asked"))
-                .filter_map(|(_, c)| {
-                    let asked = asked_at(&c.call_id)?;
-                    let at = if step.is_some() && step_of.get(&c.call_id) == step {
-                        *started.get(&c.call_id)?
-                    } else {
-                        asked
-                    };
-                    (at < start).then_some((at, c))
+            let consistent = admission.is_none_or(|admission| {
+                calls.get(&id).is_none_or(|(_, recorded)| {
+                    validated_identity(recorded).as_deref() == admission.identity
+                        && recorded_source == admission.source
                 })
-                .max_by_key(|(n, _)| *n);
-            let Some((_, readback)) = latest else {
-                check.expect_with(Subject::Session, m != "granted", || {
-                    format!("{} was granted with no read-back put before it", call.call_id)
-                });
-                continue;
-            };
-            let moved_on =
-                |a: usize| said.iter().filter(|n| **n > a).nth(1).is_some_and(|n| *n < start);
-            let opened = step_of.get(&call.call_id).and_then(|s| step_open.get(s)).copied();
-            let answer = answered_at(&readback.call_id).filter(|n| {
-                *n < opened.unwrap_or(start).min(start)
-                    && !moved_on(*n)
-                    && key(&readback.arguments) == key(&call.arguments)
             });
-            // Another repeat whose body started after the answer, before this one, may have spent
-            // it; a cut repeat's grant is not on the record, so it counts too.
-            let spent = answer.is_some_and(|a| {
-                let committed = calls.iter().any(|(_, c)| {
-                    same(c)
-                        && c.call_id != readback.call_id
-                        && started.get(&c.call_id).is_some_and(|s| a < *s && *s < start)
-                        && mark(c).as_deref() != Some("asked")
-                });
-                // A progress reload can publish the call before its final tool record. The
-                // body admission still proves it spent its grant, even without an added event.
-                committed || admitted.iter().any(|(id, n)| {
-                    a < *n && *n < start && announced.get(id).is_some_and(|c| {
-                        c.name == call.name && same(c) && c.call_id != readback.call_id
+            let claim = mark(call).unwrap_or("granted");
+            let scope_matches = proposal.is_some_and(|proposal| {
+                scopes.get(&id).is_none_or(|scope| *scope == proposal.scope)
+                    && admission.is_none_or(|admission| admission.speech == proposal.scope.0)
+            });
+            let eligible = |source_id: &str| {
+                let Some(proposal) = proposal else { return false };
+                let Some((_, readback)) = calls.get(source_id) else { return false };
+                let Some(&asked_at) = asked.get(source_id) else { return false };
+                let Some(&output_at) = outputs.get(&readback.output_id()) else { return false };
+                scope_matches
+                    && proposal.answers.contains(source_id)
+                    && !spent.contains(source_id)
+                    && readback.name == call.name
+                    && mark(readback) == Some("asked")
+                    && identity.is_some()
+                    && validated_identity(readback) == identity
+                    && asked_at <= output_at
+                    && responses.get(source_id).is_some_and(|responses| {
+                        responses.iter().any(|(delivery, message)| {
+                            output_at < *delivery
+                                && *delivery < proposal.at
+                                && humans.get(*message).is_some_and(|human| *human < *delivery)
+                        })
                     })
-                })
-            });
-            let owed = answer.is_some() && !spent;
-            let holds = match m.as_str() {
-                "granted" => owed,
-                _ => !owed,
             };
-            check.expect_with(Subject::Session, holds, || {
-                format!(
-                    "{} {} was marked {m:?}; the read-back {} {}",
-                    call.name,
-                    call.call_id,
-                    readback.call_id,
-                    if owed { "was answered and unspent" } else { "was not answered" }
-                )
-            });
+            let owed =
+                proposal.is_some_and(|proposal| proposal.answers.iter().any(|id| eligible(id)));
+            let holds = consistent
+                && identity.is_some()
+                && match claim {
+                    "granted" => source.is_some_and(eligible),
+                    "asked" => !owed && admission.is_none() && source.is_none(),
+                    _ => false,
+                };
+            check.expect_with(Subject::Session, holds, || format!(
+                "{} canonical call {id} claimed {claim:?} with source {source:?}; scope {:?}, matched and unspent={owed}",
+                call.name, proposal.map(|proposal| proposal.scope),
+            ));
+            if claim == "granted" && holds {
+                spent.insert(source.expect("a valid grant names its source").to_owned());
+            }
         }
     }
 }
 
-fn started(call_id: &str) -> Step {
-    let c = function_call(call_id, None);
-    Step::Emitted(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started { call: c }))
+struct Proposal<'a> {
+    at: usize,
+    scope: (u64, u32),
+    answers: &'a BTreeSet<String>,
 }
 
-fn function_call(call_id: &str, mark: Option<&str>) -> lk_agents_abi::FunctionCall {
-    let mut c = lk_agents_abi::FunctionCall {
+struct Admission<'a> {
+    at: usize,
+    speech: u64,
+    identity: Option<&'a str>,
+    source: Option<&'a str>,
+}
+
+fn mark(call: &FunctionCall) -> Option<&str> {
+    call.extra.get(APPROVAL_KEY).and_then(serde_json::Value::as_str)
+}
+
+fn validated_identity(call: &FunctionCall) -> Option<String> {
+    call.extra.get(APPROVAL_IDENTITY_KEY).map(|identity| match identity {
+        serde_json::Value::String(identity) => identity.clone(),
+        value => canonical(value),
+    })
+}
+
+fn canonical(value: &serde_json::Value) -> String {
+    fn sorted(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(values) => {
+                let ordered: BTreeMap<_, _> =
+                    values.iter().map(|(key, value)| (key, sorted(value))).collect();
+                serde_json::to_value(ordered).expect("JSON values serialize")
+            }
+            serde_json::Value::Array(values) => {
+                serde_json::Value::Array(values.iter().map(sorted).collect())
+            }
+            value => value.clone(),
+        }
+    }
+    sorted(value).to_string()
+}
+
+fn proposed(call_id: &str, step: u32, answers: &[&str]) -> Step {
+    proposed_in(1, call_id, step, answers)
+}
+
+fn proposed_in(speech: u64, call_id: &str, step: u32, answers: &[&str]) -> Step {
+    Step::Tool(ToolStep::Calls {
+        speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId(speech),
+        step,
+        item_id: format!("item_{call_id}"),
+        names: vec![APPROVAL_TOOL.into()],
+        input_answers: answers.iter().map(|id| format!("item_{id}")).collect(),
+    })
+}
+
+fn started(call_id: &str) -> Step {
+    Step::Emitted(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started {
+        call: function_call(call_id, None),
+    }))
+}
+
+fn function_call(call_id: &str, mark: Option<&str>) -> FunctionCall {
+    let mut call = FunctionCall {
         id: format!("item_{call_id}"),
         call_id: call_id.into(),
         arguments: r#"{"label":"human"}"#.into(),
         name: APPROVAL_TOOL.into(),
-        created_at: std::time::SystemTime::UNIX_EPOCH,
+        created_at: std::time::UNIX_EPOCH,
         extra: Default::default(),
         group_id: None,
     };
     if let Some(mark) = mark {
-        c.extra.insert(APPROVAL_KEY.into(), serde_json::Value::String(mark.into()));
+        call.extra.insert(APPROVAL_KEY.into(), mark.into());
+        call.extra.insert(APPROVAL_IDENTITY_KEY.into(), r#"{"label":"human"}"#.into());
+        if mark == "granted" {
+            call.extra.insert(APPROVAL_SOURCE_KEY.into(), "item_c1".into());
+        }
     }
-    c
+    call
 }
 
-/// A call committed by step `step` of speech 1.
 fn call(call_id: &str, mark: &str, step: u32) -> Step {
-    emitted(ChatItem::FunctionCall(function_call(call_id, Some(mark))), step)
+    emitted(function_call(call_id, Some(mark)).into(), step)
+}
+
+fn with_identity(call_id: &str, mark: &str, step: u32, label: &str, source: Option<&str>) -> Step {
+    let mut call = function_call(call_id, Some(mark));
+    // The application validated this identity; its raw model spelling is not authorization.
+    call.extra.insert(
+        APPROVAL_IDENTITY_KEY.into(),
+        canonical(&serde_json::json!({"label":label})).into(),
+    );
+    if let Some(source) = source {
+        call.extra.insert(APPROVAL_SOURCE_KEY.into(), format!("item_{source}").into());
+    }
+    emitted(call.into(), step)
 }
 
 fn output(call_id: &str, text: &str) -> Step {
-    let o = lk_agents_abi::FunctionCallOutput::new(
-        format!("{call_id}_out"),
-        call_id,
-        text,
-        false,
-        std::time::SystemTime::UNIX_EPOCH,
-    );
-    emitted(ChatItem::FunctionCallOutput(o), 1)
+    emitted(
+        FunctionCallOutput::new(
+            format!("item_{call_id}_out"),
+            call_id,
+            text,
+            false,
+            std::time::UNIX_EPOCH,
+        )
+        .into(),
+        1,
+    )
 }
 
 fn emitted(item: ChatItem, step: u32) -> Step {
+    emitted_in(1, item, step)
+}
+
+fn emitted_in(speech: u64, item: ChatItem, step: u32) -> Step {
     use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     Step::Emitted(SessionEvent::ConversationItemAdded {
         item: Box::new(item),
         agent: "agent".into(),
-        source: lk_agents_voice::agent::Source::ToolOutput { speech: SpeechId(1), step },
+        source: Source::ToolOutput { speech: SpeechId(speech), step },
         visibility: lk_agents_voice::agent::Visibility::Both,
     })
 }
 
 fn asked() -> Authored {
     Authored::new()
+        .journal(proposed("c1", 1, &[]))
         .journal(started("c1"))
         .journal(call("c1", "asked", 1))
         .journal(output("c1", &format!("{WAITING_PREFIX}Please confirm. Yes or no?")))
 }
 
-/// Read back, answered, repeated: it runs.
 fn asked_then_granted() -> Recording {
     asked()
-        .journal(output("c1", "yes"))
+        .journal(said("yes"))
+        .journal(delivered("c1", "yes"))
+        .journal(proposed("c2", 2, &["c1"]))
         .journal(started("c2"))
         .journal(call("c2", "granted", 2))
         .done()
 }
 
-/// The person said yes and the repeat asks again: the booking never happens.
 fn asked_again_after_the_answer() -> Recording {
     asked()
-        .journal(output("c1", "yes"))
+        .journal(said("yes"))
+        .journal(delivered("c1", "yes"))
+        .journal(proposed("c2", 2, &["c1"]))
         .journal(started("c2"))
         .journal(call("c2", "asked", 2))
         .done()
 }
 
-/// A restored call's body ran, although no new ConversationItemAdded announced its grant.
+/// The admission spends its exact source even if interruption prevented a committed grant.
 fn a_restored_call_spends_its_grant() -> Recording {
     asked()
-        .journal(output("c1", "yes"))
+        .journal(said("yes"))
+        .journal(delivered("c1", "yes"))
+        .journal(proposed("c2", 2, &["c1"]))
         .journal(started("c2"))
         .journal(Step::Tool(ToolStep::CallAdmitted {
             speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId(1),
             call_id: "c2".into(),
+            item_id: "item_c2".into(),
+            identity: Some(r#"{"label":"human"}"#.into()),
+            source: Some("item_c1".into()),
         }))
+        .journal(proposed("c3", 3, &["c1"]))
         .journal(started("c3"))
         .journal(call("c3", "asked", 3))
         .done()
 }
 
-/// A successful repeat consumed the answer; another grant would run the action twice.
+fn a_reused_provider_id_keeps_the_asking_item_distinct() -> Recording {
+    let reused = |id: &str, mark| {
+        let mut call = function_call(id, mark);
+        call.call_id = "reused".into();
+        call
+    };
+    let start = |id| {
+        Step::Emitted(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started {
+            call: reused(id, None),
+        }))
+    };
+    let question = FunctionCallOutput::new(
+        "item_c1_out",
+        "reused",
+        format!("{WAITING_PREFIX}Please confirm. Yes or no?"),
+        false,
+        std::time::UNIX_EPOCH,
+    );
+    Authored::new()
+        .journal(proposed("c1", 1, &[]))
+        .journal(start("c1"))
+        .journal(emitted(reused("c1", Some("asked")).into(), 1))
+        .journal(emitted(question.into(), 1))
+        .journal(said("yes"))
+        .journal(delivered("c1", "yes"))
+        .journal(proposed("c2", 2, &["c1"]))
+        .journal(start("c2"))
+        .journal(emitted(reused("c2", Some("granted")).into(), 2))
+        .done()
+}
+
+fn two_matched_confirmations_grant_different_validated_arguments() -> Recording {
+    Authored::new()
+        .journal(proposed("c1", 1, &[]))
+        .journal(started("c1"))
+        .journal(with_identity("c1", "asked", 1, "Monday", None))
+        .journal(output("c1", &format!("{WAITING_PREFIX}Cancel Monday?")))
+        .journal(proposed("c2", 2, &[]))
+        .journal(started("c2"))
+        .journal(with_identity("c2", "asked", 2, "Tuesday", None))
+        .journal(output("c2", &format!("{WAITING_PREFIX}Cancel Tuesday?")))
+        .journal(said("yes to both"))
+        .journal(delivered("c1", "yes to both"))
+        .journal(delivered("c2", "yes to both"))
+        .journal(proposed("c3", 3, &["c1", "c2"]))
+        .journal(started("c3"))
+        .journal(with_identity("c3", "granted", 3, "Monday", Some("c1")))
+        .journal(proposed("c4", 3, &["c1", "c2"]))
+        .journal(started("c4"))
+        .journal(with_identity("c4", "granted", 3, "Tuesday", Some("c2")))
+        .done()
+}
+
+fn an_identical_sibling_can_be_answered_after_the_first_was_granted() -> Recording {
+    asked()
+        .journal(proposed("c2", 2, &[]))
+        .journal(started("c2"))
+        .journal(call("c2", "asked", 2))
+        .journal(output("c2", &format!("{WAITING_PREFIX}Please also confirm this one.")))
+        .journal(said("first yes"))
+        .journal(delivered("c1", "first yes"))
+        .journal(proposed("c3", 3, &["c1"]))
+        .journal(started("c3"))
+        .journal(call("c3", "granted", 3))
+        .journal(said("second yes"))
+        .journal(delivered("c2", "second yes"))
+        .journal(proposed("c4", 4, &["c2"]))
+        .journal(started("c4"))
+        .journal(with_identity("c4", "granted", 4, "human", Some("c2")))
+        .done()
+}
+
 fn granted_twice_for_one_answer() -> Recording {
     asked()
-        .journal(output("c1", "yes"))
+        .journal(said("yes"))
+        .journal(delivered("c1", "yes"))
+        .journal(proposed("c2", 2, &["c1"]))
         .journal(started("c2"))
         .journal(call("c2", "granted", 2))
+        .journal(proposed("c3", 3, &["c1"]))
         .journal(started("c3"))
         .journal(call("c3", "granted", 3))
         .done()
 }
 
-/// Run before the person answered.
-/// The person answered, then said something else: the repeat asks again.
-fn answered_then_moved_on_asks_again() -> Recording {
+fn a_grant_names_an_unmatched_canonical_readback() -> Recording {
     asked()
-        .journal(output("c1", "yes"))
-        .journal(said("yes"))
-        .journal(said("actually, wait"))
+        .journal(proposed("c2", 2, &[]))
         .journal(started("c2"))
         .journal(call("c2", "asked", 2))
+        .journal(output("c2", &format!("{WAITING_PREFIX}Confirm the second request?")))
+        .journal(said("yes"))
+        .journal(delivered("c1", "yes"))
+        .journal(proposed("c3", 3, &["c1"]))
+        .journal(started("c3"))
+        .journal(with_identity("c3", "granted", 3, "human", Some("c2")))
+        .done()
+}
+
+/// A new invocation receives no authority merely because another invocation delivered an answer.
+fn a_new_invocation_without_admitted_origins_asks_again() -> Recording {
+    asked()
+        .journal(said("yes"))
+        .journal(delivered("c1", "yes"))
+        .journal(said("actually, wait"))
+        .journal(proposed_in(2, "c2", 1, &[]))
+        .journal(started("c2"))
+        .journal(emitted_in(2, function_call("c2", Some("asked")).into(), 1))
         .done()
 }
 
 fn said(text: &str) -> Step {
     Step::Emitted(SessionEvent::ConversationItemAdded {
-        item: Box::new(ChatItem::Message(lk_agents_abi::ChatMessage::new(
-            format!("msg_{text}"),
-            lk_agents_abi::Role::User,
-            Vec::new(),
-            std::time::SystemTime::UNIX_EPOCH,
-        ))),
+        item: Box::new(
+            lk_agents_abi::ChatMessage::text(
+                format!("msg_{text}"),
+                lk_agents_abi::Role::User,
+                text,
+                std::time::UNIX_EPOCH,
+            )
+            .into(),
+        ),
         agent: "agent".into(),
-        source: lk_agents_voice::agent::Source::UserTyped,
+        source: Source::UserTyped,
         visibility: lk_agents_voice::agent::Visibility::Both,
     })
 }
 
-/// The repeat's step began calling tools before the person answered: its request never read it.
+fn delivered(call_id: &str, response: &str) -> Step {
+    Step::Tool(ToolStep::InputResponseDelivered {
+        request: lk_agents_abi::session::InputRequestRef::Agent {
+            agent_id: "agent".into(),
+            request_id: format!("request/{call_id}"),
+        },
+        call_id: Some(format!("item_{call_id}")),
+        message_id: format!("msg_{response}"),
+    })
+}
+
+/// A response arriving after a step began calling does not enter that step's explicit authority.
 fn granted_to_an_earlier_step() -> Recording {
     asked()
+        .journal(proposed("c2", 2, &[]))
         .journal(started("c2"))
-        .journal(output("c1", "yes"))
+        .journal(said("yes"))
+        .journal(delivered("c1", "yes"))
+        .journal(proposed("c3", 2, &[]))
         .journal(started("c3"))
         .journal(call("c2", "asked", 2))
         .journal(call("c3", "granted", 2))
@@ -320,5 +542,9 @@ fn granted_to_an_earlier_step() -> Recording {
 }
 
 fn granted_unasked() -> Recording {
-    asked().journal(started("c2")).journal(call("c2", "granted", 2)).done()
+    asked()
+        .journal(proposed("c2", 2, &[]))
+        .journal(started("c2"))
+        .journal(call("c2", "granted", 2))
+        .done()
 }

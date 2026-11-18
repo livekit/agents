@@ -89,7 +89,13 @@ fn started(call_id: &str, hosted: bool) -> Step {
 
 fn admitted(call_id: &str) -> Step {
     use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
-    Step::Tool(ToolStep::CallAdmitted { speech: SpeechId(1), call_id: call_id.into() })
+    Step::Tool(ToolStep::CallAdmitted {
+        speech: SpeechId(1),
+        call_id: call_id.into(),
+        item_id: format!("item_{call_id}"),
+        identity: None,
+        source: None,
+    })
 }
 
 /// Handed over, admitted, and the runner received its body.

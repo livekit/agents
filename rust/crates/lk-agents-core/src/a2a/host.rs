@@ -46,7 +46,6 @@ impl TryFrom<TurnContext> for host::TurnContext {
             task_id: ctx.task_id,
             tasks: ctx.tasks.into_iter().map(Into::into).collect(),
             caller_history,
-            answer_tool: ctx.answer_tool,
             host_context: None,
         })
     }

@@ -67,7 +67,6 @@ pub(super) fn input(opening: Opening, history: Vec<ChatItem>) -> RunInput {
         id_seed: 0,
         opening,
         history,
-        answer_tool: None,
         delegated: false,
         mode: crate::tool_outcome::Mode::Text,
         llm: Some(LlmRef { id: LLM, provider: ProviderId::of_label("fake") }),
@@ -578,7 +577,6 @@ fn text_where_a_typed_output_is_expected_asks_the_person() {
         RunOutcome::InputRequired(RunQuestion {
             question: "Which day works for you?".into(),
             verbatim: false,
-            answer_tool: None
         })
     );
 }
@@ -590,7 +588,6 @@ fn a_tool_question_is_worded_by_the_facing_agent_only() {
     let ask = |_: &str| ToolOutcome::InputRequired {
         question: "photo of the damage".into(),
         verbatim: false,
-        tool: None,
     };
     let mut d = Driver::new(text_agent(vec![string_tool("photo", "x")]), "claim", vec![]);
     d.reply("", &[("photo", json!({"x": "1"}))]);
@@ -607,7 +604,6 @@ fn a_tool_question_is_worded_by_the_facing_agent_only() {
         RunOutcome::InputRequired(RunQuestion {
             question: "Could you send a photo of the damage?".into(),
             verbatim: false,
-            answer_tool: None
         })
     );
     assert_eq!(
@@ -634,17 +630,14 @@ fn an_empty_phrasing_reply_streams_the_original_question_before_settlement() {
     driver.run_tools(|_| ToolOutcome::InputRequired {
         question: "Photo of the damage?".into(),
         verbatim: false,
-        tool: None,
     });
     driver.reply("", &[]);
     assert!(driver.effects.iter().any(|effect| matches!(effect,
         AgentRunEffect::Emit(StreamEvent::TextDelta { delta, .. }) if delta == "Photo of the damage?")));
 }
 
-// Catches: `InputRequired(tool=)`'s answer going to the model instead of the named tool, or the
-// waiting placeholder left in the history once answered.
 #[test]
-fn an_answer_for_a_named_tool_is_handed_to_it_without_a_model_turn() {
+fn a_matched_input_origin_does_not_dispatch_or_rewrite_a_tool_call() {
     let tools =
         || vec![string_tool("ask_expert", "question"), string_tool("reply_expert", "answer")];
     let mut d = Driver::new(text_agent(tools()), "is it covered?", vec![]);
@@ -652,24 +645,35 @@ fn an_answer_for_a_named_tool_is_handed_to_it_without_a_model_turn() {
     d.run_tools(|_| ToolOutcome::InputRequired {
         question: "Which policy?".into(),
         verbatim: true,
-        tool: Some("reply_expert".into()),
     });
     let first = d.result().clone();
-    let RunOutcome::InputRequired(ask) = &first.outcome else { panic!() };
-    assert_eq!(ask.answer_tool.as_deref(), Some("reply_expert"));
-
     let mut input = d.run.input.clone();
     input.history = first.all_messages.clone();
     input.opening = Opening::Message(Box::new(user("msg_2", "Gold plan")));
-    input.answer_tool = ask.answer_tool.clone();
-    let mut d = Driver::with_input(text_agent(tools()), input);
-    assert_eq!(d.requests(), 0);
-    assert_eq!(d.prepares()[0].1, Map::from_iter([("answer".to_owned(), json!("Gold plan"))]));
+    input.id_seed = 2;
+    let run = AgentRun::new(text_agent(tools()), input)
+        .unwrap()
+        .with_input_answers(BTreeSet::from([first.pending_call.as_ref().unwrap().id.clone()]));
+    let mut d = Driver::start(run);
+    assert_eq!(d.requests(), 1);
+    assert!(d.prepares().is_empty(), "correlation is not a directive to invoke a named tool");
+    d.reply("", &[("reply_expert", json!({"answer":"the model's proposed arguments"}))]);
+    assert_eq!(
+        d.prepares()[0].1,
+        Map::from_iter([("answer".to_owned(), json!("the model's proposed arguments"))])
+    );
     d.run_tools(|_| value("covered"));
     let (_, ctx, _) = d.request();
     let outputs: Vec<_> =
         transcript(&ctx.items).into_iter().filter(|(k, _)| k == "output").collect();
-    assert_eq!(outputs, pairs(&[("output", "Gold plan"), ("output", "covered")]));
+    assert_eq!(
+        outputs,
+        pairs(&[
+            ("output", "waiting for the person's answer to: Which policy?"),
+            ("output", "covered"),
+        ])
+    );
+    assert!(transcript(&ctx.items).contains(&("user".into(), "Gold plan".into())));
 }
 
 // Catches: an implicit loop cap ending a long, finite model/tool sequence.
@@ -726,11 +730,7 @@ fn tool_metadata_is_recorded_with_its_original_call() {
     });
     driver.send(AgentRunEvent::ToolSettled {
         call,
-        outcome: ToolOutcome::InputRequired {
-            question: "Which payer?".into(),
-            verbatim: false,
-            tool: None,
-        },
+        outcome: ToolOutcome::InputRequired { question: "Which payer?".into(), verbatim: false },
     });
     driver.reply("Which payer?", &[]);
     let call = driver

@@ -159,12 +159,8 @@ fn updates_after_the_first_keep_their_owner_until_the_actual_body_finishes() {
                 &invocation.invocation_id,
                 invocation.operation,
                 "reused-call",
-                ToolOutcome::InputRequired {
-                    question: "Which city?".into(),
-                    verbatim: false,
-                    tool: None
-                }
-                .into()
+                ToolOutcome::InputRequired { question: "Which city?".into(), verbatim: false }
+                    .into()
             )
             .is_err()
     );

@@ -123,8 +123,10 @@ async def test_reused_provider_call_ids_do_not_resolve_a_later_child_with_the_ea
     assert outputs[0].id != outputs[1].id
 
 
-# Catches: the person's answer on a call not forwarded to the child waiting on it.
-async def test_on_a_call_the_persons_answer_resumes_the_waiting_child() -> None:
+# Catches: a side question resuming the child instead of waiting for its recognized response.
+async def test_a_voice_child_waits_through_a_side_question_then_receives_the_recognized_response() -> (
+    None
+):
     child_model = FakeLLM([tool_call("ask_date"), tool_call("final_result", reference="B-6")])
     child = Agent(
         name="booking",
@@ -140,11 +142,39 @@ async def test_on_a_call_the_persons_answer_resumes_the_waiting_child() -> None:
 
     desk = Agent(instructions="Delegate.", name="desk", tools=[child.as_tool(parameters=Request)])
     delegate = tool_call("booking", nights=1)
-    model = FakeLLM(lambda ctx: delegate if last_input(ctx) == "One night" else "Okay.")
+
+    def frontend(history: ChatContext) -> str | FunctionToolCall:
+        human = next(
+            item.text_content
+            for item in reversed(history.items)
+            if item.type == "message" and item.role == "user"
+        )
+        if human == "One night" and not any(
+            item.type == "function_call" and item.name == "booking" for item in history.items
+        ):
+            return delegate
+        if human == "Why do you need the date?":
+            return "To check the room's availability."
+        return "Okay."
+
+    def route(history: ChatContext) -> FunctionToolCall:
+        prompt = _routing_prompt(history)
+        assert prompt["latest_message"] in ("Why do you need the date?", "Friday")
+        [candidate] = prompt["candidates"]
+        assert candidate["question"] == "For which date?"
+        return tool_call(
+            "route_input_response",
+            candidates=[candidate["index"]] if prompt["latest_message"] == "Friday" else [],
+            unclear=False,
+        )
+
+    store = ContextStore()
     session = VoiceSession(
+        context=store.bind(),
+        delegation=DelegationOptions(routing_model=FakeLLM(route)),
         vad=FakeVAD(),
-        stt=FakeSTT(["One night", "Friday"]),
-        llm=model,
+        stt=FakeSTT(["One night", "Why do you need the date?", "Friday"]),
+        llm=FakeLLM(frontend),
         turn_handling={"turn_detection": None, "endpointing": {"min_delay": 0.1}},
         aec_warmup_duration=None,
     )
@@ -163,11 +193,33 @@ async def test_on_a_call_the_persons_answer_resumes_the_waiting_child() -> None:
             "the child's question was never asked",
         )
         microphone.speak(0.4)
+        await until(
+            lambda: any(
+                item.type == "message"
+                and item.role == "assistant"
+                and item.text_content == "To check the room's availability."
+                for item in session.history.items
+            ),
+            "the frontend did not answer the side question",
+        )
+        saved = await store.load_session()
+        assert saved.current_agent is not None
+        assert [request.state for request in saved.current_agent.input_requests.values()] == [
+            "open"
+        ]
+        assert len(child_model.requests) == 1
+        assert not _results(session)
+
+        microphone.speak(0.4)
         await until(lambda: _results(session), "the child's result never reached the call")
 
         assert _results(session) == [{"reference": "B-6"}]
-    answer = child_model.requests[1].items[-1]
-    assert answer.type == "message" and answer.text_content == "Friday"
+    answer = next(
+        item
+        for item in reversed(child_model.requests[1].items)
+        if item.type == "message" and item.role == "user"
+    )
+    assert answer.text_content == "Friday"
 
 
 # Catches: a failed remote task crashing the run instead of being the tool's error outcome.

@@ -12,6 +12,9 @@ use super::*;
 #[path = "input_tests.rs"]
 mod input;
 
+#[path = "settlement_tests.rs"]
+mod settlement;
+
 mod checkpoints {
 
     use super::*;
@@ -1117,6 +1120,10 @@ fn child_output_without_a_serialized_accepted_value_cannot_resolve_parent() {
                 ..
             } if tool_name == "book")
     }));
+    let child = &driver.session.state.frames[&driver.session.state.active_frame_id];
+    assert!(!child.completed);
+    assert!(child.output.is_none());
+    assert!(child.error.is_some());
 }
 
 #[test]
@@ -1148,6 +1155,10 @@ fn a_failed_child_keeps_its_invocation_identity_on_the_terminal_effect() {
         matches!(driver.session.phase, Phase::Done),
         "the terminal retains an identity, not a live run"
     );
+    let failed = &driver.session.state.frames[&driver.session.state.active_frame_id];
+    assert!(!failed.completed);
+    assert!(failed.output.is_none());
+    assert!(failed.error.is_some());
 }
 
 #[test]

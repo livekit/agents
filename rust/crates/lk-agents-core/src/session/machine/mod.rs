@@ -20,6 +20,13 @@ impl Session {
                     .ok_or_else(|| RoutingError::InvalidState("missing active frame".into()))?;
                 let pending = frame.parent.is_some()
                     || !frame.pending_calls.is_empty()
+                    || frame.input_requests.values().any(|request| {
+                        matches!(
+                            request.state,
+                            lk_agents_abi::session::InputRequestState::Open
+                                | lk_agents_abi::session::InputRequestState::Responding
+                        )
+                    })
                     || agent_run::execution::pending(&frame.history).is_some();
                 // A reply under a new task resumes the pending frame under that task; the door
                 // completes the waiting task as merged into it.
@@ -63,6 +70,7 @@ impl Session {
             checkpoint_due: None,
             checkpoint_bytes: 0,
             phase: Phase::NotStarted,
+            deferred_input_offers: BTreeMap::new(),
             usage: Ledger::default(),
             sequence: 0,
         })
@@ -142,19 +150,17 @@ impl Session {
         crate::session::remote::task(remote, task_id)
     }
 
-    /// Only the initiating local call can recover its previous send. Controls such as GetTask
-    /// observe that send; they never replace it as the operation whose outcome is recovered.
-    pub fn remote_recovery(
+    /// Only this live conversation can acknowledge its already observed cancellation.
+    pub fn cancel_required(
         &self,
         remote_id: &str,
         endpoint: &str,
-        origin: &lk_agents_abi::session::ToolCallRef,
-    ) -> Result<
-        Option<lk_agents_abi::delegation::remote::RemoteRecovery>,
-        lk_agents_abi::storage::StorageError,
-    > {
-        let Some(state) = self.remote_state(remote_id, endpoint)? else { return Ok(None) };
-        crate::session::remote::recovery(state, origin)
+        target: &lk_agents_abi::delegation::remote::RemoteTaskRef,
+    ) -> Result<bool, lk_agents_abi::storage::StorageError> {
+        let remote = self.remote_state(remote_id, endpoint)?.ok_or_else(|| {
+            lk_agents_abi::storage::StorageError::Invalid("this remote has no known tasks".into())
+        })?;
+        crate::session::remote::cancel_required(remote, target)
     }
 
     pub fn snapshot(&self) -> SessionSnapshot {
@@ -196,6 +202,10 @@ impl Session {
                 return self.handle(SessionEvent::Cancel, now);
             }
             SessionEvent::Start(message) if matches!(self.phase, Phase::NotStarted) => {
+                if let Err(error) = self.restore_completed(now, &mut effects) {
+                    self.finish(Err(TextSessionError::Routing(error)), &mut effects);
+                    return effects;
+                }
                 self.record_dialogue(message.clone());
                 // Receipt and human input precede classification. The detector never sees
                 // a queued question or an agent's private model history.
@@ -339,6 +349,28 @@ impl Session {
         now: Ts,
         effects: &mut Vec<SessionEffect>,
     ) {
+        let active = self.state.active_frame_id.clone();
+        let frame = &self.state.frames[&active];
+        if frame.pending_calls.iter().any(|call| call.status != ChildCallStatus::Approval) {
+            let offered =
+                offered.unwrap_or_else(|| crate::delegation::remote::routing::offered(&self.state));
+            self.deferred_input_offers.insert(active.clone(), offered);
+            if let Some(mut message) = message {
+                let frame = self.state.frames.get_mut(&active).expect("the active frame exists");
+                if !frame.history.iter().any(|item| item.id() == message.id) {
+                    agent_run::execution::bind(
+                        &mut message,
+                        &frame.history,
+                        Some(&self.state.execution_id),
+                        &self.state.execution_id,
+                    );
+                    frame.history.push(message.into());
+                }
+            }
+            self.next_child(now, effects);
+            return;
+        }
+        let offered = offered.or_else(|| self.deferred_input_offers.remove(&active));
         let invocation_id = self.mint("invocation");
         let mut answered = BTreeSet::new();
         let stamp = self.stamp(now);
@@ -410,7 +442,6 @@ impl Session {
             id_seed: lk_agents_abi::types::ids::splitmix64(self.id_seed, self.state.next_id),
             opening: Opening::Message(Box::new(message)),
             history: frame.history.clone(),
-            answer_tool: None,
             delegated: self.delegated,
             mode: crate::tool_outcome::Mode::Text,
             llm: agent.llm.clone(),
@@ -635,6 +666,14 @@ impl Session {
         let (Phase::Running(invocation) | Phase::Releasing(invocation, _)) = phase else { return };
         let output = validated_output(&invocation, &result.outcome);
         let approvals = self.approvals(&invocation, &result.all_messages);
+        if let Some(output) = &output {
+            let frame =
+                self.state.frames.get_mut(&frame_id).expect("the invocation's frame exists");
+            frame.history = result.all_messages.clone();
+            frame.completed = true;
+            frame.output = Some(output.clone());
+            frame.error = None;
+        }
         effects.push(SessionEffect::InvocationSettled {
             frame_id,
             invocation_id,
@@ -861,9 +900,10 @@ impl Session {
             if let Some(history) = history {
                 frame.history = history;
             }
-            frame.completed = false;
-            frame.output = None;
-            frame.error = Some(error.to_string());
+            if !frame.completed {
+                frame.output = None;
+                frame.error = Some(error.to_string());
+            }
             if self.checkpoints && !matches!(error, TextSessionError::Storage(_)) {
                 effects.push(SessionEffect::Checkpoint(Box::new(self.state.clone())));
             }

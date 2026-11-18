@@ -1,13 +1,15 @@
-//! A turn's reload of the partition another writer moved: the rows the call changed since its
-//! last commit stay as the call has them.
+//! Reloading stored history preserves exact response admission and the original read-backs.
 
-use lk_agents_abi::ChatItem;
 use lk_agents_abi::llm::tool_executor::WAITING_PREFIX;
+use lk_agents_abi::session::InputRequestState;
+use lk_agents_abi::{ChatItem, Role};
 use lk_agents_fuzz::drive::{Run, Setup, StorageSetup, simulate};
 use lk_agents_fuzz::input::{
     AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs, TurnMode, UserText,
 };
+use lk_agents_fuzz::record::Kind;
 use lk_agents_voice::events::SessionEvent;
+use lk_agents_voice::trace::{Step, ToolStep};
 
 /// The person's turn: `words`, heard and ended.
 fn says(utterance: u32, words: &str) -> [Input; 7] {
@@ -26,97 +28,200 @@ fn says(utterance: u32, words: &str) -> [Input; 7] {
     ]
 }
 
-// Catches (seed 1682): the store compared what it last committed of a row with the row read back,
-// though the stored form keeps less of an item (a user message's STT metadata): every row read as
-// another writer's edit, so a reload after a text turn put back the question the person had just
-// answered, and their next words answered it again while the question asked since waited.
+fn asks(chat: u32, tool: u32, question: &str) -> [Input; 5] {
+    [
+        Input::LlmToolCall {
+            chat: Ref::new(chat),
+            name: "lookup".into(),
+            args: ToolArgs("{}".into()),
+        },
+        Input::LlmEnd { chat: Ref::new(chat) },
+        Input::Advance { ms: Millis(100) },
+        Input::ToolAnswered {
+            tool: Ref::new(tool),
+            answer: ToolAnswer::AskVerbatim,
+            text: AgentText(question.into()),
+        },
+        Input::Advance { ms: Millis(3_000) },
+    ]
+}
+
+/// There is exactly one presented open question on each of these model requests.
+fn recognizes_response(chat: u32) -> [Input; 3] {
+    [
+        Input::LlmToolCall {
+            chat: Ref::new(chat),
+            name: "route_input_response".into(),
+            args: ToolArgs(r#"{"candidates":[0],"unclear":false}"#.into()),
+        },
+        Input::LlmEnd { chat: Ref::new(chat) },
+        Input::Advance { ms: Millis(100) },
+    ]
+}
+
+async fn wait_for_resource(run: &mut Run, kind: Kind, index: u32) {
+    for _ in 0..100 {
+        if run.record.live().of(kind).contains(&index) {
+            return;
+        }
+        crate::playout::apply_with_playout(run, &Input::Advance { ms: Millis(100) }).await;
+    }
+    panic!("the expected {kind:?} request {index} never became ready");
+}
+
+// Catches a reload putting an already answered question back in the classifier's candidates.
+// Original read-backs remain tool outcomes; canonical human words and response state are separate.
 #[test]
-fn an_answered_question_stays_answered_across_a_reload() {
-    let (mut reloaded, mut exercised) = (0, 0);
-    for seed in 0..8 {
-        let setup = Setup {
-            vad: true,
-            stt: true,
-            turn: TurnMode::Stt,
-            tools: vec!["lookup".into()],
-            storage: Some(StorageSetup::default()),
-            ..Setup::default()
-        };
-        let ask = |chat: u32, tool: u32, question: &str| {
-            [
-                Input::LlmToolCall {
-                    chat: Ref::new(chat),
-                    name: "lookup".into(),
-                    args: ToolArgs("{}".into()),
-                },
-                Input::LlmEnd { chat: Ref::new(chat) },
-                Input::Advance { ms: Millis(100) },
-                Input::ToolAnswered {
-                    tool: Ref::new(tool),
-                    answer: ToolAnswer::AskVerbatim,
-                    text: AgentText(question.into()),
-                },
-                Input::Advance { ms: Millis(3_000) },
-            ]
-        };
-        let inputs: Vec<Input> = [
+fn answered_occurrences_survive_a_stored_history_readback() {
+    let setup = Setup {
+        vad: true,
+        stt: true,
+        turn: TurnMode::Stt,
+        input_routing: true,
+        tools: vec!["lookup".into()],
+        storage: Some(StorageSetup::default()),
+        ..Setup::default()
+    };
+    simulate(async {
+        let mut binding = None;
+        let mut run = Run::start_with(&setup, 0, Default::default(), |args, _| {
+            binding = args.session_sink.clone();
+        })
+        .await;
+        let binding = binding.expect("stored voice has its native session binding");
+        let inputs = [
             Input::GenerateReply { user_input: None, instructions: None, allow: None },
             Input::Advance { ms: Millis(100) },
         ]
         .into_iter()
-        .chain(ask(0, 0, "Which day?"))
+        .chain(asks(0, 0, "Which day?"))
         .chain(says(0, "Monday"))
-        .chain(ask(1, 1, "Which city?"))
+        .chain(recognizes_response(1))
+        .chain(asks(2, 1, "Which city?"))
         .chain(says(1, "Paris"))
-        .chain(says(2, "Thanks"))
-        .collect();
-        let run = simulate(async {
-            let mut run = Run::start(&setup, seed, Default::default()).await;
-            for input in &inputs {
-                crate::playout::apply_with_playout(&mut run, input).await;
+        .chain(recognizes_response(3))
+        .chain([
+            Input::LlmText { chat: Ref::new(4), text: AgentText("All set.".into()) },
+            Input::LlmEnd { chat: Ref::new(4) },
+            Input::Advance { ms: Millis(1_000) },
+        ])
+        .chain(says(2, "Thanks"));
+        for input in inputs {
+            match &input {
+                Input::LlmToolCall { chat, .. }
+                | Input::LlmEnd { chat }
+                | Input::LlmText { chat, .. } => {
+                    wait_for_resource(&mut run, Kind::Chat, chat.nth).await;
+                }
+                Input::ToolAnswered { tool, .. } => {
+                    wait_for_resource(&mut run, Kind::Tool, tool.nth).await;
+                }
+                _ => {}
             }
-            run
+            crate::playout::apply_with_playout(&mut run, &input).await;
+        }
+
+        let snapshot = binding.restore().unwrap().unwrap();
+        let requests = &snapshot.frames[&snapshot.root_frame_id].input_requests;
+        let chats: Vec<_> = run
+            .record
+            .resources(lk_agents_fuzz::record::Kind::Chat)
+            .filter_map(|resource| match resource.detail() {
+                lk_agents_fuzz::record::Detail::Chat { tools, input_candidates, .. } => {
+                    Some((tools, input_candidates))
+                }
+                _ => None,
+            })
+            .collect();
+        let outcomes: Vec<_> = run
+            .record
+            .host_view()
+            .events()
+            .into_iter()
+            .filter_map(|(_, event)| {
+                if let SessionEvent::ConversationItemAdded { item, .. } = event
+                    && let ChatItem::FunctionCallOutput(output) = &**item
+                {
+                    Some((output.id.as_str(), output.name.as_str(), output.output.as_str()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            requests.len(),
+            2,
+            "both questions must actually be retained; requests: {requests:?}; model offers: {chats:?}; outcomes: {outcomes:?}"
+        );
+        for (question, response) in [("Which day?", "Monday"), ("Which city?", "Paris")] {
+            let request = requests
+                .values()
+                .find(|request| {
+                    request.source_message.raw_text_content().as_deref() == Some(question)
+                })
+                .unwrap();
+            assert_eq!(request.state, InputRequestState::Responded, "{question}");
+            assert_eq!(
+                request
+                    .response_message
+                    .as_ref()
+                    .and_then(|message| message.raw_text_content())
+                    .as_deref(),
+                Some(response)
+            );
+        }
+
+        let deliveries: Vec<_> = run
+            .record
+            .journal()
+            .iter()
+            .filter_map(|(at, step)| {
+                matches!(step, Step::Tool(ToolStep::InputResponseDelivered { .. })).then_some(*at)
+            })
+            .collect();
+        assert_eq!(deliveries.len(), 2, "each response reaches its occurrence once");
+        let first = deliveries[0];
+        let read_back_after_response = run.record.host_view().storage().iter().any(|(at, step)| {
+            first < *at
+                && matches!(
+                    step,
+                    lk_agents_fuzz::record::StorageStep::ConversationCheckpoint { .. }
+                )
         });
-        // The history as the host holds it: told item by item, replaced whole by a reload.
-        let mut history: Vec<ChatItem> = Vec::new();
-        let mut answered = false;
+        assert!(
+            read_back_after_response,
+            "the story must read stored history after accepting a response"
+        );
+        let mut history = Vec::<ChatItem>::new();
         for (_, event) in run.record.host_view().events() {
             match event {
                 SessionEvent::HistoryReloaded { items } => {
-                    reloaded += usize::from(answered);
                     history = items.clone();
                 }
                 SessionEvent::ConversationItemAdded { item, .. } => {
-                    match history.iter_mut().find(|i| i.id() == item.id()) {
-                        Some(told) => *told = (**item).clone(),
+                    match history.iter_mut().find(|seen| seen.id() == item.id()) {
+                        Some(seen) => *seen = (**item).clone(),
                         None => history.push((**item).clone()),
                     }
                 }
                 _ => {}
             }
-            answered |= history.iter().any(
-                |item| matches!(item, ChatItem::FunctionCallOutput(o) if o.output == "Monday"),
-            );
         }
-        let outputs: Vec<&str> = history
+        for response in ["Monday", "Paris"] {
+            assert!(history.iter().any(|item| matches!(item, ChatItem::Message(message)
+                if message.role == Role::User
+                    && message.raw_text_content().as_deref() == Some(response))));
+        }
+        let outputs: Vec<_> = history
             .iter()
             .filter_map(|item| match item {
-                ChatItem::FunctionCallOutput(o) => Some(o.output.as_str()),
+                ChatItem::FunctionCallOutput(output) => Some(output.output.clone()),
                 _ => None,
             })
             .collect();
-        // Both questions put: the store's latencies decide whether the scripted replies line up.
-        let asked = run.record.host_view().events().into_iter().filter(|(_, event)| {
-            matches!(event, SessionEvent::ConversationItemAdded { item, .. }
-                if matches!(item.as_ref(), ChatItem::FunctionCallOutput(o)
-                    if o.output.starts_with(WAITING_PREFIX)))
-        });
-        if asked.count() < 2 {
-            continue;
-        }
-        exercised += 1;
-        assert_eq!(outputs, ["Monday", "Paris"], "seed {seed}: a question was put back");
-    }
-    assert!(exercised >= 4, "both questions were put in only {exercised} of 8 runs");
-    assert!(reloaded > 0, "no reload came after the first answer");
+        assert_eq!(
+            outputs,
+            [format!("{WAITING_PREFIX}Which day?"), format!("{WAITING_PREFIX}Which city?")]
+        );
+    });
 }

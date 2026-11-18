@@ -3,7 +3,7 @@
 
 use super::{AgentRun, AgentRunEffect, RunError, RunQuestion};
 use lk_agents_abi::agent::run::RunInputRequirement;
-use lk_agents_abi::{ChatItem, FunctionToolCall, ToolSpec, Ts};
+use lk_agents_abi::{FunctionToolCall, ToolSpec, Ts};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeSet;
@@ -57,23 +57,7 @@ impl AgentRun {
         };
         self.pending_call = Some(members[0].call.clone());
         let call_ids: Vec<_> = members.iter().map(|request| request.call.id.clone()).collect();
-        for item in &mut self.history {
-            if let ChatItem::FunctionCall(call) = item
-                && candidates.iter().any(|request| request.call.id == call.id)
-            {
-                call.extra.insert(
-                    crate::agent_run::planning::INPUT_REQUESTED_KEY.into(),
-                    json!(call_ids.contains(&call.id)),
-                );
-            }
-        }
-        self.asked(
-            RunQuestion { question: text, verbatim: false, answer_tool: None },
-            None,
-            &call_ids,
-            now,
-            effects,
-        );
+        self.asked(RunQuestion { question: text, verbatim: false }, None, &call_ids, now, effects);
     }
 }
 

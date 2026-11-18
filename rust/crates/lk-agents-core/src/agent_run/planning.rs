@@ -58,60 +58,6 @@ pub fn plan_request(snapshot: RequestSnapshot<'_>) -> ModelRequest {
     ModelRequest { chat_ctx: ChatContext::new(items), tools }
 }
 
-/// Marks the call whose question the run's outcome selected. Selection does not prove delivery
-/// or audibility. Other waiting calls remain pending until a coordinator explicitly selects them.
-pub const INPUT_REQUESTED_KEY: &str = "lk.input_requested";
-
-/// Answer only the selected call, never every waiting output in a tool batch.
-pub fn answer_pending_input(
-    history: &mut [ChatItem],
-    answer: &str,
-) -> std::collections::BTreeSet<String> {
-    // A manual voice commit can settle without recognized words. Silence leaves the
-    // selected requirement open; it cannot consume the person's later response.
-    if answer.trim().is_empty() {
-        return std::collections::BTreeSet::new();
-    }
-    let facts: Vec<_> = history.iter().map(ItemFacts::of).collect();
-    let marked: std::collections::BTreeMap<_, _> = tool_pairs(&facts)
-        .into_iter()
-        .filter_map(|(call, output)| match (&history[call], &history[output]) {
-            (ChatItem::FunctionCall(call), ChatItem::FunctionCallOutput(output))
-                if selected(call) =>
-            {
-                Some((output.id.clone(), call.id.clone()))
-            }
-            _ => None,
-        })
-        .collect();
-    let selected = history.iter().find_map(|item| match item {
-        ChatItem::FunctionCallOutput(output)
-            if output.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX)
-                && marked.contains_key(&output.id) =>
-        {
-            Some(output.id.clone())
-        }
-        _ => None,
-    });
-    let mut answered = std::collections::BTreeSet::new();
-    for item in history {
-        if let ChatItem::FunctionCallOutput(output) = item
-            && Some(&output.id) == selected.as_ref()
-            && output.output.starts_with(lk_agents_abi::llm::tool_executor::WAITING_PREFIX)
-        {
-            output.output = answer.to_owned();
-            answered.insert(marked[&output.id].clone());
-        }
-    }
-    answered
-}
-
-fn selected(call: &lk_agents_abi::FunctionCall) -> bool {
-    call.extra
-        .get(INPUT_REQUESTED_KEY)
-        .is_some_and(|value| value.as_bool() == Some(true) || value.as_str() == Some("true"))
-}
-
 /// The history as the model reads it: no stored instructions; a call without an output yet is
 /// left out (a request cannot carry it); an answered read-back says the call has not run and how
 /// to run it, while the stored output stays the person's words.

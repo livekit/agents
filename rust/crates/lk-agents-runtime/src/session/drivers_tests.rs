@@ -25,6 +25,13 @@ impl Driver {
 }
 
 impl RemoteTaskDriver for Driver {
+    fn cancel<'a>(
+        &'a self,
+        _task: RemoteTaskRef,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), AgentClientError>> {
+        Box::pin(async { Ok(()) })
+    }
+
     fn is_live(&self) -> bool {
         self.live.load(Ordering::Acquire)
     }

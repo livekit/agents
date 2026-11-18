@@ -20,7 +20,7 @@ impl AgentRun {
             return Vec::new();
         }
         self.history = std::mem::take(&mut self.input.history);
-        self.approval_answers = self.input_answers.take().unwrap_or_default();
+        self.approval_answers = std::mem::take(&mut self.input_answers);
         self.first_new = self.history.len();
         let mut effects = Vec::new();
         self.next_step(now, &mut effects);

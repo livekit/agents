@@ -327,6 +327,26 @@ impl AgentClient {
         updates.recv().await?.and_then(|event| event.update).ok_or_else(ClientError::incomplete)
     }
 
+    /// A native owner supplies a fresh or proved-undispatched control intent. Retain its SDK
+    /// response beside the journal; a sent cancellation must be reconciled with GetTask.
+    pub async fn cancel_observed(
+        &self,
+        task: TaskRef,
+        request: a2a::CancelTaskRequest,
+        cx: &lk_agents_telemetry::Cx,
+        observer: Arc<dyn observer::RequestObserver>,
+    ) -> Result<a2a::Task, ClientError> {
+        self.connect().await?;
+        let id = self.inner.next_id();
+        let request =
+            self.inner.core.lock().resume_cancel(&task, request, JsonRpcId::Number(id as i64))?;
+        let (_, mut updates) = self.open(id, request.traced(cx.span()), Some(observer)).await?;
+        match updates.recv().await?.map(|event| event.response) {
+            Some(a2a::StreamResponse::Task(task)) => Ok(task),
+            _ => Err(ClientError::invalid_response("CancelTask did not return its task")),
+        }
+    }
+
     /// Reconciliation reads an existing task. It never repeats the message that created it.
     pub async fn get_task(
         &self,

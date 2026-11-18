@@ -60,13 +60,11 @@ pub enum ToolOutcome {
     Failed(String),
     #[host(field = "reason")]
     Rejected(String),
-    /// `InputRequired(question)`: the turn waits on the person; `tool` takes the answer.
+    /// `InputRequired(question)`: the turn waits on a correlated response from the person.
     InputRequired {
         question: String,
         #[host(default = false)]
         verbatim: bool,
-        #[host(default = None)]
-        tool: Option<String>,
     },
     /// `Working(message=)`: waits on a system, nothing delivered.
     #[host(field = "message", default = None)]
@@ -160,13 +158,11 @@ pub struct CompletedReturn {
     pub verbatim: bool,
 }
 
-/// `InputRequired(question, tool=, verbatim=)`: `tool` the name of the tool taking the answer.
+/// `InputRequired(question, verbatim=)`: the question this call asks the person.
 #[crate::host(record(module = "tool_report", boundary, extract))]
 pub struct InputRequiredReturn {
     pub question: String,
     pub verbatim: bool,
-    #[host(path = "tool.info.name", missing_default)]
-    pub tool: Option<String>,
 }
 
 /// `ToolResult(output, reply_required=, verbatim=)`; `_more` is what a delegate's verbatim

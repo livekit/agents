@@ -39,11 +39,21 @@ impl VoiceDriver {
         made: MadeCall,
         go: RequestId,
     ) {
-        let MadeCall { mut call, spec, forbidden, answering, agent } = made;
-        let answering = answering.as_ref().map(|a| (a.tool.as_str(), a.said.as_str()));
-        let admission = admit(&mut call, spec.as_slice(), forbidden, answering);
+        let MadeCall { mut call, spec, forbidden, agent } = made;
+        let admission = admit(&mut call, spec.as_slice(), forbidden);
         let advertised = admission.offered();
-        self.record_trace(TraceToolStep::Calls { speech, names: vec![call.name.clone()] });
+        let input_scope = self
+            .activity
+            .tools
+            .replies
+            .get(&speech)
+            .map(|reply| reply.input_scope.clone())
+            .unwrap_or_else(|| super::input::ReplyInputScope::Snapshot(Default::default()));
+        if matches!(admission, Admission::Forbidden { .. })
+            || self.activity.speech_scheduler.speech(speech).is_none()
+        {
+            self.trace_tool_proposal(speech, step, &call);
+        }
         let Some(state) = self.activity.speech_scheduler.speech_mut(speech) else {
             return self.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
         };
@@ -54,11 +64,11 @@ impl VoiceDriver {
             if state.scheduled() {
                 self.on_tool_started(now, (speech, step), call.clone(), None, None);
             }
-            self.activity.tools.dropped.entry((speech, step)).or_default().push(call.name);
+            self.activity.tools.dropped.entry((speech, step)).or_default().push(call.name.clone());
             return self.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
         }
         let agent = agent.filter(|_| admission == Admission::Offered);
-        let call = Deferred { speech, step, id: None, call, advertised, agent, go };
+        let call = Deferred { speech, step, input_scope, id: None, call, advertised, agent, go };
         self.activity.tools.deferred.push(call);
         self.settle_deferred_calls();
     }
@@ -95,7 +105,10 @@ impl VoiceDriver {
         match state.map(|s| (s.step_authorized(d.step), s.interrupted() || s.done())) {
             Some((true, _)) => return self.start_authorized(now, d),
             Some((false, false)) => return Some(d),
-            Some(_) | None => self.answer(Some(d.go), Answer::ToolGo(ToolGo::Gone)),
+            Some(_) | None => {
+                self.trace_tool_proposal(d.speech, d.step, &d.call);
+                self.answer(Some(d.go), Answer::ToolGo(ToolGo::Gone));
+            }
         }
         None
     }
@@ -108,6 +121,25 @@ impl VoiceDriver {
         // Stamped with its start: history is ordered by `created_at`, and it was made before the
         // step was authorized.
         if d.id.is_none() {
+            // A realtime proposal can precede its own transcript and classifier receipt.
+            // Once bound, its immutable human version never follows a later user turn.
+            if matches!(d.input_scope, super::input::ReplyInputScope::AwaitingTranscript)
+                && let Some(reply) = self.activity.tools.replies.get(&d.speech)
+                && matches!(reply.input_scope, super::input::ReplyInputScope::Human(_))
+            {
+                d.input_scope = reply.input_scope.clone();
+            }
+            let approval_answers = self.reply_input_answers(d.speech, &d.input_scope);
+            let changed = self
+                .activity
+                .tools
+                .replies
+                .get(&d.speech)
+                .is_some_and(|reply| reply.run.input_answers() != &approval_answers);
+            if changed {
+                self.reply_event(d.speech, AgentRunEvent::Answered { approval_answers });
+            }
+            self.trace_tool_proposal(d.speech, d.step, &d.call);
             d.call.created_at = self.step.wall();
             d.id = self.reply_call_made(d.speech, d.call.clone());
         }
@@ -117,6 +149,23 @@ impl VoiceDriver {
             None => self.answer(Some(d.go), Answer::ToolGo(ToolGo::Gone)),
         }
         None
+    }
+
+    fn trace_tool_proposal(&mut self, speech: SpeechId, step: u32, call: &FunctionCall) {
+        let input_answers = self
+            .activity
+            .tools
+            .replies
+            .get(&speech)
+            .map(|reply| reply.run.input_answers().clone())
+            .unwrap_or_default();
+        self.record_trace(TraceToolStep::Calls {
+            speech,
+            step,
+            item_id: call.id.clone(),
+            names: vec![call.name.clone()],
+            input_answers,
+        });
     }
 
     /// The call is told to the speech and started with its first move.
@@ -401,6 +450,7 @@ impl VoiceDriver {
             return;
         }
         for r in running {
+            self.close_body_inputs(&r.output_id);
             let call_id = r.call.call_id.clone();
             let id = if r.detached() { format!("{}_final", r.call.id) } else { r.call.id.clone() };
             self.record_effect(VoiceEffect::CancelTool {
@@ -559,7 +609,8 @@ impl VoiceDriver {
             Delivery::Fail(reason) => {
                 self.end_voice_task(now, speech, Err(VoiceTaskEnded::Failed(reason)))
             }
-            Delivery::Ask(ask) => {
+            Delivery::Ask { question: ask, call_id } => {
+                self.retain_local_question(speech, &call_id, &ask.question);
                 let output = crate::events::RunOutcome::InputRequired(ask.clone());
                 self.session.runs.outputs.insert(speech, output.clone());
                 let asking = if ask.verbatim {
@@ -572,39 +623,12 @@ impl VoiceDriver {
                     );
                     self.reply_with_instructions(now, instructions, None, voice_run)
                 };
-                // `InputRequired(tool=)`: the person's next turn is a call of that tool; asked in
-                // the agent's own words, once that reply is done.
-                if let Some(tool) = &ask.answer_tool {
-                    let after = if ask.verbatim { None } else { asking };
-                    self.activity.tools.claim =
-                        Some(crate::tool_executor::Claim { tool: tool.clone(), after });
-                }
                 if let Some(asking) = asking {
+                    self.presenting_local_input(asking, call_id);
                     self.session.runs.outputs.insert(asking, output);
                 }
             }
         }
-    }
-
-    /// Resolve the compatibility-selected question's call. Other correlated requirements remain
-    /// waiting; retaining them is not permission to answer them with this person's message.
-    pub(crate) fn answer_pending_input(&mut self, text: &str) {
-        let mut history: Vec<ChatItem> = self.session.chat_ctx.items().cloned().collect();
-        let approval_answers =
-            lk_agents_core::agent_run::planning::answer_pending_input(&mut history, text);
-        let output_ids: std::collections::BTreeSet<_> = history
-            .iter()
-            .filter_map(|item| match item {
-                ChatItem::FunctionCall(call) if approval_answers.contains(&call.id) => {
-                    Some(call.output_id())
-                }
-                _ => None,
-            })
-            .collect();
-        history.retain(|item| matches!(item, ChatItem::FunctionCallOutput(output) if output_ids.contains(&output.id)));
-        self.replies_answered(&approval_answers);
-        self.activity.tools.approval_answers = approval_answers;
-        self.replace_items(history);
     }
 
     /// `say(text)` from inside the driver: the realtime model's when it says and there is no
@@ -995,19 +1019,6 @@ impl super::AgentActivity {
     pub(super) fn tool_step_committed(&mut self, speech: SpeechId) {
         self.speech_history.commit_tools(speech);
         self.tools_in_flight.remove(&speech);
-    }
-
-    /// The tool that claimed the person's turn, once; not yet while the question it waits behind
-    /// is still being asked.
-    pub(crate) fn consume_claim(&mut self) -> Option<String> {
-        let claim = self.tools.claim.as_ref()?;
-        let asking = claim
-            .after
-            .is_some_and(|s| self.speech_scheduler.contains(s) && !self.speech_history.finished(s));
-        if asking {
-            return None;
-        }
-        self.tools.claim.take().map(|c| c.tool)
     }
 }
 

@@ -330,8 +330,6 @@ pub struct WaitOptions {
     pub tool: Option<String>,
     /// For a conversation tool's `InputRequired`, the pending call.
     pub call_id: Option<String>,
-    /// The tool the answer is handed to, when the `InputRequired` named one.
-    pub answer_tool: Option<String>,
     /// The tool's parameter schema, added to the status message as a data part.
     pub schema: Option<Value>,
 }
@@ -344,12 +342,7 @@ pub fn wait_patch(
     opts: WaitOptions,
     message_id: String,
 ) -> TaskPatch {
-    let ask = Ask {
-        question: question.to_owned(),
-        tool: opts.tool,
-        call_id: opts.call_id,
-        answer_tool: opts.answer_tool,
-    };
+    let ask = Ask { question: question.to_owned(), tool: opts.tool, call_id: opts.call_id };
     let mut parts = vec![a2a::Part::text(question)];
     if let Some(schema) = opts.schema {
         parts.push(a2a::Part::data(schema));

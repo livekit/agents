@@ -18,6 +18,7 @@ from livekit import rtc
 from livekit.agents import (
     Agent,
     Completed,
+    DelegationOptions,
     InputRequired,
     ModelRetry,
     ModelSettings,
@@ -31,6 +32,7 @@ from livekit.agents import (
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.evals import Judge, JudgeGroup, JudgmentResult
 from livekit.agents.llm import LLM, ChatContext, ChatItem, Toolset
+from livekit.agents.storage import ContextStore
 from livekit.agents.voice.events import (
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
@@ -307,8 +309,12 @@ async def test_a_read_back_function_asks_for_a_missing_detail_then_reads_back() 
         """Book."""
         return "booked"
 
-    missing = await desk.run("book monday")
-    asked = await desk.run("jo@example.com", message_history=missing.all_messages())
+    store = ContextStore()
+    delegation = DelegationOptions(
+        routing_model=FakeLLM([tool_call("route_input_response", candidates=[0], unclear=False)])
+    )
+    missing = await desk.run("book monday", context=store.bind(), delegation=delegation)
+    asked = await desk.run("jo@example.com", context=store.bind(), delegation=delegation)
 
     assert missing.status == "input_required" and missing.question == "Which email?"
     assert asked.status == "input_required" and asked.question == "Book monday to jo@example.com?"

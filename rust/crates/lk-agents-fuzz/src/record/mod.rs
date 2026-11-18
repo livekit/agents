@@ -194,6 +194,8 @@ pub enum Detail {
         ctx_ids: Vec<String>,
         speech: Option<u64>,
         tools: Vec<String>,
+        /// Count observed in an input classifier's actual prompt, without retaining dialogue.
+        input_candidates: Option<usize>,
     },
     Tool {
         invocation_id: String,

@@ -406,8 +406,6 @@ class RunRequest:
     message: ChatItem
     """A user message."""
     history: list[ChatItem]
-    answer_tool: str | None
-    """The previous invocation asked with `InputRequired(tool=)`: this message is that tool's."""
     delegated: bool
     """Another agent asked this run: questions pass up as written."""
     conn_options: APIConnectOptions

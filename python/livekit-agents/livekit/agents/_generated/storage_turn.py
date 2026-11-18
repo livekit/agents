@@ -37,7 +37,6 @@ class TurnContext:
     task_id: str
     tasks: list[TaskRecord]
     caller_history: dict[str, object] | None
-    answer_tool: str | None
 
 
 @dataclass(kw_only=True, slots=True)
@@ -49,8 +48,6 @@ class PendingCall:
     name: str
     call_id: str
     """Provider wire ID, retained for model-facing call/result pairing."""
-    answer_tool: str | None = None
-    """The tool that takes the answer, when the `InputRequired` named one."""
 
 
 @dataclass(kw_only=True, slots=True)

@@ -165,6 +165,9 @@ pub struct Session {
     checkpoint_due: Option<Ts>,
     checkpoint_bytes: usize,
     phase: Phase,
+    /// A parent may receive human input while its previously accepted child is propagated.
+    /// Remaining siblings cannot widen the occurrences offered to that deferred model turn.
+    deferred_input_offers: BTreeMap<FrameId, Vec<InputCandidate>>,
     /// The turn's ended invocations: the live one is added to it when read.
     usage: Ledger,
     sequence: u64,

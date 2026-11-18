@@ -2,7 +2,7 @@
 //! serializing a snapshot detaches it. One schema serves every execution mode.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use lk_agents_abi::storage::session::{PersistedSessionState, SessionKind};
 use lk_agents_abi::text_session::SessionSnapshot;
@@ -39,11 +39,14 @@ enum State {
 }
 
 #[derive(Clone)]
-pub struct SessionState(Arc<Mutex<Envelope>>);
+pub struct SessionState(
+    Arc<Mutex<Envelope>>,
+    Arc<Mutex<Option<Weak<dyn lk_agents_abi::session::SessionCommands>>>>,
+);
 
 impl SessionState {
     pub(crate) fn from_value(value: Value) -> Result<Self, StorageError> {
-        Ok(Self(Arc::new(Mutex::new(decode(value)?))))
+        Ok(Self(Arc::new(Mutex::new(decode(value)?)), Arc::default()))
     }
 
     pub(crate) fn assign(&self, other: &Self) {
@@ -64,6 +67,25 @@ impl SessionState {
 
     pub(crate) fn same_view(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    pub(crate) fn bind_commands(
+        &self,
+        commands: Weak<dyn lk_agents_abi::session::SessionCommands>,
+    ) -> Result<(), StorageError> {
+        let mut bound = self.1.lock();
+        if let Some(previous) = bound.as_ref()
+            && previous.strong_count() != 0
+            && !Weak::ptr_eq(previous, &commands)
+        {
+            return Err(invalid("this session view already has an active conversation owner"));
+        }
+        *bound = Some(commands);
+        Ok(())
+    }
+
+    pub(crate) fn unbind_commands(&self) {
+        self.1.lock().take();
     }
 }
 

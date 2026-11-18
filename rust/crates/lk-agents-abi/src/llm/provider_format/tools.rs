@@ -255,8 +255,8 @@ const _: () = ();
 /// The turn or task waits on the person for an answer to ``question``.
 ///
 ///     The agent facing the person asks it in its own words, or exactly as written with
-///     ``verbatim=True``. From a conversation tool the next message is written as this call's
-///     output. ``tool`` names the tool that takes the answer.
+///     ``verbatim=True``. The conversation owner correlates a response to the exact pending
+///     occurrence before continuing its originating call.
 ///
 #[crate::host(record(
     module = "function_tools",
@@ -267,8 +267,6 @@ const _: () = ();
 ))]
 pub struct InputRequired {
     pub question: String,
-    #[host(default = None, annotation = "..llm.tool_context.FunctionTool | ..llm.tool_context.RawFunctionTool | None")]
-    pub tool: Option<crate::HostRef>,
     #[host(default = false)]
     pub verbatim: bool,
 }

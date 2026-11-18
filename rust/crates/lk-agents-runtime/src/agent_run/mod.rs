@@ -37,6 +37,8 @@ const PROGRESS_QUEUE: usize = 32;
 /// What a run executes against.
 #[derive(Clone)]
 pub struct RunSetup {
+    /// Exact canonical call items whose pending input was matched by this invocation's owner.
+    pub input_answers: std::collections::BTreeSet<String>,
     pub llm: Arc<dyn Llm>,
     pub tools_host: Option<HostRef>,
     pub host: Arc<dyn AgentCallbacks>,
@@ -119,7 +121,9 @@ pub fn start(
     updates: usize,
 ) -> Result<(ActiveRun, mpsc::Receiver<RunUpdate>), AgentError> {
     let input_id = input.invocation_id.clone();
-    let run = AgentRun::new(agent, input)?.with_checkpoints();
+    let run = AgentRun::new(agent, input)?
+        .with_input_answers(setup.input_answers.clone())
+        .with_checkpoints();
     let cancel = CancellationToken::new();
     let (update_tx, update_rx) = outbox(updates.max(1));
     let (events_tx, events) = mpsc::channel(EVENT_QUEUE);

@@ -357,7 +357,6 @@ impl Settlement {
         let wait = WaitOptions {
             tool: call.map(|c| c.name.clone()),
             call_id: call.map(|c| c.call_id.clone()),
-            answer_tool: call.and_then(|c| c.answer_tool.clone()),
             ..WaitOptions::default()
         };
         let waiting = wait_patch(&answer, asked.question, wait, status_message);

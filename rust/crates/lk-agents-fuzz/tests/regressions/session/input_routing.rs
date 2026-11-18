@@ -32,6 +32,13 @@ const REMOTE: &str = "https://travel.test";
 struct AdmissionCandidate;
 
 impl RemoteTaskDriver for AdmissionCandidate {
+    fn cancel<'a>(
+        &'a self,
+        _task: lk_agents_abi::delegation::remote::RemoteTaskRef,
+    ) -> BoxFuture<'a, Result<(), AgentClientError>> {
+        Box::pin(async { Ok(()) })
+    }
+
     fn is_live(&self) -> bool {
         true
     }
@@ -420,7 +427,6 @@ fn response_handoff(reused_call_ids: bool) {
                     outcome: ToolOutcome::InputRequired {
                         question: "Which day?".into(),
                         verbatim: true,
-                        tool: None,
                     },
                     input_request: Some(Box::new(InputRequestRef::RemoteTask {
                         remote_id: REMOTE.into(),
@@ -629,7 +635,11 @@ fn response_handoff(reused_call_ids: bool) {
         assert_eq!(remote.requests["lost-native-response"].origin.as_ref(), Some(&origin));
         let recovered = native_receipt(
             &mut run,
-            owner.recover(REMOTE, REMOTE, &origin),
+            owner.recover(
+                REMOTE,
+                REMOTE,
+                &lk_agents_abi::session::SessionRecovery::Call(origin.clone()),
+            ),
             "remote response recovery",
         )
         .await

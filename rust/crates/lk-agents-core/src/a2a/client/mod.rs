@@ -271,13 +271,30 @@ impl Client {
         let metadata = reason.map(|reason| {
             [(REASON_KEY.to_owned(), Value::String(reason.into()))].into_iter().collect()
         });
+        self.resume_cancel(
+            task,
+            CancelTaskRequest { id: task.id.clone(), metadata, tenant: None },
+            id,
+        )
+    }
+
+    /// An undispatched control keeps its exact SDK body. The saved task association supplies
+    /// the context extension; no new cancellation is inferred from an uncertain operation.
+    pub fn resume_cancel(
+        &self,
+        task: &TaskRef,
+        request: CancelTaskRequest,
+        id: JsonRpcId,
+    ) -> Result<Request, ClientError> {
+        check_task(task)?;
+        if request.id != task.id {
+            return Err(ClientError::InvalidInput(
+                "the saved cancellation belongs to another task".into(),
+            ));
+        }
         self.rpc(
             a2a::methods::CANCEL_TASK,
-            TaskParams {
-                request: CancelTaskRequest { id: task.id.clone(), metadata, tenant: None },
-                context_id: &task.context_id,
-                offset: None,
-            },
+            TaskParams { request, context_id: &task.context_id, offset: None },
             id,
             false,
             Some(task.clone()),

@@ -5,7 +5,7 @@ use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
 use serde_json::json;
 
 fn ask(question: &str) -> ToolOutcome {
-    ToolOutcome::InputRequired { question: question.into(), verbatim: true, tool: None }
+    ToolOutcome::InputRequired { question: question.into(), verbatim: true }
 }
 
 /// Prepares every call of the step with its arguments as sent.

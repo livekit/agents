@@ -28,6 +28,7 @@ pub(crate) use agent_user_state::AgentUserState;
 pub(crate) use closing::{ClosePhase, Closing};
 pub use commands::*;
 pub use host_events::*;
+pub use machine::activity::local_input::LocalInputDelivery;
 pub use machine::driver::*;
 pub use spans::failed_start;
 pub use time::*;
@@ -108,6 +109,7 @@ pub(crate) struct VoiceSessionState {
     pub(crate) storage: storage::StorageTurns,
     /// The frontend expert event queue, kept across agent replacements.
     pub(crate) experts: crate::experts::Experts,
+    pub(crate) local_inputs: machine::activity::local_input::LocalInputs,
     /// `start_user_turn()`'s turn; it outlives a handoff.
     pub(crate) user_turns: machine::activity::user_turn::UserTurns,
 }
@@ -200,6 +202,7 @@ impl VoiceSessionState {
             item_turns: Default::default(),
             storage: storage::StorageTurns::new(storage_enabled),
             experts: Default::default(),
+            local_inputs: Default::default(),
             user_turns: Default::default(),
         }
     }

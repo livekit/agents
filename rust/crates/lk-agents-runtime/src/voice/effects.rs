@@ -119,6 +119,11 @@ impl VoiceRuntime {
         use lk_agents_voice::agent_session::effects::VoiceEffect as E;
         // VoiceDriver journalled each effect when it was produced.
         match effect {
+            E::RetainLocalInput { request_id, call_id, source } => {
+                self.retain_local_input(request_id, call_id, source)
+            }
+            E::CloseLocalInputs { requests } => self.close_local_inputs(requests),
+            E::CheckpointLocalInputs => self.local_inputs_checkpoint_pending = true,
             E::RouteInput { speech, request_id, message } => {
                 self.route_input(speech, request_id, message)
             }
@@ -130,7 +135,11 @@ impl VoiceRuntime {
                     .is_some()
                 {
                     self.conversation_snapshot()
-                        .map(|state| lk_agents_core::delegation::remote::routing::offered(&state))
+                        .map(|state| {
+                            self.driver.input_routing_candidates(
+                                lk_agents_core::delegation::remote::routing::offered(&state),
+                            )
+                        })
                         .unwrap_or_default()
                 } else {
                     Vec::new()
@@ -251,6 +260,8 @@ impl VoiceRuntime {
                     })();
                     if let Err(error) = result {
                         let _ = self.reports.send(VoiceEvent::ConversationStateFailed(error));
+                    } else {
+                        self.publish_local_input_candidates();
                     }
                 }
             }

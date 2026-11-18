@@ -1,8 +1,8 @@
 use lk_agents_abi::{ChatItem, FunctionCall, Role, llm::tool_executor::WAITING_PREFIX};
-use lk_agents_core::markup::ChatMessageExt;
 use lk_agents_voice::{
+    agent::Source,
     events::SessionEvent,
-    trace::{HandoffStep, Step},
+    trace::{HandoffStep, Step, ToolStep},
 };
 use std::collections::BTreeSet;
 
@@ -22,7 +22,7 @@ pub struct ToolOutputFollowsOutcome;
 impl Rule for ToolOutputFollowsOutcome {
     const CONTRACT: Contract = Contract {
         id: "tool_output_follows_outcome",
-        guarantee: "Each answered tool call is recorded with its outcome's output, error flag and reply request, and the selected call waiting on the person is answered by their next message.",
+        guarantee: "Each tool outcome retains its output, error flag and reply request. Human responses retain their own identity and reach an admitted input occurrence once, without overwriting its original question.",
         examples: &[
             a_value_asking_for_no_reply,
             a_question_answered,
@@ -32,7 +32,8 @@ impl Rule for ToolOutputFollowsOutcome {
         counterexamples: &[
             a_completion_recorded_silent,
             a_failure_not_an_error,
-            a_question_never_answered,
+            a_question_overwritten_by_its_response,
+            a_response_delivered_twice,
         ],
         probe: None,
     };
@@ -40,7 +41,6 @@ impl Rule for ToolOutputFollowsOutcome {
     fn on_complete(r: &Recording, check: &mut Check) {
         let inputs = r.inputs_view();
         let host = r.host_view();
-        let internal = r.internal_view();
         let closing = inputs.closing_asked_at();
         // Each output as first announced, and every announcement in order.
         let announced: Vec<_> = r
@@ -116,11 +116,8 @@ impl Rule for ToolOutputFollowsOutcome {
                 continue;
             };
             let detached = detached.contains(&tool.nth);
-            let recorded = if detached {
-                format!("{item_id}_final_out")
-            } else {
-                format!("{item_id}_out")
-            };
+            let recorded =
+                if detached { format!("{item_id}_final_out") } else { format!("{item_id}_out") };
             let Some((at, ChatItem::FunctionCallOutput(output), _)) =
                 announced.iter().find(|(_, item, _)| match item {
                     ChatItem::FunctionCallOutput(output) => output.id == recorded,
@@ -161,59 +158,38 @@ impl Rule for ToolOutputFollowsOutcome {
                     output.reply_required, shape.reply_required
                 )
             });
-        }
-        let mut selected = BTreeSet::new();
-        let mut waiting = Vec::new();
-        for (i, (at, item, speech)) in announced.iter().enumerate() {
-            match item {
-                ChatItem::FunctionCall(call) => {
-                    let flag =
-                        call.extra.get(lk_agents_core::agent_run::planning::INPUT_REQUESTED_KEY);
-                    if flag.is_some_and(|flag| {
-                        flag.as_bool() == Some(true) || flag.as_str() == Some("true")
-                    }) {
-                        selected.insert(call.output_id());
-                    } else {
-                        selected.remove(&call.output_id());
-                    }
-                }
-                // A step cut before its tools were awaited asks nothing; one cut after it put
-                // its question leaves the question asked.
-                ChatItem::FunctionCallOutput(o) if o.output.starts_with(WAITING_PREFIX) => {
-                    let cut = speech.is_some_and(|s| {
-                        internal.speech(s.0).interrupted_at().is_some_and(|cut| cut <= *at)
-                    });
-                    if !cut && !waiting.contains(&o.id) {
-                        waiting.push(o.id.clone());
-                    }
-                }
-                ChatItem::Message(m) if m.role == Role::User => {
-                    if closing.is_some_and(|c| c <= *at) {
-                        continue;
-                    }
-                    let Some(index) = waiting.iter().position(|id| selected.contains(id))
-                    else {
-                        continue;
-                    };
-                    let id = waiting.remove(index);
-                    let said = m.text_content().unwrap_or_default();
-                    let answered = announced[..i]
-                        .iter()
-                        .rev()
-                        .find_map(|(_, prior, _)| match prior {
-                            ChatItem::FunctionCallOutput(o) if o.id == id => Some(
-                                !o.output.starts_with(WAITING_PREFIX)
-                                    && o.output.contains(said.as_str()),
-                            ),
-                            _ => None,
-                        })
-                        .unwrap_or(false);
-                    check.expect_with(Subject::Session, answered, || {
-                        format!("the question {id} waits on was never answered by {said:?}")
-                    });
-                }
-                _ => {}
+            if *answer == ToolAnswer::Ask && !detached {
+                let replaced = r.journal().iter().any(|(later, step)| {
+                    *at < *later
+                        && matches!(step,
+                            Step::Emitted(SessionEvent::ConversationItemAdded {
+                                item,
+                                source: Source::ToolOutput { .. } | Source::ToolUpdate { .. },
+                                ..
+                            }) if matches!(&**item, ChatItem::FunctionCallOutput(next)
+                                if next.id == recorded && next.output != want))
+                });
+                check.expect_with(Subject::Resource(Kind::Tool, tool.nth), !replaced, || {
+                    format!("the original question for {item_id} was replaced by a human response")
+                });
             }
+        }
+        let mut delivered = BTreeSet::new();
+        for (_, step) in r.journal() {
+            let Step::Tool(ToolStep::InputResponseDelivered { request, message_id, .. }) = step
+            else {
+                continue;
+            };
+            check.expect_with(Subject::Session, delivered.insert(request), || {
+                format!("the same input occurrence {request:?} received a response twice")
+            });
+            let human = announced.iter().any(|(_, item, _)| {
+                matches!(item, ChatItem::Message(message)
+                    if message.id == *message_id && message.role == Role::User)
+            });
+            check.expect_with(Subject::Session, human, || {
+                format!("the response for {request:?} lost its human message {message_id}")
+            });
         }
     }
 }
@@ -255,8 +231,8 @@ fn answered(answer: ToolAnswer, text: &str) -> Authored {
     })
 }
 
-fn selected_question(call_id: &str) -> Step {
-    let mut call = FunctionCall {
+fn question_call(call_id: &str) -> Step {
+    let call = FunctionCall {
         id: format!("item_{call_id}"),
         call_id: call_id.into(),
         name: "lookup".into(),
@@ -265,7 +241,6 @@ fn selected_question(call_id: &str) -> Step {
         extra: Default::default(),
         group_id: None,
     };
-    call.extra.insert(lk_agents_core::agent_run::planning::INPUT_REQUESTED_KEY.into(), true.into());
     Step::Emitted(SessionEvent::ConversationItemAdded {
         item: Box::new(call.into()),
         agent: "agent".into(),
@@ -277,6 +252,17 @@ fn selected_question(call_id: &str) -> Step {
     })
 }
 
+fn delivered_response(call_id: &str) -> Step {
+    Step::Tool(ToolStep::InputResponseDelivered {
+        request: lk_agents_abi::session::InputRequestRef::Agent {
+            agent_id: "agent".into(),
+            request_id: format!("request/{call_id}"),
+        },
+        call_id: Some(format!("item_{call_id}")),
+        message_id: "u1".into(),
+    })
+}
+
 /// `ToolResult("sent DTMF 1", reply_required=False)`: kept, asking for nothing.
 fn a_value_asking_for_no_reply() -> Recording {
     answered(ToolAnswer::Recorded, "sent DTMF 1")
@@ -284,14 +270,14 @@ fn a_value_asking_for_no_reply() -> Recording {
         .done()
 }
 
-/// The question is asked, and the person's answer becomes the call's output.
+/// The response reaches its admitted occurrence; the original tool outcome remains a question.
 fn a_question_answered() -> Recording {
     let question = format!("{WAITING_PREFIX}Which day?");
     answered(ToolAnswer::Ask, "Which day?")
-        .journal(selected_question("c1"))
+        .journal(question_call("c1"))
         .journal(output("c1", &question, false, false))
-        .journal(output("c1", "Monday", false, false))
         .journal(user("Monday"))
+        .journal(delivered_response("c1"))
         .done()
 }
 
@@ -304,11 +290,11 @@ fn an_unselected_question_waits() -> Recording {
 
 fn a_reply_only_answers_the_selected_question() -> Recording {
     answered(ToolAnswer::Ask, "Which day?")
-        .journal(selected_question("c1"))
+        .journal(question_call("c1"))
         .journal(output("c2", &format!("{WAITING_PREFIX}What time?"), false, false))
         .journal(output("c1", &format!("{WAITING_PREFIX}Which day?"), false, false))
-        .journal(output("c1", "Monday", false, false))
         .journal(user("Monday"))
+        .journal(delivered_response("c1"))
         .done()
 }
 
@@ -322,12 +308,25 @@ fn a_failure_not_an_error() -> Recording {
     answered(ToolAnswer::Failed, "no slot").journal(output("c1", "no slot", false, true)).done()
 }
 
-/// The person answered, and the call still waits.
-fn a_question_never_answered() -> Recording {
+/// A human answer overwrites the tool's original question instead of retaining both records.
+fn a_question_overwritten_by_its_response() -> Recording {
     let question = format!("{WAITING_PREFIX}Which day?");
     answered(ToolAnswer::Ask, "Which day?")
-        .journal(selected_question("c1"))
+        .journal(question_call("c1"))
         .journal(output("c1", &question, false, false))
         .journal(user("Monday"))
+        .journal(output("c1", "Monday", false, false))
+        .journal(delivered_response("c1"))
+        .done()
+}
+
+/// A repeated delivery spends the same occurrence twice even though its human input is present.
+fn a_response_delivered_twice() -> Recording {
+    answered(ToolAnswer::Ask, "Which day?")
+        .journal(question_call("c1"))
+        .journal(output("c1", &format!("{WAITING_PREFIX}Which day?"), false, false))
+        .journal(user("Monday"))
+        .journal(delivered_response("c1"))
+        .journal(delivered_response("c1"))
         .done()
 }

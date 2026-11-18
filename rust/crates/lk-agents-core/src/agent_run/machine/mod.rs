@@ -1,7 +1,7 @@
 use super::effects::AgentRunEffect;
 use super::execution;
-use super::planning::{self, RequestSnapshot, plan_request};
-use crate::agent::{self, AgentError, first_string_parameter};
+use super::planning::{RequestSnapshot, plan_request};
+use crate::agent::{self, AgentError};
 use crate::llm::history::ChatContextExt;
 use crate::tool_calls::{self, FinalCandidate, PrepareFailure, Recorded, Settled, ToolCalls};
 use crate::tool_outcome;
@@ -63,8 +63,6 @@ pub struct RunInput {
     pub opening: Opening,
     /// The conversation so far.
     pub history: Vec<ChatItem>,
-    /// The previous invocation asked with `InputRequired(tool=)`: this message is that tool's.
-    pub answer_tool: Option<String>,
     /// Another agent asked this run: questions pass up as written; the facing agent words them.
     pub delegated: bool,
     /// The coordinator reading the outcome table.
@@ -244,9 +242,9 @@ pub struct AgentRun {
     /// The dynamic instructions last rendered, for a phrasing request.
     dynamic: Option<String>,
     approval_answers: BTreeSet<String>,
-    /// A conversation owner already admitted these response origins. None is a direct run,
-    /// whose caller still supplies history without a shared input owner.
-    input_answers: Option<BTreeSet<String>>,
+    /// Only canonical call IDs explicitly matched by the owning conversation authorize answers.
+    /// Supplied history is model context and never grants a pending call on its own.
+    input_answers: BTreeSet<String>,
     /// Only these owner-captured occurrences were offered to this frontend invocation.
     input_offers: FrozenInputOffers,
     checkpoints: bool,
@@ -373,7 +371,7 @@ impl AgentRun {
             output_retries: 0,
             dynamic: None,
             approval_answers: BTreeSet::new(),
-            input_answers: None,
+            input_answers: BTreeSet::new(),
             input_offers: FrozenInputOffers::Captured(Vec::new()),
             checkpoints: false,
             planned: 0,
@@ -392,8 +390,17 @@ impl AgentRun {
     /// Shared owners provide correlation; invocation startup must not consume another pending
     /// question simply because a new human message arrived. Approval still requires a repeat.
     pub fn with_input_answers(mut self, answered: BTreeSet<String>) -> Self {
-        self.input_answers = Some(answered);
+        self.input_answers = answered;
         self
+    }
+
+    /// The current step's exact admitted origins. A later human answer cannot authorize
+    /// a step that already began calling; its authority applies only to the following step.
+    pub fn input_answers(&self) -> &BTreeSet<String> {
+        match &self.phase {
+            Phase::Requesting(_, acting) | Phase::Acting(acting) => acting.calls.input_answers(),
+            _ => &self.approval_answers,
+        }
     }
 
     pub fn with_input_offers(
@@ -563,9 +570,6 @@ impl AgentRun {
             AgentRunEvent::ToolCallUpdated { call, extra } => {
                 if let Some(a) = self.phase.acting() {
                     a.calls.update_extra(call, extra);
-                    if let Some(item) = a.calls.item(call) {
-                        crate::delegation::local::supersede(&mut self.history, item);
-                    }
                 }
             }
             AgentRunEvent::DelegateUsage { usage } => self.ledger.add(&usage),
@@ -662,38 +666,10 @@ impl AgentRun {
                 return self.next_step(now, fx);
             }
         };
-        let answer = message.raw_text_content().unwrap_or_default();
-        self.approval_answers = match self.input_answers.take() {
-            Some(answered) => answered,
-            None => planning::answer_pending_input(&mut self.history, &answer),
-        };
+        self.approval_answers = std::mem::take(&mut self.input_answers);
         self.first_new = self.history.len();
         self.history.push(ChatItem::Message(message));
-        // The answer is that tool's: it takes it as its first string parameter, no model turn.
-        let handed = self.input.answer_tool.clone().and_then(|name| {
-            let parameter =
-                first_string_parameter(&agent::tool(&self.agent, &name)?.spec)?.to_owned();
-            Some((name, parameter))
-        });
-        match handed {
-            Some((name, parameter)) => {
-                let id = self.item_id();
-                let arguments = Value::Object(Map::from_iter([(parameter, Value::String(answer))]));
-                let call = FunctionCall {
-                    call_id: format!("{id}/answer"),
-                    id,
-                    arguments: arguments.to_string(),
-                    name,
-                    created_at: self.stamp(now),
-                    extra: Default::default(),
-                    group_id: None,
-                };
-                self.phase = Phase::Acting(Acting::new(&self.approval_answers));
-                self.admit(call, fx);
-                self.step_settled(now, fx);
-            }
-            None => self.next_step(now, fx),
-        }
+        self.next_step(now, fx);
     }
 
     /// The next model step: dynamic instructions first when there are any.
@@ -896,7 +872,7 @@ impl AgentRun {
             }
             // Conversational text where a typed output is expected asks the person.
             OutputSpec::Structured { .. } => {
-                let ask = RunQuestion { question: text, verbatim: false, answer_tool: None };
+                let ask = RunQuestion { question: text, verbatim: false };
                 self.settle_ask(ask, fx)
             }
             OutputSpec::Text { validated: true } => {

@@ -187,7 +187,6 @@ fn terminal_tool_selection_and_canonical_items_follow_model_order_not_completion
                 outcome: ToolOutcome::InputRequired {
                     question: format!("{}?", item.name),
                     verbatim: true,
-                    tool: Some(item.name),
                 },
             });
         }
@@ -231,11 +230,7 @@ fn terminal_tool_selection_and_canonical_items_follow_model_order_not_completion
         });
         assert_eq!(
             d.result().outcome,
-            RunOutcome::InputRequired(RunQuestion {
-                question: "flight?".into(),
-                verbatim: true,
-                answer_tool: Some("flight".into()),
-            })
+            RunOutcome::InputRequired(RunQuestion { question: "flight?".into(), verbatim: true })
         );
         assert_eq!(d.result().pending_call.as_ref().unwrap().call_id, selected);
         assert_eq!(d.result().input_requirements.len(), 2);
@@ -255,11 +250,7 @@ fn retry_budget_failure_has_no_selected_terminal_delivery_and_cannot_be_reopened
         if name == "retry" {
             ToolOutcome::ModelRetry("try again".into())
         } else {
-            ToolOutcome::InputRequired {
-                question: "city?".into(),
-                verbatim: true,
-                tool: Some("ask".into()),
-            }
+            ToolOutcome::InputRequired { question: "city?".into(), verbatim: true }
         }
     });
     let (step, items, _) = d.step_settled();
@@ -267,14 +258,15 @@ fn retry_budget_failure_has_no_selected_terminal_delivery_and_cannot_be_reopened
         effect,
         AgentRunEffect::HandleToolResults { terminal_call: None, .. }
     )));
-    assert!(items.iter().all(|item| !matches!(item,
-        ChatItem::FunctionCall(call) if call.extra.get(crate::agent_run::planning::INPUT_REQUESTED_KEY).and_then(Value::as_bool) == Some(true)
-    )), "a failed batch selects no question");
-    let mut failed_history = items.clone();
+    let unrelated =
+        Driver::new(text_agent(vec![string_tool("ask", "city")]), "unrelated", items.clone());
+    let (_, planned, _) = unrelated.request();
     assert!(
-        crate::agent_run::planning::answer_pending_input(&mut failed_history, "unrelated")
-            .is_empty(),
-        "a failed batch answers no question"
+        planned.items.iter().any(|item| matches!(item,
+            ChatItem::FunctionCallOutput(output)
+                if output.output == "waiting for the person's answer to: city?"
+        )),
+        "a failed batch's question stays pending as model context"
     );
     let edits = items
         .iter()
@@ -511,16 +503,39 @@ fn a_step_that_has_not_called_reads_the_latest_answers() {
     assert!(repeat_runs(&mut d, "billing"));
 }
 
-// Catches: a read-back another reply put after this run opened ignored, so an answer to the
-// earlier question grants a call though the person was asked something else last.
 #[test]
-fn a_read_back_recorded_by_another_reply_is_the_latest_question() {
+fn a_newer_question_does_not_revoke_an_explicitly_matched_readback_or_grant_it_twice() {
     let mut input = coordinated_input();
     input.history.push(asked("asked_1", "billing"));
     input.opening = Opening::Coordinated { approval_answers: ["item_asked_1".to_owned()].into() };
     let mut d = Driver::with_input(text_agent(vec![approval_tool()]), input);
     d.send(AgentRunEvent::Recorded { item: Box::new(asked("asked_2", "sales")) });
-    assert!(!repeat_runs(&mut d, "billing"));
+    assert!(repeat_runs(&mut d, "billing"));
+    let executed = d.executes();
+    assert_eq!(executed.len(), 1);
+    assert_eq!(
+        executed[0].2.extra[crate::approval::APPROVAL_SOURCE_KEY].as_str(),
+        Some("item_asked_1"),
+        "the grant names the matched older occurrence, not the newest question"
+    );
+    d.run_tools(|_| value("transferred"));
+    let (step, _, _) = d.step_settled();
+    d.send(AgentRunEvent::ToolResultsHandled {
+        step,
+        continuation: AgentRunContinuation::Continue { tools_forbidden: false },
+        reply_required: Default::default(),
+    });
+    let request = d.plans().last().unwrap().request;
+    d.respond(request, "", &[("transfer", json!({"to":"billing"}))]);
+    let (call, arguments) = d.prepares().last().unwrap().clone();
+    d.prepared(call, Value::Object(arguments));
+    assert_eq!(d.executes().len(), 1, "the same admitted occurrence grants only one repeat");
+    let (_, items, _) = d.step_settled();
+    assert!(items.iter().any(|item| matches!(item,
+        ChatItem::FunctionCall(call)
+            if crate::approval::mark(call) == Some(lk_agents_abi::llm::tool_executor::Approval::Asked)
+                && !call.extra.contains_key(crate::approval::APPROVAL_SOURCE_KEY)
+    )));
 }
 
 // Catches: an answer the person moved on from still granting a later call of a step that had

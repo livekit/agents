@@ -336,6 +336,47 @@ impl Experts {
         Ok(())
     }
 
+    /// Registration supplies the native local reference before its presentation can be admitted.
+    pub fn reference_retained(
+        &mut self,
+        output_id: &str,
+        request_id: &str,
+        reference: InputRequestRef,
+    ) {
+        if let Some(request) = self
+            .delegations
+            .get_mut(output_id)
+            .and_then(|delegation| delegation.requests.get_mut(request_id))
+        {
+            *request = Some(reference);
+        }
+    }
+
+    pub fn waits_for(&self, reference: &InputRequestRef) -> bool {
+        self.delegations.values().any(|delegation| {
+            !delegation.settled
+                && delegation
+                    .waiting
+                    .as_ref()
+                    .and_then(|request| delegation.requests.get(request))
+                    .and_then(Option::as_ref)
+                    == Some(reference)
+        })
+    }
+
+    pub fn accepts(&self, reference: &InputRequestRef, floor: Floor<'_>) -> bool {
+        self.delegations.values().any(|delegation| {
+            !delegation.settled
+                && floor.reaches(&delegation.tool)
+                && delegation
+                    .waiting
+                    .as_ref()
+                    .and_then(|request| delegation.requests.get(request))
+                    .and_then(Option::as_ref)
+                    == Some(reference)
+        })
+    }
+
     pub fn reference(&self, request: &PendingRequest) -> Option<&InputRequestRef> {
         self.delegations.get(&request.output_id)?.requests.get(&request.request_id)?.as_ref()
     }
@@ -406,6 +447,7 @@ impl Experts {
                 }
                 let request_id = delegation.waiting.as_ref()?;
                 let reference = delegation.requests.get(request_id)?.as_ref()?;
+                reference.remote()?;
                 let message = self.responses.get(reference)?.clone();
                 Some((
                     PendingRequest { output_id: output_id.clone(), request_id: request_id.clone() },

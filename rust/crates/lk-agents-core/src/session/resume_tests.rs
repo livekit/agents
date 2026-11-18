@@ -1,12 +1,15 @@
 use super::*;
 use lk_agents_abi::session::{AgentInputRequest, InputRequestState};
+use lk_agents_abi::{FunctionCall, FunctionCallOutput};
+use std::time::UNIX_EPOCH;
 
 #[test]
-fn a_root_text_question_is_a_local_continuation_until_answered_or_closed() {
+fn root_input_occurrences_do_not_restore_a_text_child_stack() {
     for status in [
         InputRequestState::Open,
         InputRequestState::Responding,
         InputRequestState::Responded,
+        InputRequestState::Superseded,
         InputRequestState::Closed,
     ] {
         let mut state = SessionSnapshot::new("conversation".into(), "text".into(), "desk".into());
@@ -25,7 +28,44 @@ fn a_root_text_question_is_a_local_continuation_until_answered_or_closed() {
                 presented_message_id: None,
             },
         );
-        let can_resume = matches!(status, InputRequestState::Responded | InputRequestState::Closed);
-        assert_eq!(validate_voice(&state, "desk").is_ok(), can_resume);
+        assert!(validate_voice(&state, "desk").is_ok());
     }
+}
+
+fn call(id: &str) -> ChatItem {
+    FunctionCall {
+        id: id.into(),
+        call_id: "reused-provider-id".into(),
+        name: "lookup".into(),
+        arguments: "{}".into(),
+        created_at: UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    }
+    .into()
+}
+
+fn output(id: &str) -> ChatItem {
+    FunctionCallOutput::new(id, "reused-provider-id", "done", false, UNIX_EPOCH).into()
+}
+
+#[test]
+fn an_earlier_result_does_not_resolve_a_later_call_with_the_same_provider_id() {
+    let history =
+        [call("first-canonical-call"), output("opaque-first-result"), call("last-canonical-call")];
+    assert!(validate_resume(&history).is_err());
+}
+
+#[test]
+fn opaque_results_allow_sequential_provider_reuse_but_not_overlapping_ambiguity() {
+    let history = [
+        call("first-canonical-call"),
+        output("opaque-first-result"),
+        call("second-canonical-call"),
+        output("opaque-second-result"),
+    ];
+    assert!(validate_resume(&history).is_ok());
+    let overlapping =
+        [history[0].clone(), history[2].clone(), history[1].clone(), history[3].clone()];
+    assert!(validate_resume(&overlapping).is_err());
 }

@@ -154,8 +154,6 @@ pub struct Handle {
     pub batch: Vec<Message>,
     /// The task that carries the reply.
     pub task_id: String,
-    /// The tool the message is handed to before the model runs.
-    pub answer_tool: Option<String>,
     /// Without the partition's lease (`concurrent`) context fields are not written.
     pub read_only: bool,
     /// How many of the partition's newest task rows the handler's context carries.

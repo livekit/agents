@@ -673,7 +673,7 @@ def test_generated_tool_records_keep_signatures_forward_types_and_exceptions() -
     from dataclasses import FrozenInstanceError
     from typing import get_type_hints
 
-    from livekit.agents.llm import FunctionTool, InputRequired, ModelRetry, ToolError, ToolFlag
+    from livekit.agents.llm import InputRequired, ModelRetry, ToolError, ToolFlag
     from livekit.agents.llm.realtime import RealtimeError
     from livekit.agents.llm.tool_context import FunctionToolInfo, StopResponse, ToolResult
 
@@ -682,7 +682,7 @@ def test_generated_tool_records_keep_signatures_forward_types_and_exceptions() -
     with pytest.raises(TypeError):
         ToolResult("hello", False)
     assert get_type_hints(FunctionToolInfo)["flags"] is ToolFlag
-    assert FunctionTool in get_type_hints(InputRequired)["tool"].__args__
+    assert get_type_hints(InputRequired) == {"question": str, "verbatim": bool}
     with pytest.raises(FrozenInstanceError):
         InputRequired("Question?").question = "Changed"
     assert (ToolFlag.NONE | ToolFlag.IGNORE_ON_ENTER) is ToolFlag.IGNORE_ON_ENTER
@@ -814,9 +814,7 @@ async def test_voice_failure_keeps_input_requirements_on_the_raised_exception(
     requirements = [
         RunInputRequirement(
             invocation_id="voice-run",
-            call=PendingCall(
-                id="flight-item", name="flight", call_id="flight-call", answer_tool=None
-            ),
+            call=PendingCall(id="flight-item", name="flight", call_id="flight-call"),
             question="Which date?",
             verbatim=True,
         )

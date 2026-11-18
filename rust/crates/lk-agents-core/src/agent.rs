@@ -1,6 +1,6 @@
 use lk_agents_abi::ToolSpec;
 pub use lk_agents_abi::agent::AgentError;
-use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec};
+use lk_agents_abi::agent::{AgentDefinition, OutputSpec};
 use serde_json::{Value, json};
 
 /// The tool a non-`str` `output_type` is offered as.
@@ -28,10 +28,6 @@ pub fn validate(agent: &AgentDefinition) -> Result<(), AgentError> {
         }
     }
     Ok(())
-}
-
-pub(crate) fn tool<'a>(agent: &'a AgentDefinition, name: &str) -> Option<&'a FunctionToolInfo> {
-    agent.tools.iter().find(|t| t.spec.provider_tool.is_none() && t.spec.name == name)
 }
 
 /// The instructions for one request: the static ones, then the rendered dynamic ones.
@@ -77,14 +73,4 @@ fn wrapped_schema(schema: &Value) -> Option<Value> {
         wrapped["$defs"] = defs;
     }
     Some(wrapped)
-}
-
-/// The first string parameter of a tool, in schema order: what an `InputRequired(tool=)` answer
-/// is handed to.
-pub(crate) fn first_string_parameter(spec: &ToolSpec) -> Option<&str> {
-    let properties = spec.json_schema.get("properties")?.as_object()?;
-    properties
-        .iter()
-        .find(|(_, p)| p.get("type").and_then(Value::as_str) == Some("string"))
-        .map(|(name, _)| name.as_str())
 }

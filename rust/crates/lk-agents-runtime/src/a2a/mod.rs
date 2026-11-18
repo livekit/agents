@@ -524,7 +524,6 @@ impl Turn {
             task_id: handle.task_id,
             tasks: run.tasks().recent(handle.recent_tasks).await?,
             caller_history,
-            answer_tool: handle.answer_tool,
         };
         let mut host_ctx = lk_agents_abi::a2a::turn::TurnContext::try_from(ctx)?;
         host_ctx.host_context = self.host_context.clone();
@@ -733,7 +732,6 @@ mod lease_tests {
             task_id: "task".into(),
             tasks: Vec::new(),
             caller_history: None,
-            answer_tool: None,
             host_context: None,
         }
     }

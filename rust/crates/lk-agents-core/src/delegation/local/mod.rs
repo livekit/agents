@@ -1,5 +1,4 @@
-//! An agent called as a tool (tools.md "Agents as tools"): what its child starts from, what the
-//! parent reads when it settles, and what a child waiting on the person keeps on its parent's call.
+//! An agent called as a tool: its opening context and the parent's view of its outcome.
 //! A TextSession runs the child as a frame; elsewhere the child is an in-process delegate.
 
 use std::time::SystemTime;
@@ -7,23 +6,13 @@ use std::time::SystemTime;
 use lk_agents_abi::agent::run::{Output, RunError, RunOutcome, RunResult};
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::text_session::{ChatHistory, RoutingError};
-use lk_agents_abi::{ChatContext, ChatItem, ChatMessage, CopyOptions, FunctionCall, Role};
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use lk_agents_abi::{ChatContext, ChatItem, ChatMessage, CopyOptions, Role};
+use serde_json::Value;
 
 use crate::llm::history::ChatContextExt;
 
-/// A waiting child's own history, on the parent's call that it asked from.
-pub const STATE_KEY: &str = "lk.agent_tool";
-
 /// How deep delegates nest outside a TextSession, as a TextSession's default `max_depth`.
 pub const MAX_DEPTH: usize = 8;
-
-#[derive(Serialize, Deserialize)]
-struct Waiting {
-    agent: String,
-    history: Vec<ChatItem>,
-}
 
 /// The child's opening history: nothing (`fresh`), or the parent's answered exchanges without
 /// instructions, handoffs or configuration updates (`fork`).
@@ -68,49 +57,6 @@ pub fn admit(depth: usize) -> Result<(), ToolOutcome> {
     Ok(())
 }
 
-/// The waiting child a call of the tool resumes: the own history kept on the tool's latest
-/// earlier call, when that call ended on the child's question; empty otherwise.
-pub fn retained(history: &[ChatItem], call: &FunctionCall, agent: &str) -> Vec<ChatItem> {
-    let latest = history.iter().rev().find_map(|item| match item {
-        ChatItem::FunctionCall(c) if c.name == call.name && c.call_id != call.call_id => Some(c),
-        _ => None,
-    });
-    latest
-        .and_then(|c| c.extra.get(STATE_KEY))
-        .and_then(|state| serde_json::from_value::<Waiting>(state.clone()).ok())
-        .filter(|waiting| waiting.agent == agent)
-        .map(|waiting| waiting.history)
-        .unwrap_or_default()
-}
-
-/// The call's retained state once the child settled: its own history while it waits on the
-/// person, so the next call resumes it; nothing once it answered.
-pub fn record(extra: &mut Map<String, Value>, agent: &str, waiting: Option<Vec<ChatItem>>) {
-    match waiting {
-        Some(history) => {
-            let state = Waiting { agent: agent.to_owned(), history };
-            let state = serde_json::to_value(state).expect("chat items serialize");
-            extra.insert(STATE_KEY.into(), state);
-        }
-        None => {
-            extra.remove(STATE_KEY);
-        }
-    }
-}
-
-/// A newer call of the tool supersedes what earlier ones kept: only the latest waiting child's
-/// history stays in the conversation, and none once the child answered.
-pub fn supersede(history: &mut [ChatItem], call: &FunctionCall) {
-    for item in history {
-        if let ChatItem::FunctionCall(earlier) = item
-            && earlier.name == call.name
-            && earlier.call_id != call.call_id
-        {
-            earlier.extra.remove(STATE_KEY);
-        }
-    }
-}
-
 /// What a settled child invocation is to its parent's call.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
@@ -126,9 +72,7 @@ impl Step {
     pub fn outcome(self) -> ToolOutcome {
         match self {
             Step::Done(outcome) => outcome,
-            Step::Ask { question, verbatim } => {
-                ToolOutcome::InputRequired { question, verbatim, tool: None }
-            }
+            Step::Ask { question, verbatim } => ToolOutcome::InputRequired { question, verbatim },
         }
     }
 }
@@ -167,8 +111,9 @@ fn value(text: String) -> ToolOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lk_agents_abi::FunctionCall;
     use lk_agents_abi::agent::run::RunQuestion;
-    use serde_json::json;
+    use serde_json::{Map, json};
     use std::time::UNIX_EPOCH;
 
     fn result(outcome: RunOutcome) -> Result<RunResult, RunError> {
@@ -233,47 +178,13 @@ mod tests {
 
     #[test]
     fn a_childs_question_passes_up_as_asked() {
-        let ask = RunQuestion { question: "Confirm?".into(), verbatim: true, answer_tool: None };
+        let ask = RunQuestion { question: "Confirm?".into(), verbatim: true };
         let step = settle(&result(RunOutcome::InputRequired(ask)), None);
         assert_eq!(step, Step::Ask { question: "Confirm?".into(), verbatim: true });
         assert_eq!(
             step.outcome(),
-            ToolOutcome::InputRequired { question: "Confirm?".into(), verbatim: true, tool: None }
+            ToolOutcome::InputRequired { question: "Confirm?".into(), verbatim: true }
         );
-    }
-
-    #[test]
-    fn only_the_tools_latest_call_left_waiting_is_resumed() {
-        let own = vec![ChatItem::Message(task("task".into(), &json!({}), UNIX_EPOCH))];
-        let mut waiting = Map::new();
-        record(&mut waiting, "booking", Some(own.clone()));
-        let current = call("now", Map::new());
-        let ChatItem::FunctionCall(current_call) = current.clone() else { unreachable!() };
-        let history = vec![call("asked", waiting.clone()), current.clone()];
-        assert_eq!(retained(&history, &current_call, "booking"), own);
-        assert!(retained(&history, &current_call, "billing").is_empty());
-
-        let mut answered = waiting;
-        record(&mut answered, "booking", None);
-        let later = vec![history[0].clone(), call("settled", answered), current];
-        assert!(retained(&later, &current_call, "booking").is_empty());
-    }
-
-    #[test]
-    fn a_newer_call_drops_the_copies_earlier_calls_kept() {
-        let own = vec![ChatItem::Message(task("task".into(), &json!({}), UNIX_EPOCH))];
-        let mut waiting = Map::new();
-        record(&mut waiting, "booking", Some(own));
-        let mut history = vec![call("first", waiting.clone()), call("second", waiting)];
-        let ChatItem::FunctionCall(newest) = history[1].clone() else { unreachable!() };
-        supersede(&mut history, &newest);
-        let kept: Vec<bool> = history
-            .iter()
-            .map(
-                |item| matches!(item, ChatItem::FunctionCall(c) if c.extra.contains_key(STATE_KEY)),
-            )
-            .collect();
-        assert_eq!(kept, [false, true]);
     }
 
     #[test]

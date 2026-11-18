@@ -192,9 +192,7 @@ class _RemoteTool(Toolset):
             await interaction.settled()
             raise
         if isinstance(event, RemoteEventInputRequired):
-            transition = InputRequired(
-                event.question, tool=self._tool, verbatim=event.verbatim_full
-            )
+            transition = InputRequired(event.question, verbatim=event.verbatim_full)
             return ToolReport(outcome=event.outcome, transition=transition)
         assert isinstance(event, RemoteEventOutcome)
         return ToolReport(outcome=event.outcome)

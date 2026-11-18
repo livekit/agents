@@ -124,6 +124,9 @@ pub struct Setup {
     pub preemptive: bool,
     /// Tools advertised to the model; each is run by the controlled tool runner.
     pub tools: Vec<String>,
+    /// A separately configured FakeLlm exercises real input-response inference and owner
+    /// admission. Authored setups leave routing disabled unless explicitly requested.
+    pub input_routing: bool,
     pub max_tool_steps: Option<u32>,
     pub instructions: String,
     pub max_unrecoverable_errors: u32,
@@ -492,6 +495,7 @@ impl Default for Setup {
             turn: TurnMode::Default,
             preemptive: false,
             tools: vec!["lookup".into()],
+            input_routing: false,
             max_tool_steps: None,
             instructions: "You are a test agent.".into(),
             max_unrecoverable_errors: 3,

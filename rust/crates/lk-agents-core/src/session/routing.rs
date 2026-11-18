@@ -150,12 +150,10 @@ impl SessionConfig {
                 if !call_exists {
                     return Err(invalid("missing originating call"));
                 }
-                if !frame.completed
-                    && !parent_frame.pending_calls.iter().any(|p| {
-                        p.parent == *parent
-                            && p.status == (ChildCallStatus::Running { frame_id: id.clone() })
-                    })
-                {
+                if !parent_frame.pending_calls.iter().any(|p| {
+                    p.parent == *parent
+                        && p.status == (ChildCallStatus::Running { frame_id: id.clone() })
+                }) {
                     return Err(invalid("child has no pending parent call"));
                 }
             }
@@ -215,14 +213,20 @@ impl SessionConfig {
         }
         for (index, id) in chain.iter().enumerate() {
             let frame = state.frames.get(id).ok_or_else(|| invalid("missing active ancestor"))?;
-            if frame.completed {
+            if frame.completed && (index + 1 != chain.len() || frame.parent.is_none()) {
                 return Err(invalid("completed frame in active chain"));
+            }
+            if frame.completed && frame.error.is_some() {
+                return Err(invalid("accepted child output also records a failure"));
             }
             if index > 0 && frame.parent.as_ref().map(|p| &p.frame_id) != chain.get(index - 1) {
                 return Err(invalid("ancestor does not match parent"));
             }
             if index + 1 == chain.len()
-                && frame.pending_calls.iter().any(|p| p.status != ChildCallStatus::Approval)
+                && frame
+                    .pending_calls
+                    .iter()
+                    .any(|p| matches!(p.status, ChildCallStatus::Running { .. }))
             {
                 return Err(invalid("active frame has an unresolved child"));
             }

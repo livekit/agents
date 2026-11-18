@@ -14,7 +14,18 @@ impl VoiceRuntime {
         request_id: String,
         message: ChatMessage,
     ) {
-        let state = self.conversation_snapshot();
+        let routing = self.conversation_snapshot().map(|state| {
+            let request = input::routing_request(&state, request_id.clone(), message).and_then(
+                |mut request| {
+                    request.candidates = self.driver.input_routing_candidates(request.candidates);
+                    (!request.candidates.is_empty()).then_some(request)
+                },
+            );
+            let offered = self.driver.input_routing_candidates(
+                lk_agents_core::delegation::remote::routing::offered(&state),
+            );
+            (request, offered)
+        });
         let options = self.delegation.clone();
         let commands = self.conversation_port.clone();
         let shared = self.shared.clone();
@@ -36,13 +47,9 @@ impl VoiceRuntime {
             async move {
                 let mut usage = Default::default();
                 let result = async {
-                    let state = state?;
-                    let Some(request) = input::routing_request(&state, request_id.clone(), message)
-                    else {
-                        return Ok(InputAdmission {
-                            offered: lk_agents_core::delegation::remote::routing::offered(&state),
-                            ..Default::default()
-                        });
+                    let (request, offered) = routing?;
+                    let Some(request) = request else {
+                        return Ok(InputAdmission { offered, ..Default::default() });
                     };
                     let verdict = match options.and_then(|options| options.routing_model) {
                         Some(model) => {

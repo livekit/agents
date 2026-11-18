@@ -50,7 +50,7 @@ impl AgentRun {
         let mut calls = Vec::with_capacity(recorded.len());
         let mut outputs = Vec::with_capacity(recorded.len());
         for Recorded { id, item, settled } in &recorded {
-            let (id, mut item) = (*id, item.clone());
+            let (id, item) = (*id, item.clone());
             let outcome = &settled.outcome;
             let shape = tool_outcome::shape(outcome, self.input.mode);
             let text = tool_outcome::delivered(outcome).unwrap_or(shape.text);
@@ -60,7 +60,7 @@ impl AgentRun {
             }
             let this = match outcome {
                 _ if accepted.is_some_and(|(call, _)| call == id) => Some(Terminal::Output),
-                ToolOutcome::InputRequired { question, verbatim, tool } => {
+                ToolOutcome::InputRequired { question, verbatim } => {
                     let requirement = input_requirement(&self.input.invocation_id, &item, outcome)
                         .expect("an InputRequired outcome retains its call identity");
                     if terminal.is_none() {
@@ -70,7 +70,6 @@ impl AgentRun {
                     Some(Terminal::Ask(RunQuestion {
                         question: question.clone(),
                         verbatim: *verbatim,
-                        answer_tool: tool.clone(),
                     }))
                 }
                 ToolOutcome::StopResponse => Some(Terminal::Stop),
@@ -80,12 +79,6 @@ impl AgentRun {
                 _ => None,
             };
             if terminal.is_none() {
-                if exceeded.is_none() && matches!(this, Some(Terminal::Ask(_))) {
-                    item.extra.insert(
-                        crate::agent_run::planning::INPUT_REQUESTED_KEY.into(),
-                        serde_json::Value::Bool(true),
-                    );
-                }
                 if this.is_some() {
                     terminal_call = Some(item.call_id.clone());
                 }
@@ -159,14 +152,13 @@ pub(super) fn input_requirement(
     item: &FunctionCall,
     outcome: &ToolOutcome,
 ) -> Option<lk_agents_abi::agent::run::RunInputRequirement> {
-    let ToolOutcome::InputRequired { question, verbatim, tool } = outcome else { return None };
+    let ToolOutcome::InputRequired { question, verbatim } = outcome else { return None };
     Some(lk_agents_abi::agent::run::RunInputRequirement {
         invocation_id: invocation_id.to_owned(),
         call: lk_agents_abi::a2a::turn::PendingCall {
             id: item.id.clone(),
             name: item.name.clone(),
             call_id: item.call_id.clone(),
-            answer_tool: tool.clone(),
         },
         question: question.clone(),
         verbatim: *verbatim,

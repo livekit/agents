@@ -207,7 +207,7 @@ async def test_voice_refuses_saved_local_agent_work_without_changing_it(
 
 
 @pytest.mark.parametrize("root_question", [False, True])
-async def test_voice_refuses_text_local_work_loaded_between_speeches(
+async def test_voice_reloads_root_questions_but_refuses_a_saved_text_child_between_speeches(
     tmp_path: Path,
     root_question: bool,
 ) -> None:
@@ -247,13 +247,36 @@ async def test_voice_refuses_text_local_work_loaded_between_speeches(
             result = await TextSession(agent=root).run("Book", context=text_store.bind(text_app))
             assert result.status == "input_required"
             before = text_app.session._to_json()
+            text_root = text_app.session.root_agent
+            assert text_root is not None
+            requests = dict(text_root.input_requests)
             await voice.generate_reply(user_input="Continue by voice")
-            await until(lambda: closes, "voice did not refuse the saved text-local continuation")
-            assert closes[0].reason.value == "error" and isinstance(closes[0].error, APIError)
-            assert isinstance(event_dict(closes[0], json=True)["error"], str)
-            assert len(model.requests) == 2, "voice must refuse before starting another model call"
+            if root_question:
+                await until(
+                    lambda: any(
+                        item.text_content == "Done." for item in app.session.chat_history.items
+                    ),
+                    "voice did not continue with the saved root question",
+                )
+                assert not closes
+                assert len(model.requests) == 3
+            else:
+                await until(
+                    lambda: closes, "voice did not refuse the saved text-local continuation"
+                )
+                assert closes[0].reason.value == "error" and isinstance(closes[0].error, APIError)
+                assert isinstance(event_dict(closes[0], json=True)["error"], str)
+                assert len(model.requests) == 2, "refuse before starting another model call"
         saved = await text_store.load_session()
-        assert saved._to_json() == before, "voice cannot rewrite the text-local agent tree"
+        if root_question:
+            saved_root = saved.root_agent
+            assert saved_root is not None
+            assert list(saved_root.input_requests) == list(requests)
+            for request_id, request in saved_root.input_requests.items():
+                assert request.source_message.id == requests[request_id].source_message.id
+                assert request.state == "open", "an unmatched human turn cannot consume a question"
+        else:
+            assert saved._to_json() == before, "voice cannot rewrite the text-local agent tree"
     finally:
         store._close()
         text_store._close()

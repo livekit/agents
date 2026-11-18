@@ -145,4 +145,28 @@ impl RemoteTaskView for RemoteTask {
     fn cancel_requested(&self) -> Result<bool, StorageError> {
         self.read(|state| state.cancel_requested)
     }
+
+    async fn cancel(&self) -> Result<(), lk_agents_abi::a2a::client::AgentClientError> {
+        use lk_agents_abi::a2a::client::AgentClientError;
+        let task = self
+            .read(|state| lk_agents_abi::delegation::remote::RemoteTaskRef {
+                task_id: state.task.id.clone(),
+                context_id: state.task.context_id.clone(),
+            })
+            .map_err(|error| AgentClientError::InvalidInput(error.to_string()))?;
+        let endpoint = self
+            .remote
+            .read(|state| state.endpoint.clone())
+            .map_err(|error| AgentClientError::InvalidInput(error.to_string()))?;
+        let owner =
+            self.remote.state.1.lock().as_ref().and_then(std::sync::Weak::upgrade).ok_or_else(
+                || {
+                    AgentClientError::InvalidInput(
+                        "remote task cancellation requires an active bound conversation owner"
+                            .into(),
+                    )
+                },
+            )?;
+        owner.cancel_remote(&self.remote.remote_id, &endpoint, &task).await
+    }
 }

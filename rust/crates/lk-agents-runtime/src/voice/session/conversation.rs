@@ -2,9 +2,9 @@
 
 use super::VoiceSession;
 use crate::session::CommandPort;
-use lk_agents_abi::session::{InputRequestRef, SessionCommands, SessionInputCommand, ToolCallRef};
+use lk_agents_abi::BoxFuture;
+use lk_agents_abi::session::{InputRequestRef, SessionCommands, SessionInputCommand};
 use lk_agents_abi::storage::StorageError;
-use lk_agents_abi::{BoxFuture, ChatMessage};
 
 impl VoiceSession {
     fn conversation(&self) -> Result<CommandPort, StorageError> {
@@ -90,6 +90,21 @@ impl SessionCommands for VoiceSession {
         Box::pin(async move { self.conversation()?.remote_driver(remote_id, endpoint, task).await })
     }
 
+    fn cancel_remote<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        task: &'a lk_agents_abi::delegation::remote::RemoteTaskRef,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), lk_agents_abi::a2a::client::AgentClientError>>
+    {
+        Box::pin(async move {
+            let commands = self.conversation().map_err(|error| {
+                lk_agents_abi::a2a::client::AgentClientError::InvalidInput(error.to_string())
+            })?;
+            commands.cancel_remote(remote_id, endpoint, task).await
+        })
+    }
+
     fn admit_input(
         &self,
         request: lk_agents_abi::session::InputRoutingRequest,
@@ -104,31 +119,6 @@ impl SessionCommands for VoiceSession {
         Box::pin(async move { self.conversation()?.checkpoint().await })
     }
 
-    fn held_input<'a>(
-        &'a self,
-        remote_id: &'a str,
-        endpoint: &'a str,
-        task_id: Option<&'a str>,
-    ) -> BoxFuture<'a, Result<Option<InputRequestRef>, StorageError>> {
-        Box::pin(async move { self.conversation()?.held_input(remote_id, endpoint, task_id).await })
-    }
-
-    fn task<'a>(
-        &'a self,
-        remote_id: &'a str,
-        endpoint: &'a str,
-        task_id: &'a str,
-    ) -> BoxFuture<'a, Result<lk_agents_abi::delegation::remote::RemoteTaskRef, StorageError>> {
-        Box::pin(async move { self.conversation()?.task(remote_id, endpoint, task_id).await })
-    }
-
-    fn response<'a>(
-        &'a self,
-        reference: &'a InputRequestRef,
-    ) -> BoxFuture<'a, Result<ChatMessage, StorageError>> {
-        Box::pin(async move { self.conversation()?.response(reference).await })
-    }
-
     fn input<'a>(
         &'a self,
         command: SessionInputCommand,
@@ -140,12 +130,12 @@ impl SessionCommands for VoiceSession {
         &'a self,
         remote_id: &'a str,
         endpoint: &'a str,
-        origin: &'a ToolCallRef,
+        target: &'a lk_agents_abi::session::SessionRecovery,
     ) -> BoxFuture<
         'a,
         Result<Option<lk_agents_abi::delegation::remote::RemoteRecovery>, StorageError>,
     > {
-        Box::pin(async move { self.conversation()?.recover(remote_id, endpoint, origin).await })
+        Box::pin(async move { self.conversation()?.recover(remote_id, endpoint, target).await })
     }
 
     fn default_context<'a>(

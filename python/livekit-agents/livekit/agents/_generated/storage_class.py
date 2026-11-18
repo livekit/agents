@@ -88,15 +88,13 @@ TaskState: TypeAlias = Literal["submitted", "working", "input-required", "comple
 
 @dataclass(kw_only=True, slots=True)
 class Ask:
-    """What a task waiting on the person holds: the question and the call that takes the answer."""
+    """A transport task's waiting question and diagnostic provenance, never response authority."""
 
     question: str
     tool: str | None = None
     """The tool that asked."""
     call_id: str | None = None
-    """The asking call, whose output the answer becomes."""
-    answer_tool: str | None = None
-    """The tool that takes the answer before the model runs."""
+    """The asking call's provider wire label; it does not select a continuation."""
 
 
 @dataclass(kw_only=True, slots=True)

@@ -48,7 +48,7 @@ pub struct SessionCores {
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     pub session_sink: Option<Arc<dyn lk_agents_abi::text_session::SessionStateSink>>,
     pub delegation: Option<lk_agents_abi::delegation::DelegationOptions>,
-    pub(crate) conversation_port: crate::session::CommandPort,
+    pub(crate) conversation_port: Arc<crate::session::CommandPort>,
     pub(crate) conversation: tokio::sync::mpsc::Receiver<crate::session::SessionCommand>,
     /// The end of the host-event stream: the runtime holds it, so its end ends the stream.
     pub(crate) events_end: lk_agents_net::signal::Producer<()>,
@@ -484,8 +484,15 @@ impl DriverBuilder {
             32,
             self.delegation.as_ref().and_then(|options| options.routing_model.clone()),
         );
+        let conversation = Arc::new(conversation);
+        if let Some(sink) = &self.session_sink {
+            let owner: Arc<dyn lk_agents_abi::session::SessionCommands> = conversation.clone();
+            sink.bind_commands(Arc::downgrade(&owner)).map_err(|error| {
+                DriverError::Provider(lk_agents_abi::errors::ApiError::from(error).into())
+            })?;
+        }
         if let Some(storage) = &self.storage {
-            storage.bind_session_commands(Arc::new(conversation.clone()));
+            storage.bind_session_commands(conversation.clone());
         }
         let cores = SessionCores {
             publications,
@@ -511,7 +518,7 @@ impl DriverBuilder {
             cores,
             SessionHandle {
                 api: queue,
-                conversation,
+                conversation: (*conversation).clone(),
                 events: ev_rx,
                 keyterms: keyterms_pushed,
                 chat_ctx,

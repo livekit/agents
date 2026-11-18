@@ -86,6 +86,12 @@ pub enum VoiceEvent {
         message: lk_agents_abi::ChatMessage,
         admission: lk_agents_abi::session::InputAdmission,
     },
+    LocalInputRetained {
+        request_id: String,
+        reference: lk_agents_abi::session::InputRequestRef,
+    },
+    LocalInputDelivered(Box<crate::agent_session::LocalInputDelivery>),
+    LocalInputCandidates(std::collections::BTreeSet<lk_agents_abi::session::InputRequestRef>),
     /// A checkpointed outgoing response owns this exact occurrence; stop prompting it.
     RemoteResponseQueued {
         request: lk_agents_abi::session::InputRequestRef,
@@ -480,6 +486,15 @@ impl VoiceDriver {
             }
             Some(VoiceEvent::InputReserved { message, admission }) => {
                 self.input_reserved(message, admission)
+            }
+            Some(VoiceEvent::LocalInputRetained { request_id, reference }) => {
+                self.local_input_retained(request_id, reference);
+            }
+            Some(VoiceEvent::LocalInputDelivered(delivery)) => {
+                self.local_input_delivered(*delivery);
+            }
+            Some(VoiceEvent::LocalInputCandidates(requests)) => {
+                self.local_input_candidates(requests)
             }
             Some(VoiceEvent::RemoteResponseQueued { request }) => {
                 self.session.experts.response_queued(&request);

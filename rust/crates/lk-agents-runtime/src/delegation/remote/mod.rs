@@ -28,6 +28,7 @@ use lk_agents_net::owned::{Background, Owned};
 use lk_agents_net::signal;
 use lk_agents_net::task::Cancellation;
 use lk_agents_telemetry as telemetry;
+mod cancel;
 mod driver;
 mod exchange;
 pub mod journal;
@@ -438,7 +439,14 @@ impl Delegation {
         let recovery = match (&self.request.owner, &self.request.origin) {
             (Some(owner), Some(origin)) => {
                 let endpoint = self.interaction.0.lock().policy.snapshot().id.endpoint;
-                owner.recover(&endpoint, &endpoint, origin).await.map_err(protocol)?
+                owner
+                    .recover(
+                        &endpoint,
+                        &endpoint,
+                        &lk_agents_abi::session::SessionRecovery::Call(origin.clone()),
+                    )
+                    .await
+                    .map_err(protocol)?
             }
             _ => None,
         };
@@ -846,7 +854,6 @@ impl State {
                 let outcome = ToolOutcome::InputRequired {
                     question: question.clone(),
                     verbatim: verbatim_full,
-                    tool: Some(self.call.name.clone()),
                 };
                 RemoteEvent::InputRequired {
                     request_id,

@@ -12,11 +12,18 @@ impl Session {
     pub(super) fn next_child(&mut self, now: Ts, effects: &mut Vec<SessionEffect>) {
         loop {
             let parent_id = self.state.active_frame_id.clone();
-            let pending = self.state.frames[&parent_id]
-                .pending_calls
-                .iter()
-                .find(|call| call.status != ChildCallStatus::Approval)
-                .cloned();
+            let parent = &self.state.frames[&parent_id];
+            let pending = parent.history.iter().find_map(|item| {
+                let ChatItem::FunctionCall(call) = item else { return None };
+                parent
+                    .pending_calls
+                    .iter()
+                    .find(|pending| {
+                        pending.parent.call_id == call.id
+                            && pending.status != ChildCallStatus::Approval
+                    })
+                    .cloned()
+            });
             let Some(pending) = pending else {
                 self.invoke(None, now, effects);
                 return;
@@ -131,13 +138,14 @@ impl Session {
         let mut pending = approvals;
         retain_approvals(&mut pending, &frame.pending_calls);
         frame.pending_calls = pending;
-        frame.completed = matches!(result.outcome, RunOutcome::Completed { .. });
         frame.output = output.clone().or_else(|| match &result.outcome {
             RunOutcome::Completed { output: lk_agents_abi::agent::run::Output::Text(text) } => {
                 Some(Value::String(text.clone()))
             }
             _ => None,
         });
+        frame.completed =
+            matches!(result.outcome, RunOutcome::Completed { .. }) && frame.output.is_some();
         frame.error = None;
         let delivered_question = match &result.outcome {
             RunOutcome::InputRequired(question) => result.new_messages.iter().find_map(|item| {
@@ -251,28 +259,51 @@ impl Session {
             );
             return;
         };
+        if let Err(error) = self.propagate_child(parent_call, output, now, effects) {
+            self.finish(Err(TextSessionError::Routing(error)), effects);
+            return;
+        }
+        self.next_child(now, effects);
+    }
+
+    /// A restored accepted child returns its retained value, never another model invocation.
+    pub(super) fn restore_completed(
+        &mut self,
+        now: Ts,
+        effects: &mut Vec<SessionEffect>,
+    ) -> Result<(), RoutingError> {
+        loop {
+            let child = &self.state.frames[&self.state.active_frame_id];
+            if !child.completed {
+                return Ok(());
+            }
+            let Some(parent) = child.parent.clone() else { return Ok(()) };
+            let output = child.output.clone().unwrap_or(Value::Null);
+            self.propagate_child(parent, output, now, effects)?;
+        }
+    }
+
+    fn propagate_child(
+        &mut self,
+        parent_call: super::ParentCall,
+        output: Value,
+        now: Ts,
+        effects: &mut Vec<SessionEffect>,
+    ) -> Result<(), RoutingError> {
+        let active_id = self.state.active_frame_id.clone();
         let pending = self.state.frames[&parent_call.frame_id]
             .pending_calls
             .iter()
             .find(|p| p.parent == parent_call)
             .cloned();
-        let Some(pending) = pending else {
-            self.finish(
-                Err(TextSessionError::Routing(RoutingError::InvalidState(
-                    "child outcome has no pending parent call".into(),
-                ))),
-                effects,
-            );
-            return;
-        };
+        let pending = pending.ok_or_else(|| {
+            RoutingError::InvalidState("child outcome has no pending parent call".into())
+        })?;
         let text = match output {
             Value::String(text) => text,
             value => value.to_string(),
         };
-        if let Err(error) = self.resolve_call(&pending, text, false, now, effects) {
-            self.finish(Err(TextSessionError::Routing(error)), effects);
-            return;
-        }
+        self.resolve_call(&pending, text, false, now, effects)?;
         // Move, rather than alias, the two frames while transferring dialogue.
         let mut child = self.state.frames.remove(&active_id).expect("the active frame exists");
         child.completed = true;
@@ -283,7 +314,7 @@ impl Session {
         // completed child would grow a long-lived conversation without bound.
         self.state.active_frame_id = parent_call.frame_id;
         self.state.ancestors.pop();
-        self.next_child(now, effects);
+        Ok(())
     }
 
     fn resolve_call(

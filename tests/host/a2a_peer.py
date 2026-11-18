@@ -29,6 +29,8 @@ class Peer:
         self.direct_reply: Json | None = None
         self.task_snapshot: Json | None = None
         self.events: Callable[[Json], list[Json]] | None = None
+        self.response_gate: asyncio.Event | None = None
+        """An optional boundary holding a stream after its first admission event."""
         self.input_schema: dict[str, Json] | None = None
         self.messages: list[Json] = []
         """Each message a ``SendStreamingMessage`` carried."""
@@ -58,6 +60,8 @@ class Peer:
 
     async def close(self) -> None:
         self._release.set()
+        if self.response_gate is not None:
+            self.response_gate.set()
         for writer in tuple(self._writers):
             writer.close()
         await asyncio.gather(*tuple(self._connections))
@@ -108,10 +112,21 @@ class Peer:
         self.messages.append(message)
         self.received.set()
         if self.events is not None:
-            stream = b"".join(
-                b"data: " + _envelope(rpc, event) + b"\n\n" for event in self.events(message)
-            )
-            await self._respond(writer, "text/event-stream", stream)
+            events = [b"data: " + _envelope(rpc, event) + b"\n\n" for event in self.events(message)]
+            if self.response_gate is None:
+                await self._respond(writer, "text/event-stream", b"".join(events))
+            else:
+                writer.write(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                    b"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                )
+                for index, event in enumerate(events):
+                    writer.write(f"{len(event):x}\r\n".encode() + event + b"\r\n")
+                    await writer.drain()
+                    if index == 0:
+                        await self.response_gate.wait()
+                writer.write(b"0\r\n\r\n")
+                await writer.drain()
             return
         if self.direct_reply is not None:
             await self._respond(

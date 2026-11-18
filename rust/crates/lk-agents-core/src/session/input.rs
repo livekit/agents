@@ -30,50 +30,6 @@ pub fn routing_request(
     })
 }
 
-/// Tool eligibility comes from the caller's configured destination, not the identity of the
-/// agent that originally asked. No response is guessed from the current agent's private chat.
-pub fn held_remote_input(
-    remote_id: &str,
-    remote: &lk_agents_abi::delegation::remote::RemoteAgentState,
-    selected_task: Option<&str>,
-) -> Result<Option<InputRequestRef>, StorageError> {
-    if let Some(task_id) = selected_task {
-        super::remote::task(remote, task_id)?;
-    }
-    let mut selected = None;
-    for (task_id, task) in &remote.tasks {
-        if selected_task.is_some_and(|selected| selected != task_id)
-            || task.task.status.state.is_terminal()
-        {
-            continue;
-        }
-        for (request_id, input) in &task.input_requests {
-            if input.state != InputRequestState::Responding || input.human_response_id.is_none() {
-                continue;
-            }
-            if input.response_message_id.is_some() {
-                return Err(invalid(
-                    "the held response already has an outgoing operation; reconcile it first",
-                ));
-            }
-            if selected.is_some() {
-                return Err(invalid(
-                    "several held responses address this remote; select an explicit task_id",
-                ));
-            }
-            selected = Some(InputRequestRef::RemoteTask {
-                remote_id: remote_id.into(),
-                task: lk_agents_abi::delegation::remote::RemoteTaskRef {
-                    context_id: task.task.context_id.clone(),
-                    task_id: task_id.clone(),
-                },
-                request_id: request_id.clone(),
-            });
-        }
-    }
-    Ok(selected)
-}
-
 pub fn validate_dispatch(
     state: &SessionSnapshot,
     command: &lk_agents_abi::delegation::remote::RemoteCommand,
@@ -223,6 +179,9 @@ pub fn apply(
     let mut next = state.clone();
     for command in commands {
         match command {
+            SessionInputCommand::Retain { agent_id, request_id, input } => {
+                retain(&mut next, agent_id, request_id, *input)?;
+            }
             SessionInputCommand::Presented { requests, message_id } => {
                 canonical(&next.chat_history, &message_id, Role::Assistant)?;
                 unique(&requests)?;
@@ -246,10 +205,7 @@ pub fn apply(
                 for reference in requests {
                     match target(&mut next, &reference)? {
                         Target::Agent(input) => {
-                            if input
-                                .response_message
-                                .as_ref()
-                                .is_some_and(|held| held.id == message_id)
+                            if input.response_message.as_ref().is_some_and(|held| held == &response)
                             {
                                 continue;
                             }
@@ -275,7 +231,7 @@ pub fn apply(
                 }
                 let repeated = match target(&mut next, &request)? {
                     Target::Agent(input) => {
-                        input.response_message.as_ref().is_some_and(|held| held.id == message_id)
+                        input.response_message.as_ref().is_some_and(|held| held == &response)
                     }
                     Target::Remote(input) => {
                         input.human_response_id.as_deref() == Some(message_id.as_str())
@@ -330,9 +286,91 @@ pub fn apply(
                     }
                 }
             }
+            SessionInputCommand::Delivered { requests, message_id } => {
+                let response = canonical(&next.chat_history, &message_id, Role::User)?.clone();
+                unique(&requests)?;
+                for reference in requests {
+                    let Target::Agent(input) = target(&mut next, &reference)? else {
+                        return Err(invalid("remote response delivery belongs to its transport"));
+                    };
+                    if !matches!(
+                        input.state,
+                        InputRequestState::Responding | InputRequestState::Responded
+                    ) || input.response_message.as_ref() != Some(&response)
+                    {
+                        return Err(invalid(
+                            "the selected local response changed or was not admitted",
+                        ));
+                    }
+                    input.state = InputRequestState::Responded;
+                }
+            }
+            SessionInputCommand::Close { requests } => {
+                unique(&requests)?;
+                for reference in requests {
+                    let Target::Agent(input) = target(&mut next, &reference)? else {
+                        return Err(invalid(
+                            "remote input closes only through its task observation",
+                        ));
+                    };
+                    if matches!(
+                        input.state,
+                        InputRequestState::Open | InputRequestState::Responding
+                    ) {
+                        input.state = InputRequestState::Closed;
+                    }
+                }
+            }
         }
     }
     *state = next;
+    Ok(())
+}
+
+/// A native owner retains a new occurrence, never a capability reconstructed from old calls.
+/// Replaying its registration preserves subsequent presentation and response admission.
+fn retain(
+    state: &mut SessionSnapshot,
+    agent_id: String,
+    request_id: String,
+    input: lk_agents_abi::session::AgentInputRequest,
+) -> Result<(), StorageError> {
+    if agent_id.is_empty()
+        || request_id.is_empty()
+        || input.source_message.id.is_empty()
+        || input.source_message.role != Role::Assistant
+        || input.source_message.raw_text_content().unwrap_or_default().trim().is_empty()
+        || input.state != InputRequestState::Open
+        || input.response_message.is_some()
+        || input.presented_message_id.is_some()
+        || input
+            .origin
+            .as_ref()
+            .is_some_and(|origin| origin.agent_id != agent_id || origin.call_id.is_empty())
+    {
+        return Err(invalid("a new local input occurrence needs its own question and origin"));
+    }
+    let agent = state
+        .frames
+        .get_mut(&lk_agents_abi::text_session::FrameId { value: agent_id })
+        .ok_or_else(|| invalid("unknown local input owner"))?;
+    if let Some(existing) = agent.input_requests.get(&request_id) {
+        if existing.source_message != input.source_message || existing.origin != input.origin {
+            return Err(invalid(
+                "the local input occurrence already has another question or origin",
+            ));
+        }
+        return Ok(());
+    }
+    if input.origin.is_some()
+        && agent.input_requests.values().any(|existing| {
+            existing.origin == input.origin
+                && matches!(existing.state, InputRequestState::Open | InputRequestState::Responding)
+        })
+    {
+        return Err(invalid("the call already owns an unresolved input occurrence"));
+    }
+    agent.input_requests.insert(request_id, input);
     Ok(())
 }
 
@@ -495,3 +533,7 @@ fn available(state: InputRequestState, presented: Option<&str>) -> Result<(), St
 fn invalid(message: &str) -> StorageError {
     StorageError::Invalid(message.into())
 }
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod tests;

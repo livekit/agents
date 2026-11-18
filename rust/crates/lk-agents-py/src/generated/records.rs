@@ -3003,13 +3003,6 @@ pub mod agent_run {
                     ))
                 }
             })?,
-            answer_tool: crate::py_values::attr_with(obj, "RunRequest", "answer_tool", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (v.extract::<::std::string::String>()).map(Some)
-                }
-            })?,
             delegated: crate::py_values::attr_with(obj, "RunRequest", "delegated", |v| {
                 v.extract::<bool>()
             })?,
@@ -20216,7 +20209,7 @@ pub mod storage_class {
         py: Python<'py>,
         value: ::lk_agents_abi::storage::Ask,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::storage::Ask { question, tool, call_id, answer_tool } = value;
+        let ::lk_agents_abi::storage::Ask { question, tool, call_id } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("question", ::pyo3::IntoPyObjectExt::into_bound_py_any(question, py)?)?;
         kwargs.set_item(
@@ -20229,13 +20222,6 @@ pub mod storage_class {
         kwargs.set_item(
             "call_id",
             match call_id {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        kwargs.set_item(
-            "answer_tool",
-            match answer_tool {
                 None => py.None().into_bound(py),
                 Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
             },
@@ -21551,7 +21537,6 @@ pub mod storage_turn {
             task_id,
             tasks,
             caller_history,
-            answer_tool,
             host_context: _,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
@@ -21629,13 +21614,6 @@ pub mod storage_turn {
                 Some(x) => crate::py_values::extra_to_py(py, &x)?.into_any(),
             },
         )?;
-        kwargs.set_item(
-            "answer_tool",
-            match answer_tool {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
         crate::py_calls::call(
             TURN_CONTEXT
                 .import(py, "livekit.agents._generated.storage_turn", "TurnContext")?
@@ -21670,13 +21648,6 @@ pub mod storage_turn {
             call_id: crate::py_values::attr_with(obj, "PendingCall", "call_id", |v| {
                 v.extract::<::std::string::String>()
             })?,
-            answer_tool: crate::py_values::attr_with(obj, "PendingCall", "answer_tool", |v| {
-                if v.is_none() {
-                    Ok(None)
-                } else {
-                    (v.extract::<::std::string::String>()).map(Some)
-                }
-            })?,
         })
     }
 
@@ -21684,18 +21655,11 @@ pub mod storage_turn {
         py: Python<'py>,
         value: ::lk_agents_abi::a2a::turn::PendingCall,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::a2a::turn::PendingCall { id, name, call_id, answer_tool } = value;
+        let ::lk_agents_abi::a2a::turn::PendingCall { id, name, call_id } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("id", ::pyo3::IntoPyObjectExt::into_bound_py_any(id, py)?)?;
         kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
         kwargs.set_item("call_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(call_id, py)?)?;
-        kwargs.set_item(
-            "answer_tool",
-            match answer_tool {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
         crate::py_calls::call(
             PENDING_CALL
                 .import(py, "livekit.agents._generated.storage_turn", "PendingCall")?
@@ -25161,13 +25125,6 @@ pub mod tool_report {
                     "verbatim",
                     |v| v.extract::<bool>(),
                 )?,
-                tool: crate::py_values::attr_with(obj, "ToolOutcomeInputRequired", "tool", |v| {
-                    if v.is_none() {
-                        Ok(None)
-                    } else {
-                        (v.extract::<::std::string::String>()).map(Some)
-                    }
-                })?,
             });
         }
         if obj.is_instance(TOOL_OUTCOME_WORKING.import(
@@ -25364,7 +25321,6 @@ pub mod tool_report {
             ::lk_agents_abi::llm::tool_executor::ToolOutcome::InputRequired {
                 question,
                 verbatim,
-                tool,
             } => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
                 kwargs.set_item(
@@ -25374,13 +25330,6 @@ pub mod tool_report {
                 kwargs.set_item(
                     "verbatim",
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim, py)?,
-                )?;
-                kwargs.set_item(
-                    "tool",
-                    match tool {
-                        None => py.None().into_bound(py),
-                        Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-                    },
                 )?;
                 crate::py_calls::call(
                     TOOL_OUTCOME_INPUT_REQUIRED
@@ -25680,27 +25629,7 @@ pub mod tool_report {
         let verbatim = crate::py_values::attr_with(obj, "InputRequiredReturn", "verbatim", |v| {
             v.extract::<bool>()
         })?;
-        let tool = match Some(obj.clone())
-            .filter(|m| !m.is_none())
-            .and_then(|m| m.getattr("tool").ok())
-            .filter(|m| !m.is_none())
-            .and_then(|m| m.getattr("info").ok())
-            .filter(|m| !m.is_none())
-            .and_then(|m| m.getattr("name").ok())
-            .filter(|m| !m.is_none())
-        {
-            Some(member) => {
-                let v = &member;
-                (if v.is_none() {
-                    Ok(None)
-                } else {
-                    (v.extract::<::std::string::String>()).map(Some)
-                })?
-            }
-            None => Default::default(),
-        };
-        let value =
-            ::lk_agents_abi::llm::tool_executor::InputRequiredReturn { question, verbatim, tool };
+        let value = ::lk_agents_abi::llm::tool_executor::InputRequiredReturn { question, verbatim };
         Ok(value)
     }
 

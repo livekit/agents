@@ -49,6 +49,8 @@ struct InvocationStart {
 }
 
 pub(super) struct Driver {
+    /// The execution owns this weak binding's life, independently of the saved view.
+    _bound_commands: Arc<dyn lk_agents_abi::session::SessionCommands>,
     delegation: Option<lk_agents_abi::delegation::DelegationOptions>,
     routing: Option<input::RoutingWork>,
     routing_background: lk_agents_net::owned::Background,
@@ -194,6 +196,25 @@ impl Driver {
                 done.resolve(drivers.get(&self.session.snapshot(), &remote_id, &endpoint, &task));
                 return;
             }
+            SessionCommand::CancelRemote { remote_id, endpoint, task, drivers, done } => {
+                done.resolve(self.session.cancel_required(&remote_id, &endpoint, &task).and_then(
+                    |required| {
+                        if !required {
+                            return Ok(None);
+                        }
+                        drivers
+                            .get(&self.session.snapshot(), &remote_id, &endpoint, &task)?
+                            .map(Some)
+                            .ok_or_else(|| {
+                                lk_agents_abi::storage::StorageError::Invalid(
+                                    "this task has no configured live driver in the conversation"
+                                        .into(),
+                                )
+                            })
+                    },
+                ));
+                return;
+            }
             SessionCommand::AdmitInput { request, verdict, done } => {
                 let result = self.session.admit_input(*request, verdict);
                 let saved = self.checkpoint_command(effects).await;
@@ -211,30 +232,26 @@ impl Driver {
                 done.resolve(result);
                 return;
             }
-            SessionCommand::HeldInput { remote_id, endpoint, task_id, done } => {
-                done.resolve(self.session.held_remote_input(
-                    &remote_id,
-                    &endpoint,
-                    task_id.as_deref(),
-                ));
-                return;
-            }
-            SessionCommand::Task { remote_id, endpoint, task_id, done } => {
-                done.resolve(self.session.remote_task(&remote_id, &endpoint, &task_id));
-                return;
-            }
-            SessionCommand::Response { reference, done } => {
-                done.resolve(self.session.input_response(&reference));
-                return;
-            }
             SessionCommand::Input { command, done } => {
                 let result = self.session.input(command);
                 let persisted = self.checkpoint_command(effects).await;
                 done.resolve(persisted.and(result));
                 return;
             }
-            SessionCommand::Recover { remote_id, endpoint, origin, done } => {
-                done.resolve(self.session.remote_recovery(&remote_id, &endpoint, &origin));
+            SessionCommand::Recover { remote_id, endpoint, target, done } => {
+                let state = self.session.snapshot();
+                done.resolve(
+                    lk_agents_core::session::remote::state(&state, &remote_id, &endpoint).and_then(
+                        |remote| {
+                            remote
+                                .map(|remote| {
+                                    lk_agents_core::session::remote::recover(remote, &target)
+                                })
+                                .transpose()
+                                .map(Option::flatten)
+                        },
+                    ),
+                );
                 return;
             }
             SessionCommand::DefaultContext { remote_id, endpoint, done } => {
@@ -391,6 +408,7 @@ impl Driver {
             host_context: Some(agent.host_context.clone()),
         };
         let setup = RunSetup {
+            input_answers: Default::default(),
             tools_host: agent.tools_host.clone(),
             llm: agent.llm.clone(),
             host: agent.host.clone(),

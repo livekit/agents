@@ -8,7 +8,6 @@ use crate::audio_recognition::AudioRecognition;
 use crate::trace::{GenerationStep, InputStep, PlayoutStep, ToolStep};
 use lk_agents_abi::llm::toolsets::SESSION_TOOLSET_SCOPE;
 use lk_agents_abi::{ChatItem, Modality, Ts};
-use lk_agents_core::markup::ChatMessageExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,8 +18,9 @@ pub mod false_interruption;
 pub mod handoff;
 pub mod hooks;
 mod idle;
-mod input;
+pub(crate) mod input;
 pub(crate) mod io;
+pub(crate) mod local_input;
 pub mod realtime;
 pub(crate) mod recognition;
 pub(crate) mod reply_run;
@@ -495,6 +495,7 @@ impl VoiceDriver {
                 // its private items while retaining other agents' and accepted history items.
                 let agent = self.activity.agent.clone();
                 self.session.chat_ctx.update_agent_chat_ctx(items, &agent);
+                self.local_history_observed(&agent);
                 if self.journalled {
                     self.record_trace(GenerationStep::ChatCtxUpdated {
                         history: self
@@ -703,14 +704,15 @@ impl VoiceDriver {
             }
             CommitOutcome::Filtered => false,
         };
+        // Revisions also revoke earlier authority even though they publish a replacement
+        // history instead of another ConversationItemAdded event.
+        if let ChatItem::Message(message) = &entry.item
+            && message.role == lk_agents_abi::Role::User
+        {
+            self.local_human_observed(&entry.agent, message);
+        }
         if !publish {
             return;
-        }
-        // The person's message answers the call an `InputRequired` left open.
-        if let ChatItem::Message(m) = &entry.item
-            && m.role == lk_agents_abi::Role::User
-        {
-            self.answer_pending_input(&m.text_content().unwrap_or_default());
         }
         if self.run_owns_item(&entry.source) {
             self.session.runs.record(&entry.item);

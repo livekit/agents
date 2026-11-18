@@ -901,6 +901,8 @@ a public Python export or an additional SDK constructor.
 | RemoteTaskState, internal data | Persisted data underlying the public RemoteTask view. | SDK Task observation, task-owned input state and cancellation intent; no serialized command capability. |
 | RemoteAgentView, RemoteContextView and RemoteTaskView, internal ABI traits | Generated bindings for the three public inspection types. | Native storage handles retain the enclosing SessionState's bound or detached owner. Getter results copy SDK values; grouping adds no duplicate histories or network calls. |
 | SessionCommands, SessionInputCommand, RemoteCommand and RemoteInput, internal ABI port/data | One serialized owner for input admission and remote observations. | Presentation receipts, response reservations, preparation, dispatch markers, responses and errors receive their checkpoint before acknowledgement. An accepted remote input observation returns its existing InputRequestRef; no new controller or stored command capability. |
+| SessionInputCommand::Retain/Delivered/Close and ToolStep::InputResponseDelivered, native only | Extend the existing owner command and diagnostic trace. | Retain a local input occurrence, checkpoint exact response delivery and close only its transient owner's occurrences. The trace names the admitted request and canonical human/call item IDs; a side question neither rewrites a waiting result nor grants approval. |
+| LocalInputs and LocalInputDelivery, private voice records | Transient eligibility and an owned checkpoint receipt for local input. | Retain the exact live body or agent/task context selected before the write. Changing the speaking floor cannot redirect or discard an accepted response; body death closes only that body's occurrences. Nothing restores a Python await or saves another agent tree. |
 | DelegationInput, internal host record | Replaces the live continuation's bare response string. | Business arguments plus their structured-input flag and optional exact input reservation. A clarification can reach the same live task without consuming its question; local live delegates receive text. Generated from ABI; applications do not construct it. |
 | ConversationHistory and ConversationStateFailed | Internal voice effect/input; no Python types. | Publish core-accepted history through the native binding before host callbacks; preserve pending recognition and refreshed remote state. The core closes voice on a refused state publication. |
 | InputPresented and ToolReport.input_request | Reuse the shared InputRequestRef in a private voice effect and the existing host report. | A checkpointed A2A occurrence follows rephrasing into actual output delivery. The existing voice inbox holds transient speech correlation; a failed/unspoken presentation can be retried without creating another input occurrence. No new question or presentation class. |
@@ -913,21 +915,26 @@ a public Python export or an additional SDK constructor.
 | CaptureInputOffers, InputOffers and RemoteResponseQueued, private voice effect/inputs | Extend the current voice driver without a host API. | Capture the owner's offers before remote tool admission; successful response preparation retires only its exact presented occurrence, without claiming delivery. |
 | Experts.prompted_responses | Transient field on the existing frontend inbox. | Wake an eligible frontend once per held occurrence. Duplicate admission follows the durable response operation, rather than suppressing every call to that tool in one human turn. |
 | ReplyInputGate and AfterCapture, private voice enums | One gate on the existing ReplyRun for capture, transcript and response admission. | Remote tool calls wait for the matching model/request identity while realtime audio continues. A stale verdict or lost producer cannot release a newer turn. |
+| ReplyInputScope and Deferred.input_scope, private voice data | Freeze the human version or initial authority snapshot on the existing reply/proposal. | A delayed classifier may complete that same turn's admission; a later human message cannot supply authority to an earlier proposal. A frozen delivery receipt does not reauthorize a revised turn. |
 | VoiceDriver.input_plans and Experts.responses | Private maps on existing native owners. | Settle first-plan waiters across agent replacement; retain admitted responses for eligible live remote continuations. Source occurrence and current waiting request must still match. These maps never enter SessionState or the communication journal. |
 | Source::InputRouting | One private provenance variant on the existing voice chat record. | Retain the admitted destination in later model requests without adding human-facing dialogue or another state class. A revised verdict replaces the same message's private observation. |
 | Run.start_with and ObservedLlm, DST only | Configure the existing simulation runner and observe its fake model boundary. | Exercise ordinary native session arguments, the production binding and real executors. The observer records model requests; it does not implement routing or persistence. No SDK export. |
+| Setup.input_routing and Detail::Chat.input_candidates, DST only | A separate fake-model profile and a compact observation on the existing chat record. | The survey scripts real classifier tool output, including grouped, unclear and invalid selections, through the production parser and admission. Default authored setups remain explicit; no copied histories or replacement routing machine. |
 | RoutingCase, RoutingModel and _RoutingStream, tests only | Labeled recognition cases, a provider observer and its stream adapter. | routing_cases/evaluate_routing/routing_summary run and report the production TextSession classifier, schema, parser and reservations with a scripted frontend. Optional prompt replacement is for experiments; there is no second routing implementation or SDK export. |
 | FakeTools.expert_answers and Registry.session, DST only | Extend the existing fake and expose its existing native session port to authored stories. | Observe exact local handoffs and exercise real command receipts, including a lost receipt. No replacement executor or SDK API. |
 | FunctionCall.output_id and Batch.call_ids, native only | Computed identities on existing records. | Use one output item identity rule for live-body lookup and final replacement. Reply templates reference model-visible wire calls; delivery events retain their unique framework entry IDs. |
 | tool_pairs, native history helper | Ordered call/result pairing for imported and generated history. | Sequentially reused provider IDs remain distinct; opaque imported output IDs survive and overlapping ambiguous calls cannot consume an arbitrary result. |
 | PendingCall.id and ToolCallRef.call_id | Canonical call-item identity on existing records. | Recovery, input provenance, local result propagation and approval admission use FunctionCall.id. Repeated provider call_id values remain wire labels and cannot alias an earlier invocation. |
+| ToolStep::CallAdmitted.item_id | Canonical identity on an existing diagnostic event. | Account for a restored call spending its approval independently of a reused provider wire ID. No additional public event or persisted state. |
+| lk.approval_source and ToolStep::Calls.input_answers, private approval metadata/trace | Extend existing call metadata and diagnostics. | A granted call records the exact read-back it consumed. Each tool decision sees only its invocation's admitted canonical IDs; two answered confirmations cannot collapse into one grant or spend each other's permission. |
 | FakeLlm.reusing_call_ids and Detail::Tool.item_id, DST only | Extend the existing model fake and tool observation. | Repeat provider call IDs between replies while tracking each admitted framework call independently. |
 | SessionBinding.memory() | Private factory on the existing storage binding type. | A default voice session uses the same native state, command admission and checkpoint implementation in memory. A supplied binding adds persistence; there is no separate public conversation controller. |
 | SessionCommand and CommandPort | Shared native runtime command queue in session/. | Text and voice use bounded command admission and producer-owned receipts. Voice checkpoints run on owned tasks alongside audio and interruption events. Ending the receiver settles received, queued and capacity-waiting requests; a client retains no execution authority after owner loss. No Python export. |
 | voice::conversation::{Work, ConversationWrite}, private runtime records | A voice command's acquisition/write phase and typed write receipt. | Retain the original command, outcome, ScopedTask and matching caller while media/events continue. A retry re-admits the original input; one command kind cannot resolve another kind's receipt. No second conversation snapshot or Python API. |
 | RemoteRecovery, internal ABI decision | Reuses the core journal's recovery classification. | Carries an unsent original SDK request, a task to read, an accepted direct reply or uncertainty. Returned through the native owner; neither serialized nor exported as Python state classes. |
 | RemoteInvocation, internal runtime input | Groups the existing invocation arguments and services. | Production and DST use the same remote executor; only its endpoint client is injected. No new Python API or second controller. |
-| RemoteTaskCommands, conditional internal ABI port | Extend the existing binding/owner command path where possible. | Bound RemoteTask.cancel() reaches the authorized owner without putting a runtime dependency in storage or adding a public controller. |
+| SessionStateSink.bind_commands and SessionRecovery, internal native binding/recovery inputs | Extend the existing binding/owner command path without a control object. | The bound view holds only a nonserialized weak SessionCommands capability. RemoteTask.cancel() reaches the task's configured live driver; cancellation recovery retains its original prepared operation or reconciles a sent control with GetTask. |
+| Control, CancellationStep and CancellationResult, private core cancellation data | Move cancellation decisions into the existing remote-delegation policy. | Select immutable dispatch or observation, reconcile a lost acknowledgement, and confirm the returned protocol state. Runtime executes those actions and settles the existing task-driver receipts. No public controller or second task state. |
 | RemoteTaskRef | Reuse/promote the current core A2A TaskRef shape. | Context/task addressing; keep internal unless a public control signature requires it. |
 | InputRequestRef | New shared reference, not a lifecycle owner. | Qualify a local or remote input occurrence; keep internal by default. |
 | InputCandidate | Ephemeral detector input resolved by the core. | The qualified reference, question, canonical assistant presentation and any held human response eligible for correction; no private model history or authority to dispatch. |
@@ -997,10 +1004,24 @@ an unsent abandoned admission releases its claim. The public regression holds th
 at card discovery and verifies successful duplicate feedback before any response is prepared,
 then checks one outgoing response and one business effect. Native cases cover lost admission
 receipts, canceled callers, corrections and existing live observers.
-Public task controls, removal of legacy named/history-only continuation, complete recovery,
-live backend execution, conversation pacing and delivery parity remain implementation work.
+Local input continuation now uses matched occurrences and canonical call provenance; the
+named-tool and history-only local paths are removed. An accepted child output is checkpointed
+before its parent call is resolved and the child is removed. Generic root questions survive a
+text-to-voice transition, while a saved text child stack is refused without rewriting it.
+Active native owners execute RemoteTask.cancel(), journal its dispatch before I/O, and require
+an observed canceled task before reporting success. Concurrent callers share that control
+operation. Idle controls, remote history-only continuation cleanup, complete recovery, live
+backend execution, conversation pacing and delivery parity remain implementation work.
 Several public signatures and lifetime contracts above remain open.
 Do not treat the architecture agreement as approval of every provisional type name.
+
+The continuation checkpoint passes Rust rules and generator checks, the 152 Python binding
+contracts, Python lint/type checks, and the changed host stories with focused reruns for the
+repaired cases. Those stories cover a local child's side question followed by its recognized
+response, a VoiceTask keeping its answer out of an earlier remote request, explicit task
+clarification with and without an acknowledgement, and concurrent bound task cancellation.
+Native executor and DST cases additionally hold response checkpoints across agent changes and
+human revisions. These proofs do not replace the full acceptance and campaign gates below.
 
 | Remaining area | Resolve |
 | --- | --- |
@@ -1127,23 +1148,16 @@ Routine private type layout and generator work do not require another public pri
 - Which existing typed error should a task cancellation expose when a peer refuses cancellation
   or its outcome remains unknown after reconciliation? Successful cancellation still requires
   a persisted observed canceled state.
-- Should `RemoteTask.cancel()` work between agent runs by opening a short native operation
-  under the conversation lease with current application credentials? The recommendation is
-  yes; detached snapshots stay read-only, and restoring state does not restore authority.
-- Which binding action installs the current configured remotes for task control between runs?
-  A loaded view has storage coordinates and observed task addresses, but no RemoteAgent token,
-  connection options or active owner. The existing bind object is inert until execution. The
-  recommendation is explicit current-configuration registration through that binding, valid
-  until its store closes; loading or inspecting a snapshot must not install authority.
+- A fresh frontend still needs current custom authentication for a third-party endpoint before
+  opening a control operation. Reuse its configured client where available; never infer custom
+  credentials from saved addresses or share them through a process-wide endpoint-only cache.
 - For inbound A2A messages without taskId, which endpoint policies continue waiting work versus
   create/merge transport tasks? Current-agent handling of unaddressed human input is agreed;
   the transport-task behavior needs to remain explicit when live execution is added.
-- How should a deliberate history edit based on an older read handle a conflicting edit
-  committed by another frontend during lease acquisition? Retained replay 32,820 exposes a
-  mismatch: the live history protects the unsaved local edit, while the persistence contract
-  requires the unread foreign revision to survive. Recommend reporting a version conflict and
-  retaining the stored revision until the application reloads and explicitly reapplies its edit.
-  Resolve the bound-history editing contract before changing either rule to make the gate pass.
+- Retained replay 32,820 exposes a pending history edit being relabeled against a newer baseline.
+  Recover by rebasing nonconflicting changes and protecting unread foreign edits, with recovery
+  logged. Preserve local intent; surface an existing typed conflict only when a clean recovery
+  cannot proceed. Prove the three-version rule before changing the persistence oracle.
 - Which interruption and frontend-response latency budgets should gate the recorded voice
   journeys? Measure the normal and held-remote baselines before choosing numerical limits.
 - The bounded protected-business-step API is deferred with the existing interruption-policy
@@ -1157,7 +1171,7 @@ API, a passing small seed window or a single live conversation does not complete
 Its exit needs the implementation, generated host surface, maintained documentation and the
 named acceptance evidence.
 
-| Order | Remaining milestone | Exit visible to a person or application |
+| Order | Milestone | Exit visible to a person or application |
 | --- | --- | --- |
 | 1 | Task routing | The same remote tool can answer, clarify or correct known work, and start independent work without a mistaken fork or duplicate response. |
 | 2 | State and A2A completeness | Public state and protocol observations remain faithful across every supported reply shape, local continuation and storage boundary. |
@@ -1242,12 +1256,15 @@ spending an approval twice. State writes never implicitly save application mutat
 **Build**
 
 - [ ] Connect await remote.tasks[task_id].cancel() to the existing native cancellation and
-  journal path for an active owner. Settle the between-run control lifetime before implementing
-  it; the recommended path is a short bound operation using current application credentials.
-  Detached snapshots remain inspection-only.
+  journal path, including a short fenced bound operation between runs. LiveKit endpoints reuse
+  current worker/server credentials to mint endpoint/thread tokens; no new bind authentication
+  parameter is required. Reuse current configured clients for custom authentication. Detached
+  snapshots remain inspection-only; loading state installs no credentials.
 - [ ] Preserve cancellation intent separately from observed cancellation. Reconcile an applied
   cancel with a lost receipt, expose refusal/unknown outcomes through existing typed errors,
-  handle late success and settle every caller on close or owner loss.
+  handle late success and settle every caller on close or owner loss. Coalesce overlapping
+  callers; a later explicit cancellation after a definitive refusal can create a fresh request.
+  An uncertain attempt still reconciles its original operation before any retry.
 - [ ] Complete recovery from a fresh frontend for saved task/context/input references, held
   human responses, accepted outcomes and uncertain dispatch. Reconstruct from current state;
   replaying the journal for inspection never resends work, repeats artifacts or replays speech.
@@ -1348,7 +1365,7 @@ effects separately. No fixed batching delay or blanket one-question-per-utteranc
 - [ ] Complete realtime voice parity, agent/tool replacement, VoiceTask isolation, room-binding
   independence, reconnect and close. Every host-awaitable receipt resolves and every stream,
   task and lease is closed or released through its owner.
-- [ ] Reproduce the observed interruption teardown leak with a held toolset-close boundary,
+- [x] Reproduce the observed interruption teardown leak with a held toolset-close boundary,
   then fix it in the owning cleanup path. Do not add sleeps or relax the leak assertion.
 
 **Owners:** core delivery contracts; voice scheduling/generation/recognition machines;

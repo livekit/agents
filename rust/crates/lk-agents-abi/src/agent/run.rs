@@ -60,14 +60,12 @@ pub enum RunOutcome {
     NoOutput,
 }
 
-/// The question a run ends on (`InputRequired`): asked as written when `verbatim`. The person's
-/// next message goes to `answer_tool`, when one is named, as its first string parameter
-/// (`InputRequired(tool=)`); the next invocation is told so.
+/// The question a run ends on (`InputRequired`), asked as written when `verbatim`.
+/// Continuing an originating call requires explicit matched input occurrence authority.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunQuestion {
     pub question: String,
     pub verbatim: bool,
-    pub answer_tool: Option<String>,
 }
 
 /// The accepted output of a completed invocation.
@@ -302,8 +300,6 @@ pub struct RunRequest {
     /// A user message.
     pub message: ChatItem,
     pub history: Vec<ChatItem>,
-    /// The previous invocation asked with `InputRequired(tool=)`: this message is that tool's.
-    pub answer_tool: Option<String>,
     /// Another agent asked this run: questions pass up as written.
     pub delegated: bool,
     pub conn_options: ApiConnectOptions,

@@ -19,7 +19,7 @@ use lk_agents_core::agent_run::{
     AgentRun, AgentRunContinuation, AgentRunEffect, AgentRunEvent, Opening, OutputVerdict,
     RunInput, StepId,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 // The run decides each step (admission, approval, retries, output acceptance); the floor decides
@@ -29,6 +29,7 @@ use std::sync::Arc;
 pub struct ReplyRun {
     pub(super) run: AgentRun,
     pub(super) input_gate: super::input::ReplyInputGate,
+    pub(super) input_scope: super::input::ReplyInputScope,
     deferred_spoken: Option<Option<String>>,
     /// The agent hosting the reply's callbacks.
     agent: Option<Arc<dyn AgentFrame>>,
@@ -74,9 +75,12 @@ impl ReplyRun {
         realtime: bool,
         request: Option<lk_agents_core::agent_run::RequestId>,
     ) -> Self {
+        let input_scope =
+            super::input::ReplyInputScope::capture(plan.new_message.as_ref(), run.input_answers());
         ReplyRun {
             run,
             input_gate: super::input::ReplyInputGate::Ready,
+            input_scope,
             deferred_spoken: None,
             agent,
             plan,
@@ -237,20 +241,18 @@ impl VoiceDriver {
         // Approval reads every agent's calls; the person's latest answers reach the run as they
         // come (the message this reply answers is committed once the speech is scheduled).
         let history: Vec<ChatItem> = self.session.chat_ctx.items().cloned().collect();
-        let approval_answers = self.activity.tools.approval_answers.clone();
+        let approval_answers = self.local_approval_answers(&definition.name);
         let input = RunInput {
             invocation_id,
             id_seed: self.session.ids.run_seed(),
             opening: Opening::Coordinated { approval_answers },
             history,
-            answer_tool: None,
             delegated: false,
             mode: lk_agents_core::tool_outcome::Mode::Voice,
             llm: None,
             wall: self.step.anchor(),
             cleanup_timeout: lk_agents_abi::HOST_TEARDOWN_TIMEOUT,
         };
-        let captures_remote = definition.tools.iter().any(|tool| tool.remote.is_some());
         let mut run = match AgentRun::new(definition, input) {
             Ok(run) => run,
             // The host validated the agent: an invalid one only reaches here from a handwritten
@@ -280,6 +282,8 @@ impl VoiceDriver {
         let added: Vec<ToolSpec> =
             tools.into_iter().filter(|t| offered.iter().all(|o| o.name != t.name)).collect();
         offered.extend(added);
+        let input_scope =
+            super::input::ReplyInputScope::capture(plan.new_message.as_ref(), run.input_answers());
         let mut plan = plan.clone();
         plan.tools = offered.clone();
         plan.record = None;
@@ -288,7 +292,8 @@ impl VoiceDriver {
         plan.on_enter = false;
         plan.running_tool_calls = Vec::new();
         let mut reply = ReplyRun::new(run, toolset.agent.clone(), plan, realtime, request);
-        if let Some(request) = request.filter(|_| captures_remote) {
+        reply.input_scope = input_scope;
+        if let Some(request) = request {
             reply.input_gate = super::input::ReplyInputGate::Capturing {
                 request,
                 after: super::input::AfterCapture::Ready,
@@ -300,14 +305,45 @@ impl VoiceDriver {
         message_id.map(|message_id| (message_id, offered))
     }
 
-    /// The person's message answered these read-backs: every live reply's step that has not
-    /// called yet grants with them.
-    pub(crate) fn replies_answered(&mut self, answers: &BTreeSet<String>) {
-        let speeches: Vec<SpeechId> = self.activity.tools.replies.keys().copied().collect();
-        for speech in speeches {
-            let approval_answers = answers.clone();
+    /// A live reply may learn delayed matching for its own human input. A newer human turn
+    /// can revoke its authority, but cannot authorize an earlier proposal.
+    pub(crate) fn replies_answered(&mut self) {
+        let owners: Vec<_> = self
+            .activity
+            .tools
+            .replies
+            .iter()
+            .map(|(speech, reply)| {
+                let agent = reply
+                    .agent
+                    .as_ref()
+                    .map(|agent| agent.definition().name.clone())
+                    .or_else(|| self.activity.speech_agent(*speech).map(str::to_owned))
+                    .unwrap_or_else(|| self.activity.agent.clone());
+                (*speech, agent, reply.input_scope.clone())
+            })
+            .collect();
+        for (speech, agent, scope) in owners {
+            let approval_answers = self.scoped_local_approval_answers(&agent, &scope);
             self.reply_event(speech, AgentRunEvent::Answered { approval_answers });
         }
+    }
+
+    pub(crate) fn reply_input_answers(
+        &self,
+        speech: SpeechId,
+        scope: &super::input::ReplyInputScope,
+    ) -> std::collections::BTreeSet<String> {
+        let Some(reply) = self.activity.tools.replies.get(&speech) else {
+            return Default::default();
+        };
+        let agent = reply
+            .agent
+            .as_ref()
+            .map(|agent| agent.definition().name.as_str())
+            .or_else(|| self.activity.speech_agent(speech))
+            .unwrap_or(&self.activity.agent);
+        self.scoped_local_approval_answers(agent, scope)
     }
 
     /// A call another speech records (a read-back put, a grant spent) is what every other live
@@ -375,6 +411,7 @@ impl VoiceDriver {
                     input_requirements,
                     ..
                 } => {
+                    self.retain_local_requirements(speech, &input_requirements);
                     if self.run_contains_speech(speech) {
                         self.session.runs.retain_input_requirements(&input_requirements);
                     }
@@ -526,7 +563,25 @@ impl VoiceDriver {
             r.executing = true;
         }
         let call_id = call.call_id.clone();
-        self.record_trace(TraceToolStep::CallAdmitted { speech, call_id });
+        let identity =
+            call.extra.get(lk_agents_core::approval::APPROVAL_IDENTITY_KEY).map(|identity| {
+                match identity {
+                    serde_json::Value::String(identity) => identity.clone(),
+                    identity => lk_agents_core::approval::canonical_json(identity),
+                }
+            });
+        let source = call
+            .extra
+            .get(lk_agents_core::approval::APPROVAL_SOURCE_KEY)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        self.record_trace(TraceToolStep::CallAdmitted {
+            speech,
+            call_id,
+            item_id: call.id.clone(),
+            identity,
+            source,
+        });
         self.reply_marked(speech, call);
     }
 
@@ -638,11 +693,9 @@ impl VoiceDriver {
     pub(crate) fn remote_inputs_ready(&self, speech: SpeechId, name: &str) -> bool {
         let Some(reply) = self.activity.tools.replies.get(&speech) else { return true };
         let remote = reply.agent.as_ref().is_some_and(|agent| {
-            agent
-                .definition()
-                .tools
-                .iter()
-                .any(|tool| tool.spec.name == name && tool.remote.is_some())
+            agent.definition().tools.iter().any(|tool| {
+                tool.spec.name == name && (tool.remote.is_some() || tool.needs_approval.is_some())
+            })
         });
         !remote || matches!(reply.input_gate, super::input::ReplyInputGate::Ready)
     }

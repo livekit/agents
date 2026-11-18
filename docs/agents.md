@@ -86,11 +86,13 @@ it explicitly updates the live session. See
 
 ## Conversation ownership
 
-The caller supplies history and application context for each invocation.
-A direct run continues from `result.all_messages()`. A text-session conversation
-keeps each agent's history in a separate session frame. Persisted drafts live
-in application context; runtime clients and services are supplied again on
-each request. The shared agent definition stores none of these values.
+The caller supplies application context for each invocation. Use `store.bind()` to
+continue a conversation, including its current agent, pending input and approvals.
+Each agent keeps its own model history. An unbound run can read
+`result.all_messages()` as model context, but that history does not restore a
+waiting conversation or authorize an approval. Persisted drafts live in application
+context; runtime clients and services are supplied again on each request. The
+shared agent definition stores none of these values.
 
 ## Persisted application fields
 
@@ -139,7 +141,7 @@ the application's final-result contract. See the
 | `input_requirements` | Every tool request awaiting human input, with its call identity, question and verbatim flag |
 | `verbatim` | The part of the answer or question that reached the person exactly as written, `None` when nothing did; see [wording and verbatim](tools.md#wording-and-verbatim) |
 | `new_messages()` | This invocation’s input and recorded messages, including tool calls/results |
-| `all_messages()` | Supplied history plus this invocation; suitable for the next direct run |
+| `all_messages()` | Supplied history plus this invocation; reusable model context, without continuation authority |
 | `usage` | Usage accumulated by this invocation |
 | `expect` | Event assertions over this invocation; see [testing](testing.md#programmatic-tests) |
 
@@ -166,25 +168,26 @@ These methods return this agent invocation's model history, including tool
 calls and results. `new_messages()` includes the incoming message recorded for
 this invocation; it is not limited to assistant output. `all_messages()` also
 includes the supplied history. Neither method combines private histories from
-other session frames. User-visible dialogue is a separate view.
+other agents. User-visible dialogue is a separate view.
 
 Every outcome branch retains the same history and usage access. Streaming
 delivers incremental text and events; the settled result uses this contract.
 `TextSession.run()` returns this same RunResult. Agent selection, parent tool-call
 correlation and private histories belong to the bound SessionState.
 
-`run()` operates on the supplied history and context; tools may mutate that
-context and perform external effects. The shared Agent definition keeps no
-per-run history or application data after it returns. The
-next turn continues from `result.all_messages()`. The model and tool loop
-stops when it accepts the final output or requests human input.
+`run()` operates on the supplied context and selected model history; tools may
+mutate that context and perform external effects. The shared Agent definition keeps
+no per-run history or application data after it returns. A bound run continues its
+saved conversation; an unbound run starts fresh, optionally reading supplied history
+as model context. The model and tool loop stops when it accepts the final output or
+requests human input.
 
 Inside a managed `a2a_session` endpoint the runtime supplies loaded history and
 scoped `ctx.store`. Follow the [context loading example](persistence.md#explicit-load-and-save-on-the-store)
 to construct dependencies and retain application changes.
 `agent.run()` executes the agent the caller selected.
 [TextSession](text-session.md) reconstructs and coordinates text conversations
-from explicitly supplied state on each request.
+through the same explicit store binding on each request.
 On a call, `VoiceSession` owns frontend interaction and expert reply routing; see [voice-session.md](voice-session.md).
 
 ## `RunContext`
@@ -330,9 +333,10 @@ their own idempotency contract.
 
 `ctx.execution_id` identifies the conversational task across human turns.
 Each turn has its own run identity. The framework records the execution id on
-the run's input message, so a reply run with that history continues a pending
-execution; otherwise a run starts a new execution at its own invocation id. On
-A2A it is the transport task id, which a frontend can supply by continuing that
+the run's input message, so supplied history can retain that correlation. It does
+not grant authority to answer pending input or approve a tool; conversation
+continuation uses the store binding. Otherwise a run starts a new execution at its own
+invocation id. On A2A it is the transport task id, which a frontend can supply by continuing that
 task. On a call it is one id for the whole call.
 
 Use the [tool approval gate](tools.md#approval) for effects that require confirmation.
@@ -592,7 +596,7 @@ async with assistant.run_stream(message, context=app) as stream:
 ```
 
 These events are application-facing execution data, not all public dialogue.
-A text session can emit child tool events with their frame identity without
+A text session can emit child tool events with their agent context identity without
 merging that private history into a parent model's history. Only explicitly
 selected presentation text belongs in the frontend's text stream. Applications
 choose which event fields their external clients may see.
@@ -615,8 +619,9 @@ again merely because the caller reads `result.question`.
 `cancel()` requests cancellation promptly at supported execution boundaries.
 It does not promise to interrupt arbitrary application code, undo tool effects,
 or roll back an independently committed business operation. Cancellation of a
-remote call attempts the transport's cancellation protocol; a remote effect
-may already have completed.
+remote observer closes that local observation; remote business work continues. Use an
+explicit task cancellation to request that the peer stop its task. A remote effect may
+already have completed.
 
 After cancellation, active iteration and `result()` raise
 `asyncio.CancelledError` once cancellation and cleanup settle. There is no

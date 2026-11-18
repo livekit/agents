@@ -28,14 +28,9 @@ pub(crate) struct Tools {
     pub(crate) fillers: BTreeMap<FillerId, FillerRun>,
     /// The steps whose `function_tools_executed` handlers the host runs, until they answer.
     pub(crate) handling: BTreeMap<HookId, Handling>,
-    /// `InputRequired(tool=)`: the person's next turn is a call of this tool.
-    pub(crate) claim: Option<Claim>,
     /// Each live model reply's `AgentRun`, which decides its steps.
     pub(crate) replies:
         BTreeMap<SpeechId, crate::agent_session::machine::activity::reply_run::ReplyRun>,
-    /// The waiting calls the person's latest message answered: the only read-backs a reply
-    /// started since can consume.
-    pub(crate) approval_answers: std::collections::BTreeSet<String>,
     /// Mints the hosted callbacks' operations, unique in the session.
     pub(crate) next_operation: u64,
     /// Calls made before their step was authorized to play, in the model's order: joined to
@@ -57,8 +52,6 @@ pub struct MadeCall {
     pub spec: Option<lk_agents_abi::ToolSpec>,
     /// The step forbade tools (`tool_choice="none"`).
     pub forbidden: bool,
-    /// The step answers an `InputRequired(tool=)`.
-    pub answering: Option<Answering>,
     /// The reply's agent, which hosts its offered tools.
     pub agent: Option<Arc<dyn AgentFrame>>,
 }
@@ -68,6 +61,7 @@ pub struct MadeCall {
 pub(crate) struct Deferred {
     pub(crate) speech: SpeechId,
     pub(crate) step: u32,
+    pub(crate) input_scope: crate::agent_session::machine::activity::input::ReplyInputScope,
     /// Its id in the reply's run, once it joined it.
     pub(crate) id: Option<CallId>,
     pub(crate) call: FunctionCall,
@@ -100,22 +94,6 @@ pub enum ToolGo {
     /// The call does not run: dropped unrun before it started (`tool_choice="none"`, a speech
     /// interrupted or done before its step was authorized), or the step's calls are over.
     Gone,
-}
-
-/// The tool an `InputRequired(tool=)` claimed the person's next turn for; once `after` (the speech
-/// asking in the agent's own words) is done, so the claim does not steer that reply.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Claim {
-    pub(crate) tool: String,
-    pub(crate) after: Option<SpeechId>,
-}
-
-/// A reply that answers an `InputRequired(tool=)`: its call of `tool` carries what the person
-/// said, as they said it, in place of the model's arguments (`_answer_arguments`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct Answering {
-    pub tool: String,
-    pub said: String,
 }
 
 impl Tools {
@@ -501,9 +479,8 @@ impl ToolExecution {
 pub enum Delivery {
     /// A verbatim result: said as written, the model reads that it was delivered.
     Say(String),
-    /// `InputRequired`: the question asked; the person's next message is written as the output
-    /// of every call left waiting (the approval's read-back included).
-    Ask(RunQuestion),
+    /// `InputRequired`: a question whose exact occurrence may later receive a matched response.
+    Ask { question: RunQuestion, call_id: String },
     /// A VoiceTask tool's validated `Completed(value)`: the task ends with the value, and its
     /// agent says nothing more about it.
     Complete(lk_agents_abi::HostRef),
@@ -738,9 +715,10 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
             let raw_update = Some(raw);
             return ToolExecution { call, output, end, raw_update, delivery: None };
         }
-        ToolOutcome::InputRequired { question, verbatim, tool } => {
-            Some(Delivery::Ask(RunQuestion { question, verbatim, answer_tool: tool }))
-        }
+        ToolOutcome::InputRequired { question, verbatim } => Some(Delivery::Ask {
+            question: RunQuestion { question, verbatim },
+            call_id: call.id.clone(),
+        }),
         other => lk_agents_core::tool_outcome::verbatim(&other)
             .map(|text| Delivery::Say(text.to_owned())),
     };

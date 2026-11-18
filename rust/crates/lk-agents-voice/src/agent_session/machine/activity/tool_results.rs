@@ -96,7 +96,7 @@ impl VoiceDriver {
     fn finish_tool_results(&mut self, handling: Handling, hosted: bool) {
         let Handling { speech, step, end, mut items, terminal_call, mut event } = handling;
         // Host tool-executed handlers may have awaited while the user cut this speech.
-        // Their original executor snapshot must not resurrect a question or claim afterward.
+        // Their original executor snapshot must not resurrect a question afterward.
         let interrupted = end.interrupted_before_tools
             || end.interrupted
             || self
@@ -126,20 +126,13 @@ impl VoiceDriver {
             })
             .collect();
         for item in &mut items {
-            match item {
-                ChatItem::FunctionCallOutput(output) => {
-                    if let Some(required) = reply_required.get(&output.call_id) {
-                        output.reply_required = *required;
-                    }
-                    // Recorded now: after every item the session stamped before it, so the
-                    // history holds two replies' questions in the order they were put.
-                    output.created_at = output.created_at.max(self.step.wall());
+            if let ChatItem::FunctionCallOutput(output) = item {
+                if let Some(required) = reply_required.get(&output.call_id) {
+                    output.reply_required = *required;
                 }
-                // A cut speech never put its question: the person's next words do not answer it.
-                ChatItem::FunctionCall(call) if interrupted => {
-                    call.extra.remove(lk_agents_core::agent_run::planning::INPUT_REQUESTED_KEY);
-                }
-                _ => {}
+                // Recorded now: after every item the session stamped before it, so the
+                // history holds two replies' questions in the order they were put.
+                output.created_at = output.created_at.max(self.step.wall());
             }
         }
         if let Some(rt) = self.activity.realtime_activity()
@@ -179,7 +172,7 @@ impl VoiceDriver {
             let Some(delivery) = execution.delivery.clone() else { continue };
             // Only core's selected terminal question can reach the person. Other delivery
             // forms retain their own domain contract (including VoiceTask completion).
-            if matches!(delivery, Delivery::Ask(_))
+            if matches!(delivery, Delivery::Ask { .. })
                 && (interrupted || terminal_call.as_deref() != Some(&execution.call.call_id))
             {
                 continue;
@@ -229,7 +222,7 @@ mod tests {
     use std::time::UNIX_EPOCH;
 
     #[test]
-    fn interrupt_while_tool_handler_waits_suppresses_the_old_question_and_claim() {
+    fn interrupt_while_tool_handler_waits_suppresses_the_old_question() {
         let mut driver = crate::agent_session::tests::driver();
         let speech = SpeechId(41);
         assert!(driver.schedule_speech(
@@ -259,12 +252,7 @@ mod tests {
         );
         let execution = answer(
             &call,
-            ToolOutcome::InputRequired {
-                question: "Which date?".into(),
-                verbatim: true,
-                tool: Some("book_flight".into()),
-            }
-            .into(),
+            ToolOutcome::InputRequired { question: "Which date?".into(), verbatim: true }.into(),
             UNIX_EPOCH,
         );
         let hook = HookId(7);
@@ -295,7 +283,6 @@ mod tests {
         driver.force_interrupt_speech(Ts::ZERO, speech, InterruptCause::Host);
         assert!(driver.activity.speech_scheduler.speech(speech).unwrap().interrupted());
         driver.on_tools_executed_handled(hook, None);
-        assert!(driver.activity.tools.claim.is_none(), "the old question cannot claim a new turn");
         assert!(
             !driver.session.runs.outputs.contains_key(&speech),
             "no old question was delivered"

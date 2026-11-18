@@ -105,6 +105,21 @@ impl lk_agents_abi::session::SessionCommands for Runner {
         Box::pin(async move { self.commands()?.remote_driver(remote_id, endpoint, task).await })
     }
 
+    fn cancel_remote<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        task: &'a lk_agents_abi::delegation::remote::RemoteTaskRef,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), lk_agents_abi::a2a::client::AgentClientError>>
+    {
+        Box::pin(async move {
+            let commands = self.commands().map_err(|error| {
+                lk_agents_abi::a2a::client::AgentClientError::InvalidInput(error.to_string())
+            })?;
+            commands.cancel_remote(remote_id, endpoint, task).await
+        })
+    }
+
     fn admit_input(
         &self,
         request: lk_agents_abi::session::InputRoutingRequest,
@@ -125,46 +140,6 @@ impl lk_agents_abi::session::SessionCommands for Runner {
         Box::pin(async move { self.commands()?.checkpoint().await })
     }
 
-    fn held_input<'a>(
-        &'a self,
-        remote_id: &'a str,
-        endpoint: &'a str,
-        task_id: Option<&'a str>,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<
-            Option<lk_agents_abi::session::InputRequestRef>,
-            lk_agents_abi::storage::StorageError,
-        >,
-    > {
-        Box::pin(async move { self.commands()?.held_input(remote_id, endpoint, task_id).await })
-    }
-
-    fn task<'a>(
-        &'a self,
-        remote_id: &'a str,
-        endpoint: &'a str,
-        task_id: &'a str,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<
-            lk_agents_abi::delegation::remote::RemoteTaskRef,
-            lk_agents_abi::storage::StorageError,
-        >,
-    > {
-        Box::pin(async move { self.commands()?.task(remote_id, endpoint, task_id).await })
-    }
-
-    fn response<'a>(
-        &'a self,
-        reference: &'a lk_agents_abi::session::InputRequestRef,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<lk_agents_abi::ChatMessage, lk_agents_abi::storage::StorageError>,
-    > {
-        Box::pin(async move { self.commands()?.response(reference).await })
-    }
-
     fn input<'a>(
         &'a self,
         command: lk_agents_abi::session::SessionInputCommand,
@@ -176,7 +151,7 @@ impl lk_agents_abi::session::SessionCommands for Runner {
         &'a self,
         remote_id: &'a str,
         endpoint: &'a str,
-        origin: &'a lk_agents_abi::session::ToolCallRef,
+        target: &'a lk_agents_abi::session::SessionRecovery,
     ) -> lk_agents_abi::BoxFuture<
         'a,
         Result<
@@ -184,7 +159,7 @@ impl lk_agents_abi::session::SessionCommands for Runner {
             lk_agents_abi::storage::StorageError,
         >,
     > {
-        Box::pin(async move { self.commands()?.recover(remote_id, endpoint, origin).await })
+        Box::pin(async move { self.commands()?.recover(remote_id, endpoint, target).await })
     }
 
     fn default_context<'a>(
@@ -388,8 +363,15 @@ fn start(
         32,
         runner.delegation.as_ref().and_then(|options| options.routing_model.clone()),
     );
+    let bound_commands: Arc<dyn lk_agents_abi::session::SessionCommands> =
+        Arc::new(commands_tx.clone());
+    if let Some(sink) = &request.session_sink {
+        sink.bind_commands(Arc::downgrade(&bound_commands))
+            .map_err(|error| Invalid(error.to_string()))?;
+    }
     let (usage_tx, usage) = signal::signal(session.usage());
     let driver = Driver {
+        _bound_commands: bound_commands,
         delegation: runner.delegation.clone(),
         routing: None,
         routing_background: lk_agents_net::owned::Background::new(

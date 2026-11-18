@@ -1,6 +1,6 @@
 use super::{Phase, Session};
 use crate::session::{InputCandidate, input};
-use lk_agents_abi::session::{InputRequestRef, SessionInputCommand};
+use lk_agents_abi::session::SessionInputCommand;
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::{ChatMessage, Role};
 
@@ -30,22 +30,6 @@ impl Session {
                 offered: crate::delegation::remote::routing::offered(&self.state),
             };
         }
-    }
-
-    pub fn held_remote_input(
-        &self,
-        remote_id: &str,
-        endpoint: &str,
-        task_id: Option<&str>,
-    ) -> Result<Option<InputRequestRef>, StorageError> {
-        let Some(remote) = self.remote_state(remote_id, endpoint)? else { return Ok(None) };
-        input::held_remote_input(remote_id, remote, task_id)
-    }
-    pub fn input_response(&self, reference: &InputRequestRef) -> Result<ChatMessage, StorageError> {
-        if self.closing || self.persistence_failure.is_some() || matches!(self.phase, Phase::Done) {
-            return Err(StorageError::Invalid("the conversation owner is closing or ended".into()));
-        }
-        input::response(&self.state, reference)
     }
 
     pub(super) fn input_routed(

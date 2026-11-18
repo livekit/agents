@@ -117,11 +117,10 @@ class ToolOutcomeRejected:
 
 @dataclass(kw_only=True, slots=True)
 class ToolOutcomeInputRequired:
-    """`InputRequired(question)`: the turn waits on the person; `tool` takes the answer."""
+    """`InputRequired(question)`: the turn waits on a correlated response from the person."""
 
     question: str
     verbatim: bool = False
-    tool: str | None = None
 
 
 @dataclass(kw_only=True, slots=True)
@@ -168,11 +167,10 @@ class CompletedReturn:
 
 @dataclass(kw_only=True, slots=True)
 class InputRequiredReturn:
-    """`InputRequired(question, tool=, verbatim=)`: `tool` the name of the tool taking the answer."""
+    """`InputRequired(question, verbatim=)`: the question this call asks the person."""
 
     question: str
     verbatim: bool
-    tool: str | None
 
 
 @dataclass(kw_only=True, slots=True)

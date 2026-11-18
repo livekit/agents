@@ -32,6 +32,15 @@ fn turn(history: Vec<ChatItem>, message: &str, arguments: Value, validated: Valu
     d
 }
 
+/// A native conversation owner matched this message to the exact pending call.
+fn admitted_answer(definition: AgentDefinition, first: &RunResult, words: &str) -> Driver {
+    let mut next =
+        input(Opening::Message(Box::new(user("owner_answer", words))), first.all_messages.clone());
+    next.id_seed = first.all_messages.len() as u64;
+    let answered = BTreeSet::from([first.pending_call.as_ref().unwrap().id.clone()]);
+    Driver::start(AgentRun::new(definition, next).unwrap().with_input_answers(answered))
+}
+
 fn question(d: &Driver) -> String {
     match &d.result().outcome {
         RunOutcome::InputRequired(ask) if ask.verbatim => ask.question.clone(),
@@ -39,10 +48,8 @@ fn question(d: &Driver) -> String {
     }
 }
 
-// Catches: a history-only continuation unable to grant (the waiting output never replaced by the
-// answer); approval decided on raw model JSON instead of the validated arguments (a defaulted
-// parameter spelled differently must not ask again); an answer granting twice; the history losing
-// the person's words or the model not told the call has not run.
+// Approval follows an owner's matched call ID and validated arguments. A model JSON spelling
+// change cannot ask again, and a single matched response cannot grant multiple repeats.
 #[test]
 fn approval_binds_the_validated_arguments_and_each_answer_is_consumed_once() {
     let validated = json!({"date": "Monday", "notify": true});
@@ -58,7 +65,7 @@ fn approval_binds_the_validated_arguments_and_each_answer_is_consumed_once() {
     assert_eq!(approval::mark(asked), Some(Approval::Asked));
 
     // The person answers; the model repeats the call with strict mode's `null` for the default.
-    let mut second = Driver::new(text_agent(vec![cancel_tool()]), "yes", history);
+    let mut second = admitted_answer(text_agent(vec![cancel_tool()]), first.result(), "yes");
     let (_, ctx, _) = second.request();
     let outputs: Vec<_> = ctx
         .items
@@ -68,7 +75,11 @@ fn approval_binds_the_validated_arguments_and_each_answer_is_consumed_once() {
             _ => None,
         })
         .collect();
-    assert_eq!(outputs, [approval::answered_text("cancel_appointment", "yes")]);
+    assert_eq!(outputs, [format!("waiting for the person's answer to: {}", question(&first))]);
+    assert!(ctx.items.iter().any(|item| matches!(item,
+        ChatItem::Message(message)
+            if message.role == Role::User && message.raw_text_content().as_deref() == Some("yes")
+    )));
     second.reply("", &[("cancel_appointment", json!({"date": "Monday", "notify": null}))]);
     let (call, arguments) = second.prepares()[0].clone();
     assert_eq!(arguments["notify"], json!(true), "the schema default replaces the null sentinel");
@@ -79,7 +90,14 @@ fn approval_binds_the_validated_arguments_and_each_answer_is_consumed_once() {
     second.reply("Done, it is cancelled.", &[]);
     let history = second.result().all_messages.clone();
     let stored: Vec<_> = transcript(&history).into_iter().filter(|(k, _)| k == "output").collect();
-    assert_eq!(stored, pairs(&[("output", "yes"), ("output", "cancelled")]));
+    assert_eq!(
+        stored,
+        vec![
+            ("output".into(), format!("waiting for the person's answer to: {}", question(&first))),
+            ("output".into(), "cancelled".into()),
+        ]
+    );
+    assert!(transcript(&history).contains(&("user".into(), "yes".into())));
 
     // A later identical call asks again: the answer was consumed.
     let third = turn(history, "cancel monday again", json!({"date": "Monday"}), validated);
@@ -97,8 +115,7 @@ fn changed_validated_arguments_need_a_fresh_approval() {
         json!({"date": "Monday"}),
         json!({"date": "2026-11-02", "notify": true}),
     );
-    let history = first.result().all_messages.clone();
-    let mut second = Driver::new(text_agent(vec![cancel_tool()]), "yes", history);
+    let mut second = admitted_answer(text_agent(vec![cancel_tool()]), first.result(), "yes");
     second.reply("", &[("cancel_appointment", json!({"date": "Monday"}))]);
     let (call, _) = second.prepares()[0].clone();
     // Validated a week later: a different date to approve.
@@ -113,8 +130,7 @@ fn changed_validated_arguments_need_a_fresh_approval() {
 fn one_answer_grants_one_repeat_within_a_step() {
     let validated = json!({"date": "Monday", "notify": true});
     let first = turn(vec![], "cancel", json!({"date": "Monday"}), validated.clone());
-    let mut d =
-        Driver::new(text_agent(vec![cancel_tool()]), "yes", first.result().all_messages.clone());
+    let mut d = admitted_answer(text_agent(vec![cancel_tool()]), first.result(), "yes");
     d.reply(
         "",
         &[
@@ -163,7 +179,7 @@ fn approval_survives_output_validation_feedback_in_the_answering_invocation() {
     let first = turn(vec![], "cancel", json!({"date": "Monday"}), validated.clone());
     let mut definition = text_agent(vec![cancel_tool()]);
     definition.output = OutputSpec::Text { validated: true };
-    let mut second = Driver::new(definition, "yes", first.result().all_messages.clone());
+    let mut second = admitted_answer(definition, first.result(), "yes");
     second.reply("Done", &[]);
     second.send(AgentRunEvent::OutputValidated {
         validation: second.validation(),
@@ -223,6 +239,24 @@ fn a_recorded_response_requires_owner_admission_before_granting_a_readback_repea
 }
 
 #[test]
+fn an_unbound_pending_history_cannot_authorize_approval_from_a_new_message() {
+    let validated = json!({"date":"Monday", "notify":true});
+    let first = turn(vec![], "cancel monday", json!({"date":"Monday"}), validated.clone());
+    let mut history = first.result().all_messages.clone();
+    // A copied old selection marker remains ordinary data, even when a new message says yes.
+    for item in &mut history {
+        if let ChatItem::FunctionCall(call) = item {
+            call.extra.insert("lk.input_requested".into(), json!(true));
+        }
+    }
+    let saved = history.clone();
+    let repeated = turn(history, "yes", json!({"date":"Monday"}), validated);
+    assert!(repeated.executes().is_empty(), "unbound history never supplies response authority");
+    assert!(question(&repeated).starts_with("Please confirm:"));
+    assert_eq!(&repeated.result().all_messages[..saved.len()], saved.as_slice());
+}
+
+#[test]
 fn standalone_result_retains_all_correlated_requests_after_core_is_dropped() {
     let mut driver = Driver::new(
         text_agent(vec![string_tool("flight", "day"), string_tool("hotel", "city")]),
@@ -233,7 +267,6 @@ fn standalone_result_retains_all_correlated_requests_after_core_is_dropped() {
     driver.run_tools(|name| ToolOutcome::InputRequired {
         question: format!("{name}?"),
         verbatim: true,
-        tool: Some(format!("answer_{name}")),
     });
     let result = driver.result().clone();
     drop(driver);
@@ -241,7 +274,6 @@ fn standalone_result_retains_all_correlated_requests_after_core_is_dropped() {
     for (requirement, name) in result.input_requirements.iter().zip(["flight", "hotel"]) {
         assert_eq!(requirement.call.name, name);
         assert_eq!(requirement.question, format!("{name}?"));
-        assert_eq!(requirement.call.answer_tool, Some(format!("answer_{name}")));
         assert!(requirement.verbatim);
         let output = result
             .all_messages
@@ -275,11 +307,7 @@ fn input_metadata_survives_a_different_terminal_outcome_in_the_same_batch() {
         if name == "stop" {
             ToolOutcome::StopResponse
         } else {
-            ToolOutcome::InputRequired {
-                question: "Which city?".into(),
-                verbatim: false,
-                tool: None,
-            }
+            ToolOutcome::InputRequired { question: "Which city?".into(), verbatim: false }
         }
     });
     let result = driver.result();
@@ -291,14 +319,13 @@ fn input_metadata_survives_a_different_terminal_outcome_in_the_same_batch() {
 }
 
 #[test]
-fn history_only_continuation_answers_the_presented_call_without_answering_other_requests() {
+fn unbound_history_keeps_every_pending_request_as_context_without_answering_one() {
     let tools = vec![string_tool("flight", "day"), string_tool("hotel", "city")];
     let mut first = Driver::new(text_agent(tools.clone()), "book both", Vec::new());
     first.reply("", &[("flight", json!({"day":"?"})), ("hotel", json!({"city":"?"}))]);
     first.run_tools(|name| ToolOutcome::InputRequired {
         question: format!("{name}?"),
         verbatim: true,
-        tool: None,
     });
     let second = Driver::new(text_agent(tools), "Monday", first.result().all_messages.clone());
     let (_, history, _) = second.request();
@@ -314,13 +341,15 @@ fn history_only_continuation_answers_the_presented_call_without_answering_other_
         .collect();
     assert_eq!(
         outputs,
-        [("flight", "Monday"), ("hotel", "waiting for the person's answer to: hotel?"),]
+        [
+            ("flight", "waiting for the person's answer to: flight?"),
+            ("hotel", "waiting for the person's answer to: hotel?"),
+        ]
     );
-    let mut saved = history.items;
-    assert!(
-        crate::agent_run::planning::answer_pending_input(&mut saved, "unrelated new message")
-            .is_empty(),
-        "an unpresented retained question is not implicitly selected on the next turn"
+    assert_eq!(
+        second.run.progress_history()[..first.result().all_messages.len()],
+        first.result().all_messages,
+        "copied history does not supply native response admission"
     );
 }
 
@@ -390,7 +419,11 @@ fn answering_one_approval_never_grants_a_retained_siblings_repeat() {
         let history = result.all_messages.clone();
         let admitted = owner_admitted.then(|| BTreeSet::from([selected.clone()]));
         let repeated = repeat_approval(history.clone(), "delete_first", "one", admitted.clone());
-        assert_eq!(repeated.executes().len(), 1, "the selected read-back was answered");
+        assert_eq!(
+            repeated.executes().len(),
+            usize::from(owner_admitted),
+            "only the owner-matched read-back was answered"
+        );
         let repeated = repeat_approval(history, "delete_second", "two", admitted);
         assert!(repeated.executes().is_empty(), "the retained sibling was never answered");
         assert_eq!(repeated.result().input_requirements[0].call.name, "delete_second");
@@ -404,13 +437,8 @@ fn an_unselected_read_back_cannot_grant_even_if_a_transport_rewrites_its_output(
     first.run_tools(|_| panic!("an unapproved body must not run"));
     let mut history = first.result().all_messages.clone();
     for item in &mut history {
-        match item {
-            ChatItem::FunctionCall(call) => {
-                call.extra
-                    .insert(crate::agent_run::planning::INPUT_REQUESTED_KEY.into(), json!(false));
-            }
-            ChatItem::FunctionCallOutput(output) => output.output = "unrelated answer".into(),
-            _ => {}
+        if let ChatItem::FunctionCallOutput(output) = item {
+            output.output = "unrelated answer".into();
         }
     }
     let repeated = repeat_approval(history, "delete_first", "one", None);
@@ -448,11 +476,7 @@ fn a_reported_question_with_a_pending_sibling(
     let question_call = driver.executes()[0].2.call_id.clone();
     driver.send(AgentRunEvent::ToolSettled {
         call: calls[0].0,
-        outcome: ToolOutcome::InputRequired {
-            question: "Which city?".into(),
-            verbatim: true,
-            tool: Some("answer_hotel".into()),
-        },
+        outcome: ToolOutcome::InputRequired { question: "Which city?".into(), verbatim: true },
     });
     assert!(driver.finished().is_none(), "the sibling still owns work");
     (driver, request, calls[1].0, question_call)
@@ -474,7 +498,6 @@ fn assert_reported_question(effects: &[AgentRunEffect], call_id: &str) {
     assert_eq!(requirement.invocation_id, "run_1");
     assert_eq!(requirement.call.call_id, call_id);
     assert_eq!(requirement.call.name, "hotel");
-    assert_eq!(requirement.call.answer_tool.as_deref(), Some("answer_hotel"));
     assert_eq!(requirement.question, "Which city?");
     assert!(requirement.verbatim);
 }
@@ -515,7 +538,6 @@ fn a_grouped_prompt_records_only_its_selected_sources_and_never_streams_unvalida
         driver.run_tools(|name| ToolOutcome::InputRequired {
             question: format!("What is your {name} name?"),
             verbatim: false,
-            tool: None,
         });
         let effects = driver.reply(
             "unvalidated text",

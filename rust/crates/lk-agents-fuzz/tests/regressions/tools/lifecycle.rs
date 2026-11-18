@@ -1,15 +1,21 @@
 mod canonical_terminal_tool_result {
     //! One canonical question wins in model order, regardless of body completion order.
     use std::collections::BTreeMap;
+    use std::sync::Arc;
 
     use lk_agents_abi::agent::run::RunOutcome;
+    use lk_agents_abi::delegation::DelegationOptions;
     use lk_agents_abi::llm::tool_executor::WAITING_PREFIX;
+    use lk_agents_abi::session::InputRequestState;
+    use lk_agents_abi::text_session::SessionStateSink as _;
     use lk_agents_abi::{ChatItem, Role};
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::fakes::FakeLlm;
     use lk_agents_fuzz::input::{
         AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs, TurnMode, UserText,
     };
     use lk_agents_fuzz::record::{Detail, Kind};
+    use lk_agents_runtime::storage::session_binding::SessionBinding;
     use lk_agents_voice::events::SessionEvent;
 
     const QUESTION: &str = "Which day?";
@@ -35,8 +41,14 @@ mod canonical_terminal_tool_result {
             tools: vec!["lookup".into(), "reserve".into()],
             ..Setup::default()
         };
+        let binding = Arc::new(SessionBinding::memory());
         let run = simulate(async {
-            let mut run = Run::start(&setup, 0, Default::default()).await;
+            let mut run = Run::start_with(&setup, 0, Default::default(), |args, registry| {
+                args.session_sink = Some(binding.clone());
+                args.delegation =
+                    Some(DelegationOptions { routing_model: Some(FakeLlm::new(registry.clone())) });
+            })
+            .await;
             let opening = [
                 // Exercise text-only presentation without requiring physical playback receipts.
                 Input::SetAudioOutput { attach: false },
@@ -102,7 +114,6 @@ mod canonical_terminal_tool_result {
                 [RunOutcome::InputRequired(lk_agents_abi::agent::run::RunQuestion {
                     question: QUESTION.into(),
                     verbatim: true,
-                    answer_tool: Some("lookup".into()),
                 })],
                 "the selected shared-run outcome must be the caller's result; events: {events:?}"
             );
@@ -174,10 +185,17 @@ mod canonical_terminal_tool_result {
                 Input::Advance { ms: Millis(3_000) },
                 Input::LlmToolCall {
                     chat: Ref::new(1),
+                    name: "route_input_response".into(),
+                    args: ToolArgs(r#"{"candidates":[0],"unclear":false}"#.into()),
+                },
+                Input::LlmEnd { chat: Ref::new(1) },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmToolCall {
+                    chat: Ref::new(2),
                     name: "lookup".into(),
                     args: ToolArgs(r#"{"label":"model guess"}"#.into()),
                 },
-                Input::LlmEnd { chat: Ref::new(1) },
+                Input::LlmEnd { chat: Ref::new(2) },
                 Input::Advance { ms: Millis(100) },
                 Input::ToolAnswered {
                     tool: Ref::new(2),
@@ -190,7 +208,7 @@ mod canonical_terminal_tool_result {
                 run.apply(input).await;
             }
             let chats: Vec<_> = run.record.resources(Kind::Chat).collect();
-            let Detail::Chat { ctx_ids, .. } = chats[1].detail() else {
+            let Detail::Chat { ctx_ids, .. } = chats[2].detail() else {
                 panic!("the next model request must expose its input history")
             };
             let carried: Vec<_> =
@@ -199,6 +217,28 @@ mod canonical_terminal_tool_result {
                 carried, history_ids,
                 "the actual next request must preserve canonical stored history order"
             );
+            let snapshot = binding.restore().unwrap().unwrap();
+            let requests = &snapshot.frames[&snapshot.root_frame_id].input_requests;
+            let selected = requests
+                .values()
+                .find(|request| {
+                    request.source_message.raw_text_content().as_deref() == Some(QUESTION)
+                })
+                .unwrap();
+            let unselected = requests
+                .values()
+                .find(|request| {
+                    request.source_message.raw_text_content().as_deref()
+                        == Some(UNSELECTED_QUESTION)
+                })
+                .unwrap();
+            assert_eq!(selected.state, InputRequestState::Responded);
+            assert_eq!(
+                selected.response_message.as_ref().and_then(|message| message.raw_text_content()),
+                Some(ANSWER.into())
+            );
+            assert_eq!(unselected.state, InputRequestState::Open);
+            assert!(unselected.response_message.is_none());
             run
         });
 
@@ -215,9 +255,6 @@ mod canonical_terminal_tool_result {
                     }
                     ChatItem::FunctionCallOutput(output) if output.name == "lookup" => {
                         outputs.entry("lookup").or_insert_with(|| output.output.clone());
-                        if output.output == ANSWER {
-                            outputs.insert("lookup", output.output.clone());
-                        }
                     }
                     _ => {}
                 }
@@ -225,10 +262,14 @@ mod canonical_terminal_tool_result {
         }
         assert_eq!(
             lookup_arguments,
-            [r#"{"label":"day"}"#, r#"{"label":"Monday"}"#],
-            "the answer reaches the selected tool, not the second question's tool"
+            [r#"{"label":"day"}"#, r#"{"label":"model guess"}"#],
+            "response correlation cannot rewrite a later tool call's arguments"
         );
-        assert_eq!(outputs.get("lookup").map(String::as_str), Some(ANSWER));
+        assert_eq!(
+            outputs.get("lookup").map(String::as_str),
+            Some(format!("{WAITING_PREFIX}{QUESTION}").as_str()),
+            "the selected question and human response remain separate records"
+        );
         assert_eq!(
             outputs.get("reserve").map(String::as_str),
             Some(format!("{WAITING_PREFIX}{UNSELECTED_QUESTION}").as_str())

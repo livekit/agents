@@ -39,7 +39,6 @@ pub fn tool_spec(name: &str) -> ToolSpec {
         name: name.to_owned(),
         provider_tool: None,
         description: format!("fixture tool {name}"),
-        // A string first: an `InputRequired(tool=)` hands it the person's answer.
         json_schema: serde_json::json!({
             "type": "object",
             "properties": {"label": {"type": "string"}, "seconds": {"type": "integer"}},
@@ -249,11 +248,7 @@ impl AgentCallbacks for FakeTools {
         let call = call_of(invocation).clone();
         self.calls.lock().unwrap().push(call.clone());
         Box::pin(async move {
-            let mut outcome = self.answer(invocation, &call, &handle).await;
-            // A verbatim question names its own tool to take the answer.
-            if let ToolOutcome::InputRequired { verbatim: true, tool, .. } = &mut outcome {
-                *tool = Some(call.name.clone());
-            }
+            let outcome = self.answer(invocation, &call, &handle).await;
             // Every completion carries a value: whether it ends a task is the core's decision,
             // so the rules see what it decides.
             let transition = matches!(outcome, ToolOutcome::Completed { .. }).then(|| {
@@ -448,10 +443,8 @@ pub fn outcome_of(answer: Answer, text: &str) -> ToolOutcome {
         Answer::Completed => ToolOutcome::Completed { text, verbatim: false },
         Answer::Failed => ToolOutcome::Failed(text),
         Answer::Rejected => ToolOutcome::Rejected(text),
-        Answer::Ask => ToolOutcome::InputRequired { question: text, verbatim: false, tool: None },
-        Answer::AskVerbatim => {
-            ToolOutcome::InputRequired { question: text, verbatim: true, tool: None }
-        }
+        Answer::Ask => ToolOutcome::InputRequired { question: text, verbatim: false },
+        Answer::AskVerbatim => ToolOutcome::InputRequired { question: text, verbatim: true },
         Answer::Working => ToolOutcome::Working(Some(text)),
     }
 }

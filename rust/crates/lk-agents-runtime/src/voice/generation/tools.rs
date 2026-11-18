@@ -51,7 +51,6 @@ impl ToolStep {
             call: call.clone(),
             spec,
             forbidden: ctx.plan.tool_choice == Some(lk_agents_abi::ToolChoice::Forbidden),
-            answering: ctx.plan.answering.clone(),
             agent: ctx.resources.toolset.agent.clone(),
         };
         let (go, first) = shared.open_call(Answer::tool_go);

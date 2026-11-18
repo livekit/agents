@@ -1,17 +1,15 @@
-use crate::agent::{Source, Visibility};
 use crate::agent_session::effects::VoiceEffect;
 use crate::agent_session::machine::activity::scheduling::{
     PreemptiveDiscard, SpeechId, SpeechKind, VoiceRunParticipation,
 };
 use crate::agent_session::machine::activity::speech::SpeechSpec;
 use crate::agent_session::{ToolUpdate, VoiceDriver};
-use crate::audio_recognition::EndOfTurnInfo;
 use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle};
 use crate::experts::{ExpertTool, Floor, Presentation};
 use crate::generation::ReplySource;
 use crate::tool_executor::{CallId, Delivery, HostedTool, ToolOutcome, answer};
 use lk_agents_abi::llm::tool_executor::ASK_IN_OWN_WORDS;
-use lk_agents_abi::{ChatItem, ChatMessage, Role, Ts};
+use lk_agents_abi::{ChatItem, ChatMessage, Ts};
 use lk_agents_core::markup::ChatMessageExt;
 
 // A detached call of a configured remote tool is a delegation: its updates are the expert's
@@ -55,6 +53,7 @@ impl VoiceDriver {
             return false;
         };
         let output_id = running.output_id.clone();
+        let origin_call_id = running.call.id.clone();
         if !self.session.experts.owns(&output_id) {
             return false;
         }
@@ -67,6 +66,14 @@ impl VoiceDriver {
             ToolUpdate::Final { report } => match &report.outcome {
                 ToolOutcome::InputRequired { question, verbatim, .. } => {
                     let request_id = self.session.ids.mint("ask");
+                    if report.input_request.is_none() {
+                        self.retain_body_question(
+                            &output_id,
+                            &request_id,
+                            &origin_call_id,
+                            question,
+                        );
+                    }
                     self.session.experts.ask(
                         &output_id,
                         &request_id,
@@ -86,6 +93,7 @@ impl VoiceDriver {
                         let updates = self.session.states.on_tool_call_ended(now, closing);
                         self.apply_user_state_updates(updates);
                     };
+                    self.close_body_inputs(&output_id);
                     self.session.experts.outcome(&output_id, outcome.clone());
                 }
             },
@@ -104,6 +112,7 @@ impl VoiceDriver {
     /// Present queued expert events while the floor is free: each presentation takes the floor,
     /// so the next waits for the following idle instant. Runs after the deferred tool reply.
     pub(crate) fn try_present_experts(&mut self, now: Ts) {
+        self.check_local_responses();
         let tools = self.activity.expert_tools();
         let outside = VoiceRunParticipation::Outside;
         loop {
@@ -131,6 +140,7 @@ impl VoiceDriver {
                         self.reply_with_instructions(now, instructions, None, outside)
                     };
                     if let Some(speech) = speech {
+                        self.presenting_local_input(speech, request_id.clone());
                         self.session.experts.presenting(
                             speech,
                             crate::experts::PendingRequest { output_id, request_id },
@@ -204,58 +214,21 @@ impl VoiceDriver {
         self.start_speech(now, spec);
     }
 
-    /// A transient local interaction's direct answer: committed as said and forwarded to its
-    /// in-memory body. Remote questions instead use shared response admission.
+    /// Only a checkpointed response to this body's exact occurrence reaches its live await.
     pub(crate) fn forward_expert_reply(
         &mut self,
-        now: Ts,
-        info: &EndOfTurnInfo,
-        user_text: Option<&str>,
-    ) -> bool {
-        let Some(hosted) = self.claim_expert_reply(now) else { return false };
-        let user = self.user_turn_item(info, user_text);
-        self.answer_expert(hosted, user, Source::UserTurn { turn: info.turn_id });
-        true
-    }
-
-    /// Typed input answering a transient local interaction, under the same direct-answer
-    /// contract as its spoken input. Remote questions use the normal frontend planning path.
-    pub(crate) fn forward_typed_expert_reply(&mut self, now: Ts, text: &str) -> bool {
-        let Some(hosted) = self.claim_expert_reply(now) else { return false };
-        let user =
-            ChatMessage::text(self.session.ids.mint("item"), Role::User, text, self.step.wall());
-        self.session.runs.record(&ChatItem::Message(user.clone()));
-        self.answer_expert(hosted, user, Source::UserTyped);
-        true
-    }
-
-    /// The pending question a reply answers now, claimed for it: its body's host handle.
-    fn claim_expert_reply(&mut self, now: Ts) -> Option<HostedTool> {
-        let tools = self.activity.expert_tools();
-        let floor = Floor { tools: &tools, free: true, task: self.activity.voice_tasks.running() };
-        let request = self.session.experts.collect(floor)?;
-        // Only in-memory local interactions retain the legacy direct-answer continuation.
-        // Remote input always passes through shared recognition and checkpoint admission.
-        if self.session.experts.reference(&request).is_some() {
-            return None;
-        }
-        let running = self.activity.tools.running.iter().find(|r| r.output_id == request.output_id);
-        // The body no longer runs: the reply is an ordinary one.
-        let hosted = running.map(|r| r.hosted.clone())?;
-        self.session.experts.answer(&request).ok()?;
+        hosted: HostedTool,
+        user: ChatMessage,
+        request: lk_agents_abi::session::InputRequestRef,
+    ) {
         if self.activity.speech_scheduler.preemptive_generation().is_some() {
-            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
+            self.cancel_preemptive_generation(self.step.now, PreemptiveDiscard::TurnAbandoned);
         }
-        Some(hosted)
-    }
-
-    fn answer_expert(&mut self, hosted: HostedTool, user: ChatMessage, source: Source) {
         let answer = lk_agents_abi::a2a::remote::DelegationInput {
             arguments: serde_json::json!({"request": user.text_content().unwrap_or_default()}),
             structured: false,
-            input_request: None,
+            input_request: Some(request),
         };
-        self.commit_item(ChatItem::Message(user), source, Visibility::Both);
         self.record_effect(VoiceEffect::AnswerExpert { hosted, answer });
     }
 
@@ -271,7 +244,7 @@ impl VoiceDriver {
 }
 
 impl super::AgentActivity {
-    fn expert_tools(&self) -> Vec<ExpertTool> {
+    pub(super) fn expert_tools(&self) -> Vec<ExpertTool> {
         let Some(agent) = &self.toolset.agent else { return Vec::new() };
         let tools = &agent.definition().tools;
         tools

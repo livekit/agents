@@ -174,6 +174,9 @@ fn label(event: &VoiceRuntimeEvent) -> &'static str {
             VoiceEvent::InputRouted { .. } => "InputRouted",
             VoiceEvent::InputReserved { .. } => "InputReserved",
             VoiceEvent::InputOffers { .. } => "InputOffers",
+            VoiceEvent::LocalInputRetained { .. } => "LocalInputRetained",
+            VoiceEvent::LocalInputDelivered(_) => "LocalInputDelivered",
+            VoiceEvent::LocalInputCandidates(_) => "LocalInputCandidates",
             VoiceEvent::RemoteResponseQueued { .. } => "RemoteResponseQueued",
         },
     }

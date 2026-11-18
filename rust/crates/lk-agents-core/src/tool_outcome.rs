@@ -24,8 +24,8 @@ impl lk_agents_abi::llm::tool_executor::ToolReports for ToolReports {
             },
             ToolReturn::Failed(error) => ToolOutcome::Failed(error),
             ToolReturn::Rejected(reason) => ToolOutcome::Rejected(reason),
-            ToolReturn::InputRequired(InputRequiredReturn { question, verbatim, tool }) => {
-                ToolOutcome::InputRequired { question, verbatim, tool }
+            ToolReturn::InputRequired(InputRequiredReturn { question, verbatim }) => {
+                ToolOutcome::InputRequired { question, verbatim }
             }
             ToolReturn::Working(message) => ToolOutcome::Working(message),
             ToolReturn::Nothing => ToolOutcome::Nothing,
@@ -165,11 +165,7 @@ mod tests {
             verbatim: false,
             more: None,
         };
-        let ask = ToolOutcome::InputRequired {
-            question: "Which day?".into(),
-            verbatim: false,
-            tool: None,
-        };
+        let ask = ToolOutcome::InputRequired { question: "Which day?".into(), verbatim: false };
         let cases: &[(ToolOutcome, (&str, bool, bool))] = &[
             (value("12C", true), ("12C", false, true)),
             (value("sent DTMF 1", false), ("sent DTMF 1", false, false)),

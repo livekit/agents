@@ -74,7 +74,6 @@ impl AgentRunner for Runner {
             id_seed: telemetry::random_seed(),
             opening: Opening::Message(Box::new(message)),
             history: request.history,
-            answer_tool: request.answer_tool,
             delegated: request.delegated,
             mode: Mode::Text,
             llm: Some(LlmRef { id: ResourceId(0), provider: self.llm.id() }),
@@ -90,6 +89,7 @@ impl AgentRunner for Runner {
             },
         );
         let setup = RunSetup {
+            input_answers: Default::default(),
             tools_host: request.tools_host,
             llm: self.llm.clone(),
             host: self.host.clone(),

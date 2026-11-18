@@ -367,10 +367,19 @@ pub enum GenerationStep {
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum ToolStep {
+    /// The occurrence's owner accepted this exact canonical human message after checkpointing.
+    InputResponseDelivered {
+        request: lk_agents_abi::session::InputRequestRef,
+        call_id: Option<String>,
+        message_id: String,
+    },
     /// The model asked for these tools (names only; arguments can be pages of JSON).
     Calls {
         speech: SpeechId,
+        step: u32,
+        item_id: String,
         names: Vec<String>,
+        input_answers: std::collections::BTreeSet<String>,
     },
     /// A tool call handed to the runner (`hosted`) or answered by the driver (an unadvertised
     /// name). Only a hosted call holds the away window.
@@ -384,6 +393,9 @@ pub enum ToolStep {
     CallAdmitted {
         speech: SpeechId,
         call_id: String,
+        item_id: String,
+        identity: Option<String>,
+        source: Option<String>,
     },
     CallEnded {
         speech: SpeechId,
@@ -985,7 +997,8 @@ impl Step {
                 | ToolStep::Finished { speech, .. }
                 | ToolStep::ReplyScheduled { speech, .. }
                 | ToolStep::ReplyDone { speech, .. } => Some(*speech),
-                ToolStep::Updated { .. }
+                ToolStep::InputResponseDelivered { .. }
+                | ToolStep::Updated { .. }
                 | ToolStep::UpdateRefused { .. }
                 | ToolStep::Cancelled { .. }
                 | ToolStep::ToolsetUpdated { .. }

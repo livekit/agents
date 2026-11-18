@@ -39,6 +39,14 @@ pub(crate) enum SessionCommand {
         drivers: Arc<drivers::Drivers>,
         done: Receipt<Option<Arc<dyn RemoteTaskDriver>>>,
     },
+    CancelRemote {
+        remote_id: String,
+        endpoint: String,
+        task: lk_agents_abi::delegation::remote::RemoteTaskRef,
+        drivers: Arc<drivers::Drivers>,
+        /// None is the core's already-observed cancellation, with no control I/O needed.
+        done: Receipt<Option<Arc<dyn RemoteTaskDriver>>>,
+    },
     AdmitInput {
         request: Box<lk_agents_abi::session::InputRoutingRequest>,
         verdict: Option<
@@ -56,31 +64,6 @@ pub(crate) enum SessionCommand {
     Flush {
         done: signal::Producer<
             Option<Result<serde_json::Value, lk_agents_abi::storage::StorageError>>,
-        >,
-    },
-    HeldInput {
-        remote_id: String,
-        endpoint: String,
-        task_id: Option<String>,
-        done: signal::Producer<
-            Option<
-                Result<
-                    Option<lk_agents_abi::session::InputRequestRef>,
-                    lk_agents_abi::storage::StorageError,
-                >,
-            >,
-        >,
-    },
-    Task {
-        remote_id: String,
-        endpoint: String,
-        task_id: String,
-        done: Receipt<lk_agents_abi::delegation::remote::RemoteTaskRef>,
-    },
-    Response {
-        reference: lk_agents_abi::session::InputRequestRef,
-        done: signal::Producer<
-            Option<Result<lk_agents_abi::ChatMessage, lk_agents_abi::storage::StorageError>>,
         >,
     },
     Input {
@@ -107,7 +90,7 @@ pub(crate) enum SessionCommand {
     Recover {
         remote_id: String,
         endpoint: String,
-        origin: lk_agents_abi::session::ToolCallRef,
+        target: lk_agents_abi::session::SessionRecovery,
         done: signal::Producer<
             Option<
                 Result<
@@ -125,11 +108,9 @@ impl SessionCommand {
             Self::RoutingContext { done, .. } => done.resolve(Err(error)),
             Self::AdmitCall { done, .. } => done.resolve(Err(error)),
             Self::RemoteDriver { done, .. } => done.resolve(Err(error)),
+            Self::CancelRemote { done, .. } => done.resolve(Err(error)),
             Self::AdmitInput { done, .. } => done.resolve(Err(error)),
             Self::Flush { done } => done.resolve(Err(error)),
-            Self::HeldInput { done, .. } => done.resolve(Err(error)),
-            Self::Task { done, .. } => done.resolve(Err(error)),
-            Self::Response { done, .. } => done.resolve(Err(error)),
             Self::Input { done, .. } => done.resolve(Err(error)),
             Self::Apply { done, .. } => done.resolve(Err(error)),
             Self::DefaultContext { done, .. } => done.resolve(Err(error)),
@@ -255,6 +236,56 @@ impl lk_agents_abi::session::SessionCommands for CommandPort {
         })
     }
 
+    fn cancel_remote<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        task: &'a lk_agents_abi::delegation::remote::RemoteTaskRef,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<(), lk_agents_abi::a2a::client::AgentClientError>>
+    {
+        Box::pin(async move {
+            use lk_agents_abi::a2a::client::AgentClientError;
+            let (done, result) = signal::once();
+            self.sender
+                .send(SessionCommand::CancelRemote {
+                    remote_id: remote_id.into(),
+                    endpoint: endpoint.into(),
+                    task: task.clone(),
+                    drivers: self.drivers.clone(),
+                    done,
+                })
+                .await
+                .map_err(|_| {
+                    AgentClientError::InvalidInput("the conversation owner ended".into())
+                })?;
+            let driver = result
+                .wait()
+                .await
+                .map_err(|_| {
+                    AgentClientError::InvalidInput(
+                        "the conversation owner ended before admitting task cancellation".into(),
+                    )
+                })?
+                .map_err(|error| match error {
+                    StorageError::Invalid(message) => AgentClientError::InvalidInput(message),
+                    error => AgentClientError::Protocol(error.to_string()),
+                })?;
+            let Some(driver) = driver else { return Ok(()) };
+            // The owner loop has released this read receipt before the driver can journal
+            // its cancellation. Awaiting control I/O inside that loop would deadlock it.
+            // Dropping this waiter leaves any enqueued control with its original driver.
+            let cancel = driver.cancel(task.clone());
+            tokio::pin!(cancel);
+            tokio::select! {
+                biased;
+                result = &mut cancel => result,
+                () = self.sender.closed() => Err(AgentClientError::InvalidInput(
+                    "the conversation owner ended before remote cancellation was confirmed".into(),
+                )),
+            }
+        })
+    }
+
     fn admit_input(
         &self,
         request: lk_agents_abi::session::InputRoutingRequest,
@@ -297,94 +328,6 @@ impl lk_agents_abi::session::SessionCommands for CommandPort {
         })
     }
 
-    fn held_input<'a>(
-        &'a self,
-        remote_id: &'a str,
-        endpoint: &'a str,
-        task_id: Option<&'a str>,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<
-            Option<lk_agents_abi::session::InputRequestRef>,
-            lk_agents_abi::storage::StorageError,
-        >,
-    > {
-        Box::pin(async move {
-            use lk_agents_abi::storage::StorageError;
-            let sender = &self.sender;
-            let (done, settled) = signal::once();
-            sender
-                .send(SessionCommand::HeldInput {
-                    remote_id: remote_id.into(),
-                    endpoint: endpoint.into(),
-                    task_id: task_id.map(str::to_owned),
-                    done,
-                })
-                .await
-                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
-            settled.wait().await.map_err(|_| {
-                StorageError::Invalid(
-                    "the conversation owner ended before selecting the response".into(),
-                )
-            })?
-        })
-    }
-
-    fn task<'a>(
-        &'a self,
-        remote_id: &'a str,
-        endpoint: &'a str,
-        task_id: &'a str,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<
-            lk_agents_abi::delegation::remote::RemoteTaskRef,
-            lk_agents_abi::storage::StorageError,
-        >,
-    > {
-        Box::pin(async move {
-            use lk_agents_abi::storage::StorageError;
-            let (done, settled) = signal::once();
-            self.sender
-                .send(SessionCommand::Task {
-                    remote_id: remote_id.into(),
-                    endpoint: endpoint.into(),
-                    task_id: task_id.into(),
-                    done,
-                })
-                .await
-                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
-            settled.wait().await.map_err(|_| {
-                StorageError::Invalid(
-                    "the conversation owner ended before resolving the task".into(),
-                )
-            })?
-        })
-    }
-
-    fn response<'a>(
-        &'a self,
-        reference: &'a lk_agents_abi::session::InputRequestRef,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<lk_agents_abi::ChatMessage, lk_agents_abi::storage::StorageError>,
-    > {
-        Box::pin(async move {
-            use lk_agents_abi::storage::StorageError;
-            let sender = &self.sender;
-            let (done, settled) = signal::once();
-            sender
-                .send(SessionCommand::Response { reference: reference.clone(), done })
-                .await
-                .map_err(|_| StorageError::Invalid("the conversation owner ended".into()))?;
-            settled.wait().await.map_err(|_| {
-                StorageError::Invalid(
-                    "the conversation owner ended before reading the response".into(),
-                )
-            })?
-        })
-    }
-
     fn input<'a>(
         &'a self,
         command: lk_agents_abi::session::SessionInputCommand,
@@ -409,7 +352,7 @@ impl lk_agents_abi::session::SessionCommands for CommandPort {
         &'a self,
         remote_id: &'a str,
         endpoint: &'a str,
-        origin: &'a lk_agents_abi::session::ToolCallRef,
+        target: &'a lk_agents_abi::session::SessionRecovery,
     ) -> lk_agents_abi::BoxFuture<
         'a,
         Result<
@@ -425,7 +368,7 @@ impl lk_agents_abi::session::SessionCommands for CommandPort {
                 .send(SessionCommand::Recover {
                     remote_id: remote_id.into(),
                     endpoint: endpoint.into(),
-                    origin: origin.clone(),
+                    target: target.clone(),
                     done,
                 })
                 .await

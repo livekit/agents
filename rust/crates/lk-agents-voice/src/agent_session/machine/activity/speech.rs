@@ -17,7 +17,6 @@ use crate::trace::{GenerationStep, InterruptStep, PlayoutStep, SpeechStep, ToolS
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{ChatContext, ChatMessage, Modality, Role, Ts};
-use lk_agents_core::markup::ChatMessageExt;
 use std::sync::Arc;
 
 struct EndOfSpeech {
@@ -60,8 +59,6 @@ pub(crate) struct SpeechSpec {
     pub(crate) end_of_turn: Option<EndOfTurnInfo>,
     /// The id a host's `say()` / `generate_reply()` answered with: the speech is created under it.
     pub(crate) host_speech: Option<SpeechId>,
-    /// The turn's reply answers an `InputRequired(tool=)`.
-    pub(crate) answering: Option<crate::tool_executor::Answering>,
 }
 
 impl SpeechSpec {
@@ -84,7 +81,6 @@ impl SpeechSpec {
             host_asked: false,
             end_of_turn: None,
             host_speech: None,
-            answering: None,
         }
     }
 }
@@ -329,23 +325,9 @@ impl VoiceDriver {
         {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
         }
-        // A transient local interaction can own this turn. Remote input remains a frontend
-        // turn whose first model plan waits for response admission.
-        if self.forward_expert_reply(now, info, edits.user_text.as_deref()) {
-            return;
-        }
-        // A tool claimed this turn: the reply calls it, a different request from any guessed one.
-        let claimed = self.activity.consume_claim();
-        if claimed.is_some() && self.activity.speech_scheduler.preemptive_generation().is_some() {
-            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
-        }
         let adopted = self.adopt_preemptive_generation(now, &info.new_transcript);
         let TurnEdits { instructions, chat_ctx, user_text } = edits;
         let user = self.user_turn_item(info, user_text.as_deref());
-        let answering = claimed.map(|tool| crate::tool_executor::Answering {
-            tool,
-            said: user.text_content().unwrap_or_default(),
-        });
         if let Some(preemptive) = adopted {
             if let Some(state) = self.activity.speech_scheduler.speech_mut(preemptive) {
                 state.set_user_metrics(user.metrics.clone());
@@ -367,10 +349,6 @@ impl VoiceDriver {
                 turn: Some(info.turn_id),
                 instructions_override: instructions,
                 end_of_turn: Some(info.clone()),
-                tool_choice: answering
-                    .as_ref()
-                    .map(|a| lk_agents_abi::ToolChoice::Named(a.tool.clone())),
-                answering,
                 ..SpeechSpec::new(
                     SpeechKind::TurnReply,
                     ReplySource::Llm,
@@ -544,7 +522,6 @@ impl VoiceDriver {
             user_metrics,
             message_id,
             speech: self.session.config.effective.speech,
-            answering: spec.answering,
             completion,
             step: 1,
         };
@@ -818,7 +795,6 @@ impl VoiceDriver {
             }
             ready = true;
             if !cancelled
-                && !self.activity.voice_tasks.running()
                 && let Some(message) = plan.spec.new_message.as_ref().filter(|message| {
                     message.role == Role::User
                         && message.raw_text_content().is_some_and(|text| !text.trim().is_empty())
@@ -960,7 +936,7 @@ impl VoiceDriver {
         // adds its message first.
         let realtime = kind == Some(SpeechKind::Realtime);
         if !realtime {
-            self.commit_spoken(speech, item.take());
+            self.commit_spoken(speech, item.take(), !interrupted);
         }
         self.activity.speech_scheduler.spoken(speech, now);
         // A blocked current speech's step ending is what a pause from inside its tool waits on.
@@ -983,32 +959,44 @@ impl VoiceDriver {
                 .detection_enabled(),
         };
         self.apply_end_of_speech(now, eos);
-        self.commit_spoken(speech, item);
+        self.commit_spoken(speech, item, !interrupted);
         self.session.experts.presentation_ended(speech);
+        self.local_input_presentation_ended(speech);
     }
 
     /// A step's words: into the record, or only told to the handle under `add_to_chat_ctx=False`.
-    fn commit_spoken(&mut self, speech: SpeechId, item: Option<(ChatItem, Source)>) {
+    fn commit_spoken(
+        &mut self,
+        speech: SpeechId,
+        item: Option<(ChatItem, Source)>,
+        complete: bool,
+    ) {
         let Some((item, source)) = item else { return };
         if self.activity.speech_scheduler.add_to_chat_ctx(speech) {
-            let presented = item
+            let message_id = item
                 .as_message()
                 .filter(|message| {
-                    message.role == Role::Assistant
+                    complete
+                        && !message.interrupted
+                        && message.role == Role::Assistant
                         && message.raw_text_content().is_some_and(|text| !text.trim().is_empty())
                 })
-                .and_then(|message| {
-                    self.session
-                        .experts
-                        .delivered(speech)
-                        .map(|request| (request, message.id.clone()))
-                });
+                .map(|message| message.id.clone());
+            let expert = message_id.as_ref().and_then(|_| self.session.experts.delivered(speech));
             self.commit_item(item, source, Visibility::Both);
-            if let Some((request, message_id)) = presented {
-                self.record_effect(crate::agent_session::effects::VoiceEffect::InputPresented {
-                    requests: vec![request],
-                    message_id,
-                });
+            if let Some(message_id) = message_id {
+                let mut requests = self.local_input_presented(speech, &message_id);
+                requests.extend(expert);
+                requests.sort();
+                requests.dedup();
+                if !requests.is_empty() {
+                    self.record_effect(
+                        crate::agent_session::effects::VoiceEffect::InputPresented {
+                            requests,
+                            message_id,
+                        },
+                    );
+                }
             }
         } else if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
             state.item_added(&item);

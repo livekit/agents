@@ -203,7 +203,6 @@ impl TaskMachine {
             message,
             batch: turn.batch.clone(),
             task_id: turn.answer_task.clone(),
-            answer_tool: None,
         };
         self.phase = Phase::Turn(Step::Handle);
         Operation::Handle(Box::new(handle))

@@ -144,3 +144,51 @@ fn reconciliation_wait_ends_when_its_original_observer_dies() {
     drop(commands);
     assert_eq!(poll(wait.as_mut()), Poll::Ready(()));
 }
+
+fn task() -> lk_agents_abi::delegation::remote::RemoteTaskRef {
+    lk_agents_abi::delegation::remote::RemoteTaskRef {
+        task_id: "booking".into(),
+        context_id: "trip".into(),
+    }
+}
+
+#[test]
+fn cancellation_waits_for_its_owner_and_preserves_a_refusal() {
+    let (driver, mut commands) = Driver::channel();
+    let mut wait = pin!(driver.cancel(task()));
+    assert!(poll(wait.as_mut()).is_pending());
+    let command = commands.try_recv().unwrap();
+    assert!(matches!(command.message, Message::Cancel(reference) if reference == task()));
+    assert!(poll(wait.as_mut()).is_pending(), "queue admission does not confirm cancellation");
+    command.done.resolve(Err(AgentClientError::Protocol("the peer refused cancellation".into())));
+    assert!(matches!(poll(wait.as_mut()), Poll::Ready(Err(AgentClientError::Protocol(_)))));
+    assert!(driver.is_live(), "a refused control does not end the original observer");
+}
+
+#[test]
+fn dropping_a_cancel_wait_does_not_retract_its_admitted_control() {
+    let (driver, mut commands) = Driver::channel();
+    let mut wait = Box::pin(driver.cancel(task()));
+    assert!(poll(wait.as_mut()).is_pending());
+    drop(wait);
+    let command = commands.try_recv().unwrap();
+    assert!(matches!(command.message, Message::Cancel(reference) if reference == task()));
+    command.done.resolve(Ok(()));
+}
+
+#[test]
+fn driver_death_settles_queued_and_in_flight_cancellation_waits() {
+    let (driver, mut commands) = Driver::channel();
+    let mut in_flight = pin!(driver.cancel(task()));
+    let mut queued = pin!(driver.cancel(task()));
+    assert!(poll(in_flight.as_mut()).is_pending());
+    let command = commands.try_recv().unwrap();
+    assert!(poll(queued.as_mut()).is_pending());
+    drop(commands);
+    assert!(matches!(poll(queued.as_mut()), Poll::Ready(Err(AgentClientError::InvalidInput(_)))));
+    drop(command);
+    assert!(matches!(
+        poll(in_flight.as_mut()),
+        Poll::Ready(Err(AgentClientError::InvalidInput(_)))
+    ));
+}

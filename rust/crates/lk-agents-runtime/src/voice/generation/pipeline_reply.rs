@@ -309,7 +309,6 @@ fn follow_up(prev: &ReplyExecution, next: NextReply) -> ReplyExecution {
         user_metrics: previous_user_metrics.or_else(|| prev.plan.user_metrics.clone()),
         message_id,
         speech: prev.plan.speech,
-        answering: None,
         completion: prev.plan.completion,
         step: prev.plan.step + 1,
     };

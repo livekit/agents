@@ -7,8 +7,8 @@ use super::{AgentRun, AgentRunEffect, Next, Phase, StepId};
 /// How an invocation opens, and who owns its record and its requests.
 #[derive(Debug, Clone)]
 pub enum Opening {
-    /// Direct runs and TextSession: the incoming message, answered against the history, and every
-    /// request planned here.
+    /// Direct runs and TextSession: the incoming message and every request planned here.
+    /// Only an owning coordinator can supply matched pending call IDs.
     Message(Box<ChatMessage>),
     /// VoiceSession: the coordinator owns the record and plans each request
     /// ([`AgentRunEffect::PlanRequest`]), and handles tool results ([`AgentRunEffect::HandleToolResults`]).

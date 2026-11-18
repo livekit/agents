@@ -280,12 +280,8 @@ fn an_experts_question_keeps_the_exact_body_live_for_answer_progress_and_outcome
         4,
         "reused".into(),
         ToolUpdate::Final {
-            report: ToolOutcome::InputRequired {
-                question: "Which city?".into(),
-                verbatim: false,
-                tool: None,
-            }
-            .into(),
+            report: ToolOutcome::InputRequired { question: "Which city?".into(), verbatim: false }
+                .into(),
         },
     );
     assert_eq!(

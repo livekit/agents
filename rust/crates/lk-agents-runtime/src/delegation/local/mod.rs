@@ -188,20 +188,25 @@ struct Delegate {
 
 impl Delegate {
     async fn drive(&self, arguments: Value, parent: Vec<ChatItem>, live: bool) -> ToolOutcome {
-        let agent = self.child.definition.name.clone();
         let mut history = agent_tool::opening(&parent, self.tool.chat_history);
-        let opening = history.len();
-        history.extend(agent_tool::retained(&parent, &self.call, &agent));
+        let mut input_answers = std::collections::BTreeSet::new();
         let mut message = agent_tool::task(self.id("task"), &arguments, self.stamp());
         if live && let Err(error) = self.host.delegated(&self.cx, &self.context).await {
             return ToolOutcome::Failed(error.to_string());
         }
         loop {
-            let (result, output) = match self.invoke(history, message).await {
+            let (result, output) = match self.invoke(history, message, input_answers).await {
                 Ok(settled) => settled,
                 Err(error) => return ToolOutcome::Failed(error),
             };
             let step = agent_tool::settle(&result, output.as_ref());
+            let matched = result
+                .as_ref()
+                .ok()
+                .and_then(|result| result.pending_call.as_ref())
+                .map(|call| call.id.clone())
+                .into_iter()
+                .collect();
             let all_messages = result.map(|r| r.all_messages).unwrap_or_default();
             match step {
                 Step::Ask { question, verbatim } if live => {
@@ -222,15 +227,11 @@ impl Delegate {
                         );
                     };
                     history = all_messages;
+                    input_answers = matched;
                     message =
                         ChatMessage::text(self.id("answer"), Role::User, answer, self.stamp());
                 }
-                step => {
-                    let waiting = matches!(step, Step::Ask { .. })
-                        .then(|| all_messages.get(opening..).unwrap_or_default().to_vec());
-                    agent_tool::record(&mut self.shared.lock().extra, &agent, waiting);
-                    return step.outcome();
-                }
+                step => return step.outcome(),
             }
         }
     }
@@ -241,6 +242,7 @@ impl Delegate {
         &self,
         history: Vec<ChatItem>,
         mut message: ChatMessage,
+        input_answers: std::collections::BTreeSet<String>,
     ) -> Result<(Result<RunResult, RunError>, Option<Value>), String> {
         let invocation_id = lk_agents_net::strings::shortuuid("run_");
         let execution_id = lk_agents_core::agent_run::execution::bind(
@@ -267,7 +269,6 @@ impl Delegate {
             id_seed: telemetry::random_seed(),
             opening: Opening::Message(Box::new(message)),
             history,
-            answer_tool: None,
             delegated: true,
             mode: Mode::Text,
             llm: Some(LlmRef { id: ResourceId(0), provider: self.child.llm.id() }),
@@ -275,6 +276,7 @@ impl Delegate {
             cleanup_timeout: HOST_TEARDOWN_TIMEOUT,
         };
         let setup = RunSetup {
+            input_answers,
             llm: self.child.llm.clone(),
             tools_host: self.child.tools_host.clone(),
             host: self.child.host.clone(),
@@ -335,7 +337,7 @@ impl Delegate {
     }
 
     fn id(&self, kind: &str) -> String {
-        format!("{}/{kind}_{}", self.call.call_id, lk_agents_net::strings::shortuuid(""))
+        format!("{}/{kind}_{}", self.call.id, lk_agents_net::strings::shortuuid(""))
     }
 
     fn stamp(&self) -> std::time::SystemTime {

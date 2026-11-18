@@ -12,6 +12,34 @@ use lk_agents_core::agent_run::RequestId as ModelRequestId;
 #[path = "input_tests.rs"]
 mod tests;
 
+#[derive(Debug, Clone)]
+pub(crate) enum ReplyInputScope {
+    Snapshot(std::collections::BTreeSet<String>),
+    AwaitingTranscript,
+    Human(Box<ChatMessage>),
+}
+
+impl ReplyInputScope {
+    pub(crate) fn capture(
+        message: Option<&ChatMessage>,
+        answers: &std::collections::BTreeSet<String>,
+    ) -> Self {
+        match message.filter(|message| message.role == Role::User) {
+            Some(message) => Self::Human(Box::new(message.clone())),
+            None => Self::Snapshot(answers.clone()),
+        }
+    }
+}
+
+/// Transcript enrichment and storage normalization do not create another human answer.
+/// Every authored content part and its interruption boundary still select an exact version.
+pub(super) fn same_human_version(left: &ChatMessage, right: &ChatMessage) -> bool {
+    left.id == right.id
+        && left.role == right.role
+        && left.content == right.content
+        && left.interrupted == right.interrupted
+}
+
 #[derive(Debug)]
 pub(super) enum AfterCapture {
     Ready,
@@ -45,7 +73,7 @@ impl VoiceDriver {
         else {
             unreachable!("the captured request was checked")
         };
-        let pending = offered.iter().any(|candidate| candidate.reference.remote().is_some());
+        let pending = !offered.is_empty();
         reply.input_offers(offered);
         match after {
             AfterCapture::Ready => {}
@@ -67,11 +95,15 @@ impl VoiceDriver {
     pub(crate) fn begin_input_route(&mut self, speech: SpeechId, message: ChatMessage) {
         let request_id = self.session.ids.mint("input_route");
         if let Some(reply) = self.activity.tools.replies.get_mut(&speech) {
+            if matches!(reply.input_scope, ReplyInputScope::AwaitingTranscript) {
+                reply.input_scope = ReplyInputScope::Human(Box::new(message.clone()));
+            }
             reply.input_gate = ReplyInputGate::Routing {
                 request_id: request_id.clone(),
                 human_id: message.id.clone(),
             };
         }
+        self.replies_answered();
         self.record_effect(crate::agent_session::effects::VoiceEffect::RouteInput {
             speech,
             request_id,
@@ -82,6 +114,7 @@ impl VoiceDriver {
     pub(crate) fn expect_realtime_input(&mut self, speech: SpeechId) {
         let message = self.realtime_input.take();
         let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return };
+        reply.input_scope = ReplyInputScope::AwaitingTranscript;
         match &mut reply.input_gate {
             ReplyInputGate::Capturing { after, .. } => {
                 *after = match message {
@@ -92,12 +125,7 @@ impl VoiceDriver {
             _ => {
                 if let Some(message) = message {
                     self.begin_input_route(speech, message);
-                } else if reply
-                    .run
-                    .input_offers()
-                    .iter()
-                    .any(|candidate| candidate.reference.remote().is_some())
-                {
+                } else if !reply.run.input_offers().is_empty() {
                     reply.input_gate = ReplyInputGate::AwaitingTranscript;
                 }
             }
@@ -151,6 +179,9 @@ impl VoiceDriver {
 
     pub(crate) fn route_realtime_input_for(&mut self, speech: SpeechId, message: ChatMessage) {
         let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return };
+        if !matches!(reply.input_scope, ReplyInputScope::Human(_)) {
+            reply.input_scope = ReplyInputScope::Human(Box::new(message.clone()));
+        }
         if let ReplyInputGate::Capturing { after, .. } = &mut reply.input_gate {
             *after = AfterCapture::Message(Box::new(message));
         } else {
@@ -186,6 +217,7 @@ impl VoiceDriver {
             );
             self.commit_item(observation.into(), Source::InputRouting, Visibility::Model);
         }
+        self.hold_local_responses(&message, &admission.requests);
         self.reserve_expert_responses(message, admission.requests);
     }
 

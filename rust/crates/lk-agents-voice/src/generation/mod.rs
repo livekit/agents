@@ -299,12 +299,6 @@ impl PlanSpec {
         if let Some(msg) = &self.new_message
             && !known.contains(msg.id.as_str())
         {
-            if msg.role == Role::User {
-                planning::answer_pending_input(
-                    &mut ctx.items,
-                    &msg.raw_text_content().unwrap_or_default(),
-                );
-            }
             ctx.insert(msg.clone());
         }
         // On, the guide's place replaces last turn's instead of stacking, filled per request by
@@ -587,8 +581,6 @@ pub struct ReplyContext {
     /// The speech options as of the reply's creation: a later `update_options` reaches the next
     /// reply, not this one.
     pub speech: crate::agent_session::options::SpeechOptions,
-    /// This reply answers an `InputRequired(tool=)`: its call of that tool takes the person's words.
-    pub answering: Option<crate::tool_executor::Answering>,
     /// The step this context plays, as `num_steps` counts it: the reply counts its own steps and
     /// reports each back edge to the core.
     pub step: u32,

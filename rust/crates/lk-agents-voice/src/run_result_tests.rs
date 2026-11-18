@@ -27,11 +27,7 @@ fn result_precedence_releases_non_selected_values() {
     let last = SpeechId(2);
     runs.outputs.insert(
         first,
-        RunOutcome::InputRequired(RunQuestion {
-            question: "old?".into(),
-            verbatim: true,
-            answer_tool: None,
-        }),
+        RunOutcome::InputRequired(RunQuestion { question: "old?".into(), verbatim: true }),
     );
     runs.speech_ended(first, None);
     assert!(runs.outputs.contains_key(&first));
@@ -62,7 +58,6 @@ fn last_completed_participating_speech_preserves_failure_precedence() {
         RunOutcome::InputRequired(RunQuestion {
             question: "ignored by speech error?".into(),
             verbatim: true,
-            answer_tool: None,
         }),
     );
     let error = ProviderError::Local(lk_agents_abi::errors::ApiError::new(
@@ -143,7 +138,7 @@ fn a_question_is_the_outcome_not_the_preceding_assistant_text() {
     runs.participated();
     runs.record(&reply("message", "earlier reply", 0));
     let speech = SpeechId(3);
-    let question = RunQuestion { question: "Confirm?".into(), verbatim: true, answer_tool: None };
+    let question = RunQuestion { question: "Confirm?".into(), verbatim: true };
     runs.outputs.insert(speech, RunOutcome::InputRequired(question.clone()));
     runs.speech_ended(speech, None);
     let (open, output) = runs.decide(false).expect("settled");
@@ -261,7 +256,6 @@ fn retained_requirements_survive_result_precedence_and_close() {
             id: "item-1".into(),
             name: "flight".into(),
             call_id: "call-1".into(),
-            answer_tool: Some("answer".into()),
         },
         question: "Which day?".into(),
         verbatim: true,
@@ -340,19 +334,11 @@ fn unrelated_speech_neither_extends_the_run_nor_replaces_its_result() {
     );
     driver.session.runs.outputs.insert(
         host,
-        RunOutcome::InputRequired(RunQuestion {
-            question: "owned?".into(),
-            verbatim: true,
-            answer_tool: None,
-        }),
+        RunOutcome::InputRequired(RunQuestion { question: "owned?".into(), verbatim: true }),
     );
     driver.session.runs.outputs.insert(
         unrelated,
-        RunOutcome::InputRequired(RunQuestion {
-            question: "unrelated?".into(),
-            verbatim: true,
-            answer_tool: None,
-        }),
+        RunOutcome::InputRequired(RunQuestion { question: "unrelated?".into(), verbatim: true }),
     );
     driver.release_speech(Ts::ZERO, host);
     driver.run_check();

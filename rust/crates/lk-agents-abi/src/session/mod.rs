@@ -44,9 +44,12 @@ impl InputRequestRef {
 /// Native delivery and response admission. A reference never authorizes its own presentation.
 #[derive(Debug, Clone)]
 pub enum SessionInputCommand {
+    Retain { agent_id: String, request_id: String, input: Box<AgentInputRequest> },
     Presented { requests: Vec<InputRequestRef>, message_id: String },
     Respond { requests: Vec<InputRequestRef>, message_id: String },
     Correct { request: InputRequestRef, previous_message_id: String, message_id: String },
+    Delivered { requests: Vec<InputRequestRef>, message_id: String },
+    Close { requests: Vec<InputRequestRef> },
 }
 
 /// Detector correlation only: matching a response does not approve a business operation.
@@ -86,6 +89,14 @@ pub struct InputAdmission {
     pub requests: Vec<InputRequestRef>,
     /// Frozen post-admission occurrences for the frontend model turn this response releases.
     pub offered: Vec<InputCandidate>,
+}
+
+/// Native recovery authority names the original business call or an explicit task control.
+/// Neither a saved address nor a restored tool name can install a live transport owner.
+#[derive(Debug, Clone)]
+pub enum SessionRecovery {
+    Call(ToolCallRef),
+    Cancellation(crate::delegation::remote::RemoteTaskRef),
 }
 
 /// Serialized conversation authority. No host policy callback or saved command capability.
@@ -148,6 +159,15 @@ pub trait SessionCommands: Send + Sync {
         >,
     >;
 
+    /// Cancel through the task's configured live driver. Saved or detached observations do
+    /// not supply credentials, and no idle owner is activated by this command.
+    fn cancel_remote<'a>(
+        &'a self,
+        remote_id: &'a str,
+        endpoint: &'a str,
+        task: &'a crate::delegation::remote::RemoteTaskRef,
+    ) -> crate::BoxFuture<'a, Result<(), crate::a2a::client::AgentClientError>>;
+
     /// Validate the offered occurrences and checkpoint their reservations before continuation.
     fn admit_input(
         &self,
@@ -160,36 +180,11 @@ pub trait SessionCommands: Send + Sync {
         command: SessionInputCommand,
     ) -> crate::BoxFuture<'a, Result<(), crate::storage::StorageError>>;
 
-    /// Canonical held human response, before any outgoing request has reserved it.
-    fn response<'a>(
-        &'a self,
-        reference: &'a InputRequestRef,
-    ) -> crate::BoxFuture<'a, Result<crate::ChatMessage, crate::storage::StorageError>>;
-
-    /// One undispatched human response for this destination. Ambiguity requires explicit routing.
-    fn held_input<'a>(
-        &'a self,
-        remote_id: &'a str,
-        endpoint: &'a str,
-        task_id: Option<&'a str>,
-    ) -> crate::BoxFuture<'a, Result<Option<InputRequestRef>, crate::storage::StorageError>>;
-
-    /// Resolve a known, nonterminal task on this destination without answering its input.
-    fn task<'a>(
-        &'a self,
-        remote_id: &'a str,
-        endpoint: &'a str,
-        task_id: &'a str,
-    ) -> crate::BoxFuture<
-        'a,
-        Result<crate::delegation::remote::RemoteTaskRef, crate::storage::StorageError>,
-    >;
-
     fn recover<'a>(
         &'a self,
         remote_id: &'a str,
         endpoint: &'a str,
-        origin: &'a ToolCallRef,
+        target: &'a SessionRecovery,
     ) -> crate::BoxFuture<
         'a,
         Result<Option<crate::delegation::remote::RemoteRecovery>, crate::storage::StorageError>,

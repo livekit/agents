@@ -27,7 +27,6 @@ pub struct TurnContext {
     pub task_id: String,
     pub tasks: Vec<TaskRecord>,
     pub caller_history: Option<Map<String, Value>>,
-    pub answer_tool: Option<String>,
     #[host(skip)]
     pub host_context: Option<crate::HostRef>,
 }
@@ -42,9 +41,6 @@ pub struct PendingCall {
     pub name: String,
     /// Provider wire ID, retained for model-facing call/result pairing.
     pub call_id: String,
-    /// The tool that takes the answer, when the `InputRequired` named one.
-    #[host(default = None)]
-    pub answer_tool: Option<String>,
 }
 
 #[crate::host(record(module = "storage_turn", extract, emit))]

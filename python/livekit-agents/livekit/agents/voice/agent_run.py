@@ -106,9 +106,8 @@ class RunHooks:
     ``checkpoint`` is awaited before model requests and result delivery; ``True`` yields there
     and marks ``interrupted``. ``on_result`` receives every result. ``on_update`` receives a
     tool's ``ctx.update(text)``; ``on_token`` the model's text from ``run()`` (``run_stream()``
-    leaves delivery to its consumer). ``answer_tool`` names the tool the message is handed to
-    before the model runs. ``delegated`` marks a message from another agent: the run does not
-    phrase its questions, the agent facing the person does.
+    leaves delivery to its consumer). ``delegated`` marks a message from another agent: the run
+    does not phrase its questions, the agent facing the person does.
     """
 
     checkpoint: Callable[[], Awaitable[bool]] | None = None
@@ -118,7 +117,6 @@ class RunHooks:
     thread: Thread | None = None
     task_id: str | None = None
     store: ContextStore | None = None
-    answer_tool: str | None = None
     delegated: bool = False
     interrupted: bool = False
     delegation_chain: tuple[DelegationPartition, ...] = ()
@@ -277,7 +275,6 @@ async def start_run(
                 execution_id=hooks.task_id if hooks is not None else None,
                 message=message,
                 history=history,
-                answer_tool=hooks.answer_tool if hooks is not None else None,
                 delegated=hooks.delegated if hooks is not None else False,
                 conn_options=conn_options,
                 host_context=(asyncio.get_running_loop(), captured),

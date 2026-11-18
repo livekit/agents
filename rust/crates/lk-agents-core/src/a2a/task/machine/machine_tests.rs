@@ -589,10 +589,9 @@ fn a_reply_to_a_merged_question_answers_the_one_waiting_now() {
     let waiting = staged.transitions.iter().find(|t| t.task_id == "waiting").expect("settled");
     assert_eq!(waiting.status, TaskState::Completed);
     assert!(staged.edits.is_empty(), "transport admission cannot rewrite a tool result");
-    let Operation::Handle(handle) = step(&mut m, Completion::Done) else {
+    let Operation::Handle(_) = step(&mut m, Completion::Done) else {
         panic!("the handler receives the whole message")
     };
-    assert_eq!(handle.answer_tool, None, "only the conversation owner decides the destination");
 }
 
 /// A2A_SEED=181 350 616 (commit_is_what_the_run_staged, Concurrent): overlapping concurrent turns

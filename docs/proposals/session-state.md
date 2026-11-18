@@ -325,7 +325,6 @@ class AgentState:
     chat_ctx: ChatContext                        # This context's private model history.
     options: FrameOptions                        # Policies fixed when the child starts.
 
-    # Existing lifecycle fields below remain placeholders for discussion.
     # Return this child's final result to the parent agent's tool call; None for root.
     # Human answers use the question's continuation, not this reference.
     origin: ToolCallRef | None
@@ -1081,19 +1080,19 @@ finishing them does not by itself complete live execution, voice delivery or int
       or journal compaction, including absent source messages.
 - [ ] Expose lossless A2A protocol records through generated host APIs; reuse Task/TaskState,
       Message, StreamResponse and existing request/response types without parallel wire models.
-- [ ] Reuse SDK method constants for journal operation identities; map any internal ABI
+- [x] Reuse SDK method constants for journal operation identities; map any internal ABI
       discriminator to them and generate host values, preserving streaming/unary send identity.
-- [ ] Store operation/method on internal request records keyed by stable request_id; require
+- [x] Store operation/method on internal request records keyed by stable request_id; require
       that ID on every journal event, independently of sequence and transport RPC identity.
 - [ ] Cover every supported client operation in generated request/response mappings; preserve
       SDK response unions/error details and validate each method's allowed outcomes.
-- [ ] Persist mutable request progress using existing Rust ownership; keep dispatch/lifetime and
+- [x] Persist mutable request progress using existing Rust ownership; keep dispatch/lifetime and
       caller/input correlation there, with no separate public primitive or local-state log markers.
-- [ ] Journal SDK requests, responses and observed errors across supported client operations;
+- [x] Journal SDK requests, responses and observed errors across supported client operations;
       generate the three commented A2AJournalKind values and validate operation correlation.
 - [ ] Commit related state/log changes atomically; test crashes between intent, dispatch, peer
       response and outcome persistence, including committed-then-lost database writes.
-- [ ] Build read-only message/task/context indexes and consistent checkpoints; preserve native
+- [x] Build read-only message/task/context indexes and consistent checkpoints; preserve native
       Message responses and contextless messages without inventing tasks.
 - [ ] Define bounded compaction and observed-state inspection semantics without losing
       unresolved request, origin, dispatch or delivery references; retain request ID/method
@@ -1109,13 +1108,13 @@ finishing them does not by itself complete live execution, voice delivery or int
 - [ ] Finalize AgentState view typing and migrate the existing activity-enum name explicitly.
 - [ ] Define agent replacement and supported child-mode transitions; verify that queued
       results survive agent changes and require matching expert/access eligibility.
-- [ ] Specify atomic result propagation/merge/child cleanup and recovery of a retained
+- [x] Specify atomic result propagation/merge/child cleanup and recovery of a retained
       completed AgentState output without re-executing the child; preserve existing failures.
 - [ ] Define shared item identity, context membership and delivery/history projection storage,
       including child removal with merge_chat_ctx disabled.
 - [ ] Implement automatic response recognition across agent changes and durable response
       reservations, independently of permission to dispatch through the current agent's tools.
-- [ ] Define local continuation records and remove InputRequired.tool plus answer_tool from
+- [x] Define local continuation records and remove InputRequired.tool plus answer_tool from
       ABI/host/runtime/storage paths, without retaining a blind-dispatch compatibility path.
       Verify that side questions do not consume pending input or invoke an arbitrary named tool.
 - [ ] Define ChatContext editing and snapshot semantics while bound.

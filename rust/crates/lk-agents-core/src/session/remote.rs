@@ -6,7 +6,7 @@ use lk_agents_abi::delegation::remote::{
     A2AJournalPayload, A2ARequest, RemoteAgentState, RemoteCommand, RemoteInput, RemoteRecovery,
     RemoteTaskRef,
 };
-use lk_agents_abi::session::{InputRequestRef, ToolCallRef};
+use lk_agents_abi::session::{InputRequestRef, SessionRecovery, ToolCallRef};
 use lk_agents_abi::storage::StorageError;
 
 /// Ending a frontend stops new transport operations, while receipts already in flight settle.
@@ -49,6 +49,38 @@ pub fn apply(
             }
         }
     }
+    let cancel = match &command.input {
+        RemoteInput::Prepare { request_id, request: A2ARequest::Cancel(cancel), .. } => {
+            Some((request_id, Some(cancel.id.as_str())))
+        }
+        RemoteInput::DispatchStarted { request_id } => Some((request_id, None)),
+        _ => None,
+    };
+    if let Some((request_id, preparing)) = cancel {
+        let remote = state(snapshot, &command.remote_id, &command.endpoint)?;
+        match (preparing, remote.and_then(|remote| remote.requests.get(request_id))) {
+            (Some(task_id), None) => {
+                let remote = remote.ok_or_else(|| {
+                    StorageError::Invalid("this remote has no known tasks".into())
+                })?;
+                task(remote, task_id)?;
+            }
+            (None, Some(request)) if !request.dispatch_started => {
+                let remote = remote.expect("the request belongs to this saved remote");
+                if let Some(A2AJournalPayload::Request(A2ARequest::Cancel(cancel))) =
+                    remote.events.get(request.request_event as usize).map(|event| &event.payload)
+                {
+                    let target = task(remote, &cancel.id)?;
+                    if request.task.as_ref() != Some(&target) {
+                        return Err(StorageError::Invalid(
+                            "the cancellation task context changed".into(),
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     super::input::validate_dispatch(snapshot, &command)?;
     let remote_id = command.remote_id;
     let remote = snapshot
@@ -77,6 +109,33 @@ pub fn task(remote: &RemoteAgentState, task_id: &str) -> Result<RemoteTaskRef, S
         ));
     }
     Ok(RemoteTaskRef { task_id: task_id.into(), context_id: saved.task.context_id.clone() })
+}
+
+/// An active owner can acknowledge an observed cancellation without another transport call.
+/// Saved addresses still have to identify this exact task and context.
+pub fn cancel_required(
+    remote: &RemoteAgentState,
+    target: &RemoteTaskRef,
+) -> Result<bool, StorageError> {
+    let saved = remote.tasks.get(&target.task_id).ok_or_else(|| {
+        StorageError::Invalid("the task is unknown on this remote in this conversation".into())
+    })?;
+    if target.task_id.is_empty()
+        || target.context_id.is_empty()
+        || saved.task.id != target.task_id
+        || saved.task.context_id != target.context_id
+    {
+        return Err(StorageError::Invalid("the saved task identity or context changed".into()));
+    }
+    if saved.task.status.state == lk_agents_abi::a2a_protocol::TaskState::Canceled {
+        return Ok(false);
+    }
+    if saved.task.status.state.is_terminal() {
+        return Err(StorageError::Invalid(
+            "the remote task ended before cancellation was requested".into(),
+        ));
+    }
+    Ok(true)
 }
 
 /// Saved addresses are pinned to their configured destination; they carry no credentials.
@@ -116,3 +175,53 @@ pub fn recovery(
         .map(Some)
         .map_err(|error| StorageError::Invalid(error.to_string()))
 }
+
+/// Recover one initiating operation or an explicit cancellation. A cancellation that may have
+/// reached its peer is observed by task identity; it is never replaced by another control send.
+pub fn recover(
+    remote: &RemoteAgentState,
+    target: &SessionRecovery,
+) -> Result<Option<RemoteRecovery>, StorageError> {
+    let target = match target {
+        SessionRecovery::Call(origin) => return recovery(remote, origin),
+        SessionRecovery::Cancellation(task) => task,
+    };
+    let saved = remote.tasks.get(&target.task_id).ok_or_else(|| {
+        StorageError::Invalid("the task is unknown on this remote in this conversation".into())
+    })?;
+    if target.task_id.is_empty()
+        || target.context_id.is_empty()
+        || saved.task.id != target.task_id
+        || saved.task.context_id != target.context_id
+    {
+        return Err(StorageError::Invalid("the saved task identity or context changed".into()));
+    }
+    if saved.task.status.state == lk_agents_abi::a2a_protocol::TaskState::Canceled {
+        return Ok(Some(RemoteRecovery::GetTask(target.clone())));
+    }
+    let previous = remote.requests.iter().filter(|(_, request)| {
+        request.task.as_ref() == Some(target)
+            && remote.events.get(request.request_event as usize).is_some_and(|event| {
+                matches!(&event.payload,
+                    A2AJournalPayload::Request(A2ARequest::Cancel(cancel)) if cancel.id == target.task_id)
+            })
+    }).max_by_key(|(_, request)| request.request_event);
+    if let Some((id, _)) = previous {
+        if saved.task.status.state.is_terminal() {
+            return Ok(Some(RemoteRecovery::GetTask(target.clone())));
+        }
+        return crate::delegation::remote::journal::recovery(remote, id)
+            .map(Some)
+            .map_err(|error| StorageError::Invalid(error.to_string()));
+    }
+    if saved.task.status.state.is_terminal() {
+        return Err(StorageError::Invalid(
+            "the remote task ended before cancellation was requested".into(),
+        ));
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+#[path = "remote_tests.rs"]
+mod tests;

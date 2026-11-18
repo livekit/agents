@@ -74,6 +74,7 @@ impl HostBinding for SessionBinding {
     }
     fn close(&self) {
         if !self.closed.swap(true, Ordering::AcqRel) {
+            self.view.unbind_commands();
             let mut active = self.store.session_view.lock();
             if active.as_ref().is_some_and(|view| view.same_view(&self.view)) {
                 *active = None;
@@ -83,6 +84,14 @@ impl HostBinding for SessionBinding {
 }
 
 impl SessionStateSink for SessionBinding {
+    fn bind_commands(
+        &self,
+        commands: std::sync::Weak<dyn lk_agents_abi::session::SessionCommands>,
+    ) -> Result<(), StorageError> {
+        self.ensure_open()?;
+        self.view.bind_commands(commands)
+    }
+
     fn checkpoint_voice<'a>(
         &'a self,
         history: lk_agents_abi::storage::voice::VoiceHistory,

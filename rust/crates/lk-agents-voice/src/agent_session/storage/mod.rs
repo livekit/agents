@@ -434,6 +434,8 @@ impl VoiceDriver {
         ) {
             return;
         }
+        let agent = self.activity.agent_name().to_owned();
+        self.local_history_observed(&agent);
         self.publish_history();
     }
 

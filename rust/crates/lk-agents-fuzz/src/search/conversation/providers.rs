@@ -39,7 +39,7 @@ impl Talk {
     }
 
     /// What the model sends on one chat request, in order. A request offering the
-    /// answering-machine classifier's or the keyterm detector's tool is answered with that tool;
+    /// answering-machine classifier's, input router's or keyterm detector's tool is answered with it;
     /// otherwise the model reaches for one of the agent's tools or says one to three of the
     /// agent's lines. A failing model fails anywhere in it, before its first chunk or partway.
     fn answer(&mut self, chat: u32) -> Vec<Input> {
@@ -50,7 +50,19 @@ impl Talk {
                 Some(Detail::Chat { tools, .. }) if tools.iter().any(|t| t == tool)
             )
         };
-        let tool_call = if offered(&self.run, RECORD_KEYTERMS_TOOL) {
+        let input_candidates = match self.run.record.resource(Kind::Chat, chat).map(|r| r.detail())
+        {
+            Some(Detail::Chat { input_candidates, .. }) => *input_candidates,
+            _ => None,
+        };
+        let tool_call = if let Some(candidates) = input_candidates {
+            // Untrusted provider choices: no-match, one/several matches, unclear, or an
+            // out-of-range reference. The actual parser and owner decide their admission.
+            Some((
+                lk_agents_core::session::input_routing::TOOL.into(),
+                input_verdict(candidates, self.rng.usize(0..5)),
+            ))
+        } else if offered(&self.run, RECORD_KEYTERMS_TOOL) {
             // Terms to track, to apply and to drop, drawn from the call's names, or an answer
             // that changes nothing.
             let mut terms = || -> Vec<&str> {
@@ -168,6 +180,23 @@ impl Talk {
         Ok(())
     }
 }
+
+/// Provider payload fixtures, selected independently of the person's words. A routing fake
+/// never decides which request owns an answer or whether an operation is approved.
+fn input_verdict(candidates: usize, choice: usize) -> ToolArgs {
+    let (selected, unclear) = match choice {
+        0 => (Vec::new(), false),
+        1 => (vec![0], false),
+        2 => ((0..candidates).collect(), false),
+        3 => (Vec::new(), true),
+        _ => (vec![candidates], false),
+    };
+    ToolArgs(serde_json::json!({"candidates":selected, "unclear":unclear}).to_string())
+}
+
+#[cfg(test)]
+#[path = "providers_tests.rs"]
+mod tests;
 
 /// The person's provider knobs a recogniser's verdicts depend on.
 #[derive(Clone, Copy)]

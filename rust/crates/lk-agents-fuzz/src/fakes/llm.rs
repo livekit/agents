@@ -70,6 +70,7 @@ impl Llm for FakeLlm {
                     ctx_ids: request.chat_ctx.items.iter().map(|i| i.id().to_string()).collect(),
                     speech: None,
                     tools: request.tools.iter().map(|t| t.name.clone()).collect(),
+                    input_candidates: input_candidates(request),
                 },
                 Control::Chat(sender),
             );
@@ -84,6 +85,20 @@ impl Llm for FakeLlm {
             }) as LlmStream)
         })
     }
+}
+
+/// Observe only the classifier's offered shape. Verdicts remain scripted wire content and
+/// still pass through production inference parsing and serialized admission.
+fn input_candidates(request: &ChatRequest) -> Option<usize> {
+    if !request.tools.iter().any(|tool| {
+        tool.name == lk_agents_core::session::input_routing::TOOL
+            && tool.json_schema["properties"].get("candidates").is_some()
+    }) {
+        return None;
+    }
+    let message = request.chat_ctx.items.last()?.as_message()?;
+    let value: serde_json::Value = serde_json::from_str(&message.raw_text_content()?).ok()?;
+    value.get("candidates")?.as_array().map(Vec::len)
 }
 
 impl StreamOutput<LlmChunk> for Response {
