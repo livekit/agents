@@ -63,7 +63,7 @@ class DecisionModel(llm.DecisionModel):
     def __init__(
         self,
         *,
-        model: DecisionModels | str = "gpt-6-luna-decisions",
+        model: DecisionModels | str = "gpt-6-luna",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,

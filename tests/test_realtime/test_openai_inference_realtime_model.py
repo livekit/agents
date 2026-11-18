@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+import aiohttp
 import pytest
 from openai.types.realtime import (
     ConversationItemAdded,
@@ -28,6 +29,21 @@ from livekit.agents.inference.realtime.openai import RealtimeSession
 from livekit.agents.llm._realtime.openai import _DiscardedGeneration, _MessageGeneration
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"provider": None}, {"provider": "azure"}])
+def test_provider_pinning_warns_only_when_explicitly_passed(
+    kwargs: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        RealtimeModel("openai/gpt-realtime", api_key="key", api_secret="secret", **kwargs)
+
+    if kwargs:
+        assert len(caplog.messages) == 1
+        assert "provider is deprecated and will be removed on March 1, 2027" in caplog.text
+        assert "Omit this argument" in caplog.text
+    else:
+        assert not caplog.messages
 
 
 def test_plugin_import_is_canonical_class() -> None:
@@ -458,6 +474,19 @@ def test_xai_explicit_turn_detection_is_preserved() -> None:
     assert model.capabilities.can_disable_turn_detection is False
 
 
+def test_google_models_keep_server_turn_detection() -> None:
+    model = RealtimeModel("google/gemini-3.8-live", api_key="key", api_secret="secret")
+
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.can_disable_turn_detection is False
+
+
+def test_openai_models_can_hand_turn_detection_to_the_client() -> None:
+    model = RealtimeModel("openai/gpt-realtime", api_key="key", api_secret="secret")
+
+    assert model.capabilities.can_disable_turn_detection is True
+
+
 def _transcript(session: RealtimeSession, item_id: str, text: str, *, status: str | None) -> None:
     payload: dict[str, Any] = {
         "type": "conversation.item.input_audio_transcription.completed",
@@ -690,3 +719,394 @@ async def test_update_options_voice_omits_empty_audio_input_subobject(
 
     assert update["session"]["audio"] == {"output": {"voice": "rex"}}
     await session.aclose()
+
+
+# -- coordinated gateway handoff --
+
+
+class _GatewaySocket:
+    """One in-memory `/realtime` connection; `reply` acts as the gateway."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.sent: list[dict[str, Any]] = []
+        self._inbox: asyncio.Queue[Any] = asyncio.Queue()
+
+    async def send_str(self, data: str) -> None:
+        if self.closed:
+            raise ConnectionResetError("socket is closed")
+        self.sent.append(json.loads(data))
+
+    async def receive(self) -> Any:
+        return await self._inbox.get()
+
+    async def close(self) -> None:
+        self.closed = True
+        self._inbox.put_nowait(SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=None))
+
+    def reply(self, msg_type: str, **fields: Any) -> None:
+        payload = json.dumps({"type": msg_type, **fields})
+        self._inbox.put_nowait(SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=payload))
+
+    def types(self) -> list[str]:
+        return [e["type"] for e in self.sent]
+
+
+class _Gateway:
+    def __init__(self) -> None:
+        self.sockets: list[_GatewaySocket] = []
+        self.headers: list[dict[str, str]] = []
+
+    async def ws_connect(self, *, url: str, headers: dict[str, str]) -> _GatewaySocket:
+        socket = _GatewaySocket()
+        self.sockets.append(socket)
+        self.headers.append(headers)
+        return socket
+
+
+def _gateway_session(
+    gateway: _Gateway, *, model: str = "openai/gpt-realtime", **kwargs: Any
+) -> RealtimeSession:
+    realtime_model = RealtimeModel(
+        model,
+        api_key="key",
+        api_secret="secret",
+        http_session=gateway,  # type: ignore[arg-type]
+    )
+    return realtime_model.session(**kwargs)
+
+
+async def _until(condition: Any) -> None:
+    async with asyncio.timeout(1.0):
+        while not condition():
+            await asyncio.sleep(0.005)
+
+
+async def test_handoff_header_requires_server_turn_detection(paused_realtime_main: None) -> None:
+    gateway = _Gateway()
+    for disabled, expected in ((False, "1"), (True, None)):
+        session = _gateway_session(gateway, turn_detection_disabled=disabled)
+        await session._create_ws_conn()
+        assert gateway.headers[-1].get("X-LiveKit-Handoff-Protocol") == expected
+        await session.aclose()
+
+
+async def test_quiet_session_leaves_a_draining_gateway() -> None:
+    gateway = _Gateway()
+    session = _gateway_session(gateway)
+    errors: list[Any] = []
+    reconnected: list[Any] = []
+    session.on("error", errors.append)
+    session.on("session_reconnected", reconnected.append)
+    try:
+        await _until(lambda: gateway.sockets and gateway.sockets[0].sent)
+        old = gateway.sockets[0]
+        old.reply("session.handoff.request", handoff_id="h1")
+
+        await _until(lambda: len(gateway.sockets) == 2 and reconnected)
+        assert old.closed
+        assert old.sent[-1] == {"type": "session.handoff.complete", "handoff_id": "h1"}
+        assert "session.update" in gateway.sockets[1].types()
+        assert errors == []
+    finally:
+        await session.aclose()
+
+
+async def test_handoff_waits_for_the_user_to_finish_speaking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(inference_realtime, "_HANDOFF_RESPONSE_GRACE", 0.05)
+    gateway = _Gateway()
+    session = _gateway_session(gateway)
+    try:
+        await _until(lambda: gateway.sockets and gateway.sockets[0].sent)
+        old = gateway.sockets[0]
+        old.reply("input_audio_buffer.speech_started", item_id="i1", audio_start_ms=0)
+        old.reply("session.handoff.request", handoff_id="h1")
+        await asyncio.sleep(0.08)
+        assert "session.handoff.complete" not in old.types()
+
+        old.reply("input_audio_buffer.speech_stopped", item_id="i1", audio_end_ms=500)
+        await asyncio.sleep(0.02)
+        assert "session.handoff.complete" not in old.types()
+        old.reply(
+            "conversation.item.input_audio_transcription.completed",
+            event_id="transcription_1",
+            item_id="i1",
+            content_index=0,
+            transcript="hello",
+        )
+
+        await _until(lambda: "session.handoff.complete" in old.types())
+        await _until(lambda: len(gateway.sockets) == 2)
+    finally:
+        await session.aclose()
+
+
+async def test_handoff_waits_for_the_reply_in_progress() -> None:
+    gateway = _Gateway()
+    session = _gateway_session(gateway)
+    try:
+        await _until(lambda: gateway.sockets and gateway.sockets[0].sent)
+        old = gateway.sockets[0]
+        done: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        session._current_generation = SimpleNamespace(_done_fut=done)  # type: ignore[assignment]
+        old.reply("session.handoff.request", handoff_id="h1")
+        await asyncio.sleep(0.08)
+        assert "session.handoff.complete" not in old.types()
+
+        done.set_result(None)
+        await _until(lambda: "session.handoff.complete" in old.types())
+    finally:
+        session._current_generation = None
+        await session.aclose()
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("model", ["openai/gpt-realtime", "xai/grok-voice-3.0"])
+async def test_handoff_preserves_a_transcript_that_arrives_after_the_reply(model: str) -> None:
+    gateway = _Gateway()
+    session = _gateway_session(gateway, model=model)
+    transcripts: list[llm.InputTranscriptionCompleted] = []
+    session.on("input_audio_transcription_completed", transcripts.append)
+    try:
+        await _until(lambda: gateway.sockets and gateway.sockets[0].sent)
+        old = gateway.sockets[0]
+        old.reply("input_audio_buffer.speech_started", item_id="user_1", audio_start_ms=0)
+        old.reply("input_audio_buffer.speech_stopped", item_id="user_1", audio_end_ms=500)
+        old.reply("input_audio_buffer.committed", item_id="user_1", previous_item_id=None)
+        old.reply(
+            "conversation.item.added",
+            previous_item_id=None,
+            item={
+                "id": "user_1",
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_audio", "transcript": None}],
+            },
+        )
+        old.reply("response.created", response={"id": "r1", "metadata": None})
+        old.reply("response.done", response={"id": "r1", "status": "completed", "usage": None})
+        old.reply("session.handoff.request", handoff_id="h1")
+        await asyncio.sleep(0.1)
+        assert not old.closed
+        assert "session.handoff.complete" not in old.types()
+
+        if model.startswith("xai/"):
+            old.reply(
+                "conversation.item.input_audio_transcription.completed",
+                event_id="partial_1",
+                item_id="user_1",
+                content_index=0,
+                transcript="Please remember",
+                status="in_progress",
+            )
+            await asyncio.sleep(0.1)
+            assert not old.closed
+
+        old.reply(
+            "conversation.item.input_audio_transcription.completed",
+            event_id="transcription_1",
+            status="completed",
+            item_id="user_1",
+            content_index=0,
+            transcript="Please remember this turn.",
+        )
+        await _until(lambda: len(gateway.sockets) == 2 and gateway.sockets[1].sent)
+        assert [event.transcript for event in transcripts if event.is_final] == [
+            "Please remember this turn."
+        ]
+        replay = [e for e in gateway.sockets[1].sent if e["type"] == "conversation.item.create"]
+        assert replay[0]["item"]["content"] == [
+            {"type": "input_text", "text": "Please remember this turn."}
+        ]
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    "error", [aiohttp.ClientConnectionError, ConnectionResetError, asyncio.TimeoutError]
+)
+async def test_handoff_reconnects_when_acknowledgement_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    error: type[Exception],
+) -> None:
+    gateway = _Gateway()
+    session = _gateway_session(gateway)
+    errors: list[Any] = []
+    session.on("error", errors.append)
+    try:
+        await _until(lambda: gateway.sockets and gateway.sockets[0].sent)
+        old = gateway.sockets[0]
+        send_str = old.send_str
+
+        async def fail_ack(data: str) -> None:
+            if json.loads(data)["type"] == "session.handoff.complete":
+                raise error("gateway disconnected")
+            await send_str(data)
+
+        monkeypatch.setattr(old, "send_str", fail_ack)
+        old.reply("session.handoff.request", handoff_id="h1")
+        await _until(lambda: len(gateway.sockets) == 2 and gateway.sockets[1].sent)
+        assert old.closed
+        assert errors == []
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    "terminal", ["conversation.item.input_audio_transcription.failed", "conversation.item.deleted"]
+)
+async def test_handoff_does_not_wait_for_failed_or_deleted_transcriptions(terminal: str) -> None:
+    gateway = _Gateway()
+    session = _gateway_session(gateway)
+    try:
+        await _until(lambda: gateway.sockets and gateway.sockets[0].sent)
+        old = gateway.sockets[0]
+        old.reply("input_audio_buffer.committed", item_id="user_1", previous_item_id=None)
+        old.reply("session.handoff.request", handoff_id="h1")
+        await asyncio.sleep(0.1)
+        assert not old.closed
+        old.reply(
+            terminal,
+            item_id="user_1",
+            content_index=0,
+            error={"code": "failed", "message": "failed"},
+        )
+        await _until(lambda: len(gateway.sockets) == 2 and gateway.sockets[1].sent)
+        assert old.closed
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_handoff_does_not_wait_when_input_transcription_is_disabled() -> None:
+    gateway = _Gateway()
+    model = RealtimeModel(
+        "openai/gpt-realtime",
+        api_key="key",
+        api_secret="secret",
+        http_session=gateway,  # type: ignore[arg-type]
+        input_audio_transcription=None,
+    )
+    session = model.session()
+    try:
+        await _until(lambda: gateway.sockets and gateway.sockets[0].sent)
+        old = gateway.sockets[0]
+        old.reply("input_audio_buffer.committed", item_id="user_1", previous_item_id=None)
+        old.reply("session.handoff.request", handoff_id="h1")
+        await _until(lambda: len(gateway.sockets) == 2 and gateway.sockets[1].sent)
+        assert old.closed
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_xai_handoff_settles_a_deleted_transcription_with_an_empty_item_id() -> None:
+    gateway = _Gateway()
+    session = _gateway_session(gateway, model="xai/grok-voice-3.0")
+    deletion: asyncio.Task[None] | None = None
+    try:
+        await _until(lambda: gateway.sockets and gateway.sockets[0].sent)
+        old = gateway.sockets[0]
+        old.reply("input_audio_buffer.committed", item_id="user_1", previous_item_id=None)
+        old.reply(
+            "conversation.item.added",
+            previous_item_id=None,
+            item={
+                "id": "user_1",
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_audio", "transcript": None}],
+            },
+        )
+        await _until(lambda: session.chat_ctx.get_by_id("user_1") is not None)
+        old.reply("session.handoff.request", handoff_id="h1")
+        await asyncio.sleep(0.1)
+        assert not old.closed
+        deletion = asyncio.create_task(session.update_chat_ctx(llm.ChatContext.empty()))
+        await _until(lambda: "conversation.item.delete" in old.types())
+        old.reply("conversation.item.deleted", item_id="")
+        await deletion
+        await _until(lambda: len(gateway.sockets) == 2 and gateway.sockets[1].sent)
+        assert old.closed
+    finally:
+        if deletion is not None:
+            await utils.aio.gracefully_cancel(deletion)
+        await session.aclose()
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("speech_started", [False, True])
+async def test_handoff_preserves_input_arriving_during_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch, speech_started: bool
+) -> None:
+    gateway = _Gateway()
+    session = _gateway_session(gateway)
+    ack_started = asyncio.Event()
+    release_ack = asyncio.Event()
+    reconnected = asyncio.Event()
+    session.on("session_reconnected", lambda _: reconnected.set())
+    try:
+        await _until(lambda: gateway.sockets and gateway.sockets[0].sent)
+        old = gateway.sockets[0]
+        send_str = old.send_str
+
+        async def block_ack(data: str) -> None:
+            if json.loads(data)["type"] == "session.handoff.complete":
+                ack_started.set()
+                await release_ack.wait()
+            await send_str(data)
+
+        monkeypatch.setattr(old, "send_str", block_ack)
+        old.reply("session.handoff.request", handoff_id="h1")
+        await asyncio.wait_for(ack_started.wait(), timeout=1.0)
+
+        if speech_started:
+            old.reply("input_audio_buffer.speech_started", item_id="user_1", audio_start_ms=0)
+            await _until(lambda: session._user_speaking)
+        else:
+            old.reply("input_audio_buffer.committed", item_id="user_1", previous_item_id=None)
+            await _until(lambda: "user_1" in session._pending_input_transcriptions)
+        release_ack.set()
+        await _until(lambda: "session.handoff.complete" in old.types())
+        await asyncio.sleep(0.1)
+        assert not old.closed
+
+        old.reply(
+            "conversation.item.added",
+            previous_item_id=None,
+            item={
+                "id": "user_1",
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_audio", "transcript": None}],
+            },
+        )
+        if speech_started:
+            old.reply("input_audio_buffer.speech_stopped", item_id="user_1", audio_end_ms=500)
+            old.reply("response.created", response={"id": "r1", "metadata": None})
+            old.reply("response.done", response={"id": "r1", "status": "completed", "usage": None})
+            await asyncio.sleep(0.1)
+            assert not old.closed
+        old.reply(
+            "conversation.item.input_audio_transcription.completed",
+            event_id="final_1",
+            item_id="user_1",
+            content_index=0,
+            transcript="Keep this turn.",
+        )
+        await asyncio.wait_for(reconnected.wait(), timeout=1.0)
+        assert old.closed
+        assert old.types().count("session.handoff.complete") == 1
+        replay = [
+            e["item"] for e in gateway.sockets[1].sent if e["type"] == "conversation.item.create"
+        ]
+        assert [item["content"] for item in replay if item["role"] == "user"] == [
+            [{"type": "input_text", "text": "Keep this turn."}]
+        ]
+    finally:
+        release_ack.set()
+        await session.aclose()

@@ -140,3 +140,21 @@ async def test_user_sent_as_metadata_user_id() -> None:
     request = await _request(llm_kwargs={"user": "user-123"}, extra_kwargs={"metadata": metadata})
     assert request["metadata"] == {"user_id": "user-123", "trace_id": "abc"}
     assert metadata == {"user_id": "caller", "trace_id": "abc"}
+
+
+async def test_sampling_params_in_extra_kwargs_sent_in_the_body() -> None:
+    # messages.create() takes no temperature/top_p/top_k since anthropic 1.0, and the evals
+    # judges pass temperature=0.0 through extra_kwargs. claude-sonnet-4-6 accepts them.
+    requests: list[dict[str, Any]] = []
+    instance = _make_llm("claude-sonnet-4-6", requests)
+    await instance.chat(chat_ctx=ChatContext(), extra_kwargs={"temperature": 0.0}).collect()
+    assert requests[0]["temperature"] == 0.0
+
+    # they override the LLM options; the other extra_kwargs are sent as before
+    extra_kwargs = {"temperature": 0.2, "top_p": 0.9, "metadata": {"trace_id": "abc"}}
+    instance = _make_llm("claude-sonnet-4-6", requests, temperature=0.7, top_k=3)
+    await instance.chat(chat_ctx=ChatContext(), extra_kwargs=extra_kwargs).collect()
+    request = requests[1]
+    assert (request["temperature"], request["top_p"], request["top_k"]) == (0.2, 0.9, 3)
+    assert request["metadata"] == {"trace_id": "abc"}
+    assert extra_kwargs == {"temperature": 0.2, "top_p": 0.9, "metadata": {"trace_id": "abc"}}
