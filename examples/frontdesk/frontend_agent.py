@@ -1,6 +1,15 @@
 import backend_agent
 
-from livekit.agents import Agent, AgentHandler, JobContext, RunResult, TextSession, VoiceSession
+from livekit.agents import (
+    Agent,
+    AgentHandler,
+    DelegationOptions,
+    JobContext,
+    RunResult,
+    TextSession,
+    VoiceSession,
+    inference,
+)
 from livekit.agents.a2a import A2ASessionContext, RemoteAgent
 from livekit.plugins import openai
 
@@ -50,5 +59,7 @@ async def phone(ctx: JobContext) -> None:
 )
 async def text(ctx: A2ASessionContext) -> RunResult[str]:
     binding = ctx.store.bind()
-    result = await TextSession(agent=chat).run(ctx.message, context=binding)
-    return result
+    async with inference.LLM("google/gemma-4-31b-it") as routing:
+        return await TextSession(
+            agent=chat, delegation=DelegationOptions(routing_model=routing)
+        ).run(ctx.message, context=binding)

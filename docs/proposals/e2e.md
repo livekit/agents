@@ -93,6 +93,11 @@ selected run. The default correctness suite does not collect these live evaluati
 Each selected journey writes `live-model-report.json` in its test artifact directory, with
 requested model IDs, turn timings, delivered conversation, task/input state and the original
 SDK communication journal. Model wording is not matched against one fixed sentence.
+The voice journey launches an ordinary RTC worker and receives actual audio over the isolated
+SFU. Its frontend and routing models are live; deterministic tone STT/TTS isolate transport,
+turn handling and response correlation from speech-provider quality. It checks a side question
+leaves the original task open, then a spoken date reaches that task. `voice-observations.json`
+records the received utterances and audio evidence alongside the native state/journal report.
 The name-collection journeys start two independent stock A2A services. They check that the
 frontend groups their related questions, that a full name reaches both original tasks, and
 that a first-name-only response leaves the last-name task open until the next response.

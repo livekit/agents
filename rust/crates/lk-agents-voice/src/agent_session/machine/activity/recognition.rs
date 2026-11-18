@@ -359,11 +359,15 @@ impl VoiceDriver {
             (reply && !handle.interrupted() && !handle.done()).then_some(id)
         });
         let Some(reply) = reply.filter(|id| !self.activity.spoke.contains(id)) else { return };
+        let Some(user) = self.session.chat_ctx.user_turn_message(turn).cloned() else { return };
         self.force_interrupt_speech(now, reply, InterruptCause::Superseded);
         let interruptible = self.session.config.effective.turn.interruption.enabled();
         self.start_speech(
             now,
             SpeechSpec {
+                // Replanning must recognize the corrected words before invoking the frontend;
+                // the previous verdict authorized only the earlier version of this same item.
+                new_message: Some(user),
                 turn: Some(turn),
                 ..SpeechSpec::new(SpeechKind::TurnReply, ReplySource::Llm, interruptible)
             },
@@ -914,6 +918,7 @@ impl VoiceDriver {
             Some(PreemptiveRefusal::Realtime)
         // The leaving agent starts none, including during its `on_exit` before the pause.
         } else if self.activity.in_window()
+            || self.session.experts.needs_input_routing()
             || s.authorization_paused
             || s.is_paused()
             || self.session.closing_past_edge()

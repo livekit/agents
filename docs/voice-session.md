@@ -29,6 +29,7 @@ again when left empty.
 | `stt`, `tts`, `vad` | Session-owned recognition, synthesis, and voice activity models |
 | `turn_handling` | a `TurnHandlingOptions`: `turn_detection`, `endpointing` (`EndpointingOptions`), `interruption` (`InterruptionOptions`), `preemptive_generation` (`PreemptiveGenerationOptions`) and `user_turn_limit` (`UserTurnLimitOptions`) in one dict |
 | `conn_options` | a `SessionConnectOptions`: each leg's [connection policy](models.md#connection-options) (`stt_conn_options`, `llm_conn_options`, `tts_conn_options`) and `max_unrecoverable_errors` |
+| `delegation` | `DelegationOptions(routing_model=...)`: a separate response-routing model shared by the session's remote tools |
 | `video_sampler` | a `VoiceActivityVideoSampler(speaking_fps=, silent_fps=)`: how often camera frames reach the model; `None` sends every frame |
 | `stt_context_options` | an `STTContextOptions`: static `keyterms` the STT is biased toward, `keyterm_detection` (`KeytermDetectionOptions`) to add terms heard in the conversation, `forward_chat_context`. `session.keyterms` reads the current terms; `update_options(keyterms=)` replaces the static ones |
 | `aec_warmup_duration` | seconds after the agent first speaks during which the person cannot interrupt, while echo cancellation adapts; 3 by default, none on an outbound SIP call the agent dialed |
@@ -754,16 +755,28 @@ conversation; see [partitions](threads.md#partitions-and-session-frames).
 `VoiceSession` owns frontend remote-tool interactions: it retains pending
 expert references, routes human replies, and schedules presentation. The
 frontend attaches `RemoteAgent(...).as_tool()` through its agent's `tools=`
-and starts the live session. It does not construct a `TextSession` or pass
-backend `SessionState` to the session. A local `agent.as_tool()` on a call
+and starts the live session. It does not construct a `TextSession`. Configure a separate
+response-routing model on the session; all remote tools share that policy:
+
+```python
+session = VoiceSession(
+    llm=frontend_model,
+    delegation=DelegationOptions(routing_model=routing_model),
+    context=store.bind(app),  # Optional: restore and checkpoint this conversation.
+)
+await session.start(front_desk, room=room)
+```
+
+Without a binding, the same native communication state and admission path run in memory.
+A local `agent.as_tool()` on a call
 is an expert the same way: its child runs in process, and its progress,
 questions and result take this path ([local agents as tools](tools.md#local-agents-as-tools)).
 
 ## Conversation-owned inbox
 
 Expert events enter an internal inbox scoped to one frontend agent's
-conversation. Each frontend conversation has its own inbox and pending reply
-destination, even when several frontends share a thread database. Backend
+conversation. Each frontend conversation has its own inbox and input-request references,
+even when several frontends share a thread database. Backend
 agents do not acquire a presentation inbox merely by using `Agent.run()` or
 `TextSession`.
 
@@ -796,8 +809,8 @@ can persist its own conversation independently without making this queue durable
 4. Useful progress may be combined; presenting progress or a question runs a
    presentation-only fast-brain model reply to phrase it. Enqueueing alone does
    not invoke the LLM.
-5. Before delivering the question, the live session records the expert destination
-   for the user's reply in the active conversation's runtime state.
+5. The native conversation retains the original input occurrence. Actual assistant output
+   supplies its presentation receipt; queued or generated wording alone does not.
 
 Applications do not call a dequeue method or run a polling loop. While the
 floor is occupied, the queue retains events for the session to process later.
@@ -828,8 +841,8 @@ invocation to phrase its question or progress. That invocation receives a
 model-valid presentation view containing the relevant visible conversation
 and expert event. It does not resume the parent's ordinary tool loop, invoke
 new business tools, or mark the expert call complete. The parent's pending
-tool call remains recorded until the expert supplies its outcome. The full
-parent history is used again only after that call is resolved.
+tool call remains recorded until the expert supplies its outcome. A new human turn still
+reaches the fast brain while the remote call runs; it need not wait for the expert.
 
 ### Routing the person's reply
 
@@ -841,13 +854,28 @@ answer goes back to the waiting refund task. Expert-triggered structured
 collection, such as automatically invoking `GetEmailTask` for that question,
 is outside this contract.
 
-The live session records the expert question before presenting it. Rephrasing
-changes its wording, not its identity or reply destination. An ordinary answer
-to the foreground question is forwarded to that expert without requiring the
-model to select the delegation tool again. The current forwarding path does not classify
-cancellations, new requests or ambiguous answers; it forwards the supplied reply. Applications
-that need that distinction must handle it before reply delivery. Only one expert question owns
-the foreground reply destination at a time.
+The live session records the expert question before presenting it. Rephrasing changes its
+wording, not its identity. Before the frontend model handles a new human turn, the separate
+routing model checks unresolved remote input requests that actually reached the person.
+"Why do you need the date?" leaves a date request open; "Friday" can answer it. Ambiguous or
+unavailable classification leaves requests open for clarification. No routing call is made
+without presented candidates, and the frontend model is never substituted for a missing
+routing model.
+
+The native owner validates the exact classified message and selected occurrences, then
+checkpoints their responses before forwarding to eligible live continuations. It can recognize
+an earlier presented request; foreground presentation priority is not answer authority. The
+person's exact reserved words reach the original remote task without another model-selected
+delegation call. The fast brain still receives the whole message and can handle an additional
+topic naturally. Recognition does not approve a business operation or prove remote delivery.
+
+Input classification belongs to its speech. An interruption closes its model stream and
+releases the waiting frontend plan. A reservation already acknowledged by storage remains
+owned by the conversation even if that assistant reply ends. Private routing observations stay
+in the agent's model context for later replies; they are excluded from the perceived
+conversation. If a final transcript revises an unheard reply's input, the replacement reply
+waits for recognition of those corrected words. The old verdict cannot authorize the revision.
+These rules do not make live Python continuations or the presentation queue durable.
 
 A frontend `VoiceTask` can temporarily own the live interaction. Its user
 turns answer that task; they are not also forwarded to the waiting expert.
@@ -893,12 +921,11 @@ with the expert, including its pending task, and the events remain queued.
 The live session retains correlation independently of the active agent's tools;
 a queued event never grants access by itself.
 
-If an expert question was already delivered before switching to an agent
-without its tool, retain the question but suspend its automatic reply routing.
-The replacement's next user turn must not silently answer an expert it cannot
-interact with. When an eligible agent becomes active, restore the pending
-interaction and clarify or re-present the question when needed before forwarding
-a relevant answer. Settled or superseded questions cannot receive late answers.
+If an expert question was delivered before switching to an agent without its tool, the
+session can still recognize and retain the person's response. The current agent handles the
+whole message, while remote delivery waits. An eligible agent's return releases the held
+response to its original continuation; re-presenting the question is not required to make an
+already recognized answer valid. Settled or superseded questions cannot receive late answers.
 
 An eligible agent can present the expert's updates and continue its pending
 interaction. The existing delegation, remote task, and originating call IDs

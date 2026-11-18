@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import os
 import struct
 import sys
@@ -16,7 +17,7 @@ from typing import Protocol
 
 import pytest
 
-from livekit.agents import AgentHandler, AgentServer, _core, voice
+from livekit.agents import AgentHandler, AgentServer, _core, inference, llm, voice
 from livekit.agents.a2a import (  # type: ignore[attr-defined]  # a2a.py shadows its re-export
     AgentClient,
     TaskUpdate,
@@ -29,7 +30,7 @@ from livekit.protocol.agent_pb.agent_session import (
     SessionResponse,
 )
 from tests.e2e.resources import serving
-from tests.fakes import FakeLLM, until
+from tests.fakes import FakeLLM, last_input, tool_call, until
 
 ROOT = Path(__file__).parents[2]
 EXAMPLES = ROOT / "examples"
@@ -175,7 +176,7 @@ def source_module(monkeypatch: pytest.MonkeyPatch) -> Callable[[str, Path], Modu
 def load_example(
     monkeypatch: pytest.MonkeyPatch, source_module: Callable[[str, Path], ModuleType]
 ) -> Callable[[str, FakeLLM], ModuleType]:
-    """Loads an example's backend with every agent's model string resolving to ``model``."""
+    """Loads an example with scripted conversational and separate response-routing models."""
 
     def load(name: str, model: FakeLLM) -> ModuleType:
         directory = EXAMPLES / name
@@ -183,6 +184,13 @@ def load_example(
         monkeypatch.setenv("HOTEL_TODAY", "2026-06-12")
         monkeypatch.delenv("CAL_API_KEY", raising=False)
         monkeypatch.setattr(voice, "llm_from_model_string", lambda _: model)
+
+        def route(history: llm.ChatContext) -> llm.FunctionToolCall:
+            candidates = json.loads(last_input(history) or "{}")["candidates"]
+            assert len(candidates) == 1, "this story answers one presented input request"
+            return tool_call("route_input_response", candidates=[0], unclear=False)
+
+        monkeypatch.setattr(inference, "LLM", lambda *_args, **_kwargs: FakeLLM(route))
         dependency = {
             "frontdesk": "calendar_api",
             "hotel-receptionist": "hotel",

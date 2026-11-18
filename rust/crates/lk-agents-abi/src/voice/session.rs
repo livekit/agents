@@ -314,6 +314,9 @@ pub struct VoiceSessionArgs {
     /// The bound conversation view; execution resources never enter its snapshot.
     #[host(default = None)]
     pub session_sink: Option<Arc<dyn crate::text_session::SessionStateSink>>,
+    /// Conversation-wide policy, independent of the current agent's model and tools.
+    #[host(default = None)]
+    pub delegation: Option<crate::delegation::DelegationOptions>,
     #[host(default = None)]
     pub stt: Option<Arc<dyn Stt>>,
     #[host(default = None)]

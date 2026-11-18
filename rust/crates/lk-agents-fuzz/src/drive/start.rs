@@ -8,6 +8,16 @@ impl Run {
     /// The probe is installed before `start()`, so the driver's first step is stamped from the
     /// same counter as everything else, keeping the recording a happens-before order.
     pub async fn start(setup: &Setup, schedule: u64, policy: Policy) -> Run {
+        Self::start_with(setup, schedule, policy, |_, _| {}).await
+    }
+
+    /// Configure production session arguments over the same controlled ports and scheduler.
+    pub async fn start_with(
+        setup: &Setup,
+        schedule: u64,
+        policy: Policy,
+        configure: impl FnOnce(&mut VoiceSessionArgs, &Arc<Registry>),
+    ) -> Run {
         let time = Timebase::of_clock(Arc::new(lk_agents_runtime::net::clock::SimClock::new()));
         let stamps = Stamps::new(time.clone());
         let gate = (policy == Policy::TaskBridge).then(|| Arc::new(super::queue::Gate::new()));
@@ -141,7 +151,7 @@ impl Run {
             ),
             None => None,
         };
-        let args = VoiceSessionArgs {
+        let mut args = VoiceSessionArgs {
             instructions: Some(setup.instructions.clone()),
             agent: OPENING_AGENT.into(),
             stt,
@@ -267,6 +277,7 @@ impl Run {
             job_run: Some(Arc::new(JobRun { host: host.clone(), stamps: stamps.clone() })),
             ..Default::default()
         };
+        configure(&mut args, &registry);
         let spans = Arc::new(SpanJournal { host: host.clone(), stamps: stamps.clone() });
         let tracer = lk_agents_telemetry::Tracer::new(spans, time.clock(), 1);
         let session_room = Arc::new(FixedRoom::new(Some(room.clone()), time.clone(), None));

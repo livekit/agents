@@ -29485,6 +29485,13 @@ pub mod voice_session {
                     }
                 },
             )?,
+            delegation: crate::py_values::attr_with(obj, "VoiceSessionArgs", "delegation", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::generated::records::delegation::delegation_options_from_py(v)).map(Some)
+                }
+            })?,
             stt: crate::py_values::attr_with(obj, "VoiceSessionArgs", "stt", |v| {
                 if v.is_none() {
                     Ok(None)

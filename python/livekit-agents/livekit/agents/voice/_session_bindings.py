@@ -440,6 +440,7 @@ class SessionHost:
             )
             self._owns_io = True
         args = VoiceSessionArgs(
+            delegation=session._delegation,
             instructions=frame.instructions,
             dynamic_instructions=frame.dynamic_instructions,
             agent=frame.agent,

@@ -18,12 +18,14 @@ from skyline import (
 from livekit.agents import (
     Agent,
     AgentHandler,
+    DelegationOptions,
     InputRequired,
     RunContext,
     RunResult,
     SessionState,
     TextSession,
     ToolError,
+    inference,
     persisted,
 )
 from livekit.agents.a2a import A2ASessionContext
@@ -341,6 +343,9 @@ async def text(ctx: A2ASessionContext) -> RunResult[str]:
     app = SupportContext()
     await ctx.store.load_context(app)
     binding = ctx.store.bind(app)
-    result = await TextSession(agent=backend).run(ctx.message, context=binding)
+    async with inference.LLM(LLM) as routing:
+        result = await TextSession(
+            agent=backend, delegation=DelegationOptions(routing_model=routing)
+        ).run(ctx.message, context=binding)
     await ctx.store.save_context(app)  # Business fields are saved explicitly.
     return result

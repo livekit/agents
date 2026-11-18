@@ -201,7 +201,11 @@ async def test_voice_refuses_saved_local_agent_work_without_changing_it(
     assert app.session._to_json() == before, "voice startup cannot reset a saved text continuation"
 
 
-async def test_voice_refuses_text_local_work_loaded_between_speeches(tmp_path: Path) -> None:
+@pytest.mark.parametrize("root_question", [False, True])
+async def test_voice_refuses_text_local_work_loaded_between_speeches(
+    tmp_path: Path,
+    root_question: bool,
+) -> None:
     storage = SQLiteStorage(directory=tmp_path)
     thread_id = (await storage.threads.create_thread()).thread_id
     thread = Thread(storage, thread_id, partition_key="desk")
@@ -218,8 +222,15 @@ async def test_voice_refuses_text_local_work_loaded_between_speeches(tmp_path: P
         """Ask for the date."""
         return InputRequired("Which date?", verbatim=True)
 
-    model = FakeLLM(["Hello.", tool_call("booking"), "Done."])
+    model = FakeLLM(["Hello.", tool_call("date" if root_question else "booking"), "Done."])
     root = Agent(name="desk", instructions="Help.", tools=[child.as_tool()], llm=model)
+    if root_question:
+
+        @root.tool(name="date")
+        async def root_date() -> InputRequired:
+            """Ask for the date without a local child."""
+            return InputRequired("Which date?", verbatim=True)
+
     closes: list[CloseEvent] = []
     try:
         app = await store.load_context(App())

@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from livekit.agents import (
     Agent,
     AgentHandler,
+    DelegationOptions,
     Failed,
     InputRequired,
     RunContext,
@@ -26,6 +27,7 @@ from livekit.agents import (
     SessionState,
     TextSession,
     ToolError,
+    inference,
     persisted,
 )
 from livekit.agents.a2a import A2ASessionContext
@@ -414,6 +416,9 @@ async def text(ctx: A2ASessionContext) -> RunResult[str]:
     app = HotelContext(hotel=hotel)
     await ctx.store.load_context(app)
     binding = ctx.store.bind(app)
-    result = await TextSession(agent=backend).run(ctx.message, context=binding)
+    async with inference.LLM("google/gemma-4-31b-it") as routing:
+        result = await TextSession(
+            agent=backend, delegation=DelegationOptions(routing_model=routing)
+        ).run(ctx.message, context=binding)
     await ctx.store.save_context(app)  # Business fields are saved explicitly.
     return result

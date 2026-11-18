@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from ..types import NotGivenOr
     from .agent_run import FunctionToolInfo
     from .chat_items import ChatItem
+    from .delegation import DelegationOptions
     from .keyterms import STTContextOptions
     from .llm_fallback import RealtimeLeg
     from .room_options import RoomIoConfig
@@ -152,6 +153,8 @@ class VoiceSessionArgs:
     storage: _core_VoiceStore | None = None
     session_sink: _core_SessionBinding | None = None
     """The bound conversation view; execution resources never enter its snapshot."""
+    delegation: DelegationOptions | None = None
+    """Conversation-wide policy, independent of the current agent's model and tools."""
     stt: STT | None = None
     vad: VAD | None = None
     llm: LLM | None = None

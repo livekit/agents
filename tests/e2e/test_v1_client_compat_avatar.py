@@ -224,6 +224,8 @@ async def test_a_2_0_avatar_worker_plays_a_v1_agents_speech(sfu: str) -> None:
                 await agent.say(1.0)
                 async with asyncio.timeout(10):  # a lost segment is never reported
                     report = await agent.finished.get()
+                # Playback RPC and received video cross independent room transports.
+                await until(lambda: seen.lit > 10, "the caller receives the avatar's video")
 
     assert report["interrupted"] is False
     assert 0.8 < float(str(report["playback_position"])) < 1.2

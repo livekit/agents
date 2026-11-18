@@ -119,6 +119,7 @@ impl VoiceRuntime {
         use lk_agents_voice::agent_session::effects::VoiceEffect as E;
         // VoiceDriver journalled each effect when it was produced.
         match effect {
+            E::RouteInput { speech, message } => self.route_input(speech, message),
             E::RealtimePlayer { speech, event } => self.forward_to_realtime_player(speech, *event),
             E::CloseRealtimePlayer(speech) => {
                 self.realtime_players.remove(&speech);

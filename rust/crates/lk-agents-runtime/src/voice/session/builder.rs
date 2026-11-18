@@ -47,6 +47,8 @@ pub struct SessionCores {
     pub peer: PeerHandle,
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     pub session_sink: Option<Arc<dyn lk_agents_abi::text_session::SessionStateSink>>,
+    pub delegation: Option<lk_agents_abi::delegation::DelegationOptions>,
+    pub(crate) conversation_port: crate::session::CommandPort,
     pub(crate) conversation: tokio::sync::mpsc::Receiver<crate::session::SessionCommand>,
     /// The end of the host-event stream: the runtime holds it, so its end ends the stream.
     pub(crate) events_end: lk_agents_net::signal::Producer<()>,
@@ -195,6 +197,7 @@ pub struct DriverBuilder {
     pub id_seed: Option<u64>,
     pub storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     pub session_sink: Option<Arc<dyn lk_agents_abi::text_session::SessionStateSink>>,
+    pub delegation: Option<lk_agents_abi::delegation::DelegationOptions>,
     /// Where the driver's steps go: nowhere in production.
     pub journal: Journal,
     /// Where the session's spans and measurements go: the process tracer in production.
@@ -271,6 +274,7 @@ impl DriverBuilder {
             id_seed: None,
             storage: None,
             session_sink: None,
+            delegation: None,
             journal: Default::default(),
             trace: tracer.root(),
             tracer,
@@ -324,6 +328,12 @@ impl DriverBuilder {
         mut self,
         executor: &mut dyn SessionExecutor,
     ) -> Result<(SessionCores, SessionHandle), DriverError> {
+        // Every voice call has one native communication state. A supplied binding adds
+        // persistence; the default uses that same command and checkpoint path in memory.
+        if self.session_sink.is_none() {
+            self.session_sink =
+                Some(Arc::new(lk_agents_storage::session_binding::SessionBinding::memory()));
+        }
         let session_id =
             self.session_id.take().unwrap_or_else(|| lk_agents_net::strings::shortuuid("AS_"));
         let id_seed = self.id_seed.unwrap_or_else(telemetry::random_seed);
@@ -489,6 +499,8 @@ impl DriverBuilder {
             peer: peer.clone(),
             storage: self.storage.take(),
             session_sink: self.session_sink.take(),
+            delegation: self.delegation.take(),
+            conversation_port: conversation.clone(),
             conversation: commands,
             events_end,
         };

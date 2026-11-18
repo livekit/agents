@@ -68,6 +68,18 @@ pub enum VoiceEvent {
     /// Forwarded from the loop so they share one arrival order.
     RoomIo(crate::room_io::RoomIoEvent),
     Gen(GenEvent),
+    InputRouted {
+        speech: crate::agent_session::machine::activity::scheduling::SpeechId,
+        result: Option<
+            Result<lk_agents_abi::session::InputAdmission, lk_agents_abi::storage::StorageError>,
+        >,
+        usage: lk_agents_abi::usage::Usage,
+    },
+    /// Durable admission survives the loss of the assistant reply awaiting its detector.
+    InputReserved {
+        message: lk_agents_abi::ChatMessage,
+        admission: lk_agents_abi::session::InputAdmission,
+    },
     /// The partition storage gave back for a speech, and the request items it was read with.
     StorageReloaded {
         read: Vec<lk_agents_abi::ChatItem>,
@@ -159,6 +171,12 @@ pub struct VoiceDriver {
     pub(super) outbox: Vec<crate::agent_session::effects::VoiceEffect>,
     pub(super) callbacks: std::collections::VecDeque<VoiceCallback>,
     pub(super) pending_input: Vec<(usize, PendingInputOperation)>,
+    /// First model plans waiting on input admission survive activity replacement, so every
+    /// originating waiter is answered even when another agent takes the conversational floor.
+    pub(crate) input_plans: std::collections::BTreeMap<
+        crate::agent_session::machine::activity::scheduling::SpeechId,
+        (crate::agent_session::RequestId, crate::generation::ReplyPlan),
+    >,
     /// Revised deadlines become fireable at the next atomic boundary, not recursively
     /// inside the transition that set them (including zero-duration deadlines).
     pub(super) revised_deadlines: std::collections::BTreeSet<Timer>,
@@ -441,6 +459,12 @@ impl VoiceDriver {
             }
             Some(VoiceEvent::RoomIo(ev)) => self.on_room_io(now, ev),
             Some(VoiceEvent::Gen(ev)) => self.on_generation(now, ev),
+            Some(VoiceEvent::InputRouted { speech, result, usage }) => {
+                self.input_routed(speech, result, usage)
+            }
+            Some(VoiceEvent::InputReserved { message, admission }) => {
+                self.input_reserved(message, admission)
+            }
             Some(VoiceEvent::StorageReloaded { read, history }) => {
                 self.storage_reloaded(read, history)
             }
@@ -847,6 +871,7 @@ impl VoiceDriver {
             }
         }
         let mut driver = VoiceDriver {
+            input_plans: Default::default(),
             published_chat_revision: None,
             outbox,
             callbacks: Default::default(),

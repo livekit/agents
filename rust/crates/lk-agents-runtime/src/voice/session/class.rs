@@ -192,6 +192,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         };
         builder.eot = args.turn_detector.clone();
         builder.llm = llm;
+        builder.delegation = args.delegation;
         // A host provider is driven through the core's own model over it.
         builder.realtime = args.realtime.map(|leg| match leg {
             RealtimeLeg::Native(model) => model,

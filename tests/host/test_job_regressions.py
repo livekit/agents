@@ -256,6 +256,7 @@ async def test_an_end_call_tool_closes_the_session_and_shuts_the_job_down(
     https://github.com/livekit/agents/issues/3391 https://github.com/livekit/agents/issues/3969
     """
     seen: list[tuple[str, str | None]] = []
+    replies: list[str | None] = []
 
     async def called(event: ToolCalledEvent) -> None:
         seen.append(("tool", get_job_context().job.id))
@@ -270,22 +271,26 @@ async def test_an_end_call_tool_closes_the_session_and_shuts_the_job_down(
 
         @session.on("close")
         def on_close(event: CloseEvent) -> None:
+            # The handle must settle before close; its Python waiter may resume later.
+            assert reply.done()
+            assert session.history.messages()[-1].text_content == "goodbye"
             seen.append(("close", event.reason.value))
             closed.set()
 
         await session.start(Agent(instructions="Help.", tools=[EndCallTool(on_tool_called=called)]))
-        await session.generate_reply(user_input="bye")
-        seen.append(("reply", session.history.messages()[-1].text_content))
+        reply = session.generate_reply(user_input="bye")
+        await reply
+        replies.append(session.history.messages()[-1].text_content)
         await closed.wait()
 
     await run_job(entrypoint, agent.Job(id="AJ_end_call"))
 
     assert seen == [
         ("tool", "AJ_end_call"),
-        ("reply", "goodbye"),
         ("close", "user_initiated"),
         ("shutdown", "user_initiated"),
     ]
+    assert replies == ["goodbye"]
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 

@@ -1,6 +1,15 @@
 import backend_agent
 
-from livekit.agents import Agent, AgentHandler, JobContext, RunResult, TextSession, VoiceSession
+from livekit.agents import (
+    Agent,
+    AgentHandler,
+    DelegationOptions,
+    JobContext,
+    RunResult,
+    TextSession,
+    VoiceSession,
+    inference,
+)
 from livekit.agents.a2a import A2ASessionContext, RemoteAgent
 
 LLM = "google/gemma-4-31b-it"
@@ -40,7 +49,11 @@ front_desk = AgentHandler()  # Groups the voice and text entry points.
 @front_desk.rtc_session()  # Voice uses DEFAULT_PARTITION_KEY; text has its own partition.
 async def phone(ctx: JobContext) -> None:
     binding = ctx.store.bind()
-    session = VoiceSession(llm=LLM, context=binding)
+    routing = inference.LLM(LLM)
+    ctx.add_shutdown_callback(routing.aclose)
+    session = VoiceSession(
+        llm=LLM, context=binding, delegation=DelegationOptions(routing_model=routing)
+    )
     await session.start(agent=voice, room=ctx.room)
     if not session.history.items:
         await session.generate_reply(instructions="Greet the customer in one sentence.")
@@ -51,5 +64,7 @@ async def phone(ctx: JobContext) -> None:
 )
 async def text(ctx: A2ASessionContext) -> RunResult[str]:
     binding = ctx.store.bind()
-    result = await TextSession(agent=chat).run(ctx.message, context=binding)
-    return result
+    async with inference.LLM(LLM) as routing:
+        return await TextSession(
+            agent=chat, delegation=DelegationOptions(routing_model=routing)
+        ).run(ctx.message, context=binding)

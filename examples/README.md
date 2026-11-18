@@ -76,6 +76,12 @@ and [threads](../docs/threads.md) for checkpoint and ownership details.
 
 ## Testing text and voice
 
+Text sessions configure a separate Gemma instance with
+`DelegationOptions(routing_model=...)`. It recognizes responses to questions already delivered,
+leaving explanations and new topics with the conversational agent. The airline's pipeline voice
+frontend uses the same session option. Each text request closes its routing model after the turn;
+the voice job closes its model at shutdown.
+
 Start with the deterministic checks from the repository root. They use scripted models;
 no provider calls are needed:
 

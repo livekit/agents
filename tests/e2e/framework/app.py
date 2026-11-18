@@ -132,10 +132,14 @@ class E2E:
         finally:
             await client.aclose()
 
-    def voice_client(self, app: RunningApp) -> AbstractAsyncContextManager[VoiceClient]:
+    def voice_client(
+        self, app: RunningApp, *, phrases: Mapping[int, str] | None = None
+    ) -> AbstractAsyncContextManager[VoiceClient]:
         from .voice import connected_voice
 
-        return connected_voice(app)
+        return (
+            connected_voice(app, phrases=phrases) if phrases is not None else connected_voice(app)
+        )
 
     async def aclose(self) -> None:
         await finish_cleanup(self._resources.aclose())

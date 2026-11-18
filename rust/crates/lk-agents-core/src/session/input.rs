@@ -8,6 +8,28 @@ use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::{ChatMessage, Role};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Only actually presented, unresolved inputs justify a classifier request. Executors perform
+/// this plan without inventing candidates or substituting the frontend's private history.
+pub fn routing_request(
+    state: &SessionSnapshot,
+    request_id: String,
+    message: ChatMessage,
+) -> Option<super::InputRoutingRequest> {
+    let candidates = candidates(state);
+    if candidates.is_empty()
+        || message.role != Role::User
+        || message.raw_text_content().unwrap_or_default().trim().is_empty()
+    {
+        return None;
+    }
+    Some(super::InputRoutingRequest {
+        request_id,
+        message,
+        history: state.chat_history.clone(),
+        candidates,
+    })
+}
+
 /// Tool eligibility comes from the caller's configured destination, not the identity of the
 /// agent that originally asked. No response is guessed from the current agent's private chat.
 pub fn held_remote_input(

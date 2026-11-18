@@ -864,6 +864,11 @@ a public Python export or an additional SDK constructor.
 | SessionCommands, SessionInputCommand, RemoteCommand and RemoteInput, internal ABI port/data | One serialized owner for input admission and remote observations. | Presentation receipts, response reservations, preparation, dispatch markers, responses and errors receive their checkpoint before acknowledgement. An accepted remote input observation returns its existing InputRequestRef; no new controller or stored command capability. |
 | ConversationHistory and ConversationStateFailed | Internal voice effect/input; no Python types. | Publish core-accepted history through the native binding before host callbacks; preserve pending recognition and refreshed remote state. The core closes voice on a refused state publication. |
 | InputPresented and ToolReport.input_request | Reuse the shared InputRequestRef in a private voice effect and the existing host report. | A checkpointed A2A occurrence follows rephrasing into actual output delivery. The existing voice inbox holds transient speech correlation; a failed/unspoken presentation can be retried without creating another input occurrence. No new question or presentation class. |
+| RouteInput, InputRouted and InputReserved | Private voice effect/inputs extending the current driver. | The first frontend plan waits for classification and checkpoint admission. Saved reservations reach the conversation independently of the assistant waiter, including after interruption. No host export or new saved record. |
+| VoiceDriver.input_plans and Experts.responses | Private maps on existing native owners. | Settle first-plan waiters across agent replacement; retain admitted responses for eligible live remote continuations. Source occurrence and current waiting request must still match. These maps never enter SessionState or the communication journal. |
+| Source::InputRouting | One private provenance variant on the existing voice chat record. | Retain the admitted destination in later model requests without adding human-facing dialogue or another state class. A revised verdict replaces the same message's private observation. |
+| Run.start_with and ObservedLlm, DST only | Configure the existing simulation runner and observe its fake model boundary. | Exercise ordinary native session arguments, the production binding and real executors. The observer records model requests; it does not implement routing or persistence. No SDK export. |
+| SessionBinding.memory() | Private factory on the existing storage binding type. | A default voice session uses the same native state, command admission and checkpoint implementation in memory. A supplied binding adds persistence; there is no separate public conversation controller. |
 | SessionCommand and CommandPort | Shared native runtime command queue in session/. | Text and voice use bounded command admission and producer-owned receipts. Voice checkpoints run on owned tasks alongside audio and interruption events. Ending the receiver settles received, queued and capacity-waiting requests; a client retains no execution authority after owner loss. No Python export. |
 | voice::conversation::{Work, ConversationWrite}, private runtime records | A voice command's acquisition/write phase and typed write receipt. | Retain the original command, outcome, ScopedTask and matching caller while media/events continue. A retry re-admits the original input; one command kind cannot resolve another kind's receipt. No second conversation snapshot or Python API. |
 | RemoteRecovery, internal ABI decision | Reuses the core journal's recovery classification. | Carries an unsent original SDK request, a task to read, an accepted direct reply or uncertainty. Returned through the native owner; neither serialized nor exported as Python state classes. |
@@ -980,13 +985,29 @@ in replay 6,569 after a different request's open hung. Smaller passing windows d
 the full gate.
 
 Local real-process E2E and all v1 client compatibility stories pass. Cloud AgentDB conformance
-has not run: this environment has no LiveKit project configuration. Local SQLite tests and
-lost-acknowledgement fault tests do not substitute for that external gate.
+remains unverified. The cross-server storage journey was attempted against staging: its two
+SQLite cases passed, but both AgentDB cases were refused with `token lacks the agent
+databaseAdmin grant`. The pinned SDK issues the new `agentThread` grants, so this run exposes
+an authentication-contract mismatch with that deployment. Keep the single agreed grant path;
+do not add a legacy authorization shim to make this external gate pass. SQLite and lost-ack
+fault tests do not substitute for the remaining AgentDB gate.
 
 ## Questions retained during implementation
 
 Record unresolved contracts here while implementation proceeds on the agreed boundaries.
 Routine private type layout and generator work do not require another public primitive.
+
+- Which AgentDB staging deployment supports the pinned SDK's `agentThread`/`agentDatabase`
+  grants? The configured staging endpoint still requires `agent.databaseAdmin` when creating
+  a thread, preventing the live cross-server storage acceptance story from reaching execution.
+
+- Keep one outbound dispatch path after input recognition. The person agreed that further
+  calls need a selected destination, which may come from detection rather than mandatory
+  model-supplied task arguments. Long resolves the task inside a delegate invocation and
+  removed automatic forwarding. Our voice admission currently forwards before that invocation;
+  real Gemma runs exposed a later tool call opening a second task even though recognition was
+  correct. Align reservation and actual dispatch before extending this path or tuning prompts
+  against an end-to-end result that conflates the two model decisions.
 
 - When interruption prevents complete `ctx.say()` delivery, should awaiting its receipt raise
   an existing delivery error or return an outcome the caller must inspect? Either way, the
@@ -1183,6 +1204,8 @@ passes deterministic stock-peer transport and failure tests.
 - [x] Keep voice handoffs/VoiceTasks transient and preserve the durable root. Refuse unresolved
   text-local agent trees without changing them; release the voice binding without closing an
   application-supplied store. Cover subsequent text execution in memory and SQLite.
+  A pending root-local text input is also a continuation, even without a child agent; refuse
+  it at startup and on a later lease reload before voice inference or history projection.
 - [x] Publish accepted voice history through native effects before host callbacks. Rebase from
   the current binding, preserve pending recognition, and use the production binding in the
   SQLite-backed voice DST. Remove Python-driven voice state updates and startup validation.
@@ -1196,6 +1219,20 @@ passes deterministic stock-peer transport and failure tests.
   abandoned runs and final-commit refusal with readable SQLite stories. A DST story reuses
   the shared applied-write/held-receipt fault and the production checkpoint writer; it
   reproduces lost remote state when run against the previous writer implementation.
+- [x] Route pipeline voice input through a separately configured model and shared native
+  admission. Save reservations before live delivery, keep the whole human message available
+  to the frontend, and settle detector/plan waits on interruption. Cover memory and bound
+  sessions, a side question followed by a date, and a response retained across an agent
+  without the remote tool. Reuse the same memory binding implementation by default.
+- [ ] Reproduce late-final/combined voice turns in the DST: a detector races a transcript
+  revision or a cut frontend reply. Reclassify the current words, preserve admitted request
+  identity and prevent accidental fresh remote work. The first live RTC evaluation exposed
+  a combined "Why do you need the date? Friday" turn followed by an unintended second task;
+  retain that run as a regression target alongside the ordinary completed-utterance baseline.
+  Two production-executor DST regressions now reproduce and fix lost routing context in a
+  later frontend reply, and a corrected unheard turn bypassing recognition. Both check held
+  native input state and cleanup; private observations stay out of perceived dialogue.
+  Corrections after a reply is already audible still need their own admission story.
 - [ ] Connect question/exact-text presentation to pipeline/realtime delivery receipts.
   Remote questions carry their checkpointed InputRequestRef through rephrasing into actual
   speech delivery. Failed output retries preserve that occurrence; exact ctx.say delivery and
@@ -1211,8 +1248,23 @@ passes deterministic stock-peer transport and failure tests.
   natural grouping of related questions, fair follow-up, grouped ordinary progress/results and
   removal of obsolete progress from pending presentation, while preserving exact output and
   durable communication records.
+  The live voice run also exposed a progress presentation already generating when its task
+  asked for input; it spoke a redundant availability update after the question. Superseding
+  queued progress alone does not cover this in-flight presentation. Add a DST story before
+  changing its speech cancellation and delivery rules.
 - [ ] Add the shared E2E voice client and receiver observations; exercise the same ordinary
   application modules with deterministic speech and inference before real-model evaluation.
+  The shared client, room/process fixtures and received-audio evidence are implemented. A live
+  pipeline voice journey now uses separate Gemma frontend/routing instances, alongside six text
+  cases for date responses, side questions, new topics, ambiguity and full/partial name grouping.
+  All seven passed together on 2026-11-17. This is sampled model evidence, not the complete
+  conversation acceptance gate; the earlier combined-turn failure remains retained above.
+  Later runs passed the six text cases but exposed a repeat remote-tool invocation after the
+  voice session had already forwarded Friday and completed the original task. Retaining the
+  admission observation in the model context did not reliably prevent a second task. Require
+  one selected continuation/new-work decision before dispatch; prompt instructions alone are
+  not an execution guard. The selection may be supplied by detection or an explicit reference.
+  Decision-model comparison and the remaining voice stories are not yet verified.
 - [ ] Route same-partition text into a call, preserving task/outcome and answered-by-voice attribution.
 - [ ] Cover agent/tool replacement, VoiceTasks, close, reconnect and independent room bindings.
 
@@ -1303,6 +1355,14 @@ identifiers and settings, scenario results, routing/delivery timings, transcript
 task/journal evidence. Review actual wording and audio as well as routing outcomes; a scripted
 pass does not count as live-model evidence. Credentials and model identifiers are explicit
 configuration, with no implicit provider fallback.
+
+Build a small labeled Gemma eval set with development and held-out cases. Evaluate response
+recognition with a scripted frontend, and frontend delegation with scripted routing, before
+running both models together. Check selected source occurrences, unwanted forwarding, duplicate
+business sends and latency; do not score wording against a fixed sentence. Long's detector
+classifies a proposed delegate call, whereas shared input admission recognizes a human response.
+Keep those labels distinct. His reviewed stack uses the same Gemma model, scripted parsing and
+routing tests, and real conversation trials; its comparative routing benchmark remains a TODO.
 
 ### E2E journeys
 

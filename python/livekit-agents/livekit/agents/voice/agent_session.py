@@ -25,6 +25,7 @@ from .._generated import (
     facades_voice_agent_session as _facades,
     public_voice_agent_session as _public,
 )
+from .._generated.delegation import DelegationOptions
 from .._generated.public_voice_agent_session import *  # noqa: F403
 from .._generated.session_options import SessionKwargs
 from .._generated.session_wire import (
@@ -101,6 +102,7 @@ _delivered: contextvars.ContextVar[tuple[VoiceSession[Any], _SessionState]] = (
 
 class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[Context_T]):
     _context: Context_T
+    _delegation: DelegationOptions | None
     _thread: Thread | None
     _execution_id: str
     _conn_options: SessionConnectOptions
@@ -141,6 +143,7 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         tools: NotGivenOr[list[Tool | Toolset]] = NOT_GIVEN,
         context: Context_T | BoundContext[Context_T] | None = None,
         thread: Thread | None = None,
+        delegation: DelegationOptions | None = None,
         video_sampler: NotGivenOr[VoiceActivityVideoSampler | None] = NOT_GIVEN,
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         stt_context_options: NotGivenOr[STTContextOptions | None] = NOT_GIVEN,
@@ -160,6 +163,8 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
                 an explicit thread must match that binding. Association alone does not activate
                 session persistence. Failure to load bound state fails ``start()`` with its
                 ``StorageError``.
+            delegation: Conversation-wide delegation policy. Configure a separate routing
+                model to recognize responses to remote questions before forwarding them.
             video_sampler: How often camera frames reach the model; ``None`` sends every frame.
             conn_options: Each leg's connection policy.
             stt_context_options: The keyterms and context the STT is biased toward.
@@ -169,6 +174,7 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
                 ``session_close_transcript_timeout``.
         """
         super().__init__()
+        self._delegation = delegation
         self._adapter = SessionAdapter(self)
         initialize(
             self,

@@ -10,6 +10,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 
 from livekit import api, rtc
+from livekit.agents._generated.types import ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID
 
 from ..resources import finish_cleanup
 from ..sfu import KEY, SECRET
@@ -22,6 +23,7 @@ class ReceivedSpeech:
     text: str
     audio_seconds: float
     ended_at: float
+    segment_id: str
 
 
 class VoiceClient:
@@ -49,7 +51,7 @@ class VoiceClient:
         return self.heard.tone_at[self._audio_position]
 
     async def hear(self) -> ReceivedSpeech:
-        _, reader = await next_transcription(self._transcriptions, self.agent.identity)
+        attributes, reader = await next_transcription(self._transcriptions, self.agent.identity)
         text = await reader.read_all()
         # A transcript alone cannot prove the receiver got audio.
         async with asyncio.timeout(15):
@@ -58,7 +60,9 @@ class VoiceClient:
         position = len(self.heard.tone_at)
         seconds = (position - self._audio_position) / 100
         self._audio_position = position
-        return ReceivedSpeech(text, seconds, time.monotonic())
+        return ReceivedSpeech(
+            text, seconds, time.monotonic(), attributes.get(ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID, "")
+        )
 
 
 @asynccontextmanager

@@ -8,6 +8,7 @@ mod effects;
 pub mod events;
 pub use events::VoiceRuntimeEvent;
 mod generation;
+mod input;
 mod io;
 mod ivr;
 mod keyterm_detection;
@@ -62,6 +63,8 @@ pub struct VoiceRuntime {
     driver: VoiceDriver,
     storage: Option<Arc<dyn lk_agents_abi::storage::voice::VoiceStorage>>,
     session_sink: Option<Arc<dyn lk_agents_abi::text_session::SessionStateSink>>,
+    delegation: Option<lk_agents_abi::delegation::DelegationOptions>,
+    conversation_port: crate::session::CommandPort,
     conversation: tokio::sync::mpsc::Receiver<crate::session::SessionCommand>,
     conversation_work: Option<conversation::Work>,
     shared: Arc<SessionShared>,
@@ -119,6 +122,7 @@ pub struct VoiceRuntime {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum HostCallbackId {
+    InputRouting,
     OutputValidation(lk_agents_abi::agent::run::ValidationId),
     ToolRefusal(lk_agents_core::agent_run::CallId),
 }
@@ -178,6 +182,20 @@ impl SpeechTasks {
         drop(replaced);
     }
 
+    /// A speech-owned callback also reports death, so its core plan cannot wait forever.
+    fn callback_feeding(
+        &self,
+        speech: SpeechId,
+        id: HostCallbackId,
+        name: &str,
+        lost: impl FnOnce() + Send + 'static,
+        work: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
+        let task = self.tasks.scoped_feeding(self.spawner.as_ref(), name, work, lost);
+        let replaced = self.of(&mut self.owned.lock(), speech).callbacks.insert(id, task);
+        drop(replaced);
+    }
+
     /// Forgets `speech`'s callback `id`, cancelled unless it ended.
     fn end_callback(&self, speech: SpeechId, id: HostCallbackId) {
         let ended =
@@ -232,6 +250,8 @@ impl VoiceRuntime {
             peer,
             storage,
             session_sink,
+            delegation,
+            conversation_port,
             conversation,
             events_end,
         } = cores;
@@ -249,6 +269,8 @@ impl VoiceRuntime {
             driver,
             storage,
             session_sink,
+            delegation,
+            conversation_port,
             conversation,
             conversation_work: None,
             shared,
@@ -381,6 +403,9 @@ impl VoiceRuntime {
     fn handle(&mut self, event: VoiceRuntimeEvent, now: Now) {
         match event {
             VoiceRuntimeEvent::Input(mut input) => {
+                if let VoiceEvent::InputRouted { speech, .. } = &input {
+                    self.speeches.end_callback(*speech, HostCallbackId::InputRouting);
+                }
                 if let VoiceEvent::Gen(lk_agents_voice::generation::GenEvent::OutputValidated {
                     speech,
                     validation,

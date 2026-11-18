@@ -27,6 +27,11 @@ pub enum SpeechHistory {
 /// significant. Driver-owned deadlines and deferred callbacks never cross this boundary.
 #[derive(Debug)]
 pub enum VoiceEffect {
+    /// Classify committed human input before planning its frontend reply.
+    RouteInput {
+        speech: SpeechId,
+        message: lk_agents_abi::ChatMessage,
+    },
     /// Canonical assistant words reached the output boundary for these native occurrences.
     InputPresented {
         requests: Vec<lk_agents_abi::session::InputRequestRef>,

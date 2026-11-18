@@ -51,6 +51,8 @@ pub enum Source {
     },
     Handoff,
     ConfigUpdate,
+    /// Private framework context describing response admission, never delivered dialogue.
+    InputRouting,
     /// `UpdateChatCtx`, `Agent(chat_ctx=..)`.
     HostCtx,
     /// An item the realtime server created; `item_id` is the server's.
@@ -72,6 +74,7 @@ impl Source {
             | Source::UserTyped
             | Source::Handoff
             | Source::ConfigUpdate
+            | Source::InputRouting
             | Source::HostCtx
             | Source::Remote { .. } => None,
         }

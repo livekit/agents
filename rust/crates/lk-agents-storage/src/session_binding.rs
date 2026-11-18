@@ -16,6 +16,14 @@ pub struct SessionBinding {
 }
 
 impl SessionBinding {
+    /// The same native conversation owner without a database or application save policy.
+    pub fn memory() -> Self {
+        let store =
+            ContextStore::new(Vec::new(), None, false).expect("an empty writable context is valid");
+        let view = SessionState::new(None).expect("an empty session state is valid");
+        Self::new(store, view).expect("a fresh memory context has no existing binding")
+    }
+
     fn ensure_open(&self) -> Result<(), StorageError> {
         if self.closed.load(Ordering::Acquire) || self.store.closed() {
             return Err(StorageError::Invalid("the session binding has ended".into()));

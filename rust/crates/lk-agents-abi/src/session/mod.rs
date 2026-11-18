@@ -77,7 +77,7 @@ pub struct InputRoutingRequest {
 }
 
 /// Accepted correlation, distinct from the detector's untrusted verdict. Not serialized.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct InputAdmission {
     /// Private context for the frontend model; never parsed to decide whether to send.
     pub observation: String,

@@ -43,7 +43,8 @@ impl Floor<'_> {
 pub enum Presentation {
     /// The delegation's latest progress; older progress was superseded.
     Progress { call_id: String, text: String },
-    /// The question now owns the person's next reply (re-presented after a suspension).
+    /// A question selected for presentation. Native response admission supplies its answers;
+    /// presentation priority alone never selects a remote reply destination.
     Question { call_id: String, request_id: String, question: String, verbatim: bool },
     /// The originating call's result.
     Outcome { call_id: String, outcome: ToolOutcome },
@@ -68,6 +69,8 @@ struct Delegation {
     progress_seen: u64,
     /// Every input request taken.
     requests: BTreeMap<String, Option<InputRequestRef>>,
+    /// The latest live input occurrence. Older requests retain only receipt provenance.
+    waiting: Option<String>,
     /// The originating call's pending output is on the record: its outcome can replace it.
     recorded: bool,
     settled: bool,
@@ -92,8 +95,8 @@ struct Foreground {
     request_id: String,
     question: String,
     verbatim: bool,
-    /// Presented, then the active agent lost the expert's tool (or a task took the
-    /// interaction): replies are not routed until it is presented again.
+    /// The active agent lost this tool or a task took the interaction. Re-offering the prompt
+    /// does not invalidate its earlier native delivery or a response already recognized.
     suspended: bool,
 }
 
@@ -109,6 +112,9 @@ pub struct Experts {
     /// Live output receipts have no meaning after a call ends; communication owns recovery.
     #[serde(skip)]
     presentations: BTreeMap<SpeechId, PendingRequest>,
+    /// Admitted human responses awaiting an eligible live continuation; never persisted here.
+    #[serde(skip)]
+    responses: BTreeMap<InputRequestRef, lk_agents_abi::ChatMessage>,
 }
 
 impl Experts {
@@ -121,6 +127,7 @@ impl Experts {
             tool,
             progress_seen: 0,
             requests: BTreeMap::new(),
+            waiting: None,
             recorded: false,
             settled: false,
         };
@@ -178,6 +185,7 @@ impl Experts {
             return false;
         }
         d.requests.insert(request_id.to_owned(), input_request);
+        d.waiting = Some(request_id.to_owned());
         self.withdraw(call_id);
         let event =
             ExpertInboxEvent::Question { request_id: request_id.into(), question, verbatim };
@@ -192,6 +200,7 @@ impl Experts {
             return false;
         };
         d.settled = true;
+        d.waiting = None;
         self.withdraw(call_id);
         self.queue.push_back(Queued {
             call_id: call_id.into(),
@@ -207,6 +216,7 @@ impl Experts {
             return false;
         };
         d.settled = true;
+        d.waiting = None;
         self.withdraw(call_id);
         self.queue.retain(|q| q.call_id != call_id);
         true
@@ -214,6 +224,17 @@ impl Experts {
 
     /// Drop the call's queued progress and its question, queued or in the foreground.
     fn withdraw(&mut self, call_id: &str) {
+        if let Some(delegation) = self.delegations.get(call_id) {
+            let current = delegation
+                .waiting
+                .as_ref()
+                .and_then(|id| delegation.requests.get(id))
+                .and_then(Option::as_ref);
+            self.responses.retain(|reference, _| {
+                !delegation.requests.values().any(|known| known.as_ref() == Some(reference))
+                    || Some(reference) == current
+            });
+        }
         self.foreground.take_if(|f| f.call_id == call_id);
         self.queue
             .retain(|q| q.call_id != call_id || matches!(q.event, ExpertInboxEvent::Outcome(_)));
@@ -281,12 +302,73 @@ impl Experts {
         Some(PendingRequest { call_id: fg.call_id.clone(), request_id: fg.request_id.clone() })
     }
 
-    /// Delivery: an answer to exactly this pending request, which it consumes.
+    /// Delivery to exactly this live continuation, which it consumes. It need not be the
+    /// foreground prompt: a native reservation can answer an earlier presented question.
     pub fn answer(&mut self, request: &PendingRequest) -> Result<(), Stale> {
+        let delegation = self
+            .delegations
+            .get_mut(&request.call_id)
+            .filter(|delegation| !delegation.settled)
+            .ok_or(Stale)?;
+        if delegation.waiting.as_deref() != Some(request.request_id.as_str()) {
+            return Err(Stale);
+        }
+        delegation.waiting = None;
+        if let Some(Some(reference)) = delegation.requests.get(&request.request_id) {
+            self.responses.remove(reference);
+        }
         self.foreground
-            .take_if(|f| f.call_id == request.call_id && f.request_id == request.request_id)
-            .map(|_| ())
-            .ok_or(Stale)
+            .take_if(|f| f.call_id == request.call_id && f.request_id == request.request_id);
+        Ok(())
+    }
+
+    pub fn reference(&self, request: &PendingRequest) -> Option<&InputRequestRef> {
+        self.delegations.get(&request.call_id)?.requests.get(&request.request_id)?.as_ref()
+    }
+
+    pub fn reserve(&mut self, reference: InputRequestRef, message: lk_agents_abi::ChatMessage) {
+        if self.delegations.values().any(|delegation| {
+            !delegation.settled
+                && delegation
+                    .waiting
+                    .as_ref()
+                    .and_then(|id| delegation.requests.get(id))
+                    .and_then(Option::as_ref)
+                    == Some(&reference)
+        }) {
+            self.responses.insert(reference, message);
+        }
+    }
+
+    /// Recognition is independent of the speaking agent; delivery still requires its tool.
+    pub fn responses(&self, floor: Floor<'_>) -> Vec<(PendingRequest, lk_agents_abi::ChatMessage)> {
+        self.delegations
+            .iter()
+            .filter_map(|(call_id, delegation)| {
+                if delegation.settled || !floor.reaches(&delegation.tool) {
+                    return None;
+                }
+                let request_id = delegation.waiting.as_ref()?;
+                let reference = delegation.requests.get(request_id)?.as_ref()?;
+                let message = self.responses.get(reference)?.clone();
+                Some((
+                    PendingRequest { call_id: call_id.clone(), request_id: request_id.clone() },
+                    message,
+                ))
+            })
+            .collect()
+    }
+
+    /// Speculation cannot authorize a response to an existing remote input occurrence.
+    pub fn needs_input_routing(&self) -> bool {
+        self.delegations.values().any(|delegation| {
+            !delegation.settled
+                && delegation
+                    .waiting
+                    .as_ref()
+                    .and_then(|id| delegation.requests.get(id))
+                    .is_some_and(Option::is_some)
+        })
     }
 
     /// A scheduled question has no delivery authority until that speech reports actual words.

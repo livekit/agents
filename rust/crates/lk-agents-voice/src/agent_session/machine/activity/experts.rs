@@ -93,6 +93,7 @@ impl VoiceDriver {
     /// Present queued expert events while the floor is free: each presentation takes the floor,
     /// so the next waits for the following idle instant. Runs after the deferred tool reply.
     pub(crate) fn try_present_experts(&mut self, now: Ts) {
+        self.dispatch_expert_responses();
         let tools = self.activity.expert_tools();
         let outside = VoiceRunParticipation::Outside;
         loop {
@@ -177,8 +178,8 @@ impl VoiceDriver {
         self.start_speech(now, spec);
     }
 
-    /// A user turn answering a pending expert question: committed as said and forwarded to that
-    /// request's body, with no model reply.
+    /// A transient local interaction's direct answer: committed as said and forwarded to its
+    /// in-memory body. Remote questions instead use shared response admission.
     pub(crate) fn forward_expert_reply(
         &mut self,
         now: Ts,
@@ -191,8 +192,8 @@ impl VoiceDriver {
         true
     }
 
-    /// Typed input (`session._run(user_input=)`, console text) answering a pending expert
-    /// question, as a spoken turn does: committed, forwarded, no model reply.
+    /// Typed input answering a transient local interaction, under the same direct-answer
+    /// contract as its spoken input. Remote questions use the normal frontend planning path.
     pub(crate) fn forward_typed_expert_reply(&mut self, now: Ts, text: &str) -> bool {
         let Some(hosted) = self.claim_expert_reply(now) else { return false };
         let user =
@@ -207,6 +208,11 @@ impl VoiceDriver {
         let tools = self.activity.expert_tools();
         let floor = Floor { tools: &tools, free: true, task: self.activity.voice_tasks.running() };
         let request = self.session.experts.collect(floor)?;
+        // Only in-memory local interactions retain the legacy direct-answer continuation.
+        // Remote input always passes through shared recognition and checkpoint admission.
+        if self.session.experts.reference(&request).is_some() {
+            return None;
+        }
         let running =
             self.activity.tools.running.iter().find(|r| r.call.call_id == request.call_id);
         // The body no longer runs: the reply is an ordinary one.
@@ -222,6 +228,41 @@ impl VoiceDriver {
         let answer = user.text_content().unwrap_or_default();
         self.commit_item(ChatItem::Message(user), source, Visibility::Both);
         self.record_effect(VoiceEffect::AnswerExpert { hosted, answer });
+    }
+
+    pub(crate) fn reserve_expert_responses(
+        &mut self,
+        message: ChatMessage,
+        requests: Vec<lk_agents_abi::session::InputRequestRef>,
+    ) {
+        for reference in requests {
+            self.session.experts.reserve(reference, message.clone());
+        }
+        self.dispatch_expert_responses();
+    }
+
+    fn dispatch_expert_responses(&mut self) {
+        let tools = self.activity.expert_tools();
+        let floor = Floor { tools: &tools, free: true, task: self.activity.voice_tasks.running() };
+        let responses = self.session.experts.responses(floor);
+        for (request, message) in responses {
+            let Some(hosted) = self
+                .activity
+                .tools
+                .running
+                .iter()
+                .find(|running| running.call.call_id == request.call_id)
+                .map(|running| running.hosted.clone())
+            else {
+                continue;
+            };
+            if self.session.experts.answer(&request).is_ok() {
+                self.record_effect(VoiceEffect::AnswerExpert {
+                    hosted,
+                    answer: message.text_content().unwrap_or_default(),
+                });
+            }
+        }
     }
 }
 

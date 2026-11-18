@@ -10,6 +10,15 @@ pub(super) fn validate_voice_graph(state: &SessionSnapshot) -> Result<(), Invali
         || !state.ancestors.is_empty()
         || state.frames.len() != 1
         || state.frames.values().any(|agent| !agent.pending_calls.is_empty())
+        || state.frames.values().any(|agent| {
+            agent.input_requests.values().any(|input| {
+                matches!(
+                    input.state,
+                    lk_agents_abi::session::InputRequestState::Open
+                        | lk_agents_abi::session::InputRequestState::Responding
+                )
+            })
+        })
     {
         return Err(Invalid(
             "saved local agent work must continue through TextSession or bound Agent.run".into(),
@@ -17,6 +26,10 @@ pub(super) fn validate_voice_graph(state: &SessionSnapshot) -> Result<(), Invali
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "resume_tests.rs"]
+mod tests;
 
 /// Voice resumes the durable root, never a saved text child or a transient speaking role.
 pub fn validate_voice(state: &SessionSnapshot, agent: &str) -> Result<(), Invalid> {

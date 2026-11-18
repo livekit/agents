@@ -28,20 +28,7 @@ Open = Callable[..., RealtimeSession]
 # ---- replies and transcripts
 
 
-@pytest.mark.parametrize(
-    "rejected",
-    [
-        False,
-        pytest.param(
-            True,
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason="https://github.com/livekit/agents/issues/6708 reproduces: terminal rejection leaves generate_reply pending",
-            ),
-        ),
-    ],
-)
+@pytest.mark.parametrize("rejected", [False, True])
 async def test_reply_requests_settle_on_output_or_terminal_rejection(
     gemini_live: LivePeer, open_session: Open, rejected: bool
 ) -> None:

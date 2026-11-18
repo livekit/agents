@@ -117,7 +117,7 @@ impl VoiceRuntime {
         }
     }
 
-    fn conversation_snapshot(&self) -> Result<SessionSnapshot, StorageError> {
+    pub(super) fn conversation_snapshot(&self) -> Result<SessionSnapshot, StorageError> {
         self.driver.admit_conversation()?;
         let state = self
             .session_sink
@@ -186,6 +186,19 @@ impl VoiceRuntime {
                     return;
                 }
                 let failed = saved.as_ref().err().cloned();
+                if saved.is_ok()
+                    && let ConversationWrite::Admission { request, outcome: Ok(admission), .. } =
+                        &write
+                {
+                    self.handle(
+                        VoiceEvent::InputReserved {
+                            message: request.message.clone(),
+                            admission: admission.clone(),
+                        }
+                        .into(),
+                        now,
+                    );
+                }
                 write.resolve(saved);
                 if let Some(error) = failed {
                     self.handle(VoiceEvent::ConversationStateFailed(error).into(), now);

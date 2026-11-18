@@ -389,11 +389,6 @@ async def test_one_generation_per_assistant_turn_with_complete_text_and_audio(
     assert audio == pcm * 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="https://github.com/livekit/agents/issues/8260 reproduces: completionStart "
-    "announces a generation before the user speaks",
-)
 async def test_completion_start_does_not_announce_a_generation_before_the_user_turn(
     session: sonic.RealtimeSession, bedrock: Bedrock
 ) -> None:

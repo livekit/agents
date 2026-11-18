@@ -329,7 +329,8 @@ impl VoiceDriver {
         {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
         }
-        // An answer to a pending expert question is forwarded, not replied to.
+        // A transient local interaction can own this turn. Remote input remains a frontend
+        // turn whose first model plan waits for response admission.
         if self.forward_expert_reply(now, info, edits.user_text.as_deref()) {
             return;
         }
@@ -511,7 +512,11 @@ impl VoiceDriver {
         };
 
         let replan = match &spec.source {
-            ReplySource::Llm if after.is_some() || self.session.storage.enabled => {
+            ReplySource::Llm
+                if after.is_some()
+                    || self.session.storage.enabled
+                    || (kind.scheduled() && plan.new_message.is_some()) =>
+            {
                 Some(crate::generation::Replan { after, spec: plan })
             }
             _ => None,
@@ -796,7 +801,7 @@ impl VoiceDriver {
     /// Answers each waiting [`ReplyPlan`](crate::generation::ReplyPlan) whose record is ready, or
     /// with `None` once its speech is gone or the close passed its edge. `true` when one was.
     pub(crate) fn settle_reply_plans(&mut self) -> bool {
-        let mut ready = false;
+        let mut ready = self.settle_canceled_input_plans();
         let mut waiting = std::collections::VecDeque::new();
         while let Some((call, plan)) = self.activity.reply_plans.pop_front() {
             let cancelled = self.session.closing_past_edge()
@@ -812,6 +817,20 @@ impl VoiceDriver {
                 continue;
             }
             ready = true;
+            if !cancelled
+                && !self.activity.voice_tasks.running()
+                && let Some(message) = plan.spec.new_message.as_ref().filter(|message| {
+                    message.role == Role::User
+                        && message.raw_text_content().is_some_and(|text| !text.trim().is_empty())
+                })
+            {
+                self.record_effect(crate::agent_session::effects::VoiceEffect::RouteInput {
+                    speech: plan.speech,
+                    message: message.clone(),
+                });
+                self.input_plans.insert(plan.speech, (call, plan));
+                continue;
+            }
             let reply = if cancelled {
                 None
             } else {

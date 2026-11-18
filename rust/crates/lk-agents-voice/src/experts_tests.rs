@@ -56,6 +56,37 @@ fn a_late_speech_receipt_keeps_the_occurrence_it_actually_presented() {
 }
 
 #[test]
+fn an_admitted_response_waits_for_its_remote_tool_and_cannot_answer_a_newer_request() {
+    let mut experts = opened();
+    let reference = |request: &str| InputRequestRef::RemoteTask {
+        remote_id: "refunds".into(),
+        task: lk_agents_abi::delegation::remote::RemoteTaskRef {
+            context_id: "conversation".into(),
+            task_id: "refund".into(),
+        },
+        request_id: request.into(),
+    };
+    let message = lk_agents_abi::ChatMessage::text(
+        "human",
+        lk_agents_abi::Role::User,
+        "Friday",
+        std::time::UNIX_EPOCH,
+    );
+    experts.ask("call_1", "r1", "Which date?".into(), false, Some(reference("input_1")));
+    experts.next(floor(&[refunds()]));
+    experts.observe(floor(&[]));
+    experts.reserve(reference("input_1"), message.clone());
+    assert!(experts.responses(floor(&[])).is_empty());
+    assert_eq!(experts.responses(floor(&[refunds()])), [(pending("r1"), message.clone())]);
+    experts.answer(&pending("r1")).unwrap();
+    assert!(experts.responses(floor(&[refunds()])).is_empty());
+    experts.ask("call_1", "r2", "Which address?".into(), false, Some(reference("input_2")));
+    experts.reserve(reference("input_1"), message);
+    assert!(experts.responses(floor(&[refunds()])).is_empty());
+    assert!(experts.answer(&pending("r1")).is_err());
+}
+
+#[test]
 fn an_unspoken_question_is_available_for_representing() {
     let tools = [refunds()];
     let mut experts = opened();
