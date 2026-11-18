@@ -129,7 +129,7 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `additional_params` | `dict[str, Any]` | Additional runtime parameters forwarded to Phonic |
 | `external_id` | `str` | Your own identifier for the conversation, stored on the Phonic conversation |
 | `configs_for_tools` | `list[PhonicToolConfig]` | Per-tool behavior overrides (see [Per-tool configuration](#per-tool-configuration)) |
-| `modalities` | `list["text" \| "audio"]` | `["text", "audio"]` (default) for voice, or `["text"]` for a text conversation: typed user turns in, text replies out, no audio |
+| `modalities` | `list["text" \| "audio"]` | `["text", "audio"]` (default) for voice, or `["text"]` for a text conversation: typed user turns in, text replies out, no audio. Start the session with room audio off: `room_options=room_io.RoomOptions(audio_input=False, audio_output=False)` |
 
 ### Per-tool configuration
 
