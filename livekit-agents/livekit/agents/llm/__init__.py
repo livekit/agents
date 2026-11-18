@@ -14,6 +14,10 @@ from .chat_context import (
     ImageContent,
     MetricsReport,
 )
+from .decision_fallback_adapter import (
+    DecisionAvailabilityChangedEvent,
+    DecisionModelFallbackAdapter,
+)
 from .decisions import (
     Choice,
     ChoiceResult,
@@ -156,7 +160,9 @@ __all__ = [
     "Decision",
     "DecisionCapabilities",
     "DecisionKind",
+    "DecisionAvailabilityChangedEvent",
     "DecisionModel",
+    "DecisionModelFallbackAdapter",
     "DecisionResponse",
     "DecisionResult",
     "Probability",
