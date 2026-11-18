@@ -94,8 +94,9 @@ class TurnDetectionMode(str, Enum):
 
     `VAD`: the STT service runs its own VAD and closes turns itself.
 
-    `EXTERNAL`: the plugin's local VAD can close turns. Without a local VAD,
-    the caller can close turns with `stream.flush()` or `STT.finalize()`.
+    `EXTERNAL`: the plugin's local VAD can close turns. Pass `vad=None` to `STT`
+    to let `AgentSession` flush the stream using its own VAD and turn detector.
+    Callers can also close turns with `stream.flush()` or `STT.finalize()`.
 
     The member names and values mirror the Agent STT SDK's own turn-detection modes so
     the two never drift.
