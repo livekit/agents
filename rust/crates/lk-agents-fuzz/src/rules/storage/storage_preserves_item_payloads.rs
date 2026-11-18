@@ -20,7 +20,7 @@ impl Rule for StoragePreservesItemPayloads {
     const CONTRACT: Contract = Contract {
         id: "storage_preserves_item_payloads",
         guarantee: "A successfully settled conversation preserves accepted item payloads through its save request, including interrupted assistant prefixes and flags. Reloads replace the expected database view; later unsaved revisions are not treated as durable.",
-        examples: &[an_unread_foreign_edit_survives_a_stale_private_edit, an_unread_foreign_edit_survives_a_stale_public_edit, an_unchanged_snapshot_does_not_supersede_a_foreign_edit, a_changed_snapshot_can_supersede_a_foreign_edit, an_explicit_private_edit_revises_a_stored_item, a_later_foreign_edit_supersedes_an_earlier_private_edit, a_foreign_write_does_not_save_unacknowledged_local_edits, an_unrelated_foreign_append_keeps_a_new_local_revision, a_late_host_callback_keeps_the_snapshot_causal_order, a_later_accepted_revision_can_already_be_saved, a_queued_snapshot_does_not_include_later_input, a_delayed_reload_cannot_undo_foreign_compaction, a_reload_does_not_accept_private_model_context, cut_saved, unsaved_revision, foreign_reload, unseen_foreign_item_kept],
+        examples: &[an_unread_foreign_edit_survives_a_stale_private_edit, an_unread_foreign_edit_survives_a_stale_public_edit, an_unchanged_snapshot_does_not_supersede_a_foreign_edit, a_changed_snapshot_can_supersede_a_foreign_edit, an_explicit_private_edit_revises_a_stored_item, a_later_foreign_edit_supersedes_an_earlier_private_edit, a_foreign_write_does_not_save_unacknowledged_local_edits, an_unrelated_foreign_append_keeps_a_new_local_revision, a_late_host_callback_keeps_the_snapshot_causal_order, an_earlier_checkpoint_receipt_covers_only_its_snapshot, a_later_accepted_revision_can_already_be_saved, a_queued_snapshot_does_not_include_later_input, a_delayed_reload_cannot_undo_foreign_compaction, a_reload_does_not_accept_private_model_context, cut_saved, unsaved_revision, foreign_reload, unseen_foreign_item_kept],
         counterexamples: &[a_stale_private_edit_cannot_erase_an_unread_foreign_edit, a_stale_public_edit_cannot_erase_an_unread_foreign_edit, an_unchanged_snapshot_cannot_excuse_losing_a_foreign_edit, a_changed_snapshot_cannot_excuse_losing_the_new_revision, an_explicit_private_edit_cannot_be_lost, a_private_edit_cannot_replace_a_later_foreign_edit, a_foreign_write_still_protects_its_own_addition, an_older_unsaved_local_edit_cannot_replace_a_foreign_edit, an_unrelated_foreign_append_cannot_excuse_losing_a_local_revision, a_late_host_callback_does_not_excuse_the_old_payload, a_queued_snapshot_still_protects_its_captured_input, a_delayed_reload_cannot_hide_a_lost_foreign_summary, generated_tail_saved, interruption_flag_lost, accepted_item_lost, unseen_foreign_item_lost],
         probe: None,
     };
@@ -213,6 +213,7 @@ pub(super) fn durable_through(r: &Recording) -> Option<Observed> {
         })
         .collect();
     let mut submitted = BTreeMap::new();
+    let mut checkpoints = BTreeMap::new();
     let mut pending = BTreeMap::new();
     let mut conversations = BTreeMap::new();
     let mut through = None::<Observed>;
@@ -232,16 +233,25 @@ pub(super) fn durable_through(r: &Recording) -> Option<Observed> {
                 }
             }
             StorageStep::HistorySubmitted { speech, sequence, .. } => {
-                submitted.insert(*speech, prepared.get(sequence).copied().unwrap_or(*at));
+                let captured = prepared.get(sequence).copied().unwrap_or(*at);
+                submitted.insert(*speech, captured);
+                checkpoints.insert(*sequence, captured);
             }
-            StorageStep::Requested { speech, operation } if matches!(operation, StorageOperation::Settle | StorageOperation::Checkpoint) => {
-                let captured = submitted.get(speech).copied().unwrap_or(*at);
-                pending.insert((*speech, *operation), captured);
+            // A speech settles once; its receipt carries no sequence.
+            StorageStep::Requested { speech, operation: StorageOperation::Settle } => {
+                pending.insert(*speech, submitted.get(speech).copied().unwrap_or(*at));
             }
-            StorageStep::Answered { speech, operation, result, .. } if matches!(operation, StorageOperation::Settle | StorageOperation::Checkpoint) => {
-                if let Some(requested) = pending.remove(&(*speech, *operation))
+            StorageStep::Answered { speech, operation: StorageOperation::Settle, result, .. } => {
+                if let Some(requested) = pending.remove(speech)
                     && result.is_ok()
                 {
+                    through = Some(through.map_or(requested, |held| held.max(requested)));
+                }
+            }
+            // One speech can have several checkpoints in flight, answered in any order: the
+            // database's read-back names the sequence that applied.
+            StorageStep::ConversationCheckpoint { sequence, .. } => {
+                if let Some(requested) = checkpoints.remove(sequence) {
                     through = Some(through.map_or(requested, |held| held.max(requested)));
                 }
             }
@@ -598,4 +608,40 @@ fn a_stale_private_edit_cannot_erase_an_unread_foreign_edit() -> Recording {
 fn a_stale_public_edit_cannot_erase_an_unread_foreign_edit() -> Recording {
     settled(an_edit_based_on_an_older_read(true))
         .storage(StorageStep::Saved { items: vec![message("local edit against an older read", false)] }).done()
+}
+
+/// One speech checkpoints twice before either answers: the first applies, the second fails.
+/// The first receipt protects its own snapshot, never the revision only the second carried.
+fn overlapping_checkpoints() -> Authored {
+    let checkpoint = |sequence, item: ChatItem| {
+        move |a: Authored| {
+            a.journal(Step::Core(CoreStep::ConversationCheckpointPrepared { sequence }))
+                .storage(StorageStep::HistorySubmitted { speech: 1, sequence, history: vec![item] })
+                .storage(StorageStep::Requested { speech: 1, operation: StorageOperation::Checkpoint })
+        }
+    };
+    let first = Authored::new().session(accepted(message("captured", false)));
+    let second = checkpoint(4, message("captured", false))(first)
+        .session(accepted(message("revised", false)));
+    checkpoint(5, message("revised", false))(second)
+        .storage(StorageStep::ConversationCheckpoint {
+            sequence: 4, items: vec![message("captured", false)], pending_user_turns: Vec::new(),
+        })
+        .storage(StorageStep::Answered {
+            speech: 1, operation: StorageOperation::Checkpoint, result: Ok(()), delivered: true,
+        })
+        .storage(StorageStep::Answered {
+            speech: 1,
+            operation: StorageOperation::Checkpoint,
+            result: Err(lk_agents_abi::storage::StorageError::LeaseLost("taken".into())),
+            delivered: true,
+        })
+}
+
+fn an_earlier_checkpoint_receipt_covers_only_its_snapshot() -> Recording {
+    overlapping_checkpoints().storage(StorageStep::Saved { items: vec![message("captured", false)] }).done()
+}
+
+fn an_earlier_checkpoint_receipt_still_protects_its_snapshot() -> Recording {
+    overlapping_checkpoints().storage(StorageStep::Saved { items: vec![] }).done()
 }
