@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from typing import Any, Generic, TypeVar, cast
 
 from opentelemetry import context as otel_context, trace
@@ -21,6 +22,68 @@ from ._pre_connect_audio import PreConnectAudioHandler
 from .types import NoiseCancellationParams, NoiseCancellationSelector
 
 T = TypeVar("T", bound=rtc.AudioFrame | rtc.VideoFrame)
+
+# create_task on the caller's loop has to happen before AudioStream.__init__ returns, and that
+# constructor is what blocks. Give the worker a loop whose create_task hops back here.
+_STREAM_TASK_SCHEDULE_TIMEOUT = 5.0
+
+
+class _LoopProxy:
+    """Forwards to a real loop, but schedules ``create_task`` from another thread."""
+
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
+
+    def create_task(self, coro: Any, **kwargs: Any) -> asyncio.Task[Any]:
+        box: dict[str, Any] = {}
+        done = threading.Event()
+
+        def _schedule() -> None:
+            try:
+                box["task"] = self._loop.create_task(coro, **kwargs)
+            except BaseException as exc:
+                box["error"] = exc
+            finally:
+                done.set()
+
+        self._loop.call_soon_threadsafe(_schedule)
+        if not done.wait(timeout=_STREAM_TASK_SCHEDULE_TIMEOUT):
+            raise RuntimeError("timed out scheduling the audio stream task on the event loop")
+        if (error := box.get("error")) is not None:
+            raise error
+        return cast(asyncio.Task[Any], box["task"])
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._loop, name)
+
+
+def _audio_stream_from_track(loop: asyncio.AbstractEventLoop, /, **kwargs: Any) -> rtc.AudioStream:
+    """Build an ``AudioStream`` off ``loop``.
+
+    ``AudioStream`` subscribes its queue and starts its read task with the running loop, so the
+    worker thread has to see that loop. The blocking piece is ``FfiClient.request`` inside
+    ``from_track`` (native filter ``new_session``); running it here keeps the job loop free.
+    """
+    try:
+        previous: asyncio.AbstractEventLoop | None = asyncio.get_event_loop()
+    except RuntimeError:
+        previous = None
+    asyncio.set_event_loop(loop)
+    try:
+        # AudioStream only uses the loop to create its read task and to deliver FFI
+        # events. The proxy is not a real loop; the annotation on from_track is.
+        return rtc.AudioStream.from_track(
+            loop=cast(asyncio.AbstractEventLoop, _LoopProxy(loop)), **kwargs
+        )
+    finally:
+        asyncio.set_event_loop(previous)
+
+
+class _DeferredAudioStream:
+    """An audio stream whose native open has not run yet."""
+
+    def __init__(self, open_stream: Callable[[], rtc.AudioStream]) -> None:
+        self.open_stream = open_stream
 
 
 class _ParticipantInputStream(Generic[T], ABC):
@@ -57,6 +120,9 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._forward_atask: asyncio.Task[None] | None = None
         self._forward_tasks: set[asyncio.Task[None]] = set()
         self._tasks: set[asyncio.Task[Any]] = set()
+        # bumped whenever the current open is no longer the one we want
+        self._stream_epoch = 0
+        self._attach_tasks: set[asyncio.Task[None]] = set()
 
         self._room.on("track_subscribed", self._on_track_available)
         self._room.on("track_unsubscribed", self._on_track_unsubscribed)
@@ -163,6 +229,10 @@ class _ParticipantInputStream(Generic[T], ABC):
         if self._closed:
             return
         self._closed = True
+        # drop an open that is still running on a worker; it closes its own stream
+        self._stream_epoch += 1
+        if attach_tasks := list(self._attach_tasks):
+            await asyncio.gather(*attach_tasks, return_exceptions=True)
 
         stream = self._stream
         self._stream = None
@@ -246,7 +316,7 @@ class _ParticipantInputStream(Generic[T], ABC):
     @abstractmethod
     def _create_stream(
         self, track: rtc.RemoteTrack, participant: rtc.Participant
-    ) -> rtc.VideoStream | rtc.AudioStream: ...
+    ) -> rtc.VideoStream | rtc.AudioStream | _DeferredAudioStream: ...
 
     def _update_processor(self, processor: rtc.FrameProcessor[T] | None) -> None:
         if processor is None and not self._processor_owned:
@@ -259,6 +329,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._processor_owned = processor is not None
 
     def _close_stream(self) -> None:
+        self._stream_epoch += 1
         stream = self._stream
         self._stream = None
         self._track = None
@@ -289,7 +360,8 @@ class _ParticipantInputStream(Generic[T], ABC):
             return False
 
         self._close_stream()
-        self._stream = self._create_stream(track, participant)
+        created = self._create_stream(track, participant)
+        # claim the track before the open returns so a second event does not start another one
         self._track = track
         self._publication = publication
         if (span := self._track_wait_span) is not None and span.is_recording():
@@ -300,13 +372,58 @@ class _ParticipantInputStream(Generic[T], ABC):
                     trace_types.ATTR_TRACK_SOURCE: rtc.TrackSource.Name(publication.source),
                 },
             )
+        if isinstance(created, _DeferredAudioStream):
+            task = asyncio.create_task(
+                self._finish_deferred_stream(
+                    self._stream_epoch, created, track, publication, participant
+                ),
+                name="roomio_open_audio_stream",
+            )
+            self._attach_tasks.add(task)
+            task.add_done_callback(self._attach_tasks.discard)
+        else:
+            self._start_forward(created, track, publication, participant)
+        return True
+
+    def _start_forward(
+        self,
+        stream: rtc.VideoStream | rtc.AudioStream,
+        track: rtc.RemoteTrack,
+        publication: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+    ) -> None:
+        self._stream = stream
         forward_task = asyncio.create_task(
-            self._forward_task(self._forward_atask, self._stream, track, publication, participant)
+            self._forward_task(self._forward_atask, stream, track, publication, participant)
         )
         self._forward_atask = forward_task
         self._forward_tasks.add(forward_task)
         forward_task.add_done_callback(self._forward_tasks.discard)
-        return True
+
+    async def _finish_deferred_stream(
+        self,
+        epoch: int,
+        deferred: _DeferredAudioStream,
+        track: rtc.RemoteTrack,
+        publication: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+    ) -> None:
+        try:
+            stream = await asyncio.to_thread(deferred.open_stream)
+        except Exception:
+            logger.exception(
+                "failed to open audio stream",
+                extra={"participant": participant.identity, "track_id": track.sid},
+            )
+            if epoch == self._stream_epoch and self._track is track:
+                self._track = None
+                self._publication = None
+            return
+
+        if self._closed or epoch != self._stream_epoch or self._track is not track:
+            await stream.aclose()
+            return
+        self._start_forward(stream, track, publication, participant)
 
     def _on_track_unsubscribed(
         self,
@@ -397,7 +514,9 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
             self._apm.process_stream(frame)
 
     @override
-    def _create_stream(self, track: rtc.Track, participant: rtc.Participant) -> rtc.AudioStream:
+    def _create_stream(
+        self, track: rtc.Track, participant: rtc.Participant
+    ) -> rtc.AudioStream | _DeferredAudioStream:
         noise_cancellation = self._noise_cancellation
         if callable(noise_cancellation):
             noise_cancellation = noise_cancellation(NoiseCancellationParams(participant, track))
@@ -419,14 +538,23 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                 extra={"participant": participant.identity, "track_id": track.sid},
             )
 
-        return rtc.AudioStream.from_track(
-            track=track,
-            sample_rate=self._sample_rate,
-            num_channels=self._num_channels,
-            frame_size_ms=self._frame_size_ms,
-            noise_cancellation=noise_cancellation,
-            auto_close_noise_cancellation=False,
-        )
+        kwargs: dict[str, Any] = {
+            "track": track,
+            "sample_rate": self._sample_rate,
+            "num_channels": self._num_channels,
+            "frame_size_ms": self._frame_size_ms,
+            "noise_cancellation": noise_cancellation,
+            "auto_close_noise_cancellation": False,
+        }
+        # BVC / BVCTelephony load the model inside the synchronous NewAudioStream FFI request
+        # (native new_session, ~100-300ms). The constructor also schedules the read task, which
+        # has to happen on the job loop, so the open runs on a worker and that task is hopped
+        # back here. A preload needs a track that already belongs to a room; the FFI rejects one
+        # that does not ("this track has no room information"), so setup_fnc cannot warm the model.
+        if isinstance(noise_cancellation, rtc.NoiseCancellationOptions):
+            loop = asyncio.get_running_loop()
+            return _DeferredAudioStream(lambda: _audio_stream_from_track(loop, **kwargs))
+        return rtc.AudioStream.from_track(**kwargs)
 
     @override
     async def _forward_task(
