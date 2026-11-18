@@ -93,6 +93,15 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Runner images ship different Rust versions; the workspace needs a current stable.
+      # (Linux wheels build inside manylinux/musllinux containers, which install their own.)
+      - name: Install Rust stable
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
       - name: Install macOS codec build prerequisites
         if: runner.os == 'macOS'
         run: brew install nasm pkg-config cmake
