@@ -66,6 +66,8 @@ fn an_answered_queued_question_is_withdrawn_without_losing_another_question() {
         ),
     );
     assert!(experts.response_queued(&reference));
+    // The answered expert acknowledges with a silent working update.
+    experts.progress("call_1", 1, String::new());
     assert_eq!(experts.next(floor(&tools)), Some(asked("call_2", "r2", "Which seat?")));
 }
 
@@ -719,6 +721,7 @@ fn five_waiting_questions_are_paced_one_expert_at_a_time_in_arrival_order() {
     assert_eq!(experts.next(open), None, "the person gets a chance to answer first");
     experts.person_turn();
     experts.answer(&trip_pending("flight")).unwrap();
+    experts.outcome("flight", value("Done"));
     assert_eq!(
         experts.next(open),
         Some(Presentation::Questions(vec![
@@ -729,7 +732,9 @@ fn five_waiting_questions_are_paced_one_expert_at_a_time_in_arrival_order() {
     );
     experts.person_turn();
     experts.answer(&trip_pending("hotel")).unwrap();
+    experts.outcome("hotel", value("Done"));
     experts.answer(&trip_pending("hotel_2")).unwrap();
+    experts.outcome("hotel_2", value("Done"));
     assert_eq!(
         experts.next(open),
         Some(Presentation::Questions(vec![trip_question(
@@ -739,6 +744,7 @@ fn five_waiting_questions_are_paced_one_expert_at_a_time_in_arrival_order() {
     );
     experts.person_turn();
     experts.answer(&trip_pending("payment")).unwrap();
+    experts.outcome("payment", value("Done"));
     assert_eq!(
         experts.next(open),
         Some(Presentation::Questions(vec![trip_question("car", "Which car size?")]))
@@ -746,30 +752,107 @@ fn five_waiting_questions_are_paced_one_expert_at_a_time_in_arrival_order() {
 }
 
 #[test]
-fn one_prompt_asks_at_most_three_of_an_experts_questions() {
+fn the_person_hears_at_most_two_questions_before_their_turn() {
     let tools = [exports()];
-    let mut experts = exports_running(4);
-    for task in 0..4 {
+    let mut experts = exports_running(3);
+    for task in 0..3 {
         let id = format!("export_{task}");
         experts.ask(&id, "q", format!("Format for export {task}?"), false, None);
     }
     let Some(Presentation::Questions(first)) = experts.next(floor(&tools)) else {
         panic!("questions are asked");
     };
-    assert_eq!(first.len(), 3);
-    assert_eq!(experts.next(floor(&tools)), None, "the fourth waits for the person's turn");
+    assert_eq!(first.len(), 2);
+    assert_eq!(experts.next(floor(&tools)), None, "the third waits for the person's turn");
     experts.person_turn();
     for q in &first {
         experts.answer(&exports_pending(&q.output_id, "q")).unwrap();
+        experts.outcome(&q.output_id, value("Exported"));
     }
     assert_eq!(
         experts.next(floor(&tools)),
         Some(Presentation::Questions(vec![export_question(
-            "export_3",
+            "export_2",
             "q",
-            "Format for export 3?"
+            "Format for export 2?"
         )]))
     );
+}
+
+#[test]
+fn a_late_question_of_the_same_expert_follows_only_within_the_turns_two_questions() {
+    let tools = [exports()];
+    let mut experts = exports_running(3);
+    experts.ask("export_0", "q", "Format for export 0?".into(), false, None);
+    experts.next(floor(&tools));
+    experts.ask("export_1", "q", "Format for export 1?".into(), false, None);
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Questions(vec![export_question(
+            "export_1",
+            "q",
+            "Format for export 1?"
+        )]))
+    );
+    experts.ask("export_2", "q", "Format for export 2?".into(), false, None);
+    assert_eq!(experts.next(floor(&tools)), None, "a third question waits for the person");
+}
+
+#[test]
+fn results_are_not_held_by_a_waiting_question_but_progress_is_and_neither_joins_its_prompt() {
+    let tools = [exports()];
+    let mut experts = exports_running(3);
+    experts.progress("export_1", 1, "Collecting stock".into());
+    experts.outcome("export_2", value("Margins exported"));
+    experts.ask("export_0", "q", "Which region?".into(), false, None);
+    // The earlier progress and result are presentations of their own, never added to a prompt.
+    assert!(matches!(experts.next(floor(&tools)), Some(Presentation::Progress(_))));
+    assert_eq!(experts.next(floor(&tools)), Some(result("export_2", value("Margins exported"))));
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Questions(vec![export_question("export_0", "q", "Which region?")]))
+    );
+    // While the person has not answered, a result is still presented; progress waits.
+    experts.progress("export_1", 2, "Uploading stock".into());
+    experts.outcome("export_1", value("Stock exported"));
+    experts.open("export_3", exports());
+    experts.recorded("export_3");
+    experts.progress("export_3", 1, "Collecting sales".into());
+    assert_eq!(experts.next(floor(&tools)), Some(result("export_1", value("Stock exported"))));
+    assert_eq!(experts.next(floor(&tools)), None, "routine progress waits for the person");
+    experts.person_turn();
+    assert!(matches!(experts.next(floor(&tools)), Some(Presentation::Progress(_))));
+}
+
+#[test]
+fn an_answered_tasks_follow_up_goes_first_once_without_starving_the_others() {
+    let tools = [expert("flights"), expert("hotels")];
+    let open = floor(&tools);
+    let mut experts = Experts::default();
+    experts.open("flight", expert("flights"));
+    experts.open("hotel", expert("hotels"));
+    experts.ask("flight", "f1", "What date?".into(), false, None);
+    experts.ask("hotel", "h1", "What budget?".into(), false, None);
+    let asks = |output_id: &str, request_id: &str, question: &str| {
+        Some(Presentation::Questions(vec![export_question(output_id, request_id, question)]))
+    };
+    assert_eq!(experts.next(open), asks("flight", "f1", "What date?"));
+    experts.person_turn();
+    experts.answer(&exports_pending("flight", "f1")).unwrap();
+    assert_eq!(experts.next(open), None, "the hotel waits until flights responds to the answer");
+    // Flights asks a follow-up right after the answer: it goes ahead of the waiting hotel.
+    experts.ask("flight", "f2", "Morning or evening?".into(), false, None);
+    assert_eq!(experts.next(open), asks("flight", "f2", "Morning or evening?"));
+    experts.person_turn();
+    experts.answer(&exports_pending("flight", "f2")).unwrap();
+    // A second follow-up in a row does not jump the line again.
+    experts.ask("flight", "f3", "Window or aisle?".into(), false, None);
+    assert_eq!(experts.next(open), asks("hotel", "h1", "What budget?"));
+    experts.person_turn();
+    experts.answer(&exports_pending("hotel", "h1")).unwrap();
+    // The hotel task never responds; the person's next turn ends the wait.
+    experts.person_turn();
+    assert_eq!(experts.next(open), asks("flight", "f3", "Window or aisle?"));
 }
 
 #[test]
@@ -797,6 +880,7 @@ fn a_passed_question_stays_open_is_not_repeated_at_once_and_newer_tasks_do_not_s
     );
     experts.person_turn();
     experts.answer(&trip_pending("hotel")).unwrap();
+    experts.outcome("hotel", value("Done"));
     // One prompt later the passed question is due again, ahead of the newer payment task.
     assert_eq!(experts.next(open), Some(flight));
     experts.person_turn();
@@ -806,9 +890,11 @@ fn a_passed_question_stays_open_is_not_repeated_at_once_and_newer_tasks_do_not_s
     );
     experts.person_turn();
     experts.answer(&trip_pending("payment")).unwrap();
+    experts.outcome("payment", value("Done"));
     // Passed twice: open for an answer, but not asked a third time.
     assert_eq!(experts.next(open), None);
     assert_eq!(experts.collect(open), [trip_pending("flight")]);
     experts.answer(&trip_pending("flight")).unwrap();
+    experts.outcome("flight", value("Done"));
     assert_eq!(experts.collect(open), []);
 }

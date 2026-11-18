@@ -1314,16 +1314,20 @@ async def test_results_ready_together_are_presented_in_one_reply(peer: Peer) -> 
         await session.generate_reply(user_input="Export both reports")
         await until(lambda: presented, "the results were not presented")
         await session.wait_for_idle()
-        assert presented == [
-            [
-                {"tool": "jobs", "is_error": False, "output": "sales exported"},
-                {"tool": "jobs", "is_error": False, "output": "stock exported"},
-            ]
+        [together] = presented
+        assert sorted(together, key=lambda result: result["output"]) == [
+            {"tool": "jobs", "is_error": False, "output": "sales exported"},
+            {"tool": "jobs", "is_error": False, "output": "stock exported"},
         ], "results ready together are one reply, not one per result"
-        outputs = [
-            item.output for item in session.history.items if item.type == "function_call_output"
-        ]
-        assert outputs == ["sales exported", "stock exported"], "each call is resolved once"
+
+        def outputs() -> list[str]:
+            items = session.history.items
+            return [item.output for item in items if item.type == "function_call_output"]
+
+        await until(
+            lambda: outputs() == ["sales exported", "stock exported"],
+            "each call is not resolved exactly once",
+        )
         assert assistant_replies(session).count("Both reports are exported.") == 1
 
 
@@ -1454,5 +1458,160 @@ async def test_independent_questions_are_paced_and_a_passed_one_returns_after_th
         assert {first, second, third} == set(asked), "a waiting question was starved"
         assert again == first, "the skipped question did not come back after the others"
         await session.generate_reply(user_input="How is the weather?")
+        await until(lambda: len(prompts(session)) == 5, "the next passed question was not asked")
         await session.wait_for_idle()
         assert prompts(session)[4:] == [second], "a passed question is asked once more only"
+
+
+def asked_question(head: str, data: Any) -> str | None:
+    """The desk asks a presented question, or several, word for word."""
+    single = "Ask the person this, in your own words, as your whole reply, and add nothing else: "
+    if head.startswith(single):
+        return head.removeprefix(single)
+    if head.startswith("Ask the person"):
+        return " ".join(question["question"] for question in data)
+    return None
+
+
+async def test_the_person_hears_at_most_two_questions_before_their_turn(peer: Peer) -> None:
+    """Three exports of one expert ask at once: two are asked, the third after the person."""
+    questions = {
+        "Export the sales report": ("sales", "Which sales region?"),
+        "Export the stock report": ("stock", "Which warehouse?"),
+        "Export the margins report": ("margins", "Which quarter?"),
+    }
+
+    def events(message: dict[str, Any]) -> list[dict[str, Any]]:
+        task, question = questions[message["parts"][0]["text"]]
+        return travel_task(message, task, question)
+
+    peer.events = events
+
+    def desk(history: ChatContext) -> str | list[FunctionToolCall]:
+        head, data = instruction(history)
+        if (asked := asked_question(head, data)) is not None:
+            return asked
+        if not any(item.type == "function_call" for item in history.items):
+            return [tool_call("jobs", request=request) for request in questions]
+        return "Noted."
+
+    every = [question for _, question in questions.values()]
+
+    def heard() -> list[str]:
+        text = asked_text(session)
+        return [question for question in every if question in text]
+
+    async with VoiceSession(
+        vad=None, delegation=DelegationOptions(routing_model=FakeLLM(start_route))
+    ) as session:
+        await session.start(
+            Agent(
+                name="desk",
+                instructions="Run jobs.",
+                tools=[RemoteAgent(peer.url, name="jobs").as_tool()],
+                llm=FakeLLM(desk),
+            )
+        )
+        await session.generate_reply(user_input="Export all three reports")
+        await until(lambda: len(heard()) == 2, "two questions were not asked")
+        await session.wait_for_idle()
+        assert len(heard()) == 2, "the person heard three questions in one turn"
+        await session.generate_reply(user_input="How is the weather?")
+        await until(lambda: len(heard()) == 3, "the third question was not asked")
+
+
+async def test_an_answered_tasks_follow_up_is_asked_before_another_tasks_waiting_question(
+    peer: Peer,
+) -> None:
+    peer.response_gate = asyncio.Event()
+
+    def question(message: dict[str, Any], task: str, number: int, text: str) -> dict[str, Any]:
+        [event] = travel_task(message, task, text)
+        event["task"]["status"]["message"]["messageId"] = f"{task}-question-{number}"
+        return event
+
+    def events(message: dict[str, Any]) -> list[dict[str, Any]]:
+        text = message["parts"][0]["text"]
+        if text == "Book a flight":
+            return [question(message, "flight", 1, "What date would you like to fly?")]
+        if text == "Book a hotel":
+            # Held after its first event until the flight question was asked.
+            submitted = {
+                "task": {
+                    "id": "hotel",
+                    "contextId": message.get("contextId", "trip"),
+                    "status": {"state": "TASK_STATE_SUBMITTED"},
+                }
+            }
+            return [submitted, question(message, "hotel", 1, "What is your nightly budget?")]
+        if text == "Friday":
+            return [question(message, "flight", 2, "Morning or evening?")]
+        return travel_task(message, "flight", "Flight booked", completed=True)
+
+    peer.events = events
+
+    def route(history: ChatContext) -> FunctionToolCall:
+        proposal = routing_input(history)
+        if "proposed_call" in proposal:
+            request = proposal["proposed_call"]["request"]
+            if request.startswith("Book"):
+                return call_route(proposal, "new")
+            return call_route(proposal, "respond", "flight")
+        flight = ("What date would you like to fly?", "Morning or evening?")
+        selected = [c["index"] for c in proposal["candidates"] if c["question"] in flight]
+        return tool_call("route_input_response", candidates=selected, unclear=False)
+
+    def desk(history: ChatContext) -> str | list[FunctionToolCall]:
+        head, data = instruction(history)
+        if (asked := asked_question(head, data)) is not None:
+            return asked
+        if head.startswith("Present "):
+            return "Your flight is booked."
+        if not any(item.type == "function_call" for item in history.items):
+            return [
+                tool_call("flights", request="Book a flight"),
+                tool_call("hotels", request="Book a hotel"),
+            ]
+        human = latest_human(history)
+        answered = any(
+            item.type == "function_call" and json.loads(item.arguments).get("request") == human
+            for item in history.items
+        )
+        if human in ("Friday", "Morning") and not answered:
+            return tool_call("flights", request=human, task_id="flight")
+        return "Noted."
+
+    order = [
+        "What date would you like to fly?",
+        "Morning or evening?",
+        "What is your nightly budget?",
+    ]
+
+    def prompts() -> list[str]:
+        return [reply for reply in assistant_replies(session) if reply in order]
+
+    async with VoiceSession(
+        vad=None, delegation=DelegationOptions(routing_model=FakeLLM(route))
+    ) as session:
+        await session.start(
+            Agent(
+                name="desk",
+                instructions="Plan the trip.",
+                tools=[
+                    RemoteAgent(peer.url, id=name, name=name).as_tool()
+                    for name in ("flights", "hotels")
+                ],
+                llm=FakeLLM(desk),
+            )
+        )
+        session.generate_reply(user_input="Book a flight and a hotel")
+        await until(lambda: prompts() == order[:1], "the flight question was not asked")
+        peer.response_gate.set()
+        await session.wait_for_idle()
+        await session.generate_reply(user_input="Friday")
+        await until(lambda: len(prompts()) == 2, "no question followed the answer")
+        await session.wait_for_idle()
+        assert prompts() == order[:2], "the follow-up waited behind another task's question"
+        await session.generate_reply(user_input="Morning")
+        await until(lambda: len(prompts()) == 3, "the hotel question was not asked")
+        assert prompts() == order

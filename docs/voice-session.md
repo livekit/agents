@@ -825,6 +825,24 @@ while the remote body runs. The frontend decides whether acknowledgement is usef
 no automatic announcement option. [Natural conversation](delegation.md#a-natural-conversation)
 owns pacing, question grouping and progress batching.
 
+In voice, the session applies these presentation rules:
+
+- A reply either asks or reports, never both. Progress, results and questions are separate
+  replies; exact output and verbatim results keep their own place in order.
+- The person hears at most two questions before their next turn. One prompt groups the first
+  waiting question with the same expert's other waiting questions; other experts' questions
+  wait for later prompts.
+- Until the person speaks after a heard question, routine progress waits. Results and exact
+  output are still presented.
+- Waiting questions are asked in arrival order. A question the person passes stays open for a
+  later answer, goes back in line behind the questions already waiting, is never repeated in
+  the next prompt, and is asked again at most once.
+- After the person answers a task, other questions wait until that task is heard from again or
+  the person speaks. A follow-up it asks goes first, once per answer and never twice in a row.
+- Results ready together are presented in one reply; each still resolves its own call.
+- A progress announcement not yet heard when its task asks or finishes is withdrawn; the other
+  tasks' updates it carried are presented later.
+
 ### Routing the person's reply
 
 Recognition runs before frontend planning and only considers established presentations.
