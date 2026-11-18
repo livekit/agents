@@ -32,6 +32,8 @@ HEADER_WORKER_TOKEN = "X-LiveKit-Worker-Token"
 HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
 HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 HEADER_REQUEST_ID = "X-LiveKit-Request-Id"
+# set when a fallback model served a /v1/decisions request, to that model's id
+HEADER_DECISIONS_MODEL_FALLBACK = "X-LiveKit-Inference-Decisions-Model-Fallback"
 
 
 @deprecate_params(
