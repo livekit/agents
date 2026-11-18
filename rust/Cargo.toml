@@ -24,7 +24,7 @@ default-members = [
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.95"
 license = "Apache-2.0"
 
 [workspace.lints.clippy]
@@ -47,8 +47,6 @@ serde_json   = "1"
 # The A2A v1 types, from a2aproject/a2a-rs: they serialize as v1 protobuf JSON.
 a2a          = { package = "a2a-lf", version = "=0.4.2" }
 thiserror    = "2"
-smallvec     = "1"
-ordered-float = "5"
 indexmap     = "2"
 # --- below the purity line ---
 tokio        = { version = "1", features = ["rt", "sync", "macros", "time"] }

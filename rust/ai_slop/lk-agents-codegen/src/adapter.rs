@@ -33,6 +33,11 @@ pub fn emit(decls: &Declarations) -> Result<Vec<Out>, String> {
     let mut root = format!(
         "{HEADER}//!\n//! The declared classes' pyo3 adapters, one module per ABI subject.\n\n"
     );
+    // Generated code clones a field without knowing whether its type is `Copy`, and pyo3's
+    // `#[pyclass(from_py_object)]` clones a `Copy` enum.
+    root.push_str(
+        "#![allow(clippy::clone_on_copy, reason = \"generated code clones fields of any type\")]\n\n",
+    );
     root.push_str("use pyo3::prelude::*;\n\n");
     for family in &sorted {
         root.push_str(&format!("pub mod {family};\n"));

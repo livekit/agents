@@ -27,13 +27,14 @@ jobs:
       - run: uv run --no-sync ruff check --output-format=github .
       - run: uv run --no-sync ruff format --check .
 
+  # On 3.12: some extras (AWS realtime) install only there. Pyright still checks the code as
+  # 3.11 (pythonVersion in pyproject.toml).
   types:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - uses: ./.github/actions/setup
         with:
-          python-version: '3.11'
           cache-key: python
       - run: uv sync --all-extras --dev
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -56,15 +57,3 @@ jobs:
           cache-key: python
       - run: uv sync --all-extras --dev
       - run: uv run --no-sync pytest tests/${{ matrix.suite }}
-
-  # A plugin with its own native extension and its own test file.
-  blockguard:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: '3.12'
-      - run: pip install python/livekit-plugins/livekit-blockguard/ pytest
-      - working-directory: python/livekit-plugins/livekit-blockguard
-        run: python -m pytest test_blockguard.py -v

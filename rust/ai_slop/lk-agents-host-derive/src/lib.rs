@@ -427,7 +427,9 @@ fn declared_default(st: &syn::ItemStruct) -> syn::Result<proc_macro2::TokenStrea
             _ => {
                 let ty = &f.ty;
                 params.push(quote::quote!(#name: #ty));
-                quote::quote!(#name)
+                // Shorthand init: the parameter has the field's name.
+                inits.push(quote::quote!(#name));
+                continue;
             }
         };
         inits.push(quote::quote!(#name: #value));
