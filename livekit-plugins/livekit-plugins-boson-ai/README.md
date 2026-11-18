@@ -12,7 +12,7 @@ See [https://docs.livekit.io/agents/models/realtime/boson/](https://docs.livekit
 ## Installation
 
 ```bash
-pip install livekit-plugins-boson
+pip install livekit-plugins-boson-ai
 ```
 
 ## Usage
@@ -22,10 +22,10 @@ Set `BOSON_API_KEY` in your environment. Get a key at
 
 ```python
 from livekit.agents import AgentSession
-from livekit.plugins import boson
+from livekit.plugins import boson_ai
 
 
-session = AgentSession(llm=boson.realtime.RealtimeModel())
+session = AgentSession(llm=boson_ai.realtime.RealtimeModel())
 ```
 
 The defaults connect to the hosted API (`wss://api.boson.ai/v1/realtime`) with
@@ -34,7 +34,7 @@ deployment, pass `url=` — and `api_key=None` if it does not authenticate.
 
 ## Model options
 
-`boson.realtime.RealtimeModel` accepts these options:
+`boson_ai.realtime.RealtimeModel` accepts these options:
 
 | Option | Description |
 | --- | --- |
