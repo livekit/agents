@@ -650,15 +650,23 @@ class FakeTranscriptionOutput(TranscriptionOutput):
 # -- realtime, duplex and avatar
 
 
+RealtimeReply: TypeAlias = "str | llm.FunctionToolCall"
+
+
 class FakeRealtime(llm.RealtimeModel):
-    """Answers each reply request with one spoken message; keeps its sessions, each
-    ``configured`` once the session sent it its tools (the end of its frame). With
-    ``dies="at_open"`` each session it opens fails at once with an unrecoverable error; with
-    ``dies="at_reply"`` it fails instead of answering its first reply request."""
+    """Answers each reply request with one spoken message, or with what a function of the
+    session's chat context and the request's instructions returns: a text it speaks or a tool
+    call it makes. Keeps each request's ``(chat context, instructions)`` in ``requests``, each
+    tool call the framework read in ``calls_read``, and its sessions, each ``configured`` once
+    the session sent it its tools (the end of its frame). With ``dies="at_open"`` each session it
+    opens fails at once with an unrecoverable error; with ``dies="at_reply"`` it fails instead of
+    answering its first reply request."""
 
     def __init__(
         self,
-        reply: str = "Hello from the realtime model.",
+        reply: str | Callable[[llm.ChatContext, str | None], RealtimeReply] = (
+            "Hello from the realtime model."
+        ),
         *,
         dies: Literal["at_open", "at_reply"] | None = None,
     ) -> None:
@@ -675,6 +683,8 @@ class FakeRealtime(llm.RealtimeModel):
         self.reply = reply
         self.dies = dies
         self.sessions: list[FakeRealtimeSession] = []
+        self.requests: list[tuple[llm.ChatContext, str | None]] = []
+        self.calls_read: list[llm.FunctionCall] = []
 
     def session(self, *, turn_detection_disabled: bool = False) -> FakeRealtimeSession:
         self.sessions.append(FakeRealtimeSession(self))
@@ -688,7 +698,7 @@ async def _one(value: _T) -> AsyncIterator[_T]:
     yield value
 
 
-async def _none() -> AsyncIterator[llm.FunctionCall]:
+async def _none() -> AsyncIterator[_T]:
     return
     yield
 
@@ -696,7 +706,7 @@ async def _none() -> AsyncIterator[llm.FunctionCall]:
 class FakeRealtimeSession(llm.RealtimeSession):
     def __init__(self, model: FakeRealtime) -> None:
         super().__init__(model)
-        self._reply = model.reply
+        self._model = model
         self._dies = model.dies
         self._chat_ctx = llm.ChatContext.empty()
         self.configured = False
@@ -736,7 +746,9 @@ class FakeRealtimeSession(llm.RealtimeSession):
     def push_video(self, frame: rtc.VideoFrame) -> None:
         pass
 
-    def generate_reply(self, **_: object) -> asyncio.Future[llm.GenerationCreatedEvent]:
+    def generate_reply(
+        self, *, instructions: object = None, **_: object
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         loop = asyncio.get_running_loop()
         if self._dies == "at_reply":
             self._dies = None
@@ -744,24 +756,39 @@ class FakeRealtimeSession(llm.RealtimeSession):
             # never answered: it fails when the session closes, as a plugin's would
             self._unanswered = loop.create_future()
             return self._unanswered
-        modalities: asyncio.Future[list[Literal["text", "audio"]]] = loop.create_future()
-        modalities.set_result(["audio", "text"])
-        message = llm.MessageGeneration(
-            message_id=shortuuid("msg_"),
-            text_stream=_one(self._reply),
-            audio_stream=_one(audio_frame(0.2, level=0)),
-            modalities=modalities,
-        )
+        asked = instructions if isinstance(instructions, str) else None
+        self._model.requests.append((self._chat_ctx.copy(), asked))
+        reply = self._model.reply
+        part = reply(self._chat_ctx, asked) if callable(reply) else reply
+        messages: AsyncIterator[llm.MessageGeneration] = _none()
+        calls: AsyncIterator[llm.FunctionCall] = _none()
+        if isinstance(part, llm.FunctionToolCall):
+            call = llm.FunctionCall(call_id=part.call_id, name=part.name, arguments=part.arguments)
+            calls = self._read(call)
+        else:
+            modalities: asyncio.Future[list[Literal["text", "audio"]]] = loop.create_future()
+            modalities.set_result(["audio", "text"])
+            message = llm.MessageGeneration(
+                message_id=shortuuid("msg_"),
+                text_stream=_one(part),
+                audio_stream=_one(audio_frame(0.2, level=0)),
+                modalities=modalities,
+            )
+            messages = _one(message)
         created: asyncio.Future[llm.GenerationCreatedEvent] = loop.create_future()
         created.set_result(
             llm.GenerationCreatedEvent(
-                message_stream=_one(message),
-                function_stream=_none(),
+                message_stream=messages,
+                function_stream=calls,
                 user_initiated=True,
                 response_id=shortuuid("resp_"),
             )
         )
         return created
+
+    async def _read(self, call: llm.FunctionCall) -> AsyncIterator[llm.FunctionCall]:
+        yield call
+        self._model.calls_read.append(call)
 
     def commit_audio(self) -> None:
         pass

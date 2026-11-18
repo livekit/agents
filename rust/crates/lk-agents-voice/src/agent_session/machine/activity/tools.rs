@@ -99,11 +99,15 @@ impl VoiceDriver {
     /// One waiting call, started or dropped unrun; returned when it keeps waiting.
     ///
     /// A discarded preemptive generation, or a speech interrupted while queued, drops the call
-    /// unrun. A start already authorized runs, interrupted or not.
+    /// unrun. A start already authorized runs, interrupted or not, unless it still waits on the
+    /// admission of the person's words: a realtime model proposes its call before that routing
+    /// ends, and an interrupted reply drops it as a pipeline reply drops its unplanned step.
     fn try_start_deferred(&mut self, now: Ts, d: Deferred) -> Option<Deferred> {
         let state = self.activity.speech_scheduler.speech(d.speech);
         match state.map(|s| (s.step_authorized(d.step), s.interrupted() || s.done())) {
-            Some((true, _)) => return self.start_authorized(now, d),
+            Some((true, ended)) if !ended || self.remote_inputs_ready(d.speech, &d.call.name) => {
+                return self.start_authorized(now, d);
+            }
             Some((false, false)) => return Some(d),
             Some(_) | None => {
                 self.trace_tool_proposal(d.speech, d.step, &d.call);
