@@ -73,6 +73,11 @@ class PhonicToolConfig(TypedDict, total=False):
     forbid_speech_after_tool_call: bool
     forbid_tool_call_after_speech: bool
     allow_tool_chaining: bool
+    execution_mode: Literal["sync", "async"]
+    wait_for_response: bool  # async tools only
+    uninterruptible: bool  # sync tools only
+    can_run_during_user_speech: bool
+    tool_call_output_timeout_ms: int
     # Built-in tools only (set on the matching ``phonic_tools`` entry):
     respond_after_sec: float  # choose_not_to_respond: seconds to wait before a follow-up (or omit)
     speech_before_tool_call: (
@@ -101,6 +106,21 @@ class ConfigurationEndpoint(TypedDict, total=False):
     url: str
     headers: dict[str, str]
     timeout_ms: int
+
+
+def _check_tool_configs(configs: NotGivenOr[list[PhonicToolConfig]]) -> None:
+    """Raise on per-tool option combinations Phonic rejects, which would otherwise end the session."""
+    for cfg in configs if is_given(configs) else []:
+        name = cfg["name"]
+        mode = cfg.get("execution_mode", "sync")
+        if cfg.get("wait_for_response") and mode != "async":
+            raise ValueError(f"{name}: wait_for_response requires execution_mode='async'")
+        if cfg.get("wait_for_response") and cfg.get("allow_tool_chaining"):
+            raise ValueError(
+                f"{name}: wait_for_response can't be combined with allow_tool_chaining"
+            )
+        if cfg.get("uninterruptible") and mode != "sync":
+            raise ValueError(f"{name}: uninterruptible requires execution_mode='sync'")
 
 
 def _to_phonic_tool_definition(
@@ -394,6 +414,8 @@ class RealtimeModel(llm.RealtimeModel):
             conn_options=conn_options,
         )
 
+        _check_tool_configs(configs_for_tools)
+
         if is_given(forbid_speech_after_tool_call):
             logger.warning(
                 "`forbid_speech_after_tool_call` is deprecated and will be removed in a future "
@@ -606,6 +628,7 @@ class RealtimeSession(llm.RealtimeSession):
         sent_tool_call_output = False
         sent_system_message = False
         forbid_speech = False
+        open_reply_turn = False
         buffered_user_text = False
         last_item_id = chat_ctx.items[-1].id if chat_ctx.items else None
 
@@ -628,14 +651,15 @@ class RealtimeSession(llm.RealtimeSession):
                         )
                     )
                     sent_tool_call_output = True
+                    cfg = self._configs_for_tools.get(item.name or "", {})
                     # the tool forbids speech after its call, or the result wants no reply
-                    if (
-                        self._configs_for_tools.get(item.name or "", {}).get(
-                            "forbid_speech_after_tool_call", False
-                        )
-                        or not item.reply_required
-                    ):
+                    if cfg.get("forbid_speech_after_tool_call", False) or not item.reply_required:
                         forbid_speech = True
+                    # Only a sync tool's reply starts right away. The agent may still be talking
+                    # when an async tool's output arrives, and opening a turn now would cut it off,
+                    # so that reply's turn opens on assistant_started_speaking.
+                    if cfg.get("execution_mode", "sync") == "sync":
+                        open_reply_turn = True
 
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
                 text = item.raw_text_content
@@ -671,7 +695,7 @@ class RealtimeSession(llm.RealtimeSession):
         # Skip opening a new assistant turn when the tool forbids speech after its call:
         # Phonic will not speak, so the generation would otherwise dangle open (never
         # receiving audio nor a finished-speaking event) until the handoff reset / aclose.
-        if sent_tool_call_output and not forbid_speech:
+        if open_reply_turn and not forbid_speech:
             self._start_new_assistant_turn()
 
     def _serialize_tools(self) -> list[dict]:
@@ -682,7 +706,11 @@ class RealtimeSession(llm.RealtimeSession):
                 {
                     "type": "custom_websocket",
                     "tool_schema": tool_schema,
-                    "tool_call_output_timeout_ms": TOOL_CALL_OUTPUT_TIMEOUT_MS,
+                    "execution_mode": cfg.get("execution_mode", "sync"),
+                    "wait_for_response": cfg.get("wait_for_response", False),
+                    "tool_call_output_timeout_ms": cfg.get(
+                        "tool_call_output_timeout_ms", TOOL_CALL_OUTPUT_TIMEOUT_MS
+                    ),
                     # fixed, not configurable: the plugin does not support tool calls during
                     # agent speech
                     "wait_for_speech_before_tool_call": True,
@@ -696,6 +724,8 @@ class RealtimeSession(llm.RealtimeSession):
                     "forbid_tool_call_after_speech": cfg.get(
                         "forbid_tool_call_after_speech", False
                     ),
+                    "uninterruptible": cfg.get("uninterruptible", False),
+                    "can_run_during_user_speech": cfg.get("can_run_during_user_speech", False),
                 }
             )
         return tool_definitions
@@ -961,6 +991,7 @@ class RealtimeSession(llm.RealtimeSession):
         }
         if not changes:
             return
+        _check_tool_configs(configs_for_tools)
 
         # Rotate the previous default into additional_languages when switching default_language so
         # it stays usable (and drop the new default, which the API forbids there), unless the caller
