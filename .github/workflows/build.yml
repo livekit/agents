@@ -129,7 +129,8 @@ jobs:
             elif command -v yum >/dev/null; then
               yum install -y cmake nasm pkgconfig opus-devel
             fi
-          sccache: true
+          # sccache publishes no musllinux wheels, so the musl containers build without it
+          sccache: ${{ !startsWith(matrix.manylinux, 'musllinux') }}
 
       - name: Bundle macOS codec libraries
         if: runner.os == 'macOS'
