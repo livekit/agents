@@ -455,3 +455,15 @@ fn an_explicit_empty_artifact_snapshot_replaces_prior_chunks() {
     assert!(done.artifacts.is_empty());
     assert_eq!(done.text, "No attachment");
 }
+
+#[test]
+fn reading_a_task_back_names_its_thread_so_a_livekit_endpoint_finds_it() {
+    let mut client = Client::new("https://example.test/agent/".into(), None).unwrap();
+    client.accept_card(&card()).unwrap();
+    let task = TaskRef { id: "task".into(), context_id: "context".into() };
+
+    let request = client.get_task(&task, JsonRpcId::Number(3)).unwrap();
+
+    let decoded = crate::a2a::rpc::decode(&request.body).unwrap();
+    assert_eq!(decoded.call, crate::a2a::rpc::Call::Get { task, history_length: None });
+}

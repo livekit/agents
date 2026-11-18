@@ -323,7 +323,15 @@ impl Client {
         check_task(task)?;
         self.rpc(
             a2a::methods::GET_TASK,
-            a2a::GetTaskRequest { id: task.id.clone(), history_length: None, tenant: None },
+            TaskParams {
+                request: a2a::GetTaskRequest {
+                    id: task.id.clone(),
+                    history_length: None,
+                    tenant: None,
+                },
+                context_id: &task.context_id,
+                offset: None,
+            },
             id,
             false,
             Some(task.clone()),

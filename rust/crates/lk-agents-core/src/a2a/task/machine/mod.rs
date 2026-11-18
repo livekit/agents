@@ -918,7 +918,12 @@ impl TaskMachine {
             Completion::Received { duplicate: None, leased } => {
                 self.leased = leased;
                 self.phase = Phase::Accepted(if leased { Next::Drain } else { Next::Open });
-                Ok(Some(Operation::Accepted(self.task_id.clone())))
+                // A live continuation is observed as the task it names, never its receipt.
+                let announced = match &self.message.task_id {
+                    Some(target) if self.policy == Policy::Live => target.clone(),
+                    _ => self.task_id.clone(),
+                };
+                Ok(Some(Operation::Accepted(announced)))
             }
             other => Err(self.unexpected(other)),
         }

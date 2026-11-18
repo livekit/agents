@@ -278,6 +278,7 @@ impl TaskMachine {
         };
         let partition_question = self.policy != Policy::Concurrent;
         let live = self.policy == Policy::Live;
+        let own_task = self.task_id.clone();
         let turn = self.turning();
         let out = turn.output.take().unwrap_or_default();
         let settled = settle(Settle {
@@ -303,9 +304,8 @@ impl TaskMachine {
         };
         // A live continuation answers with the task it continues, even when this request
         // drained its own message: the receipt only points there.
-        let own_continuation = live
-            && turn.continued.is_some()
-            && turn.task_ids.iter().any(|task| *task == self.task_id);
+        let own_continuation =
+            live && turn.continued.is_some() && turn.task_ids.contains(&own_task);
         if !turn.drain || own_continuation {
             self.answer = Some((turn.answer_task.clone(), settled.output));
         }

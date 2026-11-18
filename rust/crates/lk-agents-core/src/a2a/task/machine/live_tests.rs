@@ -213,3 +213,22 @@ fn a_task_id_that_names_no_waiting_question_answers_no_other_question() {
     };
     assert_eq!(handle.task_id, "task_received");
 }
+
+#[test]
+fn a_live_continuation_is_announced_as_the_task_it_names() {
+    let mut wire = a2a::Message::new(a2a::Role::User, vec![a2a::Part::text("High.")]);
+    wire.message_id = "answer".into();
+    wire.task_id = Some("task_asked".into());
+    let mut machine = TaskMachine::new(
+        "desk".into(),
+        Message::from_a2a(&wire, 0.0, None).unwrap(),
+        "task_receipt".into(),
+        &TurnOptions { policy: PolicySpec::All(Policy::Live), ..Default::default() },
+        0.0,
+    );
+
+    let accepted =
+        machine.on_received(Completion::Received { duplicate: None, leased: false }).unwrap();
+
+    assert_eq!(accepted, Some(Operation::Accepted("task_asked".into())));
+}
