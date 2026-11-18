@@ -182,6 +182,16 @@ impl Driver {
         result: Box<Result<TextSessionTurn, TextSessionError>>,
         working: bool,
     ) -> Vec<SessionEffect> {
+        // The failed invocation keeps its provider's original error, as outside live.
+        let invocation = self
+            .invocation_requests
+            .iter()
+            .find(|(_, request)| **request == origin.request_id)
+            .map(|(invocation, _)| invocation.clone());
+        let provider_error = match result.as_ref() {
+            Err(error) => self.provider_failure(invocation.as_deref(), error),
+            Ok(_) => None,
+        };
         let Some(request) = self.live_requests.get(&origin.request_id) else {
             return self.session.handle(
                 SessionEvent::PersistenceFailed(StorageError::Invalid(
@@ -206,7 +216,7 @@ impl Driver {
                 Err(error) => TextSessionUpdate::Failed {
                     error: error.clone(),
                     input_requirements: Vec::new(),
-                    provider_error: None,
+                    provider_error,
                 },
             })
         } else {

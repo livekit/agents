@@ -579,7 +579,7 @@ impl Driver {
     }
 
     /// A model failure's original provider error, kept by the invocation that failed.
-    fn provider_failure(
+    pub(super) fn provider_failure(
         &mut self,
         invocation_id: Option<&str>,
         error: &TextSessionError,

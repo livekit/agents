@@ -266,18 +266,19 @@ async def test_a_per_channel_map_runs_delegation_live_and_batches_direct_message
             door, send("Is breakfast included?", "m-side", context_id=thread, kind="delegation")
         ) as side:
             await until(service.pause.started.is_set, "the side question's turn did not start")
-            async with (
-                streaming(door, send("Book a taxi.", "m-direct-1", context_id=thread)) as first,
-                streaming(door, send("When is check-in?", "m-direct-2", context_id=thread)) as last,
-            ):
-                await until(
-                    lambda: first.events and last.events, "the direct messages were not admitted"
-                )
-                service.pause.release()
-                await until(
-                    lambda: side.reader.done() and first.reader.done() and last.reader.done(),
-                    "the side question and the direct burst were not answered",
-                )
+            async with streaming(
+                door, send("Book a taxi.", "m-direct-1", context_id=thread)
+            ) as first:
+                await until(lambda: first.events, "the first direct message was not admitted")
+                async with streaming(
+                    door, send("When is check-in?", "m-direct-2", context_id=thread)
+                ) as last:
+                    await until(lambda: last.events, "the second direct message was not admitted")
+                    service.pause.release()
+                    await until(
+                        lambda: side.reader.done() and first.reader.done() and last.reader.done(),
+                        "the side question and the direct burst were not answered",
+                    )
         assert service.effects == [] and not booking.reader.done(), "the booking is still held"
         service.gate.set()
         await until(lambda: booking.reader.done(), "the booking did not settle")
@@ -339,3 +340,25 @@ async def test_an_unbound_run_in_a_live_handler_is_not_a_hidden_live_owner(a2a_d
     assert booking.final()["status"]["state"] == "TASK_STATE_COMPLETED"
     assert booking.answer() == ["Booked reservation R1."]
     assert service.effects == [booking.task["id"]]
+
+
+async def test_a_live_turns_model_failure_fails_the_task_with_the_providers_error(
+    a2a_door: Door,
+) -> None:
+    """A provider error under a live owner reaches the handler as the provider raised it, as it
+    does outside live; it used to surface as a `TypeError` building a fallback `APIError`."""
+    agent = Agent(name="desk", instructions="Help.", llm=FakeLLM([KeyError("boom")]))
+    raised: list[BaseException] = []
+
+    async def handler(ctx: A2ASessionContext) -> object:
+        try:
+            return await agent.run(ctx.message, context=ctx.store.bind())
+        except BaseException as error:
+            raised.append(error)
+            raise
+
+    async with a2a_door(handler, inbox="live") as door:
+        task = (await door.post("/v1", json=send("Start", "m-start"))).json()["result"]["task"]
+
+    assert task["status"]["state"] == "TASK_STATE_FAILED"
+    assert [type(error) for error in raised] == [KeyError]
