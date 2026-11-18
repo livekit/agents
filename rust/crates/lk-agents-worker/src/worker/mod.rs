@@ -1,7 +1,8 @@
 use crate::http::IncomingRequest;
 use crate::hw::cpu::CpuMonitor;
 use crate::transport::{
-    Connected, EndpointStream, TransportError, TransportEvent, WorkerSink, WorkerTransport,
+    Connected, EndpointStream, TransportError, TransportEvent, TransportKind, WorkerSink,
+    WorkerTransport,
 };
 use crate::{DefaultLoadCalc, WorkerConfig};
 use crate::{JobDecision, JobRequest, RunningJobInfo};
@@ -24,6 +25,9 @@ use std::time::Duration;
 
 /// Default ping interval.
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
+const WORKER_PING_INTERVAL: Duration = Duration::from_secs(1);
+const WORKER_PONG_TIMEOUT: Duration = Duration::from_secs(2);
 
 const MAX_PENDING_WRITES: usize = 64;
 
@@ -358,7 +362,26 @@ struct ActiveConnection {
     transport: Connected,
     /// `None` after the server's registration response has been received.
     registration_deadline: Option<Ts>,
+    heartbeat: Option<Heartbeat>,
     writing: Option<BoxFuture<'static, Result<Option<String>, TransportError>>>,
+}
+
+#[derive(Clone, Copy)]
+enum Heartbeat {
+    SendPingAt(Ts),
+    AwaitingPong { timestamp: i64, sent_at: Ts },
+}
+
+impl Heartbeat {
+    async fn due(heartbeat: Option<Self>, clock: &dyn Clock) -> Self {
+        let Some(heartbeat) = heartbeat else { return std::future::pending().await };
+        let deadline = match heartbeat {
+            Self::SendPingAt(at) => at,
+            Self::AwaitingPong { sent_at, .. } => sent_at.saturating_add(WORKER_PONG_TIMEOUT),
+        };
+        clock.wait_until(deadline).await;
+        heartbeat
+    }
 }
 
 impl ConnectionIo {
@@ -444,6 +467,8 @@ impl ConnectionState {
                 *self = Self::Active(ActiveConnection {
                     transport: connected,
                     registration_deadline,
+                    heartbeat: (transport.kind() == TransportKind::WebSocket)
+                        .then(|| Heartbeat::SendPingAt(clock.now())),
                     writing: None,
                 });
                 Ok(ConnectionEvent::Connected)
@@ -487,7 +512,25 @@ impl ActiveConnection {
         {
             self.writing = Some(pending.send(self.transport.sink.clone(), clock.clone()).boxed());
         }
+        let heartbeat = self.heartbeat.filter(|_| self.registration_deadline.is_none());
         tokio::select! {
+            biased;
+            heartbeat = Heartbeat::due(heartbeat, &**clock) => match heartbeat {
+                Heartbeat::SendPingAt(_) => {
+                    let sent_at = clock.now();
+                    let timestamp = (lk_agents_abi::unix_secs(clock.wall()) * 1000.0) as i64;
+                    outbox.push(WorkerMessage {
+                        message: Some(proto::worker_message::Message::Ping(proto::WorkerPing {
+                            timestamp,
+                        })),
+                    }, None)?;
+                    self.heartbeat = Some(Heartbeat::AwaitingPong { timestamp, sent_at });
+                    Ok(ConnectionEvent::Progress)
+                }
+                Heartbeat::AwaitingPong { .. } => {
+                    Err(TransportError::Failed("worker ping timed out waiting for LiveKit pong".into()).into())
+                }
+            },
             sent = await_write(&mut self.writing) => {
                 self.writing = None;
                 Ok(match sent? {
@@ -513,7 +556,16 @@ impl ActiveConnection {
                     _ => Err(RuntimeError::ExpectedRegister),
                 }
             }
-            TransportEvent::ServerMessage(message) => Ok(ConnectionEvent::ServerMessage(message)),
+            TransportEvent::ServerMessage(message) => {
+                if let Some(proto::server_message::Message::Pong(pong)) = &message.message
+                    && let Some(Heartbeat::AwaitingPong { timestamp, sent_at }) = self.heartbeat
+                    && timestamp == pong.last_timestamp
+                {
+                    self.heartbeat =
+                        Some(Heartbeat::SendPingAt(sent_at.saturating_add(WORKER_PING_INTERVAL)));
+                }
+                Ok(ConnectionEvent::ServerMessage(message))
+            }
             TransportEvent::EndpointRequest(stream) if self.registration_deadline.is_some() => {
                 stream.refuse();
                 Ok(ConnectionEvent::Progress)

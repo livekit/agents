@@ -107,7 +107,7 @@ impl Rig {
     fn next_peer(&self) -> Peer {
         let (peer, incoming) = tokio::sync::mpsc::unbounded_channel();
         peer.send(register_message("worker")).unwrap();
-        self.connections.lock().push_back(incoming);
+        self.connections.lock().push_back((peer.downgrade(), incoming));
         peer
     }
 
