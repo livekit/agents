@@ -1,0 +1,33 @@
+tests/test_plugin_elevenlabs_stt.py
+  s_1a6176064eede6::t_5a24f089413b3e 1016-1018
+  s_1a6176064eede6::t_d60e00fc03c0c5 11,81-88,929-978,987,991-999,1027-1039
+  s_1a6176064eede6::t_19a1e3300f1727 1068-1070
+  s_1a6176064eede6::t_71c6840c5d0056 1000-1015,1019-1026
+  s_1a6176064eede6::t_64e802e484a971 741-743,745,1040-1067,1071-1088
+  s_1a6176064eede6::t_e798cdb147c45d 979-986,988-990
+  s_1a6176064eede6::t_3ca2b3345536f8 1089-1090
+tests/test_plugin_elevenlabs_stt_live.py
+  s_1a6176064eede6::t_1a0366651f751f 12,20-23,112-208
+livekit-plugins/livekit-plugins-elevenlabs/README.md
+  s_1a6176064eede6::t_71c6840c5d0056 43
+  s_1a6176064eede6::t_64e802e484a971 44,49,57-67
+  s_1a6176064eede6::t_bf8dcfbbc98520 68
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/stt.py
+  s_1a6176064eede6::t_6d7546e0a3f62a 23,41,147,191-193,302,460-463,525,530-537,614-659,683-685,706-707,717,733,748-749,755-761,806,810-815,818-823,838,842-843,866-868,945-956,985,989-992,1032-1037
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0ba8ada6923cd256e8961033c4a44ccda79ca859",
+  "prompts": {},
+  "sessions": {
+    "s_1a6176064eede6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ea50-b503-71c0-a323-750834adcd15",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
