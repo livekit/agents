@@ -10,6 +10,7 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
+from .utils import spell_out
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
@@ -269,7 +270,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         await self.update_tools(current_tools)
 
         read_back = (
-            f"Spell out the name letter by letter for verification: {' '.join(full_name.replace(' ', ''))}"
+            f"Spell out the name letter by letter for verification: {spell_out(full_name)}"
             if self._spell_read_back
             else "Repeat the name back to the user."
         )
