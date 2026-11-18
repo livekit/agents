@@ -232,7 +232,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         # drop an open that is still running on a worker; it closes its own stream
         self._stream_epoch += 1
         if attach_tasks := list(self._attach_tasks):
-            await asyncio.gather(*attach_tasks, return_exceptions=True)
+            await asyncio.shield(asyncio.gather(*attach_tasks, return_exceptions=True))
 
         stream = self._stream
         self._stream = None
