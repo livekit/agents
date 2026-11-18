@@ -29,6 +29,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
+from livekit.plugins.elevenlabs._turn_detection import TurnDetection
 from livekit.plugins.elevenlabs._utils import trace_id_from_headers
 
 pytestmark = pytest.mark.plugin("elevenlabs")
@@ -45,6 +46,7 @@ class _EventSink:
 def _new_stream(
     *,
     server_vad=NOT_GIVEN,
+    commit_strategy=NOT_GIVEN,
     language: str | None = "en",
     include_timestamps: bool = False,
     include_language_detection=NOT_GIVEN,
@@ -65,6 +67,7 @@ def _new_stream(
         include_timestamps=include_timestamps,
         sample_rate=16000,
         server_vad=server_vad,
+        commit_strategy=commit_strategy,
         keyterms=NOT_GIVEN,
         no_verbatim=False,
         enable_logging=True,
@@ -73,8 +76,15 @@ def _new_stream(
     stream._language = LanguageCode(language) if language else None
     stream._event_ch = _EventSink()
     stream._speaking = False
-    stream._last_partial_text = ""
     stream._final_alternatives = []
+    stream._vad = None
+    stream._reconnect_event = asyncio.Event()
+    stream._stt = elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime")
+    stream._stt._opts = stream._opts
+    stream._stt._streams.add(stream)
+    stream._turn_detection = TurnDetection(
+        opts=stream._opts, vad=None, on_end_of_speech=stream._emit_end_of_speech
+    )
     stream._input_ch = SimpleNamespace(start_time_offset=0.0)
     return stream
 
@@ -335,6 +345,142 @@ async def _connect_ws_url(stream: elevenlabs_stt.SpeechStream) -> str:
     return captured["url"]
 
 
+@pytest.mark.parametrize(
+    ("commit_strategy", "server_vad", "expected"),
+    [
+        (NOT_GIVEN, NOT_GIVEN, "manual"),
+        (NOT_GIVEN, None, "manual"),
+        (NOT_GIVEN, {}, "vad"),
+        ("manual", {}, "manual"),
+        ("vad", None, "vad"),
+        ("turn_prediction", NOT_GIVEN, "turn_prediction"),
+        ("turn_prediction", None, "turn_prediction"),
+        ("turn_prediction", {}, "turn_prediction"),
+    ],
+)
+async def test_commit_strategy_controls_connection_and_manual_flush(
+    commit_strategy, server_vad, expected
+) -> None:
+    instance = elevenlabs_stt.STT(
+        api_key="test-key",
+        model="scribe_v3_live",
+        commit_strategy=commit_strategy,
+        server_vad=server_vad,
+    )
+    stream = _new_stream()
+    stream._opts = instance._opts
+    query = URL(await _connect_ws_url(stream)).query
+    assert query["commit_strategy"] == expected
+    assert instance.capabilities.manual_flush is (expected == "manual")
+
+
+async def test_turn_prediction_passes_vad_fallback_options() -> None:
+    options = {
+        "vad_silence_threshold_secs": 2.0,
+        "vad_threshold": 0.3,
+        "min_speech_duration_ms": 100,
+        "min_silence_duration_ms": 200,
+    }
+    stream = _new_stream(commit_strategy="turn_prediction", server_vad=options)
+    stream._opts.model_id = "scribe_v3_live"
+    query = URL(await _connect_ws_url(stream)).query
+    assert query["commit_strategy"] == "turn_prediction"
+    for name, value in options.items():
+        assert query[name] == str(value)
+
+
+@pytest.mark.parametrize("model", ["scribe_v1", "scribe_v2", "scribe_v2_realtime", "scribe_v3"])
+def test_turn_prediction_rejects_unsupported_models(model: str) -> None:
+    with pytest.raises(ValueError, match="turn_prediction is only supported for scribe_v3_live"):
+        elevenlabs_stt.STT(api_key="test-key", model=model, commit_strategy="turn_prediction")
+
+    instance = elevenlabs_stt.STT(api_key="test-key", model=model)
+    with pytest.raises(ValueError, match="turn_prediction is only supported for scribe_v3_live"):
+        instance.update_options(commit_strategy="turn_prediction", server_vad={})
+    assert instance._opts.commit_strategy is NOT_GIVEN
+    assert instance._opts.server_vad is NOT_GIVEN
+
+
+@pytest.mark.parametrize("include_timestamps", [False, True])
+@pytest.mark.parametrize("include_language_detection", [False, True])
+def test_turn_prediction_waits_for_server_commit_and_emits_one_end_of_speech(
+    include_timestamps: bool, include_language_detection: bool
+) -> None:
+    stream = _new_stream(
+        commit_strategy="turn_prediction",
+        include_timestamps=include_timestamps,
+        include_language_detection=include_language_detection,
+    )
+    stream._opts.model_id = "scribe_v3_live"
+    for probability in (0.08, 0.95):
+        stream._process_stream_event(
+            {**_partial_transcript("hello"), "turn_probability": probability}
+        )
+    assert [event.type for event in stream._event_ch.events] == [
+        stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.INTERIM_TRANSCRIPT,
+    ]
+    for with_timestamps in (False, True):
+        stream._process_stream_event(
+            _committed_transcript("hello", with_timestamps=with_timestamps)
+        )
+    assert [event.type for event in stream._event_ch.events[2:]] == [
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
+        stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    assert stream._event_ch.events[-1].alternatives[0].text == "hello"
+    assert stream._speaking is False
+
+
+async def test_update_commit_strategy_reconnects_active_stream_and_updates_capabilities() -> None:
+    instance = elevenlabs_stt.STT(api_key="test-key", model="scribe_v3_live")
+    stream = _new_stream()
+    stream._opts = instance._opts
+    stream._reconnect_event = asyncio.Event()
+    instance._streams.add(stream)
+
+    for strategy in ("turn_prediction", "manual", "vad"):
+        stream._reconnect_event.clear()
+        instance.update_options(commit_strategy=strategy)
+        assert stream._reconnect_event.is_set()
+        assert instance.capabilities.manual_flush is (strategy == "manual")
+        assert URL(await _connect_ws_url(stream)).query["commit_strategy"] == strategy
+
+    instance.update_options(server_vad=None)
+    assert instance.capabilities.manual_flush is False
+    assert URL(await _connect_ws_url(stream)).query["commit_strategy"] == "vad"
+
+
+def test_stream_strategy_update_keeps_sibling_connections_and_capabilities_in_sync() -> None:
+    instance = elevenlabs_stt.STT(api_key="test-key", model="scribe_v3_live")
+    streams = [_new_stream(), _new_stream()]
+    for stream in streams:
+        stream._stt = instance
+        stream._opts = instance._opts
+        stream._reconnect_event = asyncio.Event()
+        instance._streams.add(stream)
+
+    streams[0].update_options(commit_strategy="turn_prediction")
+
+    assert not instance.capabilities.manual_flush
+    assert all(stream._reconnect_event.is_set() for stream in streams)
+    assert all(stream._opts.resolved_commit_strategy == "turn_prediction" for stream in streams)
+
+
+def test_stream_commit_strategy_update_validates_before_changing_options() -> None:
+    stream = _new_stream()
+    stream._reconnect_event = asyncio.Event()
+    with pytest.raises(ValueError, match="turn_prediction is only supported for scribe_v3_live"):
+        stream.update_options(commit_strategy="turn_prediction", server_vad={})
+    assert not stream._reconnect_event.is_set()
+    assert stream._opts.server_vad is NOT_GIVEN
+
+    stream._opts.model_id = "scribe_v3_live"
+    stream.update_options(commit_strategy="turn_prediction")
+    assert stream._reconnect_event.is_set()
+    assert stream._opts.resolved_commit_strategy == "turn_prediction"
+
+
 async def test_connect_ws_includes_keyterms() -> None:
     # keyterms bias the realtime model and are sent as repeated query params on
     # the connect URL.
@@ -456,7 +602,7 @@ def test_secondary_languages_ignored_for_batch_model(caplog: pytest.LogCaptureFi
         )
 
     assert instance._opts.secondary_languages is NOT_GIVEN
-    assert "only supported for Scribe v2 realtime" in caplog.text
+    assert "only supported for realtime models" in caplog.text
 
 
 async def test_connect_ws_requests_language_detection_when_no_language_is_pinned() -> None:
@@ -607,9 +753,11 @@ class _FakeWS:
         self._closed.set()
 
 
-def _live_stream(ws: _FakeWS, **kwargs: Any) -> elevenlabs_stt.SpeechStream:
+def _live_stream(
+    ws: _FakeWS, *, model: str = "scribe_v2_realtime", **kwargs: Any
+) -> elevenlabs_stt.SpeechStream:
     """A real SpeechStream running its real _run loop against a fake socket."""
-    instance = elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime", **kwargs)
+    instance = elevenlabs_stt.STT(api_key="test-key", model=model, **kwargs)
     opts = dataclasses.replace(instance._opts)
     stream = elevenlabs_stt.SpeechStream(
         stt=instance,
@@ -791,6 +939,506 @@ def test_manual_flush_capability_tracks_server_vad_updates() -> None:
     assert instance.capabilities.manual_flush is False
     instance.update_options(server_vad=None)
     assert instance.capabilities.manual_flush is True
+
+
+@pytest.mark.parametrize(
+    ("model", "strategy", "local_vad", "server_vad", "warns"),
+    [
+        ("scribe_v3_live", "turn_prediction", False, NOT_GIVEN, True),
+        ("scribe_v3_live", "turn_prediction", False, {}, True),
+        ("scribe_v3_live", "turn_prediction", True, NOT_GIVEN, False),
+        ("scribe_v3_live", "manual", False, NOT_GIVEN, False),
+        ("scribe_v2_realtime", "vad", False, NOT_GIVEN, False),
+    ],
+)
+def test_turn_prediction_warns_without_local_vad(
+    model, strategy, local_vad, server_vad, warns, caplog: pytest.LogCaptureFixture
+) -> None:
+    from .fake_vad import FakeVAD
+
+    elevenlabs_stt.STT(
+        api_key="test-key",
+        model=model,
+        commit_strategy=strategy,
+        vad=FakeVAD() if local_vad else None,
+        server_vad=server_vad,
+    )
+    assert ("approximately 36 seconds" in caplog.text) is warns
+    if warns:
+        assert "elevenlabs.STT(vad=...)" in caplog.text
+
+
+def test_enabling_turn_prediction_warns_once_with_an_active_stream(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    instance = elevenlabs_stt.STT(api_key="test-key", model="scribe_v3_live")
+    stream = _new_stream()
+    stream._opts = instance._opts
+    stream._reconnect_event = asyncio.Event()
+    instance._streams.add(stream)
+    instance.update_options(commit_strategy="turn_prediction")
+    assert len(caplog.records) == 1
+    assert "approximately 36 seconds" in caplog.text
+    caplog.clear()
+    instance.update_options(keyterms=["LiveKit"])
+    assert not caplog.records
+
+
+def test_stream_warns_when_enabling_turn_prediction_without_vad(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stream = _new_stream()
+    stream._opts.model_id = "scribe_v3_live"
+    stream._reconnect_event = asyncio.Event()
+    stream.update_options(commit_strategy="turn_prediction")
+    assert "approximately 36 seconds" in caplog.text
+
+
+@pytest.mark.parametrize("options", [{}, {"tag_audio_events": False}, {"keyterms": ["LiveKit"]}])
+def test_unrelated_updates_preserve_manual_flush_override(options) -> None:
+    instance = _stt()
+    instance.capabilities.manual_flush = False
+    instance.update_options(**options)
+    assert instance.capabilities.manual_flush is False
+
+
+def _forced_commit_stream(**kwargs) -> elevenlabs_stt.SpeechStream:
+    stream = _new_stream(commit_strategy="turn_prediction", **kwargs)
+    stream._opts.model_id = "scribe_v3_live"
+    stream._turn_detection._vad_speaking = True
+    stream._turn_detection._audio_duration_since_commit = 35.3
+    stream._process_stream_event({**_partial_transcript("still speaking"), "turn_probability": 0.0})
+    return stream
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("silence_threshold", [None, 0.5])
+async def test_forced_commit_keeps_turn_open_then_times_out_without_more_text(
+    silence_threshold: float | None, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="livekit.plugins.elevenlabs")
+    stream = _forced_commit_stream(server_vad={"vad_silence_threshold_secs": silence_threshold})
+    stream._process_stream_event(_committed_transcript("still speaking"))
+    assert stream._event_ch.events[-1].type == stt.SpeechEventType.FINAL_TRANSCRIPT
+    assert stream._speaking
+    deferred = [r for r in caplog.records if r.message.startswith("deferring end of speech")]
+    assert len(deferred) == 1
+    assert deferred[0].levelno == logging.DEBUG
+    assert deferred[0].audio_duration_since_commit == pytest.approx(35.3)
+    assert deferred[0].turn_probability == 0.0
+    assert deferred[0].vad_speaking is True
+    # VAD can stay positive due to background speech. It must not prevent the fallback.
+    timeout = (silence_threshold if silence_threshold is not None else 1.5) + 0.5
+    await asyncio.sleep(timeout - 0.1)
+    stream._process_stream_event(_partial_transcript(""))
+    assert stream._speaking
+    await asyncio.sleep(0.2)
+    assert stream._event_ch.events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+    assert not stream._speaking
+    await asyncio.sleep(2)
+    assert sum(e.type == stt.SpeechEventType.END_OF_SPEECH for e in stream._event_ch.events) == 1
+    fallback = [r for r in caplog.records if r.message.startswith("emitting end of speech")]
+    assert len(fallback) == 1
+    assert fallback[0].levelno == logging.WARNING
+    assert fallback[0].eos_timeout == timeout
+    assert fallback[0].vad_speaking is True
+    for record in deferred + fallback:
+        assert "lk.pii.data" not in record.__dict__
+        assert "still speaking" not in json.dumps(record.__dict__, default=str)
+
+
+@pytest.mark.virtual_time
+async def test_new_segment_text_cancels_forced_commit_fallback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stream = _forced_commit_stream(server_vad={"vad_silence_threshold_secs": 0.5})
+    stream._process_stream_event(_committed_transcript("still speaking"))
+    stream._process_stream_event({**_partial_transcript("and continuing"), "turn_probability": 0.1})
+    await asyncio.sleep(4)
+    assert not any(r.levelno >= logging.WARNING for r in caplog.records)
+    assert stream._speaking
+    assert not any(e.type == stt.SpeechEventType.END_OF_SPEECH for e in stream._event_ch.events)
+    # The next segment still needs its final transcript before the turn can close.
+    stream._turn_detection._vad_speaking = False
+    stream._process_stream_event(_committed_transcript("and continuing"))
+    assert stream._event_ch.events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+
+
+@pytest.mark.parametrize(
+    ("duration", "probability", "speaking", "client_commits"),
+    [
+        (10, 0.0, True, 0),
+        (40, 0.0, True, 0),
+        (35.3, 0.9, True, 0),
+        (35.3, None, True, 0),
+        (35.3, 0.0, False, 0),
+        (35.3, 0.0, True, 1),
+    ],
+)
+def test_other_automatic_commits_still_on_end_of_speech(
+    duration, probability, speaking, client_commits
+) -> None:
+    stream = _forced_commit_stream()
+    turn_detection = stream._turn_detection
+    turn_detection._audio_duration_since_commit = duration
+    turn_detection.on_partial_transcript(probability, text="still speaking")
+    turn_detection._vad_speaking = speaking
+    for _ in range(client_commits):
+        turn_detection.on_commit_requested()
+    stream._process_stream_event(_committed_transcript("hello"))
+    assert stream._event_ch.events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+
+
+@pytest.mark.parametrize("probability", [0.9, 1.0])
+def test_turn_probability_updates_even_when_partial_text_does_not_change(probability) -> None:
+    stream = _forced_commit_stream()
+    stream._process_stream_event(
+        {**_partial_transcript("still speaking"), "turn_probability": probability}
+    )
+    stream._process_stream_event(_committed_transcript("still speaking"))
+    assert stream._event_ch.events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+    assert len(_interim_texts(stream)) == 1
+
+
+@pytest.mark.virtual_time
+async def test_forced_commit_duration_restarts_for_each_segment() -> None:
+    stream = _forced_commit_stream()
+    try:
+        stream._process_stream_event(_committed_transcript("still speaking"))
+        stream._process_stream_event(
+            {**_partial_transcript("next segment"), "turn_probability": 0.0}
+        )
+        await stream._turn_detection.push_frame(_frame(35300))
+        stream._process_stream_event(_committed_transcript("next segment"))
+        assert not any(e.type == stt.SpeechEventType.END_OF_SPEECH for e in stream._event_ch.events)
+        assert stream._turn_detection._eos_timeout_handle is not None
+    finally:
+        stream._turn_detection.cancel_eos_timeout()
+
+
+@pytest.mark.virtual_time
+async def test_forced_commit_decision_survives_delayed_timestamps_and_new_partials(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="livekit.plugins.elevenlabs")
+    stream = _forced_commit_stream(include_timestamps=True)
+    stream._process_stream_event(_committed_transcript("still speaking"))
+    stream._process_stream_event({**_partial_transcript("next segment"), "turn_probability": 0.95})
+    stream._turn_detection._vad_speaking = False
+    stream._process_stream_event(_committed_transcript("still speaking", with_timestamps=True))
+    await asyncio.sleep(5)
+    assert stream._speaking
+    assert not any(e.type == stt.SpeechEventType.END_OF_SPEECH for e in stream._event_ch.events)
+    stream._process_stream_event(_committed_transcript("next segment"))
+    stream._process_stream_event(_committed_transcript("next segment", with_timestamps=True))
+    assert stream._event_ch.events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+    assert sum(r.message.startswith("deferring end of speech") for r in caplog.records) == 1
+    assert not any(r.levelno >= logging.WARNING for r in caplog.records)
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("continuation", ["still speaking", "next segment"])
+async def test_commit_resets_partial_deduplication_before_delayed_timestamps(
+    continuation: str,
+) -> None:
+    stream = _forced_commit_stream(include_timestamps=True)
+    stream._process_stream_event(_committed_transcript("still speaking"))
+    stream._process_stream_event({**_partial_transcript(continuation), "turn_probability": 0.0})
+    assert _interim_texts(stream) == ["still speaking", continuation]
+
+    stream._process_stream_event(_committed_transcript("still speaking", with_timestamps=True))
+    stream._process_stream_event({**_partial_transcript(continuation), "turn_probability": 0.0})
+    assert _interim_texts(stream) == ["still speaking", continuation]
+    await asyncio.sleep(3)
+    assert stream._speaking
+    assert not any(e.type == stt.SpeechEventType.END_OF_SPEECH for e in stream._event_ch.events)
+    await stream._turn_detection.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_server_final_cancels_forced_commit_timer() -> None:
+    stream = _forced_commit_stream()
+    stream._process_stream_event(_committed_transcript("still speaking"))
+    timer = stream._turn_detection._eos_timeout_handle
+    assert timer is not None
+    stream._process_stream_event(_committed_transcript(""))
+    assert timer.cancelled()
+    await asyncio.sleep(5)
+    assert sum(e.type == stt.SpeechEventType.END_OF_SPEECH for e in stream._event_ch.events) == 1
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("include_timestamps", [False, True])
+async def test_turn_detection_restart_finishes_deferred_turn_and_clears_delayed_commit(
+    include_timestamps: bool,
+) -> None:
+    stream = _forced_commit_stream(include_timestamps=include_timestamps)
+    turn_detection = stream._turn_detection
+    stream._process_stream_event(_committed_transcript("still speaking"))
+    stream._process_stream_event(_committed_transcript("still speaking", with_timestamps=True))
+    await turn_detection.start()
+    await asyncio.sleep(5)
+    assert sum(e.type == stt.SpeechEventType.END_OF_SPEECH for e in stream._event_ch.events) == 1
+    assert not stream._speaking
+    stream._process_stream_event({**_partial_transcript("new connection"), "turn_probability": 1.0})
+    stream._process_stream_event(
+        _committed_transcript("new connection", with_timestamps=include_timestamps)
+    )
+    assert stream._event_ch.events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+    await turn_detection.aclose()
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("completion", ["server_final", "timeout"])
+async def test_completed_deferred_turn_does_not_end_next_partial_on_close(completion: str) -> None:
+    stream = _forced_commit_stream()
+    stream._process_stream_event(_committed_transcript("still speaking"))
+    if completion == "server_final":
+        stream._process_stream_event(_committed_transcript("done"))
+    else:
+        await asyncio.sleep(2.1)
+    assert not stream._speaking
+    stream._process_stream_event(_partial_transcript("new turn"))
+
+    await stream._turn_detection.aclose()
+
+    assert stream._speaking
+    assert sum(e.type == stt.SpeechEventType.END_OF_SPEECH for e in stream._event_ch.events) == 1
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("reconnect_cause", ["options", "provider_error"])
+@pytest.mark.parametrize("continuation", [None, "before_final", "after_final"])
+async def test_reconnect_finishes_deferred_turn_without_more_transcripts(
+    reconnect_cause: str,
+    continuation: str | None,
+) -> None:
+    sockets = [_FakeWS(), _FakeWS()]
+    connections: list[_FakeWS] = []
+    stream = _live_stream(sockets[0], model="scribe_v3_live", commit_strategy="turn_prediction")
+    stream._conn_options = dataclasses.replace(
+        DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0, liveness_timeout=60.0
+    )
+
+    async def connect():
+        ws = sockets[len(connections)]
+        connections.append(ws)
+        return ws
+
+    stream._connect_ws = connect
+    try:
+        stream.push_frame(_frame(35300))
+        await _wait_until(lambda: bool(sockets[0].sent))
+        stream._turn_detection._vad_speaking = True
+        sockets[0].received.put_nowait({**_partial_transcript("hello"), "turn_probability": 0.0})
+        sockets[0].received.put_nowait(_committed_transcript("hello"))
+        if continuation == "before_final":
+            sockets[0].received.put_nowait(_partial_transcript("continuing"))
+        sockets[0].received.put_nowait(_committed_transcript("hello", with_timestamps=True))
+        events = [
+            await stream.__anext__() for _ in range(4 if continuation == "before_final" else 3)
+        ]
+        assert events[-1].type == stt.SpeechEventType.FINAL_TRANSCRIPT
+        if continuation == "after_final":
+            sockets[0].received.put_nowait(_partial_transcript("continuing"))
+            assert (await stream.__anext__()).type == stt.SpeechEventType.INTERIM_TRANSCRIPT
+        assert (stream._turn_detection._eos_timeout_handle is None) is (continuation is not None)
+
+        if reconnect_cause == "options":
+            stream.update_options(keyterms=["LiveKit"])
+        else:
+            sockets[0].received.put_nowait({"message_type": "transcriber_error"})
+
+        endpoint = await asyncio.wait_for(stream.__anext__(), timeout=1)
+        assert endpoint.type == stt.SpeechEventType.END_OF_SPEECH
+        assert endpoint.alternatives[0].text == "hello"
+        await _wait_until(lambda: len(connections) == 2)
+        await asyncio.sleep(3)
+        assert not stream._speaking
+        assert not stream._task.done()
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("failure_point", ["push_frame", "inference"])
+@pytest.mark.parametrize("termination", ["close", "reconnect"])
+async def test_teardown_waits_for_vad_cleanup_after_failure(
+    failure_point: str,
+    termination: str,
+) -> None:
+    from .fake_vad import FakeVAD, FakeVADStream
+
+    cleanup_started = asyncio.Event()
+    allow_cleanup = asyncio.Event()
+    cleanup_done = asyncio.Event()
+
+    class FailingVADStream(FakeVADStream):
+        close_calls = 0
+
+        async def _main_task(self):
+            async for _ in self._input_ch:
+                raise RuntimeError("VAD inference failed")
+
+        def push_frame(self, frame):
+            if failure_point == "push_frame":
+                raise RuntimeError("VAD push failed")
+            super().push_frame(frame)
+
+        async def aclose(self):
+            self.close_calls += 1
+            cleanup_started.set()
+            await allow_cleanup.wait()
+            await super().aclose()
+            cleanup_done.set()
+
+    class FailingVAD(FakeVAD):
+        def stream(self):
+            if not hasattr(self, "first_stream"):
+                self.first_stream = FailingVADStream(self)
+                return self.first_stream
+            return FakeVADStream(self)
+
+    detector = FailingVAD()
+    sockets = [_FakeWS(), _FakeWS()]
+    connections: list[_FakeWS] = []
+    stream = _live_stream(
+        sockets[0], model="scribe_v3_live", commit_strategy="turn_prediction", vad=detector
+    )
+    closing = None
+
+    async def connect():
+        ws = sockets[len(connections)]
+        connections.append(ws)
+        return ws
+
+    stream._connect_ws = connect
+    try:
+        stream.push_frame(_frame(50))
+        await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+        if termination == "close":
+            closing = asyncio.create_task(stream.aclose())
+        else:
+            stream.update_options(keyterms=["LiveKit"])
+        await asyncio.sleep(0.05)
+        if closing is not None:
+            assert not closing.done()
+        else:
+            assert len(connections) == 1
+
+        allow_cleanup.set()
+        if closing is not None:
+            await asyncio.wait_for(closing, timeout=1)
+        else:
+            await _wait_until(lambda: len(connections) == 2)
+        assert cleanup_done.is_set()
+        assert detector.first_stream.close_calls == 1
+        assert detector.first_stream._input_ch.closed
+        assert detector.first_stream._task.done()
+    finally:
+        allow_cleanup.set()
+        if closing is not None:
+            await closing
+        await stream.aclose()
+        if not cleanup_done.is_set():
+            await FakeVADStream.aclose(detector.first_stream)
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("failure_point", ["start", "push_frame", "inference", "end_input"])
+async def test_local_vad_failure_does_not_stop_transcription(
+    failure_point: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    from .fake_vad import FakeVAD, FakeVADStream
+
+    class FailingVADStream(FakeVADStream):
+        async def _main_task(self):
+            async for _ in self._input_ch:
+                if failure_point == "inference":
+                    raise RuntimeError("VAD inference failed")
+
+        def push_frame(self, frame):
+            if failure_point == "push_frame":
+                raise RuntimeError("VAD push failed")
+            super().push_frame(frame)
+
+        def end_input(self):
+            if failure_point == "end_input":
+                raise RuntimeError("VAD end_input failed")
+            super().end_input()
+
+    class FailingVAD(FakeVAD):
+        def stream(self):
+            if failure_point == "start":
+                raise RuntimeError("VAD start failed")
+            self.last_stream = FailingVADStream(self)
+            return self.last_stream
+
+    detector = FailingVAD()
+    ws = _FakeWS()
+    stream = _live_stream(
+        ws, model="scribe_v3_live", commit_strategy="turn_prediction", vad=detector
+    )
+    try:
+        stream.push_frame(_frame(50))
+        await _wait_until(lambda: bool(ws.sent))
+        if failure_point == "end_input":
+            stream.end_input()
+        await _wait_until(lambda: "disabling forced-commit guard" in caplog.text)
+        assert stream._turn_detection._vad_stream is None
+        assert not stream._turn_detection._vad_speaking
+        if failure_point != "start":
+            assert detector.last_stream._task.done()
+
+        ws.received.put_nowait({**_partial_transcript("hello"), "turn_probability": 0.0})
+        ws.received.put_nowait(_committed_transcript("hello"))
+        ws.received.put_nowait(_committed_transcript("hello", with_timestamps=True))
+        events = []
+        while not events or events[-1].type != stt.SpeechEventType.END_OF_SPEECH:
+            events.append(await asyncio.wait_for(stream.__anext__(), timeout=1))
+        assert events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+        assert events[-2].alternatives[0].text == "hello"
+        assert not stream._task.done()
+        assert sum("disabling forced-commit guard" in r.message for r in caplog.records) == 1
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_vad_drives_turn_detection_and_closes_with_stream() -> None:
+    from .fake_stt import FakeUserSpeech
+    from .fake_vad import FakeVAD
+
+    class RecordingVAD(FakeVAD):
+        def stream(self):
+            self.last_stream = super().stream()
+            return self.last_stream
+
+    detector = RecordingVAD(
+        fake_user_speeches=[FakeUserSpeech(start_time=0, end_time=50, transcript="", stt_delay=0)]
+    )
+    ws = _FakeWS()
+    stream = _live_stream(
+        ws, model="scribe_v3_live", commit_strategy="turn_prediction", vad=detector
+    )
+    try:
+        stream.push_frame(_frame(35300))
+        await asyncio.sleep(0.1)
+        assert stream._turn_detection._vad_speaking
+        assert stream._turn_detection._audio_duration_since_commit == pytest.approx(35.3)
+        ws.received.put_nowait({**_partial_transcript("hello"), "turn_probability": 0.0})
+        ws.received.put_nowait(_committed_transcript("hello"))
+        ws.received.put_nowait(_committed_transcript("hello", with_timestamps=True))
+        assert (await stream.__anext__()).type == stt.SpeechEventType.START_OF_SPEECH
+        assert (await stream.__anext__()).type == stt.SpeechEventType.INTERIM_TRANSCRIPT
+        assert (await stream.__anext__()).type == stt.SpeechEventType.FINAL_TRANSCRIPT
+        assert stream._speaking
+        timer = stream._turn_detection._eos_timeout_handle
+        assert timer is not None
+    finally:
+        await stream.aclose()
+    assert timer.cancelled()
+    assert detector.last_stream._task.done()
 
 
 @pytest.mark.parametrize(
