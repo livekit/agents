@@ -584,10 +584,11 @@ impl Driver {
         invocation_id: Option<&str>,
         error: &TextSessionError,
     ) -> Option<lk_agents_abi::errors::ProviderError> {
-        if !matches!(error, TextSessionError::Run(RunError::Model(_))) {
+        if !matches!(error, TextSessionError::Run(RunError::Model { .. })) {
             return None;
         }
-        self.work.get_mut(invocation_id?)?.failure.take()
+        // Every request a failed invocation served raises the same provider error.
+        self.work.get(invocation_id?)?.failure.clone()
     }
 
     fn release(&mut self, release: Release) -> Vec<SessionEffect> {

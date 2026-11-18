@@ -542,7 +542,10 @@ impl AgentRun {
                     let error = if error.cancelled() {
                         RunError::Cancelled
                     } else {
-                        RunError::Model(error.to_string())
+                        RunError::Model {
+                            detail: error.to_string(),
+                            kind: error.attempt_error().error_kind,
+                        }
                     };
                     self.abort(error, now, &mut fx);
                 }

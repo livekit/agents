@@ -182,12 +182,15 @@ impl Driver {
         result: Box<Result<TextSessionTurn, TextSessionError>>,
         working: bool,
     ) -> Vec<SessionEffect> {
-        // The failed invocation keeps its provider's original error, as outside live.
+        // The failed invocation keeps its provider's original error, as outside live. A request
+        // served by several invocations takes the one that kept a failure.
         let invocation = self
             .invocation_requests
             .iter()
-            .find(|(_, request)| **request == origin.request_id)
-            .map(|(invocation, _)| invocation.clone());
+            .filter(|(_, request)| **request == origin.request_id)
+            .map(|(invocation, _)| invocation)
+            .find(|invocation| self.work.get(*invocation).is_some_and(|w| w.failure.is_some()))
+            .cloned();
         let provider_error = match result.as_ref() {
             Err(error) => self.provider_failure(invocation.as_deref(), error),
             Ok(_) => None,

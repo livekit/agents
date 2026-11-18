@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from livekit.agents import Agent, InputRequired, RunContext
+from livekit.agents import Agent, APIStatusError, InputRequired, RunContext
 from livekit.agents._generated.a2a_metadata import KIND, MERGED_INTO
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import ChatContext
@@ -47,6 +47,7 @@ def front_desk(service: BookingService) -> Agent:
                 "The double.": "The double it is.",
                 "Is breakfast included?": [service.pause, "Breakfast is included."],
                 "Book a taxi.\nWhen is check-in?": "Your taxi is booked and check-in is at 3pm.",
+                "Cancel it.\nCancel all.": APIStatusError("refused", status_code=400),
             }[last.text_content or ""]
         if last.type == "function_call_output" and last.output == "Taxi T1":
             return "Your taxi is T1."
@@ -362,3 +363,46 @@ async def test_a_live_turns_model_failure_fails_the_task_with_the_providers_erro
 
     assert task["status"]["state"] == "TASK_STATE_FAILED"
     assert [type(error) for error in raised] == [KeyError]
+
+
+async def test_every_waiter_of_a_failed_live_turn_raises_the_providers_error(
+    a2a_door: Door,
+) -> None:
+    """A live turn failing at the provider fails every request it served with the provider's own
+    error; the first waiter used to take it, leaving the others a broken fallback."""
+    service = BookingService()
+    agent = front_desk(service)
+    raised: list[BaseException] = []
+
+    async def handler(ctx: A2ASessionContext) -> object:
+        try:
+            return await agent.run(ctx.message, context=ctx.store.bind())
+        except BaseException as error:
+            raised.append(error)
+            raise
+
+    async with (
+        a2a_door(handler, inbox={"delegation": "live", "a2a": "batch"}) as door,
+        streaming(door, send("Reserve a room.", "m-booking", kind="delegation")) as booking,
+    ):
+        await until(lambda: booking.progress(), "the delegated tool's progress was not streamed")
+        thread = booking.task["contextId"]
+        async with streaming(
+            door, send("Is breakfast included?", "m-side", context_id=thread, kind="delegation")
+        ) as side:
+            await until(service.pause.started.is_set, "the side question's turn did not start")
+            async with streaming(door, send("Cancel it.", "m-1", context_id=thread)) as first:
+                await until(lambda: first.events, "the first direct message was not admitted")
+                async with streaming(door, send("Cancel all.", "m-2", context_id=thread)) as last:
+                    await until(lambda: last.events, "the second direct message was not admitted")
+                    service.pause.release()
+                    await until(
+                        lambda: side.reader.done() and first.reader.done() and last.reader.done(),
+                        "the side question and the failed burst did not settle",
+                    )
+        service.gate.set()
+        await until(lambda: booking.reader.done(), "the booking did not settle")
+
+    assert last.final()["status"]["state"] == "TASK_STATE_FAILED"
+    assert raised, "the failed turn raised in its handler"
+    assert all(isinstance(error, APIStatusError) for error in raised), raised

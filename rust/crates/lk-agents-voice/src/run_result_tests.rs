@@ -70,7 +70,7 @@ fn last_completed_participating_speech_preserves_failure_precedence() {
     let (_, result) = open.settle(output, Vec::new());
     let failure = result.expect_err("the speech's failure decides");
     assert_eq!(failure.provider_error, Some(error));
-    assert!(matches!(failure.error, RunError::Model(_)));
+    assert!(matches!(failure.error, RunError::Model { .. }));
 }
 
 fn reply(id: &str, text: &str, seconds: u64) -> ChatItem {

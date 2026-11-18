@@ -75,7 +75,10 @@ impl OpenRun {
         let (outcome, value) = match (self.last.and_then(|(_, error)| error), output) {
             // `__last_speech_handle._error` (`run_result.RunResult._mark_done`).
             (Some(error), _) => {
-                let model = RunError::Model(error.to_string());
+                let model = RunError::Model {
+                    detail: error.to_string(),
+                    kind: error.attempt_error().error_kind,
+                };
                 return (self.run, Err(failure(model, Some(error), self.input_requirements)));
             }
             (None, Some(RunOutcome::Failed(error))) => {
