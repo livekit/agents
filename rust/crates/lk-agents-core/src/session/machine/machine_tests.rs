@@ -1155,7 +1155,7 @@ fn a_failed_child_keeps_its_invocation_identity_on_the_terminal_effect() {
         effect,
         SessionEffect::Finished {
             invocation_id: Some(invocation_id),
-            result: Err(TextSessionError::Run(RunError::Model(_))),
+            result: Err(TextSessionError::Run(RunError::Model { .. })),
             ..
         } if *invocation_id == child
     )));

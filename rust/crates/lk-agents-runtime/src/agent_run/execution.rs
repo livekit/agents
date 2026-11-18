@@ -394,8 +394,11 @@ impl Execution {
         match settled {
             Ok(settled) => RunUpdate::Finished(Box::new(settled)),
             Err(error) => {
-                let provider_error =
-                    if matches!(error, RunError::Model(_)) { self.failure.take() } else { None };
+                let provider_error = if matches!(error, RunError::Model { .. }) {
+                    self.failure.take()
+                } else {
+                    None
+                };
                 RunUpdate::Failed { error, input_requirements, provider_error }
             }
         }

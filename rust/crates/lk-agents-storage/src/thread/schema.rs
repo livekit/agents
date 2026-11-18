@@ -353,9 +353,13 @@ WHERE partition_key = :partition_key AND task_id = :task_id AND status IN ('subm
 
 statement! {
     /// A message received while the partition runs; a retried message id inserts nothing.
+    /// `inbox.id` is a plain rowid, which SQLite reuses once the newest rows are pruned: the id
+    /// is taken past every remaining row and every partition's `drained_id`, so an arrival is
+    /// never at or behind a drain cursor.
     InsertInbox<'a> { partition_key: &'a str, task_id: &'a str, message_id: &'a str, message: SqlValue } => r#"
-INSERT OR IGNORE INTO inbox (partition_key, task_id, message_id, message, received_at_ms)
-SELECT :partition_key, :task_id, :message_id, jsonb(:message), CAST(unixepoch('subsec') * 1000 AS INTEGER)
+INSERT OR IGNORE INTO inbox (id, partition_key, task_id, message_id, message, received_at_ms)
+SELECT MAX(COALESCE((SELECT MAX(id) FROM inbox), 0), COALESCE((SELECT MAX(drained_id) FROM partitions), 0)) + 1,
+  :partition_key, :task_id, :message_id, jsonb(:message), CAST(unixepoch('subsec') * 1000 AS INTEGER)
 WHERE NOT EXISTS (SELECT 1 FROM tasks WHERE partition_key = :partition_key AND message_id = :message_id)
 "#
 }

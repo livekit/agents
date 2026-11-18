@@ -152,3 +152,83 @@ fn another_sources_return_waits_for_the_exact_native_finalization_without_replac
     assert!(side_stage.transitions.iter().all(|transition| transition.task_id != "task_A"));
     assert!(machine.live.outputs.is_empty());
 }
+
+#[test]
+fn an_unaddressed_message_opens_its_own_task_without_answering_a_waiting_question() {
+    let mut machine = machine();
+    let mut wire = a2a::Message::new(a2a::Role::User, vec![a2a::Part::text("When is check-in?")]);
+    wire.message_id = "unaddressed".into();
+
+    let first = machine.start_turn(
+        vec![Message::from_a2a(&wire, 0.0, None).unwrap()],
+        vec!["task_new".into()],
+        Path::Main,
+        Duration::ZERO,
+    );
+
+    // A queue or batch message would read the waiting question and complete it `mergedInto`
+    // this one; under live only an explicit taskId continues a task.
+    let Operation::Handle(handle) = first else {
+        panic!("the unaddressed message opens its own handler, got {first:?}")
+    };
+    assert_eq!(handle.task_id, "task_new");
+}
+
+#[test]
+fn an_explicit_task_id_still_reads_the_question_it_continues() {
+    let mut machine = machine();
+    let mut wire = a2a::Message::new(a2a::Role::User, vec![a2a::Part::text("The double.")]);
+    wire.message_id = "answer".into();
+    wire.task_id = Some("task_asked".into());
+
+    let first = machine.start_turn(
+        vec![Message::from_a2a(&wire, 0.0, None).unwrap()],
+        vec!["task_received".into()],
+        Path::Main,
+        Duration::ZERO,
+    );
+
+    assert_eq!(first, Operation::ReadPending(Some("task_asked".into())));
+}
+
+#[test]
+fn a_task_id_that_names_no_waiting_question_answers_no_other_question() {
+    let mut machine = machine();
+    let mut wire = a2a::Message::new(a2a::Role::User, vec![a2a::Part::text("Friday.")]);
+    wire.message_id = "named".into();
+    wire.task_id = Some("task_done".into());
+    machine.start_turn(
+        vec![Message::from_a2a(&wire, 0.0, None).unwrap()],
+        vec!["task_received".into()],
+        Path::Main,
+        Duration::ZERO,
+    );
+
+    let next = machine
+        .turn_step(Step::Pending { named: true }, Completion::Task(None), Duration::ZERO)
+        .unwrap();
+
+    let Some(Operation::Handle(handle)) = next else {
+        panic!("the message opens its own handler, got {next:?}")
+    };
+    assert_eq!(handle.task_id, "task_received");
+}
+
+#[test]
+fn a_live_continuation_is_announced_as_the_task_it_names() {
+    let mut wire = a2a::Message::new(a2a::Role::User, vec![a2a::Part::text("High.")]);
+    wire.message_id = "answer".into();
+    wire.task_id = Some("task_asked".into());
+    let mut machine = TaskMachine::new(
+        "desk".into(),
+        Message::from_a2a(&wire, 0.0, None).unwrap(),
+        "task_receipt".into(),
+        &TurnOptions { policy: PolicySpec::All(Policy::Live), ..Default::default() },
+        0.0,
+    );
+
+    let accepted =
+        machine.on_received(Completion::Received { duplicate: None, leased: false }).unwrap();
+
+    assert_eq!(accepted, Some(Operation::Accepted("task_asked".into())));
+}

@@ -19,6 +19,26 @@ mod side_tables {
         generated_wrappers_preserve_the_original_exception();
         foreign_exception_keys_cannot_peek_or_take_a_local_exception();
         a_write_of_unknown_outcome_raises_storage_uncertain();
+        a_failed_model_raises_an_api_error_of_the_providers_kind();
+    }
+
+    // Catches: the conversion passing `retryable=` to `APIError`, which takes `kind=` and
+    // derives `retryable` from it, so the raise itself failed with a `TypeError`.
+    fn a_failed_model_raises_an_api_error_of_the_providers_kind() {
+        use _core::py_errors::HostException;
+        use lk_agents_abi::agent::run::RunError;
+        use lk_agents_abi::errors::ErrorKind;
+        Python::attach(|py| {
+            let raised =
+                RunError::Model { detail: "refused".into(), kind: ErrorKind::InvalidRequest }
+                    .to_py_err();
+            let value = raised.value(py);
+            let api_error = py.import("livekit.agents").unwrap().getattr("APIError").unwrap();
+            assert!(value.is_instance(&api_error).unwrap(), "{value}");
+            let kind: String = value.getattr("kind").unwrap().extract().unwrap();
+            assert_eq!(kind, "invalid_request");
+            assert!(!value.getattr("retryable").unwrap().extract::<bool>().unwrap());
+        });
     }
 
     // Catches: a write whose outcome stayed unknown reaching Python as a plain `StorageError`,

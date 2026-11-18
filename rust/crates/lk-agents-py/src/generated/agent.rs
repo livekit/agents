@@ -1907,7 +1907,7 @@ impl crate::py_errors::HostException for ::lk_agents_abi::agent::run::RunError {
                 "CancelledError",
                 ::std::string::ToString::to_string(self),
             ),
-            Self::Model(..) => crate::py_errors::host_exception_with(
+            Self::Model { detail, kind } => crate::py_errors::host_exception_with(
                 "livekit.agents._bindings",
                 "APIError",
                 ::std::string::ToString::to_string(self),
@@ -1915,8 +1915,19 @@ impl crate::py_errors::HostException for ::lk_agents_abi::agent::run::RunError {
                     let py = kwargs.py();
                     ::pyo3::types::PyDictMethods::set_item(
                         kwargs,
-                        "retryable",
-                        ::pyo3::IntoPyObjectExt::into_bound_py_any(false, py)?,
+                        "detail",
+                        ::pyo3::IntoPyObjectExt::into_bound_py_any(
+                            ::std::clone::Clone::clone(detail),
+                            py,
+                        )?,
+                    )?;
+                    ::pyo3::types::PyDictMethods::set_item(
+                        kwargs,
+                        "kind",
+                        crate::generated::records::types::error_kind_to_py(
+                            py,
+                            ::std::clone::Clone::clone(kind),
+                        )?,
                     )?;
                     ::std::result::Result::Ok(())
                 },

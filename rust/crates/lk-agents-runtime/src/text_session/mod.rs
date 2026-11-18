@@ -129,7 +129,9 @@ impl Driver {
             // Retain work after a core cleanup deadline: its callbacks and provider requests
             // remain owned until their real settlement, including late prepared resources.
             self.work.retain(|id, work| self.pending.contains_key(id) || !work.idle());
-            if self.live_requests.is_empty()
+            // A canceled owner (its endpoint failed or lost its lease) settles once its bodies
+            // are joined; requests it can no longer answer fail below.
+            if (self.live_requests.is_empty() || cancel_seen)
                 && self.session.live_idle()
                 && !matches!(self.owner_close, live::OwnerClose::Open)
             {
@@ -140,6 +142,18 @@ impl Driver {
                     std::mem::replace(&mut self.owner_close, live::OwnerClose::Closed)
                 {
                     done.resolve(Ok(()));
+                }
+                for (_, request) in std::mem::take(&mut self.live_requests) {
+                    request
+                        .updates
+                        .send(TextSessionUpdate::Failed {
+                            error: TextSessionError::Run(
+                                lk_agents_abi::agent::run::RunError::Cancelled,
+                            ),
+                            input_requirements: Vec::new(),
+                            provider_error: None,
+                        })
+                        .await;
                 }
                 return;
             }
@@ -195,7 +209,9 @@ impl Driver {
             };
             let Some(event) = event else { continue };
             effects.extend(self.session.handle(event, self.clock.now()));
-            if self.live_requests.is_empty()
+            // A canceled owner (its endpoint failed or lost its lease) settles once its bodies
+            // are joined; requests it can no longer answer fail below.
+            if (self.live_requests.is_empty() || cancel_seen)
                 && self.session.live_idle()
                 && !matches!(self.owner_close, live::OwnerClose::Open)
             {
@@ -587,15 +603,16 @@ impl Driver {
     }
 
     /// A model failure's original provider error, kept by the invocation that failed.
-    fn provider_failure(
+    pub(super) fn provider_failure(
         &mut self,
         invocation_id: Option<&str>,
         error: &TextSessionError,
     ) -> Option<lk_agents_abi::errors::ProviderError> {
-        if !matches!(error, TextSessionError::Run(RunError::Model(_))) {
+        if !matches!(error, TextSessionError::Run(RunError::Model { .. })) {
             return None;
         }
-        self.work.get_mut(invocation_id?)?.failure.take()
+        // Every request a failed invocation served raises the same provider error.
+        self.work.get(invocation_id?)?.failure.clone()
     }
 
     fn release(&mut self, release: Release) -> Vec<SessionEffect> {

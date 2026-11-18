@@ -196,3 +196,46 @@ fn canceling_the_task_that_started_a_child_leaves_the_task_now_continuing_it_run
     assert!(working, "B still owns its running body");
     assert!(live.committed(turn));
 }
+
+#[test]
+fn a_body_past_the_owned_limit_is_refused_as_retryable_pressure() {
+    let mut live = Live::new(origin("A"));
+    for id in 0..MAX_LIVE_BODIES as u64 {
+        body(&mut live, "invocation", id, &format!("item_{id}"));
+    }
+    let key = ("invocation".to_owned(), CallId(MAX_LIVE_BODIES as u64));
+    live.prepared(key.clone(), ArgumentIdentity::Json(json!({"booking":"over"})));
+    let call = FunctionCall {
+        id: "item_over".into(),
+        call_id: "wire_over".into(),
+        name: "reserve".into(),
+        arguments: json!({"booking":"over"}).to_string(),
+        created_at: std::time::UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    };
+
+    let refused = live.start_body(key.clone(), FrameId { value: "root".into() }, call).unwrap_err();
+
+    assert_eq!(refused.kind, lk_agents_abi::errors::HostErrorKind::Unavailable);
+    assert!(matches!(
+        crate::tool_outcome::host_failure(&refused),
+        ToolOutcome::ToolError(text) if text == lk_agents_abi::llm::tool_executor::UNAVAILABLE_OUTPUT
+    ));
+    assert!(live.output_source(&key).is_none(), "a refused body is not owned");
+}
+
+#[test]
+fn a_closed_owner_joins_its_cancelled_bodies_without_queueing_a_delivery() {
+    let mut live = Live::new(origin("A"));
+    let held = body(&mut live, "invocation", 1, "item_A");
+    assert!(live.detach(&held));
+    let (initial, _, _) = live.commit_started().unwrap();
+    live.committed(initial);
+
+    assert_eq!(live.close(), std::slice::from_ref(&held));
+    assert!(!live.idle(), "the cancelled body is still owned until it ends");
+    assert!(!live.settle(&held, ToolOutcome::Cancelled.into()));
+
+    assert!(live.idle(), "a closed owner settles once its last body is joined");
+}

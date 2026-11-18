@@ -675,10 +675,7 @@ impl Session {
                                 },
                             });
                             self.run_event(
-                                agent_run::AgentRunEvent::ToolLaunchFailed {
-                                    call,
-                                    error: lk_agents_abi::errors::HostError::new(error.to_string()),
-                                },
+                                agent_run::AgentRunEvent::ToolLaunchFailed { call, error },
                                 now,
                                 effects,
                             );

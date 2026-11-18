@@ -214,9 +214,10 @@ pub enum RunError {
     NoModel,
     #[host(kind = "asyncio.CancelledError")]
     Cancelled,
-    /// The model request failed after the provider's own recovery.
-    #[host(kind = "livekit.agents._bindings.APIError", kwargs(retryable = false))]
-    Model(String),
+    /// The model request failed after the provider's own recovery. `kind` is the provider's own
+    /// `ErrorKind`, from which the raised `APIError` derives `retryable`; `detail` is its words.
+    #[host(kind = "livekit.agents._bindings.APIError", kwargs)]
+    Model { detail: String, kind: crate::errors::ErrorKind },
     /// A host callback the invocation depends on (instructions, output validation) failed.
     Host(String),
     /// The model kept calling `tool` wrongly past its retry budget.
@@ -234,7 +235,7 @@ impl std::fmt::Display for RunError {
         match self {
             RunError::NoModel => f.write_str("the agent has no model"),
             RunError::Cancelled => f.write_str("the run was cancelled"),
-            RunError::Model(e) => write!(f, "the model request failed: {e}"),
+            RunError::Model { detail, .. } => write!(f, "the model request failed: {detail}"),
             RunError::Host(e) => write!(f, "{e}"),
             RunError::ToolRetriesExceeded { tool, retries } => {
                 write!(f, "tool `{tool}` exceeded max retries count of {retries}")

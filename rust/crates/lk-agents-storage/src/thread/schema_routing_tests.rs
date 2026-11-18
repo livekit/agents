@@ -250,3 +250,44 @@ fn task_update_pages_use_their_ordering_index() {
     assert_eq!(statement.get_status(StatementStatus::Sort), 0);
     assert!(statement.get_status(StatementStatus::VmStep) < 500);
 }
+
+#[test]
+fn an_arrival_after_the_last_drained_row_was_pruned_stays_past_the_drain_cursor() {
+    // The v1 `inbox.id` is a plain rowid: without an explicit id, SQLite reuses the largest
+    // remaining id + 1 once the newest rows are pruned, and the arrival hides behind `drained_id`.
+    use super::schema::{InsertInbox, InsertPartition, SelectInboxPending};
+    let conn = database();
+    conn.execute(InsertPartition::SQL, named_params! {":partition_key": "default"}).unwrap();
+    for message in ["held", "side"] {
+        conn.execute(
+            InsertInbox::SQL,
+            named_params! {
+                ":partition_key": "default", ":task_id": message, ":message_id": message,
+                ":message": "{}",
+            },
+        )
+        .unwrap();
+    }
+    conn.execute("UPDATE partitions SET drained_id = 2 WHERE partition_key = 'default'", [])
+        .unwrap();
+    // The answered side request is pruned; the held one is still working and stays.
+    conn.execute("DELETE FROM inbox WHERE message_id = 'side'", []).unwrap();
+
+    conn.execute(
+        InsertInbox::SQL,
+        named_params! {
+            ":partition_key": "default", ":task_id": "next", ":message_id": "next",
+            ":message": "{}",
+        },
+    )
+    .unwrap();
+
+    let pending: Vec<String> = conn
+        .prepare(SelectInboxPending::SQL)
+        .unwrap()
+        .query_map(named_params! {":partition_key": "default"}, |row| row.get(2))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(pending, ["next"], "the new arrival is past the drain cursor");
+}

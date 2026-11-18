@@ -87,7 +87,10 @@ fn select(
         requests: Vec<usize>,
         text: String,
     }
-    let invalid = || RunError::Model("invalid grouped input presentation".into());
+    let invalid = || RunError::Model {
+        detail: "invalid grouped input presentation".into(),
+        kind: lk_agents_abi::errors::ErrorKind::Protocol,
+    };
     let [call]: [FunctionToolCall; 1] = calls.try_into().map_err(|_| invalid())?;
     if call.name != TOOL {
         return Err(invalid());
