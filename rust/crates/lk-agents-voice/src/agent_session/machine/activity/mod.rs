@@ -710,6 +710,7 @@ impl VoiceDriver {
         if let ChatItem::Message(message) = &entry.item
             && message.role == lk_agents_abi::Role::User
         {
+            self.session.experts.person_turn();
             self.local_human_observed(&entry.agent, message);
         }
         if !publish {
