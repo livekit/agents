@@ -312,6 +312,8 @@ class SpeechStream(stt.SpeechStream):
 
         self._reconnect_event = asyncio.Event()
         self._ready_msg: dict[str, Any] | None = None
+        # the server's id for the session, from its ready message
+        self._request_id = ""
 
     @property
     def delay_in_frames(self) -> int:
@@ -411,6 +413,7 @@ class SpeechStream(stt.SpeechStream):
                 speaking = False
                 remaining_vad_steps = None
                 event = stt.SpeechEvent(
+                    request_id=self._request_id,
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[
                         stt.SpeechData(
@@ -426,6 +429,7 @@ class SpeechStream(stt.SpeechStream):
                 buffered_text = []
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
+                        request_id=self._request_id,
                         type=stt.SpeechEventType.END_OF_SPEECH,
                         alternatives=event.alternatives if speech_end > 0 else [],
                     )
@@ -495,10 +499,14 @@ class SpeechStream(stt.SpeechStream):
                         speech_end = 0.0
                         if speaking is False:
                             speaking = True
-                            start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                            start_event = stt.SpeechEvent(
+                                request_id=self._request_id,
+                                type=stt.SpeechEventType.START_OF_SPEECH,
+                            )
                             self._event_ch.send_nowait(start_event)
                         buffered_text.append(data["text"])
                         event = stt.SpeechEvent(
+                            request_id=self._request_id,
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                             alternatives=[
                                 stt.SpeechData(
@@ -525,7 +533,10 @@ class SpeechStream(stt.SpeechStream):
                             ):
                                 speaking = True
                                 self._event_ch.send_nowait(
-                                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                                    stt.SpeechEvent(
+                                        request_id=self._request_id,
+                                        type=stt.SpeechEventType.START_OF_SPEECH,
+                                    )
                                 )
                             self._mark_provider_progress()
                             continue
@@ -550,6 +561,7 @@ class SpeechStream(stt.SpeechStream):
 
                     elif type_ == "ready":
                         self._ready_msg = data
+                        self._request_id = str(data.get("request_id") or "")
                     elif type_ == "end_text":
                         if speaking:
                             speech_end = data.get("stop_s", 0.0)

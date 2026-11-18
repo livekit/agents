@@ -737,6 +737,27 @@ async def test_end_input_sends_eos_and_finalizes_pending_text():
     assert events[-1].type == SpeechEventType.END_OF_SPEECH
 
 
+async def test_events_carry_the_server_request_id():
+    """Every event carries the session id from the ready message, to match server logs."""
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1)])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+
+    assert {ev.type for ev in events} >= {
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.FINAL_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+    }
+    assert {ev.request_id for ev in events} == {READY["request_id"]}
+
+
 @pytest.mark.parametrize(("code", "retryable"), [(1011, True), (1003, False)])
 async def test_error_frame_raises_api_error(code: int, retryable: bool):
     """The server's message is surfaced; a client error (1003) is not retried."""
