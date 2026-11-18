@@ -10,7 +10,7 @@ import asyncio
 import os
 import time
 from dataclasses import dataclass, field, replace
-from typing import Literal, TypedDict, assert_never
+from typing import Literal, TypedDict
 
 import numpy as np
 import sphn
@@ -251,7 +251,7 @@ class RealtimeSession(llm.RealtimeWebSocketSession[ServerMessage, bytes]):
                 gen.text_ch.send_nowait(message["text"])
                 gen.output_text += message["text"]
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     @property
     def chat_ctx(self) -> llm.ChatContext:

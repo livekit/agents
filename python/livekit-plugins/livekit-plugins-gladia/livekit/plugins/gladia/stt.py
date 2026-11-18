@@ -299,8 +299,9 @@ class STT(stt.STT):
                         environment variable.
             http_session: Optional HttpSession to use for requests.
             base_url: The base URL for Gladia API. Defaults to "https://api.gladia.io/v2/live".
-            energy_filter: Audio energy filter configuration for voice activity detection.
-                         Can be a boolean or AudioEnergyFilter instance. Defaults to False.
+            energy_filter: Replaces low-energy audio with silence, preserving frame duration and
+                         transcript timestamps. Can be a boolean or AudioEnergyFilter instance.
+                         Defaults to False.
             translation_enabled: Whether to enable translation. Defaults to False.
             translation_target_languages: List of target languages for translation.
                                         Required if translation_enabled is True.
@@ -697,8 +698,6 @@ class SpeechStream(
                 self._audio_energy_filter = opts.energy_filter
             else:
                 self._audio_energy_filter = AudioEnergyFilter()
-        # the silent frame before a speech the energy filter heard start
-        self._held: bytes = b""
         self._session_id = ""
 
     def update_options(
@@ -823,20 +822,15 @@ class SpeechStream(
 
     def encode(
         self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio
-    ) -> _AudioChunk | _StopRecording | None:
+    ) -> _AudioChunk | _StopRecording:
         match item:
             case rtc.AudioFrame():
-                if self._audio_energy_filter is None:
-                    return _audio_chunk(bytes(item.data))
-                state = self._audio_energy_filter.update(item)
-                if state == AudioEnergyFilter.State.SILENCE:
-                    self._held = bytes(item.data)
-                    return None
-                if state == AudioEnergyFilter.State.END:
-                    # the speech the filter heard ended: Gladia ends its session
-                    return _STOP
-                held, self._held = self._held, b""
-                return _audio_chunk(held + bytes(item.data))
+                if self._audio_energy_filter is not None:
+                    state = self._audio_energy_filter.update(item)
+                    if state in (AudioEnergyFilter.State.SILENCE, AudioEnergyFilter.State.END):
+                        # Provider timestamps count uploaded samples, including quiet stretches.
+                        return _audio_chunk(bytes(item.data.nbytes))
+                return _audio_chunk(bytes(item.data))
             case stt.Flush() | stt.EndOfAudio():
                 return _STOP
             case _:
@@ -883,7 +877,7 @@ class SpeechStream(
                 detail=message.get("data", {}).get("message"),
             )
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _transcript(
         self,

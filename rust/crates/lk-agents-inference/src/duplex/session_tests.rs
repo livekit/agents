@@ -7,7 +7,7 @@ use lk_agents_abi::{AudioFrame, BoxFuture, ToolChoice, VirtualClock};
 /// A plugin's model and session over the declared views: `None` stays silent and open; a script
 /// is its transcript, then the end of the session.
 struct FakeHost(Arc<FakeSession>);
-struct FakeSession(Mutex<Option<Vec<DuplexTranscript>>>, Arc<dyn abi::DuplexInputQueue>);
+struct FakeSession(Mutex<Option<Vec<abi::DuplexEvent>>>, Arc<dyn abi::DuplexInputQueue>);
 
 impl DuplexHost for FakeHost {
     fn label(&self) -> Result<String, HostError> {
@@ -87,7 +87,7 @@ impl abi::DuplexSession for FakeSession {
         Box::pin(async move {
             let next = self.0.lock().as_mut().map(Vec::pop);
             match next {
-                Some(transcript) => Ok(transcript.map(abi::DuplexEvent::Transcript)),
+                Some(event) => Ok(event),
                 None => std::future::pending().await,
             }
         })
@@ -113,6 +113,19 @@ async fn session(
 
 async fn session_on(
     script: Option<Vec<DuplexTranscript>>,
+    clock: Arc<VirtualClock>,
+    input: Arc<crate::duplex::DuplexInput>,
+) -> Arc<dyn RealtimeSession> {
+    session_events(
+        script.map(|events| events.into_iter().map(abi::DuplexEvent::Transcript).collect()),
+        clock,
+        input,
+    )
+    .await
+}
+
+async fn session_events(
+    script: Option<Vec<abi::DuplexEvent>>,
     clock: Arc<VirtualClock>,
     input: Arc<crate::duplex::DuplexInput>,
 ) -> Arc<dyn RealtimeSession> {
@@ -231,4 +244,35 @@ async fn the_callers_audio_reaches_the_plugins_input_head_first_and_in_full() {
     }
     assert!((head - 1.0f64).abs() < 1e-9 && (live - 0.01f64).abs() < 1e-9, "{head} {live}");
     session.aclose().await;
+}
+
+#[tokio::test]
+async fn out_of_range_transcription_wall_times_preserve_the_turn_and_allow_the_next_event() {
+    use lk_agents_abi::llm::realtime::InputTranscription;
+    for bad_time in [f64::MAX, 1e19, f64::INFINITY, f64::NAN] {
+        let clock = Arc::new(VirtualClock::new());
+        let input = Arc::new(crate::duplex::DuplexInput::new(clock.clone()));
+        let transcript = |item_id: &str, started_at: f64| {
+            abi::DuplexEvent::Session(Event::InputTranscription(InputTranscription {
+                item_id: item_id.into(),
+                transcript: item_id.into(),
+                is_final: true,
+                turn_started_at: Some(started_at),
+                ..Default::default()
+            }))
+        };
+        let session = session_events(
+            Some(vec![transcript("next", 2.0), transcript("bad-time", bad_time)]),
+            clock,
+            input,
+        )
+        .await;
+        for item_id in ["bad-time", "next"] {
+            let event = session.next_event().await.unwrap();
+            assert!(matches!(event, Event::InputTranscription(t) if t.item_id == item_id));
+        }
+        let history = session.chat_ctx().await;
+        assert_eq!(history.items.len(), 2);
+        session.aclose().await;
+    }
 }

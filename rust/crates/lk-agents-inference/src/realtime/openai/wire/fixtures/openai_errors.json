@@ -1,0 +1,592 @@
+[
+  {
+    "case": "cancel_no_active",
+    "request_type": "response.cancel",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZby2HrfDhFE78VgG02",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "response_cancel_not_active",
+        "message": "Cancellation failed: no active response found",
+        "param": null,
+        "event_id": "probe_2"
+      }
+    }
+  },
+  {
+    "case": "cancel_unknown",
+    "request_type": "response.cancel",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZbs4XsrydMhr2c9arF",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "response_cancel_not_found",
+        "message": "Response with id 'resp_missing' not found",
+        "param": null,
+        "event_id": null
+      }
+    }
+  },
+  {
+    "case": "empty_audio_commit",
+    "request_type": "input_audio_buffer.commit",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZbb7YsV8hb9hnUGTJy",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "input_audio_buffer_commit_empty",
+        "message": "Error committing input audio buffer: buffer too small. Expected at least 100ms of audio, but buffer only has 0.00ms of audio.",
+        "param": null,
+        "event_id": "probe_4"
+      }
+    }
+  },
+  {
+    "case": "short_audio_commit",
+    "request_type": "input_audio_buffer.commit",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZbaRlIFtBqT65xzRVN",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "input_audio_buffer_commit_empty",
+        "message": "Error committing input audio buffer: buffer too small. Expected at least 100ms of audio, but buffer only has 10.00ms of audio.",
+        "param": null,
+        "event_id": "probe_5"
+      }
+    }
+  },
+  {
+    "case": "commit_after_clear",
+    "request_type": "input_audio_buffer.commit",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZbdqsjoXSkeM4vouE7",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "input_audio_buffer_commit_empty",
+        "message": "Error committing input audio buffer: buffer too small. Expected at least 100ms of audio, but buffer only has 0.00ms of audio.",
+        "param": null,
+        "event_id": "probe_7"
+      }
+    }
+  },
+  {
+    "case": "unknown_previous_item",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZbdaC2lVYiZ20Fa4nW",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "item_create_invalid_previous_item_id",
+        "message": "Error adding item: the previous item with id 'missing' does not exist.",
+        "param": null,
+        "event_id": "probe_8"
+      }
+    }
+  },
+  {
+    "case": "delete_unknown",
+    "request_type": "conversation.item.delete",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZbQP1oMevEKZBTjx9W",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "item_delete_invalid_item_id",
+        "message": "Error deleting item: the item with id 'missing' does not exist.",
+        "param": null,
+        "event_id": "probe_9"
+      }
+    }
+  },
+  {
+    "case": "retrieve_unknown",
+    "request_type": "conversation.item.retrieve",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZbB9KO4o5S51LR13U5",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "item_retrieve_invalid_item_id",
+        "message": "Error retrieving item: the item with id 'missing' does not exist.",
+        "param": null,
+        "event_id": "probe_10"
+      }
+    }
+  },
+  {
+    "case": "truncate_unknown",
+    "request_type": "conversation.item.truncate",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZbNCsuOlxGNZYQPJZf",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "item_truncate_invalid_item_id",
+        "message": "Item with item_id not found: missing",
+        "param": null,
+        "event_id": "probe_11"
+      }
+    }
+  },
+  {
+    "case": "duplicate_item_id",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZbf33I4yonxmEgEXW2",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "item_create_duplicate_item_id",
+        "message": "Error adding item: an item with id 'seed_user' already exists.",
+        "param": null,
+        "event_id": "probe_13"
+      }
+    }
+  },
+  {
+    "case": "truncate_user",
+    "request_type": "conversation.item.truncate",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZbwnrIcFkMyDGjEKYE",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "unsupported_content_type",
+        "message": "Only model output audio messages can be truncated",
+        "param": null,
+        "event_id": null
+      }
+    }
+  },
+  {
+    "case": "truncate_text_only_assistant",
+    "request_type": "conversation.item.truncate",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZc2O6hgWBM8mkj2ZPY",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "unsupported_content_type",
+        "message": "Only model output audio messages can be truncated",
+        "param": null,
+        "event_id": null
+      }
+    }
+  },
+  {
+    "case": "unknown_tool_call",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZc22gL9QG1xLtkcQXq",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "invalid_tool_call_id",
+        "message": "Tool call ID 'call_missing' not found in conversation.",
+        "param": null,
+        "event_id": null
+      }
+    }
+  },
+  {
+    "case": "response_missing_input_reference",
+    "request_type": "response.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZcSsOZsNkDpoc34Ipm",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "invalid_reference_item_id",
+        "message": "Error adding item: the referenced item with id 'missing' does not exist.",
+        "param": null,
+        "event_id": null
+      }
+    }
+  },
+  {
+    "case": "response_invalid_tool_choice",
+    "request_type": "response.create",
+    "event": {
+      "type": "response.done",
+      "event_id": "event_ElKZcIrcr7QwqfFvNvcFn",
+      "response": {
+        "id": "resp_ElKZclqgp33IPYGNWwNno",
+        "status": "failed",
+        "status_details": {
+          "type": "failed",
+          "error": {
+            "type": "invalid_request_error",
+            "code": "invalid_tool_choice",
+            "message": "Invalid function tool choice, you cannot require a tool call for a tool that is not available."
+          }
+        }
+      }
+    }
+  },
+  {
+    "case": "response_invalid_tokens",
+    "request_type": "response.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZgzdbVeobS1HZUWOT0",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "integer_below_min_value",
+        "message": "Invalid 'response.max_output_tokens': integer below minimum value. Expected a value >= 1, but got 0 instead.",
+        "param": "response.max_output_tokens",
+        "event_id": "probe_20"
+      }
+    }
+  },
+  {
+    "case": "item_id_len_33",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZgxF7TVAuFaYE2zRzG",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "string_above_max_length",
+        "message": "Invalid 'item.id': string too long. Expected a string with maximum length 32, but got a string with length 33 instead.",
+        "param": "item.id",
+        "event_id": "probe_22"
+      }
+    }
+  },
+  {
+    "case": "item_id_len_64",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZggXfmoEKC9ZTjLPNA",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "string_above_max_length",
+        "message": "Invalid 'item.id': string too long. Expected a string with maximum length 32, but got a string with length 64 instead.",
+        "param": "item.id",
+        "event_id": "probe_23"
+      }
+    }
+  },
+  {
+    "case": "item_id_uuid_36",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZgFRP87qX9vs6wEkis",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "string_above_max_length",
+        "message": "Invalid 'item.id': string too long. Expected a string with maximum length 32, but got a string with length 36 instead.",
+        "param": "item.id",
+        "event_id": "probe_24"
+      }
+    }
+  },
+  {
+    "case": "item_id_colon",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZg3Yp8TlpdmF9JIo4U",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "invalid_value",
+        "message": "Invalid 'item.id': string does not match pattern. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'.",
+        "param": "item.id",
+        "event_id": "probe_25"
+      }
+    }
+  },
+  {
+    "case": "item_id_slash",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZgIQVKdur8b7ct782U",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "invalid_value",
+        "message": "Invalid 'item.id': string does not match pattern. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'.",
+        "param": "item.id",
+        "event_id": "probe_26"
+      }
+    }
+  },
+  {
+    "case": "item_id_space",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZgOjj7kjsdWZdgLq1S",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "invalid_value",
+        "message": "Invalid 'item.id': string does not match pattern. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'.",
+        "param": "item.id",
+        "event_id": "probe_27"
+      }
+    }
+  },
+  {
+    "case": "item_id_unicode",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZgPvhMQNESFZJpSCAi",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "invalid_value",
+        "message": "Invalid 'item.id': string does not match pattern. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'.",
+        "param": "item.id",
+        "event_id": "probe_28"
+      }
+    }
+  },
+  {
+    "case": "item_id_reserved_root",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZgX9HxpnfUdaEziJ9X",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "unsupported_value",
+        "message": "Invalid 'item.id': Got 'root', which is a reserved value for this field.",
+        "param": "item.id",
+        "event_id": "probe_29"
+      }
+    }
+  },
+  {
+    "case": "item_id_empty",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZg81svFylNR6dpogau",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "empty_string",
+        "message": "Invalid 'item.id': empty string. Expected a string with minimum length 1, but got an empty string instead.",
+        "param": "item.id",
+        "event_id": "probe_30"
+      }
+    }
+  },
+  {
+    "case": "call_id_len_33",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZh8lbcX6LfsXShCe9t",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "string_above_max_length",
+        "message": "Invalid 'item.call_id': string too long. Expected a string with maximum length 32, but got a string with length 33 instead.",
+        "param": "item.call_id",
+        "event_id": "probe_34"
+      }
+    }
+  },
+  {
+    "case": "call_id_uuid_36",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZhe0jvx98ch56C0DyF",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "string_above_max_length",
+        "message": "Invalid 'item.call_id': string too long. Expected a string with maximum length 32, but got a string with length 36 instead.",
+        "param": "item.call_id",
+        "event_id": "probe_35"
+      }
+    }
+  },
+  {
+    "case": "delete_again",
+    "request_type": "conversation.item.delete",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZhs5rJMe31uD9BqYGW",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "item_delete_invalid_item_id",
+        "message": "Error deleting item: the item with id 'seed_answer' does not exist.",
+        "param": null,
+        "event_id": "probe_37"
+      }
+    }
+  },
+  {
+    "case": "create_while_active",
+    "request_type": "response.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZhzRf9raV1NLJT9yfE",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "conversation_already_has_active_response",
+        "message": "Conversation already has an active response in progress: resp_ElKZhv5zvczdeSzYQj365. Wait until the response is finished before creating a new one.",
+        "param": null,
+        "event_id": "create_competing"
+      }
+    }
+  },
+  {
+    "case": "cancel_after_done",
+    "request_type": "response.cancel",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZhewYZtxIgVGFuEf3m",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "response_cancel_not_active",
+        "message": "Cancellation failed: no active response found",
+        "param": null,
+        "event_id": "probe_40"
+      }
+    }
+  },
+  {
+    "case": "session_invalid_voice",
+    "request_type": "session.update",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZhGMqiHOywKUPzvZir",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "invalid_value",
+        "message": "Invalid value: 'voi...ist'. Supported values are: 'alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', and 'cedar'.",
+        "param": "session.audio.output.voice",
+        "event_id": "probe_41"
+      }
+    }
+  },
+  {
+    "case": "unknown_event_type",
+    "request_type": "not_a_realtime_event",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZhatzhWB4GdPfkCHRC",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "invalid_value",
+        "message": "Invalid value: 'not_a_realtime_event'. Supported values are: 'session.update', 'session.close', 'input_audio_buffer.append', 'session.input_audio_buffer.append', 'input_audio_buffer.commit', 'input_audio_buffer.clear', 'conversation.item.create', 'conversation.item.truncate', 'conversation.item.delete', 'conversation.item.retrieve', 'response.create', and 'response.cancel'.",
+        "param": "type",
+        "event_id": "probe_42"
+      }
+    }
+  },
+  {
+    "case": "missing_delete_item_id",
+    "request_type": "conversation.item.delete",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKZhJqz8viXLuv4UthJN",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "missing_required_parameter",
+        "message": "Missing required parameter: 'item_id'.",
+        "param": "item_id",
+        "event_id": "probe_43"
+      }
+    }
+  },
+  {
+    "case": "truncate_wrong_index",
+    "request_type": "conversation.item.truncate",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKocVP4OmLPGT9v1KbMa",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "array_above_max_length",
+        "message": "Index 1 out of range for message item_ElKocJsCfWEWWCwrfQUZz",
+        "param": null,
+        "event_id": null
+      }
+    }
+  },
+  {
+    "case": "truncate_negative",
+    "request_type": "conversation.item.truncate",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKocTEWixDzQaxMGEiyY",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "integer_below_min_value",
+        "message": "Invalid 'audio_end_ms': integer below minimum value. Expected a value >= 0, but got -1 instead.",
+        "param": "audio_end_ms",
+        "event_id": "probe_4"
+      }
+    }
+  },
+  {
+    "case": "truncate_beyond_audio",
+    "request_type": "conversation.item.truncate",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKocBA2bTMAplywaccpN",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "invalid_value",
+        "message": "Audio content of 900ms is already shorter than 600000ms",
+        "param": null,
+        "event_id": null
+      }
+    }
+  },
+  {
+    "case": "voice_change_after_audio",
+    "request_type": "session.update",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKocREMQeax4okEqKKzh",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "cannot_update_voice",
+        "message": "Cannot update a conversation's voice if assistant audio is present.",
+        "param": null,
+        "event_id": null
+      }
+    }
+  },
+  {
+    "case": "empty_message_content",
+    "request_type": "conversation.item.create",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKoc4wU3PCsGAINYPi8T",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "empty_array",
+        "message": "Invalid 'item.content': empty array. Expected an array with minimum length 1, but got an empty array instead.",
+        "param": "item.content",
+        "event_id": "probe_9"
+      }
+    }
+  },
+  {
+    "case": "cancel_oob_without_id",
+    "request_type": "response.cancel",
+    "event": {
+      "type": "error",
+      "event_id": "event_ElKodX96y9oEecqc5hLQy",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "response_cancel_not_active",
+        "message": "Cancellation failed: no active response found",
+        "param": null,
+        "event_id": "probe_12"
+      }
+    }
+  }
+]

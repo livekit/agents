@@ -6,7 +6,7 @@ use lk_agents_abi::Ts;
 /// fails when nothing, not even the pong, came back within half an interval of one. Anything the
 /// peer sends counts as an answer.
 #[derive(Debug)]
-pub(super) struct Liveness {
+pub(crate) struct Liveness {
     interval: Duration,
     next_ping: Ts,
     /// The answer owed to the last ping, by then.
@@ -14,7 +14,7 @@ pub(super) struct Liveness {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum Beat {
+pub(crate) enum Beat {
     Wait,
     Ping,
     /// A ping went unanswered.
@@ -22,20 +22,20 @@ pub(super) enum Beat {
 }
 
 impl Liveness {
-    pub(super) fn new(interval: Duration, now: Ts) -> Self {
+    pub(crate) fn new(interval: Duration, now: Ts) -> Self {
         Liveness { interval, next_ping: now.saturating_add(interval), owed: None }
     }
 
     /// The peer sent something.
-    pub(super) fn heard(&mut self) {
+    pub(crate) fn heard(&mut self) {
         self.owed = None;
     }
 
-    pub(super) fn wake_at(&self) -> Ts {
+    pub(crate) fn wake_at(&self) -> Ts {
         self.owed.map_or(self.next_ping, |owed| owed.min(self.next_ping))
     }
 
-    pub(super) fn tick(&mut self, now: Ts) -> Beat {
+    pub(crate) fn tick(&mut self, now: Ts) -> Beat {
         if self.owed.is_some_and(|owed| now >= owed) {
             return Beat::Lost;
         }

@@ -6,7 +6,7 @@ use lk_agents_abi::voice::session::VoiceSession as _;
 use lk_agents_abi::voice::speech_handle::SpeechHandle as _;
 use lk_agents_abi::{ChatItem, ChatMessage, Role};
 use lk_agents_fuzz::drive::{Run, Setup, StorageSetup, simulate};
-use lk_agents_fuzz::input::{AgentText, Input, SayInput};
+use lk_agents_fuzz::input::{AgentText, Input, Ref, SayInput};
 use lk_agents_fuzz::record::StorageStep;
 use lk_agents_voice::events::SessionEvent;
 
@@ -40,7 +40,7 @@ fn history_receipt(conflict: bool) {
             to_ctx: true,
         })
         .await;
-        let first = run.speech_handle(0);
+        let first = run.speech_handle(Ref::new(0)).expect("the host created the first speech");
         run.until("the initial speech commits and releases its partition", first.wait_reported())
             .await;
 
@@ -62,7 +62,7 @@ fn history_receipt(conflict: bool) {
             to_ctx: true,
         })
         .await;
-        let second = run.speech_handle(1);
+        let second = run.speech_handle(Ref::new(1)).expect("the host created the second speech");
         run.until("the owned snapshot query completed before the local edit", read.wait())
             .await
             .unwrap();

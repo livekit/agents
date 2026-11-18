@@ -17,10 +17,15 @@ class Segment(TypedDict, total=False):
     word_timestamps: list[WordTimestamp] | None
 
 
+class _EndAudioBody(TypedDict, total=False):
+    status: str
+
+
 class TranscriptResponse(TypedDict, total=False):
     """A message, untagged: ``type`` defaults to ``"transcription"``."""
 
     type: str
+    body: _EndAudioBody
     message: str
     segments: list[Segment] | None
     transcript: str | None

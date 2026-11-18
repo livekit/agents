@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import Literal, NotRequired, TypedDict, assert_never
+from typing import ClassVar, Literal, NotRequired, TypedDict, assert_never
 
 from livekit import rtc
 from livekit.agents import (
@@ -304,6 +304,7 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.WebSocketStream[_Response, _Config | _Keepalive]):
+    completion: ClassVar[stt.Completion] = "session_finished"
     keepalive = stt.Keepalive(every=5.0, frame=_Keepalive(type="keepalive"))
 
     def __init__(

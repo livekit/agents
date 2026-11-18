@@ -6,6 +6,8 @@ mod server;
 mod sim;
 #[path = "machine_sync_tests.rs"]
 mod sync;
+#[path = "machine_transcription_tests.rs"]
+mod transcription;
 
 mod provider_tools {
     use super::*;

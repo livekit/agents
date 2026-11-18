@@ -25,6 +25,7 @@ pub(super) enum Step {
 pub(super) struct Wire {
     pub(super) sent: Vec<protocol::WorkerMessage>,
     pub(super) attempts: u32,
+    pub(super) headers: Vec<Vec<(String, String)>>,
 }
 
 pub(super) struct ScriptedTransport {
@@ -65,9 +66,10 @@ impl WorkerTransport for ScriptedTransport {
         &self,
         _url: &str,
         _token: Option<&str>,
-        _headers: Vec<(String, String)>,
+        headers: Vec<(String, String)>,
     ) -> Result<Connected, TransportError> {
         self.wire.lock().attempts += 1;
+        self.wire.lock().headers.push(headers);
         match self.script.lock().pop_front() {
             Some(Step::ConnectFails) | None => Err(TransportError::Failed("refused".into())),
             Some(Step::Serves(frames)) => Ok(Connected {
@@ -477,7 +479,12 @@ pub(super) fn blocking_io() -> lk_agents_net::blocking_io::BlockingIo {
 
 #[tokio::test(start_paused = true)]
 async fn register_is_the_first_message_written_and_the_worker_id_lands() {
-    let (mut c, wire, _h) = conn(vec![Step::Serves(vec![register_message("W-7")])], 0);
+    let (mut c, wire, _h) = conn_with(
+        vec![Step::Serves(vec![register_message("W-7")])],
+        0,
+        WorkerConfig { version: "2.0.0-test".into(), ..Default::default() },
+        LoadHost::default(),
+    );
     // The stream blocks after the register response, so drive one connection with a deadline.
     let _ = tokio::time::timeout(Duration::from_millis(50), c.run()).await;
     let sent = &wire.lock().sent;
@@ -489,6 +496,27 @@ async fn register_is_the_first_message_written_and_the_worker_id_lands() {
         first.message
     );
     assert_eq!(c.snapshot_now().worker_id, "W-7");
+    let Some(livekit_protocol::worker_message::Message::Register(registration)) = &first.message
+    else {
+        panic!("the first message must register the worker");
+    };
+    assert_eq!(registration.version, "2.0.0-test");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_custom_user_agent_is_preserved_without_adding_a_duplicate() {
+    let wire = Arc::new(Mutex::new(Wire::default()));
+    let transport = Arc::new(ScriptedTransport {
+        script: Mutex::new(vec![Step::Serves(vec![])].into()),
+        wire: wire.clone(),
+    });
+    let mut config = runtime_cfg(0);
+    config.headers = vec![("user-agent".into(), "custom-client/1.0".into())];
+    super::dial(transport, &config, Arc::new(TestClock(tokio::time::Instant::now())))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(wire.lock().headers, vec![config.headers]);
 }
 
 // Catches: an off-by-one in the retry ladder; `max_retry = 2` means three attempts, not two.
@@ -519,6 +547,15 @@ async fn a_closed_connection_reconnects_and_the_machine_is_told() {
     let mut notifications = h.subscribe();
     let _ = tokio::time::timeout(Duration::from_millis(50), c.run()).await;
     assert_eq!(wire.lock().attempts, 2, "did not reconnect after the close");
+    let user_agent = lk_agents_net::job_identity::user_agent();
+    for headers in &wire.lock().headers {
+        let agents: Vec<_> = headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("User-Agent"))
+            .map(|(_, value)| value)
+            .collect();
+        assert_eq!(agents, vec![&user_agent]);
+    }
     assert_eq!(c.snapshot_now().worker_id, "W-2", "did not re-register on the new socket");
     let told: Vec<_> = std::iter::from_fn(|| notifications.try_recv().ok())
         .filter(|event| !matches!(event, WorkerNotification::Stopped(_)))
@@ -698,6 +735,8 @@ async fn slow_decisions_do_not_block_other_requests_status_timers_or_close() {
     assert_eq!(handle.snapshot().reserved_slots, 2);
     handle.send(WorkerCommand::Close).unwrap();
     tokio::time::timeout(Duration::from_secs(1), task).await.unwrap().unwrap().unwrap();
+    assert_eq!(handle.snapshot().reserved_slots, 0, "closed decisions hold no capacity");
+    assert!(!handle.snapshot().registered, "a closed worker is not registered");
     assert_eq!(
         dropped.load(std::sync::atomic::Ordering::SeqCst),
         2,
@@ -725,7 +764,13 @@ async fn drain_timeout_is_reported_while_a_host_decision_is_pending() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn slow_launch_allows_status_updates_and_drain_waits_for_early_job_completion() {
+async fn late_running_status_cannot_undo_job_completion_before_launch_receipt() {
+    for terminal in [protocol::JobStatus::JsSuccess, protocol::JobStatus::JsFailed] {
+        early_completion_survives_late_running_status(terminal).await;
+    }
+}
+
+async fn early_completion_survives_late_running_status(terminal: protocol::JobStatus) {
     let RuntimeRig {
         mut runtime, handle, peer, mut sent, mut started, decisions, launches, ..
     } = runtime_rig();
@@ -744,10 +789,11 @@ async fn slow_launch_allows_status_updates_and_drain_waits_for_early_job_complet
         matches!(m.message, Some(livekit_protocol::worker_message::Message::UpdateWorker(_)))
     })
     .await;
+    handle.send(WorkerCommand::JobStatus { job_id: "a".into(), status: terminal }).unwrap();
     handle
         .send(WorkerCommand::JobStatus {
             job_id: "a".into(),
-            status: protocol::JobStatus::JsSuccess,
+            status: protocol::JobStatus::JsRunning,
         })
         .unwrap();
     let h = handle.clone();
@@ -757,6 +803,11 @@ async fn slow_launch_allows_status_updates_and_drain_waits_for_early_job_complet
     launches.add_permits(1);
     drain.await.unwrap().unwrap();
     assert_eq!(handle.snapshot().active_jobs, 0);
+    until_sent(&mut sent, |m| {
+        matches!(&m.message, Some(livekit_protocol::worker_message::Message::UpdateJob(update))
+            if update.job_id == "a" && update.status == terminal as i32)
+    })
+    .await;
     handle.send(WorkerCommand::Close).unwrap();
     task.await.unwrap().unwrap();
 }
@@ -963,4 +1014,28 @@ async fn accepting_tcp_without_registering_does_not_restore_the_retry_budget() {
     assert!(matches!(&error, RuntimeError::RetriesExhausted { retries: 1, .. }));
     assert_eq!(wire.lock().attempts, 2, "only registration restores the retry budget");
     assert!(error.to_string().contains("registration timed out"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn future_control_messages_do_not_break_registration_or_the_registered_worker() {
+    use prost::Message as _;
+    // A future oneof member (field 127) is retained by protobuf as no known message.
+    let future = ServerMessage::decode(&b"\xfa\x07\x00"[..]).unwrap();
+    assert!(future.message.is_none());
+    let (mut worker, wire, handle) = conn(
+        vec![Step::Serves(vec![Ok(future.clone()), register_message("ready"), Ok(future)])],
+        0,
+    );
+    let _ = tokio::time::timeout(Duration::from_millis(50), worker.run()).await;
+    assert_eq!(wire.lock().attempts, 1);
+    assert_eq!(handle.snapshot().worker_id, "ready");
+    assert!(handle.snapshot().finished.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn future_control_messages_do_not_replace_the_required_registration() {
+    let (mut worker, wire, _) = conn(vec![Step::Serves(vec![Ok(ServerMessage::default())])], 0);
+    let error = worker.run().await.unwrap_err();
+    assert!(error.to_string().contains("registration timed out"), "{error}");
+    assert_eq!(wire.lock().attempts, 1);
 }

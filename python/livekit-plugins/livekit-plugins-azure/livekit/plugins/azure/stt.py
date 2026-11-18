@@ -532,7 +532,7 @@ class SpeechStream(stt.WebSocketStream[_Message, str]):
             if message["Text"].strip():
                 self.report(self._transcript(message, message["Text"], final=False))
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _transcript(self, message: _Interim | _Phrase, text: str, *, final: bool) -> stt.Transcript:
         start = self.start_time_offset + self._turn_start + message.get("Offset", 0) / _TICKS

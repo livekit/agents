@@ -70,6 +70,8 @@ pub enum StorageStep {
     Slowed {
         ms: u64,
     },
+    /// A successful history commit applied, but its answer was lost before the resend.
+    CommitAnswerLost,
     /// A storage-layer fault was injected.
     Fault {
         fault: StorageFault,

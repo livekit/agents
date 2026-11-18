@@ -563,7 +563,7 @@ class GPTVoiceSession(
         elif message["type"] == "error":
             self._handle_error(message.get("error"))
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     # inbound events
 

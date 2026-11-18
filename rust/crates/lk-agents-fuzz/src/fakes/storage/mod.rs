@@ -253,6 +253,7 @@ struct State {
     rng: fastrand::Rng,
     /// Faults and latency start once the store is open.
     armed: bool,
+    commit_answer_lost: bool,
     down_until: Ts,
     /// A fault that may cost ownership was injected: an outage or a write never applied.
     faulted: bool,
@@ -315,6 +316,7 @@ impl FakeDatabase {
             authored_history: 0,
             rng,
             armed: false,
+            commit_answer_lost: false,
             down_until: Ts::ZERO,
             faulted: false,
             touched: BTreeMap::new(),
@@ -652,6 +654,7 @@ impl FakeConnection {
             db.state.lock().faulted = true;
             db.dying.die_next_poll();
         }
+        let commits = statements.iter().any(|s| s.kind() == Some(StatementKind::Commit));
         let sent = statements.clone();
         let result = if db.carries_stolen(&statements) {
             db.fenced(self.inner.batch(statements)).await
@@ -673,7 +676,20 @@ impl FakeConnection {
             let ms = plan.after.as_millis() as u64;
             db.registry.record_storage(StorageStep::Slowed { ms });
         }
-        if !db.wait(plan.after).await || plan.answer_lost && result.is_ok() {
+        let lose_commit = result.is_ok()
+            && commits
+            && db
+                .setup
+                .lose_commit_answer_at
+                .is_some_and(|at| db.clock.now().as_nanos() / 1_000_000 >= at)
+            && {
+                let mut state = db.state.lock();
+                !std::mem::replace(&mut state.commit_answer_lost, true)
+            };
+        if lose_commit {
+            db.registry.record_storage(StorageStep::CommitAnswerLost);
+        }
+        if !db.wait(plan.after).await || (plan.answer_lost || lose_commit) && result.is_ok() {
             return Err(StorageError::Uncertain(Unacknowledged::sent("the answer was lost")));
         }
         result

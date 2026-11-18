@@ -54,6 +54,8 @@ pub enum Exo {
     ResponseFailed,
     /// The last user item's transcription fails.
     TranscriptionFailed,
+    /// An older ASR job fails while later turns have already completed.
+    OldestTranscriptionFailed,
 }
 
 /// Server-side VAD, as the session configured it.
@@ -104,11 +106,14 @@ pub enum Happening {
         item: Box<ChatItem>,
         previous: Option<String>,
     },
+    ItemDeleted {
+        item: String,
+    },
     SpeechStarted {
         item: String,
     },
     SpeechStopped,
-    /// The person's committed turn's transcript so far, or all of it.
+    /// A partial transcript delta, or the full transcript when `last` is true.
     Transcript {
         item: String,
         text: String,
@@ -169,6 +174,8 @@ pub struct Response {
     pub id: String,
     /// The request it answers.
     pub request: Option<String>,
+    /// A generation may be accepted and then fail without a top-level error event.
+    pub failure: Option<(&'static str, &'static str)>,
     /// The server's answer to the person's turn its VAD ended.
     turn: bool,
     instructions: usize,
@@ -205,6 +212,7 @@ pub use crate::calibration::realtime::{
 };
 
 pub struct Server {
+    pub provider: lk_agents_abi::llm::realtime::RealtimeProvider,
     rng: Rng,
     timing: Timing,
     delays: RealtimeDelays,
@@ -237,11 +245,13 @@ pub struct Server {
     /// When the server answers the last request it took: the next answer comes after.
     answered: Ts,
     last_user: Option<String>,
+    committed: u64,
 }
 
 impl Server {
     pub fn new(seed: u64, ids: String) -> Self {
         Server {
+            provider: lk_agents_abi::llm::realtime::RealtimeProvider::Inference,
             rng: Rng::with_seed(seed),
             timing: Timing::default(),
             delays: RealtimeDelays::default(),
@@ -266,6 +276,7 @@ impl Server {
             breaches: Vec::new(),
             answered: Ts::ZERO,
             last_user: None,
+            committed: 0,
         }
     }
 
@@ -389,6 +400,7 @@ impl Server {
     pub fn create(&mut self, now: Ts, item: &ChatItem, previous: Option<String>) {
         self.breathe(now);
         let at = match &previous {
+            Some(p) if p == "root" => 0,
             Some(p) => {
                 self.items.iter().position(|i| i.id == *p).map_or(self.items.len(), |i| i + 1)
             }
@@ -403,7 +415,7 @@ impl Server {
             }
         }
         self.items.insert(at, held);
-        let lag = self.answer_lag(now);
+        let lag = self.context_ack_lag(now);
         let previous = at.checked_sub(1).map(|p| self.items[p].id.clone());
         self.put(later(now, lag), Happening::ItemAdded { item: Box::new(item.clone()), previous });
     }
@@ -412,22 +424,86 @@ impl Server {
         self.items.retain(|i| i.id != id);
     }
 
+    /// Validate the provider's conversation protocol independently of client state.
+    pub fn create_request(
+        &mut self,
+        now: Ts,
+        event_id: String,
+        item: &ChatItem,
+        previous: Option<String>,
+    ) {
+        let call_id = match item {
+            ChatItem::FunctionCall(c) => Some(c.call_id.as_str()),
+            ChatItem::FunctionCallOutput(o) => Some(o.call_id.as_str()),
+            _ => None,
+        };
+        let rejection = [Some(item.id()), call_id].into_iter().flatten().find_map(|id| {
+            if id.is_empty() { Some(("empty_string", "Identity is empty")) }
+            else if id.len() > 32 && self.provider != lk_agents_abi::llm::realtime::RealtimeProvider::Xai { Some(("string_above_max_length", "Identity exceeds 32 characters")) }
+            else if !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+                Some(("invalid_value", "Identity contains unsupported characters"))
+            } else { None }
+        }).or_else(|| if matches!(item, ChatItem::Message(m) if m.content.is_empty()) {
+            Some(("empty_array", "Message content is empty"))
+        } else if item.id() == "root" {
+            Some(("unsupported_value", "Item identity is reserved"))
+        } else if self.holds(item.id()) {
+            Some(("item_create_duplicate_item_id", "Item with item_id already exists"))
+        } else if previous.as_deref().is_some_and(|id| id != "root" && !self.holds(id)) {
+            Some(("item_create_invalid_previous_item_id", "Previous item does not exist"))
+        } else if matches!(item, ChatItem::FunctionCallOutput(o) if !self.holds_call(&o.call_id)) {
+            Some(("invalid_tool_call_id", "Tool call does not exist"))
+        } else {
+            None
+        });
+        if let Some((code, message)) = rejection {
+            self.breaches.push(Breach::Refused {
+                event: "conversation.item.create".into(),
+                code,
+                why: message,
+                knowing: false,
+            });
+            // OpenAI's runtime tool-reference validation omits the client event ID.
+            if code == "invalid_tool_call_id" {
+                let lag = self.answer_lag(now);
+                self.put(
+                    later(now, lag),
+                    Happening::Error { code: Some(code), message, request: None },
+                );
+            } else {
+                self.reject(now, event_id, code, message);
+            }
+        } else {
+            self.create(now, item, previous);
+        }
+    }
+
+    pub fn delete_request(&mut self, now: Ts, event_id: String, id: &str) {
+        if self.holds(id) {
+            self.delete_acknowledged(now, id);
+        } else {
+            self.reject(now, event_id, "item_delete_invalid_item_id", "Item does not exist");
+        }
+    }
+
+    /// The write is applied before its delayed acknowledgement reaches the client.
+    pub fn delete_acknowledged(&mut self, now: Ts, id: &str) {
+        self.delete(id);
+        let lag = self.context_ack_lag(now);
+        self.put(later(now, lag), Happening::ItemDeleted { item: id.into() });
+    }
+
+    /// Correlate a rejected write with its client event, so reconciliation can settle it.
+    pub fn reject(&mut self, now: Ts, event_id: String, code: &'static str, message: &'static str) {
+        let lag = self.answer_lag(now);
+        self.put(
+            later(now, lag),
+            Happening::Error { code: Some(code), message, request: Some(event_id) },
+        );
+    }
+
     pub fn append_audio(&mut self, ms: u64) {
         self.buffer_ms += ms;
-    }
-
-    pub fn buffered_ms(&self) -> u64 {
-        self.buffer_ms
-    }
-
-    /// The VAD heard the person start and not yet stop.
-    pub fn speaking(&self) -> bool {
-        self.speaking.is_some()
-    }
-
-    /// The audio an item holds, if it holds the item.
-    pub fn audio_ms(&self, id: &str) -> Option<u64> {
-        self.items.iter().find(|i| i.id == id).map(|i| i.audio_ms)
     }
 
     /// The session's commit of what it sent.
@@ -437,14 +513,12 @@ impl Server {
             let knowing = self.own_empty;
             let why = "Error committing input audio buffer: buffer too small. Expected at least 100ms of audio.";
             // The session takes the refusal of a commit over its VAD's own as nothing.
-            let told = self.vad.is_none();
             return self.refuse(
                 now,
                 "input_audio_buffer.commit",
                 "input_audio_buffer_commit_empty",
                 why,
                 knowing,
-                told,
             );
         }
         let item = self.speaking.take().unwrap_or_else(|| self.mint_item("user"));
@@ -484,7 +558,12 @@ impl Server {
         }
         let unanswered =
             self.items.last().filter(|i| i.function_call).and_then(|i| i.call_id.clone());
-        let lag = self.delays.created.unwrap_or_else(|| self.delay(&CREATED_AFTER_CREATE));
+        let configured = if self.responses.is_empty() {
+            self.delays.first_created.or(self.delays.created)
+        } else {
+            self.delays.created
+        };
+        let lag = configured.unwrap_or_else(|| self.delay(&CREATED_AFTER_CREATE));
         let delay = self.answer_in(now, lag);
         let instructions = instructions.map(str::len);
         let r = self.respond(later(now, delay), Some(request), tool_choice, instructions);
@@ -501,14 +580,7 @@ impl Server {
             && !self.responses.iter().any(|r| r.id == id)
         {
             let why = "Response with id not found";
-            return self.refuse(
-                now,
-                "response.cancel",
-                "response_cancel_not_found",
-                why,
-                true,
-                false,
-            );
+            return self.refuse(now, "response.cancel", "response_cancel_not_found", why, true);
         }
         let target =
             self.active.filter(|r| named.is_none_or(|id| self.responses[*r as usize].id == id));
@@ -522,14 +594,7 @@ impl Server {
             };
             // "Cancellation failed": the session takes it as nothing.
             let why = "Cancellation failed: no active response found";
-            return self.refuse(
-                now,
-                "response.cancel",
-                "response_cancel_not_active",
-                why,
-                knowing,
-                false,
-            );
+            return self.refuse(now, "response.cancel", "response_cancel_not_active", why, knowing);
         };
         // The server's answer to the person's turn, nobody has heard a word of, no onset told
         // over it: the session cancels it on nothing the server saw.
@@ -556,32 +621,25 @@ impl Server {
                 "item_truncate_invalid_item_id",
                 why,
                 true,
-                true,
             );
         };
+        if !self.items[at].assistant || self.items[at].source.is_none() || !self.audio {
+            return self.refuse(
+                now,
+                "conversation.item.truncate",
+                "unsupported_content_type",
+                "Only assistant audio can be truncated",
+                true,
+            );
+        }
         // Within the audio it holds, a millisecond of rounding allowed.
         let held = &mut self.items[at];
         if end_ms > held.audio_ms + 1 {
             let why = "Audio content is already shorter than audio_end_ms";
-            return self.refuse(
-                now,
-                "conversation.item.truncate",
-                "invalid_value",
-                why,
-                true,
-                true,
-            );
+            return self.refuse(now, "conversation.item.truncate", "invalid_value", why, true);
         }
         held.audio_ms = end_ms;
         held.cut_ms = Some(end_ms);
-    }
-
-    /// A message the session put back as text: it holds no audio.
-    pub fn as_text(&mut self, item: &str) {
-        if let Some(held) = self.items.iter_mut().find(|i| i.id == item) {
-            held.audio_ms = 0;
-            held.cut_ms = Some(0);
-        }
     }
 
     /// True when a real server could do this now.
@@ -654,25 +712,33 @@ impl Server {
             }
             Exo::TranscriptionFailed => {
                 let Some(item) = self.last_user.clone() else { return false };
-                // What is still to come of its transcript never comes.
-                let mine: Vec<(Ts, u64)> = self
-                    .pending
-                    .iter()
-                    .filter(
-                        |(_, h)| matches!(h, Happening::Transcript { item: i, .. } if *i == item),
-                    )
-                    .map(|(k, _)| *k)
-                    .collect();
-                if mine.is_empty() {
-                    return false;
-                }
-                for k in mine {
-                    self.pending.remove(&k);
-                }
-                self.put(now, Happening::TranscriptFailed { item });
-                true
+                self.fail_transcription(now, item)
+            }
+            Exo::OldestTranscriptionFailed => {
+                let item = self.items.iter().find(|item| {
+                    self.pending.values().any(|h| matches!(h, Happening::Transcript { item: id, .. } if *id == item.id))
+                }).map(|item| item.id.clone());
+                item.is_some_and(|item| self.fail_transcription(now, item))
             }
         }
+    }
+
+    fn fail_transcription(&mut self, now: Ts, item: String) -> bool {
+        let pending: Vec<_> = self
+            .pending
+            .iter()
+            .filter_map(|(key, h)| {
+                matches!(h, Happening::Transcript { item: id, .. } if *id == item).then_some(*key)
+            })
+            .collect();
+        if pending.is_empty() {
+            return false;
+        }
+        for key in pending {
+            self.pending.remove(&key);
+        }
+        self.put(now, Happening::TranscriptFailed { item });
+        true
     }
 
     /// The buffer becomes a user item, and its transcription follows.
@@ -685,12 +751,25 @@ impl Server {
         self.put(later(now, 1), Happening::ItemAdded { item: Box::new(user), previous });
         let spoken: Vec<&str> = USER_TURNS.iter().copied().filter(|t| !t.is_empty()).collect();
         let text = spoken[self.rng.usize(0..spoken.len())];
-        let lag = self.delay(&TRANSCRIPTION_AFTER_COMMITTED);
+        let configured = if self.committed == 0 {
+            self.delays.first_transcription.or(self.delays.transcription)
+        } else {
+            self.delays.transcription
+        };
+        self.committed += 1;
+        let lag = configured.unwrap_or_else(|| self.delay(&TRANSCRIPTION_AFTER_COMMITTED));
+        let partial = self.delays.transcription_partial.unwrap_or(lag * 4 / 5).min(lag);
         let words: Vec<&str> = text.split(' ').collect();
         // About one delta a word, streamed over the last fifth of the wait.
         for i in 0..words.len() {
-            let at = lag * 4 / 5 + (lag / 5) * i as u64 / words.len() as u64;
-            let text = words[..=i].join(" ");
+            let at = partial + (lag - partial) * i as u64 / words.len() as u64;
+            let text = if self.provider == lk_agents_abi::llm::realtime::RealtimeProvider::Xai {
+                words[..=i].join(" ")
+            } else if i == 0 {
+                words[i].to_owned()
+            } else {
+                format!(" {}", words[i])
+            };
             let item = item.clone();
             self.put(later(now, at), Happening::Transcript { item, text, last: false });
         }
@@ -722,6 +801,14 @@ impl Server {
         });
         self.active = Some(r);
         self.put(at, Happening::Created { r });
+        let choice = tool_choice.or_else(|| self.tool_choice.clone());
+        if matches!(&choice, Some(ToolChoice::Named(name)) if !self.tools.contains(name)) {
+            self.responses[r as usize].item = None;
+            self.responses[r as usize].failure =
+                Some(("invalid_request_error", "invalid_tool_choice"));
+            self.put(later(at, 1), Happening::Done { r, status: GenerationStatus::Failed });
+            return r;
+        }
         // Its place in the conversation is taken when the item is added: an item arriving before
         // then comes before it.
         let mut t = later(at, self.delay(&ITEM_AFTER_CREATED));
@@ -754,15 +841,17 @@ impl Server {
             }
         }
         // A tool call now and then, when the session offers tools: after the words.
-        let choice = tool_choice.or_else(|| self.tool_choice.clone());
-        let (calls, of) = match (choice, self.tool_calls) {
+        let (calls, of) = match (&choice, self.tool_calls) {
             (Some(ToolChoice::Forbidden), _) => (0, 1),
-            (Some(ToolChoice::Required), _) => (1, 1),
+            (Some(ToolChoice::Required | ToolChoice::Named(_)), _) => (1, 1),
             (_, Some(percent)) => (u64::from(percent), 100),
             (_, None) => FUNCTION_CALL_SHARE,
         };
         if !self.tools.is_empty() && self.rng.u64(0..of) < calls {
-            let name = self.tools[self.rng.usize(0..self.tools.len())].clone();
+            let name = match &choice {
+                Some(ToolChoice::Named(name)) => name.clone(),
+                _ => self.tools[self.rng.usize(0..self.tools.len())].clone(),
+            };
             let fc = self.mint_item("fc");
             self.responses[r as usize].function_call = Some((fc, name));
             t = later(t, 30);
@@ -855,7 +944,7 @@ impl Server {
         }
     }
 
-    /// A refused request: the breach noted, and the `error` the session hears when `told`.
+    /// Every refused request reports an error, including benign races the client may ignore.
     fn refuse(
         &mut self,
         now: Ts,
@@ -863,20 +952,24 @@ impl Server {
         code: &'static str,
         why: &'static str,
         knowing: bool,
-        told: bool,
     ) {
         self.breaches.push(Breach::Refused { event: event.into(), code, why, knowing });
-        if told {
-            let lag = self.answer_lag(now);
-            self.put(
-                later(now, lag),
-                Happening::Error { code: Some(code), message: why, request: None },
-            );
-        }
+        let lag = self.answer_lag(now);
+        self.put(
+            later(now, lag),
+            Happening::Error { code: Some(code), message: why, request: None },
+        );
     }
 
     /// A measured answer lag, never before the answer to an earlier request: requests are taken in
     /// order.
+    fn context_ack_lag(&mut self, now: Ts) -> u64 {
+        match self.delays.context_ack {
+            Some(lag) => self.answer_in(now, lag),
+            None => self.answer_lag(now),
+        }
+    }
+
     fn answer_lag(&mut self, now: Ts) -> u64 {
         self.answer_after(now, &ERROR_AFTER_CLIENT)
     }
@@ -903,7 +996,13 @@ impl Server {
 
     fn mint_item(&mut self, kind: &str) -> String {
         self.next_item += 1;
-        format!("item_{kind}_{}{}", self.ids, self.next_item)
+        if self.provider == lk_agents_abi::llm::realtime::RealtimeProvider::Xai {
+            let namespace =
+                self.ids.bytes().fold(0_u32, |n, b| n.wrapping_mul(31).wrapping_add(u32::from(b)));
+            format!("{namespace:08x}-0000-4000-8000-{:012x}", self.next_item)
+        } else {
+            format!("item_{kind}_{}{}", self.ids, self.next_item)
+        }
     }
 
     fn put(&mut self, t: Ts, happening: Happening) {

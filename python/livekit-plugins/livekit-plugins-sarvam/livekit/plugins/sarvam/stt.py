@@ -20,7 +20,7 @@ from __future__ import annotations
 import os
 import platform
 from dataclasses import dataclass, replace
-from typing import Literal, NotRequired, TypedDict, assert_never
+from typing import ClassVar, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode
 
 import numpy as np
@@ -503,6 +503,8 @@ class _ConfigUpdate(TypedDict, total=False):
 class SpeechStream(stt.WebSocketStream[_Message, _Control | _ConfigUpdate]):
     """A realtime recognition on Sarvam's ``saaras:v3-realtime`` socket."""
 
+    completion: ClassVar[stt.Completion] = "session_finished"
+
     frame_ms = 50
 
     def __init__(
@@ -611,7 +613,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Control | _ConfigUpdate]):
         elif message["event"] == "error":
             self._error(message)
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _transcript(self, message: _PartialTranscript | _FinalTranscript) -> stt.Transcript:
         final = message["event"] == "transcript.final"

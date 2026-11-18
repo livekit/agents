@@ -20,7 +20,7 @@ import dataclasses
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal, NotRequired, TypedDict, assert_never
+from typing import Annotated, Any, ClassVar, Literal, NotRequired, TypedDict, assert_never
 
 from pydantic import Field
 
@@ -234,6 +234,7 @@ class _Command(TypedDict):
 
 
 class SpeechStream(stt.WebSocketStream[_Message, _Setup | _Audio | _Command]):
+    completion: ClassVar[stt.Completion] = "session_finished"
     frame_ms = 80
     # the plugin ends the speech from the inactivity the provider's steps report
     provider_vad = True
@@ -314,6 +315,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Setup | _Audio | _Command]):
         if message["type"] == "ready":
             self._ready_msg = message
         elif message["type"] == "end_of_stream":
+            self._finish_text()
             self.report(stt.SessionFinished())
         elif message["type"] == "error":
             # the code is an HTTP status: 429 is retried, a rejected request is not
@@ -335,7 +337,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Setup | _Audio | _Command]):
         elif message["type"] == "step":
             self._step(message)
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _step(self, message: _Step) -> None:
         if not self.speaking or not (vad_bucket := self._opts.vad_bucket):
@@ -354,6 +356,10 @@ class SpeechStream(stt.WebSocketStream[_Message, _Setup | _Audio | _Command]):
         if self._remaining_vad_steps > 0:
             return
         self._remaining_vad_steps = None
+        self._finish_text()
+
+    def _finish_text(self) -> None:
         text, self._buffered_text = " ".join(self._buffered_text), []
-        self.report(stt.Transcript(text, self._opts.language, final=True))
-        self.report(stt.SpeechEnded())
+        if text:
+            self.report(stt.Transcript(text, self._opts.language, final=True))
+            self.report(stt.SpeechEnded())

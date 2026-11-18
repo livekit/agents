@@ -266,6 +266,9 @@ pub struct StorageSetup {
     pub outage: Option<(u64, u64)>,
     /// Writes sent over `[from, from + len)` ms of the call apply, and their answers are lost.
     pub lost_answers: Option<(u64, u64)>,
+    /// The first history commit at or after this session time applies, then loses its answer.
+    /// Lease acquisition and other bookkeeping remain available, isolating commit resend.
+    pub lose_commit_answer_at: Option<u64>,
     /// Every lease take answers this long after it applied: a slow acknowledgment.
     pub take_answer_ms: Option<u64>,
     /// A selected checkpoint's receipt is held after its real write: `(sequence, delay_ms)`.
@@ -422,6 +425,10 @@ pub enum AmdAnswer {
 /// The realtime server a session is built against: what it can do, as its capabilities say.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RealtimeSetup {
+    /// The production protocol dialect and independently simulated provider profile.
+    pub provider: lk_agents_abi::llm::realtime::RealtimeProvider,
+    /// A second dialect behind the production fallback adapter, rather than a simulated swap.
+    pub fallback_provider: Option<lk_agents_abi::llm::realtime::RealtimeProvider>,
     /// The server detects the user's turns itself. The driver then has a choice the fake
     /// otherwise never offers it: to leave detection to the server or to switch it off.
     pub turn_detection: bool,
@@ -447,6 +454,8 @@ pub struct RealtimeSetup {
 impl Default for RealtimeSetup {
     fn default() -> Self {
         RealtimeSetup {
+            provider: lk_agents_abi::llm::realtime::RealtimeProvider::Inference,
+            fallback_provider: None,
             turn_detection: true,
             semantic: true,
             seed: 0,
@@ -713,6 +722,7 @@ impl RefRegistry for NoopRefs {
 
 /// A real session, the fakes behind it, and everything the run has learned.
 pub struct Run {
+    wall_clock: Arc<fakes::clock::SkewClock>,
     /// The session, as a host holds it.
     api: Arc<VoiceSession>,
     /// The room it is in: people join and leave it as a case says.
@@ -785,6 +795,8 @@ pub struct Run {
     avatar: Option<Arc<fakes::FakeAvatarWorker>>,
     /// The agent's sink streaming to it, whose give-up timer after a clear is a deadline.
     avatar_sink: Option<Arc<lk_agents_runtime::avatar::output::DataStreamAudioOutput>>,
+    /// Job-owned recording files, finalized after the session and its outputs close.
+    recorders: Vec<Arc<fakes::FakeRecorder>>,
     /// The next inline task id to mint. Per-`Run` and not process-global, so two runs of one case
     /// journal the same `task_0001`, `task_0002`, ... -- the determinism suite reads those ids.
     refs: Arc<dyn RefRegistry>,
@@ -805,6 +817,22 @@ pub struct Run {
 }
 
 impl Run {
+    /// Correct the host's wall clock while the room speaker keeps its monotonic timeline.
+    pub fn shift_wall_clock(&self, forward: bool, by: Duration) {
+        self.wall_clock.shift(forward, by);
+    }
+
+    /// The production session's final conversation and timing metadata.
+    pub async fn session_report(&self) -> lk_agents_abi::telemetry::report::SessionReport {
+        use lk_agents_abi::voice::session::VoiceSession as _;
+        self.api.report().expect("the test session was started").await
+    }
+
+    /// PCM at the room's own speaker, independent of framework playback events.
+    pub fn room_heard_audio(&self) -> Vec<(Ts, AudioFrame)> {
+        self.room.local_participant().sources().iter().flat_map(|s| s.heard_audio()).collect()
+    }
+
     /// The order of every step dispatched so far, folded: a seed replays it exactly.
     pub fn dispatch_order(&self) -> u64 {
         self.queue.order()
@@ -825,15 +853,6 @@ impl Run {
         let answer = self.drive(Some(self.budget()), done).await.expect(what);
         self.collect();
         answer
-    }
-
-    pub fn speech_handle(&self, nth: u32) -> Arc<SpeechHandle> {
-        let resource =
-            self.record.resource(Kind::Speech, nth).expect("the host created this speech");
-        let Id::Speech(id) = resource.id() else {
-            unreachable!("a speech resource has its native identity")
-        };
-        self.handles.get(&id.0).expect("the host retains its speech handle").clone()
     }
 
     pub fn hold_next_history_read(

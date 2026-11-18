@@ -374,7 +374,7 @@ class _Metadata(TypedDict):
 
 
 class _Terminate(TypedDict):
-    terminate_session: bool
+    type: Literal["end_audio"]
 
 
 class SpeechStream(stt.WebSocketStream[TranscriptResponse, _Metadata | _Terminate]):
@@ -397,6 +397,8 @@ class SpeechStream(stt.WebSocketStream[TranscriptResponse, _Metadata | _Terminat
         self._opts = opts
         self._api_key = api_key
         self._model_endpoint = model_endpoint
+        self._end_acknowledged = False
+        self._end_finished = False
 
     def update_options(
         self,
@@ -425,6 +427,7 @@ class SpeechStream(stt.WebSocketStream[TranscriptResponse, _Metadata | _Terminat
         self.reconnect("options changed")
 
     async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
+        self._end_acknowledged = self._end_finished = False
         return stt.WebSocketTarget(
             self._model_endpoint, headers={"Authorization": f"Api-Key {self._api_key}"}
         )
@@ -477,12 +480,23 @@ class SpeechStream(stt.WebSocketStream[TranscriptResponse, _Metadata | _Terminat
             case stt.Flush():
                 return None
             case stt.EndOfAudio():
-                return _Terminate(terminate_session=True)
+                return _Terminate(type="end_audio")
             case _:
                 assert_never(item)
 
+    def nothing_pending(self) -> bool:
+        # Older deployments close without acknowledgement. Once the server adopts
+        # end_audio, its finished response is required even after a final transcript.
+        return (not self._end_acknowledged or self._end_finished) and super().nothing_pending()
+
     def on_message(self, message: TranscriptResponse) -> None:
         msg_type = message.get("type", "transcription")
+        if msg_type == "end_audio":
+            self._end_acknowledged = True
+            if message.get("body", {}).get("status") == "finished":
+                self._end_finished = True
+                self.report(stt.SessionFinished())
+            return
         if msg_type == "error":
             raise APIError(
                 "Baseten STT error",

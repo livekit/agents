@@ -198,7 +198,7 @@ impl Segmenter {
                 response_id: Some(burst.id.clone()),
                 frame,
             }));
-            self.audio_ms += duration_ms;
+            self.audio_ms = self.audio_ms.saturating_add(duration_ms);
             burst.heard_ms = self.audio_ms;
             self.attach_fragments(&mut burst, &mut out.events);
             // from the end of the audio just handed over, not from its arrival
@@ -209,11 +209,11 @@ impl Segmenter {
             return out;
         }
 
-        self.audio_ms += duration_ms;
+        self.audio_ms = self.audio_ms.saturating_add(duration_ms);
         if self.burst_open() {
             self.close_burst(&mut out);
         } else if !self.fragments.is_empty()
-            && self.audio_ms - self.waiting_since_ms >= UNCLAIMED_TRANSCRIPT_MS
+            && self.audio_ms.saturating_sub(self.waiting_since_ms) >= UNCLAIMED_TRANSCRIPT_MS
         {
             log::error!(target: lk_agents_abi::LOG_TARGET, "duplex transcript outlived the audio it describes");
             self.flush_unclaimed(wall, &mut out.events);
@@ -476,8 +476,9 @@ impl Segmenter {
     fn attach_fragments(&mut self, burst: &mut Burst, out: &mut Vec<Event>) {
         while let Some(f) = self.fragments.pop_front() {
             if let Some(start) = f.start_ms {
-                let anchor = *burst.anchor_ms.get_or_insert(start - burst.audio_start_ms);
-                if start - anchor > burst.heard_ms + ATTACH_LEAD_MS {
+                let anchor =
+                    *burst.anchor_ms.get_or_insert(start.saturating_sub(burst.audio_start_ms));
+                if start.saturating_sub(anchor) > burst.heard_ms.saturating_add(ATTACH_LEAD_MS) {
                     self.fragments.push_front(f);
                     break;
                 }
@@ -493,9 +494,9 @@ impl Segmenter {
         burst.transcript.push_str(&f.text);
         let start_time = match (f.start_ms, burst.anchor_ms) {
             (Some(s), Some(anchor)) => {
-                let offset = anchor + burst.audio_start_ms;
-                let start = burst.last_annotation.max((s - offset) as f64 / 1000.0);
-                let end = f.end_ms.map(|e| start.max((e - offset) as f64 / 1000.0));
+                let offset = anchor.saturating_add(burst.audio_start_ms);
+                let start = burst.last_annotation.max(s.saturating_sub(offset) as f64 / 1000.0);
+                let end = f.end_ms.map(|e| start.max(e.saturating_sub(offset) as f64 / 1000.0));
                 burst.last_annotation = end.unwrap_or(start);
                 Some(start)
             }
@@ -540,8 +541,11 @@ impl Segmenter {
             && let Some(anchor) = burst.anchor_ms
         {
             self.completed.insert(
-                anchor + burst.audio_start_ms,
-                CompletedBurst { id: burst.id.clone(), span_end_ms: anchor + burst.heard_ms },
+                anchor.saturating_add(burst.audio_start_ms),
+                CompletedBurst {
+                    id: burst.id.clone(),
+                    span_end_ms: anchor.saturating_add(burst.heard_ms),
+                },
             );
         }
         if burst.kind != Kind::Tool {

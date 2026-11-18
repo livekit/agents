@@ -51,6 +51,7 @@ OutboundT = TypeVar("OutboundT")
 FrameT_co = TypeVar("FrameT_co", covariant=True)
 
 Signal = Literal["ready", "session_finished"]
+Completion = Literal["settled", "session_finished", "peer_closed"]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -280,6 +281,10 @@ class WebSocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
     pacing: WebSocketPacing | None = None
     """How fast frames go: a minimum interval between two, or no faster than the input plays.
     One ``WebSocketPacing`` set on several streams (one the model holds) paces them together."""
+    completion: ClassVar[Completion] = "settled"
+    """The documented session completion: settled transcripts, a terminal message reported as
+    ``SessionFinished``, or a clean peer close after it flushes its last responses."""
+
     awaits_ready: ClassVar[bool] = False
     """Each connection opens a provider session that says when it is ready: nothing but the
     ``setup`` goes until ``on_message`` reports it, within the connect limit."""
@@ -309,6 +314,11 @@ class WebSocketProtocol(ABC, Generic[ItemT, InboundT, OutboundT]):
         decoder = _class_decoder(type(self), WebSocketProtocol)
         decoded: InboundT | None = decoder.decode(frame, self._websocket.label)
         return decoded
+
+    def _skip_unknown_message(self, message: object) -> None:
+        # Custom decoders may accept more types than the handler knows. Provider additions
+        # must not terminate an otherwise usable stream; do not log their payloads.
+        log_skipped(self._websocket.label, "an unhandled message")
 
     def setup(self) -> bytes | OutboundT | None:
         """The frame each connection sends first, ahead of every other: the provider session's
@@ -612,8 +622,12 @@ class WebSocketHost:
                 self._protocol.on_message(message)
         except APIError as error:
             if error.request_id is None:
-                error.request_id = self.request_id
+                error.request_id = self._named_request or self.request_id
             raise
+        except Exception as error:
+            failure = protocol_error(self._protocol, f"{type(error).__name__}: {error}")
+            failure.request_id = self._named_request or self.request_id
+            raise failure from error
         finally:
             self.reading = False
         if self._named_request is not None:
@@ -645,6 +659,9 @@ class WebSocketHost:
 
     def _core_retrying(self, error: Exception) -> None:
         self._kind.retrying(error)
+
+    def _core_completion(self) -> Completion:
+        return self._protocol.completion
 
     def _core_owes_reply(self) -> bool:
         return self._kind.owes_reply()
@@ -789,18 +806,22 @@ class WebSocketMultiplexer(ABC, Generic[InboundT, OutboundT]):
 
     async def _core_route(self, frame: WsFrame) -> WebSocketMuxRoute:
         nowhere = WebSocketMuxRoute(context=None, message=None, ready=False, ended_context=None)
-        message = self.decode(frame)
-        if message is None:
-            return nowhere
-        if self.awaits_ready and self.ready(message):
-            return replace(nowhere, ready=True)
-        context = self.route(message)
-        # a frame no stream reads (a late one of a closed context) goes nowhere, but may end a
-        # context a stream cancelled
-        if context is None or (stream := self._stream(context)) is None:
-            return replace(nowhere, ended_context=self.context_ended(message))
-        # the stream reads the message as decoded here: no second decode
-        return replace(nowhere, context=stream.context_id, message=message)
+        try:
+            message = self.decode(frame)
+            if message is None:
+                return nowhere
+            if self.awaits_ready and self.ready(message):
+                return replace(nowhere, ready=True)
+            context = self.route(message)
+            # A late frame may still acknowledge a context's cancellation.
+            if context is None or (stream := self._stream(context)) is None:
+                return replace(nowhere, ended_context=self.context_ended(message))
+            # The stream reads the message decoded here, without decoding it again.
+            return replace(nowhere, context=stream.context_id, message=message)
+        except APIError:
+            raise
+        except Exception as error:
+            raise protocol_error(self, f"{type(error).__name__}: {error}") from error
 
     async def _core_open_context(self, context_id: str) -> list[WsFrame]:
         return frames_of(self.open_context(context_id))

@@ -6,6 +6,7 @@ import asyncio
 import json
 from typing import Any
 
+import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
@@ -118,6 +119,48 @@ async def test_typed_tool_arguments_transcripts_and_results_cross_the_protocol()
             assert result["invocationId"] == "inv-1"
             assert result["result"] == '{"count": 3}'
             assert result["agentReaction"] == "speaks"
+        finally:
+            await session.aclose()
+            await model.aclose()
+
+
+async def test_reply_timeout_callbacks_do_not_rebind_a_later_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.plugins.reply_timers import capture_reply_timers
+
+    peer = _Peer()
+    app = web.Application()
+    app.router.add_post("/api/calls", peer.create_call)
+    app.router.add_get("/join", peer.join)
+    async with TestServer(app) as server, http.open():
+        peer.join_url = str(server.make_url("/join").with_scheme("ws"))
+        model = RealtimeModel(api_key="key", base_url=str(server.make_url("/api")))
+        session = model.session()
+        generations: list[llm.GenerationCreatedEvent] = []
+        session.on("generation_created", generations.append)
+        try:
+            socket = await peer.sockets.get()
+            timers = capture_reply_timers(monkeypatch, 5.0)
+            first = session.generate_reply(instructions="first")
+            await until(lambda: len(timers) == 1, "first request timer")
+            timers[0].fire()
+            await until(first.done, "first request expires")
+            with pytest.raises(llm.RealtimeError, match="timed out"):
+                first.result()
+            second = session.generate_reply(instructions="second")
+            await until(lambda: len(timers) == 2, "second request timer")
+            assert not second.done()
+            with pytest.raises(ValueError, match="fixed at construction"):
+                model.update_options(output_medium="text")
+            assert not second.done(), "a refused option update leaves its request alone"
+            await socket.send_json({"type": "state", "state": "speaking"})
+            await until(second.done, "second response is correlated")
+            generation = second.result()
+            assert generation.user_initiated
+            assert generation is generations[-1]
+            assert generation.response_id
+            await socket.send_json({"type": "state", "state": "listening"})
         finally:
             await session.aclose()
             await model.aclose()

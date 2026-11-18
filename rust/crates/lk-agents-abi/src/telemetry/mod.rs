@@ -167,6 +167,12 @@ impl Cx {
         self.recorder.as_ref()
     }
 
+    /// The same parent, job and conversation, recording through an owning operation's adapter.
+    pub fn with_recorder(mut self, recorder: Arc<dyn Recorder>) -> Cx {
+        self.recorder = Some(recorder);
+        self
+    }
+
     /// Wall-clock unix nanoseconds; 0 for a context that records nothing.
     pub fn now_nanos(&self) -> u64 {
         self.recorder.as_ref().map_or(0, |r| r.now_nanos())

@@ -642,3 +642,25 @@ mod lifecycle {
         result
     }
 }
+
+#[tokio::test]
+async fn an_mcp_transport_send_after_close_returns_unavailable_instead_of_panicking() {
+    let server = Arc::new(Server::default());
+    let receipt = Arc::new(TransportReceipt::default());
+    let mut transport = Observed::new(
+        server.connect(),
+        receipt.clone(),
+        ProcessEnv::current_runtime().background().unwrap(),
+    );
+    transport.close().await.unwrap();
+    transport.close().await.unwrap();
+    let message = ClientJsonRpcMessage::Notification(JsonRpcNotification {
+        jsonrpc: JsonRpcVersion2_0,
+        notification: ClientNotification::InitializedNotification(
+            InitializedNotification::default(),
+        ),
+    });
+    assert!(matches!(transport.send(message).await, Err(McpError::Unavailable)));
+    assert!(transport.receive().await.is_none());
+    receipt.closed().await;
+}

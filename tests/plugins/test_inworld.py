@@ -10,8 +10,43 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import APIConnectOptions, APIError, http
+from livekit import rtc
+from livekit.agents import APIConnectOptions, APIError, http, stt
 from livekit.plugins import inworld
+
+
+async def test_input_eof_closes_the_stream_without_a_redundant_end_turn() -> None:
+    commands: list[dict[str, object]] = []
+
+    async def recognize(request: web.Request) -> web.WebSocketResponse:
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        async for raw in socket:
+            command = json.loads(raw.data)
+            commands.append(command)
+            if "closeStream" in command:
+                await socket.send_json(
+                    {"result": {"transcription": {"transcript": "last words", "isFinal": True}}}
+                )
+                await socket.close()
+        return socket
+
+    app = web.Application()
+    app.router.add_get("/stt/v1/transcribe:streamBidirectional", recognize)
+    async with TestServer(app) as server, http.open():
+        model = inworld.STT(api_key="key", base_url=str(server.make_url("/")))
+        async with model.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+            stream.push_frame(rtc.AudioFrame(bytes(3200), 16000, 1, 1600))
+            stream.end_input()
+            finals = [
+                event.alternatives[0].text
+                async for event in stream
+                if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+            ]
+        await model.aclose()
+    assert finals == ["last words"]
+    assert sum("closeStream" in command for command in commands) == 1
+    assert not any("endTurn" in command for command in commands)
 
 
 @pytest.mark.parametrize("body", ["{", '{"result":{"transcription":{"transcript":42}}}'])

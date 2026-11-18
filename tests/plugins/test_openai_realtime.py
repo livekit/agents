@@ -11,9 +11,10 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from livekit.agents import Agent, VoiceSession
+from livekit.agents import Agent, VoiceSession, llm
+from livekit.agents.voice.events import ErrorEvent
 from livekit.plugins.openai.realtime import RealtimeModel, Voice
-from tests.fakes import FakeAudioOutput
+from tests.fakes import FakeAudioOutput, until
 
 
 class _Peer:
@@ -25,6 +26,7 @@ class _Peer:
         self.authorizations: list[str | None] = []
         self._tail: str | None = None
         self._ids = 0
+        self.reject_next_options = False
 
     def _id(self, prefix: str) -> str:
         self._ids += 1
@@ -38,6 +40,19 @@ class _Peer:
             event = json.loads(message.data)
             if event["type"] == "session.update":
                 self.sessions.append(event["session"])
+                if self.reject_next_options:
+                    self.reject_next_options = False
+                    await socket.send_json(
+                        {
+                            "type": "error",
+                            "error": {
+                                "type": "invalid_request_error",
+                                "code": "cannot_update_voice",
+                                "event_id": event["event_id"],
+                                "message": "Cannot change voice after audio",
+                            },
+                        }
+                    )
             elif event["type"] == "conversation.item.create":
                 item = {**event["item"], "id": event["item"].get("id") or self._id("item")}
                 await socket.send_json(
@@ -141,3 +156,29 @@ async def test_the_api_key_given_to_the_model_authenticates_its_socket(
         await session.generate_reply(instructions="greet the user")
 
     assert peer.authorizations == ["Bearer sk-local"]
+
+
+async def test_a_rejected_option_update_does_not_fail_the_reply_handle_or_the_next_turn() -> None:
+    peer = _Peer()
+    async with _voice(peer) as session:
+        model = session.llm
+        assert isinstance(model, RealtimeModel)
+        errors: list[ErrorEvent] = []
+        session.on("error", errors.append)
+        first = session.generate_reply(instructions="first reply")
+        await until(lambda: peer.sessions, "initial configuration sent")
+        peer.reject_next_options = True
+        model.update_options(voice="cedar")
+        await until(lambda: errors, "the rejected update is reported")
+        await first
+        assert first.done() and first.exception() is None
+        model.update_options(speed=1.1)
+        second = session.generate_reply(instructions="next reply")
+        await second
+        assert second.done() and second.exception() is None
+        assert first is not second
+        assert len(first.chat_items) == len(second.chat_items) == 1
+        assert first.chat_items[0].id != second.chat_items[0].id
+        assert any(
+            isinstance(e.error, llm.RealtimeModelError) and e.error.recoverable for e in errors
+        )

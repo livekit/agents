@@ -1095,3 +1095,21 @@ class FakeLiveKit:
     async def _send(self, msg: agent.ServerMessage) -> None:
         assert self._ws is not None, "no worker connected"
         await self._ws.send_bytes(msg.SerializeToString())
+
+
+class ReplyTimer(asyncio.TimerHandle):
+    """A request's real timeout callback, fired explicitly instead of waiting on wall time."""
+
+    def __init__(
+        self, delay: float, callback: Callable[..., object], args: tuple[object, ...]
+    ) -> None:
+        super().__init__(
+            asyncio.get_running_loop().time() + delay, callback, args, asyncio.get_running_loop()
+        )
+        self._reply_callback = callback
+        self._reply_args = args
+
+    def fire(self, *, stale: bool = False) -> None:
+        """``stale`` models a callback already taken by the loop when cancellation raced it."""
+        if stale or not self.cancelled():
+            self._reply_callback(*self._reply_args)

@@ -465,7 +465,7 @@ class SynthesizeStream(tts.WebSocketStream[_Message, _Command]):
         ):
             pass
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
 
 def _error(message: _Error) -> APIError:

@@ -52,6 +52,15 @@ _ERROR_KINDS: dict[str, ErrorKind] = {
     "quota_exceeded": "quota",
     "transcriber_error": "server",
     "input_error": "invalid_request",
+    "invalid_request": "invalid_request",
+    "chunk_size_exceeded": "invalid_request",
+    "unaccepted_terms": "auth",
+    "rate_limited": "rate_limit",
+    "commit_throttled": "rate_limit",
+    "queue_overflow": "server",
+    "resource_exhausted": "server",
+    "session_time_limit_exceeded": "connection",
+    "insufficient_audio_activity": "connection",
     "error": "server",
 }
 
@@ -494,6 +503,42 @@ class _Error(_ErrorFields):
     message_type: Literal["error"]
 
 
+class _InvalidRequest(_ErrorFields):
+    message_type: Literal["invalid_request"]
+
+
+class _ChunkSizeExceeded(_ErrorFields):
+    message_type: Literal["chunk_size_exceeded"]
+
+
+class _UnacceptedTerms(_ErrorFields):
+    message_type: Literal["unaccepted_terms"]
+
+
+class _RateLimited(_ErrorFields):
+    message_type: Literal["rate_limited"]
+
+
+class _CommitThrottled(_ErrorFields):
+    message_type: Literal["commit_throttled"]
+
+
+class _QueueOverflow(_ErrorFields):
+    message_type: Literal["queue_overflow"]
+
+
+class _ResourceExhausted(_ErrorFields):
+    message_type: Literal["resource_exhausted"]
+
+
+class _SessionTimeLimitExceeded(_ErrorFields):
+    message_type: Literal["session_time_limit_exceeded"]
+
+
+class _InsufficientAudioActivity(_ErrorFields):
+    message_type: Literal["insufficient_audio_activity"]
+
+
 _Message = Annotated[
     _Partial
     | _Committed
@@ -503,6 +548,15 @@ _Message = Annotated[
     | _QuotaExceeded
     | _TranscriberError
     | _InputError
+    | _InvalidRequest
+    | _ChunkSizeExceeded
+    | _UnacceptedTerms
+    | _RateLimited
+    | _CommitThrottled
+    | _QueueOverflow
+    | _ResourceExhausted
+    | _SessionTimeLimitExceeded
+    | _InsufficientAudioActivity
     | _Error,
     Field(discriminator="message_type"),
 ]
@@ -534,6 +588,8 @@ class SpeechStream(stt.WebSocketStream[_Message, _AudioChunk]):
         self._opts = opts
         self._language = language
         self._last_partial_text = ""
+        self._pending_commits = 0
+        self._uncommitted_audio = False
         self.frame_ms = opts.audio_chunk_duration_ms
         # scribe_v2_realtime takes an empty chunk as its keepalive, not a ping
         self.keepalive = Keepalive(every=10.0, frame=self._chunk(""))
@@ -598,6 +654,8 @@ class SpeechStream(stt.WebSocketStream[_Message, _AudioChunk]):
     async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
         """Establish WebSocket connection to ElevenLabs Scribe v2 API"""
         self._last_partial_text = ""
+        self._pending_commits = 0
+        self._uncommitted_audio = False
         commit_strategy = "vad" if self._server_vad is not None else "manual"
         params = [
             f"model_id={self._opts.model_id}",
@@ -662,8 +720,13 @@ class SpeechStream(stt.WebSocketStream[_Message, _AudioChunk]):
     def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> _AudioChunk | None:
         match item:
             case rtc.AudioFrame():
+                self._uncommitted_audio |= bool(item.data)
                 return self._chunk(base64.b64encode(item.data).decode("utf-8"))
             case stt.Flush():
+                if not self._uncommitted_audio:
+                    return None
+                self._uncommitted_audio = False
+                self._pending_commits += 1
                 return self._chunk("", commit=True)
             case stt.EndOfAudio():
                 return None
@@ -691,6 +754,15 @@ class SpeechStream(stt.WebSocketStream[_Message, _AudioChunk]):
             or message["message_type"] == "transcriber_error"
             or message["message_type"] == "input_error"
             or message["message_type"] == "error"
+            or message["message_type"] == "invalid_request"
+            or message["message_type"] == "chunk_size_exceeded"
+            or message["message_type"] == "unaccepted_terms"
+            or message["message_type"] == "rate_limited"
+            or message["message_type"] == "commit_throttled"
+            or message["message_type"] == "queue_overflow"
+            or message["message_type"] == "resource_exhausted"
+            or message["message_type"] == "session_time_limit_exceeded"
+            or message["message_type"] == "insufficient_audio_activity"
         ):
             details = message.get("details")
             raise APIError(
@@ -701,19 +773,23 @@ class SpeechStream(stt.WebSocketStream[_Message, _AudioChunk]):
                 + (f" - {details}" if details else ""),
             )
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _committed(self, message: _Committed | _CommittedWithTimestamps) -> None:
         # 11labs sends every commit twice; _final_message_type picks the copy this session reads
         if message["message_type"] != self._final_message_type:
             return
         self._last_partial_text = ""
+        self._pending_commits = max(0, self._pending_commits - 1)
         if message.get("text"):
             self.report(self._transcript(message, final=True))
             if self._server_vad is None:
                 return
         # the empty commit ends the speech its commits grouped; with server VAD, each commit does
         self.report(stt.SpeechEnded())
+
+    def nothing_pending(self) -> bool:
+        return self._pending_commits == 0 and super().nothing_pending()
 
     def _transcript(self, message: _Transcript, *, final: bool) -> stt.Transcript:
         words = message.get("words") or []

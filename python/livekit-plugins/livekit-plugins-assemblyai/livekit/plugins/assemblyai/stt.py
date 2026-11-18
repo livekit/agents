@@ -21,7 +21,7 @@ import os
 import time
 import weakref
 from dataclasses import dataclass
-from typing import Literal, NotRequired, TypedDict, assert_never, final
+from typing import ClassVar, Literal, NotRequired, TypedDict, assert_never, final
 from urllib.parse import urlencode
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -524,6 +524,7 @@ class STT(stt.STT):
 class SpeechStream(
     stt.WebSocketStream[_Begin | _SpeechStarted | _Turn | _Termination | _Error, _Out]
 ):
+    completion: ClassVar[stt.Completion] = "session_finished"
     # SpeechStarted and end_of_turn are AssemblyAI's own speech boundaries
     provider_vad = True
 
@@ -791,7 +792,7 @@ class SpeechStream(
         elif message["type"] == "Turn":
             self._turn(message)
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _turn(self, message: _Turn) -> None:
         language = LanguageCode(message.get("language_code", "en"))

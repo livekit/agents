@@ -598,4 +598,4 @@ class SynthesizeStream(tts.WebSocketStream[_Message, bytes]):
                 )
             self.report(tts.SegmentDone(self._segment_id))
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)

@@ -21,7 +21,7 @@ import time
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Annotated, Final, Literal, NotRequired, TypedDict, assert_never
+from typing import Annotated, ClassVar, Final, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode, urlparse
 
 import httpx2 as httpx
@@ -691,8 +691,30 @@ class _Error(TypedDict):
     error: NotRequired[_ErrorBody]
 
 
+class _Committed(TypedDict):
+    type: Literal["input_audio_buffer.committed"]
+    item_id: str
+
+
+class _Cleared(TypedDict):
+    type: Literal["input_audio_buffer.cleared"]
+
+
+class _Failed(TypedDict):
+    type: Literal["conversation.item.input_audio_transcription.failed"]
+    item_id: str
+    error: NotRequired[_ErrorBody]
+
+
 _Message = Annotated[
-    _SpeechStarted | _SpeechStopped | _Delta | _Completed | _Error,
+    _SpeechStarted
+    | _SpeechStopped
+    | _Delta
+    | _Completed
+    | _Error
+    | _Committed
+    | _Cleared
+    | _Failed,
     Field(discriminator="type"),
 ]
 
@@ -706,15 +728,20 @@ class _Commit(TypedDict):
     type: Literal["input_audio_buffer.commit"]
 
 
+class _Clear(TypedDict):
+    type: Literal["input_audio_buffer.clear"]
+
+
 class _SessionUpdate(TypedDict):
     type: Literal["session.update"]
     session: RealtimeTranscriptionSessionCreateRequestParam
 
 
-_Command = _Append | _Commit | _SessionUpdate
+_Command = _Append | _Commit | _Clear | _SessionUpdate
 
 
 class SpeechStream(stt.WebSocketStream[_Message, _Command]):
+    completion: ClassVar[stt.Completion] = "session_finished"
     # forward audio to OAI in chunks of 50ms
     frame_ms = 50
     # the Realtime API ends a session after 15 minutes: rotate before
@@ -739,10 +766,16 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
         self._language = _transcript_language(opts.languages)
         self._vad = vad_instance
         self._vad_stream: VADStream | None = None
-        self._text = ""
+        self._texts: dict[str, str] = {}
         self._item_id = ""
         self._interim_at = 0.0
         self._item_timing: dict[str, tuple[int, int | None]] = {}
+        self._pending_items: set[str] = set()
+        self._uncommitted_samples = 0
+        self._manual_commits = 0
+        self._draining = False
+        self._cleared = False
+        self._item_error: APIError | None = None
 
     def validate_model(self, model: str, keywords: list[str]) -> None:
         """Validate a prospective model against this stream's independent language."""
@@ -786,10 +819,16 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
                 self.report(stt.SpeechEnded())
                 # a server-endpointed model closes the segment itself; this would cut it twice
                 if _is_realtime_only(self._opts.model):
-                    self.send_now(_Commit(type="input_audio_buffer.commit"))
+                    if commit := self._commit():
+                        self.send_now(commit)
 
     async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
-        self._text = ""
+        self._texts.clear()
+        self._pending_items.clear()
+        self._uncommitted_samples = 0
+        self._manual_commits = 0
+        self._draining = self._cleared = False
+        self._item_error = None
         self._item_id = ""
         self._interim_at = 0.0
         self._item_timing.clear()
@@ -818,21 +857,94 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
     def encode(self, item: rtc.AudioFrame | stt.Flush | stt.EndOfAudio) -> _Command | None:
         match item:
             case rtc.AudioFrame():
+                self._uncommitted_samples += item.samples_per_channel
                 if self._vad_stream is not None:
                     self._vad_stream.push_frame(item)
                 return _Append(
                     type="input_audio_buffer.append",
                     audio=base64.b64encode(item.data.tobytes()).decode("utf-8"),
                 )
-            case stt.Flush() | stt.EndOfAudio():
-                return None
+            case stt.Flush():
+                return self._commit()
+            case stt.EndOfAudio():
+                self._draining = True
+                if commit := self._commit():
+                    self.send_now(commit)
+                # A clear ack is a barrier: all earlier commit notifications precede it,
+                # while their transcription completions may still arrive out of order.
+                return _Clear(type="input_audio_buffer.clear")
             case _:
                 assert_never(item)
 
+    def _commit(self) -> _Commit | None:
+        if self._uncommitted_samples == 0:
+            return None
+        # OpenAI refuses commits shorter than 100 ms; pad a short final chunk with silence.
+        minimum = SAMPLE_RATE // 10
+        if self._uncommitted_samples < minimum:
+            padding = bytes((minimum - self._uncommitted_samples) * 2)
+            self.send_now(
+                _Append(
+                    type="input_audio_buffer.append",
+                    audio=base64.b64encode(padding).decode("utf-8"),
+                )
+            )
+        self._uncommitted_samples = 0
+        self._manual_commits += 1
+        return _Commit(type="input_audio_buffer.commit")
+
+    def nothing_pending(self) -> bool:
+        return (
+            not self._pending_items
+            and self._manual_commits == 0
+            and self._uncommitted_samples == 0
+            and self._item_error is None
+            and (not self._draining or self._cleared)
+            and super().nothing_pending()
+        )
+
+    def _settle_items(self) -> None:
+        if self._pending_items or self._manual_commits or (self._draining and not self._cleared):
+            return
+        if self._item_error is not None:
+            raise self._item_error
+        if self._draining:
+            self.report(stt.SessionFinished())
+
     def on_message(
-        self, message: _SpeechStarted | _SpeechStopped | _Delta | _Completed | _Error
+        self,
+        message: _SpeechStarted
+        | _SpeechStopped
+        | _Delta
+        | _Completed
+        | _Error
+        | _Committed
+        | _Cleared
+        | _Failed,
     ) -> None:
-        if message["type"] == "input_audio_buffer.speech_started":
+        if message["type"] == "input_audio_buffer.committed":
+            self._pending_items.add(message["item_id"])
+            if self._manual_commits:
+                self._manual_commits -= 1
+            else:
+                # Server VAD committed the current buffer itself.
+                self._uncommitted_samples = 0
+        elif message["type"] == "input_audio_buffer.cleared":
+            self._cleared = True
+            self._settle_items()
+        elif message["type"] == "conversation.item.input_audio_transcription.failed":
+            self._pending_items.discard(message["item_id"])
+            self._texts.pop(message["item_id"], None)
+            self._item_timing.pop(message["item_id"], None)
+            error = message.get("error", {})
+            self._item_error = APIError(
+                "OpenAI Realtime STT transcription failed",
+                kind=error_kind(error.get("code") or error.get("type")),
+                body=error,
+                detail=error.get("message"),
+            )
+            self._settle_items()
+        elif message["type"] == "input_audio_buffer.speech_started":
             item_id = self._item_id = message.get("item_id", "")
             self._item_timing[item_id] = (message.get("audio_start_ms", 0), None)
             if self._vad is None:
@@ -846,18 +958,27 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
         elif message["type"] == "conversation.item.input_audio_transcription.delta":
             self._item_id = message.get("item_id") or self._item_id
             if delta := message.get("delta"):
-                self._text += delta
+                self._texts[self._item_id] = self._texts.get(self._item_id, "") + delta
                 # interims at most every _delta_transcript_interval
                 if time.time() - self._interim_at > _delta_transcript_interval:
                     self._interim_at = time.time()
                     self.report(
-                        stt.Transcript(self._text, self._language, request_id=self._item_id)
+                        stt.Transcript(
+                            self._texts[self._item_id], self._language, request_id=self._item_id
+                        )
                     )
         elif message["type"] == "conversation.item.input_audio_transcription.completed":
-            self._text = ""
+            item_id = message.get("item_id", "")
+            self._texts.pop(item_id, None)
+            self._pending_items.discard(item_id)
             self._completed(message)
+            self._settle_items()
         elif message["type"] == "error":
             error = message.get("error", {})
+            if error.get("code") == "input_audio_buffer_commit_empty":
+                # Server VAD may have committed the same buffer before our manual commit.
+                self._manual_commits = max(0, self._manual_commits - 1)
+                return
             raise APIError(
                 "OpenAI Realtime STT error",
                 kind=error_kind(error.get("code") or error.get("type")),
@@ -865,7 +986,7 @@ class SpeechStream(stt.WebSocketStream[_Message, _Command]):
                 detail=error.get("message"),
             )
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _completed(self, message: _Completed) -> None:
         item_id = message.get("item_id", "")

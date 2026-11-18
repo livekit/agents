@@ -86,6 +86,13 @@ class _LLMOptions:
     """If set to "ephemeral", the system prompt, tools, and chat history will be cached."""
 
 
+@dataclass
+class _ToolBlock:
+    call_id: str
+    name: str
+    arguments: str = ""
+
+
 class LLM(llm.LLM):
     def __init__(
         self,
@@ -335,10 +342,7 @@ class LLMStream(llm.LLMStream):
 
     async def _run(self) -> None:
         # per attempt: a retry never inherits a half-streamed tool call or usage
-        # current function call that we're waiting for full completion (args are streamed)
-        self._tool_call_id: str | None = None
-        self._fnc_name: str | None = None
-        self._fnc_raw_arguments: str | None = None
+        self._tool_blocks: dict[int, _ToolBlock] = {}
 
         self._request_id: str = ""
         self._ignoring_cot = False  # ignore chain of thought
@@ -403,9 +407,9 @@ class LLMStream(llm.LLMStream):
                 self._cache_read_tokens = usage.cache_read_input_tokens
         elif event.type == "content_block_start":
             if event.content_block.type == "tool_use":
-                self._tool_call_id = event.content_block.id
-                self._fnc_name = event.content_block.name
-                self._fnc_raw_arguments = ""
+                self._tool_blocks[event.index] = _ToolBlock(
+                    call_id=event.content_block.id, name=event.content_block.name
+                )
         elif event.type == "content_block_delta":
             delta = event.delta
             if delta.type == "text_delta":
@@ -424,15 +428,14 @@ class LLMStream(llm.LLMStream):
                     id=self._request_id,
                     delta=llm.ChoiceDelta(content=text, role="assistant"),
                 )
-            elif delta.type == "input_json_delta" and self._fnc_raw_arguments is not None:
-                # a block the stream does not read (a server tool's) streams its input too
-                self._fnc_raw_arguments += delta.partial_json
+            elif delta.type == "input_json_delta":
+                # Server tools and future block types can stream JSON too. Only this
+                # block's deltas belong to its call, regardless of arrival order.
+                if (block := self._tool_blocks.get(event.index)) is not None:
+                    block.arguments += delta.partial_json
 
         elif event.type == "content_block_stop":
-            if self._tool_call_id is not None:
-                assert self._fnc_name is not None
-                assert self._fnc_raw_arguments is not None
-
+            if (block := self._tool_blocks.pop(event.index, None)) is not None:
                 chat_chunk = llm.ChatChunk(
                     id=self._request_id,
                     delta=llm.ChoiceDelta(
@@ -440,14 +443,13 @@ class LLMStream(llm.LLMStream):
                         tool_calls=[
                             llm.FunctionToolCall(
                                 # a call without arguments streams no JSON: its arguments are {}
-                                arguments=self._fnc_raw_arguments or "{}",
-                                name=self._fnc_name or "",
-                                call_id=self._tool_call_id or "",
+                                arguments=block.arguments or "{}",
+                                name=block.name,
+                                call_id=block.call_id,
                             )
                         ],
                     ),
                 )
-                self._tool_call_id = self._fnc_raw_arguments = self._fnc_name = None
                 return chat_chunk
 
         return None

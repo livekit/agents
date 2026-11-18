@@ -70,7 +70,7 @@ impl Default for LeaseTiming {
 
 /// Sends again a request refused before it applied: what a write's [`Resend`] and a read share.
 /// Every attempt runs under the caller's deadline, which its requests' waits inherit; another
-/// starts only while it can before that deadline.
+/// starts only while its backoff and a whole request fit before that deadline.
 pub(crate) struct Retry {
     clock: Arc<dyn Clock>,
     epoch: Ts,
@@ -99,15 +99,19 @@ impl Retry {
         crate::deadline::within(self.deadline, attempt).await
     }
 
-    /// Waits out the next backoff step; `false`, at once, when no attempt could start after it
-    /// before the deadline.
+    /// Waits out the next backoff step; `false`, at once, when the attempt after it could not be
+    /// answered before the deadline.
+    ///
+    /// A resend starts only if the server's whole request timeout fits between its backoff and
+    /// the deadline: one the deadline could cut would turn a refusal that applied nothing into an
+    /// unknown outcome. A caller too short for another whole attempt gets the refusal itself.
     pub(crate) async fn wait(&mut self, why: &str) -> bool {
         let elapsed = self.clock.now().saturating_duration_since(self.epoch);
         let Some(at) = self.backoff.next(elapsed).map(|after| self.epoch.saturating_add(after))
         else {
             return false;
         };
-        if at >= self.deadline {
+        if at.saturating_add(crate::deadline::REQUEST_TIMEOUT) > self.deadline {
             return false;
         }
         log::debug!(target: lk_agents_abi::LOG_TARGET, "storage request refused unapplied, sending it again: {why}");
@@ -134,7 +138,7 @@ impl Retry {
 }
 
 /// One write's resends: the one retry owner every write shares, as transports never resend. A
-/// write refused before it applied (`Unavailable`) is sent again while another attempt can start
+/// write refused before it applied (`Unavailable`) is sent again while another whole attempt fits
 /// before the caller's deadline, then reaches the caller as it is. A write whose outcome is
 /// unknown (`Uncertain`) is never sent again: its probe reads back once whether it applied, else
 /// it reaches the caller `Uncertain`.

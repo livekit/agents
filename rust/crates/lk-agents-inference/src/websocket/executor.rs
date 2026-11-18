@@ -270,6 +270,7 @@ async fn open(
     cx: &Cx,
     background: &Background,
 ) -> Result<(Owned<Link>, ConnectionOptions, Vec<WsFrame>), ProviderError> {
+    let completion = session.host.completion().map_err(ProviderError::from)?;
     let reply_limit =
         session.conn_options.read_timeout.map_or(DEFAULT_WAIT, Duration::from_secs_f64);
     // the stream's own, read at each connection whether it is direct or shared
@@ -298,6 +299,7 @@ async fn open(
             opened(session, request_id);
             let link = Link::owned(background, sender, Source::Direct(receiver));
             let mut options = options(&connection, reply_limit, input_idle)?;
+            options.completion = completion;
             options.response_idle = response_idle;
             if connection.awaits_ready {
                 options.readiness = Readiness::Awaited { by: ready_by };
@@ -315,6 +317,7 @@ async fn open(
             }
             // the socket's own keepalive, readiness and rotation belong to the shared socket
             let options = ConnectionOptions {
+                completion,
                 keepalive: None,
                 max_session_duration: None,
                 reply_limit,
@@ -364,6 +367,7 @@ pub(super) fn options(
         None => None,
     };
     Ok(ConnectionOptions {
+        completion: lk_agents_abi::utils::websocket::WebSocketCompletion::Settled,
         keepalive,
         max_session_duration: seconds(connection.max_session_duration, "max_session_duration")?,
         reply_limit,

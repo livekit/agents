@@ -136,6 +136,17 @@ impl FallbackSession {
             Arc::clone(&st.active)
         };
         old.aclose().await;
+        // Closing a child settles accepted partial ASR. Those final words still belong to the
+        // user's original turn and must reach the driver before it replays the new model's frame.
+        // Generation events from the retired child were settled above and cannot reopen speech.
+        while let Some(event) = old.next_event().await {
+            if matches!(
+                event,
+                Event::InputTranscription(_) | Event::RemoteItemAdded(_) | Event::Metrics(_)
+            ) {
+                self.lock().events.push_back(event);
+            }
+        }
         let mut request = self.swap_request(target);
         let mut effects: VecDeque<_> = request.handle(ChainEvent::Wake, self.clock.now()).into();
         let mut opened: Option<(u64, Arc<dyn RealtimeSession>)> = None;
@@ -358,7 +369,35 @@ impl FallbackSession {
     ) -> Option<Option<Event>> {
         match ev {
             None if !Arc::ptr_eq(active, &self.lock().active) => None,
-            None => Some(None),
+            None => {
+                let index = {
+                    let st = self.lock();
+                    if st.closed {
+                        return Some(None);
+                    }
+                    st.active_index
+                };
+                // A long-lived realtime session cannot end successfully on its own. A
+                // provider may disappear without first reporting an error; still fail over.
+                let error = ApiError::connection(Some("realtime provider stream ended".into()));
+                let failed = self
+                    .fail_over(RealtimeModelError {
+                        timestamp: self.clock.now(),
+                        label: self.children[index].label(),
+                        message: error.to_string(),
+                        recoverable: false,
+                        req_id: None,
+                        code: None,
+                        provider_error: Some(error),
+                    })
+                    .await;
+                if failed.is_some() {
+                    let mut st = self.lock();
+                    st.closed = true;
+                    st.held.clear();
+                }
+                failed.map(Some)
+            }
             Some(Event::Error(e)) if !e.recoverable => self.fail_over(e).await.map(Some),
             Some(ev) => Some(Some(self.observe(&mut self.lock(), ev))),
         }
@@ -367,7 +406,9 @@ impl FallbackSession {
     /// A fatal child error marks its model down and swaps to the best remaining one, the error
     /// passed on as recoverable; `None` once swapped. With no model left the error stays fatal.
     async fn fail_over(&self, e: RealtimeModelError) -> Option<Event> {
-        let Some(failover) = self.mark_failed(&e) else { return Some(Event::Error(e)) };
+        let Some(failover) = self.mark_failed(&e) else {
+            return (!self.lock().closed).then_some(Event::Error(e));
+        };
         self.announce(failover.recovered, true);
         self.announce(failover.failed.into_iter().collect(), false);
         let Some(target) = failover.target else { return Some(Event::Error(e)) };
@@ -380,6 +421,9 @@ impl FallbackSession {
     /// Marks the serving model failed; `None` when the policy ignores the failure.
     fn mark_failed(&self, e: &RealtimeModelError) -> Option<Failover> {
         let mut st = self.lock();
+        if st.closed {
+            return None;
+        }
         let now = self.clock.now();
         let backend = self.priority[st.active_index];
         let failed = st.policy.failed(

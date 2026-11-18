@@ -99,6 +99,9 @@ impl Run {
                     () = self.time.wait_until(until) => {}
                 }
             }
+            for recorder in self.recorders.drain(..) {
+                recorder.finish_recording();
+            }
             // Then the host closes the call's store (`SessionStorage.aclose`).
             if let Some(store) = self.store.take() {
                 let until = self.time.now().saturating_add(Duration::from_millis(NEVER_MS));

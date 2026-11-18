@@ -297,9 +297,15 @@ impl Run {
         }
     }
 
+    /// The actual handle returned to the host, retained so regressions can inspect its waits,
+    /// committed items and exception independently of the session's history.
+    pub fn speech_handle(&self, reference: Ref<crate::input::Speech>) -> Option<Arc<SpeechHandle>> {
+        self.handles.get(&self.speech_id(reference)?.0).cloned()
+    }
+
     /// The speech handle the host holds for a speech the run saw created.
     fn host_speech(&self, reference: Ref<crate::input::Speech>) -> Option<Arc<SpeechHandle>> {
-        let handle = self.handles.get(&self.speech_id(reference)?.0)?.clone();
+        let handle = self.speech_handle(reference)?;
         self.api.api().ok()?;
         Some(handle)
     }

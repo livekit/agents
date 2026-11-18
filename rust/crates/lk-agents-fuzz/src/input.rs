@@ -384,7 +384,7 @@ plain_enum! {
     /// `error` the session cannot go on after (the account's quota).
     RtEvent {
         Disconnected, Reconnected, SecondGeneration, GenerationDone, SpeechStarted,
-        SpeechStopped, ServerError, ResponseFailed, TranscriptionFailed, FatalError
+        SpeechStopped, ServerError, ResponseFailed, TranscriptionFailed, OldestTranscriptionFailed, FatalError
     }
 }
 plain_enum! {

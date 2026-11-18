@@ -970,42 +970,29 @@ class RealtimeSession(  # noqa: F811
             raise
 
     def emit_generation_event(self) -> None:
-        """Publish a llm.GenerationCreatedEvent to external subscribers.
-
-        This can be called multiple times for the same generation:
-        - Once from _create_response_generation() when a NEW generation is created
-        - Once from TurnTracker when TOOL_OUTPUT_CONTENT_START or ASSISTANT_SPEC_START arrives
-
-        The TurnTracker emission is critical for tool calls - it happens at the right moment
-        for the framework to start listening before the tool call is emitted.
-        """
+        """Announce each assistant generation once, before its content is delivered."""
         if self._current_generation is None:
             logger.debug("[GEN] emit_generation_event called but no generation exists - ignoring")
             return
 
-        # Log whether this is first or re-emission for tool call
+        # Several content blocks and the turn tracker can announce the same response. Only
+        # its first announcement owns streams or can resolve a pending reply.
         if self._current_generation.emitted:
-            logger.debug(
-                f"[GEN] EMITTING generation_created (re-emit for tool call) for response_id={self._current_generation.response_id}"
-            )
-        else:
-            logger.debug(
-                f"[GEN] EMITTING generation_created for response_id={self._current_generation.response_id}"
-            )
-
+            return
         self._current_generation.emitted = True
+        pending = self._pending_generation_fut
+        requested = pending is not None and not pending.done()
         generation_ev = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
-            user_initiated=False,
+            user_initiated=requested,
             response_id=self._current_generation.response_id,
         )
-        self.emit("generation_created", generation_ev)
-
-        # Resolve pending generate_reply future if exists
-        if self._pending_generation_fut and not self._pending_generation_fut.done():
-            self._pending_generation_fut.set_result(generation_ev)
+        # Settle before callbacks can issue another request and replace the pending slot.
+        if requested and pending is not None:
             self._pending_generation_fut = None
+            pending.set_result(generation_ev)
+        self.emit("generation_created", generation_ev)
 
     async def _handle_event(self, raw_event: object) -> None:
         """Validate a Bedrock payload before dispatching its known fields."""
@@ -1024,9 +1011,8 @@ class RealtimeSession(  # noqa: F811
             logger.warning(f"No event handler found for event type: {event_type}")
 
     async def _handle_completion_start_event(self, event_data: SonicOutputEvent) -> None:
-        """Handle completionStart - create new generation for this completion cycle."""
+        """A completion cycle starts before input ASR; it does not announce an assistant reply."""
         log_event_data(event_data)
-        self._create_response_generation()
 
     def _create_response_generation(self) -> None:
         """Instantiate _ResponseGeneration and emit the GenerationCreated event.
@@ -1616,6 +1602,11 @@ class RealtimeSession(  # noqa: F811
             # cleanup block. Keep the session active for the replacement task.
             if asyncio.current_task() is self._response_task:
                 self._is_sess_active.clear()
+                pending = self._pending_generation_fut
+                self._pending_generation_fut = None
+                if pending is not None and not pending.done():
+                    pending.set_exception(llm.RealtimeError("Nova Sonic response stream ended"))
+                self._close_current_generation()
 
     async def _restart_session(self, ex: Exception) -> None:
         # Get restart attempts from current generation, or 0 if no generation
@@ -2053,9 +2044,11 @@ class RealtimeSession(  # noqa: F811
                 extra={"lk.pii.instructions": instructions},
             )
 
-            # Create future that will be resolved when generation starts
-            fut = asyncio.Future[llm.GenerationCreatedEvent]()
-            self._pending_generation_fut = fut
+            # Superseded callers settle before the slot is reused; each timeout owns its future.
+            if (previous := self._pending_generation_fut) is not None and not previous.done():
+                self._pending_generation_fut = None
+                previous.cancel("Superseded by new generate_reply call")
+            fut = self._new_reply_waiter()
 
             # Send text message asynchronously
             async def _send_text() -> None:
@@ -2070,41 +2063,44 @@ class RealtimeSession(  # noqa: F811
 
             send_task = self._tasks.spawn(_send_text(), name="RealtimeSession._send_text")
 
-            # Set timeout from model configuration
-            def _on_timeout() -> None:
-                if not fut.done():
-                    fut.set_exception(
-                        llm.RealtimeError("generate_reply timed out waiting for generation")
-                    )
-                    if self._pending_generation_fut is fut:
-                        self._pending_generation_fut = None
-
-            timeout_handle = asyncio.get_running_loop().call_later(
-                self._generate_reply_timeout, _on_timeout
-            )
-
-            def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
-                timeout_handle.cancel()
-                if self._pending_generation_fut is fut:
-                    self._pending_generation_fut = None
+            def _on_send_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
                 if f.cancelled() or f.exception() is not None:
-                    # cancelled, timed out or closed before the text was sent: drop the send
+                    # A cancelled or expired request must not send its text on a later turn.
                     send_task.cancel()
 
-            fut.add_done_callback(_on_fut_done)
+            fut.add_done_callback(_on_send_done)
 
             return fut
 
-        # No instructions: Return pending generation if exists, otherwise create empty future that never resolves
-        # (Framework will timeout naturally if no generation happens)
-        if self._pending_generation_fut is not None:
+        # A user-text update may already have requested the answer. Await that generation with
+        # the same timeout/close ownership as an explicitly prompted request.
+        if (pending := self._pending_generation_fut) is not None and not pending.done():
             logger.debug("generate_reply: no instructions, returning existing pending generation")
-            return self._pending_generation_fut
+            return pending
 
-        logger.debug(
-            "generate_reply: no instructions and no pending generation, returning empty future"
-        )
-        return asyncio.Future[llm.GenerationCreatedEvent]()
+        return self._new_reply_waiter()
+
+    def _new_reply_waiter(self) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        fut: asyncio.Future[llm.GenerationCreatedEvent] = asyncio.get_running_loop().create_future()
+        self._pending_generation_fut = fut
+
+        def _on_timeout() -> None:
+            if not fut.done():
+                fut.set_exception(
+                    llm.RealtimeError("generate_reply timed out waiting for generation")
+                )
+            if self._pending_generation_fut is fut:
+                self._pending_generation_fut = None
+
+        timer = asyncio.get_running_loop().call_later(self._generate_reply_timeout, _on_timeout)
+
+        def _on_done(done: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            timer.cancel()
+            if self._pending_generation_fut is done:
+                self._pending_generation_fut = None
+
+        fut.add_done_callback(_on_done)
+        return fut
 
     async def _send_text_message(self, text: str, interactive: bool = True) -> None:
         """Internal method to send text message to Nova Sonic 2.0.

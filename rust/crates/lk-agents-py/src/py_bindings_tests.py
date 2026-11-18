@@ -1,6 +1,7 @@
 """Public Python journeys through the built extension, including process boundaries."""
 
 import os
+import platform
 from array import array
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -14,6 +15,7 @@ from livekit.agents.beta.workflows import format_dtmf
 from livekit.agents.llm import RealtimeCapabilities, RealtimeModel
 from livekit.agents.storage import SQLiteStorage
 from livekit.agents.utils.media import AudioByteStream
+from livekit.agents.version import __version__
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 
 pytestmark = pytest.mark.unit
@@ -24,7 +26,8 @@ def test_inference_headers_keep_the_public_list_of_pairs_interface() -> None:
     headers = _core.inference_identity_headers()
     assert isinstance(headers, list)
     [(name, agent)] = headers
-    assert name == "User-Agent" and agent.startswith("LiveKit Agents/")
+    assert name == "User-Agent"
+    assert agent == f"LiveKit Agents/{__version__} (python {platform.python_version()})"
     assert _core.inference_identity_headers(inference_class="low")[1] == (
         "X-LiveKit-Inference-Priority",
         "low",

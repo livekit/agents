@@ -951,7 +951,7 @@ impl VoiceSession {
         opening: telemetry::Opening,
     ) {
         if let Stage::Ready(ready) = &mut *self.stage.lock() {
-            ready.builder.trace = trace;
+            ready.builder.trace = lk_agents_telemetry::with_clock(&trace, self.time.clock());
             ready.builder.job_ids = job_ids;
             ready.builder.opening = Some(opening);
         }

@@ -341,6 +341,12 @@ impl WebSocketHost for Protocol {
         Ok(self.owes_reply.load(Ordering::SeqCst))
     }
 
+    fn completion(
+        &self,
+    ) -> Result<lk_agents_abi::utils::websocket::WebSocketCompletion, HostError> {
+        Ok(Default::default())
+    }
+
     fn nothing_pending(&self) -> Result<bool, HostError> {
         Ok(self.nothing_pending.load(Ordering::SeqCst))
     }

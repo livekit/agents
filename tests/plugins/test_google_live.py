@@ -49,6 +49,15 @@ async def test_reply_requests_settle_on_output_or_terminal_rejection(
         assert pending.done(), "terminal rejection must resolve the waiting caller"
         with pytest.raises(llm.RealtimeError, match="MALFORMED_FUNCTION_CALL"):
             pending.result()
+        next_reply = session.generate_reply()
+        await gemini_live.send(
+            serverContent={
+                **gemini_live.AUDIO,
+                "outputTranscription": {"text": "next reply"},
+                "turnComplete": True,
+            }
+        )
+        assert await gemini_live.drain(await next_reply) == ("next reply", 1, [])
         return
 
     for turn in range(2):
@@ -505,7 +514,9 @@ async def test_gemini_stt_emits_the_finalized_transcript_on_arrival(gemini_live:
 
     https://github.com/livekit/agents/pull/6991
     """
-    stream = GeminiSTT(api_key="test", http_options=gemini_live.http_options).stream()
+    stream = GeminiSTT(api_key="test", http_options=gemini_live.http_options).stream(
+        conn_options=APIConnectOptions(max_retry=0, read_timeout=5)
+    )
     stream.push_frame(rtc.AudioFrame(bytes(320), 16000, 1, 160))
     stream.end_input()
     # Gemini answers the end of the audio with the last turn: a turn complete before it is one
@@ -526,18 +537,29 @@ async def test_gemini_stt_emits_the_finalized_transcript_on_arrival(gemini_live:
         serverContent={"inputTranscription": {"text": "Greetings, welcome to the age of AI."}}
     )
     await gemini_live.send(serverContent={"generationComplete": True, "turnComplete": True})
+    await gemini_live.send(serverContent={"inputTranscription": {"text": "A later turn."}})
+    events: list[tuple[stt.SpeechEventType, str]] = []
+
+    async def read() -> None:
+        async for event in stream:
+            if event.type in (
+                stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                stt.SpeechEventType.FINAL_TRANSCRIPT,
+            ):
+                events.append((event.type, event.alternatives[0].text))
+
     async with stream:
-        events = [
-            (e.type, e.alternatives[0].text)
-            async for e in stream
-            if e.type
-            in (stt.SpeechEventType.INTERIM_TRANSCRIPT, stt.SpeechEventType.FINAL_TRANSCRIPT)
-        ]
+        reader = asyncio.create_task(read())
+        await until(lambda: len(events) == 4, "the transcript after turn completion arrives")
+        _core.skip_host_time(5)
+        await until(reader.done, "the bounded drain ends")
+        reader.result()
 
     assert events == [
         (stt.SpeechEventType.INTERIM_TRANSCRIPT, "Greetings."),
         (stt.SpeechEventType.INTERIM_TRANSCRIPT, "Greetings, welcome"),
         (stt.SpeechEventType.FINAL_TRANSCRIPT, "Greetings, welcome to the age of AI."),
+        (stt.SpeechEventType.FINAL_TRANSCRIPT, "A later turn."),
     ]
 
 
@@ -624,3 +646,104 @@ async def test_gemini_stt_input_that_ends_after_its_final_ends_cleanly_at_the_re
         reader.result()
     finals = [e for e in events if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
     assert [e.alternatives[0].text for e in finals] == ["Hello."]
+
+
+async def test_reply_timeouts_do_not_expire_a_newer_generation_future(
+    gemini_live: LivePeer,
+    open_session: Open,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.plugins.reply_timers import capture_reply_timers
+
+    session = open_session()
+    await gemini_live.ready(session, "before-requests")
+    timers = capture_reply_timers(monkeypatch, 5.0)
+    first = session.generate_reply()
+    timers[0].fire()
+    with pytest.raises(llm.RealtimeError, match="timed out"):
+        first.result()
+    second = session.generate_reply()
+    timers[0].fire(stale=True)
+    assert not second.done()
+    await gemini_live.send(
+        serverContent={
+            **gemini_live.AUDIO,
+            "outputTranscription": {"text": "still here"},
+            "turnComplete": True,
+        }
+    )
+    generation = await second
+    assert await gemini_live.drain(generation) == ("still here", 1, [])
+    timers[1].fire(stale=True)
+    assert second.result() is generation
+
+
+async def test_voice_reply_handles_keep_their_own_gemini_responses(gemini_live: LivePeer) -> None:
+    from livekit.agents import Agent, VoiceSession
+    from tests.fakes import FakeAudioOutput
+
+    model = RealtimeModel(api_key="test", http_options=gemini_live.http_options)
+    try:
+        async with VoiceSession(llm=model, vad=None) as session:
+            session.output.audio = FakeAudioOutput()
+            await session.start(Agent(instructions="Be brief."))
+            handles = []
+            for index in range(2):
+                handle = session.generate_reply(instructions=f"request {index}")
+                await gemini_live.wait_sent("clientContent", count=index + 1)
+                await gemini_live.send(
+                    serverContent={
+                        **gemini_live.AUDIO,
+                        "outputTranscription": {"text": f"reply {index}"},
+                        "turnComplete": True,
+                    }
+                )
+                await handle
+                assert handle.exception() is None
+                assert len(handle.chat_items) == 1
+                assert handle.chat_items[0].text_content == f"reply {index}"
+                handles.append(handle)
+            assert handles[0].chat_items[0].id != handles[1].chat_items[0].id
+    finally:
+        await model.aclose()
+
+
+async def test_a_terminal_socket_error_settles_a_pending_reply_and_its_open_streams(
+    gemini_live: LivePeer,
+    open_session: Open,
+) -> None:
+    session = open_session(conn_options=APIConnectOptions(max_retry=0))
+    await gemini_live.ready(session, "ready-for-failure")
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    pending = session.generate_reply()
+    await gemini_live.send(
+        serverContent={**gemini_live.AUDIO, "outputTranscription": {"text": "partial"}}
+    )
+    generation = await pending
+    drained = asyncio.create_task(gemini_live.drain(generation))
+    await gemini_live.sockets[-1].close()
+    try:
+        await until(lambda: errors, "the terminal socket failure is reported")
+        await until(drained.done, "the failed generation's streams end")
+        assert await drained == ("partial", 1, [])
+        assert not errors[-1].recoverable
+    finally:
+        drained.cancel()
+        await asyncio.gather(drained, return_exceptions=True)
+
+
+async def test_a_terminal_socket_error_does_not_leave_generate_reply_waiting(
+    gemini_live: LivePeer,
+    open_session: Open,
+) -> None:
+    session = open_session(conn_options=APIConnectOptions(max_retry=0))
+    await gemini_live.ready(session, "ready-for-pending-failure")
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    pending = session.generate_reply()
+    await gemini_live.sockets[-1].close()
+    await until(lambda: errors, "the failed socket ends")
+    assert pending.done(), "its response can no longer arrive on this socket"
+    with pytest.raises(llm.RealtimeError):
+        pending.result()

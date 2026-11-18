@@ -450,9 +450,15 @@ impl Run {
                 }))
                 .ok()?,
             Input::Recorder { attach } => {
-                api.attach_recorder(
-                    attach.then(|| fakes::FakeRecorder::new(registry.clone()) as _),
-                );
+                let speaker = (self.setup.room_legs.is_some()
+                    && !self.setup.avatar
+                    && !self.setup.background_audio)
+                    .then(|| (self.room.clone(), self.time.clock()));
+                let recorder = attach.then(|| fakes::FakeRecorder::new(registry.clone(), speaker));
+                if let Some(recorder) = &recorder {
+                    self.recorders.push(recorder.clone());
+                }
+                api.attach_recorder(recorder.map(|recorder| recorder as _));
                 return self.loop_runs().then(Pending::default);
             }
             Input::PushVideo {} => {

@@ -349,4 +349,4 @@ class SpeechStream(stt.WebSocketStream[_Message, None]):
                     )
                 )
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)

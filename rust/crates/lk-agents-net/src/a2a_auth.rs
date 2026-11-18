@@ -115,6 +115,7 @@ impl Credentials {
                 "credentials and positive token TTL are required".into(),
             ));
         }
+        crate::token::validate_token_ttl(Duration::from_secs(ttl_seconds)).map_err(unauthorized)?;
         Ok(AccessToken::with_api_key(&self.api_key, &self.api_secret)
             .with_identity(identity)
             .with_ttl(Duration::from_secs(ttl_seconds)))
@@ -235,5 +236,19 @@ mod tests {
         assert_eq!(caller.grant.unwrap().thread_ids, ["AT_1"]);
         assert!(endpoint_caller(Some("not a token"), true, "agent", "prod").is_err());
         assert!(endpoint_caller(None, true, "agent", "prod").unwrap().grant.is_none());
+    }
+}
+
+#[cfg(test)]
+mod lifetime_regressions {
+    use super::*;
+
+    #[test]
+    fn unrepresentable_a2a_token_lifetimes_return_errors_instead_of_panicking() {
+        let credentials = Credentials::new("key".into(), "secret".into());
+        assert!(credentials.project_token("agent".into(), u64::MAX).is_err());
+        assert!(
+            credentials.thread_grant_token(AuthGrant::default(), "agent".into(), u64::MAX).is_err()
+        );
     }
 }

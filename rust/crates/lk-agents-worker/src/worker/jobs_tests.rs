@@ -770,3 +770,58 @@ mod generated_sequences {
         }
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn dropping_a_pending_decision_cancels_the_callback_it_owns() {
+    use lk_agents_net::signal;
+    struct HoldingHost {
+        started: Mutex<Option<signal::Producer<Option<()>>>>,
+        ended: Mutex<Option<signal::Producer<Option<()>>>>,
+    }
+    #[async_trait::async_trait]
+    impl WorkerHost for HoldingHost {
+        async fn on_job_request(&self, _: JobRequest) -> JobDecision {
+            let _ended = self.ended.lock().take().unwrap();
+            self.started.lock().take().unwrap().resolve(());
+            std::future::pending().await
+        }
+        async fn launch_job(&self, _: RunningJobInfo) -> HostResult<JobId> {
+            Err(HostError::new("no launch"))
+        }
+        async fn terminate_job(&self, _: JobId) -> HostResult {
+            Ok(())
+        }
+        async fn user_load(&self) -> Option<HostResult<f32>> {
+            Some(Ok(0.0))
+        }
+    }
+    let mut rig = runtime_rig_with(
+        0,
+        WorkerConfig {
+            devmode: true,
+            load_threshold: EnvOption::Fixed(f32::INFINITY),
+            ..Default::default()
+        },
+    );
+    let (started, running) = signal::once();
+    let (ended, stopped) = signal::once();
+    rig.runtime.host = Arc::new(HoldingHost {
+        started: Mutex::new(Some(started)),
+        ended: Mutex::new(Some(ended)),
+    });
+    let mut outbox = Outbox::new(Duration::from_secs(10), rig.runtime.clock.clone());
+    rig.runtime.on_connecting(&mut outbox);
+    rig.runtime.on_registered(
+        protocol::RegisterWorkerResponse { worker_id: "worker".into(), ..Default::default() },
+        &mut outbox,
+    );
+    rig.runtime.on_server(offer("held"), &mut outbox);
+    running.wait().await.unwrap();
+    let slot = rig.runtime.pending[0].slot;
+    rig.runtime.drop_pending(slot);
+    let ended = tokio::time::timeout(Duration::from_secs(1), stopped.wait())
+        .await
+        .expect("removing the pending decision must end its callback");
+    assert!(ended.is_err(), "cancellation ends the producer without fabricating a decision");
+    assert_eq!(rig.runtime.reserved_slots(), 0);
+}

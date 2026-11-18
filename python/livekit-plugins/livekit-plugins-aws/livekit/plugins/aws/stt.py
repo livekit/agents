@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, replace
-from typing import Annotated, Literal, NotRequired, TypedDict, assert_never
+from typing import Annotated, ClassVar, Literal, NotRequired, TypedDict, assert_never
 from urllib.parse import urlencode
 
 from aiobotocore.session import AioSession
@@ -290,6 +290,7 @@ _JSON = TypeAdapter(dict[str, JsonValue])
 
 
 class SpeechStream(stt.WebSocketStream[_Event, bytes]):
+    completion: ClassVar[stt.Completion] = "peer_closed"
     frame_ms = 50
     # Transcribe fails a stream that received no audio for 15 s: a new one opens before
     audio_idle = 14.0
@@ -367,7 +368,7 @@ class SpeechStream(stt.WebSocketStream[_Event, bytes]):
                 if result["Alternatives"]:
                     self.report(self._transcript(result))
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _transcript(self, result: _Result) -> stt.Transcript:
         alternative = result["Alternatives"][0]

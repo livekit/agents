@@ -39,7 +39,7 @@ import re
 import weakref
 from collections import Counter
 from dataclasses import dataclass, replace
-from typing import Literal, TypedDict, assert_never
+from typing import ClassVar, Literal, TypedDict, assert_never
 from urllib.parse import urlencode
 
 from pydantic import JsonValue, TypeAdapter
@@ -483,6 +483,7 @@ def _apply_updates(
 
 
 class SpeechStream(stt.WebSocketStream[_Message, _Command]):
+    completion: ClassVar[stt.Completion] = "session_finished"
     # 50 ms packets, the cadence the Pulse docs recommend
     frame_ms = 50
     # speech_started and speech_ended come from the server's acoustic VAD; without them each

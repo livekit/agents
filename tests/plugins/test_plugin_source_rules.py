@@ -388,29 +388,17 @@ def _literal_message_fields(package: str) -> Iterator[str]:
 
 
 def _never_over_provider_values(package: str) -> Iterator[str]:
-    """``assert_never`` over anything but a provider message narrowed by its tag (an ``if``
-    ladder testing the tag, a key or the frame's type) or an object of the plugin's own (a
-    ``match`` of class patterns: an input item, an option)."""
-    tags = {
-        key
-        for path, names in _scopes(package).items()
-        for node in names.values()
-        if isinstance(node, ast.ClassDef) and _is_typeddict(package, path, node)
-        for key, (at, field) in _fields(package, path, node).items()
-        if _is_closed(package, at, field.annotation)
-    }
+    """Only exhaust closed internal class unions, never extensible provider messages."""
     for path, tree in _modules(package):
         parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
         for call in ast.walk(tree):
             if not (isinstance(call, ast.Call) and _head(call.func) == "assert_never"):
                 continue
-            if not (call.args and _exhausts_own_type(call, call.args[0], parents, tags)):
+            if not (call.args and _exhausts_own_type(call, parents)):
                 yield f"{path}:{call.lineno}"
 
 
-def _exhausts_own_type(
-    call: ast.Call, subject: ast.expr, parents: dict[ast.AST, ast.AST], tags: set[str]
-) -> bool:
+def _exhausts_own_type(call: ast.Call, parents: dict[ast.AST, ast.AST]) -> bool:
     statement = parents[call]
     container = parents.get(statement)
     if isinstance(container, ast.match_case):
@@ -425,38 +413,7 @@ def _exhausts_own_type(
             or case is container
             for case in match.cases
         )
-    if not (isinstance(container, ast.If) and statement in container.orelse):
-        return False
-    tests: list[ast.expr] = []
-    node: ast.If = container
-    while True:
-        tests.append(node.test)
-        parent = parents.get(node)
-        if not (isinstance(parent, ast.If) and parent.orelse == [node]):
-            break
-        node = parent
-    return all(_tests_tag(test, ast.unparse(subject), tags) for test in tests)
-
-
-def _tests_tag(test: ast.expr, subject: str, tags: set[str]) -> bool:
-    if isinstance(test, ast.BoolOp):
-        return all(_tests_tag(value, subject, tags) for value in test.values)
-    if isinstance(test, ast.Call) and _head(test.func) == "isinstance":
-        return ast.unparse(test.args[0]) == subject
-    if not (isinstance(test, ast.Compare) and len(test.ops) == 1):
-        return False
-    left, right = test.left, test.comparators[0]
-    if isinstance(test.ops[0], ast.In) and isinstance(left, ast.Constant):
-        # a key's presence narrows a union whose members differ in their keys
-        return ast.unparse(right) == subject
-    return (
-        isinstance(test.ops[0], ast.Eq)
-        and isinstance(left, ast.Subscript)
-        and ast.unparse(left.value) == subject
-        and isinstance(left.slice, ast.Constant)
-        and left.slice.value in tags
-        and isinstance(right, ast.Constant)
-    )
+    return False
 
 
 PACKAGE_RULES: dict[str, Callable[[str], Iterator[str]]] = {

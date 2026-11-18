@@ -3,6 +3,35 @@ use lk_agents_voice::agent_session::Now;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// A session's wall stamps follow the same elapsed time as its audio. Corrections to the
+/// source's OS wall clock cannot move transcripts or flushes relative to already recorded PCM.
+struct SessionClock {
+    source: Arc<dyn Clock>,
+    origin: (Ts, std::time::SystemTime),
+}
+
+impl SessionClock {
+    fn anchored(source: Arc<dyn Clock>) -> Arc<dyn Clock> {
+        let origin = (source.now(), source.wall());
+        Arc::new(Self { source, origin })
+    }
+}
+
+impl Clock for SessionClock {
+    fn now(&self) -> Ts {
+        self.source.now()
+    }
+
+    fn wall(&self) -> std::time::SystemTime {
+        let (at, wall) = self.origin;
+        wall.checked_add(self.now().saturating_duration_since(at)).unwrap_or(wall)
+    }
+
+    fn wait_until(&self, at: Ts) -> lk_agents_abi::BoxFuture<'_, ()> {
+        self.source.wait_until(at)
+    }
+}
+
 /// A clock plus the only legal way to wait on it. Cheap to clone; `FakeRtc` shares the same
 /// [`Clock`] so its playout model and the driver's timers cannot drift.
 #[derive(Clone)]
@@ -14,12 +43,12 @@ pub struct Timebase {
 
 impl Timebase {
     pub fn of_clock(clock: Arc<dyn Clock>) -> Self {
-        Timebase { clock, virt: None }
+        Timebase { clock: SessionClock::anchored(clock), virt: None }
     }
 
     /// Shares an existing clock so the playout model and the driver agree.
     pub fn from_virtual(clock: Arc<VirtualClock>) -> Self {
-        Timebase { clock: clock.clone(), virt: Some(clock) }
+        Timebase { clock: SessionClock::anchored(clock.clone()), virt: Some(clock) }
     }
 
     pub fn virtual_clock(&self) -> Option<Arc<VirtualClock>> {
@@ -84,3 +113,7 @@ impl std::fmt::Debug for Timebase {
             .finish()
     }
 }
+
+#[cfg(test)]
+#[path = "time_tests.rs"]
+mod tests;

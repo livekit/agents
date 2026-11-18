@@ -29,20 +29,23 @@ use lk_agents_abi::storage::agentdb_error::ErrorCode;
 // big frames does not spend its answer's wait being written. A dropped socket is redialed only
 // while a request waits for it, so the redial lives exactly as long as a caller's deadline; those
 // in flight fail `Disconnected` (outcome unknown). The server ends a socket with a notice on
-// request id 0, as HTTP/2's GOAWAY does: `wrong_shard_server` (the database moved or is draining:
-// redialed at once) or `idle_evicted` (redialed when next needed).
-// The server answered every request it read before its notice, so each one still unanswered
-// applied nothing: like gRPC's transparent retry, it is sent again on the next socket within its
-// deadline, and its caller sees only the answer. A request answered `wrong_shard_server` applied
-// nothing either: it is sent again the same way, while its socket retires: it takes no request
-// more, a new socket is dialed at once for the next ones, and the retiring one ends once the
-// requests still in flight on it are answered. Any other frame on request id 0 is a protocol error
-// that ends the socket. A frame the socket fails to send is not sent. Socket-less, the connection
-// is dormant, which no pool takes back. The read loop never waits on a caller: each request's
-// answers queue in a channel sized for every answer its window allows, and a request whose
-// answers overrun it is cancelled. Outgoing frames queue for the socket's writer, which sends them
-// in order; a request's caller waits until its own frame is sent, a credit or cancel is queued and
-// forgotten.
+// request id 0, as HTTP/2's GOAWAY does, having answered every request it read before it, so each
+// one still unanswered applied nothing:
+// - `wrong_shard_server`: the database moved or is draining; redialed at once.
+// - `idle_evicted`: redialed when next needed.
+// - `not_found`: the database was deleted; final. Each request unanswered there fails with it, as
+//   does every later call, and the connection closes without a redial.
+// After the first two, like gRPC's transparent retry, each unanswered request is sent again on the
+// next socket within its deadline, and its caller sees only the answer. A request answered
+// `wrong_shard_server` applied nothing either: it is sent again the same way, while its socket
+// retires: it takes no request more, a new socket is dialed at once for the next ones, and the
+// retiring one ends once the requests still in flight on it are answered. Any other frame on
+// request id 0 is a protocol error that ends the socket. A frame the socket fails to send is not
+// sent. Socket-less, the connection is dormant, which no pool takes back. The read loop never
+// waits on a caller: each request's answers queue in a channel sized for every answer its window
+// allows, and a request whose answers overrun it is cancelled. Outgoing frames queue for the
+// socket's writer, which sends them in order; a request's caller waits until its own frame is
+// sent, a credit or cancel is queued and forgotten.
 
 type WsRead = futures_util::stream::SplitStream<RawWebSocket>;
 type WsSink = futures_util::stream::SplitSink<RawWebSocket, Message>;
@@ -124,9 +127,13 @@ pub const MAX_FRAME: usize = 16 << 20;
 /// What this client names itself in `Hello`.
 const CLIENT_VERSION: &str = concat!("lk-agents/", env!("CARGO_PKG_VERSION"));
 
-/// The codes the server ends a socket with, on request id 0.
+/// The codes the server ends a socket with, on request id 0. Each leaves every unanswered
+/// request unapplied: it is sent again on the next socket, where a deleted database's `Hello`
+/// answers `NOT_FOUND`, final.
 fn is_notice(code: ErrorCode) -> bool {
-    code == ErrorCode::IDLE_EVICTED || code == ErrorCode::WRONG_SHARD_SERVER
+    code == ErrorCode::IDLE_EVICTED
+        || code == ErrorCode::WRONG_SHARD_SERVER
+        || code == ErrorCode::NOT_FOUND
 }
 
 /// A frame for the socket writer, and who learns that the socket took all of it.
@@ -142,22 +149,17 @@ type Writer = mpsc::UnboundedSender<Outgoing>;
 /// The read deadline past a missed pong, when the server names no ping timeout.
 const DEFAULT_PING_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Reconnection, on by default: a node draining or an idle database evicted severs the socket.
-/// Redials back off while requests wait; none waiting, nothing redials.
+/// Reconnection: a node draining or an idle database evicted severs the socket, the ordinary
+/// path rather than an error. Redials back off while requests wait; none waiting, nothing redials.
 #[derive(Debug, Clone)]
 pub struct Reconnect {
-    pub disable: bool,
     pub min_backoff: Duration,
     pub max_backoff: Duration,
 }
 
 impl Default for Reconnect {
     fn default() -> Self {
-        Self {
-            disable: false,
-            min_backoff: Duration::from_millis(100),
-            max_backoff: Duration::from_secs(5),
-        }
+        Self { min_backoff: Duration::from_millis(100), max_backoff: Duration::from_secs(5) }
     }
 }
 
@@ -381,9 +383,8 @@ impl Supervisor {
                 return;
             }
             self.ready.set(false);
-            let (disable, generation) = (conn.0.opts.reconnect.disable, socket.generation);
+            let generation = socket.generation;
             let cause = match end {
-                End::Retiring if disable => return conn.unguarded().finish(socket).await,
                 End::Retiring => {
                     let retiring = conn.unguarded().finish(socket);
                     let spawner = &*conn.0.spawner;
@@ -406,9 +407,6 @@ impl Supervisor {
                 None => true,
                 Some(cause) => {
                     conn.ended(generation, Some(&cause));
-                    if disable {
-                        return;
-                    }
                     cause.notice() == Some(ErrorCode::WRONG_SHARD_SERVER)
                 }
             };
@@ -690,7 +688,7 @@ impl Conn {
     }
 
     /// Hands a response to the request awaiting it on this socket, never waiting on its caller;
-    /// a pong only proves the socket is alive. The server's drain notice ends the socket, as any
+    /// a pong only proves the socket is alive. The server's notice ends the socket, as any
     /// other frame on request id 0 does; a request answered `wrong_shard_server` alone is drained,
     /// and the socket retires. The live socket's gate closes first, so a request registering
     /// meanwhile waits for the next socket.
@@ -708,8 +706,12 @@ impl Conn {
                 if let Some(ready) = ready {
                     ready.set(false);
                 }
-                self.drain(generation, None);
-                Err(WsdbError::server(e.clone()))
+                let notice = WsdbError::server(e.clone());
+                match ErrorCode(e.code) {
+                    ErrorCode::NOT_FOUND => self.gone(generation, &resp, &notice),
+                    _ => self.drain(generation, None),
+                }
+                Err(notice)
             }
             (message, 0) => {
                 Err(WsdbError::Protocol(format!("unexpected frame on request id 0: {message:?}")))
@@ -774,6 +776,23 @@ impl Conn {
             p.answers.try_send(Answer::Drained).is_ok()
         });
         self.settle(&mut st, generation);
+    }
+
+    /// The server's `not_found` notice on socket `generation`: the database was deleted. Each
+    /// request still unanswered there applied nothing and fails with the notice; every later call
+    /// fails with it too, and the connection closes without a redial.
+    fn gone(&self, generation: u64, frame: &pb::ServerMessage, notice: &WsdbError) {
+        {
+            let mut st = self.0.state.lock();
+            st.fatal = Some(notice.clone());
+            for pending in st.pending.values().filter(|p| p.socket == Some(generation)) {
+                if pending.answers.try_send(Answer::Frame(frame.clone())).is_err() {
+                    log::trace!(target: lk_agents_abi::LOG_TARGET, "agentdb request dropped meanwhile");
+                }
+            }
+        }
+        log::info!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb database deleted: connection closed");
+        self.close();
     }
 
     /// A retiring socket with nothing in flight on it is settled: its read ends.

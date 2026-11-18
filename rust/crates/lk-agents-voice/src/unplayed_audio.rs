@@ -19,10 +19,11 @@ pub struct UnplayedAudio {
 #[derive(Debug, Clone, Copy)]
 struct Joined {
     base: Duration,
-    /// Started before the join with no report yet: `(started, joined at)`. A sink that finishes it
+    joined_at: Ts,
+    /// Started before the join with no report yet. A sink that finishes it
     /// still unreported never reports, so its endpoints place it, and the part before the join is
     /// not the recording's.
-    unreported: Option<(Ts, Ts)>,
+    unreported: Option<Ts>,
 }
 
 #[derive(Debug)]
@@ -114,12 +115,12 @@ impl UnplayedAudio {
             // and its reports carry the segment's own offsets.
             let base = unplayed.heard.unwrap_or_default().min(captured);
             let unreported = match (unplayed.heard, unplayed.started) {
-                (None, Some(started)) => Some((started, now)),
+                (None, Some(started)) => Some(started),
                 _ => None,
             };
-            self.joined.insert(unplayed.segment, Joined { base, unreported });
+            self.joined.insert(unplayed.segment, Joined { base, joined_at: now, unreported });
             if let Some(started) = unplayed.started {
-                replay.push(Replay::Started(started.saturating_add(base)));
+                replay.push(Replay::Started(started.saturating_add(base).max(now)));
             }
             let mut skip = base;
             for frame in &unplayed.frames {
@@ -143,20 +144,27 @@ impl UnplayedAudio {
             PlaybackEvent::Progressed(e) => e.segment,
             PlaybackEvent::Finished { segment, .. } => *segment,
         };
-        let Some(&Joined { base, unreported }) = self.joined.get(&segment) else {
+        let Some(&Joined { base, joined_at, unreported }) = self.joined.get(&segment) else {
             return vec![ev.clone()];
         };
         match ev {
             PlaybackEvent::Started(e) => {
                 let mut e = *e;
-                e.created_at = e.created_at.saturating_add(base);
+                e.created_at = e.created_at.saturating_add(base).max(joined_at);
                 vec![PlaybackEvent::Started(e)]
             }
             PlaybackEvent::Progressed(e) => {
                 if e.offset + e.duration <= base {
                     return Vec::new();
                 }
-                let skip = base.saturating_sub(e.offset);
+                // A report may arrive after the join for audio that played before it. Keep
+                // that audio buffered until confirmed, then discard only the confirmed prefix.
+                let skip = base
+                    .saturating_sub(e.offset)
+                    .max(joined_at.saturating_duration_since(e.started_at));
+                if skip >= e.duration {
+                    return Vec::new();
+                }
                 let mut e = *e;
                 e.started_at = e.started_at.saturating_add(skip);
                 e.offset = e.offset + skip - base;
@@ -168,7 +176,7 @@ impl UnplayedAudio {
                 event.playback_position = event.playback_position.saturating_sub(base);
                 let position = event.playback_position;
                 let finished = PlaybackEvent::Finished { segment: *segment, event };
-                let Some((started, joined_at)) = unreported else { return vec![finished] };
+                let Some(started) = unreported else { return vec![finished] };
                 // Played from its start to its position: only what played after the join is placed.
                 let before = joined_at.saturating_duration_since(started).min(position);
                 let after = PlaybackEvent::Progressed(PlaybackProgressed {

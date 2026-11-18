@@ -16,6 +16,8 @@ pub const VOICE: Boundary = Boundary {
         "voice decision core (agent_session::VoiceDriver), stepped by the runtime's real loop \
          (lk_agents_runtime::voice::VoiceRuntime::serve, then ::close with its task drain) per event \
          the deterministic harness delivers to its queue, with effects performed against fake ports",
+        "inference realtime decision core (lk_agents_inference::realtime::RealtimeMachine), \
+         stepped with typed commands, provider events and virtual deadlines against the simulated server",
         "voice data plane (data_plane forwarder), stepped by the real runtime per microphone frame",
         "the runtime's room and avatar executors (lk_agents_runtime::room_io, ::avatar, ::rtc) \
          over FakeRoom, on the run's injected scheduler and clock",
@@ -31,9 +33,9 @@ pub const VOICE: Boundary = Boundary {
         "fakes::nodes",
         "fakes::output",
         "fakes::avatar (generator/media/RTC ports under the real runtime runner and stream executors)",
-        "fakes::realtime (a realtime model at the Realtime port: the server model drawn from \
-         measured timings, its happenings as the port's events, a fallback setup's swap as one; no \
-         session or fallback logic); fakes::realtime::duplex (a duplex model's events at \
+        "fakes::realtime (independent provider behavior drawn from measured timings; typed \
+         Incoming/Outgoing cross the production inference machine; connection availability and \
+         fallback swaps are simulated); fakes::realtime::duplex (a duplex model's events at \
          the Realtime boundary, as its adapter's segmenter makes them)",
         "fakes::room (the LiveKit SDK room in memory, on the run's clock)",
         "fakes::storage (the voice partition_key's thread database connection: storage's in-memory \
@@ -45,9 +47,8 @@ pub const VOICE: Boundary = Boundary {
          on the injected scheduler and clock; the task bridge samples their execution turns",
     ],
     outside: &[
-        "inference's realtime session (machine, pump, wire codec) and fallback adapter \
-         (lk_agents_inference::realtime; its own tests over the simulated OpenAI Realtime server, \
-         the fakes mirror their outcomes)",
+        "inference's realtime async pump, wire codec, connection retry executor and fallback \
+         adapter (their inference tests exercise them separately)",
         "native provider HTTP/WebSocket clients (F-18 real-peer tests)",
         "real LiveKit rooms through the rtc SDK (H-13, K-18)",
         "Python host bindings, lk-agents-py (B-19 conformance)",

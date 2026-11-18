@@ -372,7 +372,7 @@ async def test_socket_closed_mid_synthesis_raises_its_close_code() -> None:
             with pytest.raises(APIConnectionError) as error:
                 await collect(stream)
         await provider.aclose()
-        await until(closed.is_set, "the controlled peer finishes closing its synthesis socket")
+        await until(closed.is_set, "the peer finishes its close handshake")
 
     # a close code is not an HTTP status
     assert not isinstance(error.value, APIStatusError)

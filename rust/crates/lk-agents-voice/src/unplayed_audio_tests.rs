@@ -47,7 +47,7 @@ fn a_joined_segment_replays_from_its_reported_position() {
     let [Replay::Started(started), Replay::Capture(rest)] = replay.as_slice() else {
         panic!("{replay:?}")
     };
-    assert_eq!(*started, at(1_350));
+    assert_eq!(*started, at(1_400));
     assert_eq!(rest.samples_per_channel, 150);
     // The next report is told from where the recorder joined.
     let told = audio.told(&progressed(1_400, 350, 100));
@@ -78,7 +78,7 @@ fn a_sink_that_never_reports_is_placed_from_the_join() {
     };
     assert_eq!(
         (*started, first.samples_per_channel, second.samples_per_channel),
-        (at(1_000), 300, 200)
+        (at(1_100), 300, 200)
     );
     // Its finish says it played from its start: what played after the join is placed there.
     assert_eq!(audio.told(&finished(500)), vec![progressed(1_100, 100, 400), finished(500)]);
@@ -149,8 +149,19 @@ fn a_reporting_sink_with_no_report_yet_has_played_nothing() {
     };
     assert_eq!(
         (*started, first.samples_per_channel, second.samples_per_channel),
-        (at(1_000), 300, 200)
+        (at(30_000), 300, 200)
     );
     // its first report is told as it came: the recorder places the audio where it played
     assert_eq!(audio.told(&progressed(30_100, 0, 100)), vec![progressed(30_100, 0, 100)]);
+}
+
+#[test]
+fn a_delayed_progress_report_discards_only_audio_confirmed_before_the_join() {
+    let mut audio = playing(Some(100));
+    audio.join(at(1_175));
+    // The recorder kept the unconfirmed audio rather than guessing it played. This report
+    // confirms 75 ms before the join and 25 ms after it, at the segment's original offsets.
+    assert_eq!(audio.told(&progressed(1_100, 100, 100)), vec![progressed(1_175, 75, 25)]);
+    // A report entirely before attachment must not enter the recording.
+    assert!(audio.told(&progressed(1_000, 0, 150)).is_empty());
 }

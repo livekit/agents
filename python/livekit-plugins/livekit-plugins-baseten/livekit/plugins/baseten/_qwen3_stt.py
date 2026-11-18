@@ -284,8 +284,13 @@ class Qwen3SpeechStream(
         # `end_input()` flushes *and then* ends the input: a commit right before the end makes
         # the end's own commit a duplicate, which the server answers with an extra, empty turn
         self._committed = False
+        self._pending_commits = 0
+        self._audio_ended = False
 
     async def connect(self, conn_options: APIConnectOptions) -> stt_module.WebSocketTarget:
+        self._committed = False
+        self._pending_commits = 0
+        self._audio_ended = False
         return stt_module.WebSocketTarget(
             self._model_endpoint, headers={"Authorization": f"Api-Key {self._api_key}"}
         )
@@ -296,6 +301,8 @@ class Qwen3SpeechStream(
     def encode(
         self, item: rtc.AudioFrame | stt_module.Flush | stt_module.EndOfAudio
     ) -> _Append | _Commit | None:
+        if isinstance(item, stt_module.EndOfAudio):
+            self._audio_ended = True
         match item:
             case rtc.AudioFrame():
                 self._committed = False
@@ -306,6 +313,7 @@ class Qwen3SpeechStream(
                 return None
             case stt_module.Flush() | stt_module.EndOfAudio():
                 self._committed = True
+                self._pending_commits += 1
                 return _Commit(type="input_audio_buffer.commit")
             case _:
                 assert_never(item)
@@ -331,8 +339,13 @@ class Qwen3SpeechStream(
             self.report(self._transcript(message, text, final=is_final))
         # Only the commit-triggered final ends the session; VAD finals just close a turn and
         # the stream keeps going.
-        if is_final and message.get("is_end_of_audio_flush", False) and self.input.closed:
-            self.report(stt_module.SessionFinished())
+        if is_final and message.get("is_end_of_audio_flush", False):
+            self._pending_commits = max(0, self._pending_commits - 1)
+            if self._audio_ended and self._pending_commits == 0:
+                self.report(stt_module.SessionFinished())
+
+    def nothing_pending(self) -> bool:
+        return self._pending_commits == 0 and super().nothing_pending()
 
     def _transcript(
         self, event: TranscriptResponse, text: str, *, final: bool

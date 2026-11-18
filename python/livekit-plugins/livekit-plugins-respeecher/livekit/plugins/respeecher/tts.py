@@ -382,7 +382,7 @@ class SynthesizeStream(tts.WebSocketStream[_Message, _Speak]):
         elif message["type"] == "error":
             raise _error(message)
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
 
     def _speak(self, context_id: str, transcript: str, *, more: bool) -> _Speak:
         return {

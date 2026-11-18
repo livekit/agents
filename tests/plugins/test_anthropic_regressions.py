@@ -417,3 +417,41 @@ async def test_a_tool_call_without_arguments_carries_an_empty_object() -> None:
     assert call.arguments == "{}"
     replayed = [b for m in sent[1]["messages"] for b in m["content"] if b["type"] == "tool_use"]
     assert replayed[0]["input"] == {}
+
+
+async def test_foreign_block_deltas_and_stops_cannot_consume_an_active_tool_call() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        response = _response([{"type": "tool_use", "id": "call_1", "name": "ring", "input": {}}])
+        extra: list[Wire] = [
+            {"type": "provider_future_event", "metadata": {"new": True}},
+            {
+                "type": "content_block_delta",
+                "index": 9,
+                "delta": {"type": "input_json_delta", "partial_json": "foreign"},
+            },
+            {"type": "content_block_stop", "index": 9},
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"number": 3}'},
+            },
+        ]
+        injected = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in extra)
+        body = response.text.replace(
+            "event: content_block_stop\n", injected + "event: content_block_stop\n"
+        )
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+    async with anthropic.AsyncClient(
+        api_key="test", http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    ) as client:
+        model = LLM(client=client)
+        try:
+            result = await model.chat(
+                chat_ctx=_context(), conn_options=APIConnectOptions(max_retry=0)
+            ).collect()
+        finally:
+            await model.aclose()
+    assert [(t.call_id, t.name, t.arguments) for t in result.tool_calls] == [
+        ("call_1", "ring", '{"number": 3}')
+    ]

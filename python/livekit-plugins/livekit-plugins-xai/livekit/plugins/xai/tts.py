@@ -282,4 +282,4 @@ class SynthesizeStream(tts.WebSocketStream[_Message, _TextDelta | _TextDone]):
                 "xAI TTS error", kind="invalid_request", body=message, detail=message.get("message")
             )
         else:
-            assert_never(message)
+            self._skip_unknown_message(message)
