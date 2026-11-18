@@ -69,6 +69,16 @@ pub struct Question {
     pub verbatim: bool,
 }
 
+/// A delegation's result, resolving its originating call.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Resolution {
+    pub output_id: String,
+    pub outcome: ToolOutcome,
+}
+
+/// The most questions one prompt asks. Five waiting questions are not one five-part utterance.
+const MAX_ASKED_TOGETHER: usize = 3;
+
 /// One presentation opportunity, chosen when the floor permits.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Presentation {
@@ -79,8 +89,9 @@ pub enum Presentation {
     /// Questions asked together; each remains its own request. A verbatim question is asked
     /// alone, word for word.
     Questions(Vec<Question>),
-    /// The originating call's result.
-    Outcome { output_id: String, outcome: ToolOutcome },
+    /// Results ready together, presented in one reply; each resolves its own originating call.
+    /// A verbatim result is presented alone, like exact output.
+    Outcomes(Vec<Resolution>),
 }
 
 /// The pending input request a person's reply is collected for.
@@ -122,6 +133,10 @@ enum ExpertInboxEvent {
         request_id: String,
         question: String,
         verbatim: bool,
+        /// Back in line after the person passed it, at this prompt count: it is not asked
+        /// again until another prompt was asked, and only this once.
+        #[serde(default)]
+        passed: Option<u64>,
     },
     Outcome(ToolOutcome),
 }
@@ -140,6 +155,15 @@ struct Asked {
     /// Unheard, or the active agent lost this tool or a task took the interaction. Re-offering
     /// the prompt does not invalidate its earlier native delivery or a recognized response.
     suspended: bool,
+    /// The person's turn count when it was asked: until they speak, the next prompt waits.
+    #[serde(default)]
+    turn: u64,
+    /// The person took a turn without answering it. It stays open for a later answer.
+    #[serde(default)]
+    passed: bool,
+    /// Asked again after a pass: passing it again leaves it open without asking a third time.
+    #[serde(default)]
+    repeated: bool,
 }
 
 /// The queue's records: serializable delegation references, queued events in order, and the
@@ -152,6 +176,15 @@ pub struct Experts {
     queue: VecDeque<Queued>,
     /// Questions presented and still waiting, by delegation: several can be open at once.
     asked: BTreeMap<String, Asked>,
+    /// The person's turns so far.
+    #[serde(default)]
+    turns: u64,
+    /// Question prompts presented so far.
+    #[serde(default)]
+    prompts: u64,
+    /// Progress announcements scheduled and not ended, by speech.
+    #[serde(skip)]
+    announcing: BTreeMap<SpeechId, Vec<Update>>,
     /// Live output receipts have no meaning after a call ends; communication owns recovery.
     #[serde(skip)]
     presentations: BTreeMap<SpeechId, Vec<PendingRequest>>,
@@ -259,8 +292,12 @@ impl Experts {
         d.requests.insert(request_id.to_owned(), input_request);
         d.waiting = Some(request_id.to_owned());
         self.withdraw(output_id);
-        let event =
-            ExpertInboxEvent::Question { request_id: request_id.into(), question, verbatim };
+        let event = ExpertInboxEvent::Question {
+            request_id: request_id.into(),
+            question,
+            verbatim,
+            passed: None,
+        };
         self.queue.push_back(Queued { output_id: output_id.into(), event });
         true
     }
@@ -326,34 +363,63 @@ impl Experts {
         }
     }
 
-    /// The next presentation among events the active agent's tools reach. Questions come first
-    /// when a suspended one is reachable again or one leads the queue: every reachable unheard
-    /// question is asked together, so several tasks' questions are open at once and the
-    /// person's reply can be matched against all of them. Otherwise the next event in arrival
-    /// order; progress takes every reachable delegation's latest update with it.
+    /// The person took a turn: whatever was asked before it has had its chance.
+    pub fn person_turn(&mut self) {
+        self.turns += 1;
+    }
+
+    /// The next presentation among events the active agent's tools reach.
+    ///
+    /// Pacing: a prompt asks the line's first question with the other waiting questions of the
+    /// same expert (related work), at most `MAX_ASKED_TOGETHER`; other experts' questions wait
+    /// for later prompts. After a prompt is heard, until the person's next turn only a late
+    /// question of an expert already asking may follow, up to that same limit; other questions
+    /// and routine progress wait, results and exact output do not. Questions come first when a
+    /// suspended one is reachable again or one leads the queue.
+    ///
+    /// Fairness: waiting questions are asked in arrival order, so a newer task never overtakes
+    /// an older one. A question the person passed (a turn without answering it) stays open and
+    /// goes back in line behind the questions already waiting; it is asked once more only after
+    /// another prompt, never in the prompt right after it was passed.
+    ///
+    /// Otherwise the next event in arrival order: progress takes every reachable delegation's
+    /// latest update with it, and a result takes every other result ready before the next
+    /// ordered output.
     pub fn next(&mut self, floor: Floor<'_>) -> Option<Presentation> {
         self.observe(floor);
         if !floor.free {
             return None;
         }
+        self.pass();
+        let awaiting = self.awaiting_person();
         let reaches = |output_id: &str| floor.reaches(&self.delegations[output_id].tool);
         let eligible = |q: &Queued| {
             reaches(&q.output_id)
-                && match q.event {
+                && match &q.event {
                     ExpertInboxEvent::Outcome(_) | ExpertInboxEvent::Exact { .. } => {
                         self.delegations[&q.output_id].recorded
                     }
-                    ExpertInboxEvent::Question { .. } | ExpertInboxEvent::Progress(_) => true,
+                    ExpertInboxEvent::Question { passed, .. } => {
+                        self.due(*passed) && Self::room(&awaiting, self.expert(&q.output_id)) > 0
+                    }
+                    ExpertInboxEvent::Progress(_) => awaiting.is_empty(),
                 }
         };
-        let reoffer = self.asked.iter().any(|(id, asked)| asked.suspended && reaches(id));
+        let reoffer = awaiting.is_empty()
+            && self.asked.iter().any(|(id, asked)| asked.suspended && reaches(id));
         let at = self.queue.iter().position(eligible);
         let leads =
             at.is_some_and(|at| matches!(self.queue[at].event, ExpertInboxEvent::Question { .. }));
         if reoffer || leads {
-            return Some(Presentation::Questions(self.take_questions(floor)));
+            return Some(Presentation::Questions(self.take_questions(floor, &awaiting)));
         }
-        let Queued { output_id, event } = self.queue.remove(at?)?;
+        let at = at?;
+        if matches!(&self.queue[at].event,
+            ExpertInboxEvent::Outcome(outcome) if !Self::exact_outcome(outcome))
+        {
+            return Some(Presentation::Outcomes(self.take_outcomes(floor)));
+        }
+        let Queued { output_id, event } = self.queue.remove(at)?;
         Some(match event {
             ExpertInboxEvent::Progress(text) => {
                 let mut updates = vec![Update { output_id, text }];
@@ -362,40 +428,122 @@ impl Experts {
             }
             ExpertInboxEvent::Exact { text, call } => Presentation::Exact { output_id, text, call },
             ExpertInboxEvent::Question { .. } => unreachable!("a leading question is taken above"),
-            ExpertInboxEvent::Outcome(outcome) => Presentation::Outcome { output_id, outcome },
+            ExpertInboxEvent::Outcome(outcome) => {
+                Presentation::Outcomes(vec![Resolution { output_id, outcome }])
+            }
         })
     }
 
-    /// Reachable suspended questions, then queued ones in arrival order. A delegation has one
-    /// live question, so each source appears once.
-    fn take_questions(&mut self, floor: Floor<'_>) -> Vec<Question> {
+    /// Heard questions the person has not had a turn to answer yet, counted by expert.
+    fn awaiting_person(&self) -> BTreeMap<ExpertKey, usize> {
+        let mut awaiting = BTreeMap::new();
+        for (output_id, asked) in &self.asked {
+            if !asked.suspended && asked.turn == self.turns {
+                *awaiting.entry(self.expert(output_id).clone()).or_default() += 1;
+            }
+        }
+        awaiting
+    }
+
+    fn expert(&self, output_id: &str) -> &ExpertKey {
+        &self.delegations[output_id].tool.key
+    }
+
+    /// How many more of `expert`'s questions the current prompt can still take.
+    fn room(awaiting: &BTreeMap<ExpertKey, usize>, expert: &ExpertKey) -> usize {
+        match awaiting.get(expert) {
+            Some(asked) => MAX_ASKED_TOGETHER.saturating_sub(*asked),
+            None if awaiting.is_empty() => MAX_ASKED_TOGETHER,
+            None => 0,
+        }
+    }
+
+    /// A passed question is due again once another prompt was asked after its pass.
+    fn due(&self, passed: Option<u64>) -> bool {
+        passed.is_none_or(|at| self.prompts > at)
+    }
+
+    /// A verbatim result keeps its own delivery, like exact output.
+    fn exact_outcome(outcome: &ToolOutcome) -> bool {
+        lk_agents_core::tool_outcome::verbatim(outcome).is_some()
+    }
+
+    /// Heard questions the person's turn left unanswered release their place: each stays open
+    /// and, the first time, goes back in line behind the questions already waiting.
+    fn pass(&mut self) {
+        for (output_id, asked) in &mut self.asked {
+            if asked.suspended || asked.passed || asked.turn == self.turns {
+                continue;
+            }
+            asked.passed = true;
+            if asked.repeated {
+                continue;
+            }
+            let event = ExpertInboxEvent::Question {
+                request_id: asked.request_id.clone(),
+                question: asked.question.clone(),
+                verbatim: asked.verbatim,
+                passed: Some(self.prompts),
+            };
+            self.queue.push_back(Queued { output_id: output_id.clone(), event });
+        }
+    }
+
+    /// One prompt: reachable suspended questions, then due queued ones in arrival order. The
+    /// first leads; the others of its expert join it. A verbatim question is asked alone.
+    fn take_questions(
+        &mut self,
+        floor: Floor<'_>,
+        awaiting: &BTreeMap<ExpertKey, usize>,
+    ) -> Vec<Question> {
         let reaches = |output_id: &str| floor.reaches(&self.delegations[output_id].tool);
         let suspended =
             self.asked.iter().filter(|(id, a)| a.suspended && reaches(id)).map(|(output_id, a)| {
-                Question {
+                let question = Question {
                     output_id: output_id.clone(),
                     request_id: a.request_id.clone(),
                     question: a.question.clone(),
                     verbatim: a.verbatim,
-                }
+                };
+                (question, a.repeated)
             });
         let queued = self.queue.iter().filter(|q| reaches(&q.output_id)).filter_map(|q| {
-            let ExpertInboxEvent::Question { request_id, question, verbatim } = &q.event else {
+            let ExpertInboxEvent::Question { request_id, question, verbatim, passed } = &q.event
+            else {
                 return None;
             };
-            Some(Question {
+            let question = Question {
                 output_id: q.output_id.clone(),
                 request_id: request_id.clone(),
                 question: question.clone(),
                 verbatim: *verbatim,
-            })
+            };
+            self.due(*passed).then_some((question, passed.is_some()))
         });
-        let candidates: Vec<_> = suspended.chain(queued).collect();
-        let questions: Vec<_> = match candidates.first() {
-            Some(first) if first.verbatim => vec![first.clone()],
-            _ => candidates.into_iter().filter(|q| !q.verbatim).collect(),
+        let mut sources = BTreeSet::new();
+        let candidates: Vec<_> = suspended
+            .chain(queued)
+            .filter(|(q, _)| awaiting.is_empty() || !q.verbatim)
+            .filter(|(q, _)| Self::room(awaiting, self.expert(&q.output_id)) > 0)
+            .filter(|(q, _)| sources.insert(q.output_id.clone()))
+            .collect();
+        let Some((first, _)) = candidates.first() else {
+            return Vec::new();
         };
-        for q in &questions {
+        let expert = self.expert(&first.output_id);
+        let chosen: Vec<_> = if first.verbatim {
+            candidates.into_iter().take(1).collect()
+        } else {
+            let room = Self::room(awaiting, expert);
+            candidates
+                .into_iter()
+                .filter(|(q, _)| !q.verbatim && self.expert(&q.output_id) == expert)
+                .take(room)
+                .collect()
+        };
+        self.prompts += 1;
+        let mut questions = Vec::with_capacity(chosen.len());
+        for (q, repeated) in chosen {
             self.queue.retain(|queued| {
                 queued.output_id != q.output_id
                     || !matches!(queued.event, ExpertInboxEvent::Question { .. })
@@ -405,10 +553,39 @@ impl Experts {
                 question: q.question.clone(),
                 verbatim: q.verbatim,
                 suspended: false,
+                turn: self.turns,
+                passed: false,
+                repeated,
             };
             self.asked.insert(q.output_id.clone(), asked);
+            questions.push(q);
         }
         questions
+    }
+
+    /// Every presentable result up to the next ordered output (exact text or a verbatim
+    /// result), which keeps its place.
+    fn take_outcomes(&mut self, floor: Floor<'_>) -> Vec<Resolution> {
+        let mut taken = Vec::new();
+        let mut ordered = false;
+        let mut rest = VecDeque::new();
+        for queued in self.queue.drain(..) {
+            let ready = !ordered
+                && floor.reaches(&self.delegations[&queued.output_id].tool)
+                && self.delegations[&queued.output_id].recorded;
+            match queued.event {
+                ExpertInboxEvent::Outcome(outcome) if ready && !Self::exact_outcome(&outcome) => {
+                    taken.push(Resolution { output_id: queued.output_id, outcome });
+                }
+                ExpertInboxEvent::Outcome(_) | ExpertInboxEvent::Exact { .. } if ready => {
+                    ordered = true;
+                    rest.push_back(queued);
+                }
+                _ => rest.push_back(queued),
+            }
+        }
+        self.queue = rest;
+        taken
     }
 
     /// Queued progress of other reachable delegations, unless it waits behind that
@@ -433,6 +610,37 @@ impl Experts {
         }
         self.queue = rest;
         updates
+    }
+
+    /// A progress announcement was scheduled as `speech`.
+    pub fn announcing(&mut self, speech: SpeechId, updates: Vec<Update>) {
+        self.announcing.insert(speech, updates);
+    }
+
+    /// Scheduled announcements that carry progress of `output_id`, which a newer question or
+    /// result of that delegation has made stale.
+    pub fn overtaken(&self, output_id: &str) -> Vec<SpeechId> {
+        self.announcing
+            .iter()
+            .filter(|(_, updates)| updates.iter().any(|u| u.output_id == output_id))
+            .map(|(speech, _)| *speech)
+            .collect()
+    }
+
+    /// A stale announcement is withdrawn before it was heard. Its other delegations' updates
+    /// go back in line unless something newer of theirs is queued or they no longer run.
+    pub fn withdraw_announcement(&mut self, speech: SpeechId) {
+        for update in self.announcing.remove(&speech).unwrap_or_default() {
+            let live = self
+                .delegations
+                .get(&update.output_id)
+                .is_some_and(|d| !d.settled && d.waiting.is_none());
+            let newer = self.queue.iter().any(|q| q.output_id == update.output_id);
+            if live && !newer {
+                let event = ExpertInboxEvent::Progress(update.text);
+                self.queue.push_back(Queued { output_id: update.output_id, event });
+            }
+        }
     }
 
     /// Scheduling refused this exact asked question before any presentation began.
@@ -638,6 +846,7 @@ impl Experts {
 
     /// Unspoken scheduled questions are offered again when the floor permits.
     pub fn presentation_ended(&mut self, speech: SpeechId) {
+        self.announcing.remove(&speech);
         for request in self.presentations.remove(&speech).unwrap_or_default() {
             self.defer_question(&request);
         }

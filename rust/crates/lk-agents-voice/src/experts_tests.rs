@@ -27,6 +27,10 @@ fn asked(output_id: &str, request_id: &str, question: &str) -> Presentation {
     }])
 }
 
+fn result(output_id: &str, outcome: ToolOutcome) -> Presentation {
+    Presentation::Outcomes(vec![Resolution { output_id: output_id.into(), outcome }])
+}
+
 fn ask(experts: &mut Experts, request_id: &str) -> bool {
     experts.ask("call_1", request_id, "What email should receive the receipt?".into(), false, None)
 }
@@ -227,10 +231,7 @@ fn duplicate_events_are_never_presented_twice_nor_resolve_the_call_twice() {
     assert!(!experts.outcome("call_1", done.clone()));
     assert!(!experts.outcome("call_9", done.clone()));
     experts.recorded("call_1");
-    assert_eq!(
-        experts.next(floor(&tools)),
-        Some(Presentation::Outcome { output_id: "call_1".into(), outcome: done })
-    );
+    assert_eq!(experts.next(floor(&tools)), Some(result("call_1", done)));
     assert_eq!(experts.next(floor(&tools)), None);
 }
 
@@ -309,10 +310,7 @@ fn an_outcome_resolves_the_originating_call_only_once_its_pending_output_is_reco
     experts.recorded("call_1");
     assert_eq!(
         experts.next(floor(&tools)),
-        Some(Presentation::Outcome {
-            output_id: "call_1".into(),
-            outcome: ToolOutcome::Failed("Refund declined".into())
-        })
+        Some(result("call_1", ToolOutcome::Failed("Refund declined".into())))
     );
 }
 
@@ -358,10 +356,7 @@ fn exact_outputs_keep_order_and_receipts_when_later_progress_and_results_overtak
             })
         );
     }
-    assert_eq!(
-        experts.next(floor(&tools)),
-        Some(Presentation::Outcome { output_id: "call_1".into(), outcome: done })
-    );
+    assert_eq!(experts.next(floor(&tools)), Some(result("call_1", done)));
     assert_eq!(experts.next(floor(&tools)), None, "an exact output cannot be presented twice");
 }
 
@@ -467,6 +462,7 @@ fn a_partial_answer_leaves_the_other_question_open_without_asking_it_again() {
     let mut experts = two_exports_asking("Normal or high priority?", "Which quarter?");
     experts.next(floor(&tools));
     // "High" was routed to the sales export only.
+    experts.person_turn();
     experts.answer(&exports_pending("sales", "s1")).unwrap();
     assert_eq!(experts.collect(floor(&tools)), [exports_pending("stock", "k1")]);
     assert_eq!(experts.next(floor(&tools)), None, "the open quarter question is not repeated");
@@ -534,6 +530,7 @@ fn a_verbatim_question_is_asked_alone_and_word_for_word() {
             ..export_question("sales", "s1", "Say CONFIRM to export.")
         }]))
     );
+    experts.person_turn();
     assert_eq!(
         experts.next(floor(&tools)),
         Some(Presentation::Questions(vec![export_question("stock", "k1", "Which quarter?")]))
@@ -568,4 +565,250 @@ fn a_burst_of_progress_across_tasks_is_one_summary_behind_exact_output() {
             Update { output_id: "sales".into(), text: "Uploading".into() },
         ]))
     );
+}
+
+fn value(text: &str) -> ToolOutcome {
+    ToolOutcome::Value { text: text.into(), reply_required: true, verbatim: false, more: None }
+}
+
+fn resolution(output_id: &str, outcome: ToolOutcome) -> Resolution {
+    Resolution { output_id: output_id.into(), outcome }
+}
+
+/// `count` exports tasks, each started and recorded by one frontend turn.
+fn exports_running(count: usize) -> Experts {
+    let mut experts = Experts::default();
+    for task in 0..count {
+        let id = format!("export_{task}");
+        experts.open(&id, exports());
+        experts.recorded(&id);
+    }
+    experts
+}
+
+#[test]
+fn results_ready_together_are_one_presentation_up_to_the_next_ordered_output() {
+    let tools = [exports()];
+    let mut experts = exports_running(4);
+    // Every task finishes while the frontend is busy; export_1 also sent an exact reference
+    // and export_3's result is verbatim.
+    experts.outcome("export_0", value("Sales exported"));
+    experts.exact("export_1", 1, "Reference 42.".into(), None);
+    experts.outcome("export_2", value("Stock exported"));
+    experts.outcome("export_1", value("Margins exported"));
+    let verbatim = ToolOutcome::Value {
+        text: "Say: all done.".into(),
+        reply_required: true,
+        verbatim: true,
+        more: None,
+    };
+    experts.outcome("export_3", verbatim.clone());
+    // Results never overtake exact output that arrived before them.
+    assert_eq!(experts.next(floor(&tools)), Some(result("export_0", value("Sales exported"))));
+    assert!(matches!(experts.next(floor(&tools)), Some(Presentation::Exact { .. })));
+    // The two results ready behind it are one reply; each still resolves its own call.
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Outcomes(vec![
+            resolution("export_2", value("Stock exported")),
+            resolution("export_1", value("Margins exported")),
+        ]))
+    );
+    // Verbatim text is never merged into a summary.
+    assert_eq!(experts.next(floor(&tools)), Some(result("export_3", verbatim)));
+    assert_eq!(experts.next(floor(&tools)), None, "each result is presented once");
+}
+
+#[test]
+fn an_unheard_announcement_overtaken_by_a_question_is_withdrawn_and_others_keep_their_update() {
+    let tools = [exports()];
+    let mut experts = exports_running(2);
+    experts.progress("export_0", 1, "Still collecting sales rows".into());
+    experts.progress("export_1", 1, "Collecting stock".into());
+    let Some(Presentation::Progress(updates)) = experts.next(floor(&tools)) else {
+        panic!("progress is announced first");
+    };
+    experts.announcing(SpeechId(1), updates);
+    // While that announcement is still being generated, export_0 asks.
+    experts.ask("export_0", "q", "Which region?".into(), false, None);
+    assert_eq!(experts.overtaken("export_0"), [SpeechId(1)]);
+    assert_eq!(experts.overtaken("export_1"), [SpeechId(1)]);
+    experts.withdraw_announcement(SpeechId(1));
+    experts.presentation_ended(SpeechId(1));
+    assert_eq!(
+        experts.overtaken("export_0"),
+        [],
+        "a withdrawn announcement is not overtaken twice"
+    );
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Questions(vec![export_question("export_0", "q", "Which region?")])),
+        "the stale progress is not spoken before or after the question"
+    );
+    // The stock update waits for the person's turn, then is announced once.
+    assert_eq!(experts.next(floor(&tools)), None);
+    experts.person_turn();
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Progress(vec![Update {
+            output_id: "export_1".into(),
+            text: "Collecting stock".into()
+        }]))
+    );
+    assert_eq!(experts.next(floor(&tools)), None);
+}
+
+#[test]
+fn an_unheard_announcement_overtaken_by_its_result_is_withdrawn() {
+    let tools = [exports()];
+    let mut experts = exports_running(1);
+    experts.progress("export_0", 1, "Still rendering".into());
+    let Some(Presentation::Progress(updates)) = experts.next(floor(&tools)) else {
+        panic!("progress is announced first");
+    };
+    experts.announcing(SpeechId(1), updates);
+    experts.outcome("export_0", value("Exported"));
+    assert_eq!(experts.overtaken("export_0"), [SpeechId(1)]);
+    experts.withdraw_announcement(SpeechId(1));
+    experts.presentation_ended(SpeechId(1));
+    assert_eq!(experts.next(floor(&tools)), Some(result("export_0", value("Exported"))));
+    assert_eq!(experts.next(floor(&tools)), None, "the finished task's progress is not re-queued");
+}
+
+fn expert(name: &str) -> ExpertTool {
+    ExpertTool::remote(&format!("https://back.office/agents/{name}"), name)
+}
+
+fn trip_question(output_id: &str, question: &str) -> Question {
+    export_question(output_id, &format!("{output_id}_q"), question)
+}
+
+fn trip_pending(output_id: &str) -> PendingRequest {
+    exports_pending(output_id, &format!("{output_id}_q"))
+}
+
+/// Flights, payments and two hotel searches each ask before the frontend gets the floor.
+fn five_questions() -> (Vec<ExpertTool>, Experts) {
+    let tools = vec![expert("flights"), expert("hotels"), expert("payments"), expert("cars")];
+    let mut experts = Experts::default();
+    for (output_id, tool, question) in [
+        ("flight", "flights", "What date would you like to fly?"),
+        ("hotel", "hotels", "What is your nightly budget?"),
+        ("payment", "payments", "Should I charge the card on file?"),
+        ("hotel_2", "hotels", "How many rooms?"),
+        ("car", "cars", "Which car size?"),
+    ] {
+        experts.open(output_id, expert(tool));
+        experts.ask(output_id, &format!("{output_id}_q"), question.into(), false, None);
+    }
+    (tools, experts)
+}
+
+#[test]
+fn five_waiting_questions_are_paced_one_expert_at_a_time_in_arrival_order() {
+    let (tools, mut experts) = five_questions();
+    let open = floor(&tools);
+    assert_eq!(
+        experts.next(open),
+        Some(Presentation::Questions(vec![trip_question(
+            "flight",
+            "What date would you like to fly?"
+        )])),
+        "unrelated questions are not one utterance"
+    );
+    assert_eq!(experts.next(open), None, "the person gets a chance to answer first");
+    experts.person_turn();
+    experts.answer(&trip_pending("flight")).unwrap();
+    assert_eq!(
+        experts.next(open),
+        Some(Presentation::Questions(vec![
+            trip_question("hotel", "What is your nightly budget?"),
+            trip_question("hotel_2", "How many rooms?"),
+        ])),
+        "the same expert's questions are asked together"
+    );
+    experts.person_turn();
+    experts.answer(&trip_pending("hotel")).unwrap();
+    experts.answer(&trip_pending("hotel_2")).unwrap();
+    assert_eq!(
+        experts.next(open),
+        Some(Presentation::Questions(vec![trip_question(
+            "payment",
+            "Should I charge the card on file?"
+        )]))
+    );
+    experts.person_turn();
+    experts.answer(&trip_pending("payment")).unwrap();
+    assert_eq!(
+        experts.next(open),
+        Some(Presentation::Questions(vec![trip_question("car", "Which car size?")]))
+    );
+}
+
+#[test]
+fn one_prompt_asks_at_most_three_of_an_experts_questions() {
+    let tools = [exports()];
+    let mut experts = exports_running(4);
+    for task in 0..4 {
+        let id = format!("export_{task}");
+        experts.ask(&id, "q", format!("Format for export {task}?"), false, None);
+    }
+    let Some(Presentation::Questions(first)) = experts.next(floor(&tools)) else {
+        panic!("questions are asked");
+    };
+    assert_eq!(first.len(), 3);
+    assert_eq!(experts.next(floor(&tools)), None, "the fourth waits for the person's turn");
+    experts.person_turn();
+    for q in &first {
+        experts.answer(&exports_pending(&q.output_id, "q")).unwrap();
+    }
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Questions(vec![export_question(
+            "export_3",
+            "q",
+            "Format for export 3?"
+        )]))
+    );
+}
+
+#[test]
+fn a_passed_question_stays_open_is_not_repeated_at_once_and_newer_tasks_do_not_starve_it() {
+    let tools = [expert("flights"), expert("hotels"), expert("payments")];
+    let open = floor(&tools);
+    let mut experts = Experts::default();
+    experts.open("flight", expert("flights"));
+    experts.ask("flight", "flight_q", "What date would you like to fly?".into(), false, None);
+    let flight =
+        Presentation::Questions(vec![trip_question("flight", "What date would you like to fly?")]);
+    assert_eq!(experts.next(open), Some(flight.clone()));
+    // The person changes topic: the question is passed, not answered.
+    experts.person_turn();
+    assert_eq!(experts.next(open), None, "a passed question is not asked again at once");
+    assert_eq!(experts.collect(open), [trip_pending("flight")], "it stays open for an answer");
+    // Two newer tasks ask.
+    experts.open("hotel", expert("hotels"));
+    experts.ask("hotel", "hotel_q", "What is your nightly budget?".into(), false, None);
+    experts.open("payment", expert("payments"));
+    experts.ask("payment", "payment_q", "Should I charge the card?".into(), false, None);
+    assert_eq!(
+        experts.next(open),
+        Some(Presentation::Questions(vec![trip_question("hotel", "What is your nightly budget?")]))
+    );
+    experts.person_turn();
+    experts.answer(&trip_pending("hotel")).unwrap();
+    // One prompt later the passed question is due again, ahead of the newer payment task.
+    assert_eq!(experts.next(open), Some(flight));
+    experts.person_turn();
+    assert_eq!(
+        experts.next(open),
+        Some(Presentation::Questions(vec![trip_question("payment", "Should I charge the card?")]))
+    );
+    experts.person_turn();
+    experts.answer(&trip_pending("payment")).unwrap();
+    // Passed twice: open for an answer, but not asked a third time.
+    assert_eq!(experts.next(open), None);
+    assert_eq!(experts.collect(open), [trip_pending("flight")]);
+    experts.answer(&trip_pending("flight")).unwrap();
+    assert_eq!(experts.collect(open), []);
 }

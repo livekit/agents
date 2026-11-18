@@ -328,7 +328,8 @@ fn an_experts_question_keeps_the_exact_body_live_for_answer_progress_and_outcome
     assert!(driver.activity.tools.running.is_empty());
     assert!(matches!(
         driver.session.experts.next(floor()),
-        Some(Presentation::Outcome { outcome: ToolOutcome::Nothing, .. })
+        Some(Presentation::Outcomes(resolved))
+            if matches!(resolved.as_slice(), [r] if r.outcome == ToolOutcome::Nothing)
     ));
 }
 
