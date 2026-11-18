@@ -16,6 +16,7 @@ on:
           - "major-rc    (1.5.1 → 2.0.0.rc1)"
           - "next-rc     (.rc1 → .rc2)"
           - "beta        (2.0.0.dev0 → 2.0.0b1, .b1 → .b2; livekit-agents only)"
+          - "beta-all    (livekit-agents .b1 → .b2, every plugin at that same version)"
           - "promote     (1.6.0.rc2 → 1.6.0)"
           - "republish   (retry failed publish, no version bump)"
       branch:
@@ -54,7 +55,7 @@ jobs:
           key=$(echo "$VERSION" | awk '{print $1}')
           if [ "$BRANCH" != "main" ]; then
             case "$key" in
-              *-rc|next-rc|beta) ;; # allowed
+              *-rc|next-rc|beta|beta-all) ;; # allowed
               *) echo "::error::Only RC and beta releases are allowed from non-main branches (got '$key' on '$BRANCH')"; exit 1 ;;
             esac
           fi
@@ -90,6 +91,9 @@ jobs:
               ;;
             beta)
               python .github/update_versions.py --pre b --agents-only
+              ;;
+            beta-all)
+              python .github/update_versions.py --pre b --align-plugins
               ;;
             promote)
               python .github/update_versions.py --bump-type release
@@ -165,9 +169,12 @@ jobs:
           for dir in python/livekit-plugins/livekit-plugins-*; do
             if [ ! -d "$dir" ]; then continue; fi
 
-            # a beta (2.0.0b1) is livekit-agents alone; the plugins keep their releases
+            # in a beta, only plugins released at the agents' version (beta-all) are published
             if echo "$release" | grep -qE '[0-9]b[0-9]+$'; then
-              break
+              version_file=$(ls "$dir"/livekit/plugins/*/version.py 2>/dev/null | head -1)
+              if [ -z "$version_file" ] || ! grep -q "\"$release\"" "$version_file"; then
+                continue
+              fi
             fi
 
             name=""
