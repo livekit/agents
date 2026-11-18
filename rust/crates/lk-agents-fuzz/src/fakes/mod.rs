@@ -370,6 +370,9 @@ pub struct Registry {
     hazards: std::sync::OnceLock<hazard::Hazards>,
     /// The A2A peer a remote tool delegates to, when the setup has one.
     remote: std::sync::OnceLock<Arc<a2a_peer::RemotePeer>>,
+    /// The process environment a host lends the work it starts beside the session, which
+    /// outlives any one tool body, as the process does.
+    process: std::sync::OnceLock<lk_agents_runtime::net::env::ProcessEnv>,
 }
 
 impl Registry {
@@ -395,6 +398,7 @@ impl Registry {
             chat_responses: std::sync::Mutex::default(),
             hazards: std::sync::OnceLock::new(),
             remote: std::sync::OnceLock::new(),
+            process: std::sync::OnceLock::new(),
         };
         (Arc::new(registry), receiver)
     }
@@ -501,6 +505,11 @@ impl Registry {
 
     pub fn record_remote(&self, step: crate::record::RemoteStep) {
         self.write(Record::Remote { at: self.stamps.next(), step });
+    }
+
+    /// The case's process environment, made on first use.
+    pub(crate) fn process(&self) -> &lk_agents_runtime::net::env::ProcessEnv {
+        self.process.get_or_init(|| crate::drive::case_process(self.stamps.clock()))
     }
 
     /// The session's clock, which the remote peer's work and the delegation's client run on.

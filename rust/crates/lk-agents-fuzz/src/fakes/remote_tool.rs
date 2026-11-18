@@ -224,7 +224,7 @@ pub(super) async fn run(
         }
     };
     let clock = registry.clock();
-    let env = crate::drive::case_process(clock.clone());
+    let env = registry.process();
     let client = AgentClient::with_transport(
         ENDPOINT.into(),
         None,
@@ -267,7 +267,7 @@ pub(super) async fn run(
         returned: false,
         settled: false,
     };
-    let event = interaction.run_with_client(&env, client, request).await;
+    let event = interaction.run_with_client(env, client, request).await;
     let outcome = match event {
         Ok(RemoteEvent::Outcome { outcome }) | Ok(RemoteEvent::InputRequired { outcome, .. }) => {
             outcome
