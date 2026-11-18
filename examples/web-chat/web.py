@@ -1,9 +1,3 @@
-"""The chat page and its backend, on http://localhost:8000.
-
-It holds the project key, so the browser never does. The agent runs elsewhere and is
-reached through LiveKit Cloud.
-"""
-
 import os
 import re
 from pathlib import Path
