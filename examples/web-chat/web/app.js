@@ -6,7 +6,7 @@ const browser = (localStorage.browser ??= crypto.randomUUID());
 let thread = null; // the open thread, or null for a new chat
 
 
-// --- Rendering --------------------------------------------------------------------------------
+// --- Rendering ---
 
 async function get(path) {
   const res = await fetch(path);
@@ -32,16 +32,16 @@ function showError(err) {
 async function listThreads() {
   const threads = await get(`threads?browser=${browser}`);
 
-  $("threads").replaceChildren(...threads.map((t) => {
+  const items = threads.map((t) => {
     const li = document.createElement("li");
-    li.textContent = new Date(t.created_at * 1000).toLocaleString([], {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
+    const created = new Date(t.created_at * 1000);
+    li.textContent = created.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
     li.classList.toggle("open", t.id === thread);
     li.onclick = () => open(t.id).catch(showError);
     return li;
-  }));
+  });
+
+  $("threads").replaceChildren(...items);
 }
 
 // The thread is the source of truth: always render it from what was stored.
@@ -55,7 +55,7 @@ async function open(id) {
 }
 
 
-// --- Talking to the agent ---------------------------------------------------------------------
+// --- Talking to the agent ---
 
 // Sends one message over A2A and streams the answer into its bubble.
 // Without a contextId, the platform starts a new thread.
@@ -63,7 +63,9 @@ async function send(text) {
   bubble("user", text);
   const reply = bubble("assistant pending", "…");
 
-  const { token, agent } = await get(`token?browser=${browser}${thread ? `&thread=${thread}` : ""}`);
+  const query = thread ? `browser=${browser}&thread=${thread}` : `browser=${browser}`;
+  const { token, agent } = await get(`token?${query}`);
+
   const res = await fetch(`${agent}/chat/v1`, {
     method: "POST",
     headers: {
@@ -123,7 +125,7 @@ async function send(text) {
 }
 
 
-// --- Page events ------------------------------------------------------------------------------
+// --- Page events ---
 
 $("composer").onsubmit = async (event) => {
   event.preventDefault();
