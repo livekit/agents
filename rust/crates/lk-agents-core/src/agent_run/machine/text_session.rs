@@ -35,7 +35,7 @@ impl AgentRun {
                 verbatim: first.verbatim,
             };
             self.input_requirements = requirements;
-            self.ask_from_tool(ask, now, &mut effects);
+            self.ask_from_tool(ask, false, now, &mut effects);
         } else {
             self.next_step(now, &mut effects);
         }

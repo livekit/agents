@@ -495,6 +495,34 @@ async def test_history_keeps_execution_identity_only_while_input_is_pending() ->
     assert identities[2] != identities[0]
 
 
+# Catches: a sibling's finished result dropped when the same step ends on a question, so the
+# person hears only the question.
+async def test_a_sibling_result_is_reported_with_the_question() -> None:
+    model = FakeLLM(
+        [
+            [tool_call("look_up", topic="Q3 audit"), tool_call("prepare_job", priority="high")],
+            "I found 3 documents on the Q3 audit.",
+        ]
+    )
+    agent = Agent(instructions="Run jobs and look things up.", llm=model)
+
+    @agent.tool
+    def look_up(topic: str) -> str:
+        """Look up documents on a topic."""
+        return f"3 documents about {topic!r}"
+
+    @agent.tool
+    def prepare_job(priority: str) -> InputRequired:
+        """Prepare the export job."""
+        return InputRequired("Export at high priority?", verbatim=True)
+
+    result = await agent.run("What do we have on the Q3 audit? And make the export high priority.")
+
+    assert result.status == "input_required"
+    assert result.question == "I found 3 documents on the Q3 audit.\n\nExport at high priority?"
+    assert result.verbatim == "Export at high priority?"
+
+
 class _Known(BaseModel):
     value: Literal["known"] | None
 
