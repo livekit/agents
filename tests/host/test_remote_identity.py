@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
+import pytest_asyncio
 
 from livekit.agents import Agent, VoiceSession
 from livekit.agents.a2a import RemoteAgent
@@ -14,7 +16,7 @@ from livekit.agents.llm import ChatContext, FunctionToolCall
 from livekit.agents.storage import ContextStore
 from tests.fakes import FakeLLM, tool_call, until
 
-from .a2a_peer import Peer
+from .a2a_peer import Peer, serving
 
 
 def waiting_task(message: dict[str, Any]) -> list[dict[str, Any]]:
@@ -199,3 +201,88 @@ async def test_a_renamed_remote_tool_on_a_new_voice_agent_presents_the_original_
         assert len(peer.messages) == 2
         assert peer.messages[1]["taskId"] == "remote-task"
         assert not peer.cancelled
+
+
+@pytest_asyncio.fixture
+async def moved_peer() -> AsyncIterator[Peer]:
+    async with serving() as moved:
+        yield moved
+
+
+async def test_a_saved_remote_id_refuses_a_changed_endpoint_and_sends_nothing_there(
+    peer: Peer, moved_peer: Peer
+) -> None:
+    """Regression: the refusal surfaced as "An internal error occurred", hiding its reason."""
+    peer.events = waiting_task
+    store = ContextStore()
+    original = desk(peer, "flights", "flights", token="credential")
+    assert (await original.run("Book", context=store.bind())).status == "input_required"
+    moved = desk(moved_peer, "flights", "flights", token="credential")
+    result = await moved.run("Book", context=store.bind())
+    [refusal] = [item for item in result.new_messages() if item.type == "function_call_output"]
+    assert refusal.is_error
+    assert "the saved remote endpoint changed" in refusal.output
+    assert moved_peer.methods == [], "nothing is sent to the new endpoint"
+    saved = await store.load_session()
+    assert saved.remote_agents["flights"].endpoint == peer.url
+    assert list(saved.remote_agents["flights"].tasks) == ["booking"]
+
+
+async def test_one_remote_id_with_two_live_credentials_is_refused_and_distinct_ids_work(
+    peer: Peer,
+) -> None:
+    """Catches a second credential silently taking over live work under the same remote id."""
+    peer.hold = True
+
+    def flights(*, id: str, name: str, token: str) -> Any:
+        return RemoteAgent(
+            peer.url, id=id, name=name, description="Book flights.", token=token
+        ).as_tool()
+
+    tools = {"primary desk": "primary", "another credential": "impostor", "backup": "backup"}
+
+    def reply(history: ChatContext) -> str | FunctionToolCall:
+        last = history.items[-1]
+        if last.type == "message" and last.role == "user":
+            [name] = [tool for words, tool in tools.items() if words in (last.text_content or "")]
+            return tool_call(name, request="Book a flight")
+        return "Working on it."
+
+    agent = Agent(
+        name="desk",
+        instructions="Help with travel.",
+        llm=FakeLLM(reply),
+        tools=[
+            flights(id="flights", name="primary", token="primary-credential"),
+            flights(id="flights", name="impostor", token="other-credential"),
+            flights(id="flights-backup", name="backup", token="other-credential"),
+        ],
+    )
+
+    def output(name: str) -> Any:
+        return next(
+            (
+                item
+                for item in session.history.items
+                if item.type == "function_call_output" and item.name == name
+            ),
+            None,
+        )
+
+    async with VoiceSession(context=ContextStore().bind(), vad=None) as session:
+        await session.start(agent)
+        await session.generate_reply(user_input="Book with the primary desk")
+        await until(lambda: len(peer.messages) == 1, "the primary booking did not start")
+        await session.wait_for_idle()
+        await session.generate_reply(user_input="Book with the same id and another credential")
+        await until(lambda: output("impostor") is not None, "the impostor call did not settle")
+        await session.wait_for_idle()
+        await session.generate_reply(user_input="Book with the backup desk")
+        await until(lambda: len(peer.messages) == 2, "the backup booking did not start")
+        await session.wait_for_idle()
+        refusal = output("impostor")
+        assert refusal.is_error
+        assert "use distinct remote ids" in refusal.output
+        assert not output("backup").is_error
+    assert len(peer.messages) == 2, "the refused credential sent nothing"
+    assert not peer.cancelled, "the refusal leaves the live task with its original owner"

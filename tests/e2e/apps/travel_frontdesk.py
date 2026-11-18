@@ -3,6 +3,7 @@
 import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from livekit.agents import (
     Agent,
@@ -15,6 +16,8 @@ from livekit.agents import (
 from livekit.agents.a2a import A2ASessionContext, RemoteAgent
 from livekit.agents.llm import ChatContext, FunctionToolCall
 from tests.fakes import FakeLLM, last_input, tool_call
+
+from ..framework.models import write_live_report
 
 
 def answer(history: ChatContext) -> str | FunctionToolCall:
@@ -71,6 +74,9 @@ class Conversation:
 @server.a2a_session(endpoint="desk", description="A travel front desk")
 async def text(ctx: A2ASessionContext) -> object:
     app = await ctx.store.load_context(Conversation())
+    if directory := os.environ.get("E2E_ARTIFACT_DIR"):
+        # The state as loaded from storage, before this request changes it.
+        write_live_report(Path(directory), models={}, turns=[], state=app.session)
     return await TextSession(agent=agent, delegation=delegation).run(
         ctx.message, context=ctx.store.bind(app)
     )

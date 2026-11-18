@@ -6892,6 +6892,7 @@ pub mod delegation_remote {
                 crate::py_values::number_from_py::<u64>(v, "RemoteTaskState.next_input")
             })?,
             terminal_event: ::std::default::Default::default(),
+            artifact_sources: ::std::default::Default::default(),
         })
     }
 
@@ -6905,6 +6906,7 @@ pub mod delegation_remote {
             cancel_requested,
             next_input,
             terminal_event: _,
+            artifact_sources: _,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("task", crate::py_protocol::a2a_task_to_py(py, task)?)?;

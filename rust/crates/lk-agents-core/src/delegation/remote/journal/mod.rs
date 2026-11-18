@@ -4,11 +4,16 @@ use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::delegation::remote::*;
 use lk_agents_abi::session::InputRequestState;
 
+mod compaction;
+pub use compaction::{RETAINED_SETTLED_EVENTS, compact};
 mod projection;
 mod terminal;
 pub use terminal::observed;
 mod validation;
 pub use validation::validate;
+#[cfg(test)]
+#[path = "compaction_tests.rs"]
+mod compaction_tests;
 #[cfg(test)]
 #[path = "journal_tests.rs"]
 mod tests;
@@ -38,7 +43,7 @@ pub fn apply(
                 return Err(invalid("request identity is empty"));
             }
             if let Some(existing) = state.requests.get(&request_id) {
-                let original = state.events.get(existing.request_event as usize);
+                let original = state.event(existing.request_event);
                 let same_body = original.is_some_and(|entry| {
                     matches!(
                         &entry.payload,A2AJournalPayload::Request(body) if body == &request
@@ -172,7 +177,7 @@ pub fn apply(
                 }
                 _ => false,
             };
-            let task = projection::response(&mut next, &request, *response)?;
+            let task = projection::response(&mut next, &request_id, &request, *response)?;
             let input_request = task.as_ref().filter(|_| input_required).and_then(|reference| {
                 let task = next.tasks.get(&reference.task_id)?;
                 let sequence = task.next_input.checked_sub(1)?;
@@ -230,10 +235,8 @@ pub fn recovery(state: &RemoteAgentState, request_id: &str) -> Result<RemoteReco
                 .ok_or_else(|| invalid("a remote operation selected a local input"))?;
             return Ok(RemoteRecovery::GetTask(task.clone()));
         }
-        let entry = state
-            .events
-            .get(request.request_event as usize)
-            .ok_or_else(|| invalid("missing request content"))?;
+        let entry =
+            state.event(request.request_event).ok_or_else(|| invalid("missing request content"))?;
         let A2AJournalPayload::Request(body) = &entry.payload else {
             return Err(invalid("request position does not contain a request"));
         };
@@ -283,7 +286,7 @@ fn response_reserved(state: &RemoteAgentState, request: &RemoteRequestState) -> 
     let Some((_, selected_task, occurrence)) = reference.remote() else { return false };
     let Some(A2AJournalEntry {
         payload: A2AJournalPayload::Request(A2ARequest::Send(body)), ..
-    }) = state.events.get(request.request_event as usize)
+    }) = state.event(request.request_event)
     else {
         return false;
     };

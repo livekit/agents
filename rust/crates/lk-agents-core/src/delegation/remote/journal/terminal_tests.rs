@@ -159,6 +159,8 @@ fn a_terminal_snapshot_after_a_stream_gap_does_not_promote_cached_partial_artifa
     ));
 }
 
+/// Payload equality within one stream is content, not a duplicate observation; duplicates
+/// come from a second request observing the same task (see the poll and resubscribe cases).
 #[test]
 fn an_uninterrupted_terminal_stream_keeps_two_intentionally_equal_appends() {
     let mut state = RemoteAgentState::new("https://booking.test".into());
@@ -244,4 +246,81 @@ fn a_cancel_answered_by_completion_keeps_the_intent_and_accepts_the_real_result(
     assert_eq!(result.observation.unwrap(), completed, "late success is delivered as observed");
     assert!(result.confirmation.is_err(), "completion is not a confirmed cancellation");
     assert!(result.confirmed_task.is_none());
+}
+
+fn chunk(text: &str, append: bool) -> Value {
+    json!({"artifactUpdate":{"taskId":"booking","contextId":"trip",
+        "artifact":{"artifactId":"answer","parts":[{"text":text}]},"append":append}})
+}
+
+fn projected(state: &RemoteAgentState) -> Vec<Option<&str>> {
+    let artifacts = state.tasks["booking"].task.artifacts.as_ref().unwrap();
+    artifacts[0].parts.iter().map(|part| part.as_text()).collect()
+}
+
+#[test]
+fn a_chunk_already_contained_in_a_poll_snapshot_is_not_appended_twice() {
+    let mut state = RemoteAgentState::new("https://booking.test".into());
+    start(&mut state, "original", false);
+    event(&mut state, "original", working());
+    event(&mut state, "original", chunk("A", false));
+    // The poll is answered after the peer emitted B, before the stream delivers it.
+    start(&mut state, "poll", true);
+    event(
+        &mut state,
+        "poll",
+        json!({"id":"booking","contextId":"trip","status":{"state":"TASK_STATE_WORKING"},
+            "artifacts":[{"artifactId":"answer","parts":[{"text":"A"},{"text":"B"}]}]}),
+    );
+    event(&mut state, "original", chunk("B", true));
+    assert_eq!(projected(&state), [Some("A"), Some("B")], "B was observed twice, kept once");
+    // The stream's own content now matches the snapshot, so its next chunk continues it.
+    event(&mut state, "original", chunk("C", true));
+    assert_eq!(projected(&state), [Some("A"), Some("B"), Some("C")]);
+    event(
+        &mut state,
+        "original",
+        json!({"statusUpdate":{"taskId":"booking","contextId":"trip",
+        "status":{"state":"TASK_STATE_COMPLETED"}}}),
+    );
+    assert_eq!(accepted(&state).artifacts.unwrap()[0].parts.len(), 3);
+    super::super::validate("booking", &state).unwrap();
+}
+
+#[test]
+fn a_resubscribed_stream_and_a_stale_poll_never_duplicate_or_lose_chunks() {
+    let mut state = RemoteAgentState::new("https://booking.test".into());
+    start(&mut state, "original", false);
+    event(&mut state, "original", working());
+    event(&mut state, "original", chunk("A", false));
+    event(&mut state, "original", chunk("B", true));
+    super::super::apply(
+        "booking",
+        &mut state,
+        RemoteInput::Ended { request_id: "original".into() },
+    )
+    .unwrap();
+    // A resubscription starts from the current task, then the peer resends B.
+    start(&mut state, "resubscribed", false);
+    event(
+        &mut state,
+        "resubscribed",
+        json!({"task":{"id":"booking","contextId":"trip","status":{"state":"TASK_STATE_WORKING"},
+            "artifacts":[{"artifactId":"answer","parts":[{"text":"A"},{"text":"B"}]}]}}),
+    );
+    // A poll answered before B arrived lands late: it is older than the stream's content.
+    start(&mut state, "stale-poll", true);
+    event(
+        &mut state,
+        "stale-poll",
+        json!({"id":"booking","contextId":"trip","status":{"state":"TASK_STATE_WORKING"},
+            "artifacts":[{"artifactId":"answer","parts":[{"text":"A"}]}]}),
+    );
+    event(&mut state, "resubscribed", chunk("C", true));
+    assert_eq!(
+        projected(&state),
+        [Some("A"), Some("B"), Some("C")],
+        "the stream's own content supersedes an older snapshot without repeating it"
+    );
+    super::super::validate("booking", &state).unwrap();
 }

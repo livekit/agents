@@ -92,7 +92,7 @@ class RemoteRequestState:
     method: str
     """SDK method constant, fixed when the request is prepared."""
     request_event: int
-    """Journal position containing the immutable SDK request; not a second payload copy."""
+    """Journal sequence of the immutable SDK request; not a second payload copy."""
     dispatch_started: bool
     """Persisted before I/O: an attempt may have happened, not proof of admission."""
     ended: bool
