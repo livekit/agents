@@ -299,9 +299,10 @@ fn an_experts_question_keeps_the_exact_body_live_for_answer_progress_and_outcome
     );
     let floor = || Floor { tools: &tools, free: true, task: false };
     assert!(
-        matches!(driver.session.experts.next(floor()), Some(Presentation::Question { question, .. }) if question == "Which city?")
+        matches!(driver.session.experts.next(floor()), Some(Presentation::Questions(asked)) if asked[0].question == "Which city?")
     );
-    let request = driver.session.experts.collect(floor()).expect("question owns its reply");
+    let [request] =
+        driver.session.experts.collect(floor()).try_into().expect("question owns its reply");
     driver.session.experts.answer(&request).expect("answer keeps original request identity");
     driver.on_tool_update(
         Ts::ZERO,
@@ -315,7 +316,7 @@ fn an_experts_question_keeps_the_exact_body_live_for_answer_progress_and_outcome
         },
     );
     assert!(
-        matches!(driver.session.experts.next(floor()), Some(Presentation::Progress { text, .. }) if text == "continued")
+        matches!(driver.session.experts.next(floor()), Some(Presentation::Progress(updates)) if updates[0].text == "continued")
     );
     driver.on_tool_update(
         Ts::ZERO,

@@ -52,16 +52,33 @@ impl Floor<'_> {
     }
 }
 
-/// One event to present, chosen when the floor permits.
+/// A delegation's latest progress; older progress was superseded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Update {
+    pub output_id: String,
+    pub text: String,
+}
+
+/// A delegation's live question. Native response admission supplies its answers; presentation
+/// alone never selects a remote reply destination.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Question {
+    pub output_id: String,
+    pub request_id: String,
+    pub question: String,
+    pub verbatim: bool,
+}
+
+/// One presentation opportunity, chosen when the floor permits.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Presentation {
-    /// The delegation's latest progress; older progress was superseded.
-    Progress { output_id: String, text: String },
+    /// Every reachable delegation's latest progress, summarized together.
+    Progress(Vec<Update>),
     /// Exact text is never coalesced, rephrased or withdrawn by a later question or result.
     Exact { output_id: String, text: String, call: Option<crate::agent_session::SpeechCall> },
-    /// A question selected for presentation. Native response admission supplies its answers;
-    /// presentation priority alone never selects a remote reply destination.
-    Question { output_id: String, request_id: String, question: String, verbatim: bool },
+    /// Questions asked together; each remains its own request. A verbatim question is asked
+    /// alone, word for word.
+    Questions(Vec<Question>),
     /// The originating call's result.
     Outcome { output_id: String, outcome: ToolOutcome },
 }
@@ -116,28 +133,28 @@ struct Queued {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Foreground {
-    output_id: String,
+struct Asked {
     request_id: String,
     question: String,
     verbatim: bool,
-    /// The active agent lost this tool or a task took the interaction. Re-offering the prompt
-    /// does not invalidate its earlier native delivery or a response already recognized.
+    /// Unheard, or the active agent lost this tool or a task took the interaction. Re-offering
+    /// the prompt does not invalidate its earlier native delivery or a recognized response.
     suspended: bool,
 }
 
 /// The queue's records: serializable delegation references, queued events in order, and the
-/// foreground request. Saved under the frontend conversation's identity when the application
+/// asked questions. Saved under the frontend conversation's identity when the application
 /// persists frontend delivery; never a live await.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Experts {
     /// By the originating call's canonical output item ID, never its provider call ID.
     delegations: BTreeMap<String, Delegation>,
     queue: VecDeque<Queued>,
-    foreground: Option<Foreground>,
+    /// Questions presented and still waiting, by delegation: several can be open at once.
+    asked: BTreeMap<String, Asked>,
     /// Live output receipts have no meaning after a call ends; communication owns recovery.
     #[serde(skip)]
-    presentations: BTreeMap<SpeechId, PendingRequest>,
+    presentations: BTreeMap<SpeechId, Vec<PendingRequest>>,
     /// Admitted human responses awaiting an eligible live continuation; never persisted here.
     #[serde(skip)]
     responses: BTreeMap<InputRequestRef, lk_agents_abi::ChatMessage>,
@@ -279,7 +296,7 @@ impl Experts {
         true
     }
 
-    /// Drop the call's queued progress and its question, queued or in the foreground.
+    /// Drop the call's queued progress and its question, queued or asked.
     fn withdraw(&mut self, output_id: &str) {
         if let Some(delegation) = self.delegations.get(output_id) {
             let current = delegation
@@ -293,90 +310,159 @@ impl Experts {
             });
             self.prompted_responses.retain(|reference| self.responses.contains_key(reference));
         }
-        self.foreground.take_if(|f| f.output_id == output_id);
+        self.asked.remove(output_id);
         self.queue.retain(|q| {
             q.output_id != output_id
                 || matches!(q.event, ExpertInboxEvent::Outcome(_) | ExpertInboxEvent::Exact { .. })
         });
     }
 
-    /// Suspend a presented question the active agent can no longer interact with.
+    /// Suspend asked questions the active agent can no longer interact with.
     pub fn observe(&mut self, floor: Floor<'_>) {
-        let Some(fg) = &mut self.foreground else {
-            return;
-        };
-        let tool = &self.delegations[&fg.output_id].tool;
-        if !floor.reaches(tool) {
-            fg.suspended = true;
+        for (output_id, asked) in &mut self.asked {
+            if !floor.reaches(&self.delegations[output_id].tool) {
+                asked.suspended = true;
+            }
         }
     }
 
-    /// The next event to present, in arrival order among those the active agent's tools reach:
-    /// a suspended question first, once reachable again. A question waits while another owns
-    /// the person's reply.
+    /// The next presentation among events the active agent's tools reach. Questions come first
+    /// when a suspended one is reachable again or one leads the queue: every reachable unheard
+    /// question is asked together, so several tasks' questions are open at once and the
+    /// person's reply can be matched against all of them. Otherwise the next event in arrival
+    /// order; progress takes every reachable delegation's latest update with it.
     pub fn next(&mut self, floor: Floor<'_>) -> Option<Presentation> {
         self.observe(floor);
         if !floor.free {
             return None;
         }
-        if let Some(fg) = self.foreground.as_mut().filter(|f| f.suspended)
-            && floor.reaches(&self.delegations[&fg.output_id].tool)
-        {
-            fg.suspended = false;
-            return Some(Presentation::Question {
-                output_id: fg.output_id.clone(),
-                request_id: fg.request_id.clone(),
-                question: fg.question.clone(),
-                verbatim: fg.verbatim,
-            });
-        }
-        let at = self.queue.iter().position(|q| {
-            let d = &self.delegations[&q.output_id];
-            floor.reaches(&d.tool)
+        let reaches = |output_id: &str| floor.reaches(&self.delegations[output_id].tool);
+        let eligible = |q: &Queued| {
+            reaches(&q.output_id)
                 && match q.event {
-                    ExpertInboxEvent::Question { .. } => self.foreground.is_none(),
-                    ExpertInboxEvent::Outcome(_) | ExpertInboxEvent::Exact { .. } => d.recorded,
-                    ExpertInboxEvent::Progress(_) => true,
+                    ExpertInboxEvent::Outcome(_) | ExpertInboxEvent::Exact { .. } => {
+                        self.delegations[&q.output_id].recorded
+                    }
+                    ExpertInboxEvent::Question { .. } | ExpertInboxEvent::Progress(_) => true,
                 }
-        })?;
-        let Queued { output_id, event } = self.queue.remove(at)?;
+        };
+        let reoffer = self.asked.iter().any(|(id, asked)| asked.suspended && reaches(id));
+        let at = self.queue.iter().position(eligible);
+        let leads =
+            at.is_some_and(|at| matches!(self.queue[at].event, ExpertInboxEvent::Question { .. }));
+        if reoffer || leads {
+            return Some(Presentation::Questions(self.take_questions(floor)));
+        }
+        let Queued { output_id, event } = self.queue.remove(at?)?;
         Some(match event {
-            ExpertInboxEvent::Progress(text) => Presentation::Progress { output_id, text },
-            ExpertInboxEvent::Exact { text, call } => Presentation::Exact { output_id, text, call },
-            ExpertInboxEvent::Question { request_id, question, verbatim } => {
-                self.foreground = Some(Foreground {
-                    output_id: output_id.clone(),
-                    request_id: request_id.clone(),
-                    question: question.clone(),
-                    verbatim,
-                    suspended: false,
-                });
-                Presentation::Question { output_id, request_id, question, verbatim }
+            ExpertInboxEvent::Progress(text) => {
+                let mut updates = vec![Update { output_id, text }];
+                updates.extend(self.take_progress(floor));
+                Presentation::Progress(updates)
             }
+            ExpertInboxEvent::Exact { text, call } => Presentation::Exact { output_id, text, call },
+            ExpertInboxEvent::Question { .. } => unreachable!("a leading question is taken above"),
             ExpertInboxEvent::Outcome(outcome) => Presentation::Outcome { output_id, outcome },
         })
     }
 
-    /// Scheduling refused this exact foreground question before any presentation began.
+    /// Reachable suspended questions, then queued ones in arrival order. A delegation has one
+    /// live question, so each source appears once.
+    fn take_questions(&mut self, floor: Floor<'_>) -> Vec<Question> {
+        let reaches = |output_id: &str| floor.reaches(&self.delegations[output_id].tool);
+        let suspended =
+            self.asked.iter().filter(|(id, a)| a.suspended && reaches(id)).map(|(output_id, a)| {
+                Question {
+                    output_id: output_id.clone(),
+                    request_id: a.request_id.clone(),
+                    question: a.question.clone(),
+                    verbatim: a.verbatim,
+                }
+            });
+        let queued = self.queue.iter().filter(|q| reaches(&q.output_id)).filter_map(|q| {
+            let ExpertInboxEvent::Question { request_id, question, verbatim } = &q.event else {
+                return None;
+            };
+            Some(Question {
+                output_id: q.output_id.clone(),
+                request_id: request_id.clone(),
+                question: question.clone(),
+                verbatim: *verbatim,
+            })
+        });
+        let candidates: Vec<_> = suspended.chain(queued).collect();
+        let questions: Vec<_> = match candidates.first() {
+            Some(first) if first.verbatim => vec![first.clone()],
+            _ => candidates.into_iter().filter(|q| !q.verbatim).collect(),
+        };
+        for q in &questions {
+            self.queue.retain(|queued| {
+                queued.output_id != q.output_id
+                    || !matches!(queued.event, ExpertInboxEvent::Question { .. })
+            });
+            let asked = Asked {
+                request_id: q.request_id.clone(),
+                question: q.question.clone(),
+                verbatim: q.verbatim,
+                suspended: false,
+            };
+            self.asked.insert(q.output_id.clone(), asked);
+        }
+        questions
+    }
+
+    /// Queued progress of other reachable delegations, unless it waits behind that
+    /// delegation's own exact output, question or result.
+    fn take_progress(&mut self, floor: Floor<'_>) -> Vec<Update> {
+        let mut behind = BTreeSet::new();
+        let mut updates = Vec::new();
+        let mut rest = VecDeque::new();
+        for queued in self.queue.drain(..) {
+            match queued.event {
+                ExpertInboxEvent::Progress(text)
+                    if !behind.contains(&queued.output_id)
+                        && floor.reaches(&self.delegations[&queued.output_id].tool) =>
+                {
+                    updates.push(Update { output_id: queued.output_id, text });
+                }
+                _ => {
+                    behind.insert(queued.output_id.clone());
+                    rest.push_back(queued);
+                }
+            }
+        }
+        self.queue = rest;
+        updates
+    }
+
+    /// Scheduling refused this exact asked question before any presentation began.
     /// Keep its source and native reference; another eligible delivery can retry it later.
     pub(crate) fn defer_question(&mut self, request: &PendingRequest) {
-        if let Some(foreground) = self.foreground.as_mut().filter(|foreground| {
-            foreground.output_id == request.output_id && foreground.request_id == request.request_id
-        }) {
-            foreground.suspended = true;
+        if let Some(asked) = self
+            .asked
+            .get_mut(&request.output_id)
+            .filter(|asked| asked.request_id == request.request_id)
+        {
+            asked.suspended = true;
         }
     }
 
-    /// Collection: the request a person's reply answers now, if any. Nothing is forwarded while
-    /// the question is suspended or a task owns the interaction.
-    pub fn collect(&mut self, floor: Floor<'_>) -> Option<PendingRequest> {
+    /// Collection: the requests a person's reply may answer now. Nothing is forwarded to a
+    /// suspended question or while a task owns the interaction.
+    pub fn collect(&mut self, floor: Floor<'_>) -> Vec<PendingRequest> {
         self.observe(floor);
-        let fg = self.foreground.as_ref().filter(|f| !f.suspended)?;
-        Some(PendingRequest { output_id: fg.output_id.clone(), request_id: fg.request_id.clone() })
+        self.asked
+            .iter()
+            .filter(|(_, asked)| !asked.suspended)
+            .map(|(output_id, asked)| PendingRequest {
+                output_id: output_id.clone(),
+                request_id: asked.request_id.clone(),
+            })
+            .collect()
     }
 
     /// Delivery to exactly this live continuation, which it consumes. It need not be the
-    /// foreground prompt: a native reservation can answer an earlier presented question.
+    /// latest asked prompt: a native reservation can answer an earlier presented question.
     pub fn answer(&mut self, request: &PendingRequest) -> Result<(), Stale> {
         let delegation = self
             .delegations
@@ -396,8 +482,7 @@ impl Experts {
                 || !matches!(&queued.event, ExpertInboxEvent::Question { request_id, .. }
                     if request_id == &request.request_id)
         });
-        self.foreground
-            .take_if(|f| f.output_id == request.output_id && f.request_id == request.request_id);
+        self.asked.remove(&request.output_id);
         Ok(())
     }
 
@@ -534,26 +619,27 @@ impl Experts {
         })
     }
 
-    /// A scheduled question has no delivery authority until that speech reports actual words.
-    pub fn presenting(&mut self, speech: SpeechId, request: PendingRequest) {
-        self.presentations.insert(speech, request);
+    /// Scheduled questions have no delivery authority until that speech reports actual words.
+    pub fn presenting(&mut self, speech: SpeechId, requests: Vec<PendingRequest>) {
+        self.presentations.insert(speech, requests);
     }
 
-    pub fn delivered(&mut self, speech: SpeechId) -> Option<InputRequestRef> {
-        let request = self.presentations.remove(&speech)?;
+    pub fn delivered(&mut self, speech: SpeechId) -> Vec<InputRequestRef> {
+        let requests = self.presentations.remove(&speech).unwrap_or_default();
         // A late receipt belongs to the words actually delivered, even if a newer input has
         // superseded that occurrence. Shared input state decides response eligibility.
-        self.delegations.get(&request.output_id)?.requests.get(&request.request_id)?.clone()
+        requests
+            .iter()
+            .filter_map(|request| {
+                self.delegations.get(&request.output_id)?.requests.get(&request.request_id)?.clone()
+            })
+            .collect()
     }
 
-    /// An unspoken scheduled question is offered again when the floor permits.
+    /// Unspoken scheduled questions are offered again when the floor permits.
     pub fn presentation_ended(&mut self, speech: SpeechId) {
-        if let Some(request) = self.presentations.remove(&speech)
-            && let Some(foreground) = self.foreground.as_mut()
-            && foreground.output_id == request.output_id
-            && foreground.request_id == request.request_id
-        {
-            foreground.suspended = true;
+        for request in self.presentations.remove(&speech).unwrap_or_default() {
+            self.defer_question(&request);
         }
     }
 }

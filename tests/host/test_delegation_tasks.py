@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -1062,3 +1064,182 @@ async def test_a_new_request_merged_into_an_idle_task_resolves_only_its_original
             {"text": "Find a hotel"},
         ]
     assert peer.cancelled == []
+
+
+@contextlib.asynccontextmanager
+async def two_waiting_tasks(
+    peer: Peer,
+    questions: dict[str, tuple[str, str]],
+    route_answer: Callable[[dict[str, Any]], FunctionToolCall],
+    frontend: Callable[[ChatContext], str | list[FunctionToolCall]],
+) -> AsyncIterator[tuple[VoiceSession, ContextStore, list[dict[str, Any]]]]:
+    """One turn starts a task per request; each task waits on its own question.
+
+    Yields once every question was presented, before the person answers any of them, with the
+    response-routing requests the person's answers produce.
+    """
+    routed: list[dict[str, Any]] = []
+
+    def events(message: dict[str, Any]) -> list[dict[str, Any]]:
+        if (task := message.get("taskId")) is not None:
+            return travel_task(message, task, f"{task} done", completed=True)
+        task, question = questions[message["parts"][0]["text"]]
+        return travel_task(message, task, question)
+
+    peer.events = events
+
+    def route(history: ChatContext) -> FunctionToolCall:
+        proposal = routing_input(history)
+        if "proposed_call" not in proposal:
+            routed.append(proposal)
+            return route_answer(proposal)
+        if proposal["proposed_call"]["request"] in questions:
+            return call_route(proposal, "new")
+        selected = proposal["candidates"][proposal["selected_task"]]["task_id"]
+        return call_route(proposal, "respond", selected)
+
+    def desk(history: ChatContext) -> str | list[FunctionToolCall]:
+        instruction = last_input(history) or ""
+        if instruction.startswith("Ask the person"):
+            asked = dict.fromkeys(q for _, q in questions.values())
+            return " ".join(q for q in asked for _ in range(instruction.count(q)))
+        if not any(item.type == "function_call" for item in history.items):
+            return [tool_call("jobs", request=request) for request in questions]
+        return frontend(history)
+
+    store = ContextStore()
+    async with VoiceSession(
+        context=store.bind(), vad=None, delegation=DelegationOptions(routing_model=FakeLLM(route))
+    ) as session:
+        await session.start(
+            Agent(
+                name="desk",
+                instructions="Run jobs.",
+                tools=[RemoteAgent(peer.url, name="jobs").as_tool()],
+                llm=FakeLLM(desk),
+            )
+        )
+        session.generate_reply(user_input="Run both jobs")
+        asked = [question for _, question in questions.values()]
+        await until(
+            lambda: all(asked_text(session).count(q) >= asked.count(q) for q in asked),
+            "a task's question waited for another task's open question to be answered",
+        )
+        await session.wait_for_idle()
+        yield session, store, routed
+
+
+def asked_text(session: VoiceSession) -> str:
+    return " ".join(
+        item.text_content or ""
+        for item in session.history.items
+        if item.type == "message" and item.role == "assistant"
+    )
+
+
+def input_states(saved: SessionState, peer: Peer) -> dict[str, list[str]]:
+    return {
+        task_id: [request.state for request in task.input_requests.values()]
+        for task_id, task in saved.remote_agents[peer.url].tasks.items()
+    }
+
+
+async def test_one_answer_for_two_tasks_asking_the_same_question_is_clarified(peer: Peer) -> None:
+    """Both tasks ask "normal or high?": a bare "High" has two plausible destinations."""
+    questions = {
+        "Export the sales report": ("sales", "Normal or high priority?"),
+        "Export the stock report": ("stock", "Normal or high priority?"),
+    }
+
+    def unclear(proposal: dict[str, Any]) -> FunctionToolCall:
+        return tool_call("route_input_response", candidates=[], unclear=True)
+
+    def frontend(history: ChatContext) -> str | list[FunctionToolCall]:
+        clarify = any(
+            item.type == "message" and "unclear" in (item.text_content or "")
+            for item in history.items
+        )
+        return "For which report?" if clarify else "Both are running."
+
+    async with two_waiting_tasks(peer, questions, unclear, frontend) as (session, store, routed):
+        await session.generate_reply(user_input="High")
+        await session.wait_for_idle()
+        [proposal] = routed
+        assert [c["question"] for c in proposal["candidates"]] == [
+            "Normal or high priority?",
+            "Normal or high priority?",
+        ], "both presented questions are response candidates"
+        assert said(session, "For which report?")
+        assert len(peer.messages) == 2, "an unclear answer was forwarded to a guessed task"
+        assert input_states(await store.load_session(), peer) == {
+            "sales": ["open"],
+            "stock": ["open"],
+        }
+
+
+async def test_a_partial_answer_resolves_only_its_task_and_keeps_the_other_pending(
+    peer: Peer,
+) -> None:
+    questions = {
+        "Export the sales report": ("export", "Normal or high priority?"),
+        "Look up revenue": ("lookup", "Which quarter?"),
+    }
+
+    def priority_only(proposal: dict[str, Any]) -> FunctionToolCall:
+        selected = [c["index"] for c in proposal["candidates"] if "priority" in c["question"]]
+        return tool_call("route_input_response", candidates=selected, unclear=False)
+
+    def frontend(history: ChatContext) -> str | list[FunctionToolCall]:
+        calls = [item for item in history.items if item.type == "function_call"]
+        if latest_human(history) == "High" and len(calls) == 2:
+            return [tool_call("jobs", request="High", task_id="export")]
+        return "Noted."
+
+    async with two_waiting_tasks(peer, questions, priority_only, frontend) as (
+        session,
+        store,
+        routed,
+    ):
+        await session.generate_reply(user_input="High")
+        await until(lambda: len(peer.messages) == 3, "the matching answer was not forwarded")
+        await session.wait_for_idle()
+        assert [len(proposal["candidates"]) for proposal in routed] == [2]
+        assert peer.messages[2]["taskId"] == "export"
+        assert peer.messages[2]["parts"][0] == {"text": "High"}
+        assert input_states(await store.load_session(), peer) == {
+            "export": ["responded"],
+            "lookup": ["open"],
+        }, "the other task's question stays pending"
+        assert asked_text(session).count("Which quarter?") == 1, "the pending question was re-asked"
+
+
+async def test_one_utterance_answering_both_tasks_reaches_each_once(peer: Peer) -> None:
+    questions = {
+        "Export the sales report": ("export", "Normal or high priority?"),
+        "Look up revenue": ("lookup", "Which quarter?"),
+    }
+    answer = "High for the export, Q3 for the lookup"
+
+    def both(proposal: dict[str, Any]) -> FunctionToolCall:
+        return tool_call("route_input_response", candidates=[0, 1], unclear=False)
+
+    def frontend(history: ChatContext) -> str | list[FunctionToolCall]:
+        calls = [item for item in history.items if item.type == "function_call"]
+        if latest_human(history) == answer and len(calls) == 2:
+            return [
+                tool_call("jobs", request="High", task_id="export"),
+                tool_call("jobs", request="Q3", task_id="lookup"),
+            ]
+        return "Noted."
+
+    async with two_waiting_tasks(peer, questions, both, frontend) as (session, store, routed):
+        await session.generate_reply(user_input=answer)
+        await until(lambda: len(peer.messages) == 4, "each task did not receive its answer")
+        await session.wait_for_idle()
+        assert [proposal["latest_message"] for proposal in routed] == [answer]
+        forwarded = {message["taskId"]: message["parts"][0] for message in peer.messages[2:]}
+        assert forwarded == {"export": {"text": answer}, "lookup": {"text": answer}}
+        assert input_states(await store.load_session(), peer) == {
+            "export": ["responded"],
+            "lookup": ["responded"],
+        }

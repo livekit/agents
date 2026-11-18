@@ -982,7 +982,10 @@ impl VoiceDriver {
                         && message.raw_text_content().is_some_and(|text| !text.trim().is_empty())
                 })
                 .map(|message| message.id.clone());
-            let expert = message_id.as_ref().and_then(|_| self.session.experts.delivered(speech));
+            let expert = match message_id {
+                Some(_) => self.session.experts.delivered(speech),
+                None => Vec::new(),
+            };
             self.commit_item(item, source, Visibility::Both);
             if let Some(message_id) = message_id {
                 let mut requests = self.local_input_presented(speech, &message_id);
