@@ -73,7 +73,8 @@ async def thread_messages(request: Request) -> Response:
     scope, thread = scope_of(request), request.path_params["thread"]
     if scope is None or not await owns(scope, thread):
         return Response(status_code=403)
-    messages, after = [], None
+    messages: list[dict[str, str]] = []
+    after: str | None = None
     while after != "":
         page = await Thread(storage, thread).list_items(after=after)
         for entry in page.items:
