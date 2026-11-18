@@ -91,6 +91,9 @@ jobs:
         run: brew install opus nasm pkg-config cmake
 
       - name: Build wheel
+        env:
+          # System32's bash is the WSL launcher; FFmpeg's scripts need Git Bash
+          LK_BASH: ${{ runner.os == 'Windows' && 'C:\Program Files\Git\bin\bash.exe' || '' }}
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           working-directory: python/livekit-agents
