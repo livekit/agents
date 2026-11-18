@@ -46,28 +46,50 @@ DEFAULT_VOICE_ID = "vjFyp2BcCyTlUmYb"
 
 # Websocket close codes the server uses for requests it would reject again verbatim:
 # protocol error and unsupported data (unknown model, setup validation). Everything
-# else is worth a retry. 1008 (policy violation) covers the org's concurrency cap,
-# which frees up when another session ends, next to credits and API-key failures
-# that will not; the frame does not tell them apart, so the transient reading wins.
+# else is worth a retry, except the account failures below. 1008 (policy violation)
+# covers the org's concurrency cap, which frees up when another session ends, next to
+# credits and API-key failures that will not; only the message tells them apart.
 # 1011 covers worker failures and "no worker available" (but also unknown voice ids,
 # which the server does not distinguish for clients either). The server's idle and
 # duration limits close with 1008 after an error frame; a 1000/1001 before
 # end_of_stream means the server shut the socket mid-session, also worth a retry.
 _NON_RETRYABLE_CLOSE_CODES = frozenset({1002, 1003})
+# Starts of the server's messages for the 1008 failures that a retry cannot fix: the
+# API key, the account, its subscription or its credits. Other 1008s, such as the
+# concurrency cap, stay retryable.
+_ACCOUNT_FAILURES = (
+    "Missing credentials",
+    "API key not found",
+    "Invalid or expired API key",
+    "API key is revoked or expired",
+    "Invalid account",
+    "Inactive account",
+    "No active subscription",
+    "Insufficient credits",
+)
 
 
 def _close_error(
-    message: str, *, code: int | None, body: Any, reason: Any = None
+    message: str,
+    *,
+    code: int | None,
+    body: Any,
+    reason: Any = None,
+    server_message: Any = None,
 ) -> APIStatusError:
     code = code if isinstance(code, int) else -1
     if isinstance(reason, str) and reason:
         # the close frame's reason is the server's own explanation of the failure
         message = f"{message}: {reason}"
+    explanation = server_message if isinstance(server_message, str) else reason
+    account_failure = (
+        code == 1008 and isinstance(explanation, str) and explanation.startswith(_ACCOUNT_FAILURES)
+    )
     return APIStatusError(
         message,
         status_code=code,
         body=body,
-        retryable=code not in _NON_RETRYABLE_CLOSE_CODES,
+        retryable=code not in _NON_RETRYABLE_CLOSE_CODES and not account_failure,
     )
 
 
@@ -80,7 +102,10 @@ def _api_error(msg_data: dict[str, Any]) -> APIStatusError:
     """
     message = msg_data.get("message") or "unknown error"
     return _close_error(
-        f"Gradium returned error: {message}", code=msg_data.get("code"), body=msg_data
+        f"Gradium returned error: {message}",
+        code=msg_data.get("code"),
+        body=msg_data,
+        server_message=msg_data.get("message"),
     )
 
 
