@@ -1,0 +1,32 @@
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/stt.py
+  s_1a6176064eede6::t_97d964edc8a377 47,547-549,629,663,710,725,778,795,798,822,930-933,936,976
+  s_1a6176064eede6::t_973f450d4db53a 684,694,926-928
+tests/test_plugin_elevenlabs_stt.py
+  s_1a6176064eede6::t_8619f50a23cdd5 1106-1123
+  s_1a6176064eede6::t_6ddd0e786224e1 32,82-84,989,1021,1041-1046,1073,1075,1083,1097,1144-1145,1153
+  s_1a6176064eede6::t_973f450d4db53a 990,1070
+  s_1a6176064eede6::t_6a92164c44954a 1105
+tests/test_plugin_elevenlabs_stt_live.py
+  s_1a6176064eede6::t_6ddd0e786224e1 170
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/_turn_detection.py
+  s_1a6176064eede6::t_0ab6b5bc9acb35 1-50,52,54-64,68-143,149-154
+  s_1a6176064eede6::t_973f450d4db53a 65-67
+  s_1a6176064eede6::t_7ba505954cf6f3 144-148
+  s_1a6176064eede6::t_97d964edc8a377 51,53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f3df1702bc3952dec6232d39e8cbc311544168ac",
+  "prompts": {},
+  "sessions": {
+    "s_1a6176064eede6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ea50-b503-71c0-a323-750834adcd15",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
