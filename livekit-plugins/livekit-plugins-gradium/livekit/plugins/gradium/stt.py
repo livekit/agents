@@ -55,6 +55,31 @@ bytes_per_frame = {
 SUPPORTED_SAMPLE_RATE = 24000
 # Gradium's default model delay, used until the server's ready message arrives
 DEFAULT_DELAY_IN_FRAMES = 10
+# How much processed audio to accumulate before reporting it as usage
+_USAGE_REPORT_INTERVAL_S = 5.0
+
+
+class _UsageMeter:
+    """Audio the server has processed on one connection, and how much was reported."""
+
+    def __init__(self) -> None:
+        self._processed_s = 0.0
+        self._reported_s = 0.0
+
+    def advance(self, processed_s: float) -> float:
+        """Record the server's processed total; return what is due for a report, if any."""
+        self._processed_s = max(self._processed_s, processed_s)
+        due = self._processed_s - self._reported_s
+        if due < _USAGE_REPORT_INTERVAL_S:
+            return 0.0
+        self._reported_s = self._processed_s
+        return due
+
+    def remainder(self) -> float:
+        """Return the processed audio not reported yet, for the end of the session."""
+        due = self._processed_s - self._reported_s
+        self._reported_s = self._processed_s
+        return due
 
 
 def _api_error(msg_data: dict[str, Any]) -> APIStatusError:
@@ -336,6 +361,17 @@ class SpeechStream(stt.SpeechStream):
 
         self._reconnect_event.set()
 
+    def _report_usage(self, audio_duration: float) -> None:
+        # the stream may already be closed when the session ends with it
+        if audio_duration <= 0 or self._event_ch.closed:
+            return
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.RECOGNITION_USAGE,
+                recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
+            )
+        )
+
     async def _run(self) -> None:
         """
         Run a single websocket connection to Gradium and make sure to reconnect
@@ -344,6 +380,7 @@ class SpeechStream(stt.SpeechStream):
 
         closing_ws = False
         timeline = _PaddedTimeline(self._opts.sample_rate)
+        usage = _UsageMeter()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
@@ -512,6 +549,7 @@ class SpeechStream(stt.SpeechStream):
                         self._event_ch.send_nowait(event)
 
                     elif type_ == "step":
+                        self._report_usage(usage.advance(data.get("total_duration_s", 0.0)))
                         if not speaking:
                             start_threshold = self._opts.vad_start_threshold
                             vad_bucket = self._opts.vad_bucket
@@ -571,6 +609,7 @@ class SpeechStream(stt.SpeechStream):
                 ws = await self._connect_ws()
                 self._input_ch.restart_provider_clock()
                 timeline.reset()
+                usage = _UsageMeter()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
@@ -593,6 +632,7 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    self._report_usage(usage.remainder())
                     tasks_group.cancel()
                     tasks_group.exception()
             finally:

@@ -367,6 +367,30 @@ def test_padded_timeline_settles_padding_behind_each_timestamp():
     assert timeline.remove_padding(0.5) == pytest.approx(0.5)
 
 
+async def test_processed_audio_is_reported_as_usage():
+    """The audio the server processed is reported every few seconds and at the end."""
+    listening = (0.01,) * len(VAD_HORIZONS)
+    # steps up to 6.32 s of processed audio
+    frames = [READY] + [_vad_step(i, listening) for i in range(80)]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+
+    usage = [
+        ev.recognition_usage.audio_duration
+        for ev in events
+        if ev.type == SpeechEventType.RECOGNITION_USAGE and ev.recognition_usage
+    ]
+    assert len(usage) == 2  # one at 5 s, the remainder when the session ends
+    assert sum(usage) == pytest.approx(79 * 0.08)
+
+
 def test_stt_custom_language():
     """STT accepts custom language."""
     from livekit.plugins.gradium import STT
