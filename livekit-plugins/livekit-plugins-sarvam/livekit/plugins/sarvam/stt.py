@@ -936,6 +936,9 @@ class SpeechStream(stt.SpeechStream):
         # set when a transcript (or an empty one) arrives; END_OF_SPEECH doesn't count, since
         # Sarvam answers a flush with END_SPEECH first and the final just after
         self._utterance_resolved = asyncio.Event()
+        # while a reconnect settles the open utterance, it emits END_OF_SPEECH itself, after
+        # the flushed final
+        self._settling_for_reconnect = False
         # samples short of a full chunk; kept on the stream so a reconnect doesn't drop them
         self._audio_buffer: list[Any] = []
         # samples sent on the current connection, which is Sarvam's clock for it
@@ -1316,22 +1319,14 @@ class SpeechStream(stt.SpeechStream):
                 if audio_exc is not None:
                     raise audio_exc
 
+                # input has ended, so an update_options() now doesn't reconnect: the old
+                # connection finishes what it has, and a new one would only replay it
                 done2, pending2 = await asyncio.wait(
-                    [self._message_task, reconnect_task],
-                    return_when=asyncio.FIRST_COMPLETED,
+                    [self._message_task],
                     timeout=self._conn_options.timeout,
                 )
                 done |= done2
-                pending = pending2
-
-                if reconnect_task in done2:
-                    self._logger.info(
-                        "Reconnection requested, closing current connection",
-                        extra=self._build_log_context(),
-                    )
-                    self._reconnect_event.clear()
-                    await self._settle_utterance_for_reconnect(ws)
-                    return True
+                pending = pending2 | {reconnect_task}
 
                 if not done2:
                     raise APITimeoutError(
@@ -1382,6 +1377,20 @@ class SpeechStream(stt.SpeechStream):
         if not self._speaking and not self._pending_eos:
             return
 
+        self._settling_for_reconnect = True
+        try:
+            await self._flush_open_utterance(ws)
+        finally:
+            self._settling_for_reconnect = False
+
+        self._speaking = False
+        # the flush closed the utterance on the old connection, so nothing needs replaying
+        self._recent_audio.clear()
+        self._try_commit_utterance()
+        self._emit_end_of_speech()
+
+    async def _flush_open_utterance(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Send the old connection the rest of the utterance and wait for its final."""
         import numpy as np
 
         # the old connection's final is what ends this turn, not the fallback timer
@@ -1404,12 +1413,6 @@ class SpeechStream(stt.SpeechStream):
                 f"Open utterance not transcribed before reconnect: {e!r}",
                 extra=self._build_log_context(),
             )
-
-        self._speaking = False
-        # the flush closed the utterance on the old connection, so nothing needs replaying
-        self._recent_audio.clear()
-        self._try_commit_utterance()
-        self._emit_end_of_speech()
 
     def _carry_audio_into_next_connection(self) -> None:
         """Queue audio the previous connection may not have transcribed for the next one.
@@ -1828,7 +1831,10 @@ class SpeechStream(stt.SpeechStream):
                     self._speaking = False
                     self._pending_eos = True
                     self._try_commit_utterance()
-                    if not self._eos_emitted_for_utterance and self._pending_final_data is None:
+                    if self._settling_for_reconnect:
+                        # the flushed final follows; the settle step closes the turn after it
+                        pass
+                    elif not self._eos_emitted_for_utterance and self._pending_final_data is None:
                         if self._final_received_for_utterance:
                             self._emit_end_of_speech()
                         elif self._eos_fallback_task is None or self._eos_fallback_task.done():

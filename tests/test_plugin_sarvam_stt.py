@@ -601,8 +601,63 @@ async def test_reconnect_waits_past_end_speech_for_the_flushed_final(
 
     await _wait_until(lambda: len(session.sockets) == 2)
     events = await _next_events(stream, 6)
+    assert [e.type for e in events] == [
+        sarvam_stt.stt.SpeechEventType.START_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.RECOGNITION_USAGE,
+        sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT,
+        sarvam_stt.stt.SpeechEventType.RECOGNITION_USAGE,
+        sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT,
+        sarvam_stt.stt.SpeechEventType.END_OF_SPEECH,
+    ]
     texts = [e.alternatives[0].text for e in events if e.alternatives]
     assert texts == ["पहला", "दूसरा"]
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_without_an_earlier_final_waits_past_the_eos_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """END_SPEECH answering the flush doesn't start a fallback that beats a slow final."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    old = session.sockets[0]
+    await _wait_until(lambda: {"type": "flush"} in old.sent)
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+    await asyncio.sleep(sarvam_stt.EOS_FALLBACK_TIMEOUT + 0.1)
+    await stream._handle_transcript_data({"data": {"transcript": "नमस्ते", "language_code": "hi-IN"}})
+
+    await _wait_until(lambda: len(session.sockets) == 2)
+    events = [e.type for e in await _next_events(stream, 4)]
+    assert events == [
+        sarvam_stt.stt.SpeechEventType.START_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.RECOGNITION_USAGE,
+        sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT,
+        sarvam_stt.stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_update_options_after_end_input_does_not_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    stream.end_input()
+    await asyncio.sleep(0.05)
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await asyncio.sleep(0.05)
+    assert len(session.sockets) == 1
+    assert not session.sockets[0].closed  # still finishing on the old connection
     await stream.aclose()
     await stt.aclose()
 
