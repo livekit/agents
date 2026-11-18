@@ -1,0 +1,25 @@
+livekit-agents/livekit/agents/llm/__init__.py
+  s_c9fa01ab24948b::t_4c507252f2e2d5 17-20,163,165
+livekit-agents/livekit/agents/llm/decision_fallback_adapter.py
+  s_c9fa01ab24948b::t_351f13cd150b7d 1-264
+livekit-agents/livekit/agents/llm/decisions.py
+  s_c9fa01ab24948b::t_1fdc5c6488b106 11,198-205
+tests/test_decisions.py
+  s_c9fa01ab24948b::t_f3cda9b7832d91 5,10,16,351-518
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7f850d4397fdf2a2d0d86e98d9924669218b50b4",
+  "prompts": {},
+  "sessions": {
+    "s_c9fa01ab24948b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "16d4b070-3315-410b-8e32-1f2ab17907a1",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
