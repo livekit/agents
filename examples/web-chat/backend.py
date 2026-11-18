@@ -21,7 +21,9 @@ from livekit.agents.storage import AgentDBStorage, Thread
 load_dotenv()
 
 KEY, SECRET = os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"]
-AGENT = os.environ["LIVEKIT_URL"].replace("ws", "http", 1) + "/agents/web-chat/_"
+# the agent's endpoints on LiveKit Cloud, under the deployment `lk agent dev` registered it with
+DEPLOYMENT = os.environ.get("LIVEKIT_AGENT_DEPLOYMENT", "_")
+AGENT = os.environ["LIVEKIT_URL"].replace("ws", "http", 1) + f"/agents/web-chat/{DEPLOYMENT}"
 GRANT_TTL = 15 * 60  # seconds; the page asks again once a token expires
 
 credentials = Credentials(KEY, SECRET)

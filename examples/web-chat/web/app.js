@@ -3,7 +3,7 @@ const $ = (id) => document.getElementById(id);
 const grants = {};
 let thread = null;
 
-// A token to send, from web.py and renewed once it expires: for one thread of this browser,
+// A token to send, from backend.py and renewed once it expires: for one thread of this browser,
 // or with no thread, to start a new one.
 async function auth(id = "") {
   const grant = grants[id];
@@ -13,7 +13,7 @@ async function auth(id = "") {
   return (grants[id] = fresh);
 }
 
-// The app's backend, web.py: tokens, and the threads it reads for the page.
+// The app's backend, backend.py: tokens, and the threads it reads for the page.
 const BACKEND = "http://localhost:8001";
 
 async function get(path) {
