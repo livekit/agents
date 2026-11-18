@@ -81,7 +81,7 @@ impl Delivery {
             }
             result = (|| {
                 self.retained
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |retained| {
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |retained| {
                         retained.checked_add(bytes).filter(|total| *total <= AUDIO_BYTES)
                     })
                     .map_err(|_| {

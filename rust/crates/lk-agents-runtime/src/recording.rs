@@ -294,7 +294,7 @@ impl SessionRecorder {
         if self
             .shared
             .commands
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < self.shared.limits.queued_commands).then_some(count + 1)
             })
             .is_err()
@@ -304,7 +304,7 @@ impl SessionRecorder {
         if self
             .shared
             .queued_bytes
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
                 queued.checked_add(bytes).filter(|total| *total <= self.shared.limits.queued_bytes)
             })
             .is_err()
