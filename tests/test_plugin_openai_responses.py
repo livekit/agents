@@ -10,7 +10,14 @@ import aiohttp
 import httpx2 as httpx
 import pytest
 from openai.types import Reasoning
-from openai.types.responses import ResponseCreatedEvent, ResponseIncompleteEvent
+from openai.types.responses import (
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseIncompleteEvent,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputItemDoneEvent,
+    ResponseTextDeltaEvent,
+)
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, llm as agents_llm
 from livekit.plugins.openai.responses.llm import (
@@ -862,3 +869,151 @@ async def test_chained_request_sends_only_items_after_previous_response() -> Non
     assert len(interrupted["input"]) == 8
     assert last["previous_response_id"] == "resp_3"
     assert last["input"] == [{"role": "user", "content": "Bye"}]
+
+
+def _phase_message(item_id: str, phase: str | None, text: str, status: str) -> dict:
+    item: dict = {
+        "type": "message",
+        "id": item_id,
+        "role": "assistant",
+        "status": status,
+        "content": [{"type": "output_text", "text": text, "annotations": []}] if text else [],
+    }
+    if phase is not None:
+        item["phase"] = phase
+    return item
+
+
+def _phase_frames(*, phase_on_added: bool) -> list[dict]:
+    """A commentary message, then a final_answer message, as the Responses API streams them."""
+    messages = [("msg_c", "commentary", "Let me check."), ("msg_f", "final_answer", "Sunny.")]
+    frames: list[dict] = [_RESPONSE_CREATED]
+    for index, (item_id, phase, text) in enumerate(messages):
+        added_phase = phase if phase_on_added else None
+        frames += [
+            {
+                "type": "response.output_item.added",
+                "output_index": index,
+                "item": _phase_message(item_id, added_phase, "", "in_progress"),
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": item_id,
+                "output_index": index,
+                "content_index": 0,
+                "delta": text,
+                "logprobs": [],
+            },
+            {
+                "type": "response.output_item.done",
+                "output_index": index,
+                "item": _phase_message(item_id, phase, text, "completed"),
+            },
+        ]
+    frames.append(
+        {
+            "type": "response.completed",
+            "response": {
+                **_RESPONSE_CREATED["response"],
+                "status": "completed",
+                "output": [_phase_message(i, ph, t, "completed") for i, ph, t in messages],
+            },
+        }
+    )
+    return [{**frame, "sequence_number": seq} for seq, frame in enumerate(frames)]
+
+
+_PHASE_EVENT_TYPES = {
+    "response.created": ResponseCreatedEvent,
+    "response.output_item.added": ResponseOutputItemAddedEvent,
+    "response.output_text.delta": ResponseTextDeltaEvent,
+    "response.output_item.done": ResponseOutputItemDoneEvent,
+    "response.completed": ResponseCompletedEvent,
+}
+
+
+async def _phase_stream(
+    frames: list[dict], *, transport_kind: str, emit_phase_on_item_start: bool | None
+) -> list[tuple[str, str]]:
+    """The phase and text chunks the stream sends, in order."""
+    # None leaves the option unset, to cover the default
+    kwargs = (
+        {}
+        if emit_phase_on_item_start is None
+        else {"emit_phase_on_item_start": emit_phase_on_item_start}
+    )
+    if transport_kind == "websocket":
+        llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key", **kwargs)
+        llm_model._ws = _ReplayResponsesWS(frames)  # type: ignore[assignment]
+    else:
+        events = [_PHASE_EVENT_TYPES[f["type"]].model_validate(f) for f in frames]
+        client = MagicMock()
+        client._base_url = httpx.URL("https://api.openai.com/v1")
+        client.responses.create = AsyncMock(side_effect=lambda **_kw: _ReplayHTTPStream(events))
+        llm_model = ResponsesLLM(model="gpt-4.1", client=client, use_websocket=False, **kwargs)
+
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="weather?")
+
+    received: list[tuple[str, str]] = []
+    try:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(timeout=5.0)
+        ) as stream:
+            async for chunk in stream:
+                if chunk.delta is None:
+                    continue
+                if phase := (chunk.delta.extra or {}).get("openai", {}).get("phase"):
+                    received.append(("phase", phase))
+                if chunk.delta.content:
+                    received.append(("text", chunk.delta.content))
+    finally:
+        await llm_model.aclose()
+    return received
+
+
+_PHASE_AFTER_TEXT = [
+    ("text", "Let me check."),
+    ("phase", "commentary"),
+    ("text", "Sunny."),
+    ("phase", "final_answer"),
+]
+_PHASE_BEFORE_TEXT = [
+    ("phase", "commentary"),
+    ("text", "Let me check."),
+    ("phase", "final_answer"),
+    ("text", "Sunny."),
+]
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+@pytest.mark.parametrize("emit_phase_on_item_start", [None, False])
+async def test_phase_is_sent_when_message_ends_by_default(
+    transport_kind: str, emit_phase_on_item_start: bool | None
+) -> None:
+    received = await _phase_stream(
+        _phase_frames(phase_on_added=True),
+        transport_kind=transport_kind,
+        emit_phase_on_item_start=emit_phase_on_item_start,
+    )
+    assert received == _PHASE_AFTER_TEXT
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+async def test_phase_is_sent_once_when_message_starts(transport_kind: str) -> None:
+    received = await _phase_stream(
+        _phase_frames(phase_on_added=True),
+        transport_kind=transport_kind,
+        emit_phase_on_item_start=True,
+    )
+    assert received == _PHASE_BEFORE_TEXT
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+async def test_phase_missing_at_start_is_sent_when_message_ends(transport_kind: str) -> None:
+    received = await _phase_stream(
+        _phase_frames(phase_on_added=False),
+        transport_kind=transport_kind,
+        emit_phase_on_item_start=True,
+    )
+    assert received == _PHASE_AFTER_TEXT
