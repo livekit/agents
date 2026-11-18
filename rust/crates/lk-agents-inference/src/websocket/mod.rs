@@ -5,7 +5,7 @@
 
 mod connection;
 mod executor;
-mod liveness;
+pub(crate) mod liveness;
 mod mux;
 mod pacing;
 

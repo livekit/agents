@@ -18,9 +18,65 @@ from aiohttp.test_utils import TestServer
 from palabra_ai.client import REGIONS, Region
 
 from livekit import rtc
-from livekit.agents import stt as agents_stt, tts as agents_tts
+from livekit.agents import APIConnectOptions, APIError, stt as agents_stt, tts as agents_tts
 from livekit.plugins.palabra import STT, TTS
 from tests.fakes import until
+
+
+@pytest.mark.parametrize("finished", [True, False])
+async def test_stt_eof_drains_trailing_transcripts_and_requires_stream_finished(
+    monkeypatch: pytest.MonkeyPatch, finished: bool
+) -> None:
+    eof = asyncio.Event()
+
+    async def recognize(request: web.Request) -> web.WebSocketResponse:
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        async for raw in socket:
+            if raw.type != web.WSMsgType.BINARY or raw.data:
+                continue
+            eof.set()
+            await socket.send_json(
+                {
+                    "message_type": "transcription",
+                    "transcription_id": "tail",
+                    "language": "en",
+                    "is_eos": True,
+                    "segment": {"text": "trailing words"},
+                }
+            )
+            if finished:
+                await socket.send_json({"message_type": "stream_finished"})
+            await socket.close()
+        return socket
+
+    app = web.Application()
+    app.router.add_get("/asr/v1/speech-to-text/stream", recognize)
+    async with TestServer(app) as server:
+        monkeypatch.setitem(
+            REGIONS,
+            "eof-test",
+            Region(stt=str(server.make_url("/asr/v1/speech-to-text/stream").with_scheme("ws"))),
+        )
+        model = STT(api_key="key", region="eof-test")
+        finals: list[str] = []
+        async with model.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+            stream.push_frame(rtc.AudioFrame(bytes(3200), 16000, 1, 1600))
+            stream.end_input()
+
+            async def read() -> None:
+                async for event in stream:
+                    if event.type == agents_stt.SpeechEventType.FINAL_TRANSCRIPT:
+                        finals.append(event.alternatives[0].text)
+
+            if finished:
+                await read()
+            else:
+                with pytest.raises(APIError):
+                    await read()
+        await model.aclose()
+    assert eof.is_set()
+    assert finals == ["trailing words"]
 
 
 @pytest.fixture(autouse=True)

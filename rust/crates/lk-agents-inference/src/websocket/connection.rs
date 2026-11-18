@@ -2,11 +2,12 @@ use std::time::Duration;
 
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::{ApiError, ErrorKind, ProviderSaid, Timeout};
-use lk_agents_abi::utils::websocket::{WebSocketSignal, WsFrame};
+use lk_agents_abi::utils::websocket::{WebSocketCompletion, WebSocketSignal, WsFrame};
 
 /// What one connection runs under, read when it opens.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ConnectionOptions {
+    pub(super) completion: WebSocketCompletion,
     /// The protocol's keepalive frame, sent once nothing was sent for this long.
     pub(super) keepalive: Option<(Duration, WsFrame)>,
     /// Replaced at the stream's first moment it can be after this long.
@@ -278,6 +279,14 @@ impl Connection {
                 }
             }
             WebSocketSignal::SessionFinished => {
+                if let Phase::WriteFailed { error, .. } = &self.phase {
+                    let error = error.clone();
+                    self.finish(WebSocketEffect::Fail(error), effects);
+                    return;
+                }
+                if self.options.completion == WebSocketCompletion::PeerClosed {
+                    return;
+                }
                 let then = match &self.phase {
                     // the input ended and the provider finished: the stream ends
                     Phase::AwaitingReply { .. }
@@ -305,25 +314,36 @@ impl Connection {
         nothing_pending: bool,
         effects: &mut Vec<WebSocketEffect>,
     ) {
+        let nothing_pending = match self.options.completion {
+            WebSocketCompletion::Settled => nothing_pending,
+            WebSocketCompletion::SessionFinished => false,
+            WebSocketCompletion::PeerClosed => expected,
+        };
         let then = match &self.phase {
             Phase::AwaitingReply { .. } | Phase::WriteFailed { awaiting_reply: true, .. } => {
                 nothing_pending.then_some(Finish::Ended)
             }
             Phase::Finished => return,
             // the provider left the session the goodbye ended: a clean close finishes it
-            Phase::Draining { then, .. } => Some(*then),
+            Phase::Draining { then, .. } => {
+                (self.options.completion != WebSocketCompletion::SessionFinished).then_some(*then)
+            }
             // a replacement waiting for the item being written: the item goes on the next one
             Phase::Open | Phase::Held { .. } | Phase::WriteFailed { .. }
                 if self.replace_after_write =>
             {
                 Some(Finish::Replaced)
             }
-            Phase::Open | Phase::Held { .. } | Phase::WriteFailed { .. } => {
-                (expected || nothing_pending).then_some(Finish::SessionFinished)
-            }
+            Phase::Open | Phase::Held { .. } | Phase::WriteFailed { .. } => ((expected
+                && self.options.completion != WebSocketCompletion::SessionFinished)
+                || nothing_pending)
+                .then_some(Finish::SessionFinished),
         };
         let effect = match close_outcome(then.is_some(), code, reason) {
-            Ok(()) => WebSocketEffect::Finish(then.unwrap_or(Finish::Ended)),
+            Ok(()) => match &self.phase {
+                Phase::WriteFailed { error, .. } => WebSocketEffect::Fail(error.clone()),
+                _ => WebSocketEffect::Finish(then.unwrap_or(Finish::Ended)),
+            },
             Err(error) => WebSocketEffect::Fail(error),
         };
         self.finish(effect, effects);
@@ -373,17 +393,21 @@ impl Connection {
                 }
             }
             Phase::AwaitingReply { until } if now >= *until => {
-                let effect = if nothing_pending {
-                    WebSocketEffect::Finish(Finish::Ended)
+                let effect =
+                    if nothing_pending && self.options.completion == WebSocketCompletion::Settled {
+                        WebSocketEffect::Finish(Finish::Ended)
+                    } else {
+                        WebSocketEffect::Fail(ApiError::timed_out(Timeout::Read))
+                    };
+                self.finish(effect, effects);
+            }
+            Phase::Draining { until, then } if now >= *until => {
+                let effect = if self.options.completion == WebSocketCompletion::Settled {
+                    WebSocketEffect::Finish(*then)
                 } else {
                     WebSocketEffect::Fail(ApiError::timed_out(Timeout::Read))
                 };
                 self.finish(effect, effects);
-            }
-            Phase::Draining { until, then } if now >= *until => {
-                // the provider never answered the goodbye: finished all the same
-                let then = *then;
-                self.finish(WebSocketEffect::Finish(then), effects);
             }
             Phase::WriteFailed { until, error, .. } if now >= *until => {
                 // the peer never said why: the write's own failure
@@ -461,11 +485,73 @@ fn close_outcome(
 mod tests {
     use super::*;
 
+    fn awaiting_completion(completion: WebSocketCompletion) -> Connection {
+        let mut connection = Connection::open(
+            ConnectionOptions {
+                completion,
+                keepalive: None,
+                max_session_duration: None,
+                reply_limit: Duration::from_secs(10),
+                ping: None,
+                readiness: Readiness::Open,
+                input_idle: None,
+                response_idle: None,
+                goodbye: Vec::new(),
+            },
+            Ts::ZERO,
+        );
+        connection.writing_input(Ts::ZERO);
+        connection.input_written(Ts::ZERO, &mut Vec::new());
+        connection.input_ended(Ts::ZERO, true, &mut Vec::new());
+        connection
+    }
+
+    #[test]
+    fn a_promised_terminal_message_cannot_be_replaced_by_a_final_or_clean_close() {
+        for close in [false, true] {
+            let mut connection = awaiting_completion(WebSocketCompletion::SessionFinished);
+            let mut effects = Vec::new();
+            if close {
+                connection.closed(Some(1000), None, true, true, &mut effects);
+            } else {
+                connection.tick(Ts::from_nanos(10_000_000_000), true, &mut effects);
+            }
+            assert!(matches!(effects.as_slice(), [WebSocketEffect::Fail(_)]));
+        }
+    }
+
+    #[test]
+    fn a_peer_close_contract_keeps_reading_after_session_signals() {
+        let mut connection = awaiting_completion(WebSocketCompletion::PeerClosed);
+        let mut effects = Vec::new();
+        connection.signal(WebSocketSignal::SessionFinished, Ts::ZERO, &mut effects);
+        assert!(effects.is_empty());
+        connection.closed(Some(1000), None, true, false, &mut effects);
+        assert_eq!(effects, [WebSocketEffect::Finish(Finish::Ended)]);
+    }
+
+    #[test]
+    fn a_failed_final_write_cannot_become_success_after_completion_or_close() {
+        for close in [false, true] {
+            let mut connection = awaiting_completion(WebSocketCompletion::Settled);
+            let error = ApiError::connection(Some("final write failed".to_owned()));
+            connection.write_failed(Ts::ZERO, error.clone());
+            let mut effects = Vec::new();
+            if close {
+                connection.closed(Some(1000), None, true, true, &mut effects);
+            } else {
+                connection.signal(WebSocketSignal::SessionFinished, Ts::ZERO, &mut effects);
+            }
+            assert_eq!(effects, [WebSocketEffect::Fail(error)]);
+        }
+    }
+
     #[test]
     fn response_silence_waits_for_data_and_restarts_after_input_or_response() {
         let at = |ms: u64| Ts::from_nanos(ms * 1_000_000);
         let mut connection = Connection::open(
             ConnectionOptions {
+                completion: WebSocketCompletion::Settled,
                 keepalive: None,
                 max_session_duration: None,
                 reply_limit: Duration::from_secs(10),

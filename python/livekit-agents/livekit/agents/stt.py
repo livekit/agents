@@ -17,6 +17,7 @@ from ._generated.vad import VAD, VADEventType, VADStream
 from ._generated.websocket import WsFrame
 from ._websocket import (
     Batch,
+    Completion,
     InboundT,
     Keepalive,
     OutboundT,
@@ -34,6 +35,7 @@ from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, No
 from .utils import aio
 
 __all__ = [
+    "Completion",
     "EndOfAudio",
     "Flush",
     "Keepalive",
@@ -181,6 +183,7 @@ class WebSocketStream(
             vad: What hears the speech ``truncate_silence`` lets through.
         """
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
+        self._completion_received = False
         self._gate = _SilenceGate(vad) if self.truncate_silence and vad is not None else None
         # the audio the gate lets through is the usage, not the audio pushed
         self._measures_sent = self._core_measured and self._gate is not None
@@ -203,6 +206,7 @@ class WebSocketStream(
             case Ready():
                 self._websocket.signal("ready")
             case SessionFinished():
+                self._completion_received = True
                 self._websocket.signal("session_finished")
             case Transcript():
                 if not report.request_id and self.request_id:
@@ -212,6 +216,19 @@ class WebSocketStream(
                 super().report(report)
             case _:
                 assert_never(report)
+
+    def nothing_pending(self) -> bool:
+        """Whether all audio sent has been answered. Override for protocols that track
+        outstanding items independently of their speech and transcript events."""
+        return super()._core_settled()
+
+    def _core_settled(self) -> bool:
+        # The attempt's response deadline must use the protocol's pending items too.
+        if self.completion == "peer_closed" or (
+            self.completion == "session_finished" and not self._completion_received
+        ):
+            return False
+        return self.nothing_pending()
 
     def _websocket_count_sent_audio(self, seconds: float) -> None:
         if self._measures_sent and seconds > 0:
@@ -429,19 +446,20 @@ class _Recognition(WebSocketKind[rtc.AudioFrame | Flush | EndOfAudio]):
         return True
 
     def nothing_pending(self) -> bool:
-        return self._stream._core_settled()
+        return self._stream.nothing_pending()
 
     def expects_close(self) -> bool:
         # a flush that ends the session, or the end of the audio, asked the provider to close
         return self._ending_session or self._ended
 
     def can_reconnect(self) -> bool:
-        return not self._stream.speaking
+        return self._stream.nothing_pending()
 
     def retrying(self, error: Exception) -> None:
         self._stream._core_retrying(error)
 
     def connecting(self, first: bool) -> None:
+        self._stream._completion_received = False
         # the attempt's start already closed the speech the one before left open
         if not first:
             self._stream._end_speech()

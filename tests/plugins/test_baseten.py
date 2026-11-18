@@ -24,6 +24,51 @@ from tests.plugins.conftest import Connection, Frame, WsPeer
 Wire = dict[str, Any]
 
 
+async def test_qwen_eof_waits_for_every_commit_not_the_first_flush_response() -> None:
+    commits = 0
+
+    async def transcribe(request: web.Request) -> web.WebSocketResponse:
+        nonlocal commits
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        async for raw in socket:
+            if json.loads(raw.data).get("type") != "input_audio_buffer.commit":
+                continue
+            commits += 1
+            if commits == 2:
+                for text in ("first", "second"):
+                    await socket.send_json(
+                        {
+                            "is_final": True,
+                            "is_end_of_audio_flush": True,
+                            "segments": [{"text": text}],
+                        }
+                    )
+        return socket
+
+    app = web.Application()
+    app.router.add_get("/stt", transcribe)
+    async with TestServer(app) as server, http.open():
+        model = STT(
+            model="qwen3-asr",
+            api_key="key",
+            model_endpoint=str(server.make_url("/stt").with_scheme("ws")),
+        )
+        async with model.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+            stream.push_frame(rtc.AudioFrame(bytes(3200), 16000, 1, 1600))
+            stream.flush()
+            stream.push_frame(rtc.AudioFrame(bytes(3200), 16000, 1, 1600))
+            stream.end_input()
+            finals = [
+                event.alternatives[0].text
+                async for event in stream
+                if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+            ]
+        await model.aclose()
+    assert commits == 2
+    assert finals == ["first", "second"]
+
+
 @pytest.mark.parametrize("model", ["whisper", "qwen3-asr"])
 @pytest.mark.parametrize("invalid_timing", [False, True])
 async def test_transcript_timing_is_validated_before_delivery(
@@ -96,11 +141,6 @@ async def test_transcript_timing_is_validated_before_delivery(
                 assert speech.words[0].end_time == speech.end_time
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="https://github.com/livekit/agents/pull/8144 reproduces: input end drops buffered audio",
-)
 async def test_ending_input_flushes_buffered_audio_and_delivers_its_transcript() -> None:
     """Every sample is sent and its final transcript delivered; https://github.com/livekit/agents/pull/8144."""
     audio = bytearray()

@@ -1097,3 +1097,52 @@ async def test_a_control_message_sent_while_encoding_goes_ahead_of_the_item(
     assert await _say(model.stream(conn_options=NO_RETRY), "one fish.")
     assert texts[-2:] == ["flush", "<end>"]
     await model.mux.aclose()
+
+
+@pytest.mark.parametrize("failure", ["close", "timeout"])
+async def test_a_promised_completion_is_required_even_after_a_final_transcript(
+    peer: Callable[[Handler], Awaitable[str]],
+    failure: str,
+) -> None:
+    class Promised(LoopbackSttStream):
+        completion: ClassVar[stt.Completion] = "session_finished"
+
+    seen: list[str] = []
+
+    async def provider(ws: web.WebSocketResponse, _: web.Request) -> None:
+        async for msg in ws:
+            if msg.type is aiohttp.WSMsgType.TEXT:
+                command = json.loads(msg.data)["type"]
+                seen.append(command)
+                if command == "close":
+                    await ws.send_json({"type": "transcript", "text": "one segment", "final": True})
+                    if failure == "close":
+                        await ws.close(code=1000)
+
+    url = await peer(provider)
+    stream = Promised(
+        stt=LoopbackStt(url), conn_options=APIConnectOptions(max_retry=0, read_timeout=5)
+    )
+    got: list[stt.SpeechEvent] = []
+
+    async def read() -> None:
+        async for event in stream:
+            got.append(event)
+
+    async with stream:
+        reader = asyncio.create_task(read())
+        try:
+            stream.push_frame(audio(100))
+            stream.end_input()
+            await until(
+                lambda: any(e.type == stt.SpeechEventType.FINAL_TRANSCRIPT for e in got),
+                "the final segment arrives before completion",
+            )
+            if failure == "timeout":
+                _core.skip_host_time(5)
+            await until(reader.done, "the missing completion fails")
+            with pytest.raises(APIError):
+                reader.result()
+        finally:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)

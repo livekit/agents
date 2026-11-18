@@ -172,7 +172,6 @@ class RecognizeStream(stt.WebSocketStream[ServerMessage, ClientMessage]):
         self._default_language = opts.language or LanguageCode("en-US")
         self._language = self._default_language
         self._pending_interim = ""
-        self._audio_ended = False
         self._setup: ClientMessage = {}
 
     async def connect(self, conn_options: APIConnectOptions) -> stt.WebSocketTarget:
@@ -215,7 +214,6 @@ class RecognizeStream(stt.WebSocketStream[ServerMessage, ClientMessage]):
                 return None
             case stt.EndOfAudio():
                 # Gemini finalizes the pending transcript rather than waiting for more audio
-                self._audio_ended = True
                 return {"realtimeInput": {"audioStreamEnd": True}}
             case _:
                 assert_never(item)
@@ -253,9 +251,8 @@ class RecognizeStream(stt.WebSocketStream[ServerMessage, ClientMessage]):
                 self.report(self._transcript(self._pending_interim, final=True))
                 self._pending_interim = ""
             self._language = self._default_language
-            if self._audio_ended:
-                # the last turn after the audio ended: the session is done
-                self.report(stt.SessionFinished())
+            # A turn boundary can belong to earlier audio. It does not acknowledge
+            # audioStreamEnd or promise that no later transcript will arrive.
 
     def _transcript(self, text: str, *, final: bool) -> stt.Transcript:
         return stt.Transcript(text, self._language, final=final, confidence=1.0)

@@ -110,6 +110,10 @@ impl AttemptMachine {
             return Ok(RetryDecision::Retry(self.retry_delay(now)));
         }
         let error = error.attempt_error();
+        // The STT producer consumed EOF: a new attempt has no audio to recognize.
+        if self.kind == RequestKind::SttStream && self.input_ended {
+            self.attempts.disable_retries();
+        }
         if self.kind == RequestKind::SttStream
             && self.options.attempt_connected(
                 now.saturating_duration_since(self.attempt_started).as_secs_f64(),
@@ -131,6 +135,9 @@ impl AttemptMachine {
             }
             Retry::GiveUp(error) if error.kind == ApiErrorKind::Cancelled => {
                 Ok(RetryDecision::Stop)
+            }
+            Retry::GiveUp(_) if self.kind == RequestKind::SttStream && self.input_ended => {
+                Ok(RetryDecision::Raise)
             }
             Retry::GiveUp(error) => Ok(terminal_failure(
                 self.kind,
@@ -835,6 +842,19 @@ mod tests {
         assert_eq!((error.timeout, error.retryable), (Some(Timeout::Read), false));
         assert_eq!(operation.failure(error.clone().into(), false, at(1)), Err(error));
         assert_eq!(operation.wake_at(), None, "no attempt follows");
+    }
+
+    // Catches a retryable remote failure after EOF reconnecting with no audio to replay.
+    #[test]
+    fn a_retryable_failure_after_stt_consumed_eof_is_not_retried() {
+        let mut operation =
+            AttemptMachine::new(RequestKind::SttStream, ApiConnectOptions::default(), 0).unwrap();
+        assert_eq!(operation.ready(0), Ok(true));
+        operation.input_ended(0);
+        assert_eq!(
+            operation.failure(ApiError::connection(None).into(), false, 0).unwrap(),
+            RetryDecision::Raise
+        );
     }
 
     // Catches: a handshake that times out after the connect limit counted as a connected attempt,

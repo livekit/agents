@@ -25,6 +25,73 @@ SERVER_VAD: VADOptions = {"vad_silence_threshold_secs": 0.5}
 JSON = dict[str, object]
 
 
+@pytest.mark.parametrize(
+    ("error_type", "kind"),
+    [
+        ("invalid_request", "invalid_request"),
+        ("chunk_size_exceeded", "invalid_request"),
+        ("unaccepted_terms", "auth"),
+        ("rate_limited", "rate_limit"),
+    ],
+)
+async def test_documented_rejections_keep_their_error_kind(error_type: str, kind: str) -> None:
+    async def scribe(request: web.Request) -> web.WebSocketResponse:
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        await socket.send_json({"message_type": error_type, "message": "refused"})
+        async for _ in socket:
+            pass
+        return socket
+
+    async with peer(scribe) as (url, session):
+        model = STT(api_key="key", base_url=url, http_session=session)
+        async with model.stream(conn_options=OPTIONS) as stream:
+            with pytest.raises(APIError) as failure:
+                _ = [event async for event in stream]
+        assert failure.value.kind == kind
+        assert failure.value.detail == "refused"
+        await model.aclose()
+
+
+async def test_an_earlier_commit_does_not_settle_unanswered_later_audio() -> None:
+    commits = 0
+
+    async def scribe(request: web.Request) -> web.WebSocketResponse:
+        nonlocal commits
+        socket = web.WebSocketResponse()
+        await socket.prepare(request)
+        async for raw in socket:
+            if not json.loads(raw.data).get("commit"):
+                continue
+            commits += 1
+            if commits == 2:
+                await socket.send_json(committed("first"))
+                await socket.close()
+        return socket
+
+    async with peer(scribe) as (url, session):
+        model = STT(
+            api_key="key",
+            model="scribe_v2_realtime",
+            base_url=url,
+            http_session=session,
+            include_language_detection=False,
+        )
+        finals: list[str] = []
+        async with model.stream(conn_options=OPTIONS) as stream:
+            stream.push_frame(silence(100))
+            stream.flush()
+            stream.push_frame(silence(100))
+            stream.end_input()
+            with pytest.raises(APIError):
+                async for event in stream:
+                    if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                        finals.append(event.alternatives[0].text)
+        await model.aclose()
+    assert commits == 2
+    assert finals == ["first"]
+
+
 class ScribeOptions(TypedDict, total=False):
     server_vad: VADOptions
     language_code: str

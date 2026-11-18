@@ -159,10 +159,11 @@ A TTS stream (`tts.stream()`) takes text through `push_text()`, `flush()` and
 without ending its input. Provider cancellation ends
 the request without retry or a provider-health penalty.
 
-After its input ends, an inference STT stream completes when the provider
-acknowledges the end, or after a quiet period: 3 seconds after a final
-transcript, 30 seconds after the input ended or after a later interim
-transcript. A transcript that arrives after the quiet period is dropped.
+After its input ends, an inference STT stream drains for at most 30 seconds.
+After a final transcript, 3 seconds without another transcript completes the drain early;
+empty interims do not restart that quiet period. Finalize acknowledgements do not complete
+the drain: they are uncorrelated and some providers acknowledge before sending their finals.
+A transcript arriving after the drain ends is dropped.
 
 A concurrent pull of a provider stream raises `StreamStateError` without
 disturbing its accepted pull. `aclose()` requests cancellation and waits for
@@ -250,12 +251,19 @@ error for a frame that breaks the protocol. Plugins branch on items with `match`
 The end of the input is the kind's end item, which `encode` turns into the provider's goodbye
 (`case stt.EndOfAudio(): return _Out(type="CloseStream")`). The base then waits for the
 provider's reply only when the connection sent input the kind says is owed an answer (STT: its
-transcripts; TTS: a segment still open), bounded by the read limit. The framework runs the socket
+transcripts; TTS: a segment still open), bounded by the read limit. A protocol declares
+`completion="session_finished"` when its documentation promises an explicit terminal response,
+or `completion="peer_closed"` when the server flushes results before closing the socket.
+An earlier final transcript cannot replace either required completion. The default
+`completion="settled"` uses bounded transcript settlement where no terminal guarantee is known.
+An STT protocol
+that tracks outstanding item IDs overrides `nothing_pending()` so a completed item cannot
+stand in for other pending transcripts. The framework runs the socket
 in the core: the job's proxy, pings, the `keepalive=Keepalive(every=, frame=)` frame, the `setup`
 frame and `awaits_ready` (nothing else goes until `on_message` reports the kind's `Ready`, within
 the connect limit), close codes, `reconnect(reason)`, retries and the bounded close.
 `max_session_duration` replaces the connection at the first moment the stream has nothing in
-progress (STT: no open speech; TTS: no open segment; realtime: no reply being generated). A
+progress (STT: no pending recognition; TTS: no open segment; realtime: no reply being generated). A
 provider that ends its session (the kind's `SessionFinished`, a segment's `SegmentDone` with
 `connection_per_segment`, a clean close after the stream asked for it, or a clean close while
 nothing it was sent is unanswered) gets a new connection when more input comes; a clean close

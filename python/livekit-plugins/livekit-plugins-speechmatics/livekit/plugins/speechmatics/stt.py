@@ -20,7 +20,7 @@ import os
 import weakref
 from collections.abc import Sequence
 from enum import StrEnum
-from typing import Annotated, Any, Literal, NotRequired, TypedDict, TypeVar, assert_never
+from typing import Annotated, Any, ClassVar, Literal, NotRequired, TypedDict, TypeVar, assert_never
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError
@@ -567,6 +567,7 @@ _Command = _StartRecognition | _EndOfStream | _ForceEndOfUtterance | _GetSpeaker
 
 
 class SpeechStream(stt.WebSocketStream[_Message, _Command]):
+    completion: ClassVar[stt.Completion] = "session_finished"
     frame_ms = 100
     # audio waits for RecognitionStarted
     awaits_ready = True
