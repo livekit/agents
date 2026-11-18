@@ -2934,3 +2934,70 @@ async def test_a_client_delegate_is_answered_like_the_models_own(
     finally:
         await session.aclose()
         await model.aclose()
+
+
+async def test_a_closing_session_still_reports_the_usage_that_arrives_while_it_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backend tokens and the final voice usage can land after session.close is sent."""
+    ws = _LifecycleWS()
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return ws
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    metrics: list[LLMMetrics | RealtimeModelMetrics] = []
+    session.on("metrics_collected", metrics.append)
+    try:
+        await session._update_session(tools=[_get_weather])
+        await asyncio.wait_for(ws.started.wait(), timeout=1)
+        await session._session_started_fut
+        session._handle_event(
+            _response_event("item_d1", {"type": "response.created", "response": {"id": "resp_1"}})
+        )
+        session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
+
+        # the tool ends the conversation before its response completes
+        close_task = asyncio.create_task(session.aclose())
+        await asyncio.wait_for(ws.close_requested.wait(), timeout=1)
+        sent = len(ws.sent)
+        ws.emit(_response_event("item_d1", _completed("resp_1")))
+        await asyncio.sleep(gpt_live_model._SESSION_CLOSE_TIMEOUT + 1)
+        assert not close_task.done()
+        ws.emit({"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 9}})
+        await asyncio.wait_for(close_task, timeout=1)
+
+        assert [m.total_tokens for m in metrics if isinstance(m, LLMMetrics)] == [394]
+        assert [m.session_duration for m in metrics if isinstance(m, RealtimeModelMetrics)] == [9]
+        # a closing session runs no continuation
+        assert len(ws.sent) == sent
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_final_close_that_never_hears_session_closed_warns(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    ws = _LifecycleWS()
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return ws
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.wait_for(ws.started.wait(), timeout=1)
+        await session._session_started_fut
+        with caplog.at_level(logging.WARNING, logger=gpt_live_model.logger.name):
+            await asyncio.wait_for(
+                session.aclose(), timeout=gpt_live_model._FINAL_SESSION_CLOSE_TIMEOUT + 1
+            )
+        assert ws.closed.is_set()
+        assert any("session.closed" in r.getMessage() for r in caplog.records)
+    finally:
+        await model.aclose()
