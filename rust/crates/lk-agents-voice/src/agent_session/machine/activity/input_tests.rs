@@ -45,86 +45,93 @@ fn candidate(id: &str) -> InputCandidate {
     }
 }
 
+/// A realtime reply of the remote `travel` tool whose model already proposed its call, held
+/// while the reply's input capture `request` is pending.
+fn proposed_remote_call() -> (VoiceDriver, SpeechId, ModelRequestId) {
+    let mut driver = crate::agent_session::tests::driver();
+    let speech = driver.start_speech(
+        Ts::ZERO,
+        SpeechSpec::new(SpeechKind::Say, ReplySource::Text("response".into()), true),
+    );
+    driver.activity.speech_scheduler.speech_mut(speech).unwrap().authorize_generation();
+    let spec = ToolSpec {
+        name: "travel".into(),
+        description: "Travel expert".into(),
+        json_schema: serde_json::json!({"type":"object"}),
+        flags: Default::default(),
+        provider_tool: None,
+    };
+    let definition = AgentDefinition {
+        name: "desk".into(),
+        instructions: String::new(),
+        dynamic_instructions: false,
+        tools: vec![FunctionToolInfo {
+            spec: spec.clone(),
+            raw_schema: true,
+            needs_approval: None,
+            on_duplicate: DuplicateMode::Allow,
+            duplicate_scope: DuplicateScope::Name,
+            retries: None,
+            remote: Some("https://travel.test".into()),
+            local_agent: None,
+        }],
+        output: OutputSpec::Text { validated: false },
+        retries: Retries::default(),
+    };
+    let mut run = AgentRun::new(
+        definition.clone(),
+        RunInput {
+            invocation_id: "reply".into(),
+            id_seed: 0,
+            opening: Opening::Coordinated { approval_answers: Default::default() },
+            history: vec![],
+            delegated: false,
+            mode: lk_agents_core::tool_outcome::Mode::Voice,
+            llm: None,
+            wall: WallAnchor { wall: 0.0, at: Ts::ZERO },
+            cleanup_timeout: lk_agents_abi::HOST_TEARDOWN_TIMEOUT,
+        },
+    )
+    .unwrap();
+    let request = run
+        .handle(AgentRunEvent::Start, Ts::ZERO)
+        .into_iter()
+        .find_map(|effect| match effect {
+            AgentRunEffect::PlanRequest { request, .. } => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    let mut reply = ReplyRun::new(
+        run,
+        Some(Arc::new(Frame(definition))),
+        PlanSpec::default(),
+        true,
+        Some(request),
+    );
+    reply.input_gate = ReplyInputGate::Capturing { request, after: AfterCapture::Human };
+    driver.activity.tools.replies.insert(speech, reply);
+    let call = FunctionCall {
+        id: "call".into(),
+        call_id: "wire".into(),
+        arguments: "{}".into(),
+        name: "travel".into(),
+        created_at: UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    };
+    driver.on_tool_made(
+        Ts::ZERO,
+        (speech, 1),
+        MadeCall { call, spec: Some(spec), forbidden: false, agent: None },
+        crate::agent_session::RequestId(700),
+    );
+    (driver, speech, request)
+}
+
 #[test]
 fn realtime_calls_wait_for_exact_capture_and_response_admission_in_both_transcript_orders() {
     for order in [Some(false), Some(true), None] {
-        let mut driver = crate::agent_session::tests::driver();
-        let speech = driver.start_speech(
-            Ts::ZERO,
-            SpeechSpec::new(SpeechKind::Say, ReplySource::Text("response".into()), true),
-        );
-        driver.activity.speech_scheduler.speech_mut(speech).unwrap().authorize_generation();
-        let spec = ToolSpec {
-            name: "travel".into(),
-            description: "Travel expert".into(),
-            json_schema: serde_json::json!({"type":"object"}),
-            flags: Default::default(),
-            provider_tool: None,
-        };
-        let definition = AgentDefinition {
-            name: "desk".into(),
-            instructions: String::new(),
-            dynamic_instructions: false,
-            tools: vec![FunctionToolInfo {
-                spec: spec.clone(),
-                raw_schema: true,
-                needs_approval: None,
-                on_duplicate: DuplicateMode::Allow,
-                duplicate_scope: DuplicateScope::Name,
-                retries: None,
-                remote: Some("https://travel.test".into()),
-                local_agent: None,
-            }],
-            output: OutputSpec::Text { validated: false },
-            retries: Retries::default(),
-        };
-        let mut run = AgentRun::new(
-            definition.clone(),
-            RunInput {
-                invocation_id: "reply".into(),
-                id_seed: 0,
-                opening: Opening::Coordinated { approval_answers: Default::default() },
-                history: vec![],
-                delegated: false,
-                mode: lk_agents_core::tool_outcome::Mode::Voice,
-                llm: None,
-                wall: WallAnchor { wall: 0.0, at: Ts::ZERO },
-                cleanup_timeout: lk_agents_abi::HOST_TEARDOWN_TIMEOUT,
-            },
-        )
-        .unwrap();
-        let request = run
-            .handle(AgentRunEvent::Start, Ts::ZERO)
-            .into_iter()
-            .find_map(|effect| match effect {
-                AgentRunEffect::PlanRequest { request, .. } => Some(request),
-                _ => None,
-            })
-            .unwrap();
-        let mut reply = ReplyRun::new(
-            run,
-            Some(Arc::new(Frame(definition))),
-            PlanSpec::default(),
-            true,
-            Some(request),
-        );
-        reply.input_gate = ReplyInputGate::Capturing { request, after: AfterCapture::Human };
-        driver.activity.tools.replies.insert(speech, reply);
-        let call = FunctionCall {
-            id: "call".into(),
-            call_id: "wire".into(),
-            arguments: "{}".into(),
-            name: "travel".into(),
-            created_at: UNIX_EPOCH,
-            extra: Default::default(),
-            group_id: None,
-        };
-        driver.on_tool_made(
-            Ts::ZERO,
-            (speech, 1),
-            MadeCall { call, spec: Some(spec), forbidden: false, agent: None },
-            crate::agent_session::RequestId(700),
-        );
+        let (mut driver, speech, request) = proposed_remote_call();
         assert_eq!(
             driver.activity.tools.deferred.len(),
             1,
@@ -202,4 +209,23 @@ fn realtime_calls_wait_for_exact_capture_and_response_admission_in_both_transcri
             "a later question cannot become this already-started model turn's answer target"
         );
     }
+}
+
+#[test]
+fn an_interrupted_realtime_reply_drops_its_call_still_waiting_on_response_admission() {
+    let (mut driver, speech, request) = proposed_remote_call();
+    driver.input_offers(speech, request, vec![candidate("input_1")]);
+    driver.route_realtime_input_for(
+        speech,
+        ChatMessage::text("human", Role::User, "Friday", UNIX_EPOCH),
+    );
+    assert!(!driver.remote_inputs_ready(speech, "travel"), "the person's words are being routed");
+    driver.force_interrupt_speech(Ts::ZERO, speech, crate::trace::InterruptCause::Host);
+    driver.settle_deferred_calls();
+    assert!(
+        driver.activity.tools.deferred.is_empty(),
+        "an interrupted reply cannot keep a call waiting on the routing it abandoned"
+    );
+    let reply = &driver.activity.tools.replies[&speech];
+    assert!(reply.run.step_call_id("wire").is_none(), "the unadmitted call never starts");
 }
