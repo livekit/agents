@@ -277,7 +277,8 @@ impl AudioRecognition {
             | Timer::OutputSettlement(_)
             | Timer::InterruptionTimeout(_)
             | Timer::ConsecutiveSpeechDelay
-            | Timer::PartitionRelease(_) => {}
+            | Timer::PartitionRelease(_)
+            | Timer::ExpertFollowUp => {}
         }
         eff
     }

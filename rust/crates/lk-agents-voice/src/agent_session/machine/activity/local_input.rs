@@ -487,7 +487,7 @@ impl VoiceDriver {
                 // An admitted body keeps its response across floor changes. Its death, unlike a
                 // floor change, removes the exact invocation and makes a late callback invalid.
                 if !self.activity.tools.running.iter().any(|running| running.hosted == hosted)
-                    || !self.session.experts.response_queued(&request)
+                    || !self.expert_response_queued(&request)
                 {
                     return;
                 }

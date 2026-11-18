@@ -383,6 +383,12 @@ impl Experts {
         }
     }
 
+    /// The answered tasks' follow-up window passed: their silence no longer holds other
+    /// questions, and a later question of theirs takes its place in line.
+    pub fn follow_up_window_closed(&mut self) {
+        self.answered.clear();
+    }
+
     /// The person took a turn: whatever was asked before it has had its chance.
     pub fn person_turn(&mut self) {
         self.turns += 1;
@@ -402,8 +408,9 @@ impl Experts {
     ///
     /// Fairness: waiting questions are asked in arrival order, so a newer task never overtakes
     /// an older one, except a bounded follow-up: until a task the person just answered is heard
-    /// from again (or the person speaks again), other questions wait, and if it asks a
-    /// follow-up that goes first, once per answer and never twice in a row. A question the person passed (a turn without answering it) stays open and
+    /// from again, the person speaks again or the follow-up window passes, other questions
+    /// wait, and if it asks a follow-up that goes first, once per answer and never twice in a
+    /// row. A question the person passed (a turn without answering it) stays open and
     /// goes back in line behind the questions already waiting; it is asked once more only after
     /// another prompt, never in the prompt right after it was passed.
     ///

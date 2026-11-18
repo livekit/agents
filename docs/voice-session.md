@@ -837,8 +837,9 @@ In voice, the session applies these presentation rules:
 - Waiting questions are asked in arrival order. A question the person passes stays open for a
   later answer, goes back in line behind the questions already waiting, is never repeated in
   the next prompt, and is asked again at most once.
-- After the person answers a task, other questions wait until that task is heard from again or
-  the person speaks. A follow-up it asks goes first, once per answer and never twice in a row.
+- After the person answers a task, other questions wait until that task is heard from again,
+  the person speaks, or three seconds pass. A follow-up it asks in that window goes first, once
+  per answer and never twice in a row.
 - Results ready together are presented in one reply; each still resolves its own call.
 - A progress announcement not yet heard when its task asks or finishes is withdrawn; the other
   tasks' updates it carried are presented later.

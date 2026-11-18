@@ -273,6 +273,8 @@ pub enum Timer {
     ConsecutiveSpeechDelay,
     /// A speech that ended without reporting its turn: past it, its partition is released.
     PartitionRelease(SpeechId),
+    /// An answered expert task sent nothing yet: past it, other tasks' questions go ahead.
+    ExpertFollowUp,
 }
 
 /// The journal's record of a call on a provider (`InputStep::ProviderCalled`).

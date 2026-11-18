@@ -500,7 +500,7 @@ impl VoiceDriver {
                 self.local_input_candidates(requests)
             }
             Some(VoiceEvent::RemoteResponseQueued { request }) => {
-                self.session.experts.response_queued(&request);
+                self.expert_response_queued(&request);
             }
             Some(VoiceEvent::StorageReloaded { read, history }) => {
                 self.storage_reloaded(read, history)
@@ -705,6 +705,7 @@ impl VoiceDriver {
                 Timer::RealtimeRequest(key) => self.realtime_request_timed_out(key),
                 Timer::Filler(id) => self.on_filler_timer(now, id),
                 Timer::PartitionRelease(speech) => self.partition_release_due(speech),
+                Timer::ExpertFollowUp => self.expert_follow_up_window_closed(now),
                 Timer::EotPredictionTimeout
                 | Timer::EndpointingDelay
                 | Timer::TranscriptionTimeout
