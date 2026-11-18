@@ -226,11 +226,11 @@ impl CurrentScope {
         endpoint: &str,
     ) -> Result<Option<Self>, AgentClientError> {
         let Some(thread_id) = bound.thread_id().map_err(storage_error)? else { return Ok(None) };
-        let project = Project {
-            url: server_setting("LIVEKIT_URL").unwrap_or_default(),
-            api_key: server_setting("LIVEKIT_API_KEY").unwrap_or_default(),
-            api_secret: server_setting("LIVEKIT_API_SECRET").unwrap_or_default(),
-        };
+        let project = Project::new(
+            server_setting("LIVEKIT_URL").unwrap_or_default(),
+            server_setting("LIVEKIT_API_KEY").unwrap_or_default(),
+            server_setting("LIVEKIT_API_SECRET").unwrap_or_default(),
+        );
         let Some(project) = project.serving(endpoint)? else { return Ok(None) };
         let origin = url::Url::parse(&project.url)
             .map_err(|error| unavailable(error.to_string()))?

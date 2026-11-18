@@ -47,6 +47,8 @@ def _serve(executable: str, log_path: Path) -> tuple[subprocess.Popen[bytes], in
         "bind_addresses": ["127.0.0.1"],
         "rtc": {"tcp_port": _port(), "udp_port": _port(socket.SOCK_DGRAM)},
         "keys": {KEY: SECRET},
+        # a worker with agent endpoints registers over WebTransport, on the signal port over UDP
+        "webtransport": {"port": port},
         "logging": {"level": "error"},
     }
     with log_path.open("w") as log:

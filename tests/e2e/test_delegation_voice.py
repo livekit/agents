@@ -19,16 +19,20 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
+import aiohttp
 import pytest
 from a2a.types import a2a_pb2 as pb
 
+from livekit import api
 from livekit.agents import APIConnectOptions
 from livekit.agents.a2a import AgentClient, AgentThreadGrant, Credentials
-from livekit.agents.storage import AgentDBStorage, Thread
+from livekit.agents.storage import AgentDBStorage, SQLiteStorage, Thread
 
 from .framework.app import E2E, ROOT, RunningApp
 from .framework.models import live_model_environment
@@ -442,6 +446,69 @@ async def test_cancelling_one_task_leaves_the_other_running(e2e: E2E) -> None:
         assert tasks["look up the audit for Q3"] == "completed"
         assert PRIORITY not in call.heard, "the cancelled job asked nothing more"
         assert call.outputs("prepare_job") == []
+
+
+async def test_a_self_hosted_server_delegates_to_its_own_backend_and_refuses_callers_without_a_grant(
+    e2e: E2E,
+) -> None:
+    """On a self-hosted server the worker's own listener serves the backend: the frontend's
+    call carries a grant the server's credentials signed, and the listener still refuses a
+    caller with none."""
+    app = await e2e.start_app(
+        "tests.e2e.apps.delegation_voice_self_hosted",
+        voice=True,
+        path=EXAMPLE,
+        providers=Providers(SCRIPT, {"phrases": PHRASES}),
+        # the development node's WebTransport identity is self-signed
+        env={"LIVEKIT_WORKER_INSECURE": "1"},
+    )
+    storage = SQLiteStorage(directory=Path(app.env["LIVEKIT_AGENT_THREADS_DIR"]) / "default")
+    try:
+        thread_id = (await storage.threads.create_thread(scope="e2e")).thread_id
+    finally:
+        await storage.aclose()
+    async with e2e.voice_client(app, phrases=PHRASES, thread_id=thread_id) as caller:
+        call = Call(e2e, app, caller, thread_id)
+        try:
+            await call.hear(GREETING)
+            # real wait: the example keeps the default 3 s echo-cancellation warmup after the
+            # agent first speaks, during which the person's speech is not taken.
+            await asyncio.sleep(3)
+            await call.say("look up the audit for Q3")
+            # the reply may follow the frontend's acknowledgement without a pause between them
+            await call.hear_until(
+                lambda: any(found(AUDIT, "Q3") in text for text in call.heard),
+                "never heard the backend's result",
+            )
+            assert call.outputs("look_up") == [found(AUDIT, "Q3")]
+            call.check_scripts()
+        finally:
+            call.write()
+
+    body = {
+        "jsonrpc": "2.0",
+        "id": "1",
+        "method": "SendMessage",
+        "params": {
+            "message": {
+                "messageId": uuid.uuid4().hex,
+                "role": "ROLE_USER",
+                "parts": [{"text": "look up the audit for Q3"}],
+            }
+        },
+    }
+    room_only = (
+        api.AccessToken(app.env["LIVEKIT_API_KEY"], app.env["LIVEKIT_API_SECRET"])
+        .with_identity("caller")
+        .with_grants(api.VideoGrants(room_join=True, room="any"))
+        .to_jwt()
+    )
+    async with aiohttp.ClientSession() as http:
+        statuses = []
+        for headers in ({}, {"Authorization": f"Bearer {room_only}"}):
+            async with http.post(app.endpoint("backend") + "/v1", json=body, headers=headers) as r:
+                statuses.append(r.status)
+    assert statuses == [401, 403], "a caller without an endpoint or thread grant is refused"
 
 
 @pytest.mark.live_models

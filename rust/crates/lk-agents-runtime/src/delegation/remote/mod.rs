@@ -93,7 +93,7 @@ impl Port for RemoteInteraction {
         let remote_id = configuration::remote_id(&endpoint, remote_id)?;
         let id = InteractionId { remote_id, endpoint, parent_call_id: function_call.id.clone() };
         let policy = Policy::new(id).map_err(protocol)?;
-        let project = Project { url: project_url, api_key, api_secret };
+        let project = Project::new(project_url, api_key, api_secret);
         let state = State {
             policy,
             call: function_call,
@@ -1052,7 +1052,7 @@ impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
         if token.is_some() {
             return Ok(token);
         }
-        let project = Project { url: project_url, api_key, api_secret };
+        let project = Project::new(project_url, api_key, api_secret);
         let Some(project) = project.serving(&endpoint)? else {
             return Ok(None);
         };
@@ -1081,40 +1081,63 @@ impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
 /// The identity of the tokens a remote tool mints for itself.
 const DELEGATE: &str = "delegate";
 
-/// The server's LiveKit project as the host passes it; empty values when there is none.
+/// The server's LiveKit project as the host passes it, with the base URL of the server's own
+/// endpoints; empty values when there is none.
 #[derive(Clone, PartialEq, Eq)]
 struct Project {
     url: String,
     api_key: String,
     api_secret: String,
+    endpoints: String,
 }
 
 impl Project {
-    /// The project with its URL as an HTTP origin, when `endpoint` is on that origin.
+    /// The project the host passes, serving the endpoints of the server this process runs.
+    fn new(url: String, api_key: String, api_secret: String) -> Self {
+        let endpoints =
+            lk_agents_net::env::server_setting("LIVEKIT_AGENT_ENDPOINTS_URL").unwrap_or_default();
+        Self { url, api_key, api_secret, endpoints }
+    }
+
+    /// The project with its URL as an HTTP origin, when `endpoint` is on that origin or is one
+    /// of the server's own endpoints, wherever its listener is: the project's credentials sign
+    /// for both, and the receiving endpoint authorizes the grant as it does any caller's.
     fn serving(&self, endpoint: &str) -> Result<Option<Self>, AgentClientError> {
-        let Project { url, api_key, api_secret } = self;
-        if url.is_empty() || api_key.is_empty() || api_secret.is_empty() {
-            return Ok(None);
-        }
-        let (api_key, api_secret) = (api_key.clone(), api_secret.clone());
-        let Ok(mut project) = url::Url::parse(url) else {
-            return Ok(None);
-        };
-        let scheme = match project.scheme() {
-            "ws" | "http" => "http",
-            "wss" | "https" => "https",
-            _ => return Ok(None),
-        };
-        if project.set_scheme(scheme).is_err()
-            || !project.username().is_empty()
-            || project.password().is_some()
-        {
+        let Project { url, api_key, api_secret, endpoints } = self;
+        if api_key.is_empty() || api_secret.is_empty() {
             return Ok(None);
         }
         let destination = url::Url::parse(endpoint).map_err(protocol)?;
-        if project.origin() != destination.origin() {
-            return Ok(None);
+        let project = |url: url::Url| Project {
+            url: url.to_string(),
+            api_key: api_key.clone(),
+            api_secret: api_secret.clone(),
+            endpoints: endpoints.clone(),
+        };
+        if let Some(own) = http_url(endpoints)
+            && own.origin() == destination.origin()
+            && destination
+                .path()
+                .strip_prefix(own.path().trim_end_matches('/'))
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        {
+            return Ok(Some(project(own)));
         }
-        Ok(Some(Project { url: project.to_string(), api_key, api_secret }))
+        match http_url(url) {
+            Some(url) if url.origin() == destination.origin() => Ok(Some(project(url))),
+            _ => Ok(None),
+        }
     }
+}
+
+/// `value` as an HTTP(S) URL without credentials (`ws`/`wss` become `http`/`https`).
+fn http_url(value: &str) -> Option<url::Url> {
+    let mut url = url::Url::parse(value).ok()?;
+    let scheme = match url.scheme() {
+        "ws" | "http" => "http",
+        "wss" | "https" => "https",
+        _ => return None,
+    };
+    (url.set_scheme(scheme).is_ok() && url.username().is_empty() && url.password().is_none())
+        .then_some(url)
 }

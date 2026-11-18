@@ -20,6 +20,7 @@ fn channel() -> (Arc<Driver>, mpsc::Receiver<Command>) {
                 url: String::new(),
                 api_key: String::new(),
                 api_secret: String::new(),
+                endpoints: String::new(),
             },
             None,
             None,
