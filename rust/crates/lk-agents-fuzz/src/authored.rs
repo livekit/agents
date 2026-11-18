@@ -425,6 +425,13 @@ impl Authored {
         self
     }
 
+    /// A fact about the remote peer or a remote tool body.
+    pub fn remote(mut self, step: crate::record::RemoteStep) -> Self {
+        let at = self.next();
+        self.recording.record_remote(at, step);
+        self
+    }
+
     /// Virtual time passes with nothing else observed.
     pub fn later(mut self, ms: u64) -> Self {
         self.later_ms += ms;

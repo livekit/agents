@@ -34,6 +34,15 @@ impl Run {
         let world: Arc<dyn Spawner> = Arc::new(World(tasks.clone()));
         let (registry, records) = Registry::new(stamps.clone(), world.clone());
         registry.set_refuse_cancel(setup.tools_refuse_cancel);
+        if let Some(script) = setup.remote {
+            let observer = Arc::downgrade(&registry);
+            let observe: fakes::a2a_peer::Observer = Arc::new(move |step| {
+                if let Some(registry) = observer.upgrade() {
+                    registry.record_remote(step);
+                }
+            });
+            registry.attach_remote(fakes::a2a_peer::RemotePeer::new(script, observe, time.clock()));
+        }
         // The name identifies diagnostics; mutable RPC routes belong to each room instance.
         let room = crate::fakes::room::FakeRtc::new(
             time.clock(),
@@ -942,6 +951,21 @@ fn scheduled(
             })
         },
         tracer,
+        ..lk_agents_runtime::net::env::ProcessEnv::current_runtime()
+    }
+}
+
+/// The case's process environment on `clock`, as a host lends it to work it starts beside the
+/// session (a remote tool's delegation): the session's scheduler, set once the session exists.
+pub fn case_process(clock: Arc<dyn lk_agents_abi::Clock>) -> lk_agents_runtime::net::env::ProcessEnv {
+    lk_agents_runtime::net::env::ProcessEnv {
+        spawner: || {
+            SCHEDULER.with(|slot| slot.borrow().clone()).ok_or_else(|| {
+                lk_agents_runtime::net::env::ProcessError::NoRuntime("no case scheduler".into())
+            })
+        },
+        tracer: lk_agents_telemetry::Tracer::disabled(clock.clone()),
+        clock,
         ..lk_agents_runtime::net::env::ProcessEnv::current_runtime()
     }
 }

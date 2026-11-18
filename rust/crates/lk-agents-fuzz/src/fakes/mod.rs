@@ -22,6 +22,7 @@ use crate::{
 // channel, so a delivery holds no lock and a fake recording mid-delivery cannot re-enter one.
 // A delivery to a closed receiver is a recorded, rejected attempt, never a panic.
 
+pub mod a2a_peer;
 mod avatar;
 pub(crate) mod clock;
 mod console;
@@ -38,6 +39,7 @@ pub mod room;
 pub(crate) mod storage;
 mod stt;
 pub(crate) mod tools;
+pub mod remote_tool;
 mod tts;
 mod vad;
 pub mod vocabulary;
@@ -272,6 +274,11 @@ pub enum Record {
         agent: String,
         node: crate::record::NodeUse,
     },
+    /// What the remote A2A peer and the remote tool bodies observed.
+    Remote {
+        at: Observed,
+        step: crate::record::RemoteStep,
+    },
     /// Which output a flushed segment belongs to: a fact kept for the run, not a stamped event.
     Segment {
         segment: u32,
@@ -361,6 +368,8 @@ pub struct Registry {
     chat_responses: std::sync::Mutex<BTreeMap<String, u32>>,
     /// Armed once the session started, in a stressed run only.
     hazards: std::sync::OnceLock<hazard::Hazards>,
+    /// The A2A peer a remote tool delegates to, when the setup has one.
+    remote: std::sync::OnceLock<Arc<a2a_peer::RemotePeer>>,
 }
 
 impl Registry {
@@ -385,6 +394,7 @@ impl Registry {
             storage_pending: AtomicU32::new(0),
             chat_responses: std::sync::Mutex::default(),
             hazards: std::sync::OnceLock::new(),
+            remote: std::sync::OnceLock::new(),
         };
         (Arc::new(registry), receiver)
     }
@@ -479,6 +489,23 @@ impl Registry {
             at: self.stamps.next(),
             outcome: crate::record::BoundaryOutcome { operation, error },
         });
+    }
+
+    pub fn attach_remote(&self, peer: Arc<a2a_peer::RemotePeer>) {
+        assert!(self.remote.set(peer).is_ok(), "remote peer attached twice");
+    }
+
+    pub fn remote(&self) -> Option<&Arc<a2a_peer::RemotePeer>> {
+        self.remote.get()
+    }
+
+    pub fn record_remote(&self, step: crate::record::RemoteStep) {
+        self.write(Record::Remote { at: self.stamps.next(), step });
+    }
+
+    /// The session's clock, which the remote peer's work and the delegation's client run on.
+    pub(crate) fn clock(&self) -> Arc<dyn lk_agents_abi::Clock> {
+        self.stamps.clock()
     }
 
     pub fn attach_session(&self, session: Arc<VoiceSession>) {
