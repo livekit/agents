@@ -8,7 +8,7 @@ build-backend = "maturin"
 
 [project]
 name = "livekit-agents"
-version = "2.0.0b1"
+version = "2.0.0b2"
 description = "LiveKit Agents over the Rust core: the developer surface, the session run by `_core`"
 readme = "README.md"
 license = "Apache-2.0"
