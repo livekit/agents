@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import aiohttp
 import pytest
 
-from livekit.agents import tts as agents_tts, utils
+from livekit.agents import APIConnectOptions, APIError, tts as agents_tts, utils
 from livekit.agents.voice.io import TimedString
 from livekit.plugins.elevenlabs import tts as elevenlabs_tts
 
@@ -568,6 +568,182 @@ async def test_interrupted_stream_unregisters_before_ending_the_segment(
     assert "close_context" in calls
 
 
+class _AnsweringConnection:
+    """Finishes every context when it is closed; only `with_audio` sockets send audio,
+    `None` never answers (the context stays open), "no_frames" sends an audio message
+    that yields no frames."""
+
+    instances: list["_AnsweringConnection"] = []
+    with_audio: list[bool | str | None] = []
+
+    def __init__(self, opts: object, session: object) -> None:
+        self._closed = False
+        self.is_current = True
+        self._recv_task = None
+        self._has_audio = self.with_audio[len(self.instances)]
+        self._context_data: dict[
+            str, tuple[object, agents_tts.AudioEmitter, asyncio.Future[None]]
+        ] = {}
+        self.instances.append(self)
+
+    async def connect(self) -> None:
+        pass
+
+    async def aclose(self) -> None:
+        self._closed = True
+
+    def mark_non_current(self) -> None:
+        self.is_current = False
+
+    def register_stream(
+        self, stream: object, emitter: agents_tts.AudioEmitter, waiter: asyncio.Future[None]
+    ) -> None:
+        self._context_data[stream._context_id] = (stream, emitter, waiter)  # type: ignore[attr-defined]
+
+    def unregister_stream(self, context_id: str) -> None:
+        self._context_data.pop(context_id, None)
+
+    def send_content(self, content: object) -> None:
+        pass
+
+    def close_context(self, context_id: str) -> None:
+        if (entry := self._context_data.get(context_id)) is None or self._has_audio is None:
+            return
+        stream, emitter, waiter = entry
+        if self._has_audio == "no_frames":
+            stream._audio_received = True  # type: ignore[attr-defined]
+        elif self._has_audio:
+            emitter.push(bytes(4800))  # 100 ms of pcm_24000
+            stream._audio_received = True  # type: ignore[attr-defined]
+        waiter.set_result(None)
+
+
+@pytest.mark.asyncio
+async def test_retry_runs_on_a_fresh_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    # the first socket finishes the context without audio, as a stuck socket does;
+    # the retry must not be sent to it again
+    monkeypatch.setattr(_AnsweringConnection, "instances", [])
+    monkeypatch.setattr(_AnsweringConnection, "with_audio", [False, True])
+    monkeypatch.setattr(elevenlabs_tts, "_Connection", _AnsweringConnection)
+
+    async with aiohttp.ClientSession() as session:
+        tts = elevenlabs_tts.TTS(api_key="test-key", encoding="pcm_24000", http_session=session)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=1, timeout=1.0))
+        stream.push_text("hello world.")
+        stream.end_input()
+        frames = [ev.frame async for ev in stream]
+
+        first, second = _AnsweringConnection.instances
+        assert not first.is_current
+        assert first._closed  # no other stream on it: closed at once, not left to drain
+        assert second.is_current
+        assert sum(f.duration for f in frames) == pytest.approx(0.1)
+
+        # the next turn keeps the socket that worked
+        connection, _, reused = await tts._current_connection()
+        assert connection is second
+        assert reused
+
+        await stream.aclose()
+        await tts.aclose()
+
+
+@pytest.mark.asyncio
+async def test_failed_last_attempt_drops_the_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    # FallbackAdapter probes recovery with max_retry=0: the probe after a failure must not
+    # get the socket that just failed
+    monkeypatch.setattr(_AnsweringConnection, "instances", [])
+    monkeypatch.setattr(_AnsweringConnection, "with_audio", [False, True])
+    monkeypatch.setattr(elevenlabs_tts, "_Connection", _AnsweringConnection)
+
+    async with aiohttp.ClientSession() as session:
+        tts = elevenlabs_tts.TTS(api_key="test-key", encoding="pcm_24000", http_session=session)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+        stream.push_text("hello world.")
+        stream.end_input()
+        with pytest.raises(APIError):
+            async for _ in stream:
+                pass
+
+        [failed] = _AnsweringConnection.instances
+        assert not failed.is_current
+        assert failed._closed
+
+        connection, _, reused = await tts._current_connection()
+        assert connection is not failed
+        assert not reused
+
+        await stream.aclose()
+        await tts.aclose()
+        assert not tts._closing_connections  # aclose waits for dropped sockets to close
+
+
+@pytest.mark.asyncio
+async def test_retry_after_audio_without_frames_runs_on_a_fresh_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the socket sent an audio message, but it yielded no frames: the base class rejects the
+    # attempt, and the retry must still not reuse that socket
+    monkeypatch.setattr(_AnsweringConnection, "instances", [])
+    monkeypatch.setattr(_AnsweringConnection, "with_audio", ["no_frames", True])
+    monkeypatch.setattr(elevenlabs_tts, "_Connection", _AnsweringConnection)
+
+    async with aiohttp.ClientSession() as session:
+        tts = elevenlabs_tts.TTS(api_key="test-key", encoding="pcm_24000", http_session=session)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=1, timeout=1.0))
+        stream.push_text("hello world.")
+        stream.end_input()
+        frames = [ev.frame async for ev in stream]
+
+        first, second = _AnsweringConnection.instances
+        assert not first.is_current
+        assert second.is_current
+        assert sum(f.duration for f in frames) == pytest.approx(0.1)
+
+        await stream.aclose()
+        await tts.aclose()
+
+
+@pytest.mark.asyncio
+async def test_interrupted_stream_keeps_the_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    # an interruption before any audio is not a failure of the socket
+    monkeypatch.setattr(_AnsweringConnection, "instances", [])
+    monkeypatch.setattr(_AnsweringConnection, "with_audio", [None])
+    monkeypatch.setattr(elevenlabs_tts, "_Connection", _AnsweringConnection)
+
+    async with aiohttp.ClientSession() as session:
+        tts = elevenlabs_tts.TTS(api_key="test-key", encoding="pcm_24000", http_session=session)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5.0))
+        stream.push_text("hello world.")
+        stream.end_input()
+        await asyncio.sleep(0.05)
+        await stream.aclose()
+
+        [connection] = _AnsweringConnection.instances
+        assert connection.is_current
+        assert not connection._closed
+
+        await tts.aclose()
+
+
+@pytest.mark.asyncio
+async def test_dropped_socket_waits_for_other_streams(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_AnsweringConnection, "instances", [])
+    monkeypatch.setattr(_AnsweringConnection, "with_audio", [True])
+    monkeypatch.setattr(elevenlabs_tts, "_Connection", _AnsweringConnection)
+
+    async with aiohttp.ClientSession() as session:
+        tts = elevenlabs_tts.TTS(api_key="test-key", encoding="pcm_24000", http_session=session)
+        connection, _, _ = await tts._current_connection()
+        connection._context_data["other"] = (object(), object(), asyncio.Future())  # type: ignore[attr-defined]
+        tts._discard_connection(connection)
+        await asyncio.sleep(0)
+        assert not connection.is_current
+        assert not connection._closed  # another stream still runs on it
+
+        await tts.aclose()
+
+
 # -- eleven_v3 / eleven_v4 (text-to-dialogue) ----------------------------------------
 
 
@@ -628,7 +804,7 @@ def test_build_dialogue_synthesize_body_single_turn() -> None:
         ],
     )
     body = elevenlabs_tts._build_dialogue_synthesize_body(  # pyright: ignore[reportPrivateUsage]
-        tts._opts, "hello there", voice_settings=None
+        tts._opts, "hello there"
     )
 
     assert body["inputs"] == [{"text": "hello there", "voice_id": "voice-1"}]
@@ -641,13 +817,18 @@ def test_build_dialogue_synthesize_body_single_turn() -> None:
 
 def test_build_dialogue_synthesize_body_keeps_only_supported_settings() -> None:
     tts = elevenlabs_tts.TTS(
-        api_key="test-key", model="eleven_v3_conversational", voice_id="voice-1"
+        api_key="test-key",
+        model="eleven_v3_conversational",
+        voice_id="voice-1",
+        voice_settings=elevenlabs_tts.VoiceSettings(
+            stability=0.5, similarity_boost=0.75, style=0.3
+        ),
     )
     body = elevenlabs_tts._build_dialogue_synthesize_body(  # pyright: ignore[reportPrivateUsage]
-        tts._opts, "hello there", voice_settings={"stability": 0.5, "similarity_boost": 0.75}
+        tts._opts, "hello there"
     )
 
-    assert body["settings"] == {"stability": 0.5}
+    assert body["settings"] == {"stability": 0.5, "similarity": 0.75}
 
 
 def test_build_dialogue_context_init_packet_registers_single_voice() -> None:
@@ -666,13 +847,15 @@ def test_build_dialogue_context_init_packet_keeps_only_supported_voice_settings(
         api_key="test-key",
         model="eleven_v3_conversational",
         voice_id="voice-1",
-        voice_settings=elevenlabs_tts.VoiceSettings(stability=0.5, similarity_boost=0.75),
+        voice_settings=elevenlabs_tts.VoiceSettings(
+            stability=0.5, similarity_boost=0.75, style=0.3
+        ),
     )
     packet = elevenlabs_tts._build_dialogue_context_init_packet(  # pyright: ignore[reportPrivateUsage]
         tts._opts, context_id="ctx-1"
     )
 
-    assert packet["voice_settings"] == {"stability": 0.5}
+    assert packet["voice_settings"] == {"stability": 0.5, "similarity": 0.75}
 
 
 def test_dialogue_model_warns_on_unsupported_voice_settings(
@@ -682,10 +865,111 @@ def test_dialogue_model_warns_on_unsupported_voice_settings(
         elevenlabs_tts.TTS(
             api_key="test-key",
             model="eleven_v3_conversational",
-            voice_settings=elevenlabs_tts.VoiceSettings(stability=0.5, similarity_boost=0.75),
+            voice_settings=elevenlabs_tts.VoiceSettings(
+                stability=0.5, similarity_boost=0.75, style=0.3
+            ),
         )
 
-    assert any("voice_settings.similarity_boost" in r.getMessage() for r in caplog.records)
+    assert any("voice_settings.style" in r.getMessage() for r in caplog.records)
+
+
+def test_build_dialogue_synthesize_body_sends_clone_strength_for_v4() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key",
+        model="eleven_v4",
+        voice_id="voice-1",
+        voice_settings=elevenlabs_tts.VoiceSettings(
+            stability=0.5, similarity_boost=0.75, clone_strength=0.3
+        ),
+    )
+    body = elevenlabs_tts._build_dialogue_synthesize_body(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, "hello there"
+    )
+
+    assert body["settings"] == {"stability": 0.5, "similarity": 0.75, "clone_strength": 0.3}
+
+
+def test_build_dialogue_context_init_packet_sends_clone_strength_for_v4() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key",
+        model="eleven_v4_turbo",
+        voice_id="voice-1",
+        voice_settings=elevenlabs_tts.VoiceSettings(
+            stability=0.5, similarity_boost=0.75, clone_strength=0.3
+        ),
+    )
+    packet = elevenlabs_tts._build_dialogue_context_init_packet(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, context_id="ctx-1"
+    )
+
+    assert packet["voice_settings"] == {"stability": 0.5, "similarity": 0.75, "clone_strength": 0.3}
+
+
+@pytest.mark.parametrize("model", ["eleven_v3_conversational", "eleven_flash_v2_5"])
+def test_clone_strength_ignored_for_non_v4_model(
+    model: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        tts = elevenlabs_tts.TTS(
+            api_key="test-key",
+            model=model,
+            voice_id="voice-1",
+            voice_settings=elevenlabs_tts.VoiceSettings(
+                stability=0.5, similarity_boost=0.75, clone_strength=0.3
+            ),
+        )
+
+    if elevenlabs_tts.is_dialogue_model(model):
+        packet = elevenlabs_tts._build_dialogue_context_init_packet(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, context_id="ctx-1"
+        )
+    else:
+        packet = elevenlabs_tts._build_context_init_packet(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, context_id="ctx-1"
+        )
+
+    assert any("voice_settings.clone_strength" in r.getMessage() for r in caplog.records)
+    assert "clone_strength" not in packet["voice_settings"]
+
+
+def test_update_options_warns_when_clone_strength_ignored(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_flash_v2_5", voice_id="voice-1")
+
+    with caplog.at_level(logging.WARNING):
+        tts.update_options(
+            voice_settings=elevenlabs_tts.VoiceSettings(
+                stability=0.5, similarity_boost=0.75, clone_strength=0.3
+            )
+        )
+
+    assert any("voice_settings.clone_strength" in r.getMessage() for r in caplog.records)
+
+
+def test_clone_strength_sent_again_after_switching_back_to_v4() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key",
+        model="eleven_v4",
+        voice_id="voice-1",
+        voice_settings=elevenlabs_tts.VoiceSettings(
+            stability=0.5, similarity_boost=0.75, clone_strength=0.3
+        ),
+    )
+
+    tts.update_options(model="eleven_flash_v2_5")
+    assert (
+        "clone_strength"
+        not in elevenlabs_tts._build_context_init_packet(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, context_id="ctx-1"
+        )["voice_settings"]
+    )
+
+    tts.update_options(model="eleven_v4")
+    packet = elevenlabs_tts._build_dialogue_context_init_packet(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, context_id="ctx-2"
+    )
+    assert packet["voice_settings"] == {"stability": 0.5, "similarity": 0.75, "clone_strength": 0.3}
 
 
 def test_build_dialogue_context_init_packet_includes_pronunciation_dictionaries() -> None:
@@ -1059,3 +1343,47 @@ async def test_dialogue_send_loop_stops_keep_alive_once_context_closes(
 
         connection._input_queue.close()
         await asyncio.wait_for(send_task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_dialogue_send_loop_retires_unused_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unused dialogue socket closes itself before the server's 20s idle timeout."""
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_IDLE_RETIRE", 0.05)
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v4", voice_id="voice-1")
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        ws = _RecordingWs()
+        connection._ws = ws  # type: ignore[assignment]
+        connection._send_task = asyncio.create_task(connection._send_loop())
+
+        await asyncio.wait({connection._send_task}, timeout=1.0)
+
+        assert connection._closed
+        assert ws.sent == []
+
+
+@pytest.mark.asyncio
+async def test_dialogue_send_loop_retires_socket_after_last_context_ends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A context ending between keep-alive checks does not delay retirement past the deadline."""
+    monkeypatch.setattr(elevenlabs_tts, "_DIALOGUE_IDLE_RETIRE", 0.1)
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v4", voice_id="voice-1")
+    async with aiohttp.ClientSession() as session:
+        connection = elevenlabs_tts._DialogueConnection(  # pyright: ignore[reportPrivateUsage]
+            tts._opts, session
+        )
+        connection._ws = _RecordingWs()  # type: ignore[assignment]
+        connection.send_content(
+            elevenlabs_tts._SynthesizeContent("ctx-1", "hello ", flush=True)  # pyright: ignore[reportPrivateUsage]
+        )
+        connection.close_context("ctx-1")
+        connection._send_task = asyncio.create_task(connection._send_loop())
+        await asyncio.sleep(0.05)
+        connection._cleanup_context("ctx-1")
+
+        await asyncio.wait({connection._send_task}, timeout=1.0)
+
+        assert connection._closed

@@ -836,60 +836,47 @@ class SpeechStream(stt.RecognizeStream):
 
                 self._process_message(parsed)
 
-        connection_started: float | None = None
-        carried = 0.0
+        while True:
+            ws: aiohttp.ClientWebSocketResponse | None = None
+            self.start_time = time.time()
 
-        try:
-            while True:
-                ws: aiohttp.ClientWebSocketResponse | None = None
-                now = time.time()
+            self._end_speaking()
+            self._candidate = None
+            self._turn_settled.set()
+            self._turn_ended.clear()
+            self._audio_sent = False
 
-                if connection_started is not None:
-                    elapsed = now - connection_started
-                    self.start_time_offset += elapsed
-                    carried += elapsed
-
-                self.start_time = now
-                connection_started = now
-
-                self._end_speaking()
-                self._candidate = None
-                self._turn_settled.set()
-                self._turn_ended.clear()
-                self._audio_sent = False
+            try:
+                ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
+                tasks = [
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(recv_task(ws)),
+                ]
+                tasks_group = asyncio.gather(*tasks)
+                wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
-                    ws = await self._connect_ws()
-                    tasks = [
-                        asyncio.create_task(send_task(ws)),
-                        asyncio.create_task(recv_task(ws)),
-                    ]
-                    tasks_group = asyncio.gather(*tasks)
-                    wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
+                    done, _ = await asyncio.wait(
+                        (tasks_group, wait_reconnect),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in done:
+                        if task is not wait_reconnect:
+                            task.result()
 
-                    try:
-                        done, _ = await asyncio.wait(
-                            (tasks_group, wait_reconnect),
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                        for task in done:
-                            if task is not wait_reconnect:
-                                task.result()
+                    if wait_reconnect not in done:
+                        break
 
-                        if wait_reconnect not in done:
-                            break
-
-                        self._reconnect_event.clear()
-                        logger.debug("Reconnecting to Reson8 to apply updated options")
-                    finally:
-                        await utils.aio.gracefully_cancel(*tasks, wait_reconnect)
-                        tasks_group.cancel()
-                        tasks_group.exception()
+                    self._reconnect_event.clear()
+                    logger.debug("Reconnecting to Reson8 to apply updated options")
                 finally:
-                    if ws is not None:
-                        await ws.close()
-        finally:
-            self.start_time_offset -= carried
+                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect)
+                    tasks_group.cancel()
+                    tasks_group.exception()
+            finally:
+                if ws is not None:
+                    await ws.close()
 
     def _process_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("type")

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
@@ -270,6 +271,8 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
+                self._last_speech_end_time = 0
 
                 send = asyncio.create_task(send_task(ws))
                 recv = asyncio.create_task(recv_task(ws))
@@ -422,7 +425,20 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
 
                 if self._speaking:
                     self._speaking = False
-                    end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                    end_alternatives = []
+                    # Transcript spans track audio duration, which can include silence.
+                    if words and (last_word_end := words[-1].get("end", 0)) > 0:
+                        end_alternatives = [
+                            replace(
+                                speech_data,
+                                start_time=self.start_time_offset + words[0].get("start", 0),
+                                end_time=self.start_time_offset + last_word_end,
+                            )
+                        ]
+                    end_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.END_OF_SPEECH,
+                        alternatives=end_alternatives,
+                    )
                     self._event_ch.send_nowait(end_event)
             else:
                 event = stt.SpeechEvent(

@@ -319,7 +319,11 @@ class _AuthRefreshingSession(requests.Session):
         if _upload_gate.disabled:
             return self._make_ok_response()
 
-        self.headers.update(self._header_provider())
+        # OTel passes OTEL_EXPORTER_OTLP_*HEADERS per request, and per-request headers beat
+        # session headers, so an app's Authorization (e.g. Langfuse) would replace the token
+        headers = requests.structures.CaseInsensitiveDict(kwargs.get("headers") or {})
+        headers.update(self._header_provider())
+        kwargs["headers"] = headers
         resp = super().request(*args, **kwargs)
         if _upload_gate.is_disabled_response(resp.status_code, resp.content):
             _upload_gate.disable()

@@ -552,6 +552,16 @@ class RoomIO:
 
         if self._options.delete_room_on_close and self._delete_room_task is None:
             job_ctx = get_job_context()
+            if job_ctx.simulation_context() is not None and self._room is job_ctx.room:
+                # the simulator asks for on_simulation_end over this room after the session
+                # closes; the job deletes it only once that wait is over
+                async def _delete_room_on_shutdown() -> None:
+                    await job_ctx.delete_room(room_name=self._room.name)
+
+                job_ctx.add_shutdown_callback(_delete_room_on_shutdown)
+                job_ctx.shutdown(reason=ev.reason.value)
+                return
+
             logger.info(
                 "deleting room on agent session close (disable via `RoomInputOptions.delete_room_on_close=False`)",
                 extra={"room": self._room.name},

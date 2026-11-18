@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import aiohttp
@@ -31,33 +31,111 @@ _AVATAR_AGENT_NAME = "simli-avatar-agent"
 
 
 @dataclass
+class CameraSetting:
+    """The camera a Trinity-2 session starts with, as offsets from the avatar's own framing.
+
+    Every field is optional: unset (``None``) fields are omitted from the request and have
+    no effect. Simli applies values outside their supported range as sent, with a warning.
+    See https://docs.simli.com/api-reference/trinity-2/camera
+
+    Attributes:
+        pos_x_off: Moves the avatar right, in half canvas widths (-10 to 10).
+        pos_y_off: Moves the avatar down, in half canvas heights (-10 to 10).
+        pos_z_off: Metres the camera backs away from the avatar; negative moves in (-5 to 5).
+        rot_x_off: Degrees the camera tilts up (-180 to 180).
+        rot_y_off: Degrees the camera pans right (-180 to 180).
+        rot_z_off: Degrees the camera rolls clockwise (-180 to 180).
+        zoom: Multiplies the avatar's zoom; 1 is no change (above 0, up to 4).
+        orbit_x_off: Degrees the camera orbits up over the avatar's head (-80 to 80).
+        orbit_y_off: Degrees the camera orbits round to its right (-180 to 180).
+    """
+
+    pos_x_off: float | None = None
+    pos_y_off: float | None = None
+    pos_z_off: float | None = None
+    rot_x_off: float | None = None
+    rot_y_off: float | None = None
+    rot_z_off: float | None = None
+    zoom: float | None = None
+    orbit_x_off: float | None = None
+    orbit_y_off: float | None = None
+
+
+@dataclass
 class SimliConfig:
     """
     Args:
         api_key (str): Simli API Key
         face_id (str): Simli Face ID
-        emotion_id (str):
-            Emotion ID for Trinity Faces, defaults to happy_0.
-            See https://docs.simli.com/emotions
+        emotion_id (str | None):
+            Emotion (style) ID for Trinity faces, sent as ``face_id/emotion_id``.
+            Defaults to None, which sends the plain face ID so Simli uses the face's
+            default emotion.
         max_session_length (int):
             Absolute maximum session duration, avatar will disconnect after this time
             even if it's speaking.
         max_idle_time (int):
             Maximum duration the avatar is not speaking for before the avatar disconnects.
+        streaming_width (int | None):
+            Width of the avatar's video in pixels, at least 512. With ``streaming_height``
+            it must make a 1:1, 16:9 or 9:16 frame (e.g. 1366x768). Trinity-2 faces only;
+            other faces keep their own frame size. Simli's default is 768.
+        streaming_height (int | None):
+            Height of the avatar's video in pixels. See ``streaming_width``.
+        avatar_position_x (float | None):
+            Where the avatar sits across the video, from 0 (left) to 1 (right).
+            Trinity-2 only. Simli's default is 0.5.
+        avatar_position_y (float | None):
+            Where the avatar sits down the video, from 0 (top) to 1 (bottom).
+            Trinity-2 only. Simli's default is 1.0.
+        camera (CameraSetting | dict[str, float] | None):
+            The camera the session starts with, as a CameraSetting or a dict of its
+            fields, e.g. ``{"zoom": 1.2}``. Trinity-2 only. Defaults to the avatar's own
+            framing.
+        background_id (str | None):
+            ID of one of your uploaded backgrounds (``POST /assets/backgrounds``) to show
+            behind the avatar. Trinity-2 only. Defaults to the avatar's own.
+        foreground_id (str | None):
+            ID of one of your uploaded foregrounds (``POST /assets/foregrounds``) to lay
+            over the avatar. Trinity-2 only. Defaults to the avatar's own.
+
+    The Trinity-2 options are sent only when set, so Simli's defaults apply otherwise.
+    See https://docs.simli.com/api-reference/trinity-2#framing-the-video
     """
 
     api_key: str
     face_id: str
-    emotion_id: str = "92f24a0c-f046-45df-8df0-af7449c04571"
+    emotion_id: str | None = None
     max_session_length: int = 600
     max_idle_time: int = 30
+    streaming_width: int | None = None
+    streaming_height: int | None = None
+    avatar_position_x: float | None = None
+    avatar_position_y: float | None = None
+    camera: CameraSetting | dict[str, float] | None = None
+    background_id: str | None = None
+    foreground_id: str | None = None
 
     def create_json(self) -> dict[str, Any]:
         result: dict[str, Any] = {}
-        result["faceId"] = f"{self.face_id}/{self.emotion_id}"
+        result["faceId"] = f"{self.face_id}/{self.emotion_id}" if self.emotion_id else self.face_id
         result["handleSilence"] = True
         result["maxSessionLength"] = self.max_session_length
         result["maxIdleTime"] = self.max_idle_time
+
+        for name in (
+            "streaming_width",
+            "streaming_height",
+            "avatar_position_x",
+            "avatar_position_y",
+            "background_id",
+            "foreground_id",
+        ):
+            if (value := getattr(self, name)) is not None:
+                result[name] = value
+        if self.camera is not None:
+            camera = asdict(self.camera) if isinstance(self.camera, CameraSetting) else self.camera
+            result["camera"] = {k: v for k, v in camera.items() if v is not None}
         return result
 
 
@@ -137,7 +215,11 @@ class AvatarSession(BaseAvatarSession):
                 payload=self._simli_config.create_json(),
                 headers={"x-simli-api-key": self._simli_config.api_key},
             )
-            session_token = json.loads(token_body)["session_token"]
+            token_response = json.loads(token_body)
+            session_token = token_response["session_token"]
+            # e.g. a background_id that isn't the account's, which Simli drops
+            if warnings := token_response.get("warnings"):
+                logger.warning("simli session token has warnings", extra={"warnings": warnings})
         except APIStatusError as e:
             logger.error(
                 "failed to create simli session token",

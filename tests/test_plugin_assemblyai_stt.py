@@ -632,6 +632,80 @@ async def test_universal_3_6_pro_connect_config_uses_u3_pro_defaults():
 
 
 # ---------------------------------------------------------------------------
+# assemblyai-stt-3-7-realtime-agent: u3-rt-pro parameter family
+#
+# assemblyai-stt-3-7-realtime-agent is the 3.7 voice-agent streaming model.
+# Server-side it is in the U3 Pro family (`SpeechModel.is_u3_pro`) with the
+# same parameter support as universal-3-6-pro, so it accepts the u3-pro-gated
+# params and inherits the family's connect-time defaults.
+# ---------------------------------------------------------------------------
+
+
+async def test_stt_3_7_realtime_agent_is_accepted():
+    """assemblyai-stt-3-7-realtime-agent is a valid model selection."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="assemblyai-stt-3-7-realtime-agent")
+    assert stt.model == "assemblyai-stt-3-7-realtime-agent"
+    assert stt._opts.speech_model == "assemblyai-stt-3-7-realtime-agent"
+
+
+async def test_stt_3_7_realtime_agent_accepts_u3_pro_params():
+    """assemblyai-stt-3-7-realtime-agent shares the u3-rt-pro parameter family."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(
+        api_key="test-key",
+        model="assemblyai-stt-3-7-realtime-agent",
+        prompt="medical dictation",
+        agent_context="The agent asked for the patient's name.",
+        previous_context_n_turns=10,
+        continuous_partials=True,
+        interruption_delay=300,
+        voice_focus="near-field",
+        voice_focus_threshold=0.5,
+        mode="max_accuracy",
+        language_codes=["en", "es"],
+    )
+    assert stt._opts.speech_model == "assemblyai-stt-3-7-realtime-agent"
+    assert stt._opts.prompt == "medical dictation"
+    assert stt._opts.agent_context == "The agent asked for the patient's name."
+    assert stt._opts.previous_context_n_turns == 10
+    assert stt._opts.continuous_partials is True
+    assert stt._opts.interruption_delay == 300
+    assert stt._opts.voice_focus == "near-field"
+    assert stt._opts.voice_focus_threshold == 0.5
+    assert stt._opts.mode == "max_accuracy"
+    assert stt._opts.language_codes == ["en", "es"]
+
+
+async def test_stt_3_7_realtime_agent_connect_config_uses_u3_pro_defaults():
+    """The connect query names assemblyai-stt-3-7-realtime-agent and applies the
+    U3 Pro family's connect-time defaults (100ms min/max turn silence, language
+    detection on)."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model="assemblyai-stt-3-7-realtime-agent")
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query["speech_model"] == ["assemblyai-stt-3-7-realtime-agent"]
+    assert query["min_turn_silence"] == ["100"]
+    assert query["max_turn_silence"] == ["100"]
+    assert query["language_detection"] == ["true"]
+
+
+# ---------------------------------------------------------------------------
 # voice_focus / voice_focus_threshold
 #
 # Voice Focus isolates the primary voice and suppresses background noise.
@@ -778,7 +852,13 @@ async def test_voice_focus_allowed_for_all_u3_pro_family_models():
     """voice_focus is accepted for every u3-rt-pro-family model, not just the default."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"):
+    for model in (
+        "u3-rt-pro",
+        "u3-rt-pro-beta-1",
+        "universal-3-5-pro",
+        "universal-3-6-pro",
+        "assemblyai-stt-3-7-realtime-agent",
+    ):
         stt = STT(api_key="test-key", model=model, voice_focus="far-field")
         assert stt._opts.voice_focus == "far-field"
 
@@ -834,7 +914,13 @@ async def test_mode_allowed_for_all_u3_pro_family_models():
     """mode is accepted for every u3-rt-pro-family model, not just the default."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"):
+    for model in (
+        "u3-rt-pro",
+        "u3-rt-pro-beta-1",
+        "universal-3-5-pro",
+        "universal-3-6-pro",
+        "assemblyai-stt-3-7-realtime-agent",
+    ):
         stt = STT(api_key="test-key", model=model, mode="min_latency")
         assert stt._opts.mode == "min_latency"
 
@@ -1058,6 +1144,27 @@ async def test_language_codes_max_10():
         STT(api_key="test-key", model="u3-rt-pro", language_codes=codes)
 
 
+async def test_language_codes_uncapped_on_universal_3_6_pro():
+    """Universal-3.6 Pro has no documented cap, so more than 10 codes are accepted."""
+    from livekit.plugins.assemblyai import STT
+
+    codes = ["en", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "ja", "ko"]
+    stt = STT(api_key="test-key", model="universal-3-6-pro", language_codes=codes)
+    assert stt._opts.language_codes == codes
+
+    stt.update_options(language_codes=codes + ["zu"])
+    assert stt._opts.language_codes == codes + ["zu"]
+
+
+async def test_language_codes_max_10_on_stt_3_7_realtime_agent():
+    """assemblyai-stt-3-7-realtime-agent keeps the server's 10-code cap."""
+    from livekit.plugins.assemblyai import STT
+
+    codes = ["en", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "ja", "ko"]
+    with pytest.raises(ValueError, match="at most 10"):
+        STT(api_key="test-key", model="assemblyai-stt-3-7-realtime-agent", language_codes=codes)
+
+
 async def test_language_codes_max_10_applies_after_dedup():
     """11 raw entries that dedup to 10 codes are accepted — the client is never
     stricter than what it actually sends to the server."""
@@ -1119,7 +1226,13 @@ async def test_language_codes_allowed_for_all_u3_pro_family_models():
     """language_codes is accepted for every u3-rt-pro-family model, not just the default."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"):
+    for model in (
+        "u3-rt-pro",
+        "u3-rt-pro-beta-1",
+        "universal-3-5-pro",
+        "universal-3-6-pro",
+        "assemblyai-stt-3-7-realtime-agent",
+    ):
         stt = STT(api_key="test-key", model=model, language_codes=["en", "es"])
         assert stt._opts.language_codes == ["en", "es"]
 
@@ -1516,6 +1629,7 @@ async def test_carryover_on_by_default_for_u3_pro_family():
         "u3-rt-pro-beta-1",
         "universal-3-5-pro",
         "universal-3-6-pro",
+        "assemblyai-stt-3-7-realtime-agent",
         "u3-pro",
     ):
         stt = STT(api_key="test-key", model=model)
@@ -1635,6 +1749,28 @@ def _turn_message(**overrides):
     }
     msg.update(overrides)
     return msg
+
+
+@pytest.mark.parametrize("offset", [0.0, 8.5])
+async def test_eos_uses_last_word_end_time(offset):
+    stream = _make_stream_for_unit_test()
+    stream.start_time_offset = offset
+    stream._process_stream_event(_turn_message(end_of_turn=True, transcript="hello"))
+
+    endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
+    assert len(endpoints) == 1
+    assert endpoints[0].alternatives[0].end_time == pytest.approx(offset + 0.48)
+
+
+@pytest.mark.parametrize("words", [[], [{"text": "hello", "confidence": 0.9}]])
+async def test_eos_without_word_timing_does_not_use_stream_offset(words):
+    stream = _make_stream_for_unit_test()
+    stream.start_time_offset = 8.5
+    stream._process_stream_event(_turn_message(end_of_turn=True, transcript="hello", words=words))
+
+    endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
+    assert len(endpoints) == 1
+    assert endpoints[0].alternatives == []
 
 
 async def test_end_of_turn_confidence_surfaced_on_interim_metadata():

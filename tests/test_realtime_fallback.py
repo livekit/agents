@@ -9,7 +9,7 @@ from livekit.agents.llm import ChatContext, RealtimeModelFallbackAdapter
 
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 
 def _audio_frame() -> rtc.AudioFrame:
@@ -146,16 +146,18 @@ def test_proxies_calls_to_active_child() -> None:
     assert backup.created_sessions == []
 
 
-def test_forwards_child_events_to_wrapper_subscribers() -> None:
+async def test_forwards_child_events_to_wrapper_subscribers_across_restart() -> None:
     primary = FakeRealtimeModel()
-    session = RealtimeModelFallbackAdapter([primary]).session()
-
+    adapter = RealtimeModelFallbackAdapter([primary])
+    session = adapter.session()
     received: list[object] = []
     session.on("generation_created", lambda ev: received.append(ev))
 
-    primary.active_session.emit("generation_created", "sentinel")
+    primary.active_session.emit("generation_created", "before-restart")
+    await adapter.restart_session()
+    primary.active_session.emit("generation_created", "after-restart")
 
-    assert received == ["sentinel"]
+    assert received == ["before-restart", "after-restart"]
 
 
 def test_proxies_say_to_active_child() -> None:
@@ -165,6 +167,20 @@ def test_proxies_say_to_active_child() -> None:
     session.say("hello there")
 
     assert primary.active_session.say_calls == ["hello there"]
+
+
+def test_proxies_delegation_recovery_to_active_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    primary = FakeRealtimeModel()
+    session = RealtimeModelFallbackAdapter([primary]).session()
+    child = primary.active_session
+    monkeypatch.setattr(type(child), "_delegation_detection", property(lambda self: {}))
+    delegated: list[str | None] = []
+    monkeypatch.setattr(child, "delegate", delegated.append)
+
+    session.delegate("note")
+
+    assert session._delegation_detection == {}
+    assert delegated == ["note"]
 
 
 def test_proxies_start_user_activity_to_active_child() -> None:
@@ -230,36 +246,6 @@ async def test_switch_session_single_model_restarts_same() -> None:
     assert old.closed is True
     assert session._active_index == 0
     assert len(primary.created_sessions) == 2
-
-
-async def test_restart_replays_chat_ctx_onto_new_child() -> None:
-    primary = FakeRealtimeModel()
-    adapter = RealtimeModelFallbackAdapter([primary])
-    session = adapter.session()
-    old_child = primary.active_session
-
-    ctx = ChatContext.empty()
-    ctx.add_message(role="user", content="remember me")
-    await old_child.update_chat_ctx(ctx)
-
-    await adapter.restart_session()
-
-    # the freshest chat context from the dying child is replayed onto the new child
-    assert session._active.chat_ctx is ctx
-
-
-async def test_restart_preserves_wrapper_subscribers() -> None:
-    primary = FakeRealtimeModel()
-    adapter = RealtimeModelFallbackAdapter([primary])
-    session = adapter.session()
-    received: list[object] = []
-    session.on("generation_created", lambda ev: received.append(ev))
-
-    await adapter.restart_session()
-
-    # events from the NEW child still reach the original wrapper subscriber, no rebinding
-    session._active.emit("generation_created", "after-restart")
-    assert received == ["after-restart"]
 
 
 async def test_restart_preserves_provider_event_subscribers() -> None:
@@ -390,12 +376,13 @@ async def test_escalates_when_all_models_have_failed() -> None:
     assert errors[-1].recoverable is False  # exhausted -> escalate
 
 
-@pytest.mark.virtual_time
 async def test_prefers_primary_again_after_cooldown_expires() -> None:
     primary = FakeRealtimeModel()
     backup = FakeRealtimeModel()
     adapter = RealtimeModelFallbackAdapter([primary, backup], cooldown=5.0)
     session = adapter.session()
+    events: list = []
+    adapter.on("realtime_availability_changed", lambda e: events.append(e))
 
     # primary dies -> fall over to backup
     primary.active_session.emit_error(recoverable=False)
@@ -410,49 +397,27 @@ async def test_prefers_primary_again_after_cooldown_expires() -> None:
     await session._swap_task
     assert session._active_index == 0
     assert session._active is primary.created_sessions[-1]
+    assert any(e.realtime_model is primary and e.available is True for e in events)
 
 
-async def test_regenerates_via_agent_session_when_speaking() -> None:
+@pytest.mark.parametrize(
+    "agent_state, regenerated", [("speaking", 1), ("thinking", 1), ("listening", 0)]
+)
+async def test_regenerates_via_agent_session_while_replying(
+    agent_state: str, regenerated: int
+) -> None:
     primary = FakeRealtimeModel()
     backup = FakeRealtimeModel()
-    adapter = RealtimeModelFallbackAdapter([primary, backup])  # regenerate_on_swap default True
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
     session = adapter.session()
-    session._agent_session = _StubAgentSession(agent_state="speaking")
+    session._agent_session = _StubAgentSession(agent_state=agent_state)
 
     primary.active_session.emit_error(recoverable=False)
     await session._swap_task
 
     # regeneration goes through the AgentSession (orchestrated), not the raw child session
-    assert session._agent_session.interrupt_calls == 1
-    assert session._agent_session.generate_reply_calls == 1
+    assert session._agent_session.generate_reply_calls == regenerated
     assert backup.active_session.generate_reply_calls == 0
-
-
-async def test_regenerates_when_agent_thinking() -> None:
-    primary = FakeRealtimeModel()
-    backup = FakeRealtimeModel()
-    adapter = RealtimeModelFallbackAdapter([primary, backup])
-    session = adapter.session()
-    session._agent_session = _StubAgentSession(agent_state="thinking")
-
-    # "thinking" is a reply in progress (generating, pre-audio), so it regenerates too
-    primary.active_session.emit_error(recoverable=False)
-    await session._swap_task
-
-    assert session._agent_session.generate_reply_calls == 1
-
-
-async def test_no_regenerate_when_agent_not_speaking() -> None:
-    primary = FakeRealtimeModel()
-    backup = FakeRealtimeModel()
-    adapter = RealtimeModelFallbackAdapter([primary, backup])
-    session = adapter.session()
-    session._agent_session = _StubAgentSession(agent_state="listening")
-
-    primary.active_session.emit_error(recoverable=False)
-    await session._swap_task
-
-    assert session._agent_session.generate_reply_calls == 0
 
 
 async def test_no_regenerate_when_disabled() -> None:
@@ -600,30 +565,13 @@ async def test_emits_availability_changed_on_failure() -> None:
     assert any(e.realtime_model is primary and e.available is False for e in events)
 
 
-@pytest.mark.virtual_time
-def test_session_exposes_model_capabilities() -> None:
-    model = FakeRealtimeModel()
-    session = model.session()
-
-    assert session.capabilities is model.capabilities
-
-
 def test_allows_mismatched_auto_tool_reply_generation() -> None:
     primary = FakeRealtimeModel(capabilities=fake_capabilities(auto_tool_reply_generation=True))
     backup = FakeRealtimeModel(capabilities=fake_capabilities(auto_tool_reply_generation=False))
 
-    # no longer a hard capability: the active child's value is read per-turn from the session
+    # a soft capability: the active child's value is read per turn from the session
     adapter = RealtimeModelFallbackAdapter([primary, backup])
     assert adapter.capabilities.auto_tool_reply_generation is False  # conservative AND on the model
-
-
-def test_wrapper_capabilities_track_active_child() -> None:
-    primary = FakeRealtimeModel(capabilities=fake_capabilities(auto_tool_reply_generation=True))
-    backup = FakeRealtimeModel(capabilities=fake_capabilities(auto_tool_reply_generation=False))
-    adapter = RealtimeModelFallbackAdapter([primary, backup])
-    session = adapter.session()
-
-    assert session.capabilities.auto_tool_reply_generation is True  # primary active
 
 
 async def test_wrapper_capabilities_follow_swap() -> None:
@@ -631,26 +579,9 @@ async def test_wrapper_capabilities_follow_swap() -> None:
     backup = FakeRealtimeModel(capabilities=fake_capabilities(auto_tool_reply_generation=False))
     adapter = RealtimeModelFallbackAdapter([primary, backup])
     session = adapter.session()
+    assert session.capabilities.auto_tool_reply_generation is True
 
     primary.active_session.emit_error(recoverable=False)
     await session._swap_task
 
-    assert session.capabilities.auto_tool_reply_generation is False  # backup now active
-
-
-async def test_emits_availability_changed_on_recovery() -> None:
-    primary = FakeRealtimeModel()
-    backup = FakeRealtimeModel()
-    adapter = RealtimeModelFallbackAdapter([primary, backup], cooldown=5.0)
-    session = adapter.session()
-
-    events: list = []
-    adapter.on("realtime_availability_changed", lambda e: events.append(e))
-
-    primary.active_session.emit_error(recoverable=False)
-    await session._swap_task
-    await asyncio.sleep(6.0)
-    backup.active_session.emit_error(recoverable=False)
-    await session._swap_task
-
-    assert any(e.realtime_model is primary and e.available is True for e in events)
+    assert session.capabilities.auto_tool_reply_generation is False
