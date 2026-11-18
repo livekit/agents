@@ -491,13 +491,13 @@ impl VoiceDriver {
             }
             ActivityCommand::UpdateChatCtx(items) => {
                 let count = items.len();
-                // Publish the resulting record as a whole: replacing a model view can remove
-                // its private items while retaining other agents' and accepted history items.
+                // Publish the resulting history as a whole: the view's own items are the model's,
+                // never the history's.
                 let agent = self.activity.agent.clone();
                 self.session.chat_ctx.update_agent_chat_ctx(items, &agent);
                 self.conversation_changed();
                 self.publish_event(crate::events::SessionEvent::HistoryReloaded {
-                    items: self.session.chat_ctx.items().cloned().collect(),
+                    items: self.session.chat_ctx.history().cloned().collect(),
                 });
                 if self.activity.realtime().is_some() {
                     let ctx = self.session.chat_ctx.for_realtime();

@@ -412,7 +412,7 @@ impl VoiceDriver {
             return;
         }
         self.publish_event(SessionEvent::HistoryReloaded {
-            items: self.session.chat_ctx.items().cloned().collect(),
+            items: self.session.chat_ctx.history().cloned().collect(),
         });
     }
 
