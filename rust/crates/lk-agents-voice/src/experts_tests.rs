@@ -15,12 +15,16 @@ fn opened() -> Experts {
 }
 
 fn question(request_id: &str) -> Presentation {
-    Presentation::Question {
-        output_id: "call_1".into(),
+    asked("call_1", request_id, "What email should receive the receipt?")
+}
+
+fn asked(output_id: &str, request_id: &str, question: &str) -> Presentation {
+    Presentation::Questions(vec![Question {
+        output_id: output_id.into(),
         request_id: request_id.into(),
-        question: "What email should receive the receipt?".into(),
+        question: question.into(),
         verbatim: false,
-    }
+    }])
 }
 
 fn ask(experts: &mut Experts, request_id: &str) -> bool {
@@ -58,15 +62,7 @@ fn an_answered_queued_question_is_withdrawn_without_losing_another_question() {
         ),
     );
     assert!(experts.response_queued(&reference));
-    assert_eq!(
-        experts.next(floor(&tools)),
-        Some(Presentation::Question {
-            output_id: "call_2".into(),
-            request_id: "r2".into(),
-            question: "Which seat?".into(),
-            verbatim: false,
-        })
-    );
+    assert_eq!(experts.next(floor(&tools)), Some(asked("call_2", "r2", "Which seat?")));
 }
 
 #[test]
@@ -83,14 +79,14 @@ fn a_late_speech_receipt_keeps_the_occurrence_it_actually_presented() {
     };
     experts.ask("call_1", "r1", "Which email?".into(), false, Some(reference("input_1")));
     experts.next(floor(&tools));
-    experts.presenting(SpeechId(1), pending("r1"));
+    experts.presenting(SpeechId(1), vec![pending("r1")]);
 
     experts.ask("call_1", "r2", "Which address?".into(), false, Some(reference("input_2")));
-    assert_eq!(experts.delivered(SpeechId(1)), Some(reference("input_1")));
+    assert_eq!(experts.delivered(SpeechId(1)), [reference("input_1")]);
     experts.next(floor(&tools));
-    experts.presenting(SpeechId(2), pending("r2"));
-    assert_eq!(experts.delivered(SpeechId(2)), Some(reference("input_2")));
-    assert_eq!(experts.delivered(SpeechId(2)), None, "one receipt presents an occurrence once");
+    experts.presenting(SpeechId(2), vec![pending("r2")]);
+    assert_eq!(experts.delivered(SpeechId(2)), [reference("input_2")]);
+    assert_eq!(experts.delivered(SpeechId(2)), [], "one receipt presents an occurrence once");
 }
 
 #[test]
@@ -130,7 +126,7 @@ fn an_unspoken_question_is_available_for_representing() {
     let mut experts = opened();
     assert!(ask(&mut experts, "r1"));
     assert_eq!(experts.next(floor(&tools)), Some(question("r1")));
-    experts.presenting(SpeechId(1), pending("r1"));
+    experts.presenting(SpeechId(1), vec![pending("r1")]);
     experts.presentation_ended(SpeechId(1));
     assert_eq!(experts.next(floor(&tools)), Some(question("r1")));
 }
@@ -145,10 +141,10 @@ fn progress_waits_for_the_floor_and_superseded_progress_is_coalesced() {
     assert_eq!(experts.next(busy), None);
     assert_eq!(
         experts.next(floor(&tools)),
-        Some(Presentation::Progress {
+        Some(Presentation::Progress(vec![Update {
             output_id: "call_1".into(),
             text: "Refund approved, issuing it".into()
-        })
+        }]))
     );
     assert_eq!(experts.next(floor(&tools)), None);
 }
@@ -163,46 +159,22 @@ fn events_reach_only_an_agent_exposing_the_configured_remote_tool() {
     assert_eq!(experts.next(floor(&[])), None);
     // A different configured agent exposing the same remote tool presents it.
     let replacement = [ExpertTool::remote("https://back.office/agents/refunds", "refunds")];
-    assert!(matches!(experts.next(floor(&replacement)), Some(Presentation::Progress { .. })));
+    assert!(matches!(experts.next(floor(&replacement)), Some(Presentation::Progress(_))));
 }
 
 #[test]
 fn a_question_owns_the_reply_destination_and_takes_exactly_one_answer() {
     let tools = [refunds()];
     let mut experts = opened();
-    assert_eq!(experts.collect(floor(&tools)), None);
+    assert_eq!(experts.collect(floor(&tools)), []);
     assert!(ask(&mut experts, "r1"));
     // Recorded before it is presented: nothing to forward until it is asked.
-    assert_eq!(experts.collect(floor(&tools)), None);
+    assert_eq!(experts.collect(floor(&tools)), []);
     assert_eq!(experts.next(floor(&tools)), Some(question("r1")));
-    assert_eq!(experts.collect(floor(&tools)), Some(pending("r1")));
+    assert_eq!(experts.collect(floor(&tools)), [pending("r1")]);
     assert_eq!(experts.answer(&pending("r1")), Ok(()));
     assert_eq!(experts.answer(&pending("r1")), Err(Stale));
-    assert_eq!(experts.collect(floor(&tools)), None);
-}
-
-#[test]
-fn only_one_expert_question_owns_the_reply_destination_at_a_time() {
-    let tools = [refunds(), ExpertTool::remote("https://back.office/agents/baggage", "baggage")];
-    let mut experts = opened();
-    assert!(experts.open("call_2", tools[1].clone()));
-    ask(&mut experts, "r1");
-    experts.ask("call_2", "b1", "Which bag?".into(), true, None);
-    assert!(experts.progress("call_2", 1, "Tracing the bag".into()));
-    assert_eq!(experts.next(floor(&tools)), Some(question("r1")));
-    // The second question waits; other events still present.
-    assert!(matches!(experts.next(floor(&tools)), Some(Presentation::Progress { .. })));
-    assert_eq!(experts.next(floor(&tools)), None);
-    experts.answer(&pending("r1")).unwrap();
-    assert_eq!(
-        experts.next(floor(&tools)),
-        Some(Presentation::Question {
-            output_id: "call_2".into(),
-            request_id: "b1".into(),
-            question: "Which bag?".into(),
-            verbatim: true
-        })
-    );
+    assert_eq!(experts.collect(floor(&tools)), []);
 }
 
 #[test]
@@ -213,11 +185,11 @@ fn a_voice_task_owns_the_interaction_and_the_question_is_presented_again_after_i
     experts.next(floor(&tools));
     let task = Floor { task: true, ..floor(&tools) };
     assert!(experts.progress("call_1", 1, "Still working".into()));
-    assert_eq!(experts.collect(task), None);
+    assert_eq!(experts.collect(task), []);
     assert_eq!(experts.next(task), None);
     // The task returned its caller: the same request is restored, then answered.
     assert_eq!(experts.next(floor(&tools)), Some(question("r1")));
-    assert_eq!(experts.collect(floor(&tools)), Some(pending("r1")));
+    assert_eq!(experts.collect(floor(&tools)), [pending("r1")]);
 }
 
 #[test]
@@ -228,11 +200,11 @@ fn a_question_asked_before_switching_to_an_agent_without_its_tool_is_suspended()
     experts.next(floor(&tools));
     // The replacement cannot interact with the expert: its turns are not forwarded.
     experts.observe(floor(&[]));
-    assert_eq!(experts.collect(floor(&[])), None);
+    assert_eq!(experts.collect(floor(&[])), []);
     // Back to an eligible agent: the question is re-presented before any answer is forwarded.
-    assert_eq!(experts.collect(floor(&tools)), None);
+    assert_eq!(experts.collect(floor(&tools)), []);
     assert_eq!(experts.next(floor(&tools)), Some(question("r1")));
-    assert_eq!(experts.collect(floor(&tools)), Some(pending("r1")));
+    assert_eq!(experts.collect(floor(&tools)), [pending("r1")]);
 }
 
 #[test]
@@ -296,7 +268,7 @@ fn a_checkpointed_response_retires_only_its_exact_question_even_after_agent_swit
     let InputRequestRef::RemoteTask { request_id, .. } = &mut stale else { unreachable!() };
     *request_id = "refund/input_0".into();
     assert!(!experts.response_queued(&stale));
-    assert_eq!(experts.collect(floor(&tools)), Some(pending("r1")));
+    assert_eq!(experts.collect(floor(&tools)), [pending("r1")]);
     assert!(experts.response_queued(&reference));
     experts.observe(floor(&[]));
     assert_eq!(
@@ -309,15 +281,7 @@ fn a_checkpointed_response_retires_only_its_exact_question_even_after_agent_swit
         !experts.response_queued(&reference),
         "a late admission cannot retire a replacement question"
     );
-    assert_eq!(
-        experts.next(floor(&tools)),
-        Some(Presentation::Question {
-            output_id: "call_1".into(),
-            request_id: "r2".into(),
-            question: "What budget?".into(),
-            verbatim: false,
-        })
-    );
+    assert_eq!(experts.next(floor(&tools)), Some(asked("call_1", "r2", "What budget?")));
 }
 
 #[test]
@@ -409,7 +373,7 @@ fn stable_remote_identity_reaches_a_replacement_agent_after_its_model_tool_is_re
     let other_config = [ExpertTool::remote("flights-backup", "old_flight_tool")];
     assert_eq!(experts.next(floor(&other_config)), None);
     let replacement = [ExpertTool::remote("flights-primary", "search_flights")];
-    assert!(matches!(experts.next(floor(&replacement)), Some(Presentation::Progress { .. })));
+    assert!(matches!(experts.next(floor(&replacement)), Some(Presentation::Progress(_))));
 }
 
 #[test]
@@ -420,7 +384,7 @@ fn remote_ids_cannot_alias_local_agent_tool_identity() {
     let remote_lookalike = [ExpertTool::remote("agent:helper", "help")];
     assert_eq!(experts.next(floor(&remote_lookalike)), None);
     let local = [ExpertTool::local("helper", "help")];
-    assert!(matches!(experts.next(floor(&local)), Some(Presentation::Progress { .. })));
+    assert!(matches!(experts.next(floor(&local)), Some(Presentation::Progress(_))));
 }
 
 #[test]
@@ -442,10 +406,166 @@ fn a_refused_verbatim_question_keeps_its_reference_and_retries_the_same_occurren
     assert_eq!(experts.reference(&request), Some(&reference));
     assert!(experts.waits_for(&reference));
     assert!(
-        experts.collect(floor(&tools)).is_none(),
+        experts.collect(floor(&tools)).is_empty(),
         "an unheard question cannot own the next reply"
     );
     let second = experts.next(floor(&tools)).unwrap();
     assert_eq!(first, second, "retry preserves exact source and question identity");
     assert_eq!(experts.reference(&request), Some(&reference));
+}
+
+fn exports() -> ExpertTool {
+    ExpertTool::remote("https://back.office/agents/exports", "exports")
+}
+
+fn export_question(output_id: &str, request_id: &str, question: &str) -> Question {
+    Question {
+        output_id: output_id.into(),
+        request_id: request_id.into(),
+        question: question.into(),
+        verbatim: false,
+    }
+}
+
+fn exports_pending(output_id: &str, request_id: &str) -> PendingRequest {
+    PendingRequest { output_id: output_id.into(), request_id: request_id.into() }
+}
+
+/// Two exports are started; each asks before the frontend gets the floor.
+fn two_exports_asking(sales: &str, stock: &str) -> Experts {
+    let mut experts = Experts::default();
+    experts.open("sales", exports());
+    experts.open("stock", exports());
+    experts.ask("sales", "s1", sales.into(), false, None);
+    experts.ask("stock", "k1", stock.into(), false, None);
+    experts
+}
+
+#[test]
+fn questions_waiting_together_are_asked_together_and_each_takes_a_reply() {
+    let tools = [exports()];
+    let mut experts = two_exports_asking("Normal or high priority?", "Normal or high priority?");
+    // The frontend asks both at the first opportunity: neither waits on the other's answer,
+    // so the person's "high" has two candidates and response routing can ask which one.
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Questions(vec![
+            export_question("sales", "s1", "Normal or high priority?"),
+            export_question("stock", "k1", "Normal or high priority?"),
+        ]))
+    );
+    assert_eq!(
+        experts.collect(floor(&tools)),
+        [exports_pending("sales", "s1"), exports_pending("stock", "k1")]
+    );
+    assert_eq!(experts.next(floor(&tools)), None, "an asked question is not asked again");
+}
+
+#[test]
+fn a_partial_answer_leaves_the_other_question_open_without_asking_it_again() {
+    let tools = [exports()];
+    let mut experts = two_exports_asking("Normal or high priority?", "Which quarter?");
+    experts.next(floor(&tools));
+    // "High" was routed to the sales export only.
+    experts.answer(&exports_pending("sales", "s1")).unwrap();
+    assert_eq!(experts.collect(floor(&tools)), [exports_pending("stock", "k1")]);
+    assert_eq!(experts.next(floor(&tools)), None, "the open quarter question is not repeated");
+    // Then "Q3" answers the stock export.
+    experts.answer(&exports_pending("stock", "k1")).unwrap();
+    assert_eq!(experts.collect(floor(&tools)), []);
+}
+
+#[test]
+fn a_question_arriving_while_another_is_open_is_asked_at_the_next_free_floor() {
+    let tools = [exports()];
+    let mut experts = Experts::default();
+    experts.open("sales", exports());
+    experts.open("stock", exports());
+    experts.ask("sales", "s1", "Normal or high priority?".into(), false, None);
+    experts.next(floor(&tools));
+    experts.ask("stock", "k1", "Which quarter?".into(), false, None);
+    let busy = Floor { free: false, ..floor(&tools) };
+    assert_eq!(experts.next(busy), None, "a question still waits for the floor");
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Questions(vec![export_question("stock", "k1", "Which quarter?")])),
+        "an unanswered question does not hold back another task's question"
+    );
+    assert_eq!(
+        experts.collect(floor(&tools)),
+        [exports_pending("sales", "s1"), exports_pending("stock", "k1")]
+    );
+}
+
+#[test]
+fn an_unheard_group_is_offered_again_together_and_its_receipt_presents_each_source() {
+    let tools = [exports()];
+    let reference = |request: &str| InputRequestRef::Agent {
+        agent_id: "desk".into(),
+        request_id: request.into(),
+    };
+    let mut experts = Experts::default();
+    experts.open("sales", exports());
+    experts.open("stock", exports());
+    experts.ask("sales", "s1", "Normal or high priority?".into(), false, Some(reference("s")));
+    experts.ask("stock", "k1", "Which quarter?".into(), false, Some(reference("k")));
+    let group = experts.next(floor(&tools));
+    let both = vec![exports_pending("sales", "s1"), exports_pending("stock", "k1")];
+    experts.presenting(SpeechId(1), both.clone());
+    experts.presentation_ended(SpeechId(1));
+    assert_eq!(experts.collect(floor(&tools)), [], "unheard questions take no reply");
+    assert_eq!(experts.next(floor(&tools)), group);
+    experts.presenting(SpeechId(2), both);
+    assert_eq!(experts.delivered(SpeechId(2)), [reference("s"), reference("k")]);
+}
+
+#[test]
+fn a_verbatim_question_is_asked_alone_and_word_for_word() {
+    let tools = [exports()];
+    let mut experts = Experts::default();
+    experts.open("sales", exports());
+    experts.open("stock", exports());
+    experts.ask("sales", "s1", "Say CONFIRM to export.".into(), true, None);
+    experts.ask("stock", "k1", "Which quarter?".into(), false, None);
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Questions(vec![Question {
+            verbatim: true,
+            ..export_question("sales", "s1", "Say CONFIRM to export.")
+        }]))
+    );
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Questions(vec![export_question("stock", "k1", "Which quarter?")]))
+    );
+}
+
+#[test]
+fn a_burst_of_progress_across_tasks_is_one_summary_behind_exact_output() {
+    let tools = [exports()];
+    let mut experts = Experts::default();
+    experts.open("sales", exports());
+    experts.open("stock", exports());
+    experts.progress("sales", 1, "Collecting rows".into());
+    experts.exact("stock", 1, "Reference 42.".into(), None);
+    experts.progress("stock", 2, "Collecting stock".into());
+    experts.progress("sales", 2, "Rendering the PDF".into());
+    experts.recorded("stock");
+    // The stock update waits behind its own exact output; the sales updates coalesce.
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Progress(vec![Update {
+            output_id: "sales".into(),
+            text: "Rendering the PDF".into()
+        }]))
+    );
+    assert!(matches!(experts.next(floor(&tools)), Some(Presentation::Exact { .. })));
+    experts.progress("sales", 3, "Uploading".into());
+    assert_eq!(
+        experts.next(floor(&tools)),
+        Some(Presentation::Progress(vec![
+            Update { output_id: "stock".into(), text: "Collecting stock".into() },
+            Update { output_id: "sales".into(), text: "Uploading".into() },
+        ]))
+    );
 }
