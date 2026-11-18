@@ -62,7 +62,12 @@ from .audio_recognition import (
     _PreflightStaleInfo,
     _STTPipeline,
 )
-from .endpointing import create_endpointing
+from .endpointing import (
+    BaseEndpointing,
+    create_endpointing,
+    inherit_learned_delay,
+    update_endpointing,
+)
 from .events import (
     AgentFalseInterruptionEvent,
     AgentState,
@@ -187,8 +192,11 @@ class _ReusableResources:
     stt_pipeline: _STTPipeline | None = None
     rt_session: llm.RealtimeSession | None = None
     turn_detector_stream: _StreamingTurnDetectorStream | None = None
+    # not reused as-is: the next activity seeds its own endpointing with what this one learned
+    endpointing: BaseEndpointing | None = None
 
     async def cleanup(self) -> None:
+        self.endpointing = None
         tasks = []
         if self.stt_pipeline is not None:
             tasks.append(self.stt_pipeline.aclose())
@@ -885,7 +893,9 @@ class AgentActivity(RecognitionHooks):
 
         if self._audio_recognition:
             self._audio_recognition._update_options(
-                endpointing=create_endpointing(endpointing_opts)
+                endpointing=update_endpointing(
+                    self._audio_recognition._endpointing, endpointing_opts
+                )
                 if is_given(endpointing_opts)
                 else NOT_GIVEN,
                 turn_detection=turn_detection,
@@ -1113,6 +1123,9 @@ class AgentActivity(RecognitionHooks):
         resources = _ReusableResources()
 
         try:
+            if self._audio_recognition:
+                resources.endpointing = self._audio_recognition._endpointing
+
             # stt pipeline; only reuse with the default stt_node, a custom override may
             # access the old self.session/activity inside the yield loop after detach
             if (
@@ -1374,13 +1387,16 @@ class AgentActivity(RecognitionHooks):
         wired_vad = self.vad
         if wired_vad is not None and self.using_default_vad and self._rt_turn_detection_enabled:
             wired_vad = None
+        endpointing = create_endpointing(self.endpointing_opts)
+        if reuse_resources is not None and reuse_resources.endpointing is not None:
+            inherit_learned_delay(endpointing, reuse_resources.endpointing)
         self._audio_recognition = AudioRecognition(
             self._session,
             hooks=self,
             stt=self._agent.stt_node if self.stt else None,
             vad=wired_vad,
             interruption_detection=self._interruption_detector,
-            endpointing=create_endpointing(self.endpointing_opts),
+            endpointing=endpointing,
             turn_detection=self._turn_detection,
             stt_model=self.stt.model if self.stt else None,
             stt_provider=self.stt.provider if self.stt else None,

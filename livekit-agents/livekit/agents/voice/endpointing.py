@@ -268,6 +268,46 @@ class DynamicEndpointing(BaseEndpointing):
             self._utterance_pause.reset(alpha=alpha)
 
 
+def inherit_learned_delay(new: BaseEndpointing, previous: BaseEndpointing) -> None:
+    """Seed ``new`` with the pause length ``previous`` has learned from the user.
+
+    Used on agent handoff: both activities talk to the same user, so the pause learned
+    by the previous agent's ``DynamicEndpointing`` should not reset to the configured floor.
+    The learned value is clamped to the bounds of ``new``. Nothing carries over unless both
+    sides use dynamic endpointing.
+    """
+    if not isinstance(new, DynamicEndpointing) or not isinstance(previous, DynamicEndpointing):
+        return
+
+    learned = previous._utterance_pause.value
+    if learned is None:
+        return
+
+    new._utterance_pause.reset(initial=min(max(learned, new._min_delay), new._max_delay))
+
+
+def update_endpointing(current: BaseEndpointing, options: EndpointingOptions) -> BaseEndpointing:
+    """Apply ``options`` to the endpointing in use, keeping what it has learned when possible.
+
+    When ``current`` is a ``DynamicEndpointing`` and the mode stays dynamic, the options are
+    applied in place through ``DynamicEndpointing.update_options``, so changing only
+    ``max_delay`` or ``alpha`` keeps the learned pause. Changing ``min_delay`` still resets the
+    learned value to the new floor, as ``update_options`` does. Otherwise a new endpointing is
+    created from ``options``.
+    """
+    if options.get("mode", "fixed") == "dynamic" and type(current) is DynamicEndpointing:
+        current.update_options(
+            min_delay=options["min_delay"]
+            if options["min_delay"] != current._min_delay
+            else NOT_GIVEN,
+            max_delay=options["max_delay"],
+            alpha=options["alpha"],
+        )
+        return current
+
+    return create_endpointing(options)
+
+
 def create_endpointing(options: EndpointingOptions) -> BaseEndpointing:
     match options.get("mode", "fixed"):
         case "dynamic":
