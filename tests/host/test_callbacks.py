@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterable, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Annotated
@@ -370,6 +370,120 @@ async def test_a_handlers_typed_output_is_the_tasks_data_artifact(
     task = response.json()["result"]["task"]
     assert task["status"]["state"] == "TASK_STATE_COMPLETED"
     assert task["artifacts"][0]["parts"][0]["data"] == {"reservation": "R42"}
+
+
+async def stream_turn(door: httpx.AsyncClient, text: str) -> list[dict[str, object]]:
+    """The events of an A2A ``message/stream`` of ``text``."""
+    body = message_send(text) | {"method": "message/stream"}
+    async with door.stream("POST", "/v1", json=body) as response:
+        return [
+            json.loads(line.removeprefix("data:"))["result"]
+            async for line in response.aiter_lines()
+            if line.startswith("data:")
+        ]
+
+
+def streamed_text(events: list[dict[str, object]]) -> list[str]:
+    """Every text part the task's artifact updates carried, in order."""
+    return [
+        part["text"]
+        for event in events
+        if "artifactUpdate" in event
+        for part in event["artifactUpdate"]["artifact"]["parts"]  # type: ignore[index]
+        if "text" in part
+    ]
+
+
+def final_status(events: list[dict[str, object]]) -> dict[str, object]:
+    return events[-1]["statusUpdate"]["status"]  # type: ignore[index, no-any-return]
+
+
+async def test_a_generator_handler_streams_its_run_and_completes_with_its_typed_output(
+    a2a_door: Callable[[A2AHandler], AbstractAsyncContextManager[httpx.AsyncClient]],
+) -> None:
+    """Each yielded delta reaches the client as it is produced, once, and the run the handler
+    streamed is the outcome: its typed output is the task's data artifact."""
+
+    class Booking(BaseModel):
+        nights: int
+
+    model = FakeLLM([["Booking ", "two nights.", tool_call("final_result", nights=2)]])
+    agent = Agent(instructions="Help.", llm=model, output_type=Booking)
+
+    async def handler(ctx: A2ASessionContext) -> AsyncIterator[str]:
+        async with agent.run_stream(ctx.message) as stream:
+            async for delta in stream.stream_text(delta=True):
+                yield delta
+
+    async with a2a_door(handler) as door:
+        events = await stream_turn(door, "book")
+
+    assert streamed_text(events) == ["Booking ", "two nights."]
+    assert final_status(events)["state"] == "TASK_STATE_COMPLETED"
+    data = [
+        part["data"]
+        for event in events
+        if "artifactUpdate" in event
+        for part in event["artifactUpdate"]["artifact"]["parts"]  # type: ignore[index]
+        if "data" in part
+    ]
+    assert data == [{"nights": 2}]
+
+
+async def test_a_generator_handlers_run_asking_for_input_leaves_the_task_input_required(
+    a2a_door: Callable[[A2AHandler], AbstractAsyncContextManager[httpx.AsyncClient]],
+) -> None:
+    """A run the handler streamed that asks a question ends the task input-required with it."""
+    agent = Agent(instructions="Help.", llm=FakeLLM([tool_call("book")]))
+
+    @agent.tool
+    async def book(ctx: RunContext) -> InputRequired:
+        """Book."""
+        return InputRequired("Which date?", verbatim=True)
+
+    async def handler(ctx: A2ASessionContext) -> AsyncIterator[str]:
+        async with agent.run_stream(ctx.message) as stream:
+            async for delta in stream.stream_text(delta=True):
+                yield delta
+
+    async with a2a_door(handler) as door:
+        events = await stream_turn(door, "book")
+
+    status = final_status(events)
+    assert status["state"] == "TASK_STATE_INPUT_REQUIRED"
+    assert status["message"]["parts"] == [{"text": "Which date?"}]  # type: ignore[index]
+
+
+async def test_a_generator_handler_without_a_run_completes_with_the_text_it_yielded(
+    a2a_door: Callable[[A2AHandler], AbstractAsyncContextManager[httpx.AsyncClient]],
+) -> None:
+    """With no run to settle it, the answer is the yielded text, streamed once and joined."""
+
+    async def handler(ctx: A2ASessionContext) -> AsyncIterator[str]:
+        yield "Open "
+        yield "until 9."
+
+    async with a2a_door(handler) as door:
+        events = await stream_turn(door, "hours?")
+
+    assert streamed_text(events) == ["Open ", "until 9."]
+    status = final_status(events)
+    assert status["state"] == "TASK_STATE_COMPLETED"
+    assert status["message"]["parts"] == [{"text": "Open until 9."}]  # type: ignore[index]
+
+
+async def test_a_generator_handler_yielding_a_non_str_fails_the_task(
+    a2a_door: Callable[[A2AHandler], AbstractAsyncContextManager[httpx.AsyncClient]],
+) -> None:
+    """A yielded value that is not text fails the task, naming the type."""
+
+    async def handler(ctx: A2ASessionContext) -> AsyncIterator[object]:
+        yield {"hours": 9}
+
+    async with a2a_door(handler) as door:  # type: ignore[arg-type]
+        events = await stream_turn(door, "hours?")
+
+    assert final_status(events)["state"] == "TASK_STATE_FAILED"
 
 
 # -- a call's hooks, nodes and speech callbacks
