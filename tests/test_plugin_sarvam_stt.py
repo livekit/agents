@@ -256,6 +256,10 @@ class _WebSocket:
         await self._closed.wait()
         return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, 1000, "")
 
+    async def ping(self, message: bytes = b"") -> None:
+        # the liveness monitor probes an idle socket
+        return None
+
     async def close(self) -> None:
         self.closed = True
         self._closed.set()
@@ -397,11 +401,69 @@ async def test_server_end_speech_does_not_flush_next_utterance(
         assert not session.ws.closed
 
 
+class _TimestampResponse:
+    status = 200
+
+    async def __aenter__(self) -> _TimestampResponse:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def json(self) -> dict[str, object]:
+        return {
+            "request_id": "r1",
+            "transcript": "Sarvam",
+            "language_code": "hi-IN",
+            "timestamps": {"start_time_seconds": [0.1], "end_time_seconds": [0.4]},
+        }
+
+
+class _RecordingSession:
+    def __init__(self) -> None:
+        self.fields: dict[str, object] = {}
+
+    def post(self, *, data: object, **_: object) -> _TimestampResponse:
+        for type_options, _headers, value in data._fields:  # type: ignore[attr-defined]
+            self.fields[type_options["name"]] = value
+        return _TimestampResponse()
+
+
+async def test_recognize_requests_timestamps() -> None:
+    stt = sarvam_stt.STT(api_key="sk_test", with_timestamps=True)
+    session = _RecordingSession()
+    stt._session = session  # type: ignore[assignment]
+
+    event = await stt._recognize_impl(_audio(), conn_options=APIConnectOptions(max_retry=0))
+
+    assert session.fields["with_timestamps"] == "true"
+    assert event.alternatives[0].start_time == 0.1
+    assert event.alternatives[0].end_time == 0.4
+
+
+async def test_recognize_omits_timestamps_by_default() -> None:
+    stt = sarvam_stt.STT(api_key="sk_test")
+    session = _RecordingSession()
+    stt._session = session  # type: ignore[assignment]
+
+    await stt._recognize_impl(_audio(), conn_options=APIConnectOptions(max_retry=0))
+
+    assert "with_timestamps" not in session.fields
+
+
 @pytest.mark.virtual_time
-async def test_transcription_delay_measures_sarvam_speech_end_to_final(session: _Session) -> None:
+@pytest.mark.parametrize(
+    "final_latency",
+    [0.2, 1.4],
+    ids=["final_within_eos_grace", "final_after_eos_fallback"],
+)
+async def test_transcription_delay_measures_sarvam_speech_end_to_final(
+    session: _Session, final_latency: float
+) -> None:
     # Sarvam's VAD owns the turn (turn_detection="stt", no local VAD) and its final carries no
-    # speech_end. The final lands within the EOS grace period, so the plugin emits it before
-    # END_OF_SPEECH, whose speech_end_time must anchor the turn rather than its own arrival.
+    # speech_end. Whether the final beats the 1 s EOS grace period (FINAL, then END_OF_SPEECH)
+    # or the fallback emits END_OF_SPEECH first, the turn is anchored at END_OF_SPEECH's
+    # speech_end_time rather than at the final's arrival.
     hooks = MagicMock()
     hooks.retrieve_chat_ctx.return_value = llm.ChatContext()
     hooks.on_end_of_turn.return_value = True
@@ -427,7 +489,7 @@ async def test_transcription_delay_measures_sarvam_speech_end_to_final(session: 
             await asyncio.sleep(1.0)
             await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
             speech_end = time.time()
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(final_latency)
             await stream._handle_transcript_data(
                 {"data": {"transcript": "नमस्ते", "language_code": "hi-IN", "metrics": {}}}
             )
@@ -439,5 +501,6 @@ async def test_transcription_delay_measures_sarvam_speech_end_to_final(session: 
 
     metrics = hooks.on_end_of_turn.call_args.args[0].metrics
     assert metrics.stopped_speaking_at == pytest.approx(speech_end, abs=1e-3)
-    assert metrics.transcription_delay == pytest.approx(0.2, abs=1e-3)
-    assert metrics.end_of_turn_delay == pytest.approx(0.5, abs=1e-3)
+    assert metrics.transcription_delay == pytest.approx(final_latency, abs=1e-3)
+    # the turn commits one endpointing delay after the speech end, or on a later final
+    assert metrics.end_of_turn_delay == pytest.approx(max(0.5, final_latency), abs=1e-3)
