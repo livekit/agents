@@ -488,6 +488,33 @@ def test_keywords_are_copied_from_the_caller():
     assert stt._opts.keywords == ["Acme"]
 
 
+async def test_audio_is_sent_in_chunks_of_buffer_size_seconds():
+    import base64
+
+    stt, _, ws = _make_stt([READY, _text("hello", 0.1)], buffer_size_seconds=0.2)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame(0.4))
+    stream.end_input()
+    try:
+        await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+
+    chunks = [
+        len(base64.b64decode(msg["audio"])) // 2 for msg in ws.sent if msg.get("type") == "audio"
+    ]
+    assert chunks == [4800, 4800]
+    assert ws.sent[0]["input_format"] == "pcm"
+
+
+def test_unsupported_encoding_is_rejected():
+    from livekit.plugins.gradium import STT
+
+    with pytest.raises(ValueError, match="Unsupported encoding"):
+        STT(api_key="test-key", encoding="mulaw")  # type: ignore[arg-type]
+
+
 class _FakeMessage:
     def __init__(self, payload: dict) -> None:
         import aiohttp
