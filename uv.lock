@@ -42,7 +42,7 @@ members = [
     "livekit-plugins-bey",
     "livekit-plugins-bithuman",
     "livekit-plugins-bland",
-    "livekit-plugins-boson",
+    "livekit-plugins-boson-ai",
     "livekit-plugins-boson-avatar",
     "livekit-plugins-browser",
     "livekit-plugins-cambai",
@@ -112,6 +112,7 @@ members = [
     "livekit-plugins-ultravox",
     "livekit-plugins-upliftai",
     "livekit-plugins-vakyam",
+    "livekit-plugins-vlmrun",
     "livekit-plugins-xai",
     "livekit-plugins-zoom-ai",
 ]
@@ -2192,8 +2193,8 @@ bithuman = [
 bland = [
     { name = "livekit-plugins-bland" },
 ]
-boson = [
-    { name = "livekit-plugins-boson" },
+boson-ai = [
+    { name = "livekit-plugins-boson-ai" },
 ]
 boson-avatar = [
     { name = "livekit-plugins-boson-avatar" },
@@ -2402,6 +2403,9 @@ upliftai = [
 vakyam = [
     { name = "livekit-plugins-vakyam" },
 ]
+vlmrun = [
+    { name = "livekit-plugins-vlmrun" },
+]
 xai = [
     { name = "livekit-plugins-xai" },
 ]
@@ -2438,7 +2442,7 @@ requires-dist = [
     { name = "livekit-plugins-bey", marker = "extra == 'bey'", editable = "livekit-plugins/livekit-plugins-bey" },
     { name = "livekit-plugins-bithuman", marker = "extra == 'bithuman'", editable = "livekit-plugins/livekit-plugins-bithuman" },
     { name = "livekit-plugins-bland", marker = "extra == 'bland'", editable = "livekit-plugins/livekit-plugins-bland" },
-    { name = "livekit-plugins-boson", marker = "extra == 'boson'", editable = "livekit-plugins/livekit-plugins-boson" },
+    { name = "livekit-plugins-boson-ai", marker = "extra == 'boson-ai'", editable = "livekit-plugins/livekit-plugins-boson-ai" },
     { name = "livekit-plugins-boson-avatar", marker = "extra == 'boson-avatar'", editable = "livekit-plugins/livekit-plugins-boson-avatar" },
     { name = "livekit-plugins-browser", marker = "extra == 'browser'", editable = "livekit-plugins/livekit-plugins-browser" },
     { name = "livekit-plugins-cambai", marker = "extra == 'cambai'", editable = "livekit-plugins/livekit-plugins-cambai" },
@@ -2505,6 +2509,7 @@ requires-dist = [
     { name = "livekit-plugins-ultravox", marker = "extra == 'ultravox'", editable = "livekit-plugins/livekit-plugins-ultravox" },
     { name = "livekit-plugins-upliftai", marker = "extra == 'upliftai'", editable = "livekit-plugins/livekit-plugins-upliftai" },
     { name = "livekit-plugins-vakyam", marker = "extra == 'vakyam'", editable = "livekit-plugins/livekit-plugins-vakyam" },
+    { name = "livekit-plugins-vlmrun", marker = "extra == 'vlmrun'", editable = "livekit-plugins/livekit-plugins-vlmrun" },
     { name = "livekit-plugins-xai", marker = "extra == 'xai'", editable = "livekit-plugins/livekit-plugins-xai" },
     { name = "livekit-plugins-zoom-ai", marker = "extra == 'zoom-ai'", editable = "livekit-plugins/livekit-plugins-zoom-ai" },
     { name = "livekit-protocol", specifier = "==1.1.32" },
@@ -2530,7 +2535,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-ai", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "vlmrun", "xai", "zoom-ai"]
 
 [[package]]
 name = "livekit-api"
@@ -2942,7 +2947,7 @@ requires-dist = [
     { name = "aiobotocore", specifier = ">=3.0.0" },
     { name = "aws-sdk-bedrock-runtime", marker = "python_full_version >= '3.12' and extra == 'realtime'", specifier = ">=0.2.0" },
     { name = "aws-sdk-signers", marker = "python_full_version >= '3.12' and extra == 'realtime'", specifier = ">=0.0.3" },
-    { name = "aws-sdk-transcribe-streaming", marker = "python_full_version >= '3.12'", specifier = ">=0.11.0" },
+    { name = "aws-sdk-transcribe-streaming", marker = "python_full_version >= '3.12'", specifier = ">=0.11.0,<0.13.0" },
     { name = "boto3", marker = "extra == 'realtime'", specifier = ">1.35.10" },
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "smithy-http", extras = ["awscrt"], marker = "python_full_version >= '3.12'" },
@@ -3032,8 +3037,8 @@ dependencies = [
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
-name = "livekit-plugins-boson"
-source = { editable = "livekit-plugins/livekit-plugins-boson" }
+name = "livekit-plugins-boson-ai"
+source = { editable = "livekit-plugins/livekit-plugins-boson-ai" }
 dependencies = [
     { name = "livekit-agents", extra = ["openai"] },
 ]
@@ -4010,6 +4015,22 @@ dependencies = [
 requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "websockets", specifier = ">=14.0,<16.0" },
+]
+
+[[package]]
+name = "livekit-plugins-vlmrun"
+source = { editable = "livekit-plugins/livekit-plugins-vlmrun" }
+dependencies = [
+    { name = "httpx2" },
+    { name = "livekit-agents", extra = ["images", "openai"] },
+    { name = "openai" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx2", specifier = ">=2.12,<3" },
+    { name = "livekit-agents", extras = ["images", "openai"], editable = "livekit-agents" },
+    { name = "openai", specifier = ">=3.28,<4" },
 ]
 
 [[package]]
