@@ -214,6 +214,41 @@ impl Delegation {
         Ok(true)
     }
 
+    /// The observation stream ended or failed before an outcome. A known task is followed on
+    /// a fresh stream, or read once; the operation that created it is never sent again. `None`
+    /// continues with the recovered observation.
+    pub(super) async fn observation_lost(
+        &mut self,
+        reply: &mut Option<Owned<Reply>>,
+        error: AgentClientError,
+    ) -> Result<Option<RemoteEvent>, AgentClientError> {
+        use lk_agents_core::delegation::remote::ObservationLoss;
+        if let Some(lost) = reply.take() {
+            close_observation(lost).await?;
+        }
+        let streaming = self.client.offers_streaming();
+        let max_retry = self.request.conn_options.max_retry;
+        let mut loss = self.interaction.0.lock().policy.observation_lost(streaming, max_retry);
+        if let ObservationLoss::Resubscribe(task) = loss {
+            let observer = self.observer();
+            match self
+                .client
+                .subscribe_observed(task.clone(), None, &self.request.cx, observer)
+                .await
+            {
+                Ok(followed) => {
+                    *reply = self.claim_reply(followed).await?;
+                    return Ok(reply.is_none().then(forwarded));
+                }
+                Err(failure) => loss = ObservationLoss::resubscribe_failed(task, &failure),
+            }
+        }
+        let ObservationLoss::Snapshot(task) = loss else { return Err(error) };
+        let observer = self.observer();
+        let task = self.client.get_task(task, &self.request.cx, observer).await?;
+        self.interaction.reconciled_lost(a2a::StreamResponse::Task(task))?.ok_or(error).map(Some)
+    }
+
     async fn reconcile_task(&mut self) -> Result<RemoteEvent, AgentClientError> {
         let state = self.interaction.0.lock().policy.snapshot();
         let task = lk_agents_core::a2a::rpc::TaskRef {

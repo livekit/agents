@@ -1128,3 +1128,6 @@ mod terminal_observation;
 
 #[path = "remote_child_tests.rs"]
 mod completed_child;
+
+#[path = "remote_stream_tests.rs"]
+mod lost_stream;

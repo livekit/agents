@@ -650,9 +650,14 @@ impl Delegation {
                 match next {
                     Next::Update(Ok(Some(update))) => self.interaction.update(update)?,
                     Next::Update(Ok(None)) => {
-                        return Err(protocol("the remote interaction ended without an outcome"));
+                        let lost = protocol("the remote interaction ended without an outcome");
+                        initial = self.observation_lost(reply, lost).await?;
+                        continue;
                     }
-                    Next::Update(Err(error)) => return Err(error),
+                    Next::Update(Err(error)) => {
+                        initial = self.observation_lost(reply, error).await?;
+                        continue;
+                    }
                     Next::Command(Some(command)) => {
                         initial = self.message_command(command, reply).await?;
                         continue;
@@ -924,6 +929,15 @@ impl Interaction {
         let mut state = self.0.lock();
         let event = state.policy.reconcile(response).map_err(protocol)?;
         Ok(state.event(event))
+    }
+
+    fn reconciled_lost(
+        &self,
+        response: a2a::StreamResponse,
+    ) -> Result<Option<RemoteEvent>, AgentClientError> {
+        let mut state = self.0.lock();
+        let event = state.policy.reconcile_lost(response).map_err(protocol)?;
+        Ok(event.map(|event| state.event(event)))
     }
 
     fn extra(&self) -> Result<Map<String, Value>, AgentClientError> {
