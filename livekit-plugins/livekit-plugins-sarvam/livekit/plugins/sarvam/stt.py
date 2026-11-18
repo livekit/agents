@@ -45,7 +45,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
 
@@ -258,6 +258,32 @@ class ConnectionState(enum.Enum):
     FAILED = "failed"
 
 
+TimestampGranularity = Literal["segment", "word"]
+
+
+def _timed_words(timestamps: dict[str, Any]) -> list[TimedString] | None:
+    """Build timed words from the parallel arrays of a word-granularity response.
+
+    REST times are seconds from the start of the uploaded audio, like the
+    utterance's own start and end.
+    """
+    texts = timestamps.get("words")
+    starts = timestamps.get("start_time_seconds")
+    ends = timestamps.get("end_time_seconds")
+    if not (isinstance(texts, list) and isinstance(starts, list) and isinstance(ends, list)):
+        return None
+    if not (len(texts) == len(starts) == len(ends)):
+        return None
+    words = [
+        TimedString(text, start_time=float(start), end_time=float(end))
+        for text, start, end in zip(texts, starts, ends, strict=True)
+        if isinstance(text, str)
+        and isinstance(start, (int, float))
+        and isinstance(end, (int, float))
+    ]
+    return words or None
+
+
 @dataclass
 class SarvamSTTOptions:
     """Options for the Sarvam.ai STT service.
@@ -270,6 +296,7 @@ class SarvamSTTOptions:
         streaming_url: WebSocket streaming URL (auto-determined from model if not provided)
         prompt: Optional prompt for STT translate (saaras models only)
         with_timestamps: Whether REST recognition requests timestamps
+        timestamp_granularity: ``segment`` or ``word`` timestamps for REST recognition
     """
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
@@ -280,6 +307,7 @@ class SarvamSTTOptions:
     streaming_url: str | None = None
     prompt: str | None = None  # Optional prompt for STT translate (saaras models only)
     with_timestamps: bool = False
+    timestamp_granularity: TimestampGranularity | None = None
     high_vad_sensitivity: bool | None = None
     sample_rate: int = 16000
     flush_signal: bool | None = None
@@ -465,6 +493,12 @@ class STT(stt.STT):
         prompt: Optional prompt for STT translate (saaras models only)
         with_timestamps: Request timestamps from the REST endpoint, so
             non-streaming transcripts carry the speech's real start and end times
+        timestamp_granularity: Timestamp granularity for REST recognition. ``word``
+            (``saaras:v4`` only, not in ``translate`` mode) fills ``SpeechData.words``
+            with each word's start and end time; ``segment`` returns one entry per
+            chunk. Setting it requests timestamps, so ``with_timestamps`` is not
+            needed. If any part of the audio cannot be word-timed, Sarvam returns
+            segment timestamps and ``words`` is left unset.
     """
 
     def __init__(
@@ -478,6 +512,7 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         prompt: str | None = None,
         with_timestamps: bool = False,
+        timestamp_granularity: TimestampGranularity | None = None,
         high_vad_sensitivity: bool | None = None,
         sample_rate: int = 16000,
         flush_signal: bool | None = None,
@@ -517,6 +552,7 @@ class STT(stt.STT):
             base_url=base_url,
             prompt=prompt,
             with_timestamps=with_timestamps,
+            timestamp_granularity=timestamp_granularity,
             high_vad_sensitivity=high_vad_sensitivity,
             sample_rate=sample_rate,
             flush_signal=flush_signal,
@@ -649,7 +685,9 @@ class STT(stt.STT):
             form_data.add_field("model", str(opts_model))
         if _model_supports_mode(opts_model):
             form_data.add_field("mode", str(opts_mode))
-        if self._opts.with_timestamps:
+        if self._opts.timestamp_granularity is not None:
+            form_data.add_field("timestamp_granularity", self._opts.timestamp_granularity)
+        elif self._opts.with_timestamps:
             form_data.add_field("with_timestamps", "true")
 
         if not self._api_key:
@@ -694,6 +732,7 @@ class STT(stt.STT):
 
                 start_time = 0.0
                 end_time = 0.0
+                words: list[TimedString] | None = None
 
                 # Try to get timestamps if available
                 timestamps_data = response_json.get("timestamps")
@@ -704,6 +743,8 @@ class STT(stt.STT):
                         start_time = words_ts_start[0]
                     if isinstance(words_ts_end, list) and len(words_ts_end) > 0:
                         end_time = words_ts_end[-1]
+                    if timestamps_data.get("granularity") == "word":
+                        words = _timed_words(timestamps_data)
 
                 # If start/end times are still 0, use buffer duration as an estimate for end_time
                 if start_time == 0.0 and end_time == 0.0:
@@ -716,6 +757,7 @@ class STT(stt.STT):
                         start_time=start_time,
                         end_time=end_time,
                         confidence=_extract_confidence(response_json, self._logger),
+                        words=words,
                     )
                 ]
 

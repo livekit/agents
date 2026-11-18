@@ -395,6 +395,9 @@ async def test_server_end_speech_does_not_flush_next_utterance(
 class _TimestampResponse:
     status = 200
 
+    def __init__(self, timestamps: dict[str, object] | None = None) -> None:
+        self._timestamps = timestamps or {"start_time_seconds": [0.1], "end_time_seconds": [0.4]}
+
     async def __aenter__(self) -> _TimestampResponse:
         return self
 
@@ -406,18 +409,19 @@ class _TimestampResponse:
             "request_id": "r1",
             "transcript": "Sarvam",
             "language_code": "hi-IN",
-            "timestamps": {"start_time_seconds": [0.1], "end_time_seconds": [0.4]},
+            "timestamps": self._timestamps,
         }
 
 
 class _RecordingSession:
-    def __init__(self) -> None:
+    def __init__(self, timestamps: dict[str, object] | None = None) -> None:
         self.fields: dict[str, object] = {}
+        self._timestamps = timestamps
 
     def post(self, *, data: object, **_: object) -> _TimestampResponse:
         for type_options, _headers, value in data._fields:  # type: ignore[attr-defined]
             self.fields[type_options["name"]] = value
-        return _TimestampResponse()
+        return _TimestampResponse(self._timestamps)
 
 
 async def test_recognize_requests_timestamps() -> None:
@@ -440,3 +444,58 @@ async def test_recognize_omits_timestamps_by_default() -> None:
     await stt._recognize_impl(_audio(), conn_options=APIConnectOptions(max_retry=0))
 
     assert "with_timestamps" not in session.fields
+
+
+async def test_recognize_requests_word_timestamps() -> None:
+    stt = sarvam_stt.STT(api_key="sk_test", timestamp_granularity="word")
+    # From a live saaras:v4 response (trimmed).
+    session = _RecordingSession(
+        {
+            "words": ["Namaskar", "and", "I"],
+            "start_time_seconds": [1.97, 4.14, 4.43],
+            "end_time_seconds": [2.77, 4.43, 4.586],
+            "granularity": "word",
+        }
+    )
+    stt._session = session  # type: ignore[assignment]
+
+    event = await stt._recognize_impl(_audio(), conn_options=APIConnectOptions(max_retry=0))
+
+    assert session.fields["timestamp_granularity"] == "word"
+    assert "with_timestamps" not in session.fields
+    speech = event.alternatives[0]
+    assert speech.start_time == 1.97
+    assert speech.end_time == 4.586
+    assert speech.words == ["Namaskar", "and", "I"]
+    assert [w.start_time for w in speech.words] == [1.97, 4.14, 4.43]
+    assert [w.end_time for w in speech.words] == [2.77, 4.43, 4.586]
+
+
+async def test_recognize_leaves_words_unset_on_segment_fallback() -> None:
+    stt = sarvam_stt.STT(api_key="sk_test", timestamp_granularity="word")
+    session = _RecordingSession(
+        {
+            "words": ["Namaskar and I"],
+            "start_time_seconds": [1.97],
+            "end_time_seconds": [4.586],
+            "granularity": "segment",
+        }
+    )
+    stt._session = session  # type: ignore[assignment]
+
+    event = await stt._recognize_impl(_audio(), conn_options=APIConnectOptions(max_retry=0))
+
+    assert event.alternatives[0].words is None
+    assert event.alternatives[0].start_time == 1.97
+    assert event.alternatives[0].end_time == 4.586
+
+
+async def test_recognize_omits_timestamp_granularity_by_default() -> None:
+    stt = sarvam_stt.STT(api_key="sk_test")
+    session = _RecordingSession()
+    stt._session = session  # type: ignore[assignment]
+
+    event = await stt._recognize_impl(_audio(), conn_options=APIConnectOptions(max_retry=0))
+
+    assert "timestamp_granularity" not in session.fields
+    assert event.alternatives[0].words is None
