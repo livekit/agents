@@ -1,4 +1,7 @@
-"""The chat page, its tokens and its threads, on http://localhost:8000; run it beside the agent."""
+"""The app's backend: the chat page, its tokens and its threads, on http://localhost:8000.
+
+It holds the project key; the agent itself runs elsewhere and is reached through LiveKit Cloud.
+"""
 
 import os
 import re
