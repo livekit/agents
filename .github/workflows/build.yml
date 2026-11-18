@@ -102,7 +102,9 @@ jobs:
           # the pinned FFmpeg source with its required libopus encoder.
           before-script-linux: |
             if command -v apk >/dev/null; then
-              apk add --no-cache build-base cmake nasm pkgconf opus-dev opus-static
+              apk add --no-cache build-base cmake nasm pkgconf opus-dev
+              # Alpine 3.22 dropped opus-static; the shared libopus is bundled by the wheel repair
+              apk add --no-cache opus-static || true
             elif command -v yum >/dev/null; then
               yum install -y cmake nasm pkgconfig opus-devel
             fi
