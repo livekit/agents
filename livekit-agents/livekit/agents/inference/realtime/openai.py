@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import json
+import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -28,6 +32,7 @@ from livekit.agents import llm
 from livekit.agents.inference._utils import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
+    _resolve_provider,
     create_access_token,
     get_default_inference_url,
     get_inference_headers,
@@ -49,6 +54,12 @@ from ...llm._realtime.openai import (
     _DiscardedGeneration,
 )
 from .._realtime_models import DEPRECATED_REALTIME_MODELS, RealtimeModels, is_duplex_model
+
+# a gateway that is shutting down asks the session to reconnect elsewhere at a quiet point
+HEADER_HANDOFF_PROTOCOL = "X-LiveKit-Handoff-Protocol"
+# how long a committed user turn may wait for its response before the session counts as quiet
+_HANDOFF_RESPONSE_GRACE = 1.5
+_HANDOFF_POLL_INTERVAL = 0.02
 
 _XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(model="grok-transcribe")
 _XAI_DEFAULT_TURN_DETECTION = ServerVad(
@@ -76,7 +87,7 @@ class RealtimeModel(_RealtimeModel):
         self,
         model: RealtimeModels | str,
         *,
-        provider: str | None = None,
+        provider: NotGivenOr[str | None] = NOT_GIVEN,
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
@@ -99,9 +110,9 @@ class RealtimeModel(_RealtimeModel):
     ) -> None:
         """
         Args:
-            provider (str, optional): Host that must serve the model, e.g. ``"azure"`` or
-                ``"openai"`` for OpenAI models. The session is refused if no host in the
-                region matches.
+            provider: Deprecated. Provider pinning will no longer be supported on
+                March 1, 2027. Omit this argument to let LiveKit route requests and
+                use fallback providers.
         """
         if "/" not in model:
             raise ValueError("model must be provider-prefixed, for example 'openai/gpt-realtime'")
@@ -159,7 +170,7 @@ class RealtimeModel(_RealtimeModel):
             # keeps its own turn detection, as the google plugin does.
             self._capabilities.can_disable_turn_detection = False
         self._inference_opts = _InferenceOptions(
-            provider=provider,
+            provider=_resolve_provider(provider=provider),
             api_key=resolved_api_key,
             api_secret=resolved_api_secret,
             is_xai=is_xai,
@@ -186,6 +197,8 @@ class RealtimeSession(_RealtimeSession):
     _is_xai: bool = False
     _pending_transcription: ConversationItemInputAudioTranscriptionCompletedEvent | None = None
     _response_spoke: bool = False
+    _user_speaking: bool = False
+    _speech_stopped_at: float | None = None
 
     def __init__(
         self,
@@ -195,18 +208,100 @@ class RealtimeSession(_RealtimeSession):
     ) -> None:
         self._inference_model = realtime_model
         self._is_xai = realtime_model._inference_opts.is_xai
+        self._handoff_id: str | None = None
+        self._handoff_task: asyncio.Task[None] | None = None
         super().__init__(realtime_model, turn_detection_disabled=turn_detection_disabled)
+        self.on("openai_server_event_received", self._watch_handoff)
+        self.on("session_reconnected", lambda _: self._cancel_handoff())
 
     def _reset_input_turn_state(self) -> None:
         if self._is_xai:
             self._flush_input_transcription()
         super()._reset_input_turn_state()
         self._response_spoke = False
+        self._user_speaking = False
+        self._speech_stopped_at = None
+        self._pending_input_transcriptions: set[str] = set()
 
     async def aclose(self) -> None:
+        self._cancel_handoff()
         if self._is_xai:
             self._flush_input_transcription()
         await super().aclose()
+
+    def _watch_handoff(self, event: dict[str, Any]) -> None:
+        kind = event.get("type")
+        if kind == "input_audio_buffer.speech_started":
+            self._user_speaking = True
+            self._speech_stopped_at = None
+        elif kind == "input_audio_buffer.speech_stopped":
+            self._user_speaking = False
+            self._speech_stopped_at = time.monotonic()
+            if self._opts.input_audio_transcription is not None and (
+                item_id := event.get("item_id")
+            ):
+                self._pending_input_transcriptions.add(item_id)
+        elif kind == "input_audio_buffer.committed":
+            if self._opts.input_audio_transcription is not None and (
+                item_id := event.get("item_id")
+            ):
+                self._pending_input_transcriptions.add(item_id)
+        elif kind in (
+            "conversation.item.input_audio_transcription.completed",
+            "conversation.item.input_audio_transcription.failed",
+        ):
+            if event.get("status") != "in_progress":
+                self._pending_input_transcriptions.discard(event.get("item_id", ""))
+        elif kind == "response.created":
+            self._speech_stopped_at = None
+        elif kind == "session.handoff.request" and self._handoff_task is None:
+            self._handoff_id = str(event.get("handoff_id", ""))
+            self._schedule_handoff()
+
+    def _schedule_handoff(self) -> None:
+        self._handoff_task = asyncio.create_task(
+            self._handoff_when_quiet(), name="RealtimeSession._handoff_when_quiet"
+        )
+
+    def _handoff_quiet(self) -> bool:
+        done = getattr(self._current_generation, "_done_fut", None)
+        if done is not None and not done.done():
+            return False
+        if any(not fut.done() for fut in self._response_created_futures.values()):
+            return False
+        if self._user_speaking or self._pending_input_transcriptions:
+            return False
+        stopped = self._speech_stopped_at
+        return stopped is None or time.monotonic() - stopped >= _HANDOFF_RESPONSE_GRACE
+
+    async def _handoff_when_quiet(self) -> None:
+        while not self._handoff_quiet():
+            await asyncio.sleep(_HANDOFF_POLL_INTERVAL)
+        self._recycle_requested.set()
+
+    def _cancel_handoff(self) -> None:
+        if self._handoff_task is not None and not self._handoff_task.done():
+            self._handoff_task.cancel()
+        self._handoff_task = None
+
+    async def _before_recycle(self, ws_conn: aiohttp.ClientWebSocketResponse) -> bool:
+        if self._handoff_quiet():
+            if self._handoff_id is None:
+                return True
+            handoff_id, self._handoff_id = self._handoff_id, None
+            with contextlib.suppress(aiohttp.ClientError, ConnectionError, asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    ws_conn.send_str(
+                        json.dumps({"type": "session.handoff.complete", "handoff_id": handoff_id})
+                    ),
+                    timeout=self._opts.conn_options.timeout,
+                )
+            # The reader can receive another turn while the acknowledgement is in flight.
+            if self._handoff_quiet():
+                return True
+        if not self._closing:
+            self._schedule_handoff()
+        return False
 
     def _create_ws_url_and_headers(self) -> tuple[str, dict[str, str]]:
         opts = self._inference_model._inference_opts
@@ -215,6 +310,9 @@ class RealtimeSession(_RealtimeSession):
         headers["Authorization"] = f"Bearer {create_access_token(opts.api_key, opts.api_secret)}"
         if opts.provider:
             headers[HEADER_INFERENCE_PROVIDER] = opts.provider
+        # without server turn detection the session cannot see a quiet point to hand off at
+        if self._opts.turn_detection is not None:
+            headers[HEADER_HANDOFF_PROTOCOL] = "1"
         return url, headers
 
     def _wrap_session_update(self, event_id: str, session: Any) -> dict[str, Any]:
@@ -299,6 +397,7 @@ class RealtimeSession(_RealtimeSession):
     def _handle_conversion_item_deleted(self, event: ConversationItemDeletedEvent) -> None:
         if self._is_xai and event.item_id == "" and self._item_delete_future:
             event.item_id = list(self._item_delete_future.keys())[0]
+        self._pending_input_transcriptions.discard(event.item_id)
         super()._handle_conversion_item_deleted(event)
 
     def _handle_conversion_item_input_audio_transcription_completed(

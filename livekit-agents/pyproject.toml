@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "A powerful framework for building realtime voice AI agents"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10,<3.15"
+requires-python = ">=3.10,<3.16"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["webrtc", "realtime", "audio", "video", "livekit", "agents", "AI"]
 classifiers = [
@@ -23,6 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
@@ -82,8 +83,8 @@ baseten = ["livekit-plugins-baseten>=1.8.12"]
 bey = ["livekit-plugins-bey>=1.8.12"]
 bithuman = ["livekit-plugins-bithuman>=1.8.13"]
 bland = ["livekit-plugins-bland>=1.8.12"]
+boson-ai = ["livekit-plugins-boson-ai>=1.8.12"]
 boson-avatar = ["livekit-plugins-boson-avatar>=1.8.12"]
-boson = ["livekit-plugins-boson>=1.8.12"]
 browser = ["livekit-plugins-browser>=0.4.12"]
 cambai = ["livekit-plugins-cambai>=1.8.12"]
 cartesia = ["livekit-plugins-cartesia>=1.8.12"]
@@ -147,6 +148,7 @@ typesafe = ["livekit-plugins-typesafe>=1.8.12"]
 ultravox = ["livekit-plugins-ultravox>=1.8.12"]
 upliftai = ["livekit-plugins-upliftai>=1.8.12"]
 vakyam = ["livekit-plugins-vakyam>=1.8.12"]
+vlmrun = ["livekit-plugins-vlmrun>=1.8.12"]
 gradium = ["livekit-plugins-gradium>=1.8.12"]
 xai = ["livekit-plugins-xai>=1.8.12"]
 zoom-ai = ["livekit-plugins-zoom-ai>=1.8.12"]
