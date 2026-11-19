@@ -3097,6 +3097,7 @@ class AgentActivity(RecognitionHooks):
                 # history keeps the final transcript and on_user_turn_completed edits.
                 preemptive.user_message.content = user_message.content.copy()
                 preemptive.user_message.transcript_confidence = user_message.transcript_confidence
+                preemptive.user_message.extra.update(user_message.extra)
                 preemptive.user_message.metrics = metrics_report
                 self._schedule_speech(speech_handle, priority=SpeechHandle.SPEECH_PRIORITY_NORMAL)
                 logger.debug(

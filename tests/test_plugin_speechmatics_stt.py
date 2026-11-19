@@ -36,6 +36,7 @@ from speechmatics.agent_stt import (
 
 from livekit.agents import APIError, stt
 from livekit.agents.utils.aio.channel import ChanEmpty
+from livekit.agents.utils.audio import silence_frame
 from livekit.plugins.speechmatics import stt as speechmatics_stt
 from livekit.plugins.speechmatics.stt import (
     DEFAULT_BASE_URL,
@@ -43,6 +44,8 @@ from livekit.plugins.speechmatics.stt import (
     SpeechStream,
     TurnDetectionMode,
 )
+
+from .fake_vad import FakeVAD
 
 pytestmark = pytest.mark.plugin("speechmatics")
 
@@ -157,14 +160,25 @@ async def test_untimed_final_clears_previous_speechmatics_endpoint_timing() -> N
 
 
 class _StubClient:
-    """Stands in for `AgentSttAsyncClient` where only `finalize()` is under test."""
+    """Records audio and turn control calls without a connection."""
 
     def __init__(self) -> None:
         self.is_connected = True
+        self.is_ready_for_audio = True
         self.finalize_calls = 0
+        self.audio_calls: list[bytes | str] = []
 
     def finalize(self) -> None:
         self.finalize_calls += 1
+
+    async def send_audio(self, payload: bytes) -> None:
+        self.audio_calls.append(payload)
+
+    async def force_end_of_utterance(self) -> None:
+        self.audio_calls.append("ForceEndOfUtterance")
+
+    async def disconnect(self) -> None:
+        self.is_connected = False
 
 
 @pytest.fixture(autouse=True)
@@ -335,14 +349,12 @@ def test_turn_config_is_a_top_level_sibling() -> None:
 
 
 def test_bare_external_loads_a_vad() -> None:
-    """`EXTERNAL` is the default and the service does not endpoint in it.
-
-    The pre-Agent-STT plugin auto-loaded Silero here. Without it a bare `STT()` finalizes
-    nothing and transcribes nothing, which is the zero-config path.
-    """
+    """The plugin loads Silero so standalone `STT()` streams close turns automatically."""
     pytest.importorskip("livekit.plugins.silero")
 
-    assert _stt()._vad is not None
+    instance = _stt()
+    assert instance._vad is not None
+    assert not instance.capabilities.manual_flush
 
 
 def test_a_missing_silero_still_constructs(monkeypatch, caplog) -> None:
@@ -350,20 +362,26 @@ def test_a_missing_silero_still_constructs(monkeypatch, caplog) -> None:
     wherever the optional package was absent."""
     monkeypatch.setitem(sys.modules, "livekit.plugins.silero", None)
 
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("DEBUG", logger=speechmatics_stt.logger.name):
         instance = _stt()
 
     assert instance._vad is None
-    assert "EXTERNAL turn-detection mode with no `vad`" in caplog.text
+    assert instance.capabilities.manual_flush
+    assert [
+        record.levelname
+        for record in caplog.records
+        if "could not load the optional Silero VAD" in record.getMessage()
+    ] == ["DEBUG"]
 
 
 def test_explicit_none_vad_opts_out(caplog) -> None:
-    """`vad=None` is the advanced path: that caller drives `finalize()` by hand."""
-    with caplog.at_level("WARNING"):
+    """`vad=None` allows the session or caller to close turns."""
+    with caplog.at_level("DEBUG", logger=speechmatics_stt.logger.name):
         instance = _stt(vad=None)
 
     assert instance._vad is None
-    assert "EXTERNAL turn-detection mode with no `vad`" in caplog.text
+    assert instance.capabilities.manual_flush
+    assert not any(record.name == speechmatics_stt.logger.name for record in caplog.records)
 
 
 async def test_finalize_and_vad_only_act_in_external() -> None:
@@ -384,6 +402,65 @@ async def test_finalize_and_vad_only_act_in_external() -> None:
     assert service_side._stt._vad is None  # nothing is auto-loaded outside EXTERNAL
     service_side._stt.finalize()
     assert service_side._client.finalize_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("mode", "local_vad", "manual_flush"),
+    [
+        (TurnDetectionMode.EXTERNAL, None, True),
+        (TurnDetectionMode.EXTERNAL, FakeVAD(), False),
+        (TurnDetectionMode.VAD, None, False),
+    ],
+)
+async def test_stream_flush_sends_buffered_audio_before_finalizing(
+    mode: TurnDetectionMode, local_vad: FakeVAD | None, manual_flush: bool, monkeypatch
+) -> None:
+    stream = _stream(turn_detection_mode=mode, vad=local_vad)
+    client = _StubClient()
+    monkeypatch.setattr(stream, "_client", client)
+    first = silence_frame(0.01, 16000)
+    second = silence_frame(0.02, 16000)
+    try:
+        stream.flush()
+        stream.push_frame(first)
+        stream.flush()
+        stream.flush()
+        stream.push_frame(second)
+        stream.end_input()
+        await stream._process_audio()
+
+        expected: list[bytes | str] = [first.data.tobytes(), second.data.tobytes()]
+        if manual_flush:
+            expected.insert(1, "ForceEndOfUtterance")
+            expected.append("ForceEndOfUtterance")
+        assert client.audio_calls == expected
+        assert stream._stt.capabilities.manual_flush is manual_flush
+    finally:
+        await stream.aclose()
+
+
+async def test_explicit_stream_flush_with_framework_flushing_disabled(monkeypatch) -> None:
+    stream = _stream(vad=None)
+    stream._stt.capabilities.manual_flush = False
+    client = _StubClient()
+    monkeypatch.setattr(stream, "_client", client)
+    frame = silence_frame(0.01, 16000)
+    try:
+        stream.push_frame(frame)
+        stream.flush()
+        stream.push_frame(frame)
+        stream.end_input()
+        await stream._process_audio()
+
+        payload = frame.data.tobytes()
+        assert client.audio_calls == [
+            payload,
+            "ForceEndOfUtterance",
+            payload,
+            "ForceEndOfUtterance",
+        ]
+    finally:
+        await stream.aclose()
 
 
 # --- Config down-translation ---------------------------------------------------------
