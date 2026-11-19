@@ -11,8 +11,10 @@ from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
+from websockets.exceptions import ConnectionClosed
+
 from livekit import rtc
-from livekit.agents import llm, utils
+from livekit.agents import APIError, llm, utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -54,6 +56,8 @@ CONVERSATION_HISTORY_PREFIX = (
 )
 PHONIC_INPUT_FRAME_MS = 20
 WS_CLOSE_NORMAL = 1000
+# Close codes Phonic sends when it ends the conversation on purpose.
+PHONIC_CONVERSATION_ENDED_CLOSE_CODES = frozenset({4500, 4505, 4600})
 TOOL_CALL_OUTPUT_TIMEOUT_MS = 60000
 
 
@@ -62,6 +66,15 @@ TOOL_CALL_OUTPUT_TIMEOUT_MS = 60000
 _BUILT_IN_TOOL_NAMES = frozenset(
     {"choose_not_to_respond", "keypad_input", "natural_conversation_ending"}
 )
+
+
+class PhonicConversationEndedError(APIError):
+    """Phonic ended the conversation on purpose: no input was received, the time limit was
+    reached, or the assistant ended it. The session can't continue, but nothing failed."""
+
+    def __init__(self, message: str, *, close_code: int | None = None) -> None:
+        super().__init__(message, retryable=False)
+        self.close_code = close_code
 
 
 class PhonicToolConfig(TypedDict, total=False):
@@ -1336,13 +1349,8 @@ class RealtimeSession(llm.RealtimeSession):
                 elif msg_type == "error":
                     self._emit_error(Exception(message.error.message), recoverable=False)
                 elif msg_type == "assistant_ended_conversation":
-                    self._emit_error(
-                        Exception(
-                            "assistant_ended_conversation is not supported by "
-                            "the Phonic realtime model with LiveKit Agents."
-                        ),
-                        recoverable=False,
-                    )
+                    self._handle_conversation_ended("the assistant ended the conversation")
+                    return
                 elif msg_type == "conversation_created":
                     self._conversation_id = message.conversation_id
                     logger.info(f"Phonic Conversation began with ID: {self._conversation_id}")
@@ -1351,10 +1359,18 @@ class RealtimeSession(llm.RealtimeSession):
                 elif msg_type == "ready_to_start_conversation":
                     self._ready_to_start.set()
         except Exception as e:
-            if not self._session_should_close.is_set():
-                logger.error(f"Error in Phonic receive loop: {e}", exc_info=e)
-                self._emit_error(e, recoverable=True)
-                raise e
+            if self._session_should_close.is_set():
+                return
+            if (
+                isinstance(e, ConnectionClosed)
+                and e.rcvd is not None
+                and e.rcvd.code in PHONIC_CONVERSATION_ENDED_CLOSE_CODES
+            ):
+                self._handle_conversation_ended(e.rcvd.reason, close_code=e.rcvd.code)
+                return
+            logger.error(f"Error in Phonic receive loop: {e}", exc_info=e)
+            self._emit_error(e, recoverable=True)
+            raise e
 
     def _start_new_assistant_turn(self, user_initiated: bool = False) -> llm.GenerationCreatedEvent:
         if self._current_generation:
@@ -1556,6 +1572,24 @@ class RealtimeSession(llm.RealtimeSession):
             yield from self._input_resampler.push(frame)
         else:
             yield frame
+
+    def _handle_conversation_ended(self, reason: str, *, close_code: int | None = None) -> None:
+        logger.info(
+            "Phonic ended the conversation",
+            extra={
+                "conversation_id": self._conversation_id,
+                "close_code": close_code,
+                "reason": reason,
+            },
+        )
+        # AgentSession only closes on an unrecoverable error; the typed error lets apps tell
+        # this apart from a failure.
+        self._emit_error(
+            PhonicConversationEndedError(
+                f"Phonic ended the conversation: {reason}", close_code=close_code
+            ),
+            recoverable=False,
+        )
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:
         self.emit(
