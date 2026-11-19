@@ -994,7 +994,7 @@ async def test_preflight_transcript_can_be_disabled():
 def test_unknown_preflight_trigger_is_rejected():
     """A misspelt trigger raises instead of silently disabling the preview."""
     with pytest.raises(ValueError, match="preflight_trigger"):
-        _make_stt([READY], preflight_trigger="vad_trip")
+        _make_stt([READY], preflight_trigger="VAD_TRIP")
 
 
 @pytest.mark.asyncio

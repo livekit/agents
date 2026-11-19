@@ -57,7 +57,7 @@ SUPPORTED_SAMPLE_RATE = 24000
 DEFAULT_DELAY_IN_FRAMES = 10
 
 
-PreflightTrigger: TypeAlias = Literal["VAD_TRIP"]
+PreflightTrigger: TypeAlias = Literal["vad_trip"]
 
 
 def _api_error(msg_data: dict[str, Any]) -> APIStatusError:
@@ -90,7 +90,7 @@ class STTOptions:
     vad_start_threshold: float | None = None
     # When to preview the words of the turn as a PREFLIGHT_TRANSCRIPT so the session can
     # start generating before the turn is finalized; None disables the preview.
-    preflight_trigger: PreflightTrigger | None = "VAD_TRIP"
+    preflight_trigger: PreflightTrigger | None = "vad_trip"
     # Words or phrases to favor in the transcript, such as product names or jargon.
     keywords: list[str] | None = None
     # How strongly to favor the keywords, the server defaults to 2.0.
@@ -114,7 +114,7 @@ class STT(stt.STT):
         vad_bucket: int | None = 2,
         vad_flush: bool = True,
         vad_start_threshold: float | None = None,
-        preflight_trigger: PreflightTrigger | None = "VAD_TRIP",
+        preflight_trigger: PreflightTrigger | None = "vad_trip",
         temperature: float | None = None,
         language: str = "en",
         keywords: list[str] | None = None,
@@ -127,7 +127,7 @@ class STT(stt.STT):
         Args:
             preflight_trigger: When to emit a `PREFLIGHT_TRANSCRIPT` with the words heard
                 so far, or None to never emit one. The only trigger at the moment is the
-                default, `"VAD_TRIP"`: when the VAD trips. The session starts the LLM
+                default, `"vad_trip"`: when the VAD trips. The session starts the LLM
                 request from the preview and only restarts it if the final transcript
                 differs: a turn where the user resumes after the pause, or where words were
                 still held by the model delay at the trip, costs one cancelled request. The
@@ -594,7 +594,7 @@ class SpeechStream(stt.SpeechStream):
                             if positive_vad:
                                 if remaining_vad_steps is None:
                                     remaining_vad_steps = self.delay_in_frames
-                                    if self._opts.preflight_trigger == "VAD_TRIP":
+                                    if self._opts.preflight_trigger == "vad_trip":
                                         # the words so far are what the turn will most likely end
                                         # with, so trigger preemptive generation while the model
                                         # delay elapses and the flush recovers the pending text
