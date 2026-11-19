@@ -34,10 +34,9 @@ from ._utils import (
 
 DecisionModels = Literal[
     "openai/gpt-6-luna-decisions",
-    "typesafe/jev",
-    "typesafe/jev-latest",
-    "typesafe/jev-preview",
-    "livekit/clef-omni",
+    "google/gemini-decision-1",
+    "microsoft/decision-1",
+    "microsoft-eu/decision-1",
 ]
 
 
