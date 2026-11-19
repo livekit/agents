@@ -888,9 +888,9 @@ async def test_preflight_transcript_is_resent_when_speech_resumes_with_new_words
     assert events[-1].alternatives[0].text == "hello world"
 
 
-async def test_preflight_transcript_is_resent_when_the_vad_drops_and_trips_again():
-    """A VAD drop resets the preview: the next trip is a new end-of-turn candidate and the
-    session may have had to ignore the first one (the agent was still speaking)."""
+async def test_preflight_transcript_is_not_resent_when_the_vad_flickers_without_new_words():
+    """A VAD drop and trip with no new words keeps the preview: resending it would make the
+    session cancel the reply it started from the first one."""
     frames = [READY, _text("hello", 0.1), _vad_step(0, SILENT)]
     frames += [_vad_step(1, (0.1,) * len(VAD_HORIZONS))]
     frames += [_vad_step(i, SILENT) for i in range(2, 6)]
@@ -905,7 +905,8 @@ async def test_preflight_transcript_is_resent_when_the_vad_drops_and_trips_again
     finally:
         await stream.aclose()
 
-    assert _preflights(events) == ["hello", "hello"]
+    assert _preflights(events) == ["hello"]
+    assert events[-1].alternatives[0].text == "hello"
 
 
 async def test_preflight_transcript_carries_the_end_text_timing():

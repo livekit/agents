@@ -51,7 +51,7 @@ gain                                                              ◄───�
 ```
 
 A lower `vad_bucket` or `vad_threshold` makes VAD trip earlier, bringing the VAD trip
-closer to the last words, which risks triggering two LLM calls. The preview is also sent again
-each time the VAD drops and trips anew, so a VAD that flickers during a silence costs a
-cancelled request per flicker. When tuning the VAD parameters, also check the number of LLM
+closer to the last words, which risks triggering two LLM calls. The preview is sent again
+only when new words arrive, so a VAD that flickers during a silence keeps the request already
+started. When tuning the VAD parameters, also check the number of LLM
 calls to ensure you still benefit from preemptive generation.

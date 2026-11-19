@@ -131,10 +131,8 @@ class STT(stt.STT):
                 request from the preview and only restarts it if the final transcript
                 differs: a turn where the user resumes after the pause, or where words were
                 still held by the model delay at the trip, costs one cancelled request. The
-                preview is sent again each time the VAD drops and trips anew, even with the
-                same words, so a session that could not act on the first trip (the agent
-                was still speaking) gets another chance; a VAD flicker during a silence
-                costs one cancelled request.
+                preview is only sent again when new words arrive, so a VAD flicker during a
+                silence keeps the request already started.
             log_level: Opt in to the server's log messages, such as a warning about an
                 unknown or deprecated setup option: the lowest level to receive ("debug",
                 "info", "warning" or "error"). They are written to the
@@ -598,11 +596,7 @@ class SpeechStream(stt.SpeechStream):
                                     if remaining_vad_steps <= 0:
                                         _finalize()
                             else:
-                                # reset the preview: the session may not have been able to
-                                # act on the last one (agent still speaking), and the next
-                                # trip is a fresh end-of-turn candidate even with no new words
                                 remaining_vad_steps = None
-                                preflight_text = ""
 
                     elif type_ == "ready":
                         self._ready_msg = data
