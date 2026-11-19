@@ -32,7 +32,11 @@ pytestmark = pytest.mark.unit
 class FakeProvider:
     """Mimics the SDK session: a fresh request id per reply, reset by end or interrupt."""
 
-    def __init__(self, name: str = "p1", capabilities: tuple[str, ...] = ("playback_control",)):
+    def __init__(
+        self,
+        name: str = "p1",
+        capabilities: tuple[str, ...] = ("playback_control", "playback_state"),
+    ):
         self.name = name
         self.capabilities = capabilities
         self.calls: list[tuple] = []
@@ -135,7 +139,9 @@ class Harness:
         self.buffer = FakeBuffer()
         self.session._provider = self.provider  # type: ignore[assignment]
         self.session._generation = 1
-        self.session._playback_control = "playback_control" in self.provider.capabilities
+        self.session._playback_control = {"playback_control", "playback_state"} <= set(
+            self.provider.capabilities
+        )
         self.session._audio_buffer = self.buffer  # type: ignore[assignment]
         self.forwarder = asyncio.create_task(self.session._forward_audio())
 
@@ -323,6 +329,86 @@ async def test_a_pause_inside_the_fallback_wait_moves_its_deadline(
 
     await asyncio.sleep(0.4)
     assert h.buffer.finishes() == [False]
+
+
+def state(req_id: str, kind: PlaybackState, played_ms: int) -> PlaybackStateEvent:
+    return PlaybackStateEvent(req_id=req_id, state=kind, played_ms=played_ms)
+
+
+async def test_an_interruption_while_held_takes_the_position_the_server_reported(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(avatar.time, "time", lambda: clock[0])
+    await h.reply(frames=30, end=False)  # 3s
+    h.signal("p1-req-1")
+
+    clock[0] = 100.5
+    h.session._on_pause()
+    await settle()
+    # the server started playing later than the first frame reached us
+    h.session._on_playback_state(state("p1-req-1", PlaybackState.PAUSED, 420), 1)
+    clock[0] = 102.5
+    h.session._on_clear_buffer()
+    await settle()
+    assert h.buffer.events[-1] == ("finished", 0.42, True)
+
+
+async def test_after_a_resume_the_position_runs_on_from_the_server_report(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(avatar.time, "time", lambda: clock[0])
+    await h.reply(frames=30, end=False)
+    h.signal("p1-req-1")
+
+    clock[0] = 100.5
+    h.session._on_pause()
+    await settle()
+    h.session._on_playback_state(state("p1-req-1", PlaybackState.PAUSED, 400), 1)
+    clock[0] = 103.0
+    h.session._on_resume()
+    await settle()
+    h.session._on_playback_state(state("p1-req-1", PlaybackState.PLAYING, 400), 1)
+    clock[0] = 103.3
+    h.session._on_clear_buffer()
+    await settle()
+    assert h.buffer.events[-1] == ("finished", pytest.approx(0.7), True)
+
+
+async def test_a_late_server_start_moves_the_fallback_deadline(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(avatar, "COMPLETION_MARGIN_SECONDS", 0.1)
+    await h.reply(frames=3)  # 0.3s, its end reported to the server
+    h.signal("p1-req-1")  # with nothing else heard, finished at ~0.4s
+
+    await asyncio.sleep(0.2)
+    h.session._on_playback_state(state("p1-req-1", PlaybackState.PLAYING, 0), 1)  # ends at ~0.6s
+    await asyncio.sleep(0.25)
+    assert h.buffer.finishes() == [], "finished while the server was still playing it"
+
+    await asyncio.sleep(0.3)
+    assert h.buffer.finishes() == [False]
+
+
+@pytest.mark.parametrize(
+    ("capabilities", "can_pause"),
+    [
+        (("playback_control", "playback_state"), True),
+        (("playback_control",), False),  # without the played position a hold would count as played
+        ((), False),
+    ],
+)
+async def test_pause_needs_both_server_capabilities(
+    monkeypatch: pytest.MonkeyPatch, capabilities: tuple[str, ...], can_pause: bool
+) -> None:
+    session = AvatarSession(api_key="k", app_id="a", avatar_id="av")
+    session._livekit_egress = SimpleNamespace()  # type: ignore[assignment]
+    session._resolved_sample_rate = 24000
+    use_replacements(monkeypatch, FakeProvider(capabilities=capabilities))
+    await session._connect()
+    assert session._playback_control is can_pause
 
 
 async def test_a_pause_before_any_audio_holds_the_reply_from_its_first_frame(h: Harness) -> None:
