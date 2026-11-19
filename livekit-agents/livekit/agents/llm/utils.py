@@ -336,6 +336,9 @@ def to_response_format_param(
 
 
 def to_openai_response_format(response_format: type | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(response_format, dict):
+        return response_format
+
     name, json_schema_type = to_response_format_param(response_format)
 
     # No null sentinel here: nothing resolves it on the decode side (users validate
