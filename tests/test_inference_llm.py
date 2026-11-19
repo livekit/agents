@@ -298,6 +298,41 @@ async def _wire_body(model: inference.LLM, **chat_kwargs: Any) -> dict[str, Any]
 
 
 @pytest.mark.parametrize(
+    "response_format",
+    [
+        {"type": "text"},
+        {"type": "json_object"},
+        {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "Answer",
+                "schema": {
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            },
+        },
+    ],
+    ids=["text", "json-object", "json-schema"],
+)
+async def test_response_format_dict_is_sent_unchanged(response_format: dict) -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return _sse_response(_TEXT + _STOP + _DONE)
+
+    async with _client(handler) as client, openai_plugin.LLM(model="m", client=client) as model:
+        response = await model.chat(chat_ctx=_ctx(), response_format=response_format).collect()
+
+    assert response.text == "hello"
+    assert captured["response_format"] == response_format
+
+
+@pytest.mark.parametrize(
     ("model_kwargs", "chat_kwargs", "effort"),
     [
         ({}, {}, None),
