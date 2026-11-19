@@ -821,28 +821,32 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = ""
 
-        # chunking defaults (cap + expressive batch size) live in _provider_format
+        from .. import tokenize
         from ..tts._provider_format import convert_markup, normalize_markup, sentence_tokenizer
 
         provider = self._opts.model.split("/")[0]
-        sent_tokenizer_stream = sentence_tokenizer(provider, expressive=self._expressive).stream()
+        text_stream: tokenize.WordStream | tokenize.SentenceStream
+        if provider == "gradium" and not self._expressive:
+            text_stream = tokenize.basic.WordTokenizer(ignore_punctuation=False).stream()
+        else:
+            text_stream = sentence_tokenizer(provider, expressive=self._expressive).stream()
         input_sent_event = asyncio.Event()
 
         async def _input_task() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    sent_tokenizer_stream.flush()
+                    text_stream.flush()
                     continue
-                sent_tokenizer_stream.push_text(normalize_markup(self._markup_key, data))
+                text_stream.push_text(normalize_markup(self._markup_key, data))
 
-            sent_tokenizer_stream.end_input()
+            text_stream.end_input()
 
-        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _send_text_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             base_pkt: dict[str, Any] = {}
             base_pkt["type"] = "input_transcript"
-            async for ev in sent_tokenizer_stream:
+            async for ev in text_stream:
                 token_pkt = base_pkt.copy()
-                # re-normalize at sentence level: tags split across input chunks
+                # Re-normalize the emitted text: tags split across input chunks
                 # aren't caught by the per-chunk normalize in _input_task
                 normalized = normalize_markup(self._markup_key, ev.token)
                 converted = convert_markup(self._markup_key, normalized)
@@ -978,7 +982,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 connection.in_use = True
                 tasks = [
                     asyncio.create_task(_input_task()),
-                    asyncio.create_task(_sentence_stream_task(ws)),
+                    asyncio.create_task(_send_text_task(ws)),
                     asyncio.create_task(_recv_task(connection)),
                 ]
 
@@ -987,7 +991,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 finally:
                     connection.in_use = False
                     input_sent_event.set()
-                    await sent_tokenizer_stream.aclose()
+                    await text_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
                 if connection.handoff_id is not None:
                     await self._tts._retire(connection)
