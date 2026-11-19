@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import os
 import re
@@ -236,6 +237,11 @@ class TTS(tts.TTS):
             max_session_duration=300,
             mark_refreshed_on_get=True,
         )
+        # A direct session is minted for one voice, so each voice gets its own pool: a stream
+        # always draws from the pool for the voice it snapshotted, which guarantees the session
+        # it uses was minted for that exact voice. Classic connections are voice-agnostic (the
+        # voice travels in each task_start), so they share the single pool above.
+        self._direct_pools: dict[str, utils.ConnectionPool[aiohttp.ClientWebSocketResponse]] = {}
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
     @property
@@ -246,10 +252,27 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Finesse"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
-        if self._opts.use_direct_session:
-            return await self._connect_direct(timeout)
+    def _pool_for(self, voice: str) -> utils.ConnectionPool[aiohttp.ClientWebSocketResponse]:
+        """Return the connection pool a stream for ``voice`` should use.
 
+        Classic streams all share one voice-agnostic pool. Direct sessions are minted for a
+        single voice, so each voice gets its own pool; the pool's connections are therefore
+        always minted for the voice the caller asked for.
+        """
+        if not self._opts.use_direct_session:
+            return self._pool
+        pool = self._direct_pools.get(voice)
+        if pool is None:
+            pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+                connect_cb=functools.partial(self._connect_direct, voice=voice),
+                close_cb=self._close_ws,
+                max_session_duration=300,
+                mark_refreshed_on_get=True,
+            )
+            self._direct_pools[voice] = pool
+        return pool
+
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         try:
             return await asyncio.wait_for(
@@ -270,7 +293,9 @@ class TTS(tts.TTS):
                 status_code=e.status,
             ) from None
 
-    async def _connect_direct(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_direct(
+        self, timeout: float, *, voice: str
+    ) -> aiohttp.ClientWebSocketResponse:
         """Mint a direct realtime session and connect straight to the GPU region.
 
         The backend issues a short-lived, voice-scoped session token; the client then opens the
@@ -280,7 +305,7 @@ class TTS(tts.TTS):
         session = self._ensure_session()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
-        minted = await self._mint_session(session, timeout)
+        minted = await self._mint_session(session, timeout, voice)
         remaining = max(0.0, deadline - loop.time())
         try:
             return await asyncio.wait_for(
@@ -298,8 +323,10 @@ class TTS(tts.TTS):
                 status_code=e.status,
             ) from None
 
-    async def _mint_session(self, session: aiohttp.ClientSession, timeout: float) -> dict[str, Any]:
-        body = {"voice_ids": [self._opts.voice], "budget_chars": _SESSION_BUDGET_CHARS}
+    async def _mint_session(
+        self, session: aiohttp.ClientSession, timeout: float, voice: str
+    ) -> dict[str, Any]:
+        body = {"voice_ids": [voice], "budget_chars": _SESSION_BUDGET_CHARS}
         try:
             async with session.post(
                 f"{self._opts.api_base}/realtime/sessions",
@@ -323,10 +350,11 @@ class TTS(tts.TTS):
                     )
                 data = payload.get("data") if isinstance(payload, dict) else None
                 if not isinstance(data, dict) or not data.get("url") or not data.get("token"):
+                    # The body is deliberately omitted: a malformed-but-successful response can
+                    # carry the session token, which must never reach the retry/error logs.
                     raise APIStatusError(
                         "Finesse returned an unexpected session response",
                         status_code=resp.status,
-                        body=payload,
                     )
                 return data
         except aiohttp.ClientError as e:
@@ -342,7 +370,7 @@ class TTS(tts.TTS):
         return self._session
 
     def prewarm(self) -> None:
-        self._pool.prewarm()
+        self._pool_for(self._opts.voice).prewarm()
 
     def update_options(
         self,
@@ -371,10 +399,9 @@ class TTS(tts.TTS):
         )
         if is_given(voice) and voice != self._opts.voice:
             self._opts.voice = voice
-            if self._opts.use_direct_session:
-                # A direct session is pinned to its voice, so drop the pooled sessions; the
-                # next synthesis mints one for the new voice.
-                self._pool.invalidate()
+            # In direct mode nothing needs dropping here: the next synthesis snapshots the new
+            # voice and draws from that voice's own pool (see _pool_for), so it never reuses a
+            # session minted for the previous voice. The previous voice's pool simply idles out.
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(num_step):
@@ -402,6 +429,9 @@ class TTS(tts.TTS):
 
         self._streams.clear()
         await self._pool.aclose()
+        for pool in self._direct_pools.values():
+            await pool.aclose()
+        self._direct_pools.clear()
 
 
 def _task_start(opts: _TTSOptions, context_id: str, text: str, *, finalize: bool) -> dict[str, Any]:
@@ -607,7 +637,8 @@ class ChunkedStream(tts.ChunkedStream):
             return
 
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            pool = self._tts._pool_for(self._opts.voice)
+            async with pool.connection(timeout=self._conn_options.timeout) as ws:
                 await _send_text(
                     ws, self._opts, context_id, self._input_text, opened=False, finalize=True
                 )
@@ -700,9 +731,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             finished = True
 
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-                self._acquire_time = self._tts._pool.last_acquire_time
-                self._connection_reused = self._tts._pool.last_connection_reused
+            pool = self._tts._pool_for(self._opts.voice)
+            async with pool.connection(timeout=self._conn_options.timeout) as ws:
+                self._acquire_time = pool.last_acquire_time
+                self._connection_reused = pool.last_connection_reused
                 tasks = [
                     asyncio.create_task(_send_task(ws)),
                     asyncio.create_task(_recv_task(ws)),

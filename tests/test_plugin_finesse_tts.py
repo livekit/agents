@@ -555,6 +555,27 @@ async def test_direct_session_remints_when_the_voice_changes(
     await tts.aclose()
 
 
+async def test_direct_session_mints_for_the_streams_snapshot_voice(
+    server: FakeFinesse, session: aiohttp.ClientSession
+) -> None:
+    from livekit.plugins.finesse.tts import _SESSION_BUDGET_CHARS
+
+    tts = _tts_direct(server, session)
+    # The stream snapshots the current voice when it is created...
+    stream = tts.synthesize("Hello there.", conn_options=NO_RETRY)
+    # ...and the caller switches voices before it has minted or connected.
+    tts.update_options(voice="221100ffeeddccbbaa998877")
+
+    await _collect(stream)
+
+    # The session must be minted for the voice the stream snapshotted, not the live option, so
+    # the minted session and the task_start it carries always name the same voice.
+    assert server.mint_requests == [{"voice_ids": [VOICE], "budget_chars": _SESSION_BUDGET_CHARS}]
+    task_start = next(m for m in server.received if m["type"] == "task_start")
+    assert task_start["voice_id"] == VOICE
+    await tts.aclose()
+
+
 async def test_direct_session_budget_exhaustion_is_retryable(
     server: FakeFinesse, session: aiohttp.ClientSession
 ) -> None:
