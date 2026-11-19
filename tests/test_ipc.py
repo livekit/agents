@@ -965,6 +965,12 @@ async def test_job_tokens_are_kept_current_in_the_background() -> None:
     assert client.cached_token(OBSERVABILITY_CLAIMS) == "token-4"
     await utils.aio.cancel_and_wait(task)
 
+    # the job ended: its last tokens are good until they expire
+    await asyncio.sleep(1780)
+    assert client.cached_token(INFERENCE_CLAIMS) == "token-3"
+    await asyncio.sleep(30)
+    assert client.cached_token(INFERENCE_CLAIMS) is None
+
 
 @pytest.mark.virtual_time
 @pytest.mark.no_concurrent

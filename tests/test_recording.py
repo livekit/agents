@@ -511,7 +511,9 @@ async def test_upload_transcript_only() -> None:
 def job_token_source(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     """The observability token of the job, as telemetry reads it in token mode."""
     tokens: dict[str, str] = {"token": "job-token"}
-    monkeypatch.setattr(f"{_TRACES_MOD}._job_token_source", lambda: tokens.get("token"))
+    monkeypatch.setattr(
+        f"{_TRACES_MOD}._job_token_sources", {"AJ_job": lambda: tokens.get("token")}
+    )
     return tokens
 
 
@@ -1927,3 +1929,26 @@ async def test_invalid_recorder_bit_rate_rejected(audio: bool) -> None:
     assert mock_ctx._primary_agent_session is None
     assert session._room_io is None
     assert not session._started
+
+
+def test_telemetry_token_comes_from_a_job_that_still_has_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Jobs that run in threads share the pipeline: when the job that started last ends and
+    its token expires, the exports use the token of a job that still renews its own."""
+    from livekit.agents.telemetry import traces
+
+    monkeypatch.setattr(traces, "_job_token_sources", {})
+    tokens: dict[str, str | None] = {"AJ_a": "token-a", "AJ_b": "token-b"}
+    traces._set_job_token_source("AJ_a", lambda: tokens["AJ_a"])
+    traces._set_job_token_source("AJ_b", lambda: tokens["AJ_b"])
+
+    assert traces._job_observability_token() == "token-b"
+    assert traces._job_observability_token("AJ_a") == "token-a"  # a job's own upload
+
+    tokens["AJ_b"] = None  # the job ended and its last token expired
+    assert traces._job_observability_token() == "token-a"
+    assert traces._job_observability_token("AJ_b") == "token-a"
+
+    traces._set_job_token_source("AJ_c", lambda: "token-c")
+    assert list(traces._job_token_sources) == ["AJ_a", "AJ_c"]

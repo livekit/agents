@@ -41,6 +41,7 @@ from ._utils import (
     InferenceClass,
     _resolve_provider,
     create_access_token,
+    create_client_access_token,
     extract_quota_usage,
     get_default_inference_url,
     get_inference_headers,
@@ -458,7 +459,7 @@ class LLM(llm.LLM):
         )
         self._check_reasoning()
         self._client = openai.AsyncClient(
-            api_key=create_access_token(self._opts.api_key, self._opts.api_secret),
+            api_key=create_client_access_token(self._opts.api_key, self._opts.api_secret),
             base_url=self._opts.base_url,
             max_retries=0,
             http_client=httpx.AsyncClient(
@@ -471,6 +472,7 @@ class LLM(llm.LLM):
         )
 
     async def _prewarm_impl(self) -> None:
+        self._client.api_key = create_access_token(self._opts.api_key, self._opts.api_secret)
         await self._client.models.list()
 
     async def aclose(self) -> None:

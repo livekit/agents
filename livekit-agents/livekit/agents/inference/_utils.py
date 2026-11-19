@@ -197,6 +197,18 @@ def create_inference_request_id(
     return shortuuid(prefix)
 
 
+_NO_JOB_TOKEN = "no-job-token"
+
+
+def create_client_access_token(api_key: str | None, api_secret: str | None) -> str:
+    """The token an inference client is constructed with. A client can be made before its
+    job runs (process setup), where token mode has no token yet: there it is a placeholder,
+    and the client gets the job's token before each request."""
+    if (not api_key or not api_secret) and token_mode_token() is not None:
+        return _NO_JOB_TOKEN  # the client refuses an empty key
+    return create_access_token(api_key, api_secret)
+
+
 def create_access_token(api_key: str | None, api_secret: str | None, ttl: float = 600) -> str:
     if (not api_key or not api_secret) and token_mode_token() is not None:
         # token mode: no secret to sign with, the job keeps a token from the server current

@@ -49,6 +49,7 @@ from ._utils import (
     _terminal_denial,
     create_access_token,
     create_api_error_from_response,
+    create_client_access_token,
     extract_quota_usage,
     get_default_inference_url,
     get_inference_headers,
@@ -217,7 +218,7 @@ class LLM(llm.LLM):
 
     def _make_client(self) -> openai.AsyncClient:
         return openai.AsyncClient(
-            api_key=create_access_token(self._opts.api_key, self._opts.api_secret),
+            api_key=create_client_access_token(self._opts.api_key, self._opts.api_secret),
             base_url=self._opts.base_url,
             max_retries=0,
             http_client=httpx.AsyncClient(
@@ -233,6 +234,7 @@ class LLM(llm.LLM):
         if self._ws is not None:
             self._ws._pool.prewarm()
         elif self._client is not None:
+            self._client.api_key = create_access_token(self._opts.api_key, self._opts.api_secret)
             await self._client.models.list()
 
     async def aclose(self) -> None:

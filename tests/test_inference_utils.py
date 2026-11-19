@@ -268,6 +268,26 @@ def test_inference_sends_the_job_token_in_token_mode() -> None:
         create_access_token("", "")
 
 
+@pytest.mark.usefixtures("token_mode")
+async def test_inference_llm_is_constructed_before_the_job_in_token_mode() -> None:
+    """Process setup can construct a model for its job: no token is needed until a request."""
+    from livekit.agents.inference import responses
+
+    llm = inference.LLM("openai/gpt-4.1-mini")
+    http_llm = responses.LLM("openai/gpt-4.1-mini", use_websocket=False)
+    try:
+        assert llm._client.api_key == inference_utils._NO_JOB_TOKEN
+        assert (
+            http_llm._client is not None
+            and http_llm._client.api_key == inference_utils._NO_JOB_TOKEN
+        )
+        with pytest.raises(RuntimeError, match="needs a running job"):
+            await llm._prewarm_impl()
+    finally:
+        await llm.aclose()
+        await http_llm.aclose()
+
+
 def test_inference_signs_with_key_and_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LIVEKIT_TOKEN", "worker-token")
     token = create_access_token("devkey", "secret" * 6)

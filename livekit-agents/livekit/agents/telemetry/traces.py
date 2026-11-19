@@ -704,21 +704,28 @@ def set_tracer_provider(
 _TOKEN_TTL = timedelta(hours=6)
 _TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 
-# token mode: returns the observability token of the job that last prepared telemetry here.
-# The pipeline is one per process, as is the job, but for jobs that run in threads.
-_job_token_source: Callable[[], str | None] | None = None
+# token mode: job id -> its observability token, None once it has expired. The pipeline is
+# one per process, and so is the job, but for jobs that run in threads: those share it.
+_job_token_sources: dict[str, Callable[[], str | None]] = {}
 
 
-def _set_job_token_source(source: Callable[[], str | None]) -> None:
-    global _job_token_source
-    _job_token_source = source
+def _set_job_token_source(job_id: str, source: Callable[[], str | None]) -> None:
+    # a job that ended is not removed: its token serves the last exports. Drop it here,
+    # once the token has expired
+    for ended in [j for j, s in _job_token_sources.items() if s() is None]:
+        del _job_token_sources[ended]
+    _job_token_sources[job_id] = source
 
 
-def _job_observability_token() -> str:
-    token = _job_token_source() if _job_token_source is not None else None
-    if token is None:
-        raise RuntimeError("no observability token: in token mode the job gets it from the server")
-    return token
+def _job_observability_token(job_id: str | None = None) -> str:
+    """The token of the job ``job_id`` if it has one, else of the newest job that does."""
+    sources = list(_job_token_sources.values())
+    if job_id in _job_token_sources:
+        sources.append(_job_token_sources[job_id])
+    for source in reversed(sources):
+        if (token := source()) is not None:
+            return token
+    raise RuntimeError("no observability token: in token mode the job gets it from the server")
 
 
 class _AuthHeaderProvider:
@@ -1442,7 +1449,7 @@ async def _upload_session_report(
     # emit recording
     if token_mode_token() is not None:
         # token mode: no secret to sign with, the job keeps a token from the server current
-        jwt = _job_observability_token()
+        jwt = _job_observability_token(report.job_id)
     else:
         jwt = (
             api.AccessToken()

@@ -212,8 +212,8 @@ class _JobTokenClient:
     def __init__(self, proc_client: _ProcClient) -> None:
         self._client = proc_client
         self._active_requests: dict[str, asyncio.Future[CreateJobTokenResponse]] = {}
-        # claims -> (token, renew_at), unix seconds
-        self._tokens: dict[str, tuple[str, float]] = {}
+        # claims -> (token, renew_at, expires_at), unix seconds
+        self._tokens: dict[str, tuple[str, float, float]] = {}
 
     async def create_token(self, claims: str) -> str:
         """Returns a token with ``claims``, the JSON payload of an access token."""
@@ -243,13 +243,13 @@ class _JobTokenClient:
             raise RuntimeError(resp.error)
 
         now = time.time()
-        self._tokens[claims] = (resp.token, now + (resp.expires_at - now) / 2)
+        self._tokens[claims] = (resp.token, now + (resp.expires_at - now) / 2, resp.expires_at)
         return resp.token
 
     def cached_token(self, claims: str) -> str | None:
-        """The last token created with ``claims``, if any."""
+        """The last token created with ``claims``, until it expires."""
         cached = self._tokens.get(claims)
-        return cached[0] if cached is not None else None
+        return cached[0] if cached is not None and time.time() < cached[2] else None
 
     async def renew(self, *claims: str) -> float:
         """Creates the tokens that are due. Returns the seconds until the next one is."""

@@ -324,7 +324,7 @@ class JobContext:
             return
         try:
             if token_mode_token() is not None:
-                _set_job_token_source(lambda: self._job_token(OBSERVABILITY_CLAIMS))
+                _set_job_token_source(self.job.id, lambda: self._job_token(OBSERVABILITY_CLAIMS))
             _prepare_cloud_tracer(
                 room_id=self.job.room.sid,
                 job_id=self.job.id,
