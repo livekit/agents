@@ -76,7 +76,7 @@ def _new_stream(
     stream._language = LanguageCode(language) if language else None
     stream._event_ch = _EventSink()
     stream._speaking = False
-    stream._final_alternatives = []
+    stream._final_segments = []
     stream._vad = None
     stream._reconnect_event = asyncio.Event()
     stream._stt = elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime")
@@ -133,7 +133,9 @@ def test_elevenlabs_endpoint_preserves_timing_across_empty_commit(server_vad, en
     if end_time:
         assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
     else:
-        assert endpoint.alternatives == []
+        assert endpoint.alternatives[0].text == "hello"
+        assert endpoint.alternatives[0].start_time == 0.0
+        assert endpoint.alternatives[0].end_time == 0.0
 
     stream._process_stream_event(_partial_transcript("next turn"))
     stream._process_stream_event(_committed_transcript("", with_timestamps=True))
@@ -156,7 +158,10 @@ def test_untimed_final_invalidates_previous_commit_timing() -> None:
     stream._process_stream_event(final)
     stream._process_stream_event(_committed_transcript("", with_timestamps=True))
     assert stream._event_ch.events[-1].type == stt.SpeechEventType.END_OF_SPEECH
-    assert stream._event_ch.events[-1].alternatives == []
+    alternative = stream._event_ch.events[-1].alternatives[0]
+    assert alternative.text == "hello again"
+    assert alternative.start_time == 0.0
+    assert alternative.end_time == 0.0
 
 
 def test_advancing_partial_transcripts_are_forwarded() -> None:
@@ -1009,6 +1014,77 @@ def _forced_commit_stream(**kwargs) -> elevenlabs_stt.SpeechStream:
     stream._turn_detection._audio_duration_since_commit = 35.3
     stream._process_stream_event({**_partial_transcript("still speaking"), "turn_probability": 0.0})
     return stream
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    ("include_timestamps", "first_timed", "last_timed", "offset"),
+    [
+        (True, True, True, 0.0),
+        (True, False, True, 0.0),
+        (True, True, False, 0.0),
+        (True, False, False, 0.0),
+        (False, False, False, 0.0),
+        (True, True, True, 7.0),
+        (True, True, False, 7.0),
+        (False, False, False, 7.0),
+    ],
+)
+async def test_forced_turn_endpoint_combines_final_segments_once(
+    include_timestamps: bool, first_timed: bool, last_timed: bool, offset: float
+) -> None:
+    stream = _forced_commit_stream(include_timestamps=include_timestamps)
+    stream.start_time_offset = offset
+
+    def commit(text: str, start: float, end: float, timed: bool) -> None:
+        # The provider sends plain and timestamped copies of each segment, not cumulative text.
+        stream._process_stream_event({"message_type": "committed_transcript", "text": text})
+        stream._process_stream_event(
+            {
+                "message_type": "committed_transcript_with_timestamps",
+                "text": text,
+                "words": [{"text": text, "start": start, "end": end}] if timed else [],
+            }
+        )
+
+    try:
+        commit("hello", 0.1, 34.96, first_timed)
+        assert stream._speaking
+        assert not any(
+            event.type == stt.SpeechEventType.END_OF_SPEECH for event in stream._event_ch.events
+        )
+        stream._process_stream_event({**_partial_transcript("world"), "turn_probability": 1.0})
+        commit("world", 35.2, 40.0, last_timed)
+
+        finals = [
+            event.alternatives[0]
+            for event in stream._event_ch.events
+            if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+        ]
+        endpoints = [
+            event
+            for event in stream._event_ch.events
+            if event.type == stt.SpeechEventType.END_OF_SPEECH
+        ]
+        assert [final.text for final in finals] == ["hello", "world"]
+        assert len(endpoints) == 1
+        assert len(endpoints[0].alternatives) == 1
+        combined = endpoints[0].alternatives[0]
+        assert combined.text == "hello world"
+        assert combined.start_time == pytest.approx(
+            (0.1 if first_timed else 35.2) + offset if last_timed else 0.0
+        )
+        assert combined.end_time == pytest.approx(40.0 + offset if last_timed else 0.0)
+        assert [str(word) for word in combined.words or []] == (
+            (["hello"] if first_timed else []) + (["world"] if last_timed else [])
+        )
+
+        stream._process_stream_event(_partial_transcript("next turn"))
+        stream._process_stream_event(_committed_transcript("", with_timestamps=include_timestamps))
+        assert stream._event_ch.events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+        assert stream._event_ch.events[-1].alternatives == []
+    finally:
+        await stream._turn_detection.aclose()
 
 
 @pytest.mark.virtual_time

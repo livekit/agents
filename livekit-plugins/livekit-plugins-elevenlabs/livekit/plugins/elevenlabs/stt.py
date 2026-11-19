@@ -20,7 +20,7 @@ import json
 import math
 import os
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, TypedDict
 from urllib.parse import quote
 
@@ -70,6 +70,25 @@ def _speech_confidence(words: list[dict[str, Any]] | None) -> float:
     if not logprobs:
         return 0.0
     return min(1.0, max(0.0, math.exp(sum(logprobs) / len(logprobs))))
+
+
+def _combine_final_segments(
+    segments: list[SpeechData], start_time_offset: float
+) -> SpeechData | None:
+    """Combine a turn's final segments without reusing timing from an earlier segment."""
+    if not segments:
+        return None
+    last = segments[-1]
+    last_is_timed = last.end_time > start_time_offset
+    first = next((segment for segment in segments if segment.end_time > start_time_offset), last)
+    words = [word for segment in segments for word in segment.words or []]
+    return replace(
+        last,
+        text=" ".join(segment.text for segment in segments),
+        start_time=first.start_time if last_is_timed else 0.0,
+        end_time=last.end_time if last_is_timed else 0.0,
+        words=words or None,
+    )
 
 
 class VADOptions(TypedDict, total=False):
@@ -543,7 +562,7 @@ class SpeechStream(stt.SpeechStream):
         self._vad = stt._vad
         self._reconnect_event = asyncio.Event()
         self._speaking = False  # Track if we're currently in a speech segment
-        self._final_alternatives: list[SpeechData] = []
+        self._final_segments: list[SpeechData] = []
         self._turn_detection = TurnDetection(
             opts=opts, vad=self._vad, on_end_of_speech=self._emit_end_of_speech
         )
@@ -632,13 +651,14 @@ class SpeechStream(stt.SpeechStream):
 
     def _emit_end_of_speech(self) -> None:
         if self._speaking:
+            alternative = _combine_final_segments(self._final_segments, self.start_time_offset)
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
                     type=SpeechEventType.END_OF_SPEECH,
-                    alternatives=self._final_alternatives,
+                    alternatives=[alternative] if alternative is not None else [],
                 )
             )
-            self._final_alternatives = []
+            self._final_segments = []
             self._speaking = False
 
     async def _run(self) -> None:
@@ -779,7 +799,7 @@ class SpeechStream(stt.SpeechStream):
                 ws = await self._connect_ws()
                 self._input_ch.restart_provider_clock()
                 await self._turn_detection.start()
-                self._final_alternatives = []
+                self._final_segments = []
                 if self._opts.previous_text:
                     # Must be the first input_audio_chunk on the connection.
                     await ws.send_str(
@@ -965,7 +985,7 @@ class SpeechStream(stt.SpeechStream):
 
                 # Send FINAL_TRANSCRIPT but keep speaking=True
                 # Multiple commits can occur within the same speech segment
-                self._final_alternatives = [speech_data] if end_time > 0 else []
+                self._final_segments.append(speech_data)
                 final_event = stt.SpeechEvent(
                     type=SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[speech_data],
