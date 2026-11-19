@@ -120,7 +120,7 @@ def transfer_check(bank: FakeBank, from_account_id: str, amount: float) -> dict[
             "amount": amount,
             "fee": fee,
             "remaining_limit": remaining_limit,
-            "say": f"The daily limit leaves {remaining_limit:.2f} dollars today, which does not cover {amount:.2f}; offer that amount today and the rest tomorrow.",
+            "say": f"The daily limit leaves {remaining_limit:.2f} dollars today, which does not cover {amount:.2f}. Offer that amount today. The caller can call again tomorrow for the rest; you cannot schedule a transfer.",
         }
     say = (
         f"A transfer of {amount:.2f} dollars is allowed"
