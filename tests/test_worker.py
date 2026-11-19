@@ -159,6 +159,101 @@ async def test_run_raises_when_connection_exhausts_retries() -> None:
             await server.aclose()  # repeated aclose() stays a no-op
 
 
+@pytest.mark.virtual_time
+async def test_worker_times_out_waiting_for_registration() -> None:
+    await asyncio.sleep(0.001)  # start the worker's intervals after virtual time zero
+    server = AgentServer(
+        ws_url="ws://localhost",
+        api_key="devkey",
+        api_secret="secret" * 6,
+        num_idle_processes=0,
+        max_retry=0,
+    )
+    server.rtc_session()(_noop_entrypoint)
+    server._simulation = True
+    ws = AsyncMock(spec=aiohttp.ClientWebSocketResponse)
+
+    async def wait_for_response() -> None:
+        await asyncio.sleep(60)
+
+    ws.receive_bytes.side_effect = wait_for_response
+    with (
+        patch.dict(os.environ),
+        patch.object(aiohttp.ClientSession, "ws_connect", new_callable=AsyncMock, return_value=ws),
+    ):
+        try:
+            with pytest.raises(RuntimeError, match="failed to connect to livekit"):
+                await asyncio.wait_for(server.run(devmode=True), timeout=11)
+            ws.close.assert_awaited_once()
+        finally:
+            await server.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_worker_reconnects_when_a_ping_goes_unanswered() -> None:
+    await asyncio.sleep(0.001)  # start the worker's intervals after virtual time zero
+    server = AgentServer(
+        ws_url="ws://localhost", api_key="devkey", api_secret="secret" * 6, num_idle_processes=0
+    )
+    server.rtc_session()(_noop_entrypoint)
+    server._simulation = True
+    clock = asyncio.get_running_loop().time
+    first_pings: list[float] = []
+    recovered_ping = asyncio.Event()
+    close_started = 0.0
+
+    def make_socket(worker_id: str) -> AsyncMock:
+        incoming: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+        ws = AsyncMock(spec=aiohttp.ClientWebSocketResponse)
+        ws.receive_bytes.return_value = agent.ServerMessage(
+            register=agent.RegisterWorkerResponse(worker_id=worker_id)
+        ).SerializeToString()
+        ws.receive.side_effect = incoming.get
+
+        async def send(data: bytes) -> None:
+            msg = agent.WorkerMessage.FromString(data)
+            if not msg.HasField("ping"):
+                return
+            if worker_id == "AW_first":
+                first_pings.append(clock())
+                if len(first_pings) > 1:
+                    return
+            else:
+                recovered_ping.set()
+            pong = agent.ServerMessage(pong=agent.WorkerPong(last_timestamp=msg.ping.timestamp))
+            incoming.put_nowait(
+                aiohttp.WSMessage(aiohttp.WSMsgType.BINARY, pong.SerializeToString(), None)
+            )
+
+        ws.send_bytes.side_effect = send
+        return ws
+
+    async def stall_close() -> None:
+        nonlocal close_started
+        close_started = clock()
+        await asyncio.sleep(10)
+
+    first_ws = make_socket("AW_first")
+    first_ws.close.side_effect = stall_close
+    with (
+        patch.dict(os.environ),
+        patch.object(aiohttp.ClientSession, "ws_connect", new_callable=AsyncMock) as connect,
+    ):
+        connect.side_effect = [first_ws, make_socket("AW_next")]
+        run = asyncio.create_task(server.run(devmode=True))
+        try:
+            await asyncio.wait_for(recovered_ping.wait(), timeout=5)
+            assert connect.await_count == 2
+            assert server.id == "AW_next"
+            first, second = first_pings
+            assert second - first == pytest.approx(1.0)
+            assert close_started - second == pytest.approx(2.0)
+            first_ws.close.assert_awaited_once()
+        finally:
+            await server.aclose()
+            await run
+
+
 async def test_reports_running_jobs_as_assigned_after_registering() -> None:
     server = AgentServer(api_key="devkey", api_secret="devsecret", num_idle_processes=0)
     # the identity is the one the worker accepted the job with
@@ -420,6 +515,9 @@ async def test_final_job_status_reaches_worker_websocket(
                 await ws.send_bytes(
                     agent.ServerMessage(availability=availability).SerializeToString()
                 )
+            elif message.HasField("ping"):
+                pong = agent.WorkerPong(last_timestamp=message.ping.timestamp)
+                await ws.send_bytes(agent.ServerMessage(pong=pong).SerializeToString())
             elif message.HasField("availability"):
                 assignment = agent.JobAssignment(job=job, token="fake_token")
                 await ws.send_bytes(agent.ServerMessage(assignment=assignment).SerializeToString())

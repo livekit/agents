@@ -309,6 +309,7 @@ class STT(stt.STT):
                 _synthesize_url(self._opts),
                 data=form,
                 headers={AUTHORIZATION_HEADER: self._opts.api_key},
+                timeout=aiohttp.ClientTimeout(total=30, sock_connect=conn_options.timeout),
             ) as response:
                 if response.status != 200:
                     # check the status first: an error body may be empty or not JSON

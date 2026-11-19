@@ -158,3 +158,75 @@ async def test_sampling_params_in_extra_kwargs_sent_in_the_body() -> None:
     assert (request["temperature"], request["top_p"], request["top_k"]) == (0.2, 0.9, 3)
     assert request["metadata"] == {"trace_id": "abc"}
     assert extra_kwargs == {"temperature": 0.2, "top_p": 0.9, "metadata": {"trace_id": "abc"}}
+
+
+def _sse(*events: dict[str, Any]) -> bytes:
+    return b"".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in events)
+
+
+def _message_start(usage: dict[str, int]) -> dict[str, Any]:
+    message = {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude",
+        "content": [],
+        "stop_reason": None,
+        "stop_sequence": None,
+        "usage": usage,
+    }
+    return {"type": "message_start", "message": message}
+
+
+@pytest.mark.parametrize(
+    ("start_usage", "delta_usage", "prompt_tokens", "completion_tokens"),
+    [
+        # the counts on message_delta are cumulative totals, not increments
+        ({"input_tokens": 25, "output_tokens": 1}, {"output_tokens": 15}, 25, 15),
+        # server tools add input tokens, which message_delta reports
+        (
+            {"input_tokens": 400, "output_tokens": 3},
+            {"input_tokens": 9200, "output_tokens": 310},
+            9200,
+            310,
+        ),
+        (
+            {"input_tokens": 10, "output_tokens": 1, "cache_read_input_tokens": 100},
+            {"output_tokens": 20, "cache_read_input_tokens": 300},
+            310,
+            20,
+        ),
+    ],
+)
+async def test_usage_takes_the_cumulative_message_delta_counts(
+    start_usage: dict[str, int],
+    delta_usage: dict[str, int],
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> None:
+    body = _sse(
+        _message_start(start_usage),
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": delta_usage,
+        },
+        {"type": "message_stop"},
+    )
+    client = anthropic.AsyncClient(
+        api_key="sk-ant-test",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200, headers={"content-type": "text/event-stream"}, content=body
+                )
+            )
+        ),
+    )
+    instance = LLM(model="claude-sonnet-4-6", api_key="sk-ant-test", client=client)
+
+    response = await instance.chat(chat_ctx=ChatContext()).collect()
+
+    assert response.usage is not None
+    assert response.usage.prompt_tokens == prompt_tokens
+    assert response.usage.completion_tokens == completion_tokens

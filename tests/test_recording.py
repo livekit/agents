@@ -82,6 +82,7 @@ def _make_mock_job_ctx(enable_recording: bool = True) -> MagicMock:
     mock_ctx.job.agent_name = "test-agent"
     mock_ctx.room.name = "test-room"
     mock_ctx._primary_agent_session = None
+    mock_ctx._redaction_enabled = False
     mock_ctx.session_directory = Path("/tmp/test-session")
     return mock_ctx
 
@@ -408,6 +409,25 @@ async def test_init_recording_called_with_options() -> None:
         "transcript": True,
         "redaction": True,
     }
+    await _cleanup(session)
+
+
+@pytest.mark.parametrize("job_redaction", [False, True])
+@pytest.mark.parametrize("session_redaction", [False, True])
+async def test_session_redaction_uses_resolved_job_state(
+    job_redaction: bool, session_redaction: bool
+) -> None:
+    session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+    mock_ctx.job.enable_redaction = True
+    mock_ctx._redaction_enabled = job_redaction
+
+    with _patch_job_ctx(mock_ctx):
+        await session.start(
+            SimpleAgent(), record={**_RECORDING_ALL_OFF, "redaction": session_redaction}
+        )
+
+    assert session._redaction_enabled is (job_redaction or session_redaction)
     await _cleanup(session)
 
 
@@ -923,17 +943,19 @@ def _make_simulation_context(*, run_id: str, job_id: str) -> object:
     return SimulationContext(dispatch, MagicMock())
 
 
-def test_job_context_otel_metadata_includes_simulation_identity() -> None:
+@pytest.mark.parametrize("redaction", [False, True])
+def test_job_context_otel_metadata_includes_simulation_identity(redaction: bool) -> None:
     from livekit.agents.job import JobContext
 
     ctx = object.__new__(JobContext)
     sim = _make_simulation_context(run_id="run_abc", job_id="job_def")
     ctx.simulation_context = MagicMock(return_value=sim)
 
-    assert ctx._otel_metadata() == {
+    assert ctx._otel_metadata({"redaction": redaction}, redaction_enabled=redaction) == {
         "lk.simulation.enabled": True,
         "lk.simulation.run_id": "run_abc",
         "lk.simulation.job_id": "job_def",
+        **({"lk.redaction.enabled": True} if redaction else {}),
     }
 
 
@@ -949,17 +971,23 @@ def test_job_context_otel_metadata_omits_blank_simulation_ids() -> None:
     assert ctx._otel_metadata() == {"lk.simulation.enabled": True}
 
 
-def test_job_context_init_recording_enables_session_redaction() -> None:
+@pytest.mark.parametrize("simulation", [False, True])
+@pytest.mark.parametrize("project_redaction", [False, True])
+@pytest.mark.parametrize("session_redaction", [False, True])
+def test_job_context_init_recording_resolves_redaction(
+    simulation: bool, project_redaction: bool, session_redaction: bool
+) -> None:
     from livekit.agents.job import JobContext
 
     ctx = object.__new__(JobContext)
     ctx._info = SimpleNamespace(
-        job=SimpleNamespace(enable_redaction=False),
+        job=SimpleNamespace(enable_redaction=project_redaction),
         url="",
     )
     ctx._recording_initialized = False
     ctx._redaction_enabled = False
     ctx._early_log_handler = None
+    ctx.simulation_context = MagicMock(return_value=object() if simulation else None)
 
     ctx.init_recording(
         {
@@ -967,11 +995,11 @@ def test_job_context_init_recording_enables_session_redaction() -> None:
             "traces": False,
             "logs": False,
             "transcript": False,
-            "redaction": True,
+            "redaction": session_redaction,
         }
     )
 
-    assert ctx._redaction_enabled is True
+    assert ctx._redaction_enabled is (session_redaction or (project_redaction and not simulation))
 
 
 @pytest.mark.parametrize(
@@ -981,8 +1009,9 @@ def test_job_context_init_recording_enables_session_redaction() -> None:
         pytest.param(False, True, id="session-redaction"),
     ],
 )
+@pytest.mark.parametrize("simulation", [False, True])
 def test_job_context_init_recording_rejects_audio_without_transcript_when_redacted(
-    project_redaction: bool, session_redaction: bool
+    project_redaction: bool, session_redaction: bool, simulation: bool
 ) -> None:
     from livekit.agents.job import JobContext
 
@@ -994,9 +1023,15 @@ def test_job_context_init_recording_rejects_audio_without_transcript_when_redact
     ctx._recording_initialized = False
     ctx._redaction_enabled = project_redaction
     ctx._early_log_handler = None
+    ctx.simulation_context = MagicMock(return_value=object() if simulation else None)
 
-    with pytest.raises(
-        ValueError, match="audio upload requires transcript upload when redaction is enabled"
+    redaction_enabled = session_redaction or (project_redaction and not simulation)
+    with (
+        pytest.raises(
+            ValueError, match="audio upload requires transcript upload when redaction is enabled"
+        )
+        if redaction_enabled
+        else contextlib.nullcontext()
     ):
         ctx.init_recording(
             {

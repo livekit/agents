@@ -862,3 +862,125 @@ async def test_chained_request_sends_only_items_after_previous_response() -> Non
     assert len(interrupted["input"]) == 8
     assert last["previous_response_id"] == "resp_3"
     assert last["input"] == [{"role": "user", "content": "Bye"}]
+
+
+def _phase_message(item_id: str, phase: str | None, text: str) -> dict:
+    content = [{"type": "output_text", "text": text, "annotations": []}] if text else []
+    return {
+        "type": "message",
+        "id": item_id,
+        "role": "assistant",
+        "status": "completed",
+        "phase": phase,
+        "content": content,
+    }
+
+
+def _stream_frames(items: list[dict]) -> list[dict]:
+    frames = [_RESPONSE_CREATED]
+    for i, item in enumerate(items):
+        frame = {"sequence_number": 0, "output_index": i, "item": item}
+        frames.append({**frame, "type": "response.output_item.added"})
+        for part in item.get("content", []):
+            frames.append({**_TEXT_DELTA, "item_id": item["id"], "delta": part["text"]})
+        frames.append({**frame, "type": "response.output_item.done"})
+    response = {**_RESPONSE_CREATED["response"], "status": "completed", "output": items}
+    frames.append({"type": "response.completed", "sequence_number": 0, "response": response})
+    return frames
+
+
+_SAME = "Tell me about a project."
+
+
+@pytest.mark.parametrize(
+    ("items", "spoken"),
+    [
+        (
+            [_phase_message("c", "commentary", _SAME), _phase_message("f", "final_answer", _SAME)],
+            _SAME,
+        ),
+        (
+            [_phase_message("c", "commentary", "Hmm."), _phase_message("f", "final_answer", _SAME)],
+            _SAME,
+        ),
+        (
+            [_phase_message("c", "commentary", _SAME), _phase_message("f", "final_answer", "")],
+            _SAME,
+        ),
+        ([_phase_message("m", None, _SAME)], _SAME),
+        (
+            [
+                _phase_message("c", "commentary", _SAME),
+                _output_function_call("call_1", "lookup"),
+                _phase_message("f", "final_answer", _SAME),
+            ],
+            _SAME,
+        ),
+    ],
+    ids=["same", "different", "empty-final", "no-phase", "final-after-tool-call"],
+)
+async def test_one_message_per_response_is_spoken(items: list[dict], spoken: str) -> None:
+    """A commentary message is spoken only when no final answer text follows it."""
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    llm_model._ws = _ReplayResponsesWS(_stream_frames(items))  # type: ignore[assignment]
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Hi")
+
+    async with llm_model.chat(chat_ctx=chat_ctx) as stream:
+        text = "".join([c.delta.content async for c in stream if c.delta and c.delta.content])
+    await llm_model.aclose()
+
+    assert text == spoken
+
+
+async def test_chained_request_after_commentary_and_final_answer() -> None:
+    """The stored reply matches the previous output, so the next request chains."""
+    pair = [_phase_message("c", "commentary", _SAME), _phase_message("f", "final_answer", _SAME)]
+    ws = _ScriptedResponsesWS([pair, []])
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    llm_model._ws = ws  # type: ignore[assignment]
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Hi")
+
+    for reply in (_SAME, None):
+        async with llm_model.chat(chat_ctx=chat_ctx) as stream:
+            async for _ in stream:
+                pass
+        if reply:
+            chat_ctx.add_message(role="assistant", content=reply)
+            chat_ctx.add_message(role="user", content="A voice agent.")
+    await llm_model.aclose()
+
+    assert ws.payloads[1]["previous_response_id"] == "resp_1"
+
+
+async def test_released_commentary_is_not_retried() -> None:
+    """A failure after released commentary does not request the reply again."""
+
+    class _FailAfterReplayWS(_ReplayResponsesWS):
+        def generate_response(self, payload: dict, **kwargs: object):  # noqa: ANN202
+            frames = super().generate_response(payload, **kwargs)  # type: ignore[arg-type]
+
+            async def _replay():  # noqa: ANN202
+                async for frame in frames:
+                    yield frame
+                raise aiohttp.ClientConnectionError("reset")
+
+            return _replay()
+
+    items = [_phase_message("c", "commentary", _SAME), _phase_message("f", "final_answer", "")]
+    ws = _FailAfterReplayWS(_stream_frames(items))
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    llm_model._ws = ws  # type: ignore[assignment]
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Hi")
+
+    with pytest.raises(APIConnectionError):
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=2, retry_interval=0)
+        ) as stream:
+            async for _ in stream:
+                pass
+    await llm_model.aclose()
+
+    assert ws.attempts == 1
