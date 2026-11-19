@@ -390,7 +390,31 @@ def _inject_schema_defaults(value: Any, *, schema: dict[str, Any], root: dict[st
                     return _inject_schema_defaults(item, schema=additional, root=root)
                 return item
 
-            return {key: _inject_entry(key, item) for key, item in value.items()}
+            def _omit_for_none_default(key: str, item: Any) -> bool:
+                # `x: str = None` advertises null as "use the default", but the default
+                # itself fails validation against `str`; leaving the key out lets
+                # pydantic apply the default unvalidated, as for an omitted argument
+                if item is not None or not isinstance(properties, dict):
+                    return False
+                prop = properties.get(key)
+                if not isinstance(prop, dict):
+                    return False
+                ref = prop.get("$ref")
+                if isinstance(ref, str):
+                    resolved = _strict.resolve_ref(root=root, ref=ref)
+                    if isinstance(resolved, dict):
+                        prop = {**resolved, **prop}
+                return (
+                    "default" in prop
+                    and prop["default"] is None
+                    and not _json_schema_allows_null(prop, root=root)
+                )
+
+            return {
+                key: _inject_entry(key, item)
+                for key, item in value.items()
+                if not _omit_for_none_default(key, item)
+            }
 
     if isinstance(value, list):
         prefix_items = schema.get("prefixItems")
