@@ -395,7 +395,15 @@ class LLMStream(llm.LLMStream):
             if event.message.usage.cache_read_input_tokens:
                 self._cache_read_tokens = event.message.usage.cache_read_input_tokens
         elif event.type == "message_delta":
-            self._output_tokens += event.usage.output_tokens
+            # usage on message_delta is cumulative: it replaces the message_start counts
+            usage = event.usage
+            self._output_tokens = usage.output_tokens
+            if usage.input_tokens is not None:
+                self._input_tokens = usage.input_tokens
+            if usage.cache_creation_input_tokens is not None:
+                self._cache_creation_tokens = usage.cache_creation_input_tokens
+            if usage.cache_read_input_tokens is not None:
+                self._cache_read_tokens = usage.cache_read_input_tokens
         elif event.type == "content_block_start":
             if event.content_block.type == "tool_use":
                 self._tool_call_id = event.content_block.id

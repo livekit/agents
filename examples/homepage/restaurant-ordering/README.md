@@ -33,10 +33,10 @@ Otherwise the agent waits for someone to join the room.
   for the page's "try saying" line.
 - `src/phone.py` rings a real phone for an outbound call.
 
-The voice pipeline runs on LiveKit Inference: `assemblyai/universal-3-6-pro` for speech to text,
-Gemma 4 31B (`google/gemma-4-31b-it`) as the LLM, Fish Audio S2.1 Pro (`fishaudio/s2.1-pro`) for
-the voice, and the LiveKit turn detector. Suggested replies also use Gemma 4 31B, and ai-coustics
-cleans up the caller's audio.
+The voice pipeline runs on LiveKit Inference: `assemblyai/assemblyai-stt-3-7-realtime-agent` for
+speech to text, Gemma 4 31B (`google/gemma-4-31b-it`) as the LLM, Fish Audio S2.1 Pro
+(`fishaudio/s2.1-pro`) for the voice, and the LiveKit turn detector. Suggested replies also use
+Gemma 4 31B, and ai-coustics cleans up the caller's audio.
 
 The demo page reads the `restaurant.*` attributes, so changing their shape needs a matching change
 to the page.

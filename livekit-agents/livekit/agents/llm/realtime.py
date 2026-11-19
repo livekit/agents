@@ -330,6 +330,17 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     @abstractmethod
     async def aclose(self) -> None: ...
 
+    async def _release_and_close(self) -> asyncio.Future[None]:
+        """Close the session as far as its agent needs, returning a future done when fully closed.
+
+        The rest waits only on the provider; the default runs the full ``aclose()`` and returns a
+        done future.
+        """
+        await self.aclose()
+        closed: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        closed.set_result(None)
+        return closed
+
     async def _update_session(
         self,
         *,
