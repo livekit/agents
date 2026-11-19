@@ -368,7 +368,7 @@ class A2AEndpoint:
         self._url: str | None = None
         self._config: ServerConfig | None = None
 
-    def bind(self, *, storage: Storage, config: ServerConfig) -> None:
+    def bind(self, *, storage: Storage | None, config: ServerConfig) -> None:
         """Attach the endpoint to a server's storage and configuration."""
         self._storage = self._storage or storage
         self._config = config

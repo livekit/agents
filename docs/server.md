@@ -189,7 +189,7 @@ if __name__ == "__main__":
 
 | `AgentServer` option | What |
 | --- | --- |
-| `storage` | where threads live; default the local `SQLiteStorage()`, so a server always has storage |
+| `storage` | where threads live; default `AgentDBStorage()` on LiveKit Cloud and the local `SQLiteStorage()` on any other server or in console, so a server always has storage |
 | `agent_name`, `preload_modules` | see above and below |
 | `ws_url`, `api_key`, `api_secret` | the LiveKit project; default `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
 | `num_idle_processes` | job processes kept warm ahead of dispatch; `min(ceil(cpus), 4)` in production, none in development |

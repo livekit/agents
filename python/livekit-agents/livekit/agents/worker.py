@@ -135,8 +135,10 @@ class AgentServer(AgentHandler):
 
     Options left out default from the environment where one applies (``LIVEKIT_URL``,
     ``LIVEKIT_AGENT_NAME``, ...); ``load_threshold``, ``num_idle_processes`` and the listeners
-    default differently in development. A local ``SQLiteStorage`` serves the thread API in
-    development, and on the port ``LIVEKIT_THREAD_API_PORT`` names otherwise.
+    default differently in development. Without ``storage``, threads live in agent-db on LiveKit
+    Cloud and in a local ``SQLiteStorage`` on any other server or in console. A local
+    ``SQLiteStorage`` serves the thread API in development, and on the port
+    ``LIVEKIT_THREAD_API_PORT`` names otherwise.
     """
 
     def __init__(
@@ -164,10 +166,23 @@ class AgentServer(AgentHandler):
         """The session storage every door of this server opens its partition_key with."""
         return self._storage
 
-    def _ensure_storage(self) -> Storage:
-        if self._storage is None:
-            from .storage import SQLiteStorage
+    def _ensure_storage(self, *, console: bool = False) -> Storage:
+        """The storage given, else one picked once: local SQLite for a console call, agent-db
+        in the server's own project on LiveKit Cloud, and local SQLite on any other server."""
+        if self._storage is not None:
+            return self._storage
+        from urllib.parse import urlparse
 
+        from .storage import AgentDBStorage, SQLiteStorage, _rebuild
+
+        url = self._config.ws_url
+        cloud = (urlparse(url).hostname or "").endswith((".livekit.cloud", ".livekit.run"))
+        if cloud and not console:
+            # the server's own project, which its options may give without the environment
+            project = {"url": url, "api_key": self._config.api_key or None}
+            project["api_secret"] = self._config.api_secret or None
+            self._storage = _rebuild(AgentDBStorage, project)
+        else:
             self._storage = SQLiteStorage()
         return self._storage
 
@@ -197,8 +212,8 @@ class AgentServer(AgentHandler):
                 raise TypeError(f"not a door: {door!r}")
             if door.name in self._a2a_endpoints:
                 raise ValueError(f"a2a_session(endpoint={door.name!r}) is already served")
-            storage = self._ensure_storage()
-            door.bind(storage=storage, config=self._config)
+            # the default storage is chosen when the server runs, where console can choose it
+            door.bind(storage=self._storage, config=self._config)
             self._a2a_endpoints[door.name] = door
         return doors
 
@@ -214,6 +229,12 @@ class AgentServer(AgentHandler):
                 extra={"endpoints": unserved},
             )
         storage = self._ensure_storage()
+        for door in self._a2a_endpoints.values():
+            door.bind(storage=storage, config=self._config)
+        logger.info(
+            "thread storage",
+            extra={"storage": type(storage).__name__, "location": storage.threads.location},
+        )
         runtime = self._ensure_runtime()
         from .storage import SQLiteStorage
 
