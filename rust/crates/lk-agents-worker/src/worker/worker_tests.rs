@@ -3,11 +3,13 @@
     clippy::disallowed_methods,
     reason = "tests drive tokio's sync primitives directly"
 )]
+use super::{ActiveConnection, ConnectionEvent, Heartbeat, Outbox, WriteCompletion};
 use crate::transport::{
     Connected, TransportError, TransportEvent, WorkerSink, WorkerStream, WorkerTransport,
 };
 use crate::*;
 use async_trait::async_trait;
+use futures_util::FutureExt;
 use livekit_protocol::{self as protocol, RegisterWorkerResponse, ServerMessage, server_message};
 use lk_agents_abi::{Clock, Ts};
 use parking_lot::Mutex;
@@ -128,6 +130,15 @@ pub(super) fn register_message(worker_id: &str) -> Result<ServerMessage, Transpo
     Ok(msg)
 }
 
+fn pong_message(last_timestamp: i64) -> ServerMessage {
+    ServerMessage {
+        message: Some(server_message::Message::Pong(protocol::WorkerPong {
+            last_timestamp,
+            ..Default::default()
+        })),
+    }
+}
+
 pub(super) fn conn(steps: Vec<Step>, max_retry: u32) -> (Worker, Arc<Mutex<Wire>>, WorkerClient) {
     conn_with(
         steps,
@@ -179,7 +190,7 @@ impl Clock for TestClock {
         Ts::from_nanos(self.0.elapsed().as_nanos() as u64)
     }
     fn wall(&self) -> SystemTime {
-        SystemTime::UNIX_EPOCH
+        SystemTime::UNIX_EPOCH + self.0.elapsed()
     }
 
     fn wait_until(&self, at: Ts) -> lk_agents_abi::BoxFuture<'_, ()> {
@@ -191,6 +202,7 @@ impl Clock for TestClock {
 
 pub(super) struct ChannelTransport {
     pub(super) stall_writes: Arc<std::sync::atomic::AtomicBool>,
+    answer_pings: Arc<std::sync::atomic::AtomicBool>,
 
     /// One peer per connection, in dial order.
     pub(super) incoming: Connections,
@@ -202,12 +214,21 @@ pub(super) struct ChannelSink {
     pub(super) stall_writes: Arc<std::sync::atomic::AtomicBool>,
     pub(super) sent: tokio::sync::mpsc::UnboundedSender<protocol::WorkerMessage>,
     pub(super) closed: Arc<std::sync::atomic::AtomicUsize>,
+    peer: tokio::sync::mpsc::WeakUnboundedSender<Result<ServerMessage, TransportError>>,
+    answer_pings: Arc<std::sync::atomic::AtomicBool>,
 }
 #[async_trait]
 impl WorkerSink for ChannelSink {
     async fn send(&self, message: protocol::WorkerMessage) -> Result<(), TransportError> {
         if self.stall_writes.load(std::sync::atomic::Ordering::SeqCst) {
             return std::future::pending().await;
+        }
+        if self.answer_pings.load(std::sync::atomic::Ordering::SeqCst)
+            && let Some(protocol::worker_message::Message::Ping(ping)) = &message.message
+            && let Some(peer) = self.peer.upgrade()
+        {
+            peer.send(Ok(pong_message(ping.timestamp)))
+                .map_err(|e| TransportError::Failed(e.to_string()))?;
         }
         self.sent.send(message).map_err(|e| TransportError::Failed(e.to_string()))
     }
@@ -238,7 +259,7 @@ impl WorkerTransport for ChannelTransport {
         _: Option<&str>,
         _: Vec<(String, String)>,
     ) -> Result<Connected, TransportError> {
-        let incoming = self
+        let (peer, incoming) = self
             .incoming
             .lock()
             .pop_front()
@@ -248,6 +269,8 @@ impl WorkerTransport for ChannelTransport {
                 sent: self.sent.clone(),
                 closed: self.closed.clone(),
                 stall_writes: self.stall_writes.clone(),
+                peer,
+                answer_pings: self.answer_pings.clone(),
             }),
             stream: Box::new(ChannelStream(incoming)),
         })
@@ -255,13 +278,11 @@ impl WorkerTransport for ChannelTransport {
 }
 
 pub(super) type Peer = tokio::sync::mpsc::UnboundedSender<Result<ServerMessage, TransportError>>;
-pub(super) type Connections = Arc<
-    Mutex<
-        std::collections::VecDeque<
-            tokio::sync::mpsc::UnboundedReceiver<Result<ServerMessage, TransportError>>,
-        >,
-    >,
->;
+type ChannelConnection = (
+    tokio::sync::mpsc::WeakUnboundedSender<Result<ServerMessage, TransportError>>,
+    tokio::sync::mpsc::UnboundedReceiver<Result<ServerMessage, TransportError>>,
+);
+pub(super) type Connections = Arc<Mutex<std::collections::VecDeque<ChannelConnection>>>;
 
 /// The load the host reports, its sample count, and a gate it waits on when closed.
 pub(super) struct HostLoad {
@@ -341,6 +362,7 @@ pub(super) struct RuntimeRig {
     pub(super) load: Arc<HostLoad>,
     pub(super) launched: Arc<Mutex<Vec<crate::RunningJobInfo>>>,
     pub(super) stall_writes: Arc<std::sync::atomic::AtomicBool>,
+    answer_pings: Arc<std::sync::atomic::AtomicBool>,
     pub(super) runtime: Worker,
     pub(super) handle: WorkerClient,
     pub(super) peer: tokio::sync::mpsc::UnboundedSender<Result<ServerMessage, TransportError>>,
@@ -363,6 +385,7 @@ pub(super) fn runtime_rig_with_retry(max_retry: u32) -> RuntimeRig {
 
 pub(super) fn runtime_rig_with(max_retry: u32, cfg: WorkerConfig) -> RuntimeRig {
     let stall_writes = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let answer_pings = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let (peer, incoming) = tokio::sync::mpsc::unbounded_channel();
     let (send, sent) = tokio::sync::mpsc::unbounded_channel();
     let (start, started) = tokio::sync::mpsc::unbounded_channel();
@@ -371,12 +394,13 @@ pub(super) fn runtime_rig_with(max_retry: u32, cfg: WorkerConfig) -> RuntimeRig 
     let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let failing_launches = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let connections: Connections = Arc::new(Mutex::new([incoming].into()));
+    let connections: Connections = Arc::new(Mutex::new([(peer.downgrade(), incoming)].into()));
     let load = Arc::new(HostLoad::default());
     let launched = Arc::new(Mutex::new(Vec::new()));
     let (runtime, handle) = Worker::with_components(
         Arc::new(ChannelTransport {
             stall_writes: stall_writes.clone(),
+            answer_pings: answer_pings.clone(),
             incoming: connections.clone(),
             sent: send,
             closed: closed.clone(),
@@ -409,6 +433,7 @@ pub(super) fn runtime_rig_with(max_retry: u32, cfg: WorkerConfig) -> RuntimeRig 
         dropped,
         closed,
         stall_writes,
+        answer_pings,
         failing_launches,
     }
 }
@@ -564,6 +589,161 @@ async fn a_closed_connection_reconnects_and_the_machine_is_told() {
     assert_eq!(told, [false, true, false], "registered, lost, registered again");
 }
 
+#[tokio::test(start_paused = true)]
+async fn an_open_connection_reconnects_when_a_ping_goes_unanswered() {
+    use protocol::worker_message::Message::Ping;
+
+    let RuntimeRig { mut runtime, handle, peer, mut sent, connections, answer_pings, .. } =
+        runtime_rig_with_retry(1);
+    answer_pings.store(false, std::sync::atomic::Ordering::SeqCst);
+    let (next_peer, incoming) = tokio::sync::mpsc::unbounded_channel();
+    connections.lock().push_back((next_peer.downgrade(), incoming));
+    let mut notifications = handle.subscribe();
+    let task = tokio::spawn(async move { runtime.run().await });
+
+    assert!(matches!(
+        sent.recv().await.unwrap().message,
+        Some(protocol::worker_message::Message::Register(_))
+    ));
+    assert!(sent.try_recv().is_err());
+    peer.send(register_message("W-1")).unwrap();
+    assert!(matches!(notifications.recv().await.unwrap(), WorkerNotification::Registered(_)));
+
+    let is_ping = |m: &protocol::WorkerMessage| matches!(m.message, Some(Ping(_)));
+    let Some(Ping(first)) = until_sent(&mut sent, is_ping).await.message else { unreachable!() };
+    peer.send(Ok(pong_message(first.timestamp))).unwrap();
+    let Some(Ping(second)) = until_sent(&mut sent, is_ping).await.message else { unreachable!() };
+    assert_eq!(second.timestamp - first.timestamp, 1000);
+
+    // The old pong must not clear the new deadline. Keep the peer open.
+    peer.send(Ok(pong_message(first.timestamp))).unwrap();
+    let before_deadline = tokio::time::timeout(Duration::from_millis(1999), notifications.recv());
+    assert!(before_deadline.await.is_err());
+    let disconnected =
+        tokio::time::timeout(Duration::from_millis(100), notifications.recv()).await.unwrap();
+    assert_eq!(disconnected.unwrap(), WorkerNotification::Disconnected);
+    assert!(peer.is_closed(), "worker did not drop the first connection");
+
+    next_peer.send(register_message("W-2")).unwrap();
+    let registered =
+        tokio::time::timeout(Duration::from_secs(1), notifications.recv()).await.unwrap().unwrap();
+    assert!(matches!(registered, WorkerNotification::Registered(info) if info.worker_id == "W-2"));
+    until_sent(&mut sent, is_ping).await;
+    handle.send(WorkerCommand::Close).unwrap();
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_queued_ping_gets_its_full_pong_deadline_after_the_write() {
+    use lk_agents_net::clock::RealClock;
+
+    let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
+    let mut outbox = Outbox::new(Duration::from_secs(10), clock.clone());
+    let wire = Arc::new(Mutex::new(Wire::default()));
+    let (release, earlier_write) = tokio::sync::oneshot::channel();
+    let mut connection = ActiveConnection {
+        transport: Connected {
+            sink: Arc::new(Sink(wire.clone())),
+            stream: Box::new(Stream(Default::default())),
+        },
+        registration_deadline: None,
+        heartbeat: Some(Heartbeat::SendPingAt(clock.now())),
+        writing: Some(
+            async move {
+                earlier_write.await.unwrap();
+                Ok(WriteCompletion::Message)
+            }
+            .boxed(),
+        ),
+    };
+
+    assert!(matches!(
+        connection.next_event(&mut outbox, &clock).await,
+        Ok(ConnectionEvent::Progress)
+    ));
+    let event = connection.next_event(&mut outbox, &clock);
+    assert!(tokio::time::timeout(Duration::from_secs(3), event).await.is_err());
+    assert!(wire.lock().sent.is_empty());
+
+    release.send(()).unwrap();
+    assert!(matches!(
+        connection.next_event(&mut outbox, &clock).await,
+        Ok(ConnectionEvent::Progress)
+    ));
+    assert!(matches!(
+        connection.next_event(&mut outbox, &clock).await,
+        Ok(ConnectionEvent::Progress)
+    ));
+    assert!(matches!(
+        wire.lock().sent[0].message,
+        Some(protocol::worker_message::Message::Ping(_))
+    ));
+
+    let event = connection.next_event(&mut outbox, &clock);
+    assert!(tokio::time::timeout(Duration::from_millis(1999), event).await.is_err());
+    let event = connection.next_event(&mut outbox, &clock);
+    let result = tokio::time::timeout(Duration::from_millis(100), event).await.unwrap();
+    assert!(
+        matches!(result, Err(RuntimeError::Connection(TransportError::Failed(reason))) if reason.contains("waiting for LiveKit pong"))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_ready_matching_pong_wins_at_the_deadline() {
+    use lk_agents_net::clock::RealClock;
+
+    let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
+    let mut outbox = Outbox::new(Duration::from_secs(10), clock.clone());
+    let timestamp = 1234;
+    let mut connection = ActiveConnection {
+        transport: Connected {
+            sink: Arc::new(Sink(Arc::new(Mutex::new(Wire::default())))),
+            stream: Box::new(Stream([Ok(pong_message(timestamp))].into())),
+        },
+        registration_deadline: None,
+        heartbeat: Some(Heartbeat::AwaitingPong { timestamp, sent_at: clock.now() }),
+        writing: None,
+    };
+    tokio::time::advance(Duration::from_secs(2)).await;
+
+    let event = connection.next_event(&mut outbox, &clock).await;
+    assert!(matches!(event, Ok(ConnectionEvent::ServerMessage(_))));
+    assert!(matches!(connection.heartbeat, Some(Heartbeat::SendPingAt(_))));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pong_received_before_the_write_completes_is_kept() {
+    use lk_agents_net::clock::RealClock;
+
+    let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
+    let mut outbox = Outbox::new(Duration::from_secs(10), clock.clone());
+    let timestamp = 1234;
+    let (release, write) = tokio::sync::oneshot::channel();
+    let mut connection = ActiveConnection {
+        transport: Connected {
+            sink: Arc::new(Sink(Arc::new(Mutex::new(Wire::default())))),
+            stream: Box::new(Stream([Ok(pong_message(timestamp))].into())),
+        },
+        registration_deadline: None,
+        heartbeat: Some(Heartbeat::SendingPing { timestamp, pong_received: false }),
+        writing: Some(
+            async move {
+                write.await.unwrap();
+                Ok(WriteCompletion::Ping)
+            }
+            .boxed(),
+        ),
+    };
+
+    let event = connection.next_event(&mut outbox, &clock).await;
+    assert!(matches!(event, Ok(ConnectionEvent::ServerMessage(_))));
+    release.send(()).unwrap();
+
+    let event = connection.next_event(&mut outbox, &clock).await;
+    assert!(matches!(event, Ok(ConnectionEvent::Progress)));
+    assert!(matches!(connection.heartbeat, Some(Heartbeat::SendPingAt(_))));
+}
+
 // Catches: the reconnect budget spent over the worker's lifetime instead of per outage (the
 // reference resets it on each connect): with `max_retry = 1`, an outage after a recovered one
 // still gets its retry.
@@ -581,7 +761,7 @@ async fn a_connection_restores_the_retry_budget() {
         ],
         1,
     );
-    let _ = tokio::time::timeout(Duration::from_secs(30), c.run()).await;
+    let _ = tokio::time::timeout(Duration::from_millis(50), c.run()).await;
     assert_eq!(wire.lock().attempts, 3);
     assert_eq!(c.snapshot_now().worker_id, "W-2", "gave up after the second outage");
 }
@@ -879,8 +1059,12 @@ async fn an_unanswered_webtransport_dial_fails_startup_with_the_reason() {
 async fn dropping_command_handles_does_not_starve_registration_deadlines() {
     let RuntimeRig { mut runtime, handle, peer: _peer, sent: _sent, closed, .. } = runtime_rig();
     drop(handle);
-    let result = tokio::time::timeout(Duration::from_secs(11), runtime.run()).await.unwrap();
-    assert!(matches!(result, Err(RuntimeError::RetriesExhausted { retries: 0, .. })));
+    let started = tokio::time::Instant::now();
+    let error =
+        tokio::time::timeout(Duration::from_secs(11), runtime.run()).await.unwrap().unwrap_err();
+    assert!(matches!(error, RuntimeError::RetriesExhausted { retries: 0, .. }));
+    assert!(error.to_string().contains("registration timed out"));
+    assert!(started.elapsed() >= Duration::from_secs(10));
     assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
@@ -912,6 +1096,7 @@ async fn dropping_runtime_notifies_waiters_and_closes_command_queue() {
 async fn a_stalled_write_after_registration_expires_and_closes_the_connection() {
     let RuntimeRig { mut runtime, handle, peer, sent: _sent, closed, stall_writes, .. } =
         runtime_rig();
+    runtime.runtime_cfg.connection_timeout = Duration::from_secs(1);
     let mut notifications = handle.subscribe();
     peer.send(register_message("worker")).unwrap();
     let task = tokio::spawn(async move { runtime.run().await });
