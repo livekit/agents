@@ -62,7 +62,8 @@ async def entrypoint(ctx: JobContext):
         tts=cartesia.TTS(model="YOUR_TTS_MODEL", voice="YOUR_VOICE_ID", language="ar"),
         turn_handling=TurnHandlingOptions(turn_detection="stt"),
     )
-    backchannels = nabrah.BackchannelController(recognizer, session, text="ممم")
+    # Optional: short context-aware acknowledgments ("أيوه", "تمام") while the user talks.
+    backchannels = nabrah.BackchannelController(recognizer, session)
 
     async def cleanup() -> None:
         backchannels.close()
@@ -97,8 +98,47 @@ Options of `STTConv`. `None` means the server default.
 `STTConv` sends 16 kHz mono PCM16 in 20 ms packets. The model processes 80 ms
 frames. Transcript timing uses `audio_processed`; preflight uses the latest
 `turn.frames[].p_end`. LiveKit must enable preemptive generation to use
-preflight for early replies. Finals close the turn; custom `end_of_turn` and
-`backchannel` events are also emitted.
+preflight for early replies. Finals close the turn. The STT also emits two custom
+events: `backchannel` with `{"text": <the user's turn so far>}` and `end_of_turn`
+with `{"text": <the final transcript>}`.
+
+### Backchannels
+
+`BackchannelController` turns the server's `backchannel` events into short spoken
+acknowledgments. On each event the LLM writes one or two words for the user's turn so
+far (e.g. "أيوه", "تمام", "صح"), so they fit the context instead of a fixed phrase.
+
+- Spoken with `session.say(..., allow_interruptions=True, add_to_chat_ctx=False)`: the
+  user's next words cut it off, it never commits a user turn, and it never enters the
+  chat history.
+- The user's end of turn cancels a backchannel still being generated or playing.
+- It stays silent when interruptions are disabled for the session or the agent (an
+  uninterruptible backchannel would replace the user's audio with silence for STT), when
+  the agent isn't listening, when the LLM is slower than `timeout`, or within `cooldown`
+  of the last backchannel.
+
+Each backchannel is one LLM request. Pass a small, fast model so it fits in `timeout`
+and keeps cost down:
+
+```python
+backchannels = nabrah.BackchannelController(
+    recognizer,
+    session,
+    llm=google.LLM(model="YOUR_FAST_LLM_MODEL"),
+    cooldown=3.0,
+    timeout=1.0,
+)
+```
+
+Call `backchannels.close()` on shutdown to unsubscribe from the STT events.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `llm` | `session.llm` | Model for the words; a small, fast model is best. |
+| `instructions` | built-in | System prompt for the words. |
+| `cooldown` | `3.0` | Minimum seconds between backchannels. |
+| `timeout` | `1.0` | Skip the backchannel if the LLM takes longer (seconds). |
+| `max_words` | `2` | Words kept from the LLM reply. |
 
 ## Legacy (`eot_nabrah`, `nabrah_stt_v1`)
 

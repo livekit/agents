@@ -110,7 +110,7 @@ class STTConv(stt.STT):
     is used (eot_threshold 0.915, eot_debounce 2, min_speech_ms 350, bc_threshold 0.4,
     bc_debounce 2, bc_refractory_ms 1200). The server rejects wrong types and non-finite
     values (not retried) but imposes no range limits.
-    Emits custom events: "backchannel" {} and "end_of_turn" {"text"}.
+    Emits custom events: "backchannel" {"text": turn so far} and "end_of_turn" {"text"}.
 
     preflight_threshold: send PREFLIGHT_TRANSCRIPT (the turn so far) once the server's end-of-turn
     probability reaches this, before the turn really ends at eot_threshold. LiveKit uses it to
@@ -394,7 +394,7 @@ class SpeechStreamConv(stt.RecognizeStream):
                 if m.get("type") == "transcript":
                     on_transcript(m)
                 elif m.get("type") == "backchannel":
-                    self._stt.emit("backchannel", {})
+                    self._stt.emit("backchannel", {"text": last_interim})
                 elif m.get("type") == "error":
                     raise _server_error(m.get("message") or "Unknown server error")
             if ws.close_code not in (None, aiohttp.WSCloseCode.OK):

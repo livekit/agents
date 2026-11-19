@@ -178,3 +178,9 @@ docs/
 
 # Examples for development
 examples/dev/*
+
+# added by backup_repos.py
+.env.*
+!.env.example
+.venv/
+node_modules/
