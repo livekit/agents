@@ -1048,6 +1048,21 @@ def _participant_token_ctx(worker: _TokenWorker) -> JobContext:
 
 
 @pytest.mark.no_concurrent  # patches os.environ
+async def test_job_api_signs_with_the_key_when_a_worker_token_is_also_set() -> None:
+    """Key mode with LIVEKIT_TOKEN in the environment: ctx.api must not send that token."""
+    ctx = _participant_token_ctx(_TokenWorker())
+    with (
+        patch.dict(os.environ, {**_KEY_MODE_ENV, "LIVEKIT_TOKEN": "worker-token"}),
+        patch.dict(os.environ, {"LIVEKIT_URL": "http://localhost:7880"}),
+        patch("livekit.agents.job.http_context.http_session", return_value=MagicMock()),
+    ):
+        room = ctx.api.room
+
+    assert getattr(room, "_token", None) is None
+    assert room.api_key == "devkey"
+
+
+@pytest.mark.no_concurrent  # patches os.environ
 async def test_participant_token_is_signed_with_the_worker_credentials() -> None:
     worker = _TokenWorker()
     ctx = _participant_token_ctx(worker)

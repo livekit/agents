@@ -712,8 +712,10 @@ _job_token_sources: dict[str, Callable[[], str | None]] = {}
 def _set_job_token_source(job_id: str, source: Callable[[], str | None]) -> None:
     # a job that ended is not removed: its token serves the last exports. Drop it here,
     # once the token has expired
-    for ended in [j for j, s in _job_token_sources.items() if s() is None]:
-        del _job_token_sources[ended]
+    # jobs in threads call this at the same time: iterate a copy
+    for ended, ended_source in list(_job_token_sources.items()):
+        if ended_source() is None:
+            _job_token_sources.pop(ended, None)
     _job_token_sources[job_id] = source
 
 

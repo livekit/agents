@@ -1952,3 +1952,21 @@ def test_telemetry_token_comes_from_a_job_that_still_has_one(
 
     traces._set_job_token_source("AJ_c", lambda: "token-c")
     assert list(traces._job_token_sources) == ["AJ_a", "AJ_c"]
+
+
+def test_telemetry_token_source_is_set_while_another_job_sets_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Jobs in threads register at the same time: a source added during another job's
+    registration must not make that one fail."""
+    from livekit.agents.telemetry import traces
+
+    monkeypatch.setattr(traces, "_job_token_sources", {})
+
+    def _source_a() -> str:
+        traces._job_token_sources.setdefault("AJ_c", lambda: "token-c")  # the other thread
+        return "token-a"
+
+    traces._set_job_token_source("AJ_a", _source_a)
+    traces._set_job_token_source("AJ_b", lambda: "token-b")
+    assert list(traces._job_token_sources) == ["AJ_a", "AJ_c", "AJ_b"]

@@ -529,7 +529,12 @@ class JobContext:
                 session=http_context.http_session(),
             )
 
-        return api.LiveKitAPI(session=http_context.http_session())
+        # given here: without them LiveKitAPI prefers a LIVEKIT_TOKEN in the environment
+        return api.LiveKitAPI(
+            api_key=os.environ.get("LIVEKIT_API_KEY"),
+            api_secret=os.environ.get("LIVEKIT_API_SECRET"),
+            session=http_context.http_session(),
+        )
 
     async def create_participant_token(
         self,
