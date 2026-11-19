@@ -58,8 +58,10 @@ DEFAULT_SESSION_TTL = timedelta(hours=24) - timedelta(minutes=5)
 # across the whole session, so the token has to outlive the call too.
 DEFAULT_LIVEKIT_TOKEN_TTL = timedelta(hours=24)
 LIVEKIT_AVATAR_PUBLISH_SOURCES = ["camera", "microphone"]
-# server capability: it can hold playback (pause/resume) while it keeps ingesting audio
+# server capabilities: it can hold playback (pause/resume) while it keeps ingesting audio,
+# and it reports each request's playback state with its played position
 PLAYBACK_CONTROL_CAPABILITY = "playback_control"
+PLAYBACK_STATE_CAPABILITY = "playback_state"
 
 PROVIDER_RECONNECT_DELAYS_SECONDS = (0.0, 0.5, 1.0)
 PROVIDER_CONNECT_TIMEOUT_SECONDS = 15.0
@@ -121,28 +123,22 @@ class _Reply:
     pushed: float = 0.0
     input_done: bool = False
     started_at: float | None = None
-    # time the server held playback (paused); it isn't played time
-    held: float = 0.0
+    # the last played position the server reported (start counts as 0), when, and
+    # whether playback was held then; the position runs on from it while playing
+    played_at_report: float = 0.0
+    reported_at: float | None = None
+    held: bool = False
     finished: bool = False
     completion_task: asyncio.Task[None] | None = None
 
-    def _held(self, now: float, hold_started_at: float | None) -> float:
-        assert self.started_at is not None
-        held = self.held
-        if hold_started_at is not None:
-            held += max(0.0, now - max(hold_started_at, self.started_at))
-        return held
+    def report(self, played: float, now: float, *, held: bool) -> None:
+        self.played_at_report, self.reported_at, self.held = played, now, held
 
-    def played(self, now: float, hold_started_at: float | None) -> float:
-        if self.started_at is None:
+    def played(self, now: float) -> float:
+        if self.reported_at is None:
             return 0.0
-        played = now - self.started_at - self._held(now, hold_started_at)
+        played = self.played_at_report + (0.0 if self.held else now - self.reported_at)
         return min(self.pushed, max(0.0, played))
-
-    def expected_end(self, now: float, hold_started_at: float | None) -> float:
-        """When the reply finishes playing, given the pauses so far."""
-        assert self.started_at is not None
-        return self.started_at + self._held(now, hold_started_at) + self.pushed
 
 
 class AvatarSession(BaseAvatarSession):
@@ -249,7 +245,6 @@ class AvatarSession(BaseAvatarSession):
         # pause: what the framework asked for, and whether the server holds playback
         self._paused = False
         self._server_holding = False
-        self._hold_started_at: float | None = None
 
     @property
     def avatar_identity(self) -> str:
@@ -463,7 +458,10 @@ class AvatarSession(BaseAvatarSession):
         except BaseException:
             await self._close_quietly(provider, generation)
             raise
-        self._playback_control = PLAYBACK_CONTROL_CAPABILITY in provider.capabilities
+        # pause needs the played position too: time held isn't time played
+        self._playback_control = {PLAYBACK_CONTROL_CAPABILITY, PLAYBACK_STATE_CAPABILITY} <= set(
+            provider.capabilities
+        )
         self._provider = provider
 
     async def _connect_with_retries(self) -> int:
@@ -755,7 +753,7 @@ class AvatarSession(BaseAvatarSession):
                 await provider.resume()
             except Exception as e:
                 logger.warning("Failed to resume SpatialReal avatar playback", exc_info=e)
-            self._release_hold()
+            self._set_held(False)
             logger.debug(
                 "SpatialReal avatar playback resumed (server-side)",
                 extra={"request_id": self._latest_req_id()},
@@ -767,21 +765,19 @@ class AvatarSession(BaseAvatarSession):
         except Exception as e:
             logger.warning("Failed to pause SpatialReal avatar playback", exc_info=e)
             return
-        self._server_holding = True
-        self._hold_started_at = time.time()
+        self._set_held(True)
         logger.debug(
             "SpatialReal avatar playback paused (server-side)",
             extra={"request_id": self._latest_req_id()},
         )
 
-    def _release_hold(self) -> None:
-        if self._hold_started_at is not None:
-            now = time.time()
-            for reply in self._replies:
-                if reply.started_at is not None:
-                    reply.held += now - max(self._hold_started_at, reply.started_at)
-        self._server_holding = False
-        self._hold_started_at = None
+    def _set_held(self, held: bool) -> None:
+        # the server's reply refines the position; until then it runs on from here
+        self._server_holding = held
+        now = time.time()
+        for reply in self._replies:
+            if reply.reported_at is not None:
+                reply.report(reply.played(now), now, held=held)
 
     # --- server events ------------------------------------------------------------------
 
@@ -806,23 +802,30 @@ class AvatarSession(BaseAvatarSession):
             self._finish(reply, interrupted=False, reason="provider_end")
 
     def _on_playback_state(self, event: PlaybackStateEvent, generation: int) -> None:
-        # PLAYING/PAUSED/ENDED arrive through the playback signal; the one thing it can't
-        # express is the server giving up on a held pause
-        if (
-            generation != self._generation
-            or event.state != PlaybackState.INTERRUPTED
-            or event.reason != InterruptReason.PAUSE_TIMEOUT
-        ):
+        # start and end arrive through the playback signal; this gives the played position,
+        # and tells when the server gave up on a held pause
+        if generation != self._generation:
             return
         reply = self._reply_for(event.req_id)
         if reply is None:
+            return
+        if event.state in (PlaybackState.PLAYING, PlaybackState.PAUSED):
+            reply.report(
+                event.played_ms / 1000, time.time(), held=event.state == PlaybackState.PAUSED
+            )
+            return
+        if (
+            event.state != PlaybackState.INTERRUPTED
+            or event.reason != InterruptReason.PAUSE_TIMEOUT
+        ):
             return
         logger.warning(
             "SpatialReal avatar pause timed out on the server; finishing the reply",
             extra={"request_id": event.req_id, "played_ms": event.played_ms},
         )
+        reply.report(event.played_ms / 1000, time.time(), held=True)
         self._paused = False
-        self._release_hold()
+        self._server_holding = False
         if reply is self._input:
             self._input = None
             self._drop_until_segment_end = True
@@ -838,6 +841,8 @@ class AvatarSession(BaseAvatarSession):
         if reply.started_at is not None:
             return
         reply.started_at = time.time()
+        if reply.reported_at is None:
+            reply.report(0.0, reply.started_at, held=False)
         if self._audio_buffer is not None:
             self._audio_buffer.notify_playback_started()
         logger.debug(
@@ -861,11 +866,7 @@ class AvatarSession(BaseAvatarSession):
         if reply.finished:
             return
         reply.finished = True
-        # before the hold is released below: time still held is not played time
-        if interrupted:
-            position = reply.played(time.time(), self._hold_started_at)
-        else:
-            position = reply.pushed
+        position = reply.played(time.time()) if interrupted else reply.pushed
         if reply in self._replies:
             self._replies.remove(reply)
         if self._input is reply:
@@ -875,7 +876,7 @@ class AvatarSession(BaseAvatarSession):
         if task is not None and task is not asyncio.current_task():
             task.cancel()
         if not self._replies:
-            self._release_hold()
+            self._server_holding = False
 
         logger.debug(
             "SpatialReal avatar segment playback completed",
@@ -901,7 +902,7 @@ class AvatarSession(BaseAvatarSession):
             self._drop_until_segment_end = True
         for reply in list(self._replies):
             self._finish(reply, interrupted=True, reason=reason)
-        self._release_hold()
+        self._server_holding = False
 
     def _arm_completion_fallback(self, reply: _Reply) -> None:
         if reply.completion_task is not None:
@@ -914,19 +915,19 @@ class AvatarSession(BaseAvatarSession):
         armed_at = time.time()
         while not reply.finished:
             now = time.time()
-            if reply.started_at is None:
+            if reply.held or self._server_holding:
+                # time held by a pause isn't playback: wait it out
+                await asyncio.sleep(COMPLETION_MARGIN_SECONDS)
+                continue
+            if reply.reported_at is None:
                 deadline = armed_at + reply.pushed + START_ALLOWANCE_SECONDS
             else:
-                # when the reply should have played out; a pause moves it later, so it
+                # when the rest should have played out; each server report moves it, so it
                 # is worked out again on every wake-up
-                deadline = reply.expected_end(now, self._hold_started_at)
+                deadline = reply.reported_at + reply.pushed - reply.played_at_report
             deadline += COMPLETION_MARGIN_SECONDS
             if now < deadline:
                 await asyncio.sleep(deadline - now)
-                continue
-            if self._server_holding:
-                # time held by a pause isn't playback: wait it out
-                await asyncio.sleep(COMPLETION_MARGIN_SECONDS)
                 continue
             logger.warning(
                 "SpatialReal reported no end of playback; finishing the reply",
