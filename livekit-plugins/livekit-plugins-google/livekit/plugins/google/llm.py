@@ -68,7 +68,8 @@ def _supports_thinking_level(model: str) -> bool:
 
 def _supports_xhigh_thinking(model: str) -> bool:
     """Check if model accepts thinking_level "xhigh", its maximum reasoning depth"""
-    return "gemini-4-hydrogen" in model.lower()
+    model = model.lower()
+    return "gemini-4-hydrogen" in model or "gemini-4-neon" in model
 
 
 def _validate_thinking_level(model: str, level: str | types.ThinkingLevel | None) -> None:
