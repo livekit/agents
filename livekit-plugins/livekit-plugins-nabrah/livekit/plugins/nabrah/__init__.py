@@ -17,7 +17,6 @@
 from livekit.agents import Plugin
 
 from ._factory import STT, NabrahRecognitionModel
-from .backchannel import BackchannelController
 from .log import logger
 from .stt import SpeechStream
 from .stt_conv import SpeechStreamConv, STTConv
@@ -37,6 +36,5 @@ __all__ = [
     "SpeechStream",
     "STTConv",
     "SpeechStreamConv",
-    "BackchannelController",
     "__version__",
 ]

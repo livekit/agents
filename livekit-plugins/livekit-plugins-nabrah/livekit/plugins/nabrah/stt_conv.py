@@ -20,7 +20,7 @@ This plugin only maps the WebSocket messages to LiveKit speech events:
     partial with words in the current turn  -> START_OF_SPEECH (once), INTERIM_TRANSCRIPT
     partial with p_end >= preflight          -> PREFLIGHT_TRANSCRIPT (once per text; for preemptive generation)
     final (end of turn)                      -> FINAL_TRANSCRIPT, END_OF_SPEECH, RECOGNITION_USAGE
-    {"type": "backchannel"}                  -> "backchannel" event on the STT (see BackchannelController)
+    {"type": "backchannel"}                  -> "backchannel" event on the STT (the app decides what to do)
 
 Use with `turn_detection="stt"` and no VAD: the server owns the turn.
 

@@ -31,7 +31,7 @@ the original `STT` retains its production language handling, defaulting to
 
 ## Conversational (`nabrah_stt_conv`)
 
-The server decides when a turn ends and when to backchannel. Use
+The server decides when a turn ends. Use
 `turn_detection="stt"` and no VAD. The wire/metrics model name is `nabrah_stt_conv_v1`.
 
 ```python
@@ -62,14 +62,6 @@ async def entrypoint(ctx: JobContext):
         tts=cartesia.TTS(model="YOUR_TTS_MODEL", voice="YOUR_VOICE_ID", language="ar"),
         turn_handling=TurnHandlingOptions(turn_detection="stt"),
     )
-    # Optional: short context-aware acknowledgments ("أيوه", "تمام") while the user talks.
-    backchannels = nabrah.BackchannelController(recognizer, session)
-
-    async def cleanup() -> None:
-        backchannels.close()
-
-    ctx.add_shutdown_callback(cleanup)
-
     await session.start(
         agent=Agent(instructions="You are a helpful voice assistant."),
         room=ctx.room,
@@ -88,57 +80,15 @@ Options of `STTConv`. `None` means the server default.
 | `api_key` | `NABRAH_API_KEY` | API key (`NABRAH_STT_V2_API_KEY` also works). |
 | `eot_threshold` | `None` (0.915) | End-of-turn probability. |
 | `eot_debounce` | `None` (2) | Consecutive 80 ms frames above the threshold. |
-| `min_speech_ms` | `None` (350) | Speech needed before a turn end or backchannel. |
-| `bc_threshold` | `None` (0.4) | Backchannel probability. |
-| `bc_debounce` | `None` (2) | Consecutive frames above the backchannel threshold. |
-| `bc_refractory_ms` | `None` (1200) | Minimum time between backchannels. |
+| `min_speech_ms` | `None` (350) | Speech needed before a turn end. |
 | `no_text_reset_s` | `None` | Seconds without new words before the turn state resets (0 disables). |
 | `preflight_threshold` | `0.5` | Probability that sends an early transcript for preemptive generation; `None` disables. |
 
 `STTConv` sends 16 kHz mono PCM16 in 20 ms packets. The model processes 80 ms
 frames. Transcript timing uses `audio_processed`; preflight uses the latest
 `turn.frames[].p_end`. LiveKit must enable preemptive generation to use
-preflight for early replies. Finals close the turn. The STT also emits two custom
-events: `backchannel` with `{"text": <the user's turn so far>}` and `end_of_turn`
-with `{"text": <the final transcript>}`.
-
-### Backchannels
-
-`BackchannelController` turns the server's `backchannel` events into short spoken
-acknowledgments. On each event the LLM writes one or two words for the user's turn so
-far (e.g. "أيوه", "تمام", "صح"), so they fit the context instead of a fixed phrase.
-
-- Spoken with `session.say(..., allow_interruptions=True, add_to_chat_ctx=False)`: the
-  user's next words cut it off, it never commits a user turn, and it never enters the
-  chat history.
-- The user's end of turn cancels a backchannel still being generated or playing.
-- It stays silent when interruptions are disabled for the session or the agent (an
-  uninterruptible backchannel would replace the user's audio with silence for STT), when
-  the agent isn't listening, when the LLM is slower than `timeout`, or within `cooldown`
-  of the last backchannel.
-
-Each backchannel is one LLM request. Pass a small, fast model so it fits in `timeout`
-and keeps cost down:
-
-```python
-backchannels = nabrah.BackchannelController(
-    recognizer,
-    session,
-    llm=google.LLM(model="YOUR_FAST_LLM_MODEL"),
-    cooldown=3.0,
-    timeout=1.0,
-)
-```
-
-Call `backchannels.close()` on shutdown to unsubscribe from the STT events.
-
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `llm` | `session.llm` | Model for the words; a small, fast model is best. |
-| `instructions` | built-in | System prompt for the words. |
-| `cooldown` | `3.0` | Minimum seconds between backchannels. |
-| `timeout` | `1.0` | Skip the backchannel if the LLM takes longer (seconds). |
-| `max_words` | `2` | Words kept from the LLM reply. |
+preflight for early replies. Finals close the turn; the STT also emits a custom
+`end_of_turn` event with `{"text": <the final transcript>}`.
 
 ## Legacy (`eot_nabrah`, `nabrah_stt_v1`)
 
