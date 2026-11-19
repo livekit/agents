@@ -97,3 +97,8 @@ def test_the_hand_off_is_recorded():
     from flows.bank import CONTRACT
 
     assert "transfer_to_human" in CONTRACT.rules["end_call"].after_any
+
+
+async def test_a_task_can_undo_its_own_write():
+    task = WriteTask(FLOWS["block_card"], CallState())
+    assert "unblock_card" in _names(task.tools)

@@ -110,7 +110,7 @@ def test_a_replacement_needs_a_blocked_card_now_not_a_block_in_this_call():
 
     bank = FakeBank.seeded()
     card = bank.card("c_1", "4421")
-    ctx = SimpleNamespace(userdata=SimpleNamespace(bank=bank))
+    ctx = SimpleNamespace(userdata=SimpleNamespace(bank=bank, customer_id="c_1"))
     with pytest.raises(ToolError):
         asyncio.run(order_replacement(ctx, card.id))
     with pytest.raises(ToolError):
@@ -119,3 +119,22 @@ def test_a_replacement_needs_a_blocked_card_now_not_a_block_in_this_call():
     assert json.loads(asyncio.run(order_replacement(ctx, card.id)))["card_id"] == card.id
     assert CONTRACT.rules["order_replacement"].after == []
     assert CONTRACT.rules["unblock_card"].after == []
+
+
+def test_reads_use_the_verified_customer_not_an_argument():
+    import asyncio
+    import inspect
+    from types import SimpleNamespace
+
+    from flows.bank import get_accounts, get_card, verify_identity
+
+    from livekit.agents import ToolError
+
+    assert "customer_id" not in inspect.signature(get_accounts).parameters
+    assert "customer_id" not in inspect.signature(get_card).parameters
+    ctx = SimpleNamespace(userdata=SimpleNamespace(bank=FakeBank.seeded(), customer_id=None))
+    with pytest.raises(ToolError):
+        asyncio.run(get_accounts(ctx))
+    asyncio.run(verify_identity(ctx, "4155550123", "1980-04-02"))
+    assert ctx.userdata.customer_id == "c_1"
+    assert json.loads(asyncio.run(get_card(ctx, "4421")))["last_four"] == "4421"

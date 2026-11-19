@@ -33,7 +33,7 @@ Each practice is a mechanism in code, not a line in the prompt. The prompt stays
 | `undo` | The tool that takes this write back. | `block_card` is undone by `unblock_card`. |
 | `requires_closing_question` | The agent must have asked a question, and the call must quote the caller's answer. | `end_call`. |
 
-`Contract.guarded` wraps each tool. Before the call, it checks the rule and returns a short `NOT DONE` reason when the call is out of order. The model reads the reason and corrects itself on the next step. A repeated write returns `ALREADY DONE` instead of running twice, unless a tool it depends on replied again since. For example, a second transfer of the same amount needs a second `transfer_check`.
+`Contract.guarded` wraps each tool and names the arguments from the tool's signature, because LiveKit passes them positionally. Before the call, it checks the rule and returns a short `NOT DONE` reason when the call is out of order. The model reads the reason and corrects itself on the next step. A repeated write returns `ALREADY DONE` instead of running twice, unless a tool it depends on replied again since. For example, a second transfer of the same amount needs a second `transfer_check`.
 
 Use `after` only for an order that must hold inside one call, such as verifying the caller first. A rule about the world, such as "only a blocked card can be replaced", belongs in the tool, which reads the current state. Then a card blocked on an earlier call can still be unblocked or replaced.
 
@@ -41,9 +41,11 @@ Use `after` only for an order that must hold inside one call, such as verifying 
 
 After a read, `Contract.narrate` appends which later tool uses each value, for example `(card_id for block_card: card_4421)`. After a write, it says that the write is done and which tool takes it back. The model does not need to guess an identifier or repeat a write to be sure.
 
+Values that the session already knows are not model arguments. After `verify_identity` succeeds, the verified customer is stored in the session's user data, and every read uses it. A model that must copy an identifier across a task boundary can invent one, and an invented customer identifier is also an authorization hole.
+
 ### 3. One task per write
 
-Each write flow (block, unblock, dispute, transfer, travel notice) runs as its own `AgentTask` with only the tools that flow needs. The parent agent starts a flow through a `start_<flow>` tool. The task stays open after a write, so the caller can add to the same request, for example a replacement after a block. The model calls `finish_request` when the caller is done with the request, and the task refuses to finish until one of its writes succeeded. The model calls `end_request` when the caller drops the request. Small tool sets keep a smaller model from reaching for the wrong tool.
+Each write flow (block, unblock, dispute, transfer, travel notice) runs as its own `AgentTask` with only the tools that flow needs. The parent agent starts a flow through a `start_<flow>` tool. The task stays open after a write, so the caller can add to the same request, for example a replacement after a block. The model calls `finish_request` when the caller is done with the request, and the task refuses to finish until one of its writes succeeded. The model calls `end_request` when the caller drops the request. Each task also gets the undo tool of each of its writes, so a caller who changes their mind right after a block is served in the same task. Small tool sets keep a smaller model from reaching for the wrong tool.
 
 ### 4. Digits are read back from the transcript, not from memory
 

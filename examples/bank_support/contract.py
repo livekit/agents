@@ -299,15 +299,18 @@ class Contract:
         """
         name = fn.__name__
         contract = self
+        signature = inspect.signature(fn)
 
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            ctx = next((a for a in args if isinstance(a, RunContext)), None)
-            if ctx is None:
-                ctx = kwargs.get("ctx")
+            # LiveKit binds a tool call's arguments positionally, so name them from the
+            # signature before checking; the RunContext is not a model argument.
+            bound = signature.bind(*args, **kwargs)
+            ctx = next(v for v in bound.arguments.values() if isinstance(v, RunContext))
+            arguments = {k: v for k, v in bound.arguments.items() if v is not ctx}
             state: CallState = ctx.userdata.state
             history = _history(ctx)
-            refusal = contract.check(name, kwargs, state, history)
+            refusal = contract.check(name, arguments, state, history)
             if refusal is not None:
                 logger.info("%s refused: %s", name, refusal[:120])
                 return refusal
@@ -315,15 +318,15 @@ class Contract:
             try:
                 result = await fn(*args, **kwargs)
             except ToolError as exc:
-                state.record(name, kwargs, str(exc), ok=False)
+                state.record(name, arguments, str(exc), ok=False)
                 raise
             finally:
                 fillers.cancel()
             text = result if isinstance(result, str) else json.dumps(result)
-            state.record(name, kwargs, text)
-            return contract.narrate(name, kwargs, text)
+            state.record(name, arguments, text)
+            return contract.narrate(name, arguments, text)
 
-        wrapper.__signature__ = inspect.signature(fn)  # type: ignore[attr-defined]
+        wrapper.__signature__ = signature  # type: ignore[attr-defined]
         return wrapper
 
 

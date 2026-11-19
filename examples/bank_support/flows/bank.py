@@ -162,6 +162,15 @@ def _bank(ctx: RunContext) -> FakeBank:
     return ctx.userdata.bank
 
 
+def _customer_id(ctx: RunContext) -> str:
+    """The verified caller. Identity is session state, never a model argument: a model
+    asked to carry an id across a task boundary may invent one."""
+    customer_id = ctx.userdata.customer_id
+    if customer_id is None:
+        raise ToolError("The caller is not verified yet. Call verify_identity first.")
+    return customer_id
+
+
 async def verify_identity(ctx: RunContext, phone: str, date_of_birth: str) -> str:
     """Verify the caller against the account holder on file. Call this before anything else.
 
@@ -174,16 +183,13 @@ async def verify_identity(ctx: RunContext, phone: str, date_of_birth: str) -> st
         raise ToolError(
             f"No account holder matches phone {phone} and date of birth {date_of_birth}. Read both back to the caller and ask them to repeat."
         )
-    return json.dumps({"customer_id": customer.id, "name": customer.name})
+    ctx.userdata.customer_id = customer.id
+    return json.dumps({"name": customer.name})
 
 
-async def get_accounts(ctx: RunContext, customer_id: str) -> str:
-    """The verified customer's accounts with their type, last four digits and balance.
-
-    Args:
-        customer_id: The customer id from verify_identity.
-    """
-    accounts = _bank(ctx).accounts(customer_id)
+async def get_accounts(ctx: RunContext) -> str:
+    """The verified caller's accounts with their type, last four digits and balance."""
+    accounts = _bank(ctx).accounts(_customer_id(ctx))
     return json.dumps(
         {
             "accounts": [
@@ -194,14 +200,13 @@ async def get_accounts(ctx: RunContext, customer_id: str) -> str:
     )
 
 
-async def get_card(ctx: RunContext, customer_id: str, last_four: str) -> str:
-    """The card ending in the four digits the caller gives.
+async def get_card(ctx: RunContext, last_four: str) -> str:
+    """The verified caller's card ending in the four digits they give.
 
     Args:
-        customer_id: The customer id from verify_identity.
         last_four: The last four digits of the card number.
     """
-    card = _bank(ctx).card(customer_id, last_four)
+    card = _bank(ctx).card(_customer_id(ctx), last_four)
     if card is None:
         raise ToolError(
             f"No card ending in {last_four} on this customer. Read the four digits back and ask again."

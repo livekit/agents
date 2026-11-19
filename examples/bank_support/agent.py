@@ -84,6 +84,7 @@ DIGIT_KEYTERMS = [
 class Userdata:
     bank: FakeBank
     state: CallState = field(default_factory=CallState)
+    customer_id: str | None = None  # set by verify_identity
 
 
 def annotate_user_turn(state: CallState, message: ChatMessage) -> None:
@@ -105,6 +106,17 @@ def _guarded_tools(names: list[str]) -> list[FunctionTool]:
     return [function_tool(CONTRACT.guarded(TOOLS[name])) for name in names]
 
 
+def _with_undo_tools(names: list[str]) -> list[str]:
+    """The flow's tools plus the undo tool of each write, so a caller who changes their
+    mind right after a write is served in the same task."""
+    out = list(names)
+    for name in names:
+        undo = CONTRACT.rules[name].undo if name in CONTRACT.rules else None
+        if undo and undo not in out:
+            out.append(undo)
+    return out
+
+
 class WriteTask(AgentTask[dict[str, Any]]):
     """One unit of work: its own instructions, only its tools, and the call's records.
 
@@ -120,7 +132,7 @@ class WriteTask(AgentTask[dict[str, Any]]):
             instructions=flow.instructions
             + " When the caller has nothing more for this request, call finish_request.",
             tools=[
-                *_guarded_tools(flow.tools),
+                *_guarded_tools(_with_undo_tools(flow.tools)),
                 self._finish_request_tool(),
                 self._end_request_tool(),
             ],

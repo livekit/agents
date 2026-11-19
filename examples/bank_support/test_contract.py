@@ -210,3 +210,62 @@ def test_digits_heard_from_spoken_numbers():
     assert digits_heard("the last four are four four two one") == ["4421"]
     assert digits_heard("it's two zero two, five five five, oh one eight eight") == ["2025550188"]
     assert digits_heard("I'd like to block my card") == []
+
+
+# --- through LiveKit's own argument binding ------------------------------------------------
+# LiveKit binds a tool call's arguments positionally, so these tests call the guarded tool
+# the way the framework does instead of calling Contract.check directly.
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import MagicMock  # noqa: E402
+
+from livekit.agents import RunContext, function_tool  # noqa: E402
+from livekit.agents.llm.utils import prepare_function_arguments  # noqa: E402
+
+BOUND = Contract(
+    {
+        "lookup": Rule(needs={"account_id": "accounts.ids[]"}),
+        "end_call": Rule(requires_closing_question=True),
+    }
+)
+
+
+async def lookup(ctx: RunContext, account_id: str) -> str:
+    return '{"ok": true}'
+
+
+async def end_call(ctx: RunContext, caller_reply: str) -> str:
+    return "Ending the call."
+
+
+def _ctx(history: list[tuple[str, str]] = ()) -> RunContext:
+    ctx = MagicMock(spec=RunContext)
+    ctx.userdata = SimpleNamespace(state=CallState())
+    ctx.session.history.items = [SimpleNamespace(role=r, text_content=t) for r, t in history]
+    ctx.session.user_state = "listening"
+    return ctx
+
+
+async def _call(fn, ctx: RunContext, arguments: dict) -> str:
+    tool = function_tool(BOUND.guarded(fn))
+    args, kwargs = prepare_function_arguments(
+        fnc=tool, json_arguments=json.dumps(arguments), call_ctx=ctx
+    )
+    return await tool(*args, **kwargs)
+
+
+async def test_a_bound_argument_is_checked_against_the_producers_reply():
+    ctx = _ctx()
+    ctx.userdata.state.record("accounts", {}, json.dumps({"ids": ["acc_2", "acc_3"]}))
+    reply = await _call(lookup, ctx, {"account_id": "unknown"})
+    assert reply.startswith("NOT DONE") and "acc_2" in reply
+    assert (await _call(lookup, ctx, {"account_id": "acc_2"})).startswith('{"ok": true}')
+
+
+async def test_a_bound_caller_reply_ends_the_call():
+    ctx = _ctx(
+        [("assistant", "Anything else I can help with?"), ("user", "No, that’s all. Thank you.")]
+    )
+    assert await _call(end_call, ctx, {"caller_reply": "No, that’s all. Thank you."}) == (
+        "Ending the call."
+    )
