@@ -280,11 +280,11 @@ class STTRealtime(stt.STT):
                 phrase such as ``New Delhi`` in one item. Sarvam accepts up to 50 terms
                 of at most 64 characters, within about 8 KB URL-encoded (15 full-length
                 Devanagari terms). Terms are fixed for the lifetime of each connection,
-                and a realtime stream never reconnects because each connection is
-                billed: terms the agent session adds (``stt_context_options``) apply
-                from the next stream, so keyterms detected mid-call do not reach the
-                stream already open. For detected keyterms during a call, use
-                :class:`STT`.
+                and a realtime stream never reconnects, since a new connection is a new
+                session that would lose the open utterance: terms the agent session adds
+                (``stt_context_options``) apply from the next stream, so keyterms
+                detected mid-call do not reach the stream already open. For detected
+                keyterms during a call, use :class:`STT`.
             return_timestamps: Whether finals should carry segment-level start and end times.
             api_key: Sarvam API key. Falls back to the ``SARVAM_API_KEY`` environment variable.
             base_url: WebSocket URL of the realtime endpoint.
@@ -510,9 +510,9 @@ class STTRealtime(stt.STT):
         return stream
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
-        # Sarvam takes keyterms only when a connection opens, and this endpoint bills per
-        # connection, so open streams keep theirs and the merged set applies from the
-        # next stream.
+        # Sarvam takes keyterms only when a connection opens, and a realtime stream never
+        # reconnects (a new connection is a new session), so open streams keep theirs and
+        # the merged set applies from the next stream.
         if keyterms == self._session_keyterms:
             return
         self._session_keyterms = list(keyterms)
