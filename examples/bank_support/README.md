@@ -27,13 +27,15 @@ Each practice is a mechanism in code, not a line in the prompt. The prompt stays
 | Field | Meaning | Example |
 | --- | --- | --- |
 | `needs` | An argument must come from an earlier tool result. | `block_card.card_id` comes from `get_card`. |
-| `after` | Tools that must have succeeded first. | Every read comes after `verify_identity`. |
+| `after` | Tools that must have succeeded first in this call. | Every read comes after `verify_identity`. |
 | `after_any` | At least one of these must have happened. | `end_call` comes after a write or a hand-off. |
 | `formats` | A regex for an argument, with a spoken description. | A phone number has ten digits. |
 | `undo` | The tool that takes this write back. | `block_card` is undone by `unblock_card`. |
-| `requires_closing_question` | The agent must ask "anything else?" and hear a no. | `end_call`. |
+| `requires_closing_question` | The agent must have asked a question, and the call must quote the caller's answer. | `end_call`. |
 
-`Contract.guarded` wraps each tool. Before the call, it checks the rule and returns a short `NOT DONE` reason when the call is out of order. The model reads the reason and corrects itself on the next step. A repeated write returns `ALREADY DONE` instead of running twice.
+`Contract.guarded` wraps each tool. Before the call, it checks the rule and returns a short `NOT DONE` reason when the call is out of order. The model reads the reason and corrects itself on the next step. A repeated write returns `ALREADY DONE` instead of running twice, unless a tool it depends on replied again since. For example, a second transfer of the same amount needs a second `transfer_check`.
+
+Use `after` only for an order that must hold inside one call, such as verifying the caller first. A rule about the world, such as "only a blocked card can be replaced", belongs in the tool, which reads the current state. Then a card blocked on an earlier call can still be unblocked or replaced.
 
 ### 2. Tool results say where their values go
 
@@ -41,7 +43,7 @@ After a read, `Contract.narrate` appends which later tool uses each value, for e
 
 ### 3. One task per write
 
-Each write flow (block, unblock, dispute, transfer, travel notice) runs as its own `AgentTask` with only the tools that flow needs. The parent agent starts a flow through a `start_<flow>` tool. The task ends when its completing write succeeds or the caller drops the request. Small tool sets keep a smaller model from reaching for the wrong tool.
+Each write flow (block, unblock, dispute, transfer, travel notice) runs as its own `AgentTask` with only the tools that flow needs. The parent agent starts a flow through a `start_<flow>` tool. The task stays open after a write, so the caller can add to the same request, for example a replacement after a block. The model calls `finish_request` when the caller is done with the request, and the task refuses to finish until one of its writes succeeded. The model calls `end_request` when the caller drops the request. Small tool sets keep a smaller model from reaching for the wrong tool.
 
 ### 4. Digits are read back from the transcript, not from memory
 
@@ -53,7 +55,7 @@ If a guarded tool takes more than two seconds, the agent says "One moment." It r
 
 ### 6. The call ends only after a closing question
 
-`end_call` requires a completed write or hand-off, and a "no" to "Is there anything else I can help with?". The agent says a closing line and the session closes after the audio drains.
+`end_call` requires some handled request: a write, an answered question, a hand-off, or a request the caller dropped. The agent's last turn must also be a question, and `end_call` must quote the caller's answer in `caller_reply`. The hook checks that the quote matches the caller's last turn. The model decides whether the answer means "nothing else", so the check has no word lists and works in any language. The agent says a closing line and the session closes after the audio drains.
 
 ### Session configuration
 
@@ -74,7 +76,7 @@ Most changes happen in `flows/bank.py`:
 2. Write one `Rule` per tool in `CONTRACT`.
 3. Add one `Flow` per write in `FLOWS`.
 
-`contract.py` and `agent.py` have no bank-specific logic, except for the prompt.
+`contract.py` and `agent.py` have no bank-specific logic, except for the prompt and the digit words, which are English.
 
 ## Simulations
 

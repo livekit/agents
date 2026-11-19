@@ -62,7 +62,7 @@ def test_the_contract_names_every_write_and_the_end_call():
     }
     assert CONTRACT.rules["end_call"].requires_closing_question
     assert CONTRACT.rules["transfer_funds"].after == ["get_accounts", "transfer_check"]
-    assert all(flow.completes_on in CONTRACT.rules for flow in FLOWS.values())
+    assert all(flow.writes for flow in FLOWS.values())
 
 
 def test_a_transfer_argument_must_match_the_advisors_figure():
@@ -98,3 +98,24 @@ def test_a_transfer_argument_must_match_the_advisors_figure():
         [],
     )
     assert why.startswith("NOT DONE") and "transfer_check" in why
+
+
+def test_a_replacement_needs_a_blocked_card_now_not_a_block_in_this_call():
+    import asyncio
+    from types import SimpleNamespace
+
+    from flows.bank import order_replacement, unblock_card
+
+    from livekit.agents import ToolError
+
+    bank = FakeBank.seeded()
+    card = bank.card("c_1", "4421")
+    ctx = SimpleNamespace(userdata=SimpleNamespace(bank=bank))
+    with pytest.raises(ToolError):
+        asyncio.run(order_replacement(ctx, card.id))
+    with pytest.raises(ToolError):
+        asyncio.run(unblock_card(ctx, card.id))
+    bank.block_card(card.id, "lost")  # blocked on an earlier call
+    assert json.loads(asyncio.run(order_replacement(ctx, card.id)))["card_id"] == card.id
+    assert CONTRACT.rules["order_replacement"].after == []
+    assert CONTRACT.rules["unblock_card"].after == []

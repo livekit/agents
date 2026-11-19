@@ -10,8 +10,9 @@ Three kinds of rule cover every flow document seen so far:
 
 - dependency: an argument must come from an earlier tool's reply (``needs``);
 - prerequisite: a tool may only run after another has succeeded (``after``);
-- terminal: the call may only end once the work is done and the caller has
-  declined "anything else" (``after_any`` + ``requires_closing_question``);
+- terminal: the call may only end once some work is done, the agent asked a
+  question, and the model quotes the caller's answer (``after_any`` +
+  ``requires_closing_question``);
 
 plus one hygiene rule, ``formats``: a value must have the right shape, and a
 wrong shape is read back to the caller instead of guessed.
@@ -42,22 +43,6 @@ FILLER_DELAY_S = 2.0
 FILLER_INTERVAL_S = 3.5
 FILLER_MAX = 3
 
-DECLINE_WORDS = (
-    "no",
-    "nope",
-    "nothing",
-    "that's all",
-    "that's it",
-    "that is all",
-    "all set",
-    "i'm good",
-    "i am good",
-    "we're done",
-    "goodbye",
-    "bye",
-)
-ACCEPT_WORDS = ("yes", "yeah", "yep", "actually", "one more", "also", "another", "and ")
-
 
 @dataclass(frozen=True)
 class Rule:
@@ -72,8 +57,10 @@ class Rule:
             the caller declined the work the agent offered).
         formats: argument name -> (regex, description read to the caller).
         undo: the tool that takes this write back.
-        requires_closing_question: the agent must have asked whether there is
-            anything else and the caller must have declined.
+        requires_closing_question: the agent's last turn before the caller's
+            last turn was a question, and the call quotes the caller's answer in
+            ``caller_reply``. The model judges the answer; the hook checks that
+            there was a question and that the model read the reply.
     """
 
     write: bool = False
@@ -95,12 +82,11 @@ class ToolRecord:
 
 @dataclass
 class CallState:
-    """Everything the contract reads about one call: the tool replies so far, the
-    caller's turns, and the completion hooks of the task in progress."""
+    """Everything the contract reads about one call: the tool replies so far and the
+    caller's turns."""
 
     records: list[ToolRecord] = field(default_factory=list)
     user_turns: list[str] = field(default_factory=list)
-    completions: dict[str, Callable[[str, dict[str, Any], str], None]] = field(default_factory=dict)
     declined: bool = False
 
     def record(self, name: str, arguments: dict[str, Any], result: str, ok: bool = True) -> None:
@@ -139,21 +125,35 @@ def _walk(data: Any, keypath: str) -> list[Any]:
     return _walk(value, rest)
 
 
-def closing_question_declined(history: list[tuple[str, str]]) -> bool:
-    """True when the agent's last "anything else?" was answered with a decline."""
-    asked_at = None
-    for i, (role, text) in enumerate(history):
-        if role == "assistant" and "anything else" in text.lower():
-            asked_at = i
-    if asked_at is None:
-        return False
-    answers = [t.lower() for role, t in history[asked_at + 1 :] if role == "user"]
-    if not answers:
-        return False
-    answer = answers[0]
-    if any(w in answer for w in ACCEPT_WORDS):
-        return False
-    return any(w in answer for w in DECLINE_WORDS)
+def _normalise(text: str) -> str:
+    return " ".join(re.findall(r"[\w']+", text.lower()))
+
+
+def closing_question_problem(
+    history: list[tuple[str, str]], caller_reply: str | None
+) -> str | None:
+    """None when the agent asked a question and ``caller_reply`` quotes the caller's answer.
+
+    No word lists: whether the answer means "nothing else" is the model's call. The
+    hook only checks that a question was asked and that the model read the answer.
+    """
+    last_user = max((i for i, (role, _) in enumerate(history) if role == "user"), default=None)
+    asked = None
+    if last_user is not None:
+        before = [text for role, text in history[:last_user] if role == "assistant"]
+        asked = before[-1] if before else None
+    if asked is None or not asked.rstrip().endswith("?"):
+        return (
+            "NOT ENDED: before ending, ask the caller whether there is anything else you can "
+            "help with, and end only after they say there is nothing else."
+        )
+    quoted = _normalise(caller_reply or "")
+    if not quoted or f" {quoted} " not in f" {_normalise(history[last_user][1])} ":
+        return (
+            "NOT ENDED: put the caller's last words, exactly as they said them, in caller_reply. "
+            "End only if those words say there is nothing else."
+        )
+    return None
 
 
 _DIGIT_WORDS = {
@@ -254,18 +254,13 @@ class Contract:
                     f'NOT DONE: {arg} "{unknown[0]}" is not one of the values {producer} returned '
                     f"({', '.join(sorted(seen)) or 'none'}). Use one of those exactly, or call {producer} again."
                 )
-        if rule.write:
-            for r in state.succeeded(name):
-                if r.arguments == arguments:
-                    return (
-                        f"ALREADY DONE: {name} with these exact arguments succeeded earlier in this call. "
-                        "Do not repeat it; tell the caller it is done."
-                    )
-        if rule.requires_closing_question and not closing_question_declined(history):
+        if rule.write and _repeats_a_write(rule, name, arguments, state):
             return (
-                "NOT ENDED: before ending, ask the caller whether there is anything else you can help with, "
-                "and end only after they say there is nothing else."
+                f"ALREADY DONE: {name} with these exact arguments succeeded earlier in this call. "
+                "Do not repeat it; tell the caller it is done."
             )
+        if rule.requires_closing_question:
+            return closing_question_problem(history, arguments.get("caller_reply"))
         return None
 
     # --- after the call -------------------------------------------------------------------
@@ -326,13 +321,30 @@ class Contract:
                 fillers.cancel()
             text = result if isinstance(result, str) else json.dumps(result)
             state.record(name, kwargs, text)
-            hook = state.completions.get(name)
-            if hook is not None:
-                hook(name, kwargs, text)
             return contract.narrate(name, kwargs, text)
 
         wrapper.__signature__ = inspect.signature(fn)  # type: ignore[attr-defined]
         return wrapper
+
+
+def _repeats_a_write(rule: Rule, name: str, arguments: dict[str, Any], state: CallState) -> bool:
+    """True when this exact write already succeeded and nothing it depends on was read since.
+
+    A fresh reply from a producer (a new transfer_check before a second transfer)
+    means the caller asked again, so the write may run again.
+    """
+    last = max(
+        (
+            i
+            for i, r in enumerate(state.records)
+            if r.name == name and r.ok and r.arguments == arguments
+        ),
+        default=None,
+    )
+    if last is None:
+        return False
+    producers = {path.partition(".")[0] for path in rule.needs.values()}
+    return not any(r.ok and r.name in producers for r in state.records[last + 1 :])
 
 
 def _history(ctx: RunContext) -> list[tuple[str, str]]:

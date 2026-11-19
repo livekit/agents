@@ -42,12 +42,10 @@ CONTRACT = Contract(
             needs={"card_id": "get_card.card_id"},
             undo="unblock_card",
         ),
-        "unblock_card": Rule(
-            write=True, after=["block_card"], needs={"card_id": "block_card.card_id"}
-        ),
-        "order_replacement": Rule(
-            write=True, after=["block_card"], needs={"card_id": "block_card.card_id"}
-        ),
+        # Card state, not call history, decides whether these can run: the tools refuse
+        # an active card, so a card blocked on an earlier call can be unblocked or replaced.
+        "unblock_card": Rule(write=True, needs={"card_id": "get_card.card_id"}),
+        "order_replacement": Rule(write=True, needs={"card_id": "get_card.card_id"}),
         "open_dispute": Rule(
             write=True,
             after=["get_transactions"],
@@ -71,13 +69,21 @@ CONTRACT = Contract(
             needs={"card_id": "get_card.card_id"},
             formats={"start_date": ISO_DATE, "end_date": ISO_DATE},
         ),
+        "transfer_to_human": Rule(),
+        # Any handled request counts as work: a write, an answered question, a hand-off,
+        # or a request the caller dropped.
         "end_call": Rule(
             after_any=[
                 "block_card",
+                "unblock_card",
+                "order_replacement",
                 "open_dispute",
                 "transfer_funds",
                 "add_travel_notice",
-                "unblock_card",
+                "get_accounts",
+                "get_card",
+                "get_transactions",
+                "transfer_to_human",
                 "declined",
             ],
             requires_closing_question=True,
@@ -278,7 +284,11 @@ async def unblock_card(ctx: RunContext, card_id: str) -> str:
     Args:
         card_id: The card id that was blocked.
     """
-    card = _bank(ctx).unblock_card(card_id)
+    bank = _bank(ctx)
+    card = bank.card_by_id(card_id)
+    if card is None or card.status != "blocked":
+        raise ToolError("That card is not blocked, so there is nothing to take back.")
+    card = bank.unblock_card(card_id)
     return json.dumps({"card_id": card.id, "status": card.status})
 
 
@@ -288,7 +298,11 @@ async def order_replacement(ctx: RunContext, card_id: str) -> str:
     Args:
         card_id: The blocked card's id.
     """
-    return json.dumps(_bank(ctx).order_replacement(card_id))
+    bank = _bank(ctx)
+    card = bank.card_by_id(card_id)
+    if card is None or card.status != "blocked":
+        raise ToolError("That card is active. Block it first, after the caller agrees.")
+    return json.dumps(bank.order_replacement(card_id))
 
 
 async def open_dispute(
@@ -355,14 +369,18 @@ TOOLS = {
 
 @dataclass(frozen=True)
 class Flow:
-    """A unit of work the parent hands to a task: its instructions, its tools, and the
-    write whose success completes it."""
+    """A unit of work the parent hands to a task: its instructions and its tools. The
+    task finishes when the caller is done with the request, after at least one of its
+    writes succeeded, or when the caller drops the request."""
 
     name: str
     instructions: str
     tools: list[str]
-    completes_on: str
     description: str = field(default="")
+
+    @property
+    def writes(self) -> list[str]:
+        return [t for t in self.tools if CONTRACT.rules.get(t, Rule()).write]
 
 
 FLOWS = {
@@ -372,17 +390,19 @@ FLOWS = {
         instructions=(
             "You are handling exactly one request: block the caller's card, and order a replacement only if they ask. "
             "Ask for the last four digits of the card, read them back digit by digit, then get_card. State what you are "
-            "about to do and wait for the caller's yes before block_card. Say what was done and how to take it back."
+            "about to do and wait for the caller's yes before block_card. Say what was done and how to take it back, "
+            "then offer a replacement."
         ),
         tools=["get_card", "block_card", "order_replacement"],
-        completes_on="block_card",
     ),
     "unblock_card": Flow(
         name="unblock_card",
         description="Take a block back when the caller found the card.",
-        instructions="You are handling exactly one request: lift the block on the card blocked earlier in this call, after the caller confirms.",
-        tools=["unblock_card"],
-        completes_on="unblock_card",
+        instructions=(
+            "You are handling exactly one request: lift the block on a card. Get the card by its last four "
+            "digits, confirm it with the caller, then unblock_card after their yes."
+        ),
+        tools=["get_card", "unblock_card"],
     ),
     "dispute": Flow(
         name="dispute",
@@ -393,7 +413,6 @@ FLOWS = {
             "read its sentence back, then open_dispute after the caller's yes."
         ),
         tools=["get_accounts", "get_card", "get_transactions", "dispute_total", "open_dispute"],
-        completes_on="open_dispute",
     ),
     "transfer": Flow(
         name="transfer",
@@ -404,7 +423,6 @@ FLOWS = {
             "then transfer_funds after the caller's yes, with the exact amount transfer_check allowed."
         ),
         tools=["get_accounts", "transfer_check", "transfer_funds"],
-        completes_on="transfer_funds",
     ),
     "travel_notice": Flow(
         name="travel_notice",
@@ -414,6 +432,5 @@ FLOWS = {
             "dates as year-month-day and the countries, then add_travel_notice after the caller's yes."
         ),
         tools=["get_card", "add_travel_notice"],
-        completes_on="add_travel_notice",
     ),
 }

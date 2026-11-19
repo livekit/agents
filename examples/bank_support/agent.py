@@ -106,29 +106,59 @@ def _guarded_tools(names: list[str]) -> list[FunctionTool]:
 
 
 class WriteTask(AgentTask[dict[str, Any]]):
-    """One unit of work: its own instructions, only its tools, the call's records, and a
-    completion the model cannot talk past. It completes on the flow's write, or when the
-    caller declines through ``end_request``."""
+    """One unit of work: its own instructions, only its tools, and the call's records.
+
+    The task stays open after a write, so the caller can add to the same request (a
+    replacement after a block). It finishes through ``finish_request`` once one of its
+    writes succeeded, or through ``end_request`` when the caller drops the request."""
 
     def __init__(self, flow: Flow, state: CallState, chat_ctx: ChatContext | None = None) -> None:
         self._flow = flow
         self._state = state
+        self._first_record = len(state.records)
         super().__init__(
-            instructions=flow.instructions,
-            tools=[*_guarded_tools(flow.tools), self._end_request_tool()],
+            instructions=flow.instructions
+            + " When the caller has nothing more for this request, call finish_request.",
+            tools=[
+                *_guarded_tools(flow.tools),
+                self._finish_request_tool(),
+                self._end_request_tool(),
+            ],
             chat_ctx=chat_ctx,
         )
 
     async def on_enter(self) -> None:
-        self._state.completions[self._flow.completes_on] = self._on_write
+        self._first_record = len(self._state.records)
         self.session.generate_reply()
 
-    async def on_exit(self) -> None:
-        self._state.completions.pop(self._flow.completes_on, None)
-
-    def _on_write(self, name: str, arguments: dict[str, Any], result: str) -> None:
+    async def finish_request_reply(self, summary: str) -> str | None:
+        """None when the task finished; otherwise the reply the model gets instead."""
+        done = [
+            r.name
+            for r in self._state.records[self._first_record :]
+            if r.ok and r.name in self._flow.writes
+        ]
+        if not done:
+            return (
+                f"NOT DONE: none of {', '.join(self._flow.writes)} has succeeded for this request. "
+                "Finish the change after the caller's yes, or call end_request if they dropped it."
+            )
         if not self.done():
-            self.complete({"flow": self._flow.name, "done": True, "tool": name, "result": result})
+            self.complete(
+                {"flow": self._flow.name, "done": True, "writes": done, "summary": summary}
+            )
+        return None
+
+    def _finish_request_tool(self) -> FunctionTool:
+        async def finish_request(summary: str) -> str:
+            """Finish this request once the change is made and the caller has nothing more for it.
+
+            Args:
+                summary: What was done, in one sentence.
+            """
+            return await self.finish_request_reply(summary) or "Request finished."
+
+        return function_tool(finish_request)
 
     def _end_request_tool(self) -> FunctionTool:
         async def end_request(reason: str) -> str:
@@ -153,7 +183,7 @@ class BankAgent(Agent):
         tools = _guarded_tools(["verify_identity", "get_accounts", "get_card", "get_transactions"])
         for flow in FLOWS.values():
             tools.append(self._start_tool(flow))
-        tools.append(function_tool(self.transfer_to_human))
+        tools.append(function_tool(CONTRACT.guarded(self._transfer_to_human_impl)))
         tools.append(function_tool(CONTRACT.guarded(self._end_call_impl)))
         return tools
 
@@ -161,7 +191,7 @@ class BankAgent(Agent):
         async def start(ctx: RunContext[Userdata]) -> str:
             result = await WriteTask(flow, ctx.userdata.state, chat_ctx=self.chat_ctx)
             if result.get("done"):
-                return f"The {flow.name} request is complete: {result.get('result', '')}"
+                return f"The {flow.name} request is complete: {result.get('summary', '')}"
             return (
                 f"The {flow.name} request was closed without a change: {result.get('reason', '')}"
             )
@@ -172,7 +202,7 @@ class BankAgent(Agent):
         )
         return function_tool(start)
 
-    async def transfer_to_human(self, ctx: RunContext[Userdata], summary: str) -> str:
+    async def _transfer_to_human_impl(self, ctx: RunContext[Userdata], summary: str) -> str:
         """Hand the call to a person, for a request no tool here covers or when the caller asks for one.
 
         Args:
@@ -181,10 +211,15 @@ class BankAgent(Agent):
         logger.info("transfer to human: %s", summary)
         return "A colleague will take the call from here. Tell the caller, then end the call."
 
-    async def _end_call_impl(self, ctx: RunContext[Userdata], closing_message: str) -> str:
-        """End the call after the caller has said there is nothing else.
+    _transfer_to_human_impl.__name__ = "transfer_to_human"
+
+    async def _end_call_impl(
+        self, ctx: RunContext[Userdata], caller_reply: str, closing_message: str
+    ) -> str:
+        """End the call after you asked whether there is anything else and the caller said no.
 
         Args:
+            caller_reply: The caller's last words, exactly as they said them.
             closing_message: The goodbye to say first.
         """
         await ctx.session.say(closing_message, allow_interruptions=False)

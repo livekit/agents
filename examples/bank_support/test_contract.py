@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from contract import CallState, Contract, Rule, closing_question_declined, digits_heard
+from contract import CallState, Contract, Rule, digits_heard
 
 CONTRACT = Contract(
     {
@@ -18,7 +18,9 @@ CONTRACT = Contract(
             needs={"card_id": "get_card.card_id"},
             undo="unblock_card",
         ),
-        "unblock_card": Rule(write=True, after=["block_card"]),
+        "unblock_card": Rule(write=True, needs={"card_id": "get_card.card_id"}),
+        "transfer_check": Rule(after=["verify_identity"]),
+        "transfer_funds": Rule(write=True, needs={"amount": "transfer_check.amount"}),
         "open_dispute": Rule(
             write=True,
             after=["get_transactions"],
@@ -26,7 +28,8 @@ CONTRACT = Contract(
         ),
         "verify_identity": Rule(formats={"phone": (r"^\d{10}$", "ten digits")}),
         "end_call": Rule(
-            after_any=["block_card", "open_dispute", "declined"], requires_closing_question=True
+            after_any=["block_card", "open_dispute", "transfer_to_human", "declined"],
+            requires_closing_question=True,
         ),
     }
 )
@@ -122,9 +125,19 @@ def test_a_successful_write_is_not_repeated():
     assert why.startswith("ALREADY DONE")
 
 
-def test_an_undo_needs_the_action_it_undoes():
+def test_an_undo_reads_the_cards_current_state_not_this_calls_history():
     s = _verified()
-    assert "block_card" in CONTRACT.check("unblock_card", {"card_id": "card_1"}, s, [])
+    s.record("get_card", {"last_four": "4421"}, json.dumps({"card_id": "card_1"}))
+    assert CONTRACT.check("unblock_card", {"card_id": "card_1"}, s, []) is None
+
+
+def test_a_repeated_write_runs_again_after_a_fresh_reply_from_its_producer():
+    s = _verified()
+    s.record("transfer_check", {"amount": 50.0}, json.dumps({"amount": 50.0}))
+    s.record("transfer_funds", {"amount": 50.0}, json.dumps({"transfer_id": "t1"}))
+    assert CONTRACT.check("transfer_funds", {"amount": 50.0}, s, []).startswith("ALREADY DONE")
+    s.record("transfer_check", {"amount": 50.0}, json.dumps({"amount": 50.0}))
+    assert CONTRACT.check("transfer_funds", {"amount": 50.0}, s, []) is None
 
 
 def test_a_read_reply_says_where_its_values_go():
@@ -144,37 +157,50 @@ def test_a_write_reply_names_its_undo():
     assert "unblock_card" in out
 
 
-def test_the_call_ends_only_after_the_work_and_the_closing_question():
+ASKED = ("assistant", "Your card is blocked. Can I help with anything else?")
+
+
+def test_the_call_does_not_end_before_any_work():
     s = _verified()
-    history = []
-    why = CONTRACT.check("end_call", {"closing_message": "Bye"}, s, history)
-    assert why.startswith("NOT ENDED") and "anything else" in why.lower()
+    history = [ASKED, ("user", "No, that's all.")]
+    why = CONTRACT.check("end_call", {"caller_reply": "No, that's all."}, s, history)
+    assert why.startswith("NOT ENDED")
+
+
+def test_the_call_ends_after_work_a_question_and_the_callers_quoted_answer():
+    s = _verified()
     s.record("get_card", {"last_four": "4421"}, json.dumps({"card_id": "card_1"}))
+    s.record("block_card", {"card_id": "card_1", "reason": "lost"}, json.dumps({}))
+    history = [ASKED, ("user", "No, that's all, thanks.")]
+    assert CONTRACT.check("end_call", {"caller_reply": "no, that's all"}, s, history) is None
+
+
+def test_the_call_does_not_end_when_the_agent_did_not_ask_a_question():
+    s = _verified()
+    s.record("block_card", {"card_id": "card_1", "reason": "lost"}, json.dumps({}))
+    history = [("assistant", "Your card is blocked."), ("user", "Okay.")]
+    why = CONTRACT.check("end_call", {"caller_reply": "Okay."}, s, history)
+    assert why.startswith("NOT ENDED") and "ask" in why.lower()
+
+
+def test_the_caller_reply_must_quote_the_callers_last_turn():
+    s = _verified()
+    s.record("block_card", {"card_id": "card_1", "reason": "lost"}, json.dumps({}))
+    history = [ASKED, ("user", "I don't know, maybe check my savings now")]
+    why = CONTRACT.check("end_call", {"caller_reply": "No, that's all."}, s, history)
+    assert why.startswith("NOT ENDED") and "caller_reply" in why
+
+
+def test_a_hand_off_counts_as_finished_work():
+    s = CallState()
     s.record(
-        "block_card", {"card_id": "card_1", "reason": "lost"}, json.dumps({"status": "blocked"})
+        "transfer_to_human", {"summary": "wants a higher card limit"}, "A colleague will take it."
     )
     history = [
-        ("assistant", "Your card is blocked. Is there anything else I can help with?"),
-        ("user", "No, that's all, thanks."),
+        ("assistant", "A colleague will take it from here. Anything else?"),
+        ("user", "No, bye."),
     ]
-    assert CONTRACT.check("end_call", {"closing_message": "Bye"}, s, history) is None
-    history = [
-        ("assistant", "Your card is blocked. Is there anything else I can help with?"),
-        ("user", "Yes, one more thing."),
-    ]
-    assert CONTRACT.check("end_call", {"closing_message": "Bye"}, s, history).startswith(
-        "NOT ENDED"
-    )
-
-
-def test_closing_question_detection():
-    assert closing_question_declined(
-        [("assistant", "Anything else today?"), ("user", "nope, that's it")]
-    )
-    assert not closing_question_declined(
-        [("assistant", "Anything else today?"), ("user", "actually yes")]
-    )
-    assert not closing_question_declined([("user", "no")])
+    assert CONTRACT.check("end_call", {"caller_reply": "No, bye."}, s, history) is None
 
 
 def test_digits_heard_from_spoken_numbers():

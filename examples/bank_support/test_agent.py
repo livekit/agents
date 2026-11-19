@@ -40,7 +40,13 @@ def test_a_guarded_tool_keeps_its_description_and_parameters():
 
 def test_each_flow_becomes_a_task_with_only_its_tools():
     task = WriteTask(FLOWS["transfer"], CallState())
-    assert _names(task.tools) == {"get_accounts", "transfer_check", "transfer_funds", "end_request"}
+    assert _names(task.tools) == {
+        "get_accounts",
+        "transfer_check",
+        "transfer_funds",
+        "finish_request",
+        "end_request",
+    }
     assert task.instructions.startswith("You are handling exactly one request")
 
 
@@ -67,3 +73,27 @@ def test_the_bank_seeds_from_scenario_userdata():
     assert bank.today.isoformat() == "2026-06-12"
     assert next(a for a in bank.accounts("c_1") if a.kind == "checking").balance == 100.0
     assert isinstance(simulation.bank_from_userdata({}), FakeBank)
+
+
+async def test_a_task_does_not_finish_before_one_of_its_writes():
+    state = CallState()
+    task = WriteTask(FLOWS["block_card"], state)
+    reply = await task.finish_request_reply("blocked the card")
+    assert reply.startswith("NOT DONE") and "block_card" in reply
+    assert not task.done()
+
+
+async def test_a_task_stays_open_after_its_first_write():
+    state = CallState()
+    task = WriteTask(FLOWS["block_card"], state)
+    state.record("block_card", {"card_id": "card_1", "reason": "lost"}, "{}")
+    assert not task.done()
+    assert await task.finish_request_reply("blocked the card") is None
+
+
+def test_the_hand_off_is_recorded():
+    agent = BankAgent()
+    assert "transfer_to_human" in {t.info.name for t in agent.tools}
+    from flows.bank import CONTRACT
+
+    assert "transfer_to_human" in CONTRACT.rules["end_call"].after_any
