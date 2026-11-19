@@ -12,7 +12,7 @@ import aiohttp
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, APITimeoutError
 from livekit.agents.stt import SpeechEventType
 from livekit.plugins.gradium.stt import DEFAULT_DELAY_IN_FRAMES
 
@@ -103,7 +103,13 @@ class FakeWebSocket:
         frame = self._frames.pop(0)
         if frame == "close":
             return _Msg(aiohttp.WSMsgType.CLOSE, self.close_code, "")
+        if isinstance(frame, tuple) and frame[0] == "error":
+            self._exception = frame[1]
+            return _Msg(aiohttp.WSMsgType.ERROR, frame[1])
         return _Msg(aiohttp.WSMsgType.TEXT, json.dumps(frame))
+
+    def exception(self) -> BaseException | None:
+        return getattr(self, "_exception", None)
 
     async def close(self) -> bool:
         return True
@@ -288,7 +294,7 @@ async def test_synthetic_vad_silence_does_not_shift_later_turns(monkeypatch, vad
     clock = ReconnectClock(monkeypatch)
     options = {} if vad_flush else {"vad_flush": False}
     provider = STT(api_key="test-key", http_session=clock, **options)
-    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=1))
     stream.start_time_offset = 7.0
 
     # vad_flush pads the model delay (80 ms frames) of silence after each turn
@@ -334,7 +340,10 @@ async def test_synthetic_vad_silence_does_not_shift_later_turns(monkeypatch, vad
                     provider_start=index * (1.0 + padding if vad_flush else 1.0),
                     expected_end=7.4 + index,
                 )
-            stream.update_options(buffer_size_seconds=0.1)
+            # a dropped socket makes the base class reconnect
+            clock.sockets[-1].incoming.put_nowait(
+                aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1011, "server restart")
+            )
             await wait_until(lambda: len(clock.sockets) == 2)
             await check_turn(3, captured_at=1010.0, provider_start=0.0, expected_end=17.4)
     finally:
@@ -682,17 +691,23 @@ async def test_vad_start_of_speech_with_vad_bucket_zero():
 
 
 @pytest.mark.no_concurrent
-async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
-    from livekit.agents import APIConnectOptions
+async def test_reconnect_reanchors_audio_clock(monkeypatch):
+    """A retry after the server drops the socket re-anchors the audio clock."""
     from livekit.plugins.gradium.stt import STT
 
     from .stt_reconnect import ReconnectClock
 
     clock = ReconnectClock(monkeypatch)
     provider = STT(api_key="test-key", http_session=clock)
-    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=1))
+
+    def drop_socket() -> None:
+        clock.sockets[-1].incoming.put_nowait(
+            aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1011, "server restart")
+        )
+
     try:
-        await clock.check(stream, lambda: stream.update_options(buffer_size_seconds=0.1))
+        await clock.check(stream, drop_socket)
     finally:
         await stream.aclose()
         await provider.aclose()
@@ -831,3 +846,125 @@ async def test_final_end_of_stream_send_on_a_closed_socket_is_not_an_error():
         ev.alternatives[0].text for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT
     ]
     assert finals == ["hello"]
+
+
+async def test_interim_transcripts_are_cumulative():
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1), _text("world", 0.4)])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream,
+            lambda ev: (
+                ev.type == SpeechEventType.INTERIM_TRANSCRIPT
+                and ev.alternatives[0].text.endswith("world")
+            ),
+        )
+    finally:
+        await stream.aclose()
+
+    interims = [
+        ev.alternatives[0] for ev in events if ev.type == SpeechEventType.INTERIM_TRANSCRIPT
+    ]
+    assert [alt.text for alt in interims] == ["hello", "hello world"]
+    # both carry the start of the utterance, not of the latest word
+    assert [alt.start_time for alt in interims] == pytest.approx([0.1, 0.1], abs=0.05)
+
+
+class HangingSession:
+    """A server that never completes the websocket handshake."""
+
+    async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+async def test_stream_times_out_on_hung_connect():
+    from livekit.plugins.gradium import STT
+
+    stt = STT(api_key="test-key", http_session=HangingSession())  # type: ignore[arg-type]
+    stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.2))
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APITimeoutError):
+            await _collect_until(stream, lambda ev: False)
+    finally:
+        await stream.aclose()
+
+
+async def test_connect_failures_are_retryable_api_errors():
+    """DNS, refused connection, TLS: aiohttp raises ClientConnectionError subclasses that
+    the base class would treat as fatal unless mapped."""
+    from livekit.plugins.gradium import STT
+
+    class RefusingSession:
+        async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+            raise aiohttp.ClientOSError(111, "Connection refused")
+
+    stt = STT(api_key="test-key", http_session=RefusingSession())  # type: ignore[arg-type]
+    stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1))
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIConnectionError) as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.retryable is True
+    finally:
+        await stream.aclose()
+
+
+async def test_transport_error_frame_reconnects():
+    """aiohttp reports a transport failure as an ERROR message, not a close frame."""
+    err = RuntimeError("transport failed")
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1), ("error", err)])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIConnectionError) as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.__cause__ is err
+        assert excinfo.value.retryable is True
+    finally:
+        await stream.aclose()
+
+
+async def test_a_text_frame_without_start_s_does_not_corrupt_the_turn():
+    bad = {"type": "text", "text": "dropped"}  # no start_s
+    frames = [READY, bad, _text("hello", 0.1)] + [_vad_step(i, SILENT) for i in range(4)]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    assert [ev.type for ev in events].count(SpeechEventType.START_OF_SPEECH) == 1
+    assert events[0].type == SpeechEventType.START_OF_SPEECH
+    assert events[-1].alternatives[0].text == "hello"
+
+
+async def test_update_options_keeps_the_socket_and_the_utterance():
+    """`buffer_size_seconds` does not affect the live session, so changing it must not
+    reconnect: a reconnect dropped the words buffered so far."""
+    stt, session, _ = _make_stt([READY, _text("hello", 0.1)], after_eos=[_text("world", 0.4), EOS])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        await _collect_until(stream, lambda ev: ev.type == SpeechEventType.INTERIM_TRANSCRIPT)
+        stt.update_options(buffer_size_seconds=0.1)
+        stream.push_frame(_audio_frame())
+        stream.end_input()
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+
+    assert len(session.connects) == 1
+    finals = [ev for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [ev.alternatives[0].text for ev in finals] == ["hello world"]
+    assert stream._opts.buffer_size_seconds == 0.1

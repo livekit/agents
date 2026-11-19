@@ -29,8 +29,10 @@ import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    APITimeoutError,
     LanguageCode,
     stt,
     utils,
@@ -45,12 +47,6 @@ from .models import LogLevel
 from .tts import _close_error
 
 STTEncoding = Literal["pcm_s16le"]
-
-# Define bytes per frame for different encoding types
-bytes_per_frame = {
-    "pcm_s16le": 2,
-}
-
 
 SUPPORTED_SAMPLE_RATE = 24000
 # Gradium's default model delay, used until the server's ready message arrives
@@ -77,7 +73,7 @@ class STTOptions:
     encoding: str = "pcm_s16le"
     temperature: float | None = None
     language: LanguageCode = LanguageCode("en")
-    vad_threshold: float = 0.6
+    vad_threshold: float = 0.9
     vad_bucket: int | None = 2
     # When set, we flush the stt state on the first time the VAD triggers
     # in order to recover the text currently being processed as soon as possible.
@@ -126,7 +122,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=True,  # only final transcripts
+                interim_results=True,
                 aligned_transcript=False,  # only chunk start times are available
                 offline_recognize=False,
             ),
@@ -308,9 +304,7 @@ class SpeechStream(stt.SpeechStream):
         self._model_endpoint = model_endpoint
         self._model_name = model_name
         self._session = http_session
-        self._speech_duration: float = 0
 
-        self._reconnect_event = asyncio.Event()
         self._ready_msg: dict[str, Any] | None = None
 
     @property
@@ -331,16 +325,13 @@ class SpeechStream(stt.SpeechStream):
         *,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
+        # Nothing here changes the live session, so the stream keeps its socket:
+        # reconnecting would drop the utterance in progress.
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
-        self._reconnect_event.set()
-
     async def _run(self) -> None:
-        """
-        Run a single websocket connection to Gradium and make sure to reconnect
-        when something went wrong.
-        """
+        """Run one websocket session to Gradium; the base class retries on failure."""
 
         closing_ws = False
         timeline = _PaddedTimeline(self._opts.sample_rate)
@@ -399,13 +390,14 @@ class SpeechStream(stt.SpeechStream):
             buffered_text: list[str] = []
             speech_end = 0.0
             speaking = False
+            utterance_start = 0.0
             remaining_vad_steps: int | None = None
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
 
             def _finalize() -> None:
-                nonlocal speaking, remaining_vad_steps, buffered_text, speech_end
+                nonlocal speaking, remaining_vad_steps, buffered_text, speech_end, utterance_start
                 if not speaking:
                     return
                 speaking = False
@@ -416,6 +408,7 @@ class SpeechStream(stt.SpeechStream):
                         stt.SpeechData(
                             text=" ".join(buffered_text),
                             language=self._opts.language,
+                            start_time=utterance_start,
                             end_time=timeline.remove_padding(speech_end) + self.start_time_offset
                             if speech_end > 0
                             else 0.0,
@@ -424,6 +417,7 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._event_ch.send_nowait(event)
                 buffered_text = []
+                utterance_start = 0.0
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.END_OF_SPEECH,
@@ -458,8 +452,15 @@ class SpeechStream(stt.SpeechStream):
                         body=f"{msg.data=} {msg.extra=}",
                     )
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if closing_ws:
+                        _finalize()
+                        return
+                    # a transport failure surfaces as an ERROR message, not a close frame
+                    raise APIConnectionError("Gradium connection lost") from ws.exception()
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
-                    logger.error("Unexpected Gradium message type: %s", msg.type)
+                    logger.warning("Unexpected Gradium message type: %s", msg.type)
                     continue
 
                 try:
@@ -492,20 +493,27 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     if type_ == "text":
+                        # read the fields first: a malformed frame must not open a turn
+                        text, start_s = data["text"], data["start_s"]
                         speech_end = 0.0
+                        if not buffered_text:
+                            utterance_start = (
+                                timeline.remove_padding(start_s) + self.start_time_offset
+                            )
                         if speaking is False:
                             speaking = True
                             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                             self._event_ch.send_nowait(start_event)
-                        buffered_text.append(data["text"])
+                        buffered_text.append(text)
+                        # The agent treats an interim as the whole partial utterance (it
+                        # replaces the previous one), not as a delta.
                         event = stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                             alternatives=[
                                 stt.SpeechData(
-                                    text=data["text"],
+                                    text=" ".join(buffered_text),
                                     language=self._opts.language,
-                                    start_time=timeline.remove_padding(data["start_s"])
-                                    + self.start_time_offset,
+                                    start_time=utterance_start,
                                 )
                             ],
                         )
@@ -564,45 +572,39 @@ class SpeechStream(stt.SpeechStream):
                 except Exception:
                     logger.exception("Failed to process message from Gradium")
 
-        ws: aiohttp.ClientWebSocketResponse | None = None
-
-        while True:
+        ws = await self._connect_ws()
+        self._input_ch.restart_provider_clock()
+        try:
+            tasks = [
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
             try:
-                ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
-                timeline.reset()
-                tasks = [
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                tasks_group: asyncio.Future[Any] = asyncio.gather(*tasks)
-                try:
-                    done, _ = await asyncio.wait(
-                        [tasks_group, wait_reconnect_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()
+                await asyncio.gather(*tasks)
             finally:
-                if ws is not None:
-                    await ws.close()
+                await utils.aio.gracefully_cancel(*tasks)
+        finally:
+            await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        ws = await self._session.ws_connect(
-            self._model_endpoint, headers=ws_headers(self._api_key), autoping=False
-        )
+        # The shared aiohttp session has no connect timeout of its own, so bound the
+        # handshake here and map its failures to API errors the base class can retry.
+        try:
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(
+                    self._model_endpoint, headers=ws_headers(self._api_key), autoping=False
+                ),
+                self._conn_options.timeout,
+            )
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            # DNS, refused connection, TLS: transient, and not an APIError by itself
+            raise APIConnectionError() from e
 
         # Build and send the setup payload as the first message
         setup_msg: dict[str, Any] = {
