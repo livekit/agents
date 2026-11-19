@@ -14,6 +14,7 @@ from livekit import agents, rtc
 from livekit.agents import inference, stt
 from livekit.agents.stt.stt import STT, SpeechData, SpeechEvent
 from livekit.plugins import (
+    aircaps,
     assemblyai,
     aws,
     azure,
@@ -53,6 +54,7 @@ TRAILING_SILENCE_DURATION_MS = 2000
 SPEECH_END_TIME = 44.4
 
 UNTIMED_EOS_REASONS = {
+    "livekit.plugins.aircaps": "AirCaps Live sends no speech-end timestamp",
     "livekit.plugins.aws": "AWS EOS timing is deferred until live validation",
     "livekit.plugins.cartesia": "Cartesia turns does not provide speech-end timestamps",
     "livekit.plugins.fireworksai": "Fireworks emits an untimed EOS during connection cleanup",
@@ -115,6 +117,7 @@ STTs: list[Callable[[], stt.STT]] = [
 
 # Additional model configurations used only by streaming tests.
 STREAM_ONLY_STTs: list[Callable[[], stt.STT]] = [
+    parameter_factory(aircaps),
     parameter_factory(xai),
     parameter_factory(inworld),
     parameter_factory(fishaudio),
