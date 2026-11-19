@@ -19,6 +19,7 @@ import pytest
 from livekit import rtc
 from livekit.agents import Plugin
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
+from livekit.agents.voice.transcription.synchronizer import TranscriptSynchronizer
 from livekit.plugins import meshlite
 
 pytestmark = [pytest.mark.unit, pytest.mark.plugin("meshlite")]
@@ -346,3 +347,18 @@ async def test_aclose_does_not_use_the_base_participant_removal(monkeypatch) -> 
     assert identity in room.remote_participants
     assert session.output.audio is None
     assert avatar._wait_avatar_join_task is None
+
+
+async def test_aclose_detaches_an_output_wrapped_by_the_session() -> None:
+    # RoomIO wraps the avatar output in a TranscriptSynchronizer when
+    # transcription is synced; closing the avatar must still stop the voice.
+    room, session, identity = FakeRoom(), fake_session(), visitor()
+    avatar = meshlite.AvatarSession(visitor_identity=identity)
+    await avatar.start(session, room)
+    synchronizer = TranscriptSynchronizer(
+        next_in_chain_audio=session.output.audio, next_in_chain_text=None
+    )
+    session.output.audio = synchronizer.audio_output
+    await avatar.aclose()
+    assert session.output.audio is None
+    await synchronizer.aclose()

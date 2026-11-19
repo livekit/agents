@@ -34,6 +34,7 @@ from livekit import rtc
 from livekit.agents import AgentSession, utils
 from livekit.agents.metrics.base import AvatarMetrics, Metadata
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
+from livekit.agents.voice.io import AudioOutput
 
 from .log import logger
 
@@ -190,7 +191,10 @@ class AvatarSession(BaseAvatarSession):
         self._closed = True
 
         session, output = self._agent_session, self._audio_output
-        if session is not None and output is not None and session.output.audio is output:
+        if session is not None and output is not None and _routes_to(session.output.audio, output):
+            # The session may wrap our output (transcript synchronizer,
+            # recorder, ...); the whole chain ends at the visitor, so detach it.
+            # An output installed later by someone else is left alone.
             session.output.audio = None
         if output is not None:
             # The output starts a task that waits for the visitor, one loop turn
@@ -209,3 +213,15 @@ class AvatarSession(BaseAvatarSession):
         if self._wait_avatar_join_task is not None:
             await utils.aio.cancel_and_wait(self._wait_avatar_join_task)
             self._wait_avatar_join_task = None
+
+
+def _routes_to(head: AudioOutput | None, target: AudioOutput) -> bool:
+    """Whether ``head`` is ``target`` or wraps it through ``next_in_chain``."""
+    seen: set[int] = set()
+    node = head
+    while node is not None and id(node) not in seen:
+        if node is target:
+            return True
+        seen.add(id(node))
+        node = getattr(node, "next_in_chain", None)
+    return False
