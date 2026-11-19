@@ -26,11 +26,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError
-from livekit.agents.inference import (
-    WatermarkDetector,
-    WatermarkResult,
-    watermark as watermark_module,
-)
+from livekit.agents.inference import WatermarkDetector, WatermarkResult
 from livekit.agents.inference._utils import HEADER_USER_AGENT
 from livekit.agents.inference.watermark import _CHECK_PATH, _parse_retry_after
 from livekit.agents.types import APIConnectOptions
@@ -123,6 +119,41 @@ class _RecordingSession:
     def post(self, url: str, **kwargs: Any) -> Any:
         self.timeouts.append(kwargs["timeout"])
         return self._session.post(url, **kwargs)
+
+
+class _FailedPost:
+    """What ``session.post`` returns when the request fails before any response."""
+
+    def __init__(self, error: BaseException) -> None:
+        self._error = error
+
+    async def __aenter__(self) -> Any:
+        raise self._error
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+
+class _FailingSession:
+    """A session whose every post fails with ``error``, with no socket and no clock."""
+
+    def __init__(self, error: BaseException) -> None:
+        self._error = error
+        self.posts = 0
+
+    def post(self, url: str, **kwargs: Any) -> _FailedPost:
+        self.posts += 1
+        return _FailedPost(self._error)
+
+
+def _failing_detector(session: _FailingSession, **kwargs: Any) -> WatermarkDetector:
+    return WatermarkDetector(
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="http://gateway.invalid/v1",
+        http_session=session,  # type: ignore[arg-type]
+        **kwargs,
+    )
 
 
 def _json(
@@ -356,17 +387,31 @@ async def test_attempt_timeout_covers_the_gateway_worst_case() -> None:
     assert session.timeouts[0].total >= 190.0
 
 
-async def test_attempt_timeout_raises_without_retry(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(watermark_module, "_ATTEMPT_TIMEOUT", 0.05)
-    gateway = _Gateway([_json(VERDICT)], delay=1.0)
-    async with _serve(gateway) as detector:
-        waits = _record_waits(detector)
-        with pytest.raises(APITimeoutError) as error:
-            await detector.check(wav_bytes(), provider="cartesia")
+async def test_attempt_timeout_raises_without_retry() -> None:
+    session = _FailingSession(asyncio.TimeoutError())
+    detector = _failing_detector(session)
+    waits = _record_waits(detector)
+    with pytest.raises(APITimeoutError) as error:
+        await detector.check(wav_bytes(), provider="cartesia")
 
     assert not error.value.retryable
-    assert len(gateway.requests) == 1
+    assert session.posts == 1
     assert waits == []
+
+
+async def test_connect_timeout_is_retried() -> None:
+    session = _FailingSession(aiohttp.ConnectionTimeoutError())
+    detector = _failing_detector(
+        session, conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    waits = _record_waits(detector)
+    with pytest.raises(APIConnectionError) as error:
+        await detector.check(wav_bytes(), provider="cartesia")
+
+    assert not isinstance(error.value, APITimeoutError)
+    assert error.value.retryable
+    assert session.posts == 2
+    assert waits == [0.1]
 
 
 async def test_failed_connect_is_retried() -> None:

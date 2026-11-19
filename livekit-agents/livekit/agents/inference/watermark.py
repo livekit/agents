@@ -190,11 +190,15 @@ class WatermarkDetector:
                 reaches the gateway counts against the project's daily checks, so only
                 two answers are retried: a 503 (provider at capacity, gateway busy or
                 draining) and a 429 that sends ``Retry-After``. Each waits the gateway's
-                ``Retry-After``, and one over 60 s is raised instead. A 502 or 504 is
-                raised at once: the provider failed on this file and would again.
-            APITimeoutError: The attempt did not finish within 190 s. Not retried.
-            APIConnectionError: The gateway could not be reached. A failed connect is
-                retried, since the gateway never saw it; a dropped request is not.
+                ``Retry-After``, and one over 60 s is raised instead. A 503 that sends
+                no usable ``Retry-After`` waits the ``conn_options`` retry interval. A
+                502 or 504 is raised at once: the provider failed on this file and
+                would again.
+            APITimeoutError: The attempt connected and did not finish within 190 s.
+                Not retried.
+            APIConnectionError: The gateway could not be reached. A failed connect, a
+                connect that timed out included, is retried, since the gateway never
+                saw it; a dropped request is not.
             APIError: The gateway answered 200 with a body that is not a check.
             ValueError: The file is empty.
             TypeError: ``file`` is not a path, bytes, or a binary file object.
@@ -247,10 +251,12 @@ class WatermarkDetector:
                     retry_after=_parse_retry_after(response.headers.get("Retry-After")),
                     terminal=_terminal_denial(response.headers),
                 )
+        except (aiohttp.ConnectionTimeoutError, aiohttp.ClientConnectorError) as exc:
+            # Listed before TimeoutError: a connect timeout is one too, and it never
+            # reached the gateway.
+            raise APIConnectionError("inference gateway connection failed") from exc
         except asyncio.TimeoutError as exc:
             raise APITimeoutError("inference watermark check timed out", retryable=False) from exc
-        except aiohttp.ClientConnectorError as exc:
-            raise APIConnectionError("inference gateway connection failed") from exc
         except aiohttp.ClientError as exc:
             raise APIConnectionError(
                 "inference gateway connection failed", retryable=False
