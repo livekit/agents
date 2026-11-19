@@ -63,9 +63,9 @@ from .audio_recognition import (
     _STTPipeline,
 )
 from .endpointing import (
-    BaseEndpointing,
     create_endpointing,
     inherit_learned_delay,
+    learned_delay,
     update_endpointing,
 )
 from .events import (
@@ -192,11 +192,11 @@ class _ReusableResources:
     stt_pipeline: _STTPipeline | None = None
     rt_session: llm.RealtimeSession | None = None
     turn_detector_stream: _StreamingTurnDetectorStream | None = None
-    # not reused as-is: the next activity seeds its own endpointing with what this one learned
-    endpointing: BaseEndpointing | None = None
+    # not a resource: the pause learned from the user so far, seeds the next activity's
+    # dynamic endpointing
+    learned_endpointing_delay: float | None = None
 
     async def cleanup(self) -> None:
-        self.endpointing = None
         tasks = []
         if self.stt_pipeline is not None:
             tasks.append(self.stt_pipeline.aclose())
@@ -359,6 +359,9 @@ class AgentActivity(RecognitionHooks):
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
         self._realtime_user_input_answered_at: float = 0.0
         self._audio_recognition: AudioRecognition | None = None
+        # learned endpointing delay received on handoff, passed on unchanged if this
+        # activity does not learn one itself (fixed endpointing)
+        self._inherited_endpointing_delay: float | None = None
         self._lock = asyncio.Lock()
         # Serialize remote-context snapshots with their pushes, including provider acknowledgements.
         self._rt_chat_ctx_lock = asyncio.Lock()
@@ -1123,8 +1126,14 @@ class AgentActivity(RecognitionHooks):
         resources = _ReusableResources()
 
         try:
-            if self._audio_recognition:
-                resources.endpointing = self._audio_recognition._endpointing
+            learned = (
+                learned_delay(self._audio_recognition._endpointing)
+                if self._audio_recognition
+                else None
+            )
+            resources.learned_endpointing_delay = (
+                learned if learned is not None else self._inherited_endpointing_delay
+            )
 
             # stt pipeline; only reuse with the default stt_node, a custom override may
             # access the old self.session/activity inside the yield loop after detach
@@ -1387,9 +1396,10 @@ class AgentActivity(RecognitionHooks):
         wired_vad = self.vad
         if wired_vad is not None and self.using_default_vad and self._rt_turn_detection_enabled:
             wired_vad = None
+        if reuse_resources is not None:
+            self._inherited_endpointing_delay = reuse_resources.learned_endpointing_delay
         endpointing = create_endpointing(self.endpointing_opts)
-        if reuse_resources is not None and reuse_resources.endpointing is not None:
-            inherit_learned_delay(endpointing, reuse_resources.endpointing)
+        inherit_learned_delay(endpointing, self._inherited_endpointing_delay)
         self._audio_recognition = AudioRecognition(
             self._session,
             hooks=self,

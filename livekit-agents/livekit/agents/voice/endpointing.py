@@ -268,19 +268,22 @@ class DynamicEndpointing(BaseEndpointing):
             self._utterance_pause.reset(alpha=alpha)
 
 
-def inherit_learned_delay(new: BaseEndpointing, previous: BaseEndpointing) -> None:
-    """Seed ``new`` with the pause length ``previous`` has learned from the user.
+def learned_delay(endpointing: BaseEndpointing) -> float | None:
+    """The pause ``endpointing`` has learned from the user, or None if it does not learn one."""
+    if isinstance(endpointing, DynamicEndpointing):
+        return endpointing._utterance_pause.value
+    return None
 
-    Used on agent handoff: both activities talk to the same user, so the pause learned
-    by the previous agent's ``DynamicEndpointing`` should not reset to the configured floor.
-    The learned value is clamped to the bounds of ``new``. Nothing carries over unless both
-    sides use dynamic endpointing.
+
+def inherit_learned_delay(new: BaseEndpointing, learned: float | None) -> None:
+    """Seed ``new`` with a pause learned from the user earlier in the session.
+
+    Used on agent handoff: every activity talks to the same user, so the pause learned by an
+    earlier agent's ``DynamicEndpointing`` should not reset to the configured floor, even when
+    an agent with fixed endpointing ran in between. The learned value is clamped to the bounds
+    of ``new``. Nothing changes unless ``new`` uses dynamic endpointing.
     """
-    if not isinstance(new, DynamicEndpointing) or not isinstance(previous, DynamicEndpointing):
-        return
-
-    learned = previous._utterance_pause.value
-    if learned is None:
+    if learned is None or not isinstance(new, DynamicEndpointing):
         return
 
     new._utterance_pause.reset(initial=min(max(learned, new._min_delay), new._max_delay))
