@@ -138,3 +138,20 @@ def test_reads_use_the_verified_customer_not_an_argument():
     asyncio.run(verify_identity(ctx, "4155550123", "1980-04-02"))
     assert ctx.userdata.customer_id == "c_1"
     assert json.loads(asyncio.run(get_card(ctx, "4421")))["last_four"] == "4421"
+
+
+def test_a_dispute_needs_only_the_transactions():
+    import asyncio
+    import inspect
+    from types import SimpleNamespace
+
+    from flows.bank import open_dispute
+
+    assert "card_id" not in inspect.signature(open_dispute).parameters
+    assert "card_id" not in CONTRACT.rules["open_dispute"].needs
+    bank = FakeBank.seeded()
+    checking = next(a for a in bank.accounts("c_1") if a.kind == "checking")
+    ids = [t.id for t in bank.transactions(checking.id, 30)[:2]]
+    ctx = SimpleNamespace(userdata=SimpleNamespace(bank=bank, customer_id="c_1"))
+    asyncio.run(open_dispute(ctx, ids, "I do not recognise these"))
+    assert len(bank.disputes) == 1 and bank.disputes[0]["transaction_ids"] == ids

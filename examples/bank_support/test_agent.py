@@ -102,3 +102,19 @@ def test_the_hand_off_is_recorded():
 async def test_a_task_can_undo_its_own_write():
     task = WriteTask(FLOWS["block_card"], CallState())
     assert "unblock_card" in _names(task.tools)
+
+
+async def test_a_hand_off_says_goodbye_and_closes_the_session():
+    from unittest.mock import AsyncMock, MagicMock
+
+    import agent as agent_module
+
+    agent_module.SESSION_DRAIN_S = 0
+    ctx = MagicMock()
+    ctx.session.say = AsyncMock()
+    ctx.session.aclose = AsyncMock()
+    bank_agent = BankAgent()
+    await bank_agent._transfer_to_human_impl(ctx, "wants a higher limit", "Connecting you now.")
+    await bank_agent._close_task
+    ctx.session.say.assert_awaited_once_with("Connecting you now.", allow_interruptions=False)
+    ctx.session.aclose.assert_awaited_once()

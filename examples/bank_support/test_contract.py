@@ -269,3 +269,12 @@ async def test_a_bound_caller_reply_ends_the_call():
     assert await _call(end_call, ctx, {"caller_reply": "No, that’s all. Thank you."}) == (
         "Ending the call."
     )
+
+
+async def test_the_same_refused_call_twice_tells_the_model_to_ask_the_caller():
+    ctx = _ctx()
+    ctx.userdata.state.record("accounts", {}, json.dumps({"ids": ["acc_2", "acc_3"]}))
+    first = await _call(lookup, ctx, {"account_id": "unknown"})
+    second = await _call(lookup, ctx, {"account_id": "unknown"})
+    assert "ask the caller" not in first.lower()
+    assert second.startswith("NOT DONE") and "ask the caller" in second.lower()

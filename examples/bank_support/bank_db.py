@@ -181,14 +181,11 @@ class FakeBank:
         self.replacements.append(order)
         return order
 
-    def open_dispute(
-        self, card_id: str, transaction_ids: list[str], reason: str
-    ) -> dict[str, object]:
+    def open_dispute(self, transaction_ids: list[str], reason: str) -> dict[str, object]:
         for tid in transaction_ids:
             self._transactions[tid].disputed = True
         dispute = {
             "dispute_id": f"dsp_{next(self._ids)}",
-            "card_id": card_id,
             "transaction_ids": list(transaction_ids),
             "reason": reason,
         }

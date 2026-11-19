@@ -88,6 +88,7 @@ class CallState:
     records: list[ToolRecord] = field(default_factory=list)
     user_turns: list[str] = field(default_factory=list)
     declined: bool = False
+    last_refused: tuple[str, dict[str, Any]] | None = None
 
     def record(self, name: str, arguments: dict[str, Any], result: str, ok: bool = True) -> None:
         self.records.append(ToolRecord(name, dict(arguments), result, ok))
@@ -312,8 +313,17 @@ class Contract:
             history = _history(ctx)
             refusal = contract.check(name, arguments, state, history)
             if refusal is not None:
+                if state.last_refused == (name, arguments):
+                    # A model that replays a refused call verbatim is missing something
+                    # only the caller can give; say so instead of refusing in a loop.
+                    refusal += (
+                        " You sent this exact call again after it was refused. Do not repeat it: "
+                        "ask the caller for what is missing, or change the arguments as described."
+                    )
+                state.last_refused = (name, arguments)
                 logger.info("%s refused: %s", name, refusal[:120])
                 return refusal
+            state.last_refused = None
             fillers = asyncio.create_task(_say_fillers(ctx))
             try:
                 result = await fn(*args, **kwargs)

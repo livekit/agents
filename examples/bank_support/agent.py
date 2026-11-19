@@ -214,14 +214,20 @@ class BankAgent(Agent):
         )
         return function_tool(start)
 
-    async def _transfer_to_human_impl(self, ctx: RunContext[Userdata], summary: str) -> str:
-        """Hand the call to a person, for a request no tool here covers or when the caller asks for one.
+    async def _transfer_to_human_impl(
+        self, ctx: RunContext[Userdata], summary: str, closing_message: str
+    ) -> str:
+        """Hand the call to a person, for a request no tool here covers or when the caller asks
+        for one. This ends your part of the call: no closing question is needed.
 
         Args:
-            summary: What the caller needs, in one or two sentences.
+            summary: What the caller needs, in one or two sentences, for the colleague.
+            closing_message: What to tell the caller before the hand-off.
         """
         logger.info("transfer to human: %s", summary)
-        return "A colleague will take the call from here. Tell the caller, then end the call."
+        # A real deployment transfers the SIP call here; the example ends the session.
+        await self._say_and_close(ctx, closing_message)
+        return "Transferred to a colleague."
 
     _transfer_to_human_impl.__name__ = "transfer_to_human"
 
@@ -234,7 +240,11 @@ class BankAgent(Agent):
             caller_reply: The caller's last words, exactly as they said them.
             closing_message: The goodbye to say first.
         """
-        await ctx.session.say(closing_message, allow_interruptions=False)
+        await self._say_and_close(ctx, closing_message)
+        return "Ending the call."
+
+    async def _say_and_close(self, ctx: RunContext[Userdata], message: str) -> None:
+        await ctx.session.say(message, allow_interruptions=False)
         session = ctx.session
 
         async def close_after_drain() -> None:
@@ -242,7 +252,6 @@ class BankAgent(Agent):
             await session.aclose()
 
         self._close_task = asyncio.create_task(close_after_drain())
-        return "Ending the call."
 
     _end_call_impl.__name__ = "end_call"
 

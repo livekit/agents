@@ -49,10 +49,7 @@ CONTRACT = Contract(
         "open_dispute": Rule(
             write=True,
             after=["get_transactions"],
-            needs={
-                "card_id": "get_card.card_id",
-                "transaction_ids": "get_transactions.transactions[].id",
-            },
+            needs={"transaction_ids": "get_transactions.transactions[].id"},
         ),
         "transfer_funds": Rule(
             write=True,
@@ -310,17 +307,15 @@ async def order_replacement(ctx: RunContext, card_id: str) -> str:
     return json.dumps(bank.order_replacement(card_id))
 
 
-async def open_dispute(
-    ctx: RunContext, card_id: str, transaction_ids: list[str], reason: str
-) -> str:
-    """Dispute one or more transactions on a card.
+async def open_dispute(ctx: RunContext, transaction_ids: list[str], reason: str) -> str:
+    """Dispute one or more transactions. The bank knows which account and card each one
+    is on, so the caller does not need to.
 
     Args:
-        card_id: The card id from get_card.
         transaction_ids: The transaction ids from get_transactions, confirmed with the caller.
         reason: The caller's reason, in their words.
     """
-    return json.dumps(_bank(ctx).open_dispute(card_id, transaction_ids, reason))
+    return json.dumps(_bank(ctx).open_dispute(transaction_ids, reason))
 
 
 async def transfer_funds(
@@ -417,7 +412,7 @@ FLOWS = {
             "get_transactions, let the caller pick the ones they do not recognise, confirm them with dispute_total and "
             "read its sentence back, then open_dispute after the caller's yes."
         ),
-        tools=["get_accounts", "get_card", "get_transactions", "dispute_total", "open_dispute"],
+        tools=["get_accounts", "get_transactions", "dispute_total", "open_dispute"],
     ),
     "transfer": Flow(
         name="transfer",

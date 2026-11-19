@@ -28,12 +28,12 @@ Each practice is a mechanism in code, not a line in the prompt. The prompt stays
 | --- | --- | --- |
 | `needs` | An argument must come from an earlier tool result. | `block_card.card_id` comes from `get_card`. |
 | `after` | Tools that must have succeeded first in this call. | Every read comes after `verify_identity`. |
-| `after_any` | At least one of these must have happened. | `end_call` comes after a write or a hand-off. |
+| `after_any` | At least one of these must have happened. | `end_call` comes after a write or an answered question. |
 | `formats` | A regex for an argument, with a spoken description. | A phone number has ten digits. |
 | `undo` | The tool that takes this write back. | `block_card` is undone by `unblock_card`. |
 | `requires_closing_question` | The agent must have asked a question, and the call must quote the caller's answer. | `end_call`. |
 
-`Contract.guarded` wraps each tool and names the arguments from the tool's signature, because LiveKit passes them positionally. Before the call, it checks the rule and returns a short `NOT DONE` reason when the call is out of order. The model reads the reason and corrects itself on the next step. A repeated write returns `ALREADY DONE` instead of running twice, unless a tool it depends on replied again since. For example, a second transfer of the same amount needs a second `transfer_check`.
+`Contract.guarded` wraps each tool and names the arguments from the tool's signature, because LiveKit passes them positionally. Before the call, it checks the rule and returns a short `NOT DONE` reason when the call is out of order. The model reads the reason and corrects itself on the next step. If the model sends the exact same refused call again, the reason tells it to ask the caller for what is missing, so a refusal cannot turn into a loop. A repeated write returns `ALREADY DONE` instead of running twice, unless a tool it depends on replied again since. For example, a second transfer of the same amount needs a second `transfer_check`.
 
 Use `after` only for an order that must hold inside one call, such as verifying the caller first. A rule about the world, such as "only a blocked card can be replaced", belongs in the tool, which reads the current state. Then a card blocked on an earlier call can still be unblocked or replaced.
 
@@ -57,7 +57,7 @@ If a guarded tool takes more than two seconds, the agent says "One moment." It r
 
 ### 6. The call ends only after a closing question
 
-`end_call` requires some handled request: a write, an answered question, a hand-off, or a request the caller dropped. The agent's last turn must also be a question, and `end_call` must quote the caller's answer in `caller_reply`. The hook checks that the quote matches the caller's last turn. The model decides whether the answer means "nothing else", so the check has no word lists and works in any language. The agent says a closing line and the session closes after the audio drains.
+`end_call` requires some handled request: a write, an answered question, or a request the caller dropped. A hand-off to a person ends the agent's part of the call by itself, so it needs no closing question. The agent's last turn must also be a question, and `end_call` must quote the caller's answer in `caller_reply`. The hook checks that the quote matches the caller's last turn. The model decides whether the answer means "nothing else", so the check has no word lists and works in any language. The agent says a closing line and the session closes after the audio drains.
 
 ### Session configuration
 
