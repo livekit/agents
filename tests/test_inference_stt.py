@@ -369,6 +369,23 @@ def test_opted_in_assemblyai_can_use_session_turn_detection() -> None:
     assert stt.capabilities.manual_flush
 
 
+async def test_live_assemblyai_stream_keeps_manual_flush_after_model_switch() -> None:
+    stt = _make_stt("assemblyai/universal-3-6-pro", external_endpointing=True)
+    live = stt.stream(conn_options=_no_retry())
+    try:
+        stt.update_options(model="deepgram/nova-3")
+
+        assert not stt.capabilities.manual_flush
+        assert live.manual_flush
+        new = stt.stream(conn_options=_no_retry())
+        try:
+            assert not new.manual_flush
+        finally:
+            await new.aclose()
+    finally:
+        await live.aclose()
+
+
 def test_switching_model_re_resolves_vad_and_default_rate() -> None:
     stt = _make_stt()
     stt.update_options(model="openai/gpt-live-transcribe")

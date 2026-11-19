@@ -1102,6 +1102,16 @@ class SpeechStream(stt.SpeechStream):
             opts, extra_kwargs={**opts.extra_kwargs, **self._keyterm_payload()}
         )
         self._connection: _STTConnection | None = None
+        # fixed at creation: this stream keeps its model when the parent STT switches
+        self._manual_flush = (
+            opts.external_endpointing
+            and _provider_for_model(opts.model) == "assemblyai"
+            and vad_instance is None
+        )
+
+    @property
+    def manual_flush(self) -> bool:
+        return self._manual_flush
 
     async def _close_connection(self, connection: _STTConnection) -> None:
         """Stop the sole reader and bound socket cleanup, including failed candidates."""
