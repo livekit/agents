@@ -37,12 +37,14 @@ from livekit.agents import (
     LanguageCode,
     stt,
     utils,
+    vad as vad_module,
 )
 from livekit.agents.stt import SpeechData, SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
 from livekit.agents.voice.io import TimedString
 
+from ._turn_detection import TurnDetection
 from ._utils import PeriodicCollector, trace_id_from_headers
 from .log import logger
 from .models import STTRealtimeSampleRates
@@ -82,7 +84,35 @@ class VADOptions(TypedDict, total=False):
 
 
 # https://elevenlabs.io/docs/overview/models#models-overview
-ElevenLabsSTTModels = Literal["scribe_v1", "scribe_v2", "scribe_v2_realtime"]
+ElevenLabsSTTModels = Literal[
+    "scribe_v1",
+    "scribe_v2",
+    "scribe_v2_realtime",
+    "scribe_v3",
+    "scribe_v3_live",
+]
+
+# Models served over the realtime WebSocket endpoint instead of the batch API.
+_REALTIME_MODELS = ("scribe_v2_realtime", "scribe_v3_live")
+
+CommitStrategy = Literal["manual", "vad", "turn_prediction"]
+
+
+def _validate_commit_strategy(model: str, commit_strategy: NotGivenOr[CommitStrategy]) -> None:
+    if commit_strategy == "turn_prediction" and model != "scribe_v3_live":
+        raise ValueError("turn_prediction is only supported for scribe_v3_live")
+
+
+def _warn_missing_turn_prediction_vad(
+    model: str, commit_strategy: NotGivenOr[CommitStrategy], vad: vad_module.VAD | None
+) -> None:
+    if model == "scribe_v3_live" and commit_strategy == "turn_prediction" and vad is None:
+        logger.warning(
+            "scribe_v3_live with turn_prediction can force-commit transcription segments "
+            "after approximately 36 seconds of audio, ending the user's turn while they "
+            "are still speaking. Pass a local VAD to elevenlabs.STT(vad=...) to enable "
+            "the forced-commit guard."
+        )
 
 
 @dataclass
@@ -102,6 +132,13 @@ class STTOptions:
     enable_logging: bool
     previous_text: str | None
     audio_chunk_duration_ms: int = 50
+    commit_strategy: NotGivenOr[CommitStrategy] = NOT_GIVEN
+
+    @property
+    def resolved_commit_strategy(self) -> CommitStrategy:
+        if is_given(self.commit_strategy):
+            return self.commit_strategy
+        return "vad" if is_given(self.server_vad) and self.server_vad is not None else "manual"
 
 
 class STT(stt.STT):
@@ -118,6 +155,8 @@ class STT(stt.STT):
         sample_rate: STTRealtimeSampleRates = 16000,
         audio_chunk_duration_ms: int = 50,
         server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
+        commit_strategy: NotGivenOr[CommitStrategy] = NOT_GIVEN,
+        vad: vad_module.VAD | None = None,
         include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
         model: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
@@ -134,16 +173,15 @@ class STT(stt.STT):
             api_key (NotGivenOr[str]): ElevenLabs API key. Can be set via argument or `ELEVEN_API_KEY` environment variable.
             base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
             language_code (NotGivenOr[str]): Language code for the STT model. Optional.
-            secondary_languages (NotGivenOr[list[str]]): Additional languages that may be spoken in
-                the audio, on top of `language_code`. Keeps the primary language hinted while still
-                recognizing the others, which is what a code-switching speaker needs. Names and
-                ISO-639-3 codes are accepted and normalized to what the API takes. Only supported
-                for Scribe v2 realtime.
+            secondary_languages (NotGivenOr[list[str]]): Additional languages that may be spoken
+                alongside `language_code`. The primary language remains a hint while the model
+                recognizes the additional languages. Names and ISO-639-3 codes are accepted
+                and normalized for the API. Only supported for realtime models.
             include_language_detection (NotGivenOr[bool]): Whether the committed transcript reports
                 the language the model actually heard. Defaults to True when no `language_code` is
                 set and False otherwise. Turning it off while no `language_code` is set leaves the
                 plugin with no language to report and every transcript falls back to "en". Only
-                supported for Scribe v2 realtime.
+                supported for realtime models.
             tag_audio_events (bool): Whether to tag audio events like (laughter), (footsteps), etc. in the transcription.
                 Only supported for Scribe v1 model. Default is True.
             use_realtime (bool): Whether to use "scribe_v2_realtime" model for streaming mode. Default is NOT_GIVEN.
@@ -152,10 +190,20 @@ class STT(stt.STT):
             audio_chunk_duration_ms (int): Duration of each outgoing realtime audio chunk in
                 milliseconds. Must be a positive integer. Defaults to 50. Larger chunks reduce
                 message frequency but increase buffering latency. Flushes send any shorter
-                remaining chunk before committing. Only used for Scribe v2 realtime.
-            server_vad (NotGivenOr[VADOptions | None]): Server-side VAD options, only supported for Scribe v2 realtime model.
-                At construction, omit or set to None to use manual commits. Pass {} to enable server VAD defaults.
-                In update_options(), omission keeps the current setting; None disables server VAD and restores manual commits.
+                remaining chunk before committing. Only used for realtime models.
+            server_vad (NotGivenOr[VADOptions | None]): Server-side VAD options, only supported for realtime models.
+                Pass a dict to configure VAD for the vad or turn_prediction commit strategy.
+                When commit_strategy is omitted, a dict enables VAD commits and None uses manual commits.
+                In update_options(), omission keeps the current setting.
+            commit_strategy (NotGivenOr[CommitStrategy]): Realtime transcript commit strategy.
+                If omitted, uses vad when server_vad is a dict, otherwise manual.
+                An explicit strategy takes precedence over server_vad. turn_prediction is only
+                supported for scribe_v3_live and uses VAD as a fallback.
+            vad (vad.VAD | None): Optional local VAD used to distinguish suspected forced
+                segment commits from turn ends on scribe_v3_live. Only used with automatic
+                commit strategies. It does not replace server-side turn prediction.
+                Without it, turn_prediction can end the user's turn at a forced segment
+                commit after approximately 36 seconds of audio, even during ongoing speech.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             model (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
                 be selected based on parameters provided.
@@ -170,7 +218,7 @@ class STT(stt.STT):
             enable_logging (bool): Enable logging of the request. When set to false, zero retention
                 mode will be used. Defaults to True.
             previous_text (NotGivenOr[str]): Preceding text context sent once on the first realtime
-                audio chunk to improve transcription accuracy. Only supported for Scribe v2 realtime.
+                audio chunk to improve transcription accuracy. Only supported for realtime models.
         """
 
         if (
@@ -202,21 +250,22 @@ class STT(stt.STT):
                 )
                 model = "scribe_v2_realtime" if use_realtime else "scribe_v1"
         model = model if is_given(model) else "scribe_v1"
-        use_realtime = model == "scribe_v2_realtime"
+        use_realtime = model in _REALTIME_MODELS
+        _validate_commit_strategy(model, commit_strategy)
+        _warn_missing_turn_prediction_vad(model, commit_strategy, vad)
 
         if not use_realtime and is_given(server_vad):
-            logger.warning("Server-side VAD is only supported for Scribe v2 realtime model")
+            logger.warning("Server-side VAD is only supported for realtime models")
 
         if not use_realtime and is_given(secondary_languages):
             logger.warning(
-                "`secondary_languages` is only supported for Scribe v2 realtime model "
-                "and will be ignored"
+                "`secondary_languages` is only supported for realtime models and will be ignored"
             )
             secondary_languages = NOT_GIVEN
 
         if not use_realtime and is_given(include_language_detection):
             logger.warning(
-                "`include_language_detection` is only supported for Scribe v2 realtime model "
+                "`include_language_detection` is only supported for realtime models "
                 "and will be ignored"
             )
             include_language_detection = NOT_GIVEN
@@ -224,18 +273,9 @@ class STT(stt.STT):
         resolved_previous_text = previous_text if is_given(previous_text) else None
         if not use_realtime and resolved_previous_text is not None:
             logger.warning(
-                "`previous_text` is only supported for Scribe v2 realtime model and will be ignored"
+                "`previous_text` is only supported for realtime models and will be ignored"
             )
             resolved_previous_text = None
-
-        super().__init__(
-            capabilities=STTCapabilities(
-                streaming=use_realtime,
-                interim_results=True,
-                aligned_transcript="word" if include_timestamps and use_realtime else False,
-                manual_flush=use_realtime and (not is_given(server_vad) or server_vad is None),
-            )
-        )
 
         elevenlabs_api_key = api_key if is_given(api_key) else os.environ.get("ELEVEN_API_KEY")
         if not elevenlabs_api_key:
@@ -256,6 +296,7 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             audio_chunk_duration_ms=audio_chunk_duration_ms,
             server_vad=server_vad,
+            commit_strategy=commit_strategy,
             include_timestamps=include_timestamps,
             model_id=model,
             keyterms=keyterms,
@@ -263,7 +304,16 @@ class STT(stt.STT):
             enable_logging=enable_logging,
             previous_text=resolved_previous_text,
         )
+        super().__init__(
+            capabilities=STTCapabilities(
+                streaming=use_realtime,
+                interim_results=True,
+                aligned_transcript="word" if include_timestamps and use_realtime else False,
+                manual_flush=use_realtime and self._opts.resolved_commit_strategy == "manual",
+            )
+        )
         self._session = http_session
+        self._vad = vad
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
@@ -400,35 +450,46 @@ class STT(stt.STT):
         *,
         tag_audio_events: NotGivenOr[bool] = NOT_GIVEN,
         server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
+        commit_strategy: NotGivenOr[CommitStrategy] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         secondary_languages: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """Update STT options. Omitted options keep their current values.
 
-        Set server_vad to None to disable server VAD and use manual commits.
-        Pass {} to enable server VAD with defaults, or a VADOptions dict to configure it.
-        Changing server_vad reconnects active streams and can discard unfinished transcripts.
-        Wait for the current turn's final transcript before changing the commit strategy.
+        An explicit commit_strategy takes precedence over server_vad.
+        Without an explicit strategy, server_vad=None uses manual commits and a dict enables VAD.
+        VAD options also configure the fallback for turn_prediction.
+        Changing these options reconnects active streams and can discard unfinished transcripts.
+        Change the commit strategy between turns.
         """
+        _validate_commit_strategy(self._opts.model_id, commit_strategy)
+        if is_given(commit_strategy) and commit_strategy != self._opts.resolved_commit_strategy:
+            _warn_missing_turn_prediction_vad(self._opts.model_id, commit_strategy, self._vad)
+
         if is_given(tag_audio_events):
             self._opts.tag_audio_events = tag_audio_events
 
         if is_given(server_vad):
             self._opts.server_vad = server_vad
-            self._capabilities.manual_flush = self._capabilities.streaming and server_vad is None
+        if is_given(commit_strategy):
+            self._opts.commit_strategy = commit_strategy
+        if is_given(server_vad) or is_given(commit_strategy):
+            self._capabilities.manual_flush = (
+                self._capabilities.streaming and self._opts.resolved_commit_strategy == "manual"
+            )
 
         if is_given(keyterms):
             self._opts.keyterms = keyterms
 
         if is_given(secondary_languages):
-            if self._opts.model_id == "scribe_v2_realtime":
+            if self._opts.model_id in _REALTIME_MODELS:
                 self._opts.secondary_languages = [
                     LanguageCode(language) for language in secondary_languages
                 ]
             else:
                 logger.warning(
-                    "`secondary_languages` is only supported for Scribe v2 realtime model "
+                    "`secondary_languages` is only supported for realtime models "
                     "and will be ignored"
                 )
                 secondary_languages = NOT_GIVEN
@@ -443,6 +504,8 @@ class STT(stt.STT):
                 keyterms=keyterms,
                 secondary_languages=secondary_languages,
             )
+            if is_given(commit_strategy):
+                stream._reconnect_event.set()
 
     def stream(
         self,
@@ -462,7 +525,7 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.SpeechStream):
-    """Streaming speech recognition using ElevenLabs Scribe v2 realtime API"""
+    """Streaming speech recognition using the ElevenLabs Scribe realtime API"""
 
     def __init__(
         self,
@@ -477,10 +540,13 @@ class SpeechStream(stt.SpeechStream):
         self._opts = opts
         self._language = language
         self._session = http_session
+        self._vad = stt._vad
         self._reconnect_event = asyncio.Event()
         self._speaking = False  # Track if we're currently in a speech segment
-        self._last_partial_text = ""
         self._final_alternatives: list[SpeechData] = []
+        self._turn_detection = TurnDetection(
+            opts=opts, vad=self._vad, on_end_of_speech=self._emit_end_of_speech
+        )
         self._audio_duration_collector = PeriodicCollector(
             callback=self._on_audio_duration_report,
             duration=5.0,
@@ -490,17 +556,30 @@ class SpeechStream(stt.SpeechStream):
         self,
         *,
         server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
+        commit_strategy: NotGivenOr[CommitStrategy] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         secondary_languages: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         """Update stream options. Omitted options keep their current values.
 
-        Set server_vad to None to disable server VAD and use manual commits.
-        Pass {} to enable server VAD with defaults, or a VADOptions dict to configure it.
+        An explicit commit_strategy takes precedence over server_vad.
+        Without an explicit strategy, server_vad=None uses manual commits and a dict enables VAD.
+        VAD options also configure the fallback for turn_prediction.
         Changes reconnect the stream and can discard unfinished transcripts.
-        Wait for the current turn's final transcript before changing these options.
+        Change these options between turns.
+        Commit strategy changes apply to the owning STT and all its streams.
         """
+        if is_given(commit_strategy):
+            assert isinstance(self._stt, STT)
+            self._stt.update_options(
+                server_vad=server_vad,
+                commit_strategy=commit_strategy,
+                no_verbatim=no_verbatim,
+                keyterms=keyterms,
+                secondary_languages=secondary_languages,
+            )
+            return
         if is_given(server_vad):
             self._opts.server_vad = server_vad
             self._reconnect_event.set()
@@ -551,6 +630,17 @@ class SpeechStream(stt.SpeechStream):
 
         return "committed_transcript"
 
+    def _emit_end_of_speech(self) -> None:
+        if self._speaking:
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=SpeechEventType.END_OF_SPEECH,
+                    alternatives=self._final_alternatives,
+                )
+            )
+            self._final_alternatives = []
+            self._speaking = False
+
     async def _run(self) -> None:
         """Run the streaming transcription session"""
         closing_ws = False
@@ -558,7 +648,7 @@ class SpeechStream(stt.SpeechStream):
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
                 while True:
-                    # scribe_v2_realtime model requires a keepalive message instead of a ping
+                    # realtime models require a keepalive message instead of a ping
                     await asyncio.sleep(10)
                     await ws.send_str(
                         json.dumps(
@@ -604,6 +694,7 @@ class SpeechStream(stt.SpeechStream):
                         has_ended = True
 
                     for frame in frames:
+                        await self._turn_detection.push_frame(frame)
                         self._audio_duration_collector.push(frame.duration)
                         audio_b64 = base64.b64encode(frame.data.tobytes()).decode("utf-8")
                         await ws.send_str(
@@ -619,6 +710,7 @@ class SpeechStream(stt.SpeechStream):
 
                     if has_ended:
                         self._audio_duration_collector.flush()
+                        self._turn_detection.on_commit_requested()
                         await ws.send_str(
                             json.dumps(
                                 {
@@ -633,6 +725,7 @@ class SpeechStream(stt.SpeechStream):
                         has_ended = False
 
                 closing_ws = True
+                await self._turn_detection.end_input()
             except (aiohttp.ClientError, ConnectionError) as e:
                 if closing_ws or self._session.closed:
                     return
@@ -685,7 +778,7 @@ class SpeechStream(stt.SpeechStream):
             try:
                 ws = await self._connect_ws()
                 self._input_ch.restart_provider_clock()
-                self._last_partial_text = ""
+                await self._turn_detection.start()
                 self._final_alternatives = []
                 if self._opts.previous_text:
                     # Must be the first input_audio_chunk on the connection.
@@ -704,6 +797,7 @@ class SpeechStream(stt.SpeechStream):
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
                     asyncio.create_task(keepalive_task(ws)),
+                    asyncio.create_task(self._turn_detection.run_vad()),
                 ]
                 tasks_group = asyncio.gather(*tasks)
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
@@ -727,16 +821,16 @@ class SpeechStream(stt.SpeechStream):
                     tasks_group.cancel()
                     tasks_group.exception()  # Retrieve exception to prevent it from being logged
             finally:
+                await self._turn_detection.aclose()
                 if ws is not None:
                     await ws.close()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        """Establish WebSocket connection to ElevenLabs Scribe v2 API"""
-        commit_strategy = "vad" if self._server_vad is not None else "manual"
+        """Establish WebSocket connection to the ElevenLabs Scribe realtime API"""
         params = [
             f"model_id={self._opts.model_id}",
             f"audio_format=pcm_{self._opts.sample_rate}",
-            f"commit_strategy={commit_strategy}",
+            f"commit_strategy={self._opts.resolved_commit_strategy}",
             f"enable_logging={str(self._opts.enable_logging).lower()}",
         ]
 
@@ -831,12 +925,18 @@ class SpeechStream(stt.SpeechStream):
                 for word in words
             ]
 
+        is_forced_commit = False
+        if message_type in ("committed_transcript", "committed_transcript_with_timestamps"):
+            is_forced_commit = self._turn_detection.on_committed_transcript(
+                data, final_message_type=self._final_message_type
+            )
         if message_type == "partial_transcript":
+            text_changed = self._turn_detection.on_partial_transcript(
+                data.get("turn_probability"), text=text
+            )
             logger.debug("Received message type partial_transcript", extra={"lk.pii.data": data})
 
-            if text and text != self._last_partial_text:
-                self._last_partial_text = text
-
+            if text_changed:
                 # Send START_OF_SPEECH if we're not already speaking
                 if not self._speaking:
                     self._event_ch.send_nowait(
@@ -855,8 +955,6 @@ class SpeechStream(stt.SpeechStream):
         elif message_type == self._final_message_type:
             # Final committed transcripts - these are sent to the LLM/TTS layer in LiveKit agents
             # and trigger agent responses (unlike partial transcripts which are UI-only)
-            self._last_partial_text = ""
-
             if text:
                 # Send START_OF_SPEECH if we're not already speaking
                 if not self._speaking:
@@ -874,15 +972,10 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._event_ch.send_nowait(final_event)
 
-            if self._speaking and (not text or self._server_vad is not None):
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(
-                        type=SpeechEventType.END_OF_SPEECH,
-                        alternatives=self._final_alternatives,
-                    )
-                )
-                self._final_alternatives = []
-                self._speaking = False
+            if not is_forced_commit and (
+                not text or self._opts.resolved_commit_strategy != "manual"
+            ):
+                self._turn_detection.end_speech()
 
         elif message_type in ("committed_transcript", "committed_transcript_with_timestamps"):
             # the other copy of a commit the branch above already emitted
