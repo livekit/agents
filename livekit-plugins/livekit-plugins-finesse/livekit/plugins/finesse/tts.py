@@ -312,7 +312,11 @@ class TTS(tts.TTS):
             self._direct_inuse.pop(voice, None)
         for v in list(self._direct_pools):
             if v != self._opts.voice and self._direct_inuse.get(v, 0) == 0:
-                await self._direct_pools.pop(v).aclose()
+                # pop with a default: a concurrent release may have already removed this pool
+                # while we awaited an earlier aclose().
+                pool = self._direct_pools.pop(v, None)
+                if pool is not None:
+                    await pool.aclose()
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
