@@ -42,14 +42,36 @@ _STATUS_HINTS = {
 }
 
 
-SupportedLanguage = Literal["de", "en", "es", "fr", "fy", "it", "nl", "pl", "pt", "sv"]
-"""The languages Reson8 can recognize, as ISO 639-1 codes.
+STTModel = Literal["resonant-1", "rumble-2"]
+"""Reson8 speech-to-text models whose options this plugin checks locally.
+
+``STT`` also accepts any other model name and leaves its checks to Reson8. See
+https://docs.reson8.dev/speech-to-text/models/.
+"""
+
+DEFAULT_MODEL: STTModel = "resonant-1"
+"""The model Reson8 uses when no ``model`` is sent."""
+
+# fmt: off
+SupportedLanguage = Literal[
+    "af", "ar", "az", "be", "bg", "bn", "bs", "ca", "ceb", "cs", "da", "de", "el", "en",
+    "es", "et", "eu", "fa", "fi", "fil", "fr", "fy", "gl", "hi", "hr", "hu", "id", "is",
+    "it", "ja", "jv", "ko", "lt", "lv", "mk", "mr", "ms", "mt", "nb", "nl", "pl", "pt",
+    "ro", "ru", "sk", "sl", "sq", "sr", "sv", "ta", "th", "tr", "uk", "vi", "yue", "zh",
+]
+# fmt: on
+"""The languages ``rumble-2`` can recognize, as language codes.
 
 See https://docs.reson8.dev/speech-to-text/features/languages/.
 """
 
 SUPPORTED_LANGUAGES: tuple[str, ...] = get_args(SupportedLanguage)
 """``SupportedLanguage`` as a runtime tuple, for validation and error messages."""
+
+MODEL_LANGUAGES: dict[str, tuple[str, ...]] = {
+    "resonant-1": ("de", "en", "es", "fr", "fy", "it", "nl", "pl", "pt", "sv"),
+    "rumble-2": SUPPORTED_LANGUAGES,
+}
 
 Encoding = Literal["pcm_s16le"]
 """
@@ -82,15 +104,17 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "::1", "[::1]"})
 _IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 
-def normalize_languages(value: str | Sequence[str] | None) -> str | None:
+def normalize_languages(value: str | Sequence[str] | None, model: str | None = None) -> str | None:
     """
     Normalize and validate a language selection into Reson8's query form.
 
     ``"nl"`` -> ``"nl"``; ``"nl,de"`` -> ``"nl,de"``; ``["nl", "de"]`` ->
     ``"nl,de"``; ``None``/``""``/``[]`` -> ``None`` (auto-detect).
 
-    Raises ``ValueError`` if any code is not a :data:`SupportedLanguage`, so
-    invalid selections fail locally rather than after a request to the API.
+    Raises ``ValueError`` if any code is not supported by ``model``, or by
+    :data:`DEFAULT_MODEL` when no model is set, so invalid selections fail
+    locally rather than after a request to the API. A model this plugin does
+    not list is left for Reson8 to check.
     """
 
     if value is None:
@@ -101,12 +125,15 @@ def normalize_languages(value: str | Sequence[str] | None) -> str | None:
     if not codes:
         return None
 
-    unsupported = [c for c in codes if c not in SUPPORTED_LANGUAGES]
-    if unsupported:
-        supported = ", ".join(sorted(SUPPORTED_LANGUAGES))
-        raise ValueError(
-            f"unsupported language(s): {', '.join(unsupported)}. Reson8 supports: {supported}."
-        )
+    model = model or DEFAULT_MODEL
+    allowed = MODEL_LANGUAGES.get(model)
+    if allowed is not None:
+        unsupported = [c for c in codes if c not in allowed]
+        if unsupported:
+            supported = ", ".join(sorted(allowed))
+            raise ValueError(
+                f"unsupported language(s): {', '.join(unsupported)}. {model} supports: {supported}."
+            )
 
     return ",".join(codes)
 
