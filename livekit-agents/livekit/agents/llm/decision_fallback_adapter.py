@@ -32,6 +32,11 @@ class DecisionAvailabilityChangedEvent:
     available: bool
 
 
+def _name(model: DecisionModel) -> str:
+    # models of one class share a label, so the label alone does not say which one failed
+    return f"{model.label} ({model.model})"
+
+
 @dataclass
 class _ModelStatus:
     available: bool = True
@@ -70,7 +75,7 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
         self,
         models: list[DecisionModel],
         *,
-        attempt_timeout: float = 0.5,
+        attempt_timeout: float = 1.0,
         max_retry_per_model: int = 0,
         retry_interval: float = 0.5,
     ) -> None:
@@ -78,9 +83,11 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
         Args:
             models: Decision models in priority order.
             attempt_timeout: Timeout for each request to a model, in seconds. It applies to
-                every model and replaces a model's own default, so raise it for a slow model.
-                Keep it below any deadline the caller sets on ``evaluate``: a model is only
-                marked unavailable when its request fails, not when the caller cancels first.
+                every model and replaces a model's own default. Set it from the latency of
+                the slowest model: a healthy model that answers later than this is marked
+                unavailable. Keep it below any deadline the caller sets on ``evaluate``: a
+                model is only marked unavailable when its request fails, not when the caller
+                cancels first.
             max_retry_per_model: Retries on the same model before moving on. Defaults to 0,
                 which moves on after the first failure.
             retry_interval: Seconds between retries on the same model.
@@ -190,11 +197,11 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
                     )
                 except APIError as e:
                     logger.warning(
-                        "%s failed, switching to next decision model: %s", model.label, e
+                        "%s failed, switching to next decision model: %s", _name(model), e
                     )
                 except Exception:
                     logger.exception(
-                        f"{model.label} unexpected error, switching to next decision model"
+                        f"{_name(model)} unexpected error, switching to next decision model"
                     )
                 else:
                     self._set_available(model, status, True)
@@ -212,7 +219,7 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
             )
 
         raise APIConnectionError(
-            f"all decision models failed ({[model.label for model in self._models]}) "
+            f"all decision models failed ({[_name(model) for model in self._models]}) "
             f"after {time.perf_counter() - started:.2f} seconds"
         )
 
@@ -251,9 +258,9 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
                         input=input, decisions=decisions, conn_options=conn_options
                     )
                 except Exception as e:
-                    logger.debug("%s recovery attempt failed: %s", model.label, e)
+                    logger.debug("%s recovery attempt failed: %s", _name(model), e)
                     return
-            logger.info(f"{model.label} recovered")
+            logger.info(f"{_name(model)} recovered")
             self._set_available(model, status, True)
 
         status.recovering_task = asyncio.create_task(_recover())

@@ -426,27 +426,18 @@ async def test_fallback_moves_on_after_any_request_failure(failure: Exception) -
     await adapter.aclose()
 
 
-async def test_fallback_applies_its_own_timeout_to_each_model() -> None:
-    adapter, _ = fallback(
-        SwitchModel("primary", "hang"), SwitchModel("secondary"), attempt_timeout=0.5
-    )
+@pytest.mark.parametrize(("options", "timeout"), [({}, 1.0), ({"attempt_timeout": 0.5}, 0.5)])
+async def test_fallback_applies_its_own_timeout_to_each_model(
+    options: dict[str, float], timeout: float
+) -> None:
+    adapter, _ = fallback(SwitchModel("primary", "hang"), SwitchModel("secondary"), **options)
     loop = asyncio.get_running_loop()
     started = loop.time()
     response = await evaluate(
         adapter, decisions=CHECK, conn_options=APIConnectOptions(max_retry=3, timeout=10)
     )
     assert response.model == "secondary"
-    assert loop.time() - started == pytest.approx(0.5)
-    await adapter.aclose()
-
-
-async def test_fallback_default_timeout_leaves_room_in_a_one_second_deadline() -> None:
-    primary = SwitchModel("primary", "hang")
-    adapter, events = fallback(primary, SwitchModel("secondary"))
-    for _ in range(2):
-        response = await asyncio.wait_for(evaluate(adapter, decisions=CHECK), timeout=1.0)
-        assert response.model == "secondary"
-    assert events == [("primary", False)]
+    assert loop.time() - started == pytest.approx(timeout)
     await adapter.aclose()
 
 
@@ -476,7 +467,8 @@ async def test_fallback_retries_every_model_once_all_are_unavailable() -> None:
     secondary = SwitchModel("secondary", down)
     adapter, events = fallback(SwitchModel("primary", down), secondary)
 
-    with pytest.raises(APIConnectionError, match="all decision models failed"):
+    # both are SwitchModel, so only the model ids tell them apart
+    with pytest.raises(APIConnectionError, match=r"\(primary\).*\(secondary\)"):
         await evaluate(adapter, decisions=CHECK)
     await asyncio.sleep(1)  # the background checks fail too
 
