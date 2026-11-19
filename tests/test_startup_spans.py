@@ -191,6 +191,30 @@ def test_framework_callbacks_are_not_user_callbacks() -> None:
     assert _is_framework_callback(AgentSession.aclose)
 
 
+@pytest.mark.parametrize("simulation", [False, True])
+def test_startup_redaction_ignores_project_setting_for_simulations(
+    monkeypatch: pytest.MonkeyPatch, simulation: bool
+) -> None:
+    from livekit.agents.telemetry.utils import redaction_enabled
+    from livekit.agents.types import ATTRIBUTE_SIMULATOR_DISPATCH
+
+    info = _info()
+    info.job.enable_redaction = True
+    if simulation:
+        info.job.attributes[ATTRIBUTE_SIMULATOR_DISPATCH] = '{"simulationRunId":"run_abc"}'
+    ctx = JobContext(
+        proc=MagicMock(),
+        info=info,
+        room=_mock_room(),
+        on_connect=lambda: None,
+        on_shutdown=lambda reason: None,
+        inference_executor=MagicMock(),
+    )
+    monkeypatch.setattr("livekit.agents.job.get_job_context", lambda **_: ctx)
+
+    assert redaction_enabled() is (not simulation)
+
+
 def test_job_span_is_back_dated_and_carries_the_join_keys(
     span_exporter: InMemorySpanExporter,
 ) -> None:

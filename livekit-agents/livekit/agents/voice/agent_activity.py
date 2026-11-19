@@ -1671,12 +1671,25 @@ class AgentActivity(RecognitionHooks):
         self._session._keyterm_detector.off("metrics_collected", self._on_metrics_collected)
 
         if self._rt_session is not None:
-            await self._rt_session.aclose()
-            # after aclose, so a model that reports its final usage while closing is still counted
-            self._rt_session.off("metrics_collected", self._on_metrics_collected)
+            rt_session, realtime_spans = self._rt_session, self._realtime_spans
 
-        if self._realtime_spans is not None:
-            self._realtime_spans.clear()
+            def _on_rt_closed(closed: asyncio.Future[None]) -> None:
+                # after the close, so the final usage reported while closing is still counted
+                rt_session.off("metrics_collected", self._on_metrics_collected)
+                if realtime_spans is not None:
+                    realtime_spans.clear()
+                self._session._rt_closing.discard(closed)
+                if not closed.cancelled() and (exc := closed.exception()) is not None:
+                    logger.error("error closing the realtime session", exc_info=exc)
+
+            closed = await rt_session._release_and_close()
+            if closed.done():
+                _on_rt_closed(closed)
+            else:
+                # the provider is still confirming the close (GPT-Live waits for its final usage);
+                # the session owns the rest, so the next agent starts meanwhile
+                self._session._rt_closing.add(closed)
+                closed.add_done_callback(_on_rt_closed)
 
         if self._audio_recognition is not None:
             await self._audio_recognition._aclose()
@@ -3084,6 +3097,7 @@ class AgentActivity(RecognitionHooks):
                 # history keeps the final transcript and on_user_turn_completed edits.
                 preemptive.user_message.content = user_message.content.copy()
                 preemptive.user_message.transcript_confidence = user_message.transcript_confidence
+                preemptive.user_message.extra.update(user_message.extra)
                 preemptive.user_message.metrics = metrics_report
                 self._schedule_speech(speech_handle, priority=SpeechHandle.SPEECH_PRIORITY_NORMAL)
                 logger.debug(
