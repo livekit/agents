@@ -1,0 +1,19 @@
+livekit-agents/livekit/agents/inference/decision_model.py
+  s_2b94c9f2cd8578::t_4b4530a9f418e7 37-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b91b995b8b5cfd28730a87b81561db4f1419b92c",
+  "prompts": {},
+  "sessions": {
+    "s_2b94c9f2cd8578": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_2b94c9f2cd8578",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

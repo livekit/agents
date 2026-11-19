@@ -1,0 +1,21 @@
+livekit-agents/livekit/agents/llm/decision_fallback_adapter.py
+  s_47697770993118::t_927b62a23390eb 35-39,78,86-90,200,204,222,261,263
+tests/test_decisions.py
+  s_47697770993118::t_4a2b9bbc80ab63 429-433,440,470-471
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1e120e3c97f84b143e991dbd5009a8be76b1fc5b",
+  "prompts": {},
+  "sessions": {
+    "s_47697770993118": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_47697770993118",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
