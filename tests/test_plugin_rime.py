@@ -835,6 +835,48 @@ async def _collect(stream) -> list:
     return [event async for event in stream]
 
 
+def _message_fields(response_id: str) -> dict:
+    return {
+        "response_id": response_id,
+        "output_index": 0,
+        "item_id": f"message-{response_id}",
+        "content_index": 0,
+    }
+
+
+async def _stream_long_reply(peer, session):
+    """Stream 600 text and 100 ms audio deltas that nothing reads, one minute of audio."""
+    await session._update_session(instructions="test")
+    pending = session.generate_reply()
+    response_id = await peer.start(await peer.next())
+    generation = await pending
+    fields = _message_fields(response_id)
+    await peer.emit(
+        "response.output_item.added",
+        response_id=response_id,
+        output_index=0,
+        item={"id": fields["item_id"], "type": "message"},
+    )
+    message = None
+    chunk = base64.b64encode(b"\1\0" * 2400).decode()
+    for batch in range(12):
+        for i in range(batch * 50, batch * 50 + 50):
+            await peer.emit("response.text.delta", **fields, delta=f"{i} ")
+            await peer.emit("response.audio.delta", **fields, delta=chunk)
+
+        # Let the SDK hand each batch to the adapter, as network pacing does: the
+        # SDK's own event queue holds 256 events.
+        async def taken(count=batch * 50 + 50):
+            while True:
+                output = session._generations[response_id].outputs.get(fields["item_id"])
+                if output is not None and output.audio.qsize() == count:
+                    return output
+                await asyncio.sleep(0)
+
+        message = await asyncio.wait_for(taken(), 3)
+    return response_id, generation, message
+
+
 async def _speak(tts: TTS, text: str = "hello", conn_options: APIConnectOptions = _NO_RETRY):
     stream = tts.stream(conn_options=conn_options)
     try:
@@ -4371,6 +4413,44 @@ class TestRealtime:
             await peer.end(response_id)
             assert (await asyncio.wait_for(reply, 3)).response_id == response_id
             assert peer.requests.empty()
+
+    async def test_long_reply_arriving_faster_than_playback_is_kept(self):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            response_id, generation, message = await _stream_long_reply(peer, session)
+            await peer.emit(
+                "response.text.done",
+                **_message_fields(response_id),
+                text="".join(f"{i} " for i in range(600)),
+            )
+            await peer.emit("response.audio.done", **_message_fields(response_id))
+            await peer.end(response_id)
+            stream = await asyncio.wait_for(anext(generation.message_stream), 3)
+            text, audio = await asyncio.wait_for(
+                asyncio.gather(_collect(stream.text_stream), _collect(stream.audio_stream)), 5
+            )
+            assert len(text) == 600
+            assert len(audio) == 600
+            assert session._failure is None
+            await session.aclose()
+
+    @pytest.mark.parametrize("stop", ["truncate", "interrupt"])
+    async def test_stopped_long_reply_drops_unread_output(self, stop):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            response_id, generation, message = await _stream_long_reply(peer, session)
+            stream = await asyncio.wait_for(anext(generation.message_stream), 3)
+            if stop == "truncate":
+                session.truncate(
+                    message_id=stream.message_id, modalities=["audio"], audio_end_ms=500
+                )
+            else:
+                session.interrupt()
+            assert message.text.qsize() == 0
+            assert message.audio.qsize() == 0
+            assert await _collect(stream.audio_stream) == []
+            assert session._failure is None
+            await session.aclose()
 
     async def test_audio_overflow_during_handshake_closes_the_late_connection(self):
         async with peer_model() as (peer, model, _):

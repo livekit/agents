@@ -589,7 +589,10 @@ Manual audio commits, per-reply tools, and video inputs log a warning and are
 ignored. Disabling server turn detection, opening a second concurrent session,
 and invalid tool choices raise `llm.RealtimeError` without closing an active
 session. Use a separate TTS model for `session.say()`.
-Audio and output queues are bounded; overflow fails the session. The adapter
+Reply text and audio queue until playback reads them, since Prism sends reply
+audio faster than real time. Without an audio output, use `playback="discard"`;
+otherwise unread reply audio stays queued until its reply is evicted or the
+session closes. Other queues are bounded; overflow fails the session. The adapter
 retains up to 128 generations, evicting completed generations as new ones arrive.
 Truncation is available only for retained output references.
 

@@ -337,13 +337,21 @@ class RealtimeModel(llm.RealtimeModel):
             await self._client.close()
 
 
+def _discard(chan: utils.aio.Chan[Any]) -> None:
+    """Close a reply channel and drop what its reader has not taken."""
+    chan.close()
+    while chan.qsize():
+        chan.recv_nowait()
+
+
 @dataclass
 class _Message:
     output: r.OutputRef
-    text: utils.aio.Chan[str] = field(default_factory=lambda: utils.aio.Chan(maxsize=256))
-    audio: utils.aio.Chan[rtc.AudioFrame] = field(
-        default_factory=lambda: utils.aio.Chan(maxsize=256)
-    )
+    # Prism sends reply audio faster than real time, and playback reads it at real
+    # time. Like other realtime plugins, keep unread output until it is read or the
+    # reply is discarded.
+    text: utils.aio.Chan[str] = field(default_factory=utils.aio.Chan)
+    audio: utils.aio.Chan[rtc.AudioFrame] = field(default_factory=utils.aio.Chan)
     transcript: str = ""
     played_transcript: str | None = None
     retained_text: str | None = None
@@ -1099,8 +1107,8 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
             return
         message = generation.outputs[message_id]
         message.discarded = True
-        message.text.close()
-        message.audio.close()
+        _discard(message.text)
+        _discard(message.audio)
         if is_given(audio_transcript) or audio_end_ms == 0:
             message.played_transcript = audio_transcript if is_given(audio_transcript) else ""
             assert self._history is not None
@@ -1412,8 +1420,12 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                 if message.retained_text is not None:
                     self._history.record_assistant(item_id, message.retained_text)
             message.retained_text = None
-            message.text.close()
-            message.audio.close()
+            if generation.abandoned:
+                _discard(message.text)
+                _discard(message.audio)
+            else:
+                message.text.close()
+                message.audio.close()
         generation.messages.close()
         generation.functions.close()
 
