@@ -150,6 +150,7 @@ class STT(stt.STT):
                 interim_results=True,
                 aligned_transcript=False,  # only chunk start times are available
                 offline_recognize=False,
+                manual_flush=True,
             ),
         )
 
@@ -365,10 +366,11 @@ class SpeechStream(stt.SpeechStream):
         """
 
         closing_ws = False
+        flush_count = 0
         timeline = _PaddedTimeline(self._opts.sample_rate)
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal closing_ws, flush_count
             samples_per_buffer = 1920
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -378,6 +380,7 @@ class SpeechStream(stt.SpeechStream):
             )
 
             async for data in self._input_ch:
+                flush_id: int | None = None
                 if isinstance(data, self._VADFlush):
                     zeros = AudioFrame.create(
                         sample_rate=self._opts.sample_rate,
@@ -388,6 +391,8 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.write(zeros.data.tobytes())
                 elif isinstance(data, self._FlushSentinel):
                     frames = audio_bstream.flush()
+                    flush_count += 1
+                    flush_id = flush_count
                 else:
                     timeline.add_audio(data.samples_per_channel)
                     frames = audio_bstream.write(data.data.tobytes())
@@ -405,6 +410,13 @@ class SpeechStream(stt.SpeechStream):
                         await ws.send_str(json.dumps(audio_msg))
                     except (aiohttp.ClientError, ConnectionError):
                         # the server closed first; recv_task raises the retryable error
+                        return
+
+                if flush_id is not None:
+                    try:
+                        await ws.send_str(json.dumps({"type": "flush", "flush_id": flush_id}))
+                        flush_id = None
+                    except (aiohttp.ClientError, ConnectionError):
                         return
 
             # Input ended: tell the server, then let recv_task drain the model's last
@@ -603,6 +615,21 @@ class SpeechStream(stt.SpeechStream):
                     elif type_ == "end_text":
                         if speaking:
                             speech_end = data.get("stop_s", 0.0)
+                    elif type_ == "flushed":
+                        # the server returned every word the model delay held at the flush
+                        if speaking:
+                            _finalize()
+                        else:
+                            # nothing was heard, but the flush still needs an answer or the
+                            # commit waits for its transcript timeout
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(
+                                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                                    alternatives=[
+                                        stt.SpeechData(text="", language=self._opts.language)
+                                    ],
+                                )
+                            )
                     elif type_ == "log":
                         log_server_message(data)
                     else:

@@ -499,10 +499,11 @@ class _FakeMessage:
 class _FakeWebSocket:
     def __init__(self) -> None:
         self.incoming: asyncio.Queue[dict] = asyncio.Queue()
+        self.sent: list[dict] = []
         self.close_code = None
 
     async def send_str(self, message: str) -> None:
-        pass
+        self.sent.append(json.loads(message))
 
     async def ping(self) -> None:
         pass
@@ -994,3 +995,64 @@ def test_unknown_preflight_trigger_is_rejected():
     """A misspelt trigger raises instead of silently disabling the preview."""
     with pytest.raises(ValueError, match="preflight_trigger"):
         _make_stt([READY], preflight_trigger="vad_trip")
+
+
+@pytest.mark.asyncio
+async def test_manual_flush_asks_the_server_and_finalizes_on_its_reply():
+    """A flush (`commit_user_turn`) asks the server for the words the model delay still holds
+    and finalizes on its `flushed` reply, so they make it into the final transcript instead
+    of the next turn."""
+    from livekit.agents.stt import SpeechEventType
+    from livekit.plugins.gradium import STT
+
+    session = _FakeSession()
+    stt = STT(api_key="test-key", http_session=session)
+    assert stt.capabilities.manual_flush
+    stream = stt.stream()
+    collector = _EventCollector(stream)
+    try:
+        session.ws.incoming.put_nowait(READY)
+        session.ws.incoming.put_nowait(_text("hello", 0.1))
+        await collector.wait_for(2)
+
+        stream.flush()
+        await collector.drain(session.ws)
+        assert session.ws.sent[-1] == {"type": "flush", "flush_id": 1}
+
+        # the held word comes out before the server confirms the flush
+        session.ws.incoming.put_nowait(_text("world", 0.4))
+        session.ws.incoming.put_nowait({"type": "flushed", "flush_id": 1})
+        events = await collector.wait_for(5)
+        assert [ev.type for ev in events] == [
+            SpeechEventType.START_OF_SPEECH,
+            SpeechEventType.INTERIM_TRANSCRIPT,
+            SpeechEventType.INTERIM_TRANSCRIPT,
+            SpeechEventType.FINAL_TRANSCRIPT,
+            SpeechEventType.END_OF_SPEECH,
+        ]
+        assert events[3].alternatives[0].text == "hello world"
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_manual_flush_without_speech_answers_with_an_empty_final():
+    """A commit while nothing was heard must not wait for its transcript timeout."""
+    from livekit.agents.stt import SpeechEventType
+    from livekit.plugins.gradium import STT
+
+    session = _FakeSession()
+    stt = STT(api_key="test-key", http_session=session)
+    stream = stt.stream()
+    collector = _EventCollector(stream)
+    try:
+        session.ws.incoming.put_nowait(READY)
+        await collector.drain(session.ws)
+
+        stream.flush()
+        session.ws.incoming.put_nowait({"type": "flushed", "flush_id": 1})
+        events = await collector.wait_for(1)
+        assert [ev.type for ev in events] == [SpeechEventType.FINAL_TRANSCRIPT]
+        assert events[0].alternatives[0].text == ""
+    finally:
+        await stream.aclose()
