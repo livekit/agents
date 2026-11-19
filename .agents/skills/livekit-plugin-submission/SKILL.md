@@ -55,13 +55,13 @@ If you're running inside a checkout of livekit/agents or livekit/agents-js, find
 
 **Package names**
 
-- If you have a shell, run `pip index versions livekit-plugins-<name>` and `npm view @livekit/agents-plugin-<name> version`. "No matching distribution" from pip, or a 404 from npm, means the name is unclaimed.
+- If you have a shell, run `curl -s -o /dev/null -w "%{http_code}" https://pypi.org/simple/livekit-plugins-<name>/` (200 means the name is taken, 404 means it's unclaimed) and `npm view @livekit/agents-plugin-<name> version` (a version means taken, an E404 error means unclaimed). Don't use `pip index versions`: it also reports "No matching distribution" for packages that exist but don't support your Python version. Any other result, such as a network error, means you couldn't tell, so ask the partner.
 - Without a shell, try `https://pypi.org/project/livekit-plugins-<name>/` and `https://www.npmjs.com/package/@livekit/agents-plugin-<name>`. PyPI often blocks automated fetches, so if neither check works, ask the partner in Step 3.
 - If neither name exists, the answer is No. If a name exists, ask in Step 3 whether the partner published it. If someone else did, flag it.
 
 **PR**
 
-Use the `gh` CLI if it's available (`gh pr view <url> --comments` and `gh api repos/<owner>/<repo>/pulls/<n>/comments`). Otherwise read the PR page on github.com. To read the plugin code, open the files from the PR's head branch on `raw.githubusercontent.com/<fork owner>/agents/<branch>/<path>`.
+Use the `gh` CLI if it's available (`gh pr view <url> --comments` and `gh api repos/<owner>/<repo>/pulls/<n>/comments`). Otherwise read the PR page on github.com. To read the plugin code, open the files from the PR's head branch on `raw.githubusercontent.com/<head owner>/<head repo>/<branch>/<path>`. Take the owner, repo and branch from the PR's "from" label, for example `acme/agents-js:acme-tts`. The repo is `agents` for Python PRs and `agents-js` for Node.js PRs, unless the fork was renamed.
 
 - **SDKs:** Python for a livekit/agents PR, Node.js for a livekit/agents-js PR.
 - **Maintainers:** collect GitHub handles from the PR author and commit authors. You'll need names and emails from the partner.
