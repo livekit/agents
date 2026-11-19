@@ -555,6 +555,23 @@ async def test_direct_session_remints_when_the_voice_changes(
     await tts.aclose()
 
 
+async def test_direct_session_evicts_an_unused_voices_pool(
+    server: FakeFinesse, session: aiohttp.ClientSession
+) -> None:
+    tts = _tts_direct(server, session)
+    await _collect(tts.synthesize("One.", conn_options=NO_RETRY))
+    assert set(tts._direct_pools) == {VOICE}
+
+    tts.update_options(voice="221100ffeeddccbbaa998877")
+    await _collect(tts.synthesize("Two.", conn_options=NO_RETRY))
+
+    # Synthesizing on the new voice closes the previous voice's now-idle pool, so a direct
+    # session is not held open for a voice no longer in use.
+    assert set(tts._direct_pools) == {"221100ffeeddccbbaa998877"}
+    assert tts._direct_inuse == {}
+    await tts.aclose()
+
+
 async def test_direct_session_mints_for_the_streams_snapshot_voice(
     server: FakeFinesse, session: aiohttp.ClientSession
 ) -> None:

@@ -20,6 +20,8 @@ import json
 import os
 import re
 import weakref
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -242,6 +244,9 @@ class TTS(tts.TTS):
         # it uses was minted for that exact voice. Classic connections are voice-agnostic (the
         # voice travels in each task_start), so they share the single pool above.
         self._direct_pools: dict[str, utils.ConnectionPool[aiohttp.ClientWebSocketResponse]] = {}
+        # Count of streams currently synthesizing on each direct-session voice, so an idle pool
+        # for a voice no longer in use can be closed without severing an active stream.
+        self._direct_inuse: dict[str, int] = {}
         self._streams = weakref.WeakSet[SynthesizeStream]()
 
     @property
@@ -271,6 +276,43 @@ class TTS(tts.TTS):
             )
             self._direct_pools[voice] = pool
         return pool
+
+    @asynccontextmanager
+    async def _pooled_connection(
+        self, voice: str, timeout: float
+    ) -> AsyncIterator[
+        tuple[
+            utils.ConnectionPool[aiohttp.ClientWebSocketResponse], aiohttp.ClientWebSocketResponse
+        ]
+    ]:
+        """Hold a connection from ``voice``'s pool, evicting now-idle direct pools on release."""
+        pool = self._pool_for(voice)
+        direct = self._opts.use_direct_session
+        if direct:
+            self._direct_inuse[voice] = self._direct_inuse.get(voice, 0) + 1
+        try:
+            async with pool.connection(timeout=timeout) as ws:
+                yield pool, ws
+        finally:
+            if direct:
+                await self._release_direct(voice)
+
+    async def _release_direct(self, voice: str) -> None:
+        """Drop a stream's hold on ``voice`` and close the pools no voice is using any more.
+
+        A direct session holds a GPU session open, so once the voice is no longer current and no
+        stream is still synthesizing on it, its pool is closed rather than left idle. Pools with
+        an active stream are kept (their checked-out connection is never severed), and a later
+        stream for an evicted voice simply mints a fresh session.
+        """
+        remaining = self._direct_inuse.get(voice, 0) - 1
+        if remaining > 0:
+            self._direct_inuse[voice] = remaining
+        else:
+            self._direct_inuse.pop(voice, None)
+        for v in list(self._direct_pools):
+            if v != self._opts.voice and self._direct_inuse.get(v, 0) == 0:
+                await self._direct_pools.pop(v).aclose()
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
@@ -399,9 +441,10 @@ class TTS(tts.TTS):
         )
         if is_given(voice) and voice != self._opts.voice:
             self._opts.voice = voice
-            # In direct mode nothing needs dropping here: the next synthesis snapshots the new
-            # voice and draws from that voice's own pool (see _pool_for), so it never reuses a
-            # session minted for the previous voice. The previous voice's pool simply idles out.
+            # In direct mode the next synthesis snapshots the new voice and draws from that
+            # voice's own pool (see _pool_for), so it never reuses a session minted for the
+            # previous voice. The previous voice's pool is closed by _release_direct once no
+            # stream is using it any more.
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(num_step):
@@ -432,6 +475,7 @@ class TTS(tts.TTS):
         for pool in self._direct_pools.values():
             await pool.aclose()
         self._direct_pools.clear()
+        self._direct_inuse.clear()
 
 
 def _task_start(opts: _TTSOptions, context_id: str, text: str, *, finalize: bool) -> dict[str, Any]:
@@ -637,8 +681,9 @@ class ChunkedStream(tts.ChunkedStream):
             return
 
         try:
-            pool = self._tts._pool_for(self._opts.voice)
-            async with pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._tts._pooled_connection(
+                self._opts.voice, self._conn_options.timeout
+            ) as (_pool, ws):
                 await _send_text(
                     ws, self._opts, context_id, self._input_text, opened=False, finalize=True
                 )
@@ -731,8 +776,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             finished = True
 
         try:
-            pool = self._tts._pool_for(self._opts.voice)
-            async with pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._tts._pooled_connection(
+                self._opts.voice, self._conn_options.timeout
+            ) as (pool, ws):
                 self._acquire_time = pool.last_acquire_time
                 self._connection_reused = pool.last_connection_reused
                 tasks = [
