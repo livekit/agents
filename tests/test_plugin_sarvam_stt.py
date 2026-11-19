@@ -1537,6 +1537,16 @@ async def test_stt_stream_on_v3_ignores_session_keyterms(ws_session: _KeytermSes
         await stream.aclose()
 
 
+def test_stt_on_v3_warns_that_session_keyterms_are_unsupported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stt = sarvam_stt.STT(api_key="sk_test", model="saaras:v3")
+    with caplog.at_level("WARNING"):
+        stt._update_session_keyterms(["Vistaar"])
+    assert "keyterms are not supported by this STT" in caplog.text
+    assert stt._session_keyterms == []
+
+
 def test_keyterms_capability_follows_the_model() -> None:
     assert sarvam_stt.STT(api_key="sk_test").capabilities.keyterms
     assert not sarvam_stt.STT(api_key="sk_test", model="saaras:v3").capabilities.keyterms

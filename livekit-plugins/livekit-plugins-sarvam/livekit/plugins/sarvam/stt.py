@@ -579,6 +579,9 @@ class STT(stt.STT):
         return "Sarvam"
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if not self.capabilities.keyterms:
+            super()._update_session_keyterms(keyterms)
+            return
         # Sarvam takes keyterms only when a connection opens, so open streams reconnect
         # with the merged set between utterances, as the Deepgram plugin does.
         if keyterms == self._session_keyterms:

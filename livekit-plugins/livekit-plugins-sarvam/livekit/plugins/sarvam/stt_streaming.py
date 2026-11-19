@@ -510,6 +510,9 @@ class STTRealtime(stt.STT):
         return stream
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if not self.capabilities.keyterms:
+            super()._update_session_keyterms(keyterms)
+            return
         # Sarvam takes keyterms only when a connection opens, and a realtime stream never
         # reconnects (a new connection is a new session), so open streams keep theirs and
         # the merged set applies from the next stream.

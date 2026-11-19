@@ -2090,6 +2090,16 @@ def test_realtime_merges_session_keyterms_into_new_streams(
     assert stt._opts.keyterms == ["Bulbul"]  # session terms never leak into user terms
 
 
+def test_realtime_on_v3_warns_that_session_keyterms_are_unsupported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stt = stt_streaming.STTRealtime(api_key="sk_test")
+    with caplog.at_level(logging.WARNING):
+        stt._update_session_keyterms(["Vistaar"])
+    assert "keyterms are not supported by this STT" in caplog.text
+    assert stt._session_keyterms == []
+
+
 def test_realtime_keyterms_capability_follows_the_model() -> None:
     assert not stt_streaming.STTRealtime(api_key="sk_test").capabilities.keyterms
     stt = stt_streaming.STTRealtime(api_key="sk_test", model="saaras:v4")
