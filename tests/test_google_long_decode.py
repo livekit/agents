@@ -117,6 +117,7 @@ class TestModelDetection:
             ("gemini-4-argon", True),
             ("gemini-4-carbon", True),
             ("gemini-4-hydrogen", True),
+            ("gemini-4-neon", True),
             ("gemini-3-pro-preview", False),
             ("gemini-2.5-flash", False),
             ("gemma-4-27b-it", False),
@@ -250,10 +251,11 @@ class TestRequestShaping:
         assert cfg.thinking_budget is None
         assert cfg.thinking_level == types.ThinkingLevel.HIGH
 
+    @pytest.mark.parametrize("model", ["gemini-4-hydrogen", "gemini-4-neon"])
     @pytest.mark.parametrize("level", ["xhigh", "XHIGH"])
-    async def test_xhigh_goes_out_upper_case_on_hydrogen(self, level: str) -> None:
+    async def test_xhigh_goes_out_upper_case_where_supported(self, model: str, level: str) -> None:
         extra = await _request_config(
-            _llm("gemini-4-hydrogen", thinking_config=types.ThinkingConfig(thinking_level=level))
+            _llm(model, thinking_config=types.ThinkingConfig(thinking_level=level))
         )
         cfg = extra["thinking_config"]
         assert cfg.model_dump(mode="json", exclude_none=True) == {"thinking_level": "XHIGH"}
@@ -262,11 +264,12 @@ class TestRequestShaping:
         "thinking_config",
         [{"thinking_level": "xhigh"}, types.ThinkingConfig(thinking_level="xhigh")],
     )
-    async def test_a_per_call_xhigh_goes_out_upper_case_on_hydrogen(
-        self, thinking_config: types.ThinkingConfigOrDict
+    @pytest.mark.parametrize("model", ["gemini-4-hydrogen", "gemini-4-neon"])
+    async def test_a_per_call_xhigh_goes_out_upper_case_where_supported(
+        self, model: str, thinking_config: types.ThinkingConfigOrDict
     ) -> None:
         extra = await _request_config(
-            _llm("gemini-4-hydrogen"), extra_kwargs={"thinking_config": thinking_config}
+            _llm(model), extra_kwargs={"thinking_config": thinking_config}
         )
         cfg = extra["thinking_config"]
         assert cfg.model_dump(mode="json", exclude_none=True) == {"thinking_level": "XHIGH"}
