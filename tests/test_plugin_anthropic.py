@@ -122,8 +122,9 @@ class TestAnthropicStreamRetry:
 class _FakeAnthropicStream:
     """Replays a fixed list of stream events, like the SDK's message stream."""
 
-    def __init__(self, events: list[Any]) -> None:
+    def __init__(self, events: list[Any], error: Exception | None = None) -> None:
         self._events = iter(events)
+        self._error = error
 
     async def __aenter__(self):
         return self
@@ -138,6 +139,8 @@ class _FakeAnthropicStream:
         try:
             return next(self._events)
         except StopIteration:
+            if self._error is not None:
+                raise self._error from None
             raise StopAsyncIteration from None
 
 
@@ -161,16 +164,21 @@ def _text_block(*parts: str) -> list[Any]:
     ]
 
 
-async def _reply_text(events: list[Any]) -> str:
+async def _reply_text(*attempts: list[Any] | _FakeAnthropicStream) -> str:
+    """Runs one LLMStream; each attempt is one provider stream, used in turn by retries."""
+    streams = iter(
+        a if isinstance(a, _FakeAnthropicStream) else _FakeAnthropicStream(a) for a in attempts
+    )
+
     async def open_stream():
-        return _FakeAnthropicStream(events)
+        return next(streams)
 
     stream = LLMStream(
         _make_llm(),
         create_anthropic_stream=open_stream,
         chat_ctx=llm.ChatContext.empty(),
         tools=[],
-        conn_options=APIConnectOptions(max_retry=0),
+        conn_options=APIConnectOptions(max_retry=len(attempts) - 1, retry_interval=0),
     )
     response = await stream.collect()
     return response.text
@@ -204,3 +212,9 @@ class TestThinkingTags:
     async def test_unclosed_thinking_does_not_silence_the_next_block(self) -> None:
         events = [*_text_block("<thinking>check the slot"), *_text_block("Booking it now.")]
         assert await _reply_text(events) == "Booking it now."
+
+    @pytest.mark.asyncio
+    async def test_a_retry_drops_text_held_by_the_failed_attempt(self) -> None:
+        # the first attempt fails right after the start of a tag, before any chunk is sent
+        failed = _FakeAnthropicStream(_text_block("<think")[:2], error=RuntimeError("reset"))
+        assert await _reply_text(failed, _text_block("Hello.")) == "Hello."

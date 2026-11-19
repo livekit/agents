@@ -350,6 +350,8 @@ class LLMStream(llm.LLMStream):
 
     async def _run(self) -> None:
         retryable = True
+        # each attempt starts clean, so a retry can't emit text a failed attempt held back
+        self._thinking_filter = llm_utils.ThinkingTokenFilter("<thinking>", "</thinking>")
         try:
             async with await self._create_anthropic_stream() as stream:
                 async for event in stream:
