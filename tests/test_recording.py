@@ -507,9 +507,18 @@ async def test_upload_transcript_only() -> None:
     assert "audio" not in part_names
 
 
+@pytest.fixture
+def job_token_source(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """The observability token of the job, as telemetry reads it in token mode."""
+    tokens: dict[str, str] = {"token": "job-token"}
+    monkeypatch.setattr(f"{_TRACES_MOD}._job_token_source", lambda: tokens.get("token"))
+    return tokens
+
+
+@pytest.mark.usefixtures("job_token_source")
 @pytest.mark.parametrize("token_mode", [True, False], ids=["token_mode", "key_mode"])
 async def test_upload_authorization(token_mode: bool, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Token mode sends the worker token as is; with a key and secret the upload signs one."""
+    """Token mode sends the job's token; with a key and secret the upload signs one."""
     monkeypatch.setenv("LIVEKIT_TOKEN", "worker-token")
     monkeypatch.setenv("LIVEKIT_API_KEY", "" if token_mode else "devkey")
     monkeypatch.setenv("LIVEKIT_API_SECRET", "" if token_mode else "secret")
@@ -525,9 +534,10 @@ async def test_upload_authorization(token_mode: bool, monkeypatch: pytest.Monkey
             await _call_upload(report, http_session=mock_http)
 
     authorization = mock_http.post.call_args.kwargs["headers"]["Authorization"]
-    assert authorization == ("Bearer worker-token" if token_mode else "Bearer test-jwt")
+    assert authorization == ("Bearer job-token" if token_mode else "Bearer test-jwt")
 
 
+@pytest.mark.usefixtures("job_token_source")
 @pytest.mark.parametrize("token_mode", [True, False], ids=["token_mode", "key_mode"])
 def test_telemetry_auth_header(token_mode: bool, monkeypatch: pytest.MonkeyPatch) -> None:
     from livekit.agents.telemetry.traces import _AuthHeaderProvider
@@ -539,23 +549,28 @@ def test_telemetry_auth_header(token_mode: bool, monkeypatch: pytest.MonkeyPatch
         _stub_access_token(mock_at)
         headers = _AuthHeaderProvider()()
 
-    assert headers == {"Authorization": "Bearer worker-token" if token_mode else "Bearer test-jwt"}
+    assert headers == {"Authorization": "Bearer job-token" if token_mode else "Bearer test-jwt"}
 
 
-def test_telemetry_auth_header_follows_refreshed_worker_token(
-    monkeypatch: pytest.MonkeyPatch,
+def test_telemetry_auth_header_follows_the_job_token(
+    job_token_source: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A worker token refreshed after the provider was created is sent on the next export."""
+    """A token the job renewed after the provider was created is sent on the next export,
+    and the worker token never is."""
     from livekit.agents.telemetry.traces import _AuthHeaderProvider
 
     monkeypatch.setenv("LIVEKIT_TOKEN", "worker-token")
     monkeypatch.delenv("LIVEKIT_API_KEY", raising=False)
     monkeypatch.delenv("LIVEKIT_API_SECRET", raising=False)
     provider = _AuthHeaderProvider()
-    assert provider() == {"Authorization": "Bearer worker-token"}
+    assert provider() == {"Authorization": "Bearer job-token"}
 
-    monkeypatch.setenv("LIVEKIT_TOKEN", "refreshed-worker-token")
-    assert provider() == {"Authorization": "Bearer refreshed-worker-token"}
+    job_token_source["token"] = "renewed-job-token"
+    assert provider() == {"Authorization": "Bearer renewed-job-token"}
+
+    job_token_source.clear()
+    with pytest.raises(RuntimeError, match="no observability token"):
+        provider()
 
 
 async def test_upload_uses_extended_timeout() -> None:

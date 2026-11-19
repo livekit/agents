@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import aiohttp
 import httpx2 as httpx
@@ -242,12 +243,29 @@ def token_mode(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("token_mode")
-def test_inference_sends_the_worker_token_in_token_mode() -> None:
-    assert inference_utils.resolve_credentials(None, None) == ("", "")
-    assert create_access_token("", "") == "worker-token"
+def test_inference_sends_the_job_token_in_token_mode() -> None:
+    from livekit.agents._token_mode import INFERENCE_CLAIMS
+    from livekit.agents.job import _JobContextVar
 
+    assert inference_utils.resolve_credentials(None, None) == ("", "")
     stt = inference.STT("deepgram/nova-3")
-    assert create_access_token(stt._opts.api_key, stt._opts.api_secret) == "worker-token"
+
+    tokens = {INFERENCE_CLAIMS: "inference-token"}
+    ctx_token = _JobContextVar.set(MagicMock(_job_token=tokens.get))
+    try:
+        assert create_access_token("", "") == "inference-token"
+        assert create_access_token(stt._opts.api_key, stt._opts.api_secret) == "inference-token"
+
+        # the job has no token yet: never the worker token
+        tokens.clear()
+        with pytest.raises(RuntimeError, match="needs a running job"):
+            create_access_token("", "")
+    finally:
+        _JobContextVar.reset(ctx_token)
+
+    # outside a job
+    with pytest.raises(RuntimeError, match="needs a running job"):
+        create_access_token("", "")
 
 
 def test_inference_signs_with_key_and_secret(monkeypatch: pytest.MonkeyPatch) -> None:

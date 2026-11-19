@@ -38,7 +38,7 @@ from livekit import api, rtc
 from livekit.api.access_token import AccessToken, Claims, VideoGrants
 from livekit.protocol import agent, models
 
-from ._token_mode import token_mode_token
+from ._token_mode import OBSERVABILITY_CLAIMS, token_mode_token
 from .log import logger
 from .observability import Tagger
 from .telemetry import (
@@ -55,6 +55,7 @@ from .telemetry.traces import (
     _discard_cloud_tracer,
     _JobTelemetry,
     _prepare_cloud_tracer,
+    _set_job_token_source,
     _setup_cloud_tracer,
     _shutdown_telemetry,
 )
@@ -307,6 +308,12 @@ class JobContext:
         self._early_log_handler = _BufferingHandler()
         logging.getLogger().addHandler(self._early_log_handler)
 
+    def _job_token(self, claims: str) -> str | None:
+        """Token mode: the token the job keeps current for ``claims``, if it has one."""
+        if self._job_token_client is None:
+            return None
+        return self._job_token_client.cached_token(claims)
+
     def _prepare_telemetry(self) -> None:
         """Have the cloud trace pipeline up before the job's first span; whether anything is
         uploaded is decided in ``init_recording``, and the job's spans are held until then."""
@@ -316,6 +323,8 @@ class JobContext:
         if not obs_url:
             return
         try:
+            if token_mode_token() is not None:
+                _set_job_token_source(lambda: self._job_token(OBSERVABILITY_CLAIMS))
             _prepare_cloud_tracer(
                 room_id=self.job.room.sid,
                 job_id=self.job.id,

@@ -694,36 +694,6 @@ async def test_start_job_error_reports_failure_and_exits():
     assert job_proc.failed
 
 
-async def test_update_worker_token_replaces_livekit_token_in_the_job_process():
-    """A refreshed worker token from the worker replaces LIVEKIT_TOKEN in the job process,
-    where token_mode_token() reads it for inference and telemetry."""
-    from livekit.agents._token_mode import token_mode_token
-    from livekit.agents.ipc import job_proc_lazy_main, proto
-
-    class _Client:
-        async def send(self, msg: object) -> None:
-            pass
-
-    job_proc = job_proc_lazy_main._JobProc(
-        _initialize_proc,
-        _job_entrypoint,
-        None,
-        session_end_timeout=300.0,
-        executor_type=job.JobExecutorType.THREAD,
-    )
-    job_proc._client = _Client()  # type: ignore[assignment]
-    job_proc._inf_client = job_proc_lazy_main._InfClient(job_proc._client)
-    job_proc._job_token_client = job_proc_lazy_main._JobTokenClient(job_proc._client)
-
-    cch = utils.aio.Chan[ipc.channel.Message]()
-    cch.send_nowait(proto.UpdateWorkerToken(token="refreshed-worker-token"))
-    cch.send_nowait(proto.ShutdownRequest())
-    env = {"LIVEKIT_API_KEY": "", "LIVEKIT_API_SECRET": "", "LIVEKIT_TOKEN": "first-worker-token"}
-    with patch.dict(os.environ, env):
-        await asyncio.wait_for(job_proc.entrypoint(cch), timeout=5.0)
-        assert token_mode_token() == "refreshed-worker-token"
-
-
 def _create_thread_proc(
     *,
     close_timeout: float,
@@ -969,6 +939,48 @@ async def test_job_token_is_cached_and_renewed_at_half_life() -> None:
     await asyncio.sleep(20)  # past half of the first token's 600s
     assert await worker.client.create_token(claims) == "token-3"
     assert worker.claims == [claims, '{"video": {"roomCreate": true}}', claims]
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+async def test_job_tokens_are_kept_current_in_the_background() -> None:
+    """What a job in token mode runs for its inference and telemetry tokens: both are in the
+    cache after the first renew, and each is replaced at half of its lifetime."""
+    from livekit.agents._token_mode import INFERENCE_CLAIMS, OBSERVABILITY_CLAIMS
+
+    worker = _TokenWorker(ttl=1800)
+    client = worker.client
+    assert client.cached_token(INFERENCE_CLAIMS) is None
+
+    delay = await client.renew(INFERENCE_CLAIMS, OBSERVABILITY_CLAIMS)
+    assert delay == pytest.approx(900, abs=1)
+    assert client.cached_token(INFERENCE_CLAIMS) == "token-1"
+    assert client.cached_token(OBSERVABILITY_CLAIMS) == "token-2"
+
+    task = asyncio.create_task(client.keep_current(delay, INFERENCE_CLAIMS, OBSERVABILITY_CLAIMS))
+    await asyncio.sleep(890)
+    assert len(worker.claims) == 2
+    await asyncio.sleep(20)  # past half of the 1800s
+    assert client.cached_token(INFERENCE_CLAIMS) == "token-3"
+    assert client.cached_token(OBSERVABILITY_CLAIMS) == "token-4"
+    await utils.aio.cancel_and_wait(task)
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+async def test_job_token_renewal_retries_after_an_error() -> None:
+    worker = _TokenWorker(error="the connection to the LiveKit server was lost")
+    client = worker.client
+
+    delay = await client.renew("{}")  # does not raise: the job starts without the token
+    assert delay == ipc.job_proc_lazy_main._JOB_TOKEN_RETRY_DELAY
+    assert client.cached_token("{}") is None
+
+    task = asyncio.create_task(client.keep_current(delay, "{}"))
+    worker._error = ""
+    await asyncio.sleep(delay + 1)
+    assert client.cached_token("{}") == "token-2"
+    await utils.aio.cancel_and_wait(task)
 
 
 @pytest.mark.virtual_time

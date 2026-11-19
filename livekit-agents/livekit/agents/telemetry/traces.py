@@ -704,6 +704,22 @@ def set_tracer_provider(
 _TOKEN_TTL = timedelta(hours=6)
 _TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 
+# token mode: returns the observability token of the job that last prepared telemetry here.
+# The pipeline is one per process, as is the job, but for jobs that run in threads.
+_job_token_source: Callable[[], str | None] | None = None
+
+
+def _set_job_token_source(source: Callable[[], str | None]) -> None:
+    global _job_token_source
+    _job_token_source = source
+
+
+def _job_observability_token() -> str:
+    token = _job_token_source() if _job_token_source is not None else None
+    if token is None:
+        raise RuntimeError("no observability token: in token mode the job gets it from the server")
+    return token
+
 
 class _AuthHeaderProvider:
     def __init__(self) -> None:
@@ -713,11 +729,8 @@ class _AuthHeaderProvider:
         self._refresh()
 
     def _refresh(self) -> None:
-        if (token := token_mode_token()) is not None:
-            # token mode: no secret to sign with, the worker token is sent as is
-            self._auth_header = f"Bearer {token}"
-            self._expires_at = datetime.now(timezone.utc) + _TOKEN_TTL
-            return
+        if token_mode_token() is not None:
+            return  # no secret to sign with: __call__ sends the job's token
 
         access_token = (
             api.AccessToken()
@@ -728,9 +741,9 @@ class _AuthHeaderProvider:
         self._expires_at = datetime.now(timezone.utc) + _TOKEN_TTL
 
     def __call__(self) -> dict[str, str]:
-        if (token := token_mode_token()) is not None:
-            # the worker can replace the token at any time (refresh): send the current one
-            return {"Authorization": f"Bearer {token}"}
+        if token_mode_token() is not None:
+            # the job renews its token in the background: send the current one
+            return {"Authorization": f"Bearer {_job_observability_token()}"}
 
         now = datetime.now(timezone.utc)
         if now >= self._expires_at - _TOKEN_REFRESH_MARGIN:
@@ -1427,9 +1440,10 @@ async def _upload_session_report(
         return
 
     # emit recording
-    # token mode: no secret to sign with, the worker token is sent as is
-    jwt = token_mode_token()
-    if jwt is None:
+    if token_mode_token() is not None:
+        # token mode: no secret to sign with, the job keeps a token from the server current
+        jwt = _job_observability_token()
+    else:
         jwt = (
             api.AccessToken()
             .with_observability_grants(api.ObservabilityGrants(write=True))

@@ -962,29 +962,20 @@ async def test_hot_reload_waits_until_registered() -> None:
     assert [m.WhichOneof("message") for m in sent] == ["migrate_job", "create_job_token"]
 
 
-async def test_update_token_reaches_the_worker_and_running_job_processes() -> None:
-    """A refreshed worker token is used by the next connection, read by token_mode_token(),
-    and sent to the processes that run a job; an idle process gets it when its job starts."""
+async def test_update_token_replaces_the_worker_token() -> None:
+    """A refreshed worker token is used by the next connection. Jobs do not use it: they
+    get their own tokens from the server."""
     from livekit.agents._token_mode import token_mode_token
-    from livekit.agents.ipc.job_proc_executor import ProcJobExecutor
 
     server = _token_mode_server()
     with patch.dict(os.environ, _NO_KEY_ENV):
-        # the dev channel can deliver one before the server runs, without a process pool
+        # the dev channel can deliver one before the server runs
         await server._update_token("early-worker-token")
         assert token_mode_token() == "early-worker-token"
-
-    running = MagicMock(spec=ProcJobExecutor, update_worker_token=AsyncMock())
-    idle = MagicMock(spec=ProcJobExecutor, running_job=None, update_worker_token=AsyncMock())
-    server._proc_pool = MagicMock(processes=[running, idle])
-    server._closed = False  # running
-    with patch.dict(os.environ, _NO_KEY_ENV):
         await server._update_token("refreshed-worker-token")
         assert token_mode_token() == "refreshed-worker-token"
 
     assert server._token == "refreshed-worker-token"
-    running.update_worker_token.assert_awaited_once_with("refreshed-worker-token")
-    idle.update_worker_token.assert_not_awaited()
 
 
 async def test_watch_client_reports_token_mode_and_applies_credentials() -> None:

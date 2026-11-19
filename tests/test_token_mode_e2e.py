@@ -1,8 +1,8 @@
 """Token mode, end to end, against a real LiveKit server.
 
 The worker registers with a worker token and holds no API key or secret. Its job joins the
-room and calls a server API; the token for that call comes from the server, over the worker
-connection (CreateJobToken). The test skips on a server before agent protocol 2.
+room and calls a server API; the token for that call, and the job's inference token, come
+from the server, over the worker connection (CreateJobToken). The test skips on a server before agent protocol 2.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import pytest
 
 from livekit import api
 from livekit.agents import AgentServer, JobContext
+from livekit.agents.inference._utils import create_access_token
 
 from .lk_server import LK_API_KEY, LK_API_SECRET, LK_URL, livekit_server  # noqa: F401
 
@@ -27,6 +28,10 @@ _METADATA = "set by the job in token mode"
 
 
 async def _entrypoint(ctx: JobContext) -> None:
+    # the job got its inference token from the server before the entrypoint ran
+    claims = api.TokenVerifier(LK_API_KEY, LK_API_SECRET).verify(create_access_token("", ""))
+    assert claims.inference is not None and claims.inference.perform
+
     await ctx.connect()
     await ctx.api.room.update_room_metadata(
         api.UpdateRoomMetadataRequest(room=ctx.room.name, metadata=_METADATA)
