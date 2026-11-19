@@ -84,9 +84,9 @@ class SuggestedReplies:
         return self
 
     async def _say(self, data: rtc.RpcInvocationData) -> str:
-        async with self._session._claim_user_turn():
-            await self._session.interrupt()
-            self._session.generate_reply(user_input=data.payload)
+        self._session.reset_away_timer()
+        await self._session.interrupt()
+        self._session.generate_reply(user_input=data.payload)
         return "ok"
 
     def _on_item(self, ev: ConversationItemAddedEvent) -> None:
