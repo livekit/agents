@@ -13,17 +13,20 @@ import asyncio
 import contextlib
 import io
 import logging
+import socket
 import wave
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import aiohttp
 import jwt
 import pytest
 from aiohttp import web
-from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError
 from livekit.agents.inference import WatermarkDetector, WatermarkResult
@@ -85,40 +88,65 @@ class _Gateway:
     """Answers each request with the next reply, repeating the last one."""
 
     replies: list[ReplyFactory]
-    delay: float = 0.0
     requests: list[_Request] = field(default_factory=list)
 
-    async def handle(self, request: web.Request) -> web.Response:
-        parts: list[_Part] = []
-        async for part in await request.multipart():
-            assert isinstance(part, aiohttp.BodyPartReader)
-            parts.append(
-                _Part(
-                    name=part.name,
-                    filename=part.filename,
-                    headers=dict(part.headers),
-                    data=bytes(await part.read()),
-                )
-            )
-        self.requests.append(
-            _Request(path=request.path, headers=dict(request.headers), parts=parts)
-        )
-        if self.delay:
-            await asyncio.sleep(self.delay)
+    def handle(self, request: _Request) -> web.Response:
+        self.requests.append(request)
         index = min(len(self.requests), len(self.replies)) - 1
         return self.replies[index]()
 
 
-class _RecordingSession:
-    """Delegates to a real session and records each attempt's timeout."""
+class _BufferWriter:
+    def __init__(self) -> None:
+        self.data = bytearray()
 
-    def __init__(self, session: aiohttp.ClientSession) -> None:
-        self._session = session
+    async def write(self, data: bytes) -> None:
+        self.data.extend(data)
+
+
+async def _request(url: str, headers: dict[str, str], form: aiohttp.FormData) -> _Request:
+    payload = form()
+    writer = _BufferWriter()
+    await payload.write(writer)
+    headers = {**headers, **payload.headers}
+    message = BytesParser(policy=policy.default).parsebytes(
+        f"Content-Type: {headers['Content-Type']}\r\n\r\n".encode() + writer.data
+    )
+    parts = [
+        _Part(
+            name=part.get_param("name", header="content-disposition"),
+            filename=part.get_filename(),
+            headers=dict(part.items()),
+            data=part.get_payload(decode=True),
+        )
+        for part in message.iter_parts()
+    ]
+    return _Request(path=urlsplit(url).path, headers=headers, parts=parts)
+
+
+class _Response:
+    def __init__(self, response: web.Response) -> None:
+        self.status = response.status
+        self.headers = response.headers
+        self._body = response.body
+
+    async def read(self) -> bytes:
+        assert isinstance(self._body, bytes)
+        return self._body
+
+
+class _RecordingSession:
+    """Serializes actual multipart payloads in memory and records attempt timeouts."""
+
+    def __init__(self, gateway: _Gateway) -> None:
+        self._gateway = gateway
         self.timeouts: list[aiohttp.ClientTimeout] = []
 
-    def post(self, url: str, **kwargs: Any) -> Any:
+    @contextlib.asynccontextmanager
+    async def post(self, url: str, **kwargs: Any) -> AsyncIterator[_Response]:
         self.timeouts.append(kwargs["timeout"])
-        return self._session.post(url, **kwargs)
+        request = await _request(url, kwargs["headers"], kwargs["data"])
+        yield _Response(self._gateway.handle(request))
 
 
 class _FailedPost:
@@ -193,27 +221,25 @@ def _draining() -> web.Response:
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("watermark unit tests must not open network sockets")
+
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(socket.socket, "bind", forbidden)
+
+
 @contextlib.asynccontextmanager
-async def _serve(
-    gateway: _Gateway, *, recording: bool = False, **kwargs: Any
-) -> AsyncIterator[WatermarkDetector]:
-    app = web.Application()
-    app.router.add_post(f"/v1{_CHECK_PATH}", gateway.handle)
-    server = TestServer(app)
-    await server.start_server()
-    session = aiohttp.ClientSession()
+async def _serve(gateway: _Gateway, **kwargs: Any) -> AsyncIterator[WatermarkDetector]:
     options: dict[str, Any] = {
         "api_key": "test-key",
         "api_secret": "test-secret",
-        "base_url": str(server.make_url("/v1")),
-        "http_session": _RecordingSession(session) if recording else session,
+        "base_url": "http://gateway.invalid/v1",
+        "http_session": _RecordingSession(gateway),
     }
     options.update(kwargs)
-    try:
-        yield WatermarkDetector(**options)
-    finally:
-        await session.close()
-        await server.close()
+    yield WatermarkDetector(**options)
 
 
 def _record_waits(detector: WatermarkDetector) -> list[float]:
@@ -377,7 +403,7 @@ async def test_request_carries_minted_token() -> None:
 
 async def test_attempt_timeout_covers_the_gateway_worst_case() -> None:
     gateway = _Gateway([_json(VERDICT)])
-    async with _serve(gateway, recording=True) as detector:
+    async with _serve(gateway) as detector:
         await detector.check(wav_bytes(), provider="cartesia")
         session = detector._session
 
@@ -415,24 +441,16 @@ async def test_connect_timeout_is_retried() -> None:
 
 
 async def test_failed_connect_is_retried() -> None:
-    server = TestServer(web.Application())
-    await server.start_server()
-    base_url = str(server.make_url("/v1"))
-    await server.close()
-    options = APIConnectOptions(max_retry=1, retry_interval=0)
-    async with aiohttp.ClientSession() as session:
-        detector = WatermarkDetector(
-            api_key="test-key",
-            api_secret="test-secret",
-            base_url=base_url,
-            http_session=session,
-            conn_options=options,
-        )
-        waits = _record_waits(detector)
-        with pytest.raises(APIConnectionError) as error:
-            await detector.check(wav_bytes(), provider="cartesia")
+    session = _FailingSession(aiohttp.ClientConnectorError(None, ConnectionRefusedError()))
+    detector = _failing_detector(
+        session, conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    waits = _record_waits(detector)
+    with pytest.raises(APIConnectionError) as error:
+        await detector.check(wav_bytes(), provider="cartesia")
 
     assert error.value.retryable
+    assert session.posts == 2
     assert waits == [0.1]
 
 
