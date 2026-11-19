@@ -146,6 +146,12 @@ jobs:
       contents: read
       pull-requests: write
 
+    env:
+      # Pull requests from forks never receive the 20 provider secrets this job
+      # needs, so the suite cannot pass there. Skip it explicitly instead of
+      # swallowing its exit code.
+      STT_CREDENTIALS_AVAILABLE: ${{ secrets.OPENAI_API_KEY != '' }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -174,6 +180,7 @@ jobs:
           printf '%s' '${{ secrets.GOOGLE_STT_CREDENTIALS_JSON }}' > ${{ github.workspace }}/tests/google.json
 
       - name: Run STT tests
+        if: env.STT_CREDENTIALS_AVAILABLE == 'true'
         env:
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
@@ -208,13 +215,13 @@ jobs:
           rm -f ${{ github.workspace }}/tests/google.json
 
       - name: Generate test summary
-        if: always()
+        if: always() && env.STT_CREDENTIALS_AVAILABLE == 'true'
         id: test-summary
         run: |
           python3 scripts/generate_test_summary.py test-results.xml -o test-summary.md
 
       - name: Post results to PR
-        if: always() && (github.event_name == 'pull_request' || github.event.inputs.pr_number != '')
+        if: always() && env.STT_CREDENTIALS_AVAILABLE == 'true' && (github.event_name == 'pull_request' || github.event.inputs.pr_number != '')
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
@@ -267,6 +274,6 @@ jobs:
             }
 
       - name: Add to job summary
-        if: always()
+        if: always() && env.STT_CREDENTIALS_AVAILABLE == 'true'
         run: |
           cat test-summary.md >> $GITHUB_STEP_SUMMARY
