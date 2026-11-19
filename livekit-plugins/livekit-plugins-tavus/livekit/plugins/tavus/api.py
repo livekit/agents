@@ -167,13 +167,20 @@ class TavusAPI:
         response_data = await self._post("personas", payload)
         return response_data["persona_id"]  # type: ignore
 
-    async def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def end_conversation(self, conversation_id: str) -> None:
+        """End a conversation, releasing its replica."""
+        await self._post(f"conversations/{conversation_id}/end", {}, expect_json=False)
+
+    async def _post(
+        self, endpoint: str, payload: dict[str, Any], *, expect_json: bool = True
+    ) -> dict[str, Any]:
         """
         Make a POST request to the Tavus API with retry logic.
 
         Args:
             endpoint: API endpoint path (without leading slash)
             payload: JSON payload for the request
+            expect_json: Whether the response carries a JSON body to return
 
         Returns:
             Response data as a dictionary
@@ -199,6 +206,8 @@ class TavusAPI:
                         raise APIStatusError(
                             "Server returned an error", status_code=response.status, body=text
                         )
+                    if not expect_json:
+                        return {}
                     try:
                         return await response.json()  # type: ignore
                     except ValueError as e:
