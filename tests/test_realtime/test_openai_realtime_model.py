@@ -1219,7 +1219,11 @@ async def test_reconnect_replays_long_item_ids_within_the_limit() -> None:
 
         await connections[0][0].close()
         for _ in range(500):
-            if len(connections) == 2 and len(connections[1][1]) >= 4:
+            if (
+                len(connections) == 2
+                and len(connections[1][1]) >= 4
+                and len(session.chat_ctx.items) == 3
+            ):
                 break
             await asyncio.sleep(0.01)
 
