@@ -380,6 +380,10 @@ class ResponsesLLMStream(llm.LLMStream):
                         if chunk is not None and chunk.has_response():
                             retryable = False
 
+                if not self._response_completed:
+                    # the body ended without response.completed/failed/incomplete
+                    raise APIConnectionError(retryable=True)
+
             except openai.APITimeoutError:
                 raise APITimeoutError(retryable=retryable)  # noqa: B904
             except openai.APIStatusError as e:
