@@ -4,6 +4,7 @@ use lk_agents_abi::storage::thread::Backoff;
 use lk_agents_net::signal::Producer;
 
 use super::{Conn, End, Socket, WsdbError};
+use crate::telemetry::log_keys;
 
 /// The task owning the live socket and the ready gate. However it ends (a give-up, a close, a
 /// panic, its runtime dropped), it closes the connection, failing every request in flight, then
@@ -107,11 +108,11 @@ impl Conn {
             };
             match self.connect(deadline).await {
                 Ok(socket) => {
-                    log::info!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb reconnected");
+                    log::info!(target: lk_agents_abi::LOG_TARGET, (log_keys::AGENTDB_DATABASE_ID) = self.0.opts.database_id.as_str(); "agentdb reconnected");
                     return Some(socket);
                 }
                 Err(e) if e.is_final() => {
-                    log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb redial refused for good: {e}");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, (log_keys::AGENTDB_DATABASE_ID) = self.0.opts.database_id.as_str(); "agentdb redial refused for good: {e}");
                     self.0.state.lock().fatal = Some(e);
                     return None;
                 }
