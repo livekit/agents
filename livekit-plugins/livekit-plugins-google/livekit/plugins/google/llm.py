@@ -25,6 +25,7 @@ import httpx
 
 import google.auth.credentials
 from google.auth._default_async import default_async
+from google.auth.transport import mtls
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
@@ -310,7 +311,9 @@ class LLM(llm.LLM):
             media_resolution=media_resolution,
         )
         # use httpx, whose timeout limits each read and not the total request time like aiohttp's;
-        # a client without an explicit transport keeps HTTPS_PROXY/NO_PROXY from the environment
+        # a client without an explicit transport keeps HTTPS_PROXY/NO_PROXY from the environment.
+        # genai presents a Vertex client certificate only through its own transport, so leave
+        # the transport to genai when one is configured.
         client_http_options = (
             http_options.model_copy() if is_given(http_options) else types.HttpOptions()
         )
@@ -318,6 +321,11 @@ class LLM(llm.LLM):
         if (
             "transport" not in (client_http_options.async_client_args or {})
             and client_http_options.httpx_async_client is None
+            and not (
+                use_vertexai
+                and mtls.should_use_client_cert()  # type: ignore[no-untyped-call]
+                and mtls.has_default_client_cert_source()  # type: ignore[no-untyped-call]
+            )
         ):
             self._httpx_client = httpx.AsyncClient()
             client_http_options.httpx_async_client = self._httpx_client
