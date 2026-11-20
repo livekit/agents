@@ -136,11 +136,16 @@ class StreamPacerWrapper(SentenceStream):
             ):
                 batch: list[str] = []
                 while self._sentences:
-                    batch.append(self._sentences.pop(0))
+                    # stop before a sentence would push the batch past max_text_length;
+                    # a single sentence longer than the limit is still sent on its own
                     if (
-                        first_sentence  # send first sentence immediately
-                        or sum(len(s) for s in batch) >= self._options.max_text_length
+                        batch
+                        and len(" ".join(batch)) + 1 + len(self._sentences[0])
+                        > self._options.max_text_length
                     ):
+                        break
+                    batch.append(self._sentences.pop(0))
+                    if first_sentence:  # send first sentence immediately
                         break
 
                 if batch:
