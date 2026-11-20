@@ -116,14 +116,15 @@ impl From<WsdbError> for StorageError {
     }
 }
 
-/// A sent write answered with a code that applied nothing is refused, as an unsent one is; one
+/// A sent write answered with a code that applied nothing, or drained unanswered (the server's
+/// notice says it applied nothing), is refused, as an unsent one is; one
 /// answered with a code that may have applied, or never answered (a dropped or closed socket, a
 /// timeout, a malformed answer, a server going away), may have committed: `Uncertain`. Only a
 /// sent write can be.
 impl From<WriteError> for StorageError {
     fn from(e: WriteError) -> Self {
         match e {
-            WriteError::NotSent(e) => e.into(),
+            WriteError::NotSent(e) | WriteError::Sent(e @ WsdbError::Drained) => e.into(),
             WriteError::Sent(e @ WsdbError::Server { code, .. }) if !code.maybe_applied() => {
                 e.into()
             }

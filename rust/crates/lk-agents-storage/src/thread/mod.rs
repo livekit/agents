@@ -29,7 +29,7 @@ use crate::thread::db::{ItemPage, TaskPage, TaskQuery};
 use crate::thread::schema::*;
 use lk_agents_abi::storage::Unacknowledged;
 use lk_agents_abi::storage::context::ContextScope;
-use lk_agents_abi::storage::thread::Backoff;
+use lk_agents_abi::storage::thread::{Backoff, RETRY_MAX_BACKOFF, RETRY_MIN_BACKOFF};
 
 use crate::ThreadDbConnection;
 
@@ -68,14 +68,18 @@ impl Default for LeaseTiming {
     }
 }
 
-/// Sends again a request refused before it applied: what a write's [`Resend`] and a read share.
-/// Every attempt runs under the caller's deadline, which its requests' waits inherit; another
-/// starts only while its backoff and a whole request fit before that deadline.
+/// Sends again a request refused before it applied: what a write's [`Resend`] and a read share,
+/// the one retry owner of a storage request. Each resend waits the next step of one policy, from
+/// 100 ms doubling to 5 s, jittered to between half and all of it, so no refusal resends in a
+/// loop and clients refused together do not return together. Every attempt runs under the
+/// caller's deadline, which its requests' waits inherit; another starts only while its backoff
+/// and a whole request fit before that deadline.
 pub(crate) struct Retry {
     clock: Arc<dyn Clock>,
     epoch: Ts,
     deadline: Ts,
     backoff: Backoff,
+    attempts: u32,
 }
 
 impl Retry {
@@ -90,8 +94,9 @@ impl Retry {
     pub(crate) fn until(clock: Arc<dyn Clock>, deadline: Ts) -> Self {
         let deadline = crate::deadline::current().map_or(deadline, |outer| outer.min(deadline));
         let epoch = clock.now();
-        let backoff = Backoff::new(Duration::ZERO, deadline.saturating_duration_since(epoch));
-        Self { clock, epoch, deadline, backoff }
+        let backoff = Backoff::jittered(RETRY_MIN_BACKOFF, RETRY_MAX_BACKOFF, rand::random())
+            .until(Duration::ZERO, deadline.saturating_duration_since(epoch));
+        Self { clock, epoch, deadline, backoff, attempts: 1 }
     }
 
     /// `attempt` under the deadline: what its requests' waits inherit.
@@ -105,8 +110,10 @@ impl Retry {
     /// A resend starts only if the server's whole request timeout fits between its backoff and
     /// the deadline: one the deadline could cut would turn a refusal that applied nothing into an
     /// unknown outcome. A caller too short for another whole attempt gets the refusal itself.
+    /// Logged at debug: the caller hears the outcome.
     pub(crate) async fn wait(&mut self, why: &str) -> bool {
-        let elapsed = self.clock.now().saturating_duration_since(self.epoch);
+        let now = self.clock.now();
+        let elapsed = now.saturating_duration_since(self.epoch);
         let Some(at) = self.backoff.next(elapsed).map(|after| self.epoch.saturating_add(after))
         else {
             return false;
@@ -114,7 +121,16 @@ impl Retry {
         if at.saturating_add(crate::deadline::REQUEST_TIMEOUT) > self.deadline {
             return false;
         }
-        log::debug!(target: lk_agents_abi::LOG_TARGET, "storage request refused unapplied, sending it again: {why}");
+        let delay = at.saturating_duration_since(now);
+        let subject = "storage request refused unapplied";
+        lk_agents_abi::types::retry::retrying(
+            log::Level::Debug,
+            subject,
+            self.attempts,
+            delay,
+            &why,
+        );
+        self.attempts = self.attempts.saturating_add(1);
         self.clock.wait_until(at).await;
         true
     }

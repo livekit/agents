@@ -318,3 +318,32 @@ crate::contract!(
     tasks_page_by_last_update_with_a_filter_bound_token,
     tasks_browse_in_insertion_order_by_lane,
 );
+
+/// Catches: a request refused unapplied resent with no wait, a fixed pause every client shares,
+/// or after a backoff past the point a whole request fits. Each resend waits between half and all
+/// of a step doubling from 100 ms to 5 s, and none starts the deadline could cut.
+#[tokio::test(start_paused = true)]
+async fn a_refused_request_is_resent_after_a_jittered_doubling_backoff_within_its_deadline() {
+    use crate::deadline::REQUEST_TIMEOUT;
+    let clock: Arc<dyn lk_agents_abi::Clock> = Arc::new(lk_agents_net::clock::RealClock::new());
+    let (start, ms) = (clock.now(), Duration::from_millis);
+    let deadline = start.saturating_add(Duration::from_secs(40));
+    let attempts = parking_lot::Mutex::new(Vec::new());
+    let refused = super::Retry::until(clock.clone(), deadline)
+        .send(|| async {
+            attempts.lock().push(clock.now().saturating_duration_since(start));
+            Err::<(), _>(StorageError::Unavailable("retry: snapshot too old".into()))
+        })
+        .await;
+    assert!(matches!(refused, Err(StorageError::Unavailable(_))), "{refused:?}");
+    let attempts = attempts.into_inner();
+    assert_eq!(attempts[0], Duration::ZERO);
+    for (k, pair) in attempts.windows(2).enumerate() {
+        let step = (ms(100) * 2u32.pow(k as u32)).min(ms(5000));
+        let waited = pair[1] - pair[0];
+        assert!(waited >= step / 2 && waited <= step, "resend {k} waited {waited:?}: {attempts:?}");
+    }
+    let last = *attempts.last().unwrap();
+    assert!(start.saturating_add(last + REQUEST_TIMEOUT) <= deadline, "{attempts:?}");
+    assert!(attempts.len() >= 9, "resent until the deadline left no room: {attempts:?}");
+}

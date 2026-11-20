@@ -467,7 +467,7 @@ async fn a_slow_stream_does_not_stall_another_stream() {
     let deadline = conn.0.clock.now().saturating_add(Duration::from_secs(2));
     let query = pb::client_message::Message::Query(statement(&st("SELECT", vec![])));
     let mut frame = pb::ClientMessage { request_id: 0, message: Some(query) };
-    let mut stalled = conn.send(&mut frame, deadline, conn.window()).await.unwrap();
+    let mut stalled = conn.send(&mut frame, deadline, conn.window(), &mut false).await.unwrap();
     let exec = conn.exec(&st("INSERT", vec![]), deadline).await;
     assert_eq!(exec.expect("answered past the stalled stream").rows_affected, 1);
     // the stalled stream reads what its window held, then that it was cancelled

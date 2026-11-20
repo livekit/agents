@@ -564,3 +564,95 @@ async fn thread_calls_end_at_the_storage_deadline() {
     assert!(matches!(write, Err(StorageError::Uncertain(_))), "{write:?}");
     storage.close().await;
 }
+
+/// Runs `request`, stepping `clock` 2 ms at a time once the tasks have run what they can; the
+/// virtual instants at which `seen` first held each further frame `kind` picks.
+async fn frames_over_virtual_time<T>(
+    clock: &lk_agents_abi::VirtualClock,
+    seen: &connection::tests::Served,
+    kind: fn(&connection::wire::ClientMessage) -> bool,
+    request: impl Future<Output = T>,
+) -> (T, Vec<Ts>) {
+    let (mut request, mut at) = (std::pin::pin!(request), Vec::new());
+    loop {
+        for _ in 0..20 {
+            let poll = std::future::poll_fn(|cx| std::task::Poll::Ready(request.as_mut().poll(cx)));
+            if let std::task::Poll::Ready(out) = poll.await {
+                at.resize(frames(seen, kind), clock.now());
+                return (out, at);
+            }
+            tokio::task::yield_now().await;
+        }
+        at.resize(frames(seen, kind), clock.now());
+        clock.advance(Duration::from_millis(2));
+        assert!(clock.now() < Ts::from_nanos(60_000_000_000), "the request never ended");
+    }
+}
+
+/// Catches: a database answering every request `wrong_shard_server` or `retry` (1003) resending
+/// it in a zero-delay loop. Only a moved request's first resend is immediate; every later one
+/// waits a jittered backoff (at least half of 100 ms, doubling), its retry owner's or its
+/// redial's, and the retries stop before the caller's deadline. Reads and writes alike reach
+/// their caller `Unavailable`.
+#[tokio::test]
+async fn a_request_refused_on_every_attempt_backs_off_until_its_deadline() {
+    fn moving(m: &connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage> {
+        match is_query(m) || is_batch(m) {
+            true => vec![connection::tests::error(ErrorCode::WRONG_SHARD_SERVER, "moved")],
+            false => connection::tests::script(m),
+        }
+    }
+    fn busy(m: &connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage> {
+        match is_query(m) || is_batch(m) {
+            true => vec![connection::tests::error(ErrorCode::RETRY, "snapshot too old")],
+            false => connection::tests::script(m),
+        }
+    }
+    type Script = fn(&connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage>;
+    let ms = Duration::from_millis;
+    for (name, script, immediate) in [("moved", moving as Script, 2), ("retry", busy, 1)] {
+        for write in [false, true] {
+            let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+            let (url, seen) = connection::tests::serve(script, false).await;
+            let background = crate::testing::background();
+            let opts = connection::Options::new(url, "DB_1");
+            let minter = TokenMinter::new("devkey", "secret").unwrap();
+            let conn = Conn::dial(opts, minter, background.spawner, clock.clone()).await.unwrap();
+            let pool = Arc::new(DbPool::new(clock.clone()));
+            let pooled = Pooled {
+                conn,
+                schema: SchemaCell::default(),
+                pool,
+                closed: AtomicBool::new(false),
+            };
+            let deadline = clock.now().saturating_add(crate::deadline::REQUEST_TIMEOUT + ms(1000));
+            let kind = if write { is_batch } else { is_query };
+            let request = crate::deadline::within(deadline, async {
+                let statement = Statement::raw("UPDATE t SET n = 1");
+                let out = match write {
+                    true => {
+                        let clock = pooled.pool.clock.clone();
+                        let resend = Resend::new(clock, &Cx::NONE, StorageWrite::Context);
+                        resend.send(|| pooled.batch(vec![statement.clone()])).await.map(drop)
+                    }
+                    false => pooled.query(statement.clone()).await.map(drop),
+                };
+                pooled.conn.aclose().await;
+                out
+            });
+            let (out, at) = frames_over_virtual_time(&clock, &seen, kind, request).await;
+            let case = format!("{name}, write {write}: {at:?}");
+            assert!(matches!(out, Err(StorageError::Unavailable(_))), "{case}: {out:?}");
+            // the moved request went out again with no backoff
+            assert!(at[immediate - 1] < Ts::ZERO.saturating_add(ms(40)), "{case}");
+            // each later attempt waited at least half its step (50 ms), less the ticks a frame
+            // can take to be seen; a zero-delay loop shows a tick or two
+            for pair in at[immediate - 1..].windows(2) {
+                assert!(pair[1].saturating_duration_since(pair[0]) >= ms(30), "{case}");
+            }
+            // a resend starts only while a whole request fits before the deadline: within the
+            // first second, a few doubling steps
+            assert!(*at.last().unwrap() < deadline && at.len() <= 2 * 5, "{case}");
+        }
+    }
+}

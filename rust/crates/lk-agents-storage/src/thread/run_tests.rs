@@ -732,7 +732,7 @@ async fn a_commit_whose_ack_was_lost_before_it_applied_is_uncertain_not_sent_aga
 /// acknowledgment lost, is `Uncertain` at the caller's one deadline, not a fresh wait later.
 #[tokio::test(start_paused = true)]
 async fn a_commit_and_its_resolution_share_the_callers_deadline() {
-    use crate::deadline::{REQUEST_TIMEOUT, REQUEST_WAIT};
+    use crate::deadline::REQUEST_WAIT;
     let fx = Backend::Sqlite.fixture(None).await;
     let (s, faults) = fx.faulty_thread().await;
     let mut run = s
@@ -741,7 +741,9 @@ async fn a_commit_and_its_resolution_share_the_callers_deadline() {
         .await
         .unwrap();
     run.history_mut().push(message("i1", ChatRole::User, "hi"));
-    faults.unreachable_for(REQUEST_WAIT - REQUEST_TIMEOUT - std::time::Duration::from_secs(1));
+    // the fifth resend, the first past this, lands within 1.55 s to 3.1 s whatever its jitter:
+    // early enough for a whole request before the deadline
+    faults.unreachable_for(std::time::Duration::from_millis(1500));
     faults.fail_next_commit(crate::testing::WriteFault::LoseAckAfter);
     faults.unreachable_after_commit_for(REQUEST_WAIT * 6);
     let started = tokio::time::Instant::now();

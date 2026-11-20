@@ -415,17 +415,58 @@ pub fn agent_message(parts: Vec<a2a::Part>, task_id: &str, message_id: String) -
     }
 }
 
-/// A retry schedule: a pause from 100 ms, doubling up to 1 s, until a deadline. How a partition
-/// another holder has is polled and a write whose answer was lost is sent again.
+/// The first step of a retry's backoff: a request refused unapplied, a socket redialed.
+pub const RETRY_MIN_BACKOFF: Duration = Duration::from_millis(100);
+/// The step a retry's backoff doubles up to.
+pub const RETRY_MAX_BACKOFF: Duration = Duration::from_secs(5);
+
+/// A backoff schedule: each repeated attempt waits the next step, doubling from its first up to
+/// its last, until a deadline. A poll ([`Backoff::new`]) waits each step whole; a retry
+/// ([`Backoff::jittered`]) waits between half and all of it, so clients refused together do not
+/// come back together.
 #[derive(Debug, Clone)]
 pub struct Backoff {
     deadline: Duration,
+    max: Duration,
     pause: Duration,
+    /// The jitter's generator state, seeded by the caller; `None` waits each step whole.
+    jitter: Option<u64>,
 }
 
 impl Backoff {
+    /// A poll until `timeout` past `now`: 100 ms doubling to 1 s. How a partition another holder
+    /// has is polled.
     pub fn new(now: Duration, timeout: Duration) -> Self {
-        Self { deadline: now + timeout, pause: Duration::from_millis(100) }
+        let poll = Self {
+            deadline: Duration::MAX,
+            max: Duration::from_secs(1),
+            pause: Duration::from_millis(100),
+            jitter: None,
+        };
+        poll.until(now, timeout)
+    }
+
+    /// A retry's schedule: `min` doubling to `max`, each wait drawn from `seed` between half and
+    /// all of its step; no deadline but [`Backoff::until`]'s.
+    pub fn jittered(min: Duration, max: Duration, seed: u64) -> Self {
+        Self { deadline: Duration::MAX, max, pause: min, jitter: Some(seed) }
+    }
+
+    /// The schedule, ending `timeout` past `now`.
+    pub fn until(self, now: Duration, timeout: Duration) -> Self {
+        Self { deadline: now.saturating_add(timeout), ..self }
+    }
+
+    /// The next step's wait, whatever the deadline.
+    pub fn delay(&mut self) -> Duration {
+        let step = self.pause;
+        self.pause = step.saturating_mul(2).min(self.max);
+        let Some(state) = &mut self.jitter else {
+            return step;
+        };
+        let half = step / 2;
+        let span = u64::try_from((step - half).as_nanos()).unwrap_or(u64::MAX);
+        half + Duration::from_nanos(splitmix64(state) % span.saturating_add(1))
     }
 
     /// When to try again after a miss at `now`; `None` once the deadline passed.
@@ -433,10 +474,17 @@ impl Backoff {
         if now >= self.deadline {
             return None;
         }
-        let at = now + self.pause;
-        self.pause = (self.pause * 2).min(Duration::from_secs(1));
-        Some(at)
+        Some(now.saturating_add(self.delay()))
     }
+}
+
+/// The next of a SplitMix64 sequence: enough to spread waits, from a seed the caller supplies.
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 /// Unix seconds as a `Timestamp`, to the nearest nanosecond, so the float reads back unchanged.
@@ -527,9 +575,40 @@ mod host {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeSet;
 
     fn message(id: &str) -> a2a::Message {
         a2a::Message { message_id: id.into(), ..a2a::Message::new(a2a::Role::User, vec![]) }
+    }
+
+    /// Each wait of a retry stays within half and all of its step, the steps double to the cap,
+    /// so refused clients spread out and never retry with no wait.
+    #[test]
+    fn a_retry_waits_between_half_and_all_of_each_doubling_step() {
+        let ms = Duration::from_millis;
+        for seed in 0..200 {
+            let mut retry = Backoff::jittered(RETRY_MIN_BACKOFF, RETRY_MAX_BACKOFF, seed);
+            for step in [100, 200, 400, 800, 1600, 3200, 5000, 5000] {
+                let wait = retry.delay();
+                assert!(wait >= ms(step) / 2 && wait <= ms(step), "seed {seed}: {wait:?}");
+            }
+        }
+        let waits: BTreeSet<Duration> = (0..20)
+            .map(|seed| Backoff::jittered(RETRY_MIN_BACKOFF, RETRY_MAX_BACKOFF, seed).delay())
+            .collect();
+        assert!(waits.len() > 10, "the jitter spreads clients: {waits:?}");
+    }
+
+    #[test]
+    fn a_retry_stops_at_its_deadline() {
+        let (t0, ms) = (Duration::from_secs(100), Duration::from_millis);
+        let mut retry = Backoff::jittered(ms(100), ms(5000), 7).until(t0, ms(1000));
+        let mut now = t0;
+        while let Some(at) = retry.next(now) {
+            assert!(at > now);
+            now = at;
+        }
+        assert!(now >= t0 + ms(1000) && now < t0 + ms(1000) + ms(5000));
     }
 
     #[test]
