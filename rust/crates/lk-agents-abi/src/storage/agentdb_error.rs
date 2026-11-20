@@ -37,6 +37,12 @@ impl ErrorCode {
     /// Refused for pressure that passes, or cut while it waited its turn: send it again after a
     /// backoff.
     pub const RETRY: Self = Self(1003);
+    /// The owner cannot serve the database now (its store failing or not confirming its
+    /// ownership), and nothing applied: send it again after a backoff, as `RETRY`.
+    pub const UNAVAILABLE: Self = Self(1004);
+    /// A read held its snapshot past the log's limit and it was let go; nothing applied: send it
+    /// again after a backoff, as `RETRY`, and it reads a fresh snapshot.
+    pub const SNAPSHOT_EXPIRED: Self = Self(1007);
     /// The request may have committed, whole, or not at all.
     pub const COMMIT_UNKNOWN_RESULT: Self = Self(1021);
     /// Its client's Cancel stopped the request before it applied: only the canceller sees it.
@@ -53,10 +59,12 @@ impl ErrorCode {
     pub const PERMISSION_DENIED: Self = Self(6000);
     pub const UNAUTHENTICATED: Self = Self(6001);
 
-    const TABLE: [Declared; 13] = [
+    const TABLE: [Declared; 15] = [
         declared(Self::WRONG_SHARD_SERVER, "wrong_shard_server", true, false),
         declared(Self::IDLE_EVICTED, "idle_evicted", true, false),
         declared(Self::RETRY, "retry", true, false),
+        declared(Self::UNAVAILABLE, "unavailable", true, false),
+        declared(Self::SNAPSHOT_EXPIRED, "snapshot_expired", true, false),
         declared(Self::COMMIT_UNKNOWN_RESULT, "commit_unknown_result", true, true),
         declared(Self::CANCELLED, "cancelled", false, false),
         declared(Self::TIMED_OUT, "timed_out", false, false),
@@ -117,6 +125,17 @@ mod tests {
                 assert_ne!(d.name, other.name, "{} twice", d.name);
             }
         }
+    }
+
+    /// Catches: `unavailable` or `snapshot_expired` read as unknown (maybe applied, final), so a
+    /// store outage or a long read failed its write `Uncertain` instead of being sent again.
+    #[test]
+    fn unavailable_and_snapshot_expired_applied_nothing_and_are_sent_again() {
+        for code in [ErrorCode::UNAVAILABLE, ErrorCode::SNAPSHOT_EXPIRED] {
+            assert!(code.known() && code.retryable() && !code.maybe_applied(), "{code}");
+        }
+        assert_eq!(ErrorCode(1004).to_string(), "unavailable");
+        assert_eq!(ErrorCode(1007).to_string(), "snapshot_expired");
     }
 
     /// Catches: an unknown code read as nothing applied or as worth sending again.
