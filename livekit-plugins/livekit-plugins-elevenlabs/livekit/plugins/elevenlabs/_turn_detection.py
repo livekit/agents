@@ -106,7 +106,8 @@ class TurnDetection:
                     self._start_partial_timeout()
         except Exception:
             await self._disable_vad()
-        finally:
+        else:
+            # On cancellation, aclose() finishes the pending turn before closing VAD.
             if stream is self._vad_stream:
                 await self._close_vad()
 

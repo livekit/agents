@@ -202,6 +202,8 @@ class STT(stt.STT):
             vad (vad.VAD | None): Optional local VAD used to distinguish suspected forced
                 segment commits from turn ends on scribe_v3_live. Only used with automatic
                 commit strategies. It does not replace server-side turn prediction.
+                It also ends a fresh turn opened by a partial transcript when local VAD stays
+                silent and no provider commit arrives within the silence timeout.
                 Without it, turn_prediction can end the user's turn at a forced segment
                 commit after approximately 36 seconds of audio, even during ongoing speech.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.

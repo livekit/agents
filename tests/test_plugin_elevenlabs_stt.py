@@ -1356,6 +1356,50 @@ async def test_stream_closes_dangling_partial_after_optional_committed_turn(
 
 
 @pytest.mark.virtual_time
+@pytest.mark.parametrize("termination", ["close", "provider_error"])
+@pytest.mark.parametrize("local_vad", [True, False])
+async def test_stream_finishes_guarded_partial_on_teardown(
+    termination: str, local_vad: bool
+) -> None:
+    ws = _FakeWS()
+    stream = _live_stream(
+        ws,
+        model="scribe_v3_live",
+        commit_strategy="turn_prediction",
+        vad=_ControlledVAD() if local_vad else None,
+    )
+    stream._conn_options = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, max_retry=0)
+    events: list[stt.SpeechEventType] = []
+
+    async def collect_events() -> None:
+        async for event in stream:
+            events.append(event.type)
+
+    collector = asyncio.create_task(collect_events())
+    try:
+        stream.push_frame(_frame(50))
+        await _wait_until(lambda: bool(ws.sent))
+        ws.received.put_nowait(_partial_transcript("Hello"))
+        await _wait_until(lambda: stt.SpeechEventType.INTERIM_TRANSCRIPT in events)
+
+        if termination == "provider_error":
+            ws.received.put_nowait({"message_type": "transcriber_error"})
+            with pytest.raises(APIConnectionError, match="transcriber_error"):
+                await asyncio.wait_for(collector, timeout=1)
+        else:
+            await stream.aclose()
+            await collector
+    finally:
+        await stream.aclose()
+        await asyncio.gather(collector, return_exceptions=True)
+
+    expected = [stt.SpeechEventType.START_OF_SPEECH, stt.SpeechEventType.INTERIM_TRANSCRIPT]
+    if local_vad:
+        expected.append(stt.SpeechEventType.END_OF_SPEECH)
+    assert events == expected
+
+
+@pytest.mark.virtual_time
 @pytest.mark.parametrize("include_timestamps", [False, True])
 async def test_stream_does_not_time_out_forced_commit_continuation(
     include_timestamps: bool,
