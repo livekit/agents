@@ -124,10 +124,13 @@ async fn create_requires_write_before_allocating_a_thread(backend: Backend) {
     assert!(matches!(response.next().await, Err(DoorError::Auth(_))));
     let listed = store
         .storage
-        .list_threads(livekit_protocol::agent::agent_thread::ListRequest {
-            scope: "customer:42".into(),
-            ..Default::default()
-        })
+        .list_threads(
+            livekit_protocol::agent::agent_thread::ListRequest {
+                scope: "customer:42".into(),
+                ..Default::default()
+            },
+            Default::default(),
+        )
         .await
         .unwrap();
     assert!(listed.threads.is_empty());
@@ -565,10 +568,13 @@ async fn a_body_over_the_budget_is_refused_before_any_turn(backend: Backend) {
     assert_eq!(answer.json()["error"]["code"], -32602);
     let listed = store
         .storage
-        .list_threads(livekit_protocol::agent::agent_thread::ListRequest {
-            scope: "customer:42".into(),
-            ..Default::default()
-        })
+        .list_threads(
+            livekit_protocol::agent::agent_thread::ListRequest {
+                scope: "customer:42".into(),
+                ..Default::default()
+            },
+            Default::default(),
+        )
         .await
         .unwrap();
     assert!(listed.threads.is_empty());

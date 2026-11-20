@@ -494,3 +494,42 @@ async fn listener_enforces_cors_body_limits_and_closes_idle_connections() {
     assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err());
     store.close().await;
 }
+
+/// A list naming no scope follows the grant: the project's threads for `all`, its own scope's
+/// for a scoped grant, and nothing for a `threadIds` grant.
+#[tokio::test]
+async fn a_list_without_scope_lists_by_the_grant() {
+    let store = Backend::Sqlite.store(Default::default()).await;
+    let service =
+        ThreadService::new(store.storage.clone(), "project-a".into(), KEY.into(), SECRET.into());
+    let path = "/v0/projects/project-a/threads";
+    for scope in ["customer", "other"] {
+        let body = format!(r#"{{"scope":"{scope}"}}"#);
+        service
+            .request("POST", path, "", Some(&format!("Bearer {}", token(scope))), body.as_bytes())
+            .await
+            .unwrap();
+    }
+    let bearer = |grant: AuthGrant| {
+        let token = Credentials::new(KEY.into(), SECRET.into())
+            .thread_grant_token(AuthGrant { list: true, ..grant }, "".into(), 3600)
+            .unwrap();
+        format!("Bearer {token}")
+    };
+    let scopes = |page: serde_json::Value| -> Vec<String> {
+        let items = page["items"].as_array().unwrap().iter();
+        let mut scopes: Vec<_> = items.map(|t| t["scope"].as_str().unwrap().to_owned()).collect();
+        scopes.sort();
+        scopes
+    };
+    let all = bearer(AuthGrant { all: true, ..Default::default() });
+    let page = service.request("GET", path, "", Some(&all), b"").await.unwrap();
+    assert_eq!(scopes(page), ["customer", "other"]);
+    let scoped = bearer(AuthGrant { scope: "customer".into(), ..Default::default() });
+    let page = service.request("GET", path, "", Some(&scoped), b"").await.unwrap();
+    assert_eq!(scopes(page), ["customer"]);
+    let ids = bearer(AuthGrant { thread_ids: vec!["AT_x".into()], ..Default::default() });
+    let refused = service.request("GET", path, "", Some(&ids), b"").await.unwrap_err();
+    assert_eq!(refused.status_code, Some(403));
+    store.close().await;
+}

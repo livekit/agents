@@ -9,8 +9,8 @@ use livekit_protocol::agent::agent_thread::{
 use lk_agents_abi::storage as host;
 use lk_agents_abi::storage::handles::Thread as Reads;
 use lk_agents_abi::storage::{
-    Storage as HostStorageClass, StorageError, TaskState, ThreadInfo, ThreadItem, ThreadItemPage,
-    ThreadPage, ThreadTask,
+    SortOrder, Storage as HostStorageClass, StorageError, TaskState, ThreadInfo, ThreadItem,
+    ThreadItemPage, ThreadPage, ThreadSummary, ThreadTask,
 };
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::owned::Background;
@@ -230,11 +230,6 @@ fn ttl(seconds: i64) -> Option<pbjson_types::Duration> {
     (seconds > 0).then_some(pbjson_types::Duration { seconds, nanos: 0 })
 }
 
-/// agent-db's page size: `0` lets the server choose.
-fn page_limit(limit: Option<u32>) -> Result<i32, StorageError> {
-    limit.map_or(Ok(0), |l| i32::try_from(l).map_err(|_| StorageError::Invalid("limit".into())))
-}
-
 fn seconds_of(t: Option<pbjson_types::Timestamp>) -> i64 {
     t.map_or(0, |t| t.seconds)
 }
@@ -252,9 +247,16 @@ fn thread_info(t: ThreadRecord) -> ThreadInfo {
 }
 
 fn thread_page(r: ListResponse) -> ThreadPage {
+    let summary = |t: ThreadRecord| ThreadSummary {
+        thread_id: t.thread_id,
+        scope: t.scope,
+        attributes: t.attributes.into_iter().collect(),
+        created_at: seconds_of(t.created_at),
+        idle_ttl_seconds: t.idle_ttl.map_or(0, |d| d.seconds),
+    };
     ThreadPage {
-        threads: r.threads.into_iter().map(thread_info).collect(),
-        before: r.next_page_token,
+        threads: r.threads.into_iter().map(summary).collect(),
+        next_page_token: r.next_page_token,
     }
 }
 
@@ -440,16 +442,18 @@ impl HostStorageClass for Namespace {
 
     async fn list_threads(
         &self,
-        scope: String,
-        before: Option<String>,
+        scope: Option<String>,
+        sort_order: SortOrder,
+        page_token: Option<String>,
         limit: Option<u32>,
     ) -> Result<ThreadPage, StorageError> {
         let request = ListRequest {
-            scope,
-            page_token: before.unwrap_or_default(),
-            limit: page_limit(limit)?,
+            scope: scope.unwrap_or_default(),
+            page_token: page_token.unwrap_or_default(),
+            // `0` is the backend's default page; anything above the cap is clamped there.
+            limit: limit.map_or(0, |l| i32::try_from(l).unwrap_or(i32::MAX)),
         };
-        Ok(thread_page(self.storage().await?.list_threads(request).await?))
+        Ok(thread_page(self.storage().await?.list_threads(request, sort_order).await?))
     }
 
     async fn update_thread(

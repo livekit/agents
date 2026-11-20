@@ -219,12 +219,15 @@ pub trait Storage: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn get_thread(&self, thread_id: String) -> Result<ThreadInfo, StorageError>;
 
-    /// The threads of one scope, newest first; `before` is the previous page's cursor.
+    /// One page of threads by creation: one `scope`'s, or the project's with none.
+    /// `page_token` is the previous page's `next_page_token`, bound to its `sort_order`; `limit`
+    /// is 50 when omitted and at most 100.
     #[host(await)]
     async fn list_threads(
         &self,
-        scope: String,
-        #[host(kw, default = None)] before: Option<String>,
+        #[host(default = None)] scope: Option<String>,
+        #[host(kw, default = "newest_first")] sort_order: SortOrder,
+        #[host(default = None)] page_token: Option<String>,
         #[host(default = None)] limit: Option<u32>,
     ) -> Result<ThreadPage, StorageError>;
 
@@ -312,14 +315,42 @@ pub struct ThreadInfo {
     pub idle_ttl_seconds: i64,
 }
 
-/// One page of `list_threads`, newest first.
+/// A listed thread: its activity and expiry come from `get_thread`.
+#[crate::host(record(module = "storage_class", emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreadSummary {
+    pub thread_id: String,
+    pub scope: String,
+    pub attributes: BTreeMap<String, String>,
+    pub created_at: i64,
+    pub idle_ttl_seconds: i64,
+}
+
+/// One page of `list_threads`.
 #[crate::host(record(module = "storage_class", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThreadPage {
-    pub threads: Vec<ThreadInfo>,
-    /// The next page's cursor; empty at the end.
-    pub before: String,
+    pub threads: Vec<ThreadSummary>,
+    /// The next page's `page_token`; empty at the end.
+    pub next_page_token: String,
 }
+
+/// The order `list_threads` pages threads in, by creation.
+#[crate::host(record(module = "storage_class", extract))]
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SortOrder {
+    #[default]
+    #[host(rename = "newest_first")]
+    NewestFirst,
+    #[host(rename = "oldest_first")]
+    OldestFirst,
+}
+
+/// The default `list_threads` page.
+pub const DEFAULT_THREAD_PAGE: i32 = 50;
+/// The largest `list_threads` page.
+pub const MAX_THREAD_PAGE: i32 = 100;
 
 /// One chat item of a thread.
 #[crate::host(record(module = "storage_class", emit))]

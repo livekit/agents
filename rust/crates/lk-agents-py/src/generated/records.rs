@@ -20124,6 +20124,49 @@ pub mod storage_class {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
+    static THREAD_SUMMARY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn thread_summary_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::storage::ThreadSummary,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::storage::ThreadSummary {
+            thread_id,
+            scope,
+            attributes,
+            created_at,
+            idle_ttl_seconds,
+        } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("thread_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(thread_id, py)?)?;
+        kwargs.set_item("scope", ::pyo3::IntoPyObjectExt::into_bound_py_any(scope, py)?)?;
+        kwargs.set_item("attributes", {
+            let d = ::pyo3::types::PyDict::new(py);
+            for (k, x) in attributes {
+                d.set_item(
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?,
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+                )?;
+            }
+            d.into_any()
+        })?;
+        kwargs
+            .set_item("created_at", ::pyo3::IntoPyObjectExt::into_bound_py_any(created_at, py)?)?;
+        kwargs.set_item(
+            "idle_ttl_seconds",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(idle_ttl_seconds, py)?,
+        )?;
+        crate::py_calls::call(
+            THREAD_SUMMARY
+                .import(py, "livekit.agents._generated.storage_class", "ThreadSummary")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
     static THREAD_PAGE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -20131,7 +20174,7 @@ pub mod storage_class {
         py: Python<'py>,
         value: ::lk_agents_abi::storage::ThreadPage,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::storage::ThreadPage { threads, before } = value;
+        let ::lk_agents_abi::storage::ThreadPage { threads, next_page_token } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item(
             "threads",
@@ -20139,12 +20182,15 @@ pub mod storage_class {
                 py,
                 threads
                     .into_iter()
-                    .map(|x| crate::generated::records::storage_class::thread_info_to_py(py, x))
+                    .map(|x| crate::generated::records::storage_class::thread_summary_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
         )?;
-        kwargs.set_item("before", ::pyo3::IntoPyObjectExt::into_bound_py_any(before, py)?)?;
+        kwargs.set_item(
+            "next_page_token",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(next_page_token, py)?,
+        )?;
         crate::py_calls::call(
             THREAD_PAGE
                 .import(py, "livekit.agents._generated.storage_class", "ThreadPage")?
@@ -20152,6 +20198,21 @@ pub mod storage_class {
             (),
             Some(&kwargs),
         )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
+
+    pub fn sort_order_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::storage::SortOrder> {
+        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
+        match &*value {
+            "newest_first" => Ok(::lk_agents_abi::storage::SortOrder::NewestFirst),
+            "oldest_first" => Ok(::lk_agents_abi::storage::SortOrder::OldestFirst),
+            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
+                "SortOrder: {other:?} is not one of 'newest_first', 'oldest_first'"
+            ))),
+        }
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.

@@ -670,3 +670,69 @@ async fn a_request_refused_on_every_attempt_backs_off_until_its_deadline() {
         }
     }
 }
+
+/// agent-db lists newest first with pages of 50 by default and 100 at most, project-wide with no
+/// scope; a row it answers with activity and expiry reaches the host without them. Oldest first
+/// is refused before anything is sent, until the protocol's `ListRequest` carries the order.
+#[tokio::test]
+async fn cloud_thread_listing_caps_pages_and_refuses_oldest_first() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let heads = Arc::new(Mutex::new(Vec::new()));
+    let seen = heads.clone();
+    let peer = lk_agents_net::task::TokioSpawner::current().spawn(async move {
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut bytes = [0; 4096];
+            while !request.ends_with(b"\r\n\r\n") {
+                let n = socket.read(&mut bytes).await.unwrap();
+                assert_ne!(n, 0);
+                request.extend_from_slice(&bytes[..n]);
+            }
+            seen.lock().push(String::from_utf8(request).unwrap());
+            let body = serde_json::to_vec(&json!({
+                "items": [{
+                    "threadId": "AT_1", "scope": "user:1", "attributes": {"title": "Renewal"},
+                    "createdAt": "2026-01-01T00:00:00Z", "lastActive": "2026-01-02T00:00:00Z",
+                    "expiresAt": "2026-01-03T00:00:00Z", "idleTtl": "86400s"
+                }],
+                "pageInfo": {"nextCursor": "next", "hasMore": true}
+            }))
+            .unwrap();
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len(),
+            );
+            socket.write_all(header.as_bytes()).await.unwrap();
+            socket.write_all(&body).await.unwrap();
+        }
+    });
+    let storage = Namespace::new(
+        &ProcessEnv::current_runtime(),
+        None,
+        Some(url),
+        Some("key".into()),
+        Some("secret".into()),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let page = storage.list_threads(None, SortOrder::NewestFirst, None, None).await.unwrap();
+    assert_eq!(page.next_page_token, "next");
+    let row = &page.threads[0];
+    assert_eq!(
+        (row.thread_id.as_str(), row.created_at, row.idle_ttl_seconds),
+        ("AT_1", 1767225600, 86400)
+    );
+    storage.list_threads(None, SortOrder::NewestFirst, None, Some(500)).await.unwrap();
+    let refused = storage.list_threads(None, SortOrder::OldestFirst, None, None).await;
+    assert!(matches!(refused, Err(StorageError::Invalid(_))), "{refused:?}");
+    peer.await.unwrap();
+    storage.aclose().await;
+    let heads = heads.lock();
+    assert!(heads[0].starts_with("GET /v0/projects/p_/threads?"), "{}", heads[0]);
+    assert!(heads[0].contains("page.pageSize=50") && !heads[0].contains("scope="), "{}", heads[0]);
+    assert!(heads[1].contains("page.pageSize=100"), "{}", heads[1]);
+}

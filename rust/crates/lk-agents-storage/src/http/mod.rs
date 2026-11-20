@@ -236,23 +236,27 @@ impl generated::ThreadService for ThreadService {
         context: &Context,
         request: ListThreadsRequest,
     ) -> Result<ListThreadsResponse, ApiError> {
-        self.authorize(
-            context,
-            &request.project_id,
-            AuthOperation::List,
-            "",
-            Some(&request.scope),
-        )?;
-        if request.scope.is_empty() {
-            return Err(ApiError::invalid("scope is required"));
+        // No scope is the project's list under an `all` grant, and the grant's own scope under a
+        // scoped one.
+        let grant_scope = context.principal.grant.as_ref().filter(|grant| !grant.all);
+        let scope = match grant_scope {
+            Some(grant) if request.scope.is_empty() => grant.scope.clone(),
+            _ => request.scope,
+        };
+        self.authorize(context, &request.project_id, AuthOperation::List, "", Some(&scope))?;
+        if request.page_page_size < 0 {
+            return Err(ApiError::invalid("page.pageSize cannot be negative"));
         }
         let page = self
             .storage
-            .list_threads(agent_thread::ListRequest {
-                scope: request.scope,
-                page_token: request.page_cursor,
-                limit: page_size(request.page_page_size)? as i32,
-            })
+            .list_threads(
+                agent_thread::ListRequest {
+                    scope,
+                    page_token: request.page_cursor,
+                    limit: request.page_page_size,
+                },
+                lk_agents_abi::storage::SortOrder::NewestFirst,
+            )
             .await?;
         Ok(ListThreadsResponse { items: page.threads, page_info: page_info(page.next_page_token) })
     }

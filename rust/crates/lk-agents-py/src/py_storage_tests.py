@@ -39,6 +39,35 @@ async def test_default_local_directory_is_project_isolated_and_survives_pickle(
         await storage.aclose()
 
 
+async def test_list_threads_pages_summaries_in_either_order(tmp_path: Path) -> None:
+    """Rows carry no activity or expiry; no scope lists the project's threads; a page token
+    continues its own order; an unknown order is refused."""
+    storage = SQLiteStorage(directory=tmp_path)
+    try:
+        made = [await storage.threads.create_thread(scope=s) for s in ("a", "a", "a", "b")]
+        page = await storage.threads.list_threads("a", limit=2)
+        assert len(page.threads) == 2 and page.next_page_token
+        assert not hasattr(page.threads[0], "last_active")
+        assert not hasattr(page.threads[0], "expires_at")
+        rest = await storage.threads.list_threads("a", page_token=page.next_page_token, limit=2)
+        newest = [t.thread_id for t in page.threads + rest.threads]
+        assert rest.next_page_token == "" and sorted(newest) == sorted(
+            t.thread_id for t in made[:3]
+        )
+        oldest = await storage.threads.list_threads("a", sort_order="oldest_first")
+        assert [t.thread_id for t in oldest.threads] == newest[::-1]
+        project = await storage.threads.list_threads()
+        assert sorted(t.thread_id for t in project.threads) == sorted(t.thread_id for t in made)
+        with pytest.raises(ValueError):
+            await storage.threads.list_threads(
+                "a", sort_order="oldest_first", page_token=page.next_page_token
+            )
+        with pytest.raises(ValueError):
+            await storage.threads.list_threads(sort_order="sideways")  # type: ignore[arg-type]
+    finally:
+        await storage.aclose()
+
+
 @pytest.mark.parametrize("project_id", ["", "p_", "../other", "/tmp/other", "a/b", "a\\b"])
 def test_local_project_id_cannot_escape_its_directory(project_id: str) -> None:
     with pytest.raises(ValueError, match="project_id"):

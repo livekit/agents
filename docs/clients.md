@@ -19,7 +19,8 @@ threads = storage.threads
 info = await threads.create_thread(scope=user_id, attributes={"title": "New chat"})
 thread_id = info.thread_id
 page = await threads.list_threads(user_id, limit=30)                    # the scope, newest first
-older = await threads.list_threads(user_id, before=page.before, limit=30)
+older = await threads.list_threads(user_id, page_token=page.next_page_token, limit=30)
+first = await threads.list_threads(sort_order="oldest_first")           # the project's, oldest first
 
 info = await threads.get_thread(thread_id)                             # raises ThreadNotFound
 await threads.update_thread(thread_id, attributes={"title": "Renewal"})   # idle_ttl_seconds=
@@ -44,8 +45,11 @@ database has its id. Times are timestamps and TTLs durations on the wire; the
 Python client reads and writes them as seconds. A listed thread carries
 `thread_id`, `scope`, `attributes`, `created_at` and `idle_ttl_seconds`, not
 `last_active` or `expires_at`: those come from `GetThread`. `list_threads`
-returns a `ThreadPage`, `threads` and the `before` cursor of the next page
-(the wire's `next_page_token`), empty on the last page. A
+returns a `ThreadPage`: `threads`, each a `ThreadSummary` of those fields, and
+the `next_page_token` to pass as the next call's `page_token`, empty on the
+last page; a token continues only the `sort_order` that issued it. `sort_order`
+is `"newest_first"` (the default) or `"oldest_first"`, and `scope=None` lists
+what the grant covers: the project's threads under the project credential. A
 thread lives in the project's data region and belongs to the project, not
 to one agent: any agent of the project continues it.
 

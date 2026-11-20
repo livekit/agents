@@ -22,6 +22,7 @@ from .storage_class import (
     LocalStorageOptions,
     PartitionRow,
     RunOutcome,
+    SortOrder,
     TaskOrder,
     TaskPage,
     TaskRecord,
@@ -88,12 +89,16 @@ class Storage:
         """Unknown, deleted or expired threads raise `ThreadNotFound`."""
     async def list_threads(
         self,
-        scope: str,
+        scope: str | None = None,
         *,
-        before: str | None = None,
+        sort_order: SortOrder = "newest_first",
+        page_token: str | None = None,
         limit: int | None = None,
     ) -> ThreadPage:
-        """The threads of one scope, newest first; `before` is the previous page's cursor."""
+        """One page of threads by creation: one `scope`'s, or the project's with none.
+        `page_token` is the previous page's `next_page_token`, bound to its `sort_order`; `limit`
+        is 50 when omitted and at most 100.
+        """
     async def update_thread(
         self,
         thread_id: str,
