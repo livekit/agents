@@ -54,6 +54,9 @@ async def check_one(
             return record(path, error=e.status_code, body=e.body)
         except APIConnectionError as e:
             return record(path, error="connection", detail=str(e))
+        except (ValueError, OSError) as e:
+            # An empty or unreadable file fails only itself; the batch goes on.
+            return record(path, error="file", detail=str(e))
     results = [
         {"type": r.type, "outcome": r.outcome, "probability": r.probability} for r in check.results
     ]
