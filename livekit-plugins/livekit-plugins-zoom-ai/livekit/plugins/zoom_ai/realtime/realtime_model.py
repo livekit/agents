@@ -170,6 +170,12 @@ class RealtimeModel(_engine.RealtimeModel):
                 f"llm_provider={llm_provider!r} needs provider_headers with your "
                 f"{llm_provider} API key"
             )
+        if llm_provider != "zoom" and model == DEFAULT_MODEL:
+            # Zoom would refuse it as the provider's model id and end the session at startup
+            raise ValueError(
+                f"llm_provider={llm_provider!r} needs model set to one of your "
+                f"{llm_provider} model IDs; {DEFAULT_MODEL!r} is Zoom's built-in model"
+            )
         if not url.startswith(("wss://", "ws://")):
             raise ValueError(f"url must be a ws(s):// URL, got {url!r}")
 
@@ -286,6 +292,8 @@ class RealtimeSession(_engine.RealtimeSession):
         # the active response is already being cancelled, by us or by Zoom's barge-in
         self._zoom_active_cancelled = False
         self._zoom_sent_outputs: set[str] = set()
+        # function results sent but not yet acknowledged (not in chat_ctx), by call_id
+        self._zoom_unacked_outputs: dict[str, llm.FunctionCallOutput] = {}
         self._zoom_warned: set[str] = set()
 
         super().__init__(realtime_model)
@@ -390,7 +398,11 @@ class RealtimeSession(_engine.RealtimeSession):
         self._response_created_futures[event_id] = fut
 
         def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
-            self._zoom_stop_reply_timer(event_id)
+            if event_id not in self._zoom_inflight:
+                # A sent request keeps its timer even once cancelled or interrupted: if Zoom
+                # never answers it, it would take the next response, so the timeout
+                # reconnects. A response or a refusal for it stops the timer.
+                self._zoom_stop_reply_timer(event_id)
             self._response_created_futures.pop(event_id, None)
             if f.cancelled():
                 # skipped if still queued; its response is cancelled when it arrives if sent
@@ -517,8 +529,11 @@ class RealtimeSession(_engine.RealtimeSession):
         # A connection's first update: unused at start-up (the session starts in _zoom_start)
         # and sent first on a reconnection.
         if self._zoom_conversation_started:
-            # the new server session knows nothing: carry the conversation over
-            self._zoom_history = _render_history(self.chat_ctx.items)
+            # The new server session knows nothing: carry the conversation over, with the
+            # function results the old one never acknowledged, which chat_ctx lacks.
+            self._zoom_history = _render_history(
+                [*self.chat_ctx.items, *self._zoom_unacked_outputs.values()]
+            )
         return self._zoom_session_update(first=True)
 
     def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
@@ -646,6 +661,7 @@ class RealtimeSession(_engine.RealtimeSession):
                 if item.call_id in known:
                     continue
                 self._zoom_sent_outputs.add(item.call_id)
+                self._zoom_unacked_outputs[item.call_id] = item
                 self.send_event(
                     {
                         "type": "conversation.item.create",
@@ -773,6 +789,9 @@ class RealtimeSession(_engine.RealtimeSession):
         # connection is gone.
         self._zoom_queue.clear()
         self._zoom_inflight.clear()
+        for handle in self._zoom_reply_timers.values():
+            handle.cancel()
+        self._zoom_reply_timers.clear()
         self._zoom_active_response = None
         self._zoom_active_cancelled = False
         # Events queued for the old connection refer to its responses and items (cancels,
@@ -806,6 +825,9 @@ class RealtimeSession(_engine.RealtimeSession):
         elif event_type == "conversation.item.added":
             self._zoom_conversation_started = True
             self._zoom_fix_item_added(event)
+            item = event.get("item")
+            if isinstance(item, dict) and item.get("type") == "function_call_output":
+                self._zoom_unacked_outputs.pop(str(item.get("call_id")), None)
         elif event_type == "conversation.item.input_audio_transcription.completed":
             self._zoom_conversation_started = True
         elif event_type == "response.created":
@@ -841,6 +863,7 @@ class RealtimeSession(_engine.RealtimeSession):
         # request was cancelled meanwhile.
         if self._zoom_inflight:
             event_id = self._zoom_inflight.popleft()
+            self._zoom_stop_reply_timer(event_id)
             metadata = response.get("metadata")
             response["metadata"] = {
                 **(metadata if isinstance(metadata, dict) else {}),
@@ -908,12 +931,12 @@ class RealtimeSession(_engine.RealtimeSession):
             # request went out; otherwise ask again after its response.done.
             if self._zoom_inflight:
                 event_id = self._zoom_inflight.popleft()
+                # waiting locally again, or done: the timeout restarts if it is resent
+                self._zoom_stop_reply_timer(event_id)
                 if event_id in self._discarded_event_ids:
                     # cancelled meanwhile, and nothing was created for it
                     self._discarded_event_ids.discard(event_id)
                 else:
-                    # waiting locally again: the timeout restarts when it is resent
-                    self._zoom_stop_reply_timer(event_id)
                     self._zoom_queue.appendleft(event_id)
             else:
                 logger.debug("reply request answered by the already active response")

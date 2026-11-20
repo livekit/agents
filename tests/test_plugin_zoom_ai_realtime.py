@@ -77,6 +77,8 @@ class FakeVoiceAgent:
         self.status = 101
         # accept the WebSocket, then close it before the session is configured
         self.close_on_connect = False
+        # acknowledge function results as conversation.item.created
+        self.ack_outputs = True
         self._new_conn = asyncio.Event()
 
     async def handler(self, request: web.Request) -> web.StreamResponse:
@@ -101,6 +103,7 @@ class FakeVoiceAgent:
             elif (
                 event["type"] == "conversation.item.create"
                 and event["item"]["type"] == "function_call_output"
+                and self.ack_outputs
             ):
                 # Zoom acknowledges a function result as conversation.item.created
                 conn._outputs += 1
@@ -340,6 +343,13 @@ def test_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_bring_your_own_provider_needs_headers() -> None:
     with pytest.raises(ValueError, match="provider_headers"):
         zoom_ai.realtime.RealtimeModel(api_key=API_KEY, llm_provider="openai", model="gpt-4.1")
+
+
+def test_bring_your_own_provider_needs_its_own_model() -> None:
+    with pytest.raises(ValueError, match="model IDs"):
+        zoom_ai.realtime.RealtimeModel(
+            api_key=API_KEY, llm_provider="openai", provider_headers={"X-Api-Key": "sk-test"}
+        )
 
 
 def test_model_metadata_and_capabilities() -> None:
@@ -861,6 +871,57 @@ async def test_unanswered_reply_request_reconnects(
     await session.aclose()
 
 
+async def test_interrupted_request_zoom_never_answers_reconnects(
+    server: tuple[FakeVoiceAgent, str],
+    http: aiohttp.ClientSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(realtime_model, "_REPLY_TIMEOUT", 0.05)
+    fake, url = server
+    session = await start(make_model(url, http, conn_options=FAST_RETRY))
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    conn = await fake.conn()
+    fut = session.generate_reply()
+    await wait_for(lambda: conn.of_type("response.create"))
+    session.interrupt()
+    with pytest.raises(llm.RealtimeError):
+        await asyncio.wait_for(fut, 2)
+    # Zoom never answers it, so the next response.created can't be told apart from its
+    # answer: the connection is replaced rather than letting it take that response
+    new_conn = await fake.conn(1)
+    assert len(errors) == 1 and "didn't answer" in str(errors[0].error)
+    await wait_for(lambda: new_conn.of_type("session.update"))
+    reply_fut = session.generate_reply()
+    await wait_for(lambda: new_conn.of_type("response.create"))
+    await reply(new_conn, response_id="resp_2")
+    assert (await asyncio.wait_for(reply_fut, 2)).response_id == "resp_2"
+    await session.aclose()
+
+
+async def test_late_response_to_an_interrupted_request_does_not_reconnect(
+    server: tuple[FakeVoiceAgent, str],
+    http: aiohttp.ClientSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(realtime_model, "_REPLY_TIMEOUT", 0.05)
+    fake, url = server
+    session = await start(make_model(url, http, conn_options=FAST_RETRY))
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    conn = await fake.conn()
+    fut = session.generate_reply()
+    await wait_for(lambda: conn.of_type("response.create"))
+    session.interrupt()
+    await conn.emit("response.created", response={"id": "resp_late"})
+    with pytest.raises(llm.RealtimeError):
+        await asyncio.wait_for(fut, 2)
+    await wait_for(lambda: conn.of_type("response.cancel"))
+    await asyncio.sleep(0.1)  # past the timeout
+    assert len(fake.conns) == 1 and not errors
+    await session.aclose()
+
+
 async def test_interrupt_cancels_and_truncate_aligns_history(
     server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
 ) -> None:
@@ -1089,6 +1150,42 @@ async def test_reconnects_with_the_conversation_after_the_server_closes(
         "Hello there.",
         "Still there?",
     ]
+    await session.aclose()
+
+
+async def test_reconnect_carries_over_an_unacknowledged_function_result(
+    server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
+) -> None:
+    fake, url = server
+    fake.ack_outputs = False
+    session = await start(make_model(url, http, conn_options=FAST_RETRY), tools=[get_order_status])
+    gens: list[llm.GenerationCreatedEvent] = []
+    session.on("generation_created", gens.append)
+    conn = await fake.conn()
+    await user_turn(conn, item_id="user_1", transcript="Status of order 123?")
+    await function_call(conn)
+    await wait_for(lambda: gens)
+    await asyncio.wait_for(collect(gens[0]), 2)
+    chat_ctx = session.chat_ctx.copy()
+    chat_ctx.items.append(
+        llm.FunctionCallOutput(
+            call_id=LONG_CALL_ID, name="get_order_status", output="shipped", is_error=False
+        )
+    )
+    await session.update_chat_ctx(chat_ctx)
+    await wait_for(lambda: conn.of_type("conversation.item.create"))
+
+    # the connection drops before Zoom acknowledges the result
+    await conn.ws.close()
+    conn2 = await fake.conn(1)
+    await wait_for(lambda: conn2.of_type("session.update"))
+    instructions = conn2.of_type("session.update")[0]["session"]["think"]["instructions"]
+    assert 'assistant called get_order_status({"order_id":"123"})' in instructions
+    assert instructions.rstrip().endswith("get_order_status returned: shipped")
+    # it isn't sent again as an item the new session never asked for
+    await session.update_chat_ctx(chat_ctx)
+    await asyncio.sleep(0.05)
+    assert not conn2.of_type("conversation.item.create")
     await session.aclose()
 
 
