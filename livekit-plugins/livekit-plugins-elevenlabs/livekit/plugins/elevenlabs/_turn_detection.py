@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 
 class TurnDetection:
-    """Defer end of speech for suspected forced segment commits."""
+    """Guard forced segment commits and uncommitted partials using local VAD."""
 
     def __init__(
         self, *, opts: STTOptions, vad: vad_module.VAD | None, on_end_of_speech: Callable[[], None]
@@ -41,6 +41,7 @@ class TurnDetection:
         self._vad_stream: vad_module.VADStream | None = None
         self._vad_close_task: asyncio.Task[None] | None = None
         self._eos_timeout_handle: asyncio.TimerHandle | None = None
+        self._partial_timeout_handle: asyncio.TimerHandle | None = None
         self._reset()
 
     def _reset(self) -> None:
@@ -50,6 +51,8 @@ class TurnDetection:
         self._last_turn_probability: float | None = None
         self._last_partial_text = ""
         self._eos_pending = False
+        self._partial_pending = False
+        self._partial_started_turn = False
         self._num_text_updates = 0
         self._pending_commit_results: deque[tuple[bool, int]] = deque()
 
@@ -97,10 +100,16 @@ class TurnDetection:
                     break
                 if event.type == vad_module.VADEventType.START_OF_SPEECH:
                     self._vad_speaking = True
+                    self._cancel_partial_timeout()
                 elif event.type == vad_module.VADEventType.END_OF_SPEECH:
                     self._vad_speaking = False
+                    self._start_partial_timeout()
         except Exception:
             await self._disable_vad()
+        else:
+            # On cancellation, aclose() finishes the pending turn before closing VAD.
+            if stream is self._vad_stream:
+                await self._close_vad()
 
     async def _disable_vad(self) -> None:
         if self._vad_stream is None:
@@ -111,6 +120,9 @@ class TurnDetection:
         await self._close_vad()
 
     async def _close_vad(self) -> None:
+        self._cancel_partial_timeout()
+        self._partial_pending = False
+        self._partial_started_turn = False
         stream, self._vad_stream = self._vad_stream, None
         self._vad_speaking = False
         if stream is not None:
@@ -136,10 +148,15 @@ class TurnDetection:
 
     def end_speech(self) -> None:
         self._eos_pending = False
+        self._partial_pending = False
+        self._partial_started_turn = False
         self.cancel_eos_timeout()
+        self._cancel_partial_timeout()
         self._emit_end_of_speech()
 
-    def on_partial_transcript(self, probability: float | None, *, text: str) -> bool:
+    def on_partial_transcript(
+        self, probability: float | None, *, text: str, starts_turn: bool = False
+    ) -> bool:
         self._last_turn_probability = probability
         text_changed = bool(text and text != self._last_partial_text)
         if text_changed:
@@ -147,6 +164,10 @@ class TurnDetection:
             self._num_text_updates += 1
             # New segment text still needs its own final transcript.
             self.cancel_eos_timeout()
+            self._partial_pending = True
+            if starts_turn:
+                self._partial_started_turn = True
+            self._start_partial_timeout()
         return text_changed
 
     def on_committed_transcript(self, data: dict[str, Any], *, final_message_type: str) -> bool:
@@ -156,7 +177,7 @@ class TurnDetection:
         """
         message_type = data.get("message_type")
         has_text = bool(data.get("text"))
-        result = (False, self._num_text_updates)
+        result: tuple[bool, int] | None = None
         if message_type == "committed_transcript":
             result = self._classify_commit(has_text=has_text)
             if final_message_type == "committed_transcript_with_timestamps":
@@ -169,11 +190,18 @@ class TurnDetection:
                     else self._classify_commit(has_text=has_text)
                 )
 
+        if result is not None and result[1] == self._num_text_updates:
+            self._partial_pending = False
+            self._partial_started_turn = False
+            self._cancel_partial_timeout()
+
+        if result is None:
+            return False
         is_forced_commit, num_text_updates = result
         if message_type != final_message_type or not is_forced_commit or not has_text:
             return False
         self._eos_pending = True
-        if num_text_updates == self._num_text_updates:
+        if num_text_updates == self._num_text_updates or not self._partial_pending:
             self._start_eos_timeout()
         return True
 
@@ -211,14 +239,18 @@ class TurnDetection:
 
     def _start_eos_timeout(self) -> None:
         self.cancel_eos_timeout()
+        timeout = self._eos_timeout_duration
+        self._eos_timeout_handle = asyncio.get_running_loop().call_later(
+            timeout, self._on_eos_timeout, timeout
+        )
+
+    @property
+    def _eos_timeout_duration(self) -> float:
         server_vad = self._opts.server_vad if is_given(self._opts.server_vad) else None
         silence_threshold = (server_vad or {}).get("vad_silence_threshold_secs")
         # The provider may send no further transcript after a forced commit.
         # Allow a short grace period beyond its silence threshold before EOS.
-        timeout = (silence_threshold if silence_threshold is not None else 1.5) + 0.5
-        self._eos_timeout_handle = asyncio.get_running_loop().call_later(
-            timeout, self._on_eos_timeout, timeout
-        )
+        return (silence_threshold if silence_threshold is not None else 1.5) + 0.5
 
     def _on_eos_timeout(self, timeout: float) -> None:
         self._eos_timeout_handle = None
@@ -232,9 +264,39 @@ class TurnDetection:
         )
         self.end_speech()
 
+    def _start_partial_timeout(self) -> None:
+        if (
+            self._partial_timeout_handle is not None
+            or not self._partial_started_turn
+            or not self._partial_pending
+            or self._vad_stream is None
+            or self._vad_speaking
+        ):
+            return
+        timeout = self._eos_timeout_duration
+        self._partial_timeout_handle = asyncio.get_running_loop().call_later(
+            timeout, self._on_partial_timeout, timeout
+        )
+
+    def _on_partial_timeout(self, timeout: float) -> None:
+        self._partial_timeout_handle = None
+        logger.warning(
+            "emitting end of speech for an uncommitted partial while local VAD remains silent",
+            extra={"eos_timeout": timeout},
+        )
+        self.end_speech()
+
+    def _cancel_partial_timeout(self) -> None:
+        if self._partial_timeout_handle is not None:
+            self._partial_timeout_handle.cancel()
+            self._partial_timeout_handle = None
+
     async def aclose(self) -> None:
         # End any deferred turn before discarding its connection state.
-        if self._eos_pending:
+        if self._eos_pending or (
+            self._partial_started_turn and self._partial_pending and self._vad_stream is not None
+        ):
             self.end_speech()
         self.cancel_eos_timeout()
+        self._cancel_partial_timeout()
         await self._close_vad()
