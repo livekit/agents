@@ -1449,7 +1449,7 @@ class SpeechStream(stt.SpeechStream):
             if pending:
                 await utils.aio.cancel_and_wait(*pending)
 
-            if self._pending_eos and not self._eos_emitted_for_utterance:
+            if (self._speaking or self._pending_eos) and not self._eos_emitted_for_utterance:
                 # the socket is closing, so close the turn rather than leave it to the
                 # fallback timer that the cleanup below cancels
                 self._try_commit_utterance()
@@ -1502,10 +1502,13 @@ class SpeechStream(stt.SpeechStream):
 
         Only the old connection can transcribe speech it has started on, so its buffered
         audio and a flush go there, and the turn ends with END_OF_SPEECH either way. That
-        includes an utterance whose END_SPEECH arrived but whose final hasn't yet. With no
-        utterance open, unsent audio carries into the new connection instead.
+        includes an utterance whose END_SPEECH arrived but whose final hasn't yet, even
+        after the fallback timer has emitted END_OF_SPEECH. With no utterance open, unsent
+        audio carries into the new connection instead.
         """
-        if not self._speaking and not self._pending_eos:
+        # after the fallback's END_OF_SPEECH, the final is still due on the old connection
+        final_due = self._eos_emitted_for_utterance and not self._utterance_resolved.is_set()
+        if not self._speaking and not self._pending_eos and not final_due:
             return
 
         self._settling_for_reconnect = True
@@ -1514,6 +1517,8 @@ class SpeechStream(stt.SpeechStream):
         finally:
             self._settling_for_reconnect = False
 
+        # settled either way, so a later reconnect doesn't flush this utterance again
+        self._utterance_resolved.set()
         self._speaking = False
         # the flush closed the utterance on the old connection, so nothing needs replaying
         self._recent_audio.clear()
