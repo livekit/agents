@@ -1,4 +1,4 @@
-# Copyright 2025 LiveKit, Inc.
+# Copyright 2026 LiveKit, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,38 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""SLNG plugin for LiveKit Agents
+"""VLM Run plugin for LiveKit Agents
 
-STT and TTS adapters for SLNG gateway models.
-
-See https://docs.slng.ai/ for more information.
+Vision-language models from the VLM Run gateway, through its OpenAI-compatible chat
+completions API, and typed decisions through its System One API.
 """
 
-from .connection import PluginEvent, STTConnectionConfig, TTSConnectionConfig
-from .log import logger
-from .stt import STT, SpeechStream
-from .tts import TTS
+from .decision_model import DecisionModel
+from .llm import LLM
+from .models import ChatModels, DecisionModels
 from .version import __version__
 
 __all__ = [
-    "STT",
-    "TTS",
-    "PluginEvent",
-    "STTConnectionConfig",
-    "SpeechStream",
-    "TTSConnectionConfig",
+    "LLM",
+    "DecisionModel",
+    "ChatModels",
+    "DecisionModels",
     "__version__",
 ]
 
 from livekit.agents import Plugin
 
+from .log import logger
 
-class SLNGPlugin(Plugin):
+
+class VLMRunPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(SLNGPlugin())
+Plugin.register_plugin(VLMRunPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()
