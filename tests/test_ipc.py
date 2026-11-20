@@ -411,6 +411,48 @@ async def test_slow_initialization():
         assert exitcode != 0, "process should have been killed"
 
 
+@pytest.mark.parametrize("wait_for_idle", [True, False])
+async def test_proc_pool_start_waits_for_idle(wait_for_idle: bool):
+    mp_ctx = mp.get_context("spawn")
+    loop = asyncio.get_running_loop()
+    num_idle_processes = 2
+    pool = ipc.proc_pool.ProcPool(
+        job_executor_type=job.JobExecutorType.PROCESS,
+        initialize_process_fnc=_initialize_proc,
+        job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
+        simulation_end_fnc=None,
+        num_idle_processes=num_idle_processes,
+        initialize_timeout=20.0,
+        close_timeout=20.0,
+        session_end_timeout=300.0,
+        inference_executor=None,
+        memory_warn_mb=0,
+        memory_limit_mb=0,
+        http_proxy=None,
+        mp_ctx=mp_ctx,
+        loop=loop,
+    )
+
+    start_args = _new_start_args(mp_ctx)
+    start_args.initialize_simulate_work_time = 1.0
+    ready_q = asyncio.Queue()
+
+    @pool.on("process_created")
+    def _process_created(proc: ipc.job_proc_executor.ProcJobExecutor):
+        proc.user_arguments = start_args
+
+    @pool.on("process_ready")
+    def _process_ready(proc: ipc.job_proc_executor.ProcJobExecutor):
+        ready_q.put_nowait(None)
+
+    await pool.start(wait_for_idle=wait_for_idle)
+    assert ready_q.qsize() == (num_idle_processes if wait_for_idle else 0)
+
+    await _wait_for_elements(ready_q, num_idle_processes - ready_q.qsize())
+    await pool.aclose()
+
+
 async def test_proc_pool_launch_job_raises_when_all_spawns_fail():
     """launch_job raises instead of hanging when every spawn fails to initialize."""
     mp_ctx = mp.get_context("spawn")
