@@ -528,6 +528,7 @@ async def test_committed_turn_suppresses_the_resume(rt_session: AgentSession) ->
 async def test_teardown_does_not_resume_a_deferred_pause(rt_session: AgentSession) -> None:
     # the close path releases the pause itself, so the resume must not fire mid-teardown
     activity, _ = _paused_activity(rt_session)
+    activity._create_speech_task = _swallow_task  # type: ignore[method-assign, assignment]
     resumes = _record_resumes(rt_session)
 
     activity.on_end_of_speech(None)
