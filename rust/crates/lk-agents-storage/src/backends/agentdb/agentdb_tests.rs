@@ -45,12 +45,13 @@ async fn unavailable_after_sending_a_commit_is_uncertain_and_is_not_resent() {
     pooled.conn.aclose().await;
 }
 
-/// agent-store answers `retry` (1003) when a write applied nothing and `commit_unknown_result`
-/// (1021) when its durable flush failed after SQLite committed: the first is a retryable refusal,
-/// the second `Uncertain`. Before, both were unknown codes, so a write failed `Invalid` and was
-/// never retried.
+/// agent-store answers `retry` (1003) when a write applied nothing under pressure, `unavailable`
+/// (1004) when the owner could not serve it, `snapshot_expired` (1007) when a read held its
+/// snapshot too long, and `commit_unknown_result` (1021) when its durable flush failed after
+/// SQLite committed: the first three are retryable refusals, the last `Uncertain`. Before, each was
+/// an unknown code, so a write failed `Invalid` or `Uncertain` and was never retried.
 #[tokio::test]
-async fn retry_refuses_a_sent_write_and_commit_unknown_result_leaves_it_uncertain() {
+async fn retryable_codes_refuse_a_sent_write_and_commit_unknown_result_leaves_it_uncertain() {
     use connection::tests::{dial, error, hello_ok, serve};
     use connection::wire as pb;
     fn answers(code: ErrorCode, message: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
@@ -63,11 +64,22 @@ async fn retry_refuses_a_sent_write_and_commit_unknown_result_leaves_it_uncertai
     fn retry(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
         answers(ErrorCode::RETRY, m)
     }
+    fn unavailable(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        answers(ErrorCode::UNAVAILABLE, m)
+    }
+    fn snapshot_expired(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        answers(ErrorCode::SNAPSHOT_EXPIRED, m)
+    }
     fn commit_unknown(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
         answers(ErrorCode::COMMIT_UNKNOWN_RESULT, m)
     }
     type Script = fn(&pb::ClientMessage) -> Vec<pb::ServerMessage>;
-    for (code, script) in [("retry", retry as Script), ("commit_unknown_result", commit_unknown)] {
+    for (code, script) in [
+        ("retry", retry as Script),
+        ("unavailable", unavailable),
+        ("snapshot_expired", snapshot_expired),
+        ("commit_unknown_result", commit_unknown),
+    ] {
         let (url, _) = serve(script, false).await;
         let conn = dial(&url, "DB_1").await.unwrap();
         let pooled = Pooled {
@@ -78,11 +90,13 @@ async fn retry_refuses_a_sent_write_and_commit_unknown_result_leaves_it_uncertai
         };
         let result = pooled.batch(vec![Statement::raw("UPDATE partitions SET version = 2")]).await;
         match code {
-            "retry" => assert!(
-                matches!(result, Err(StorageError::Unavailable(ref e)) if e.contains("retry")),
-                "{result:?}"
+            "commit_unknown_result" => {
+                assert!(matches!(result, Err(StorageError::Uncertain(_))), "{result:?}")
+            }
+            _ => assert!(
+                matches!(result, Err(StorageError::Unavailable(ref e)) if e.starts_with(code)),
+                "{code}: {result:?}"
             ),
-            _ => assert!(matches!(result, Err(StorageError::Uncertain(_))), "{result:?}"),
         }
         pooled.conn.aclose().await;
     }
