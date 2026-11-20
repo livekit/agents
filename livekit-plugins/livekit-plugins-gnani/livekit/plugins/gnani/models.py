@@ -4,6 +4,10 @@ from typing import Literal
 #                                    STT                                       #
 ###############################################################################
 
+GnaniSTTModels = Literal["gnani-prisma-v2.5", "prisma-v3.0"]
+"""Prisma STT model ids. When no model is given, the API uses its default
+(Prisma v2.5). See https://docs.gnani.ai/api/STT/models/prisma-v3"""
+
 GnaniSTTLanguages = Literal[
     "bn-IN",
     "en-IN",

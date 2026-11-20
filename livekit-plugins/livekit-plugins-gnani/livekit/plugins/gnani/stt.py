@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from livekit.agents.utils import AudioBuffer
 
 from .log import logger
-from .models import GnaniSTTLanguages
+from .models import GnaniSTTLanguages, GnaniSTTModels
 
 GnaniSTTFormat = Literal["verbatim", "transcribe"]
 
@@ -76,6 +76,7 @@ class GnaniSTTOptions:
     format: str = "verbatim"
     itn_native_numerals: bool = False
     use_streaming: bool = True
+    model: str | None = None
 
 
 _DEPRECATED_STT_KWARGS = frozenset(("organization_id", "user_id", "http_session"))
@@ -112,6 +113,8 @@ class STT(stt.STT):
             (wss://.../stt/v3/stream). When False, use REST recognition
             (POST /stt/v3), which requires a local VAD — LiveKit wraps the STT
             with ``stt.StreamAdapter`` automatically.
+        model: Prisma model id, e.g. "prisma-v3.0" or "gnani-prisma-v2.5". When
+            omitted, the API uses its default model (Prisma v2.5).
     """
 
     def __init__(
@@ -125,6 +128,7 @@ class STT(stt.STT):
         format: GnaniSTTFormat = "verbatim",
         itn_native_numerals: bool = False,
         use_streaming: bool = True,
+        model: GnaniSTTModels | str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -157,12 +161,13 @@ class STT(stt.STT):
             format=format,
             itn_native_numerals=itn_native_numerals,
             use_streaming=use_streaming,
+            model=model,
         )
         self._session: aiohttp.ClientSession | None = None
 
     @property
     def model(self) -> str:
-        return "vachana-stt-v3"
+        return self._opts.model or "vachana-stt-v3"
 
     @property
     def provider(self) -> str:
@@ -209,6 +214,8 @@ class STT(stt.STT):
         form_data.add_field("audio_file", wav_bytes, filename="audio.wav", content_type="audio/wav")
         form_data.add_field("language_code", lang)
         form_data.add_field("format", self._opts.format)
+        if self._opts.model is not None:
+            form_data.add_field("model", self._opts.model)
 
         if self._opts.preferred_language is not None:
             form_data.add_field("preferred_language", self._opts.preferred_language)
@@ -326,6 +333,8 @@ class SpeechStream(stt.RecognizeStream):
             "lang_code": self._opts.language,
             "x-sample-rate": str(self._opts.sample_rate),
         }
+        if self._opts.model is not None:
+            headers["x-model"] = self._opts.model
         if self._opts.format != "verbatim":
             headers["x-format"] = self._opts.format
         if self._opts.preferred_language is not None:
