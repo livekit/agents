@@ -1,0 +1,575 @@
+"""FonadaLabs TTS plugin for LiveKit — Klone V2 Flash / Klone V2 Pro.
+
+- ``klone_v2_flash`` (default): streams raw 24 kHz PCM over a pooled WebSocket
+  (``wss://api.fonada.ai/v1/voice-clone/ws``). One connection carries many
+  utterances, so it is the lowest-latency option for voice agents.
+- ``klone_v2_pro``: one-shot ``POST /v1/voice-clone/chunks`` (Pro does not
+  support streaming or the WebSocket).
+
+Streamed LLM text is split into sentences as it arrives. The first sentence is
+sent on its own so audio starts early; sentences that arrive while it is being
+synthesized are batched into the next request, which keeps the number of
+requests per reply low (the API's default limit is 10 requests per minute).
+
+Docs: https://fonadalabs.ai/docs/text-to-speech/klone-v2-flash
+      https://fonadalabs.ai/docs/text-to-speech/klone-v2-pro
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
+from typing import Any
+
+import aiohttp
+
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    tokenize,
+    tts,
+    utils,
+)
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+
+from ._utils import parse_error
+from .log import logger
+from .models import (
+    LANGUAGE_ALIASES,
+    TTS_LANGUAGES,
+    TTSFlashLanguages,
+    TTSModels,
+    resolve_language,
+)
+
+FONADALABS_API_BASE_URL = "https://api.fonada.ai"
+
+SAMPLE_RATE = 24000
+NUM_CHANNELS = 1
+
+# Per-request text limit for both Klone V2 models.
+_MAX_TEXT_CHARS = 5000
+# Pro generates the whole clip before responding (~2.4s per 100 chars measured),
+# so long batches are split to keep each request well inside its timeout and to
+# start playback sooner. Requests near the 5000-char limit also failed upstream.
+_PRO_MAX_CHUNK_CHARS = 1000
+
+# The server closes idle WebSockets after 5 minutes.
+_WS_MAX_IDLE_SECS = 240.0
+
+
+class _StaleConnectionError(APIConnectionError):
+    """A pooled WebSocket died before the server answered; safe to reconnect."""
+
+
+def _split_text(text: str, max_chars: int = _MAX_TEXT_CHARS) -> list[str]:
+    """Split *text* at sentence boundaries into chunks of at most *max_chars*."""
+    text = text.strip()
+    if len(text) <= max_chars:
+        return [text] if text else []
+
+    chunks: list[str] = []
+    buf = ""
+    for sent in (s.strip() for s in tokenize.basic.SentenceTokenizer().tokenize(text)):
+        if not sent:
+            continue
+        while len(sent) > max_chars:
+            if buf:
+                chunks.append(buf)
+                buf = ""
+            chunks.append(sent[:max_chars])
+            sent = sent[max_chars:]
+        if buf and len(buf) + 1 + len(sent) > max_chars:
+            chunks.append(buf)
+            buf = sent
+        else:
+            buf = f"{buf} {sent}" if buf else sent
+    if buf:
+        chunks.append(buf)
+    return chunks
+
+
+# ---------------------------------------------------------------------------
+# TTS
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _TTSOptions:
+    model: str
+    language: str
+    share_id: str
+    instruct: str | None
+    num_step: int | None
+    speed: float | None
+
+
+class TTS(tts.TTS):
+    """FonadaLabs Text-to-Speech plugin for LiveKit (Klone V2 Flash by default).
+
+    Args:
+        api_key:      FonadaLabs API key (or ``FONADALABS_API_KEY`` env var).
+        model:        ``"klone_v2_flash"`` (default, streaming) or ``"klone_v2_pro"``.
+        language:     ISO code or display name, e.g. ``"hi"`` / ``"Hindi"``.
+                      See :data:`~.models.KLONE_V2_FLASH_LANGUAGES` and
+                      :data:`~.models.KLONE_V2_PRO_LANGUAGES`.
+        share_id:     Voice Arena voice ``share_id`` (8 characters, e.g. ``"UFNPsnEd"``).
+                      Required; voice names are not accepted.
+        instruct:     Style hint, e.g. ``"calm, friendly"`` (max 500 chars).
+        num_step:     Diffusion steps, 8–64 (Flash only).
+        speed:        Speaking rate, 0.25–4.0. FonadaLabs notes this is currently
+                      unreliable on Flash.
+        tokenizer:    Sentence tokenizer for streamed text. Defaults to
+                      :class:`livekit.agents.tokenize.blingfire.SentenceTokenizer`.
+        base_url:     Override the API base URL.
+        http_session: Reuse an existing :class:`aiohttp.ClientSession`.
+    """
+
+    def __init__(
+        self,
+        *,
+        share_id: str,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        model: TTSModels | str = "klone_v2_flash",
+        language: TTSFlashLanguages | str = "hi",
+        instruct: NotGivenOr[str] = NOT_GIVEN,
+        num_step: NotGivenOr[int] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
+        base_url: str = FONADALABS_API_BASE_URL,
+        http_session: aiohttp.ClientSession | None = None,
+    ) -> None:
+        super().__init__(
+            capabilities=tts.TTSCapabilities(streaming=True),
+            sample_rate=SAMPLE_RATE,
+            num_channels=NUM_CHANNELS,
+        )
+
+        fonada_api_key = (
+            api_key if utils.is_given(api_key) else os.environ.get("FONADALABS_API_KEY")
+        )
+        if not fonada_api_key:
+            raise ValueError(
+                "FonadaLabs API key is required. "
+                "Pass it directly or set the FONADALABS_API_KEY environment variable."
+            )
+        self._api_key = fonada_api_key
+
+        if model not in TTS_LANGUAGES:
+            raise ValueError(
+                f"Unsupported TTS model {model!r}. Supported: {', '.join(TTS_LANGUAGES)}"
+            )
+
+        self._opts = _TTSOptions(
+            model=model,
+            language=_resolve_tts_language(model, language),
+            share_id=_validate_share_id(share_id),
+            instruct=_validate_instruct(instruct if utils.is_given(instruct) else None),
+            num_step=_validate_num_step(num_step if utils.is_given(num_step) else None),
+            speed=_validate_speed(speed if utils.is_given(speed) else None),
+        )
+        if model == "klone_v2_pro" and utils.is_given(num_step):
+            logger.warning("num_step is only supported by klone_v2_flash; it will be ignored")
+
+        self._sentence_tokenizer = (
+            tokenizer if utils.is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
+        )
+
+        self._base_url = base_url.rstrip("/")
+        self._ws_url = (
+            self._base_url.replace("https://", "wss://").replace("http://", "ws://")
+            + "/v1/voice-clone/ws"
+        )
+        self._chunks_url = f"{self._base_url}/v1/voice-clone/chunks"
+        self._session = http_session
+
+        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            connect_cb=self._connect_ws,
+            close_cb=self._close_ws,
+            max_session_duration=_WS_MAX_IDLE_SECS,
+            mark_refreshed_on_get=True,
+        )
+        self._streams: set[SynthesizeStream] = set()
+
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        return "FonadaLabs"
+
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if self._session is None:
+            self._session = utils.http_context.http_session()
+        return self._session
+
+    def update_options(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        share_id: NotGivenOr[str] = NOT_GIVEN,
+        instruct: NotGivenOr[str | None] = NOT_GIVEN,
+        num_step: NotGivenOr[int | None] = NOT_GIVEN,
+        speed: NotGivenOr[float | None] = NOT_GIVEN,
+    ) -> None:
+        if utils.is_given(language):
+            self._opts.language = _resolve_tts_language(self._opts.model, language)
+        if utils.is_given(share_id):
+            self._opts.share_id = _validate_share_id(share_id)
+        if utils.is_given(instruct):
+            self._opts.instruct = _validate_instruct(instruct)
+        if utils.is_given(num_step):
+            self._opts.num_step = _validate_num_step(num_step)
+        if utils.is_given(speed):
+            self._opts.speed = _validate_speed(speed)
+
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        try:
+            ws = await asyncio.wait_for(
+                self._ensure_session().ws_connect(
+                    self._ws_url, headers={"Authorization": f"Bearer {self._api_key}"}
+                ),
+                timeout,
+            )
+        except aiohttp.WSServerHandshakeError as e:
+            raise APIStatusError(
+                message=f"FonadaLabs TTS WebSocket handshake failed: {e.message}",
+                status_code=e.status,
+            ) from e
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("Timed out connecting to FonadaLabs TTS") from e
+        except aiohttp.ClientError as e:
+            raise APIConnectionError(f"Failed to connect to FonadaLabs TTS: {e}") from e
+
+        # The socket is not in the pool yet: close it on any failure, including
+        # cancellation while waiting for the ready message.
+        try:
+            try:
+                msg = await ws.receive(timeout=timeout)
+            except asyncio.TimeoutError as e:
+                raise APITimeoutError("Timed out waiting for FonadaLabs TTS ready message") from e
+
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                raise APIConnectionError(f"FonadaLabs TTS closed before ready ({msg.type})")
+            data = json.loads(msg.data)
+            if data.get("type") != "ready":
+                code, message = parse_error(data)
+                raise APIStatusError(
+                    message=f"FonadaLabs TTS rejected connection [{code}]: {message}",
+                    status_code=int(data.get("status") or 403),
+                    retryable=False,
+                )
+        except BaseException:
+            await ws.close()
+            raise
+        return ws
+
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        await ws.close()
+
+    def prewarm(self) -> None:
+        if self._opts.model == "klone_v2_flash":
+            self._pool.prewarm()
+
+    def synthesize(
+        self,
+        text: str,
+        *,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> tts.ChunkedStream:
+        return self._synthesize_with_stream(text, conn_options=conn_options)
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
+
+    async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
+        await self._pool.aclose()
+        await super().aclose()
+
+
+# ---------------------------------------------------------------------------
+# SynthesizeStream
+# ---------------------------------------------------------------------------
+
+
+class SynthesizeStream(tts.SynthesizeStream):
+    """Synthesizes one agent reply per stream, starting as soon as the first
+    sentence is complete."""
+
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        output_emitter.initialize(
+            request_id=utils.shortuuid(),
+            sample_rate=SAMPLE_RATE,
+            num_channels=NUM_CHANNELS,
+            mime_type="audio/pcm",
+        )
+
+        sent_stream = self._tts._sentence_tokenizer.stream()
+        pending: list[str] = []
+        sentence_ready = asyncio.Event()
+        input_done = False
+
+        async def _input_task() -> None:
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    sent_stream.flush()
+                    continue
+                sent_stream.push_text(data)
+            sent_stream.end_input()
+
+        async def _sentence_task() -> None:
+            nonlocal input_done
+            try:
+                async for ev in sent_stream:
+                    if ev.token.strip():
+                        pending.append(ev.token.strip())
+                        sentence_ready.set()
+            finally:
+                input_done = True
+                sentence_ready.set()
+
+        async def _next_batch() -> str | None:
+            """Wait for at least one sentence, then take every sentence queued so far."""
+            while not pending and not input_done:
+                sentence_ready.clear()
+                await sentence_ready.wait()
+            if not pending:
+                return None
+            batch = " ".join(pending)
+            pending.clear()
+            return batch
+
+        tasks = [asyncio.create_task(_input_task()), asyncio.create_task(_sentence_task())]
+        try:
+            if self._opts.model == "klone_v2_flash":
+                await self._run_ws(_next_batch, output_emitter)
+            else:
+                while (batch := await _next_batch()) is not None:
+                    for chunk in _split_text(batch, _PRO_MAX_CHUNK_CHARS):
+                        self._mark_started()
+                        await self._run_http(chunk, output_emitter)
+            output_emitter.flush()
+        finally:
+            await sent_stream.aclose()
+            await utils.aio.gracefully_cancel(*tasks)
+
+    async def _run_ws(
+        self,
+        next_batch: Callable[[], Awaitable[str | None]],
+        output_emitter: tts.AudioEmitter,
+    ) -> None:
+        ws: aiohttp.ClientWebSocketResponse | None = None
+        sent_any = False
+        # The socket goes back to the pool only if every utterance finished
+        # cleanly. After any error, audio still in flight for the failed request
+        # could otherwise play at the start of the next reply.
+        reusable = False
+        try:
+            while (batch := await next_batch()) is not None:
+                for chunk in _split_text(batch):
+                    self._mark_started()
+                    if ws is None:
+                        ws = await self._tts._pool.get(timeout=self._conn_options.timeout)
+                    try:
+                        await self._speak_ws(ws, chunk, output_emitter)
+                    except _StaleConnectionError as e:
+                        # The server closed an idle pooled socket before answering the
+                        # first request of this reply; nothing was played, so reconnect
+                        # and resend instead of surfacing an error and a retry.
+                        if sent_any:
+                            raise
+                        logger.debug(f"TTS pooled WebSocket was stale ({e}); reconnecting")
+                        self._tts._pool.remove(ws)
+                        ws = await self._tts._pool.get(timeout=self._conn_options.timeout)
+                        await self._speak_ws(ws, chunk, output_emitter)
+                    sent_any = True
+            reusable = True
+        finally:
+            if ws is not None:
+                if reusable:
+                    self._tts._pool.put(ws)
+                else:
+                    self._tts._pool.remove(ws)
+
+    async def _speak_ws(
+        self, ws: aiohttp.ClientWebSocketResponse, text: str, output_emitter: tts.AudioEmitter
+    ) -> None:
+        request_id = utils.shortuuid()
+        payload: dict[str, Any] = {
+            "text": text,
+            "share_id": self._opts.share_id,
+            "language": self._opts.language,
+            "output_audio_codec": "pcm",
+            "request_id": request_id,
+        }
+        if self._opts.instruct:
+            payload["instruct"] = self._opts.instruct
+        if self._opts.num_step is not None:
+            payload["num_step"] = self._opts.num_step
+        if self._opts.speed is not None:
+            payload["speed"] = self._opts.speed
+
+        if ws.closed:
+            raise _StaleConnectionError("FonadaLabs TTS WebSocket already closed")
+        try:
+            await ws.send_str(json.dumps(payload))
+        except (aiohttp.ClientError, ConnectionResetError) as e:
+            raise _StaleConnectionError(f"FonadaLabs TTS send failed: {e}") from e
+        got_reply = False
+
+        logger.debug(f"TTS utterance sent ({len(text)} chars)")
+
+        while True:
+            try:
+                msg = await ws.receive(timeout=self._conn_options.timeout)
+            except asyncio.TimeoutError as e:
+                raise APITimeoutError("FonadaLabs TTS timed out waiting for audio") from e
+
+            if msg.type == aiohttp.WSMsgType.BINARY:
+                got_reply = True
+                output_emitter.push(msg.data)
+            elif msg.type == aiohttp.WSMsgType.TEXT:
+                got_reply = True
+                data = json.loads(msg.data)
+                msg_type = data.get("type")
+                if data.get("request_id") not in (None, request_id):
+                    continue
+                if msg_type == "start":
+                    continue
+                if msg_type == "end":
+                    logger.debug(
+                        f"TTS utterance done — first_audio={data.get('first_audio_ms')}ms "
+                        f"total={data.get('total_ms')}ms bytes={data.get('audio_bytes')}"
+                    )
+                    return
+                if msg_type == "error":
+                    code, message = parse_error(data)
+                    raise APIStatusError(
+                        message=f"FonadaLabs TTS error [{code}]: {message}",
+                        status_code=int(data.get("status") or 500),
+                        body=data,
+                    )
+            elif msg.type in (
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSING,
+            ):
+                err_cls = APIConnectionError if got_reply else _StaleConnectionError
+                raise err_cls(
+                    f"FonadaLabs TTS WebSocket closed unexpectedly (code={ws.close_code})"
+                )
+            elif msg.type == aiohttp.WSMsgType.ERROR:
+                raise APIConnectionError(f"FonadaLabs TTS WebSocket error: {ws.exception()}")
+
+    async def _run_http(self, text: str, output_emitter: tts.AudioEmitter) -> None:
+        form: dict[str, str] = {
+            "model": self._opts.model,
+            "text": text,
+            "share_id": self._opts.share_id,
+            "language": self._opts.language,
+            "output_audio_codec": "pcm",
+        }
+        if self._opts.instruct:
+            form["instruct"] = self._opts.instruct
+        if self._opts.speed is not None:
+            form["speed"] = str(self._opts.speed)
+
+        data = aiohttp.FormData()
+        for key, value in form.items():
+            data.add_field(key, value)
+
+        try:
+            async with self._tts._ensure_session().post(
+                self._tts._chunks_url,
+                data=data,
+                headers={"Authorization": f"Bearer {self._tts._api_key}"},
+                # Pro is non-streaming: the whole clip is generated before the
+                # response starts, and generation time grows with text length
+                # (~2.4s per 100 chars measured). The default 10s conn timeout
+                # would fail most replies over ~400 chars, so allow at least 60s.
+                timeout=aiohttp.ClientTimeout(total=max(self._conn_options.timeout, 60.0)),
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    code, message = parse_error(body)
+                    raise APIStatusError(
+                        message=f"FonadaLabs TTS error [{code}]: {message}",
+                        status_code=resp.status,
+                        body=body,
+                    )
+                async for data_chunk in resp.content.iter_chunked(4096):
+                    output_emitter.push(data_chunk)
+        except asyncio.TimeoutError as e:
+            raise APITimeoutError("FonadaLabs TTS request timed out") from e
+        except aiohttp.ClientError as e:
+            raise APIConnectionError(f"FonadaLabs TTS connection failed: {e}") from e
+
+    async def aclose(self) -> None:
+        self._tts._streams.discard(self)
+        await super().aclose()
+
+
+# ---------------------------------------------------------------------------
+# Validation helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_tts_language(model: str, language: str) -> str:
+    supported = TTS_LANGUAGES[model]
+    code = resolve_language(language, supported, LANGUAGE_ALIASES.get(model))
+    if code is None:
+        raise ValueError(
+            f"Language {language!r} is not supported by {model}. "
+            f"Supported: {', '.join(f'{c} ({n})' for c, n in supported.items())}"
+        )
+    return code
+
+
+def _validate_share_id(share_id: str) -> str:
+    share_id = (share_id or "").strip()
+    if not share_id:
+        raise ValueError(
+            "share_id is required: pass the Voice Arena share_id of the voice "
+            '(e.g. share_id="UFNPsnEd")'
+        )
+    return share_id
+
+
+def _validate_instruct(instruct: str | None) -> str | None:
+    if not instruct:
+        return None
+    if len(instruct) > 500:
+        logger.warning("instruct is longer than 500 characters and will be truncated")
+        return instruct[:500]
+    return instruct
+
+
+def _validate_num_step(num_step: int | None) -> int | None:
+    if num_step is not None and not 8 <= num_step <= 64:
+        raise ValueError("num_step must be between 8 and 64")
+    return num_step
+
+
+def _validate_speed(speed: float | None) -> float | None:
+    if speed is not None and not 0.25 <= speed <= 4.0:
+        raise ValueError("speed must be between 0.25 and 4.0")
+    return speed
