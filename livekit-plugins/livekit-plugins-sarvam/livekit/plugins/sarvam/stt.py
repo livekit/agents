@@ -53,6 +53,9 @@ from .log import logger
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 EOS_FALLBACK_TIMEOUT = 1.0
+# Sarvam never closes the socket when input ends, so after the final flush the stream
+# waits this long for a just-started utterance to surface before deciding none is open.
+END_OF_INPUT_GRACE = 0.5
 
 # Sarvam API details
 SARVAM_STT_BASE_URL = "https://api.sarvam.ai/speech-to-text"
@@ -937,19 +940,9 @@ class SpeechStream(stt.SpeechStream):
             int(self._opts.sample_rate * self._CHUNK_DURATION_MS / 1000),
             1,
         )
-        self._end_of_stream_msg = self._build_end_of_stream_message()
-
-    def _build_end_of_stream_message(self) -> str:
-        return json.dumps(
-            {
-                "type": "end_of_stream",
-                "audio": {
-                    "data": "",
-                    "encoding": self._audio_encoding,
-                    "sample_rate": self._opts.sample_rate,
-                },
-            }
-        )
+        # set while no utterance is open, so end of input knows when it may close
+        self._utterance_settled = asyncio.Event()
+        self._utterance_settled.set()
 
     def _build_log_context(self) -> dict:
         """Build consistent logging context."""
@@ -1278,10 +1271,13 @@ class SpeechStream(stt.SpeechStream):
                 if audio_exc is not None:
                     raise audio_exc
 
+                # Sarvam ignores end-of-input and never closes the socket itself, so
+                # wait only for the utterance the final flush closes, then close ours.
+                settled_task = asyncio.create_task(self._wait_for_utterance_settled())
+                tasks.append(settled_task)
                 done2, pending2 = await asyncio.wait(
-                    [self._message_task, reconnect_task],
+                    [self._message_task, reconnect_task, settled_task],
                     return_when=asyncio.FIRST_COMPLETED,
-                    timeout=self._conn_options.timeout,
                 )
                 done |= done2
                 pending = pending2
@@ -1294,14 +1290,15 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.clear()
                     return
 
-                if not done2:
-                    raise APITimeoutError(
-                        "Timed out waiting for STT server response after audio input ended"
-                    )
-
             # Cancel remaining tasks using LiveKit's utility
             if pending:
                 await utils.aio.cancel_and_wait(*pending)
+
+            if (self._speaking or self._pending_eos) and not self._eos_emitted_for_utterance:
+                # the socket is closing, so close the turn rather than leave it to the
+                # fallback timer that the cleanup below cancels
+                self._try_commit_utterance()
+                self._emit_end_of_speech()
 
             # Check for exceptions in completed tasks
             for task in done:
@@ -1331,17 +1328,53 @@ class SpeechStream(stt.SpeechStream):
                     extra=self._build_log_context(),
                 )
 
+    async def _wait_for_utterance_settled(self) -> None:
+        # The grace is fixed discovery time, so it doesn't count against the caller's
+        # timeout; only an utterance that is actually open is bounded by it.
+        await asyncio.sleep(END_OF_INPUT_GRACE)
+        if self._utterance_settled.is_set():
+            return
+        try:
+            await asyncio.wait_for(self._utterance_settled.wait(), self._conn_options.timeout)
+        except asyncio.TimeoutError:
+            raise APITimeoutError(
+                "Timed out waiting for the final transcript after audio input ended"
+            ) from None
+
+    async def _send_pcm(self, ws: aiohttp.ClientWebSocketResponse, pcm: bytes) -> None:
+        """Send 16-bit PCM samples in Sarvam's audio message."""
+        import base64
+
+        await ws.send_str(
+            json.dumps(
+                {
+                    "audio": {
+                        "data": base64.b64encode(pcm).decode("utf-8"),
+                        "encoding": self._audio_encoding,
+                        "sample_rate": self._opts.sample_rate,
+                    }
+                }
+            )
+        )
+
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Process audio frames and send them in chunks."""
-        import base64
-
         import numpy as np
 
         # Audio buffering for chunked sending
         audio_buffer: list[np.int16] = []
         chunk_size = self._chunk_size  # Derived from selected sample rate
         chunks_sent = 0
+        flushed = False  # whether the last message sent was a flush
+
+        async def send_tail() -> None:
+            nonlocal flushed
+            if not audio_buffer:
+                return
+            await self._send_pcm(ws, np.array(audio_buffer, dtype=np.int16).tobytes())
+            audio_buffer.clear()
+            flushed = False
 
         self._logger.debug(
             "Starting audio processing",
@@ -1359,23 +1392,10 @@ class SpeechStream(stt.SpeechStream):
 
                         # Check if we have enough data for a chunk
                         while len(audio_buffer) >= chunk_size:
-                            # Convert to Int16Array
                             chunk_data = np.array(audio_buffer[:chunk_size], dtype=np.int16)
-
-                            # Convert to base64
-                            base64_audio = base64.b64encode(chunk_data.tobytes()).decode("utf-8")
-
-                            # Send audio in the required format
-                            audio_message = {
-                                "audio": {
-                                    "data": base64_audio,
-                                    "encoding": self._audio_encoding,
-                                    "sample_rate": self._opts.sample_rate,
-                                }
-                            }
-
-                            await ws.send_str(json.dumps(audio_message))
+                            await self._send_pcm(ws, chunk_data.tobytes())
                             chunks_sent += 1
+                            flushed = False
 
                             # Remove sent data from buffer
                             audio_buffer = audio_buffer[chunk_size:]
@@ -1396,24 +1416,21 @@ class SpeechStream(stt.SpeechStream):
                         raise
 
                 elif isinstance(frame, self._FlushSentinel):
-                    if audio_buffer:
-                        tail = np.array(audio_buffer, dtype=np.int16).tobytes()
-                        await ws.send_str(
-                            json.dumps(
-                                {
-                                    "audio": {
-                                        "data": base64.b64encode(tail).decode("utf-8"),
-                                        "encoding": self._audio_encoding,
-                                        "sample_rate": self._opts.sample_rate,
-                                    }
-                                }
-                            )
-                        )
-                        audio_buffer.clear()
+                    await send_tail()
                     if self._opts.flush_signal:
                         await ws.send_str(json.dumps({"type": "flush"}))
+                        flushed = True
 
-            await ws.send_str(self._end_of_stream_msg)
+            await send_tail()
+            utterance_open = self._speaking or self._pending_eos
+            if utterance_open:
+                # a final from earlier in the utterance doesn't cover the audio sent since,
+                # so only one answering this flush settles it
+                self._utterance_settled.clear()
+            if not flushed or utterance_open:
+                # Sarvam has no end-of-stream message; a flush finalizes the open utterance
+                # (with or without flush_signal), so trailing speech isn't lost.
+                await ws.send_str(json.dumps({"type": "flush"}))
 
         except Exception as e:
             self._logger.error(
@@ -1597,9 +1614,15 @@ class SpeechStream(stt.SpeechStream):
         # Prefer the per-message request_id from the server; fall back to the
         # session-wide server request_id captured from an earlier message.
         request_id = transcript_data.get("request_id") or self._server_request_id or ""
+        # the utterance is settled once Sarvam has transcribed it, even to nothing; the
+        # END_OF_SPEECH fallback can fire before that, so it doesn't count
+        self._utterance_settled.set()
 
         if not transcript_text:
             self._logger.debug("Received empty transcript", extra=self._build_log_context())
+            if self._pending_eos:
+                # nothing to transcribe, so END_SPEECH needn't wait for a final
+                self._emit_end_of_speech()
             return
 
         try:
@@ -1669,6 +1692,7 @@ class SpeechStream(stt.SpeechStream):
                 if not self._speaking:
                     self._reset_utterance_state()
                     self._speaking = True
+                    self._utterance_settled.clear()
                     start_event = stt.SpeechEvent(
                         type=stt.SpeechEventType.START_OF_SPEECH,
                         request_id=self._server_request_id or "",
