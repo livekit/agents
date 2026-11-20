@@ -448,6 +448,30 @@ async def test_end_input_waits_for_the_final_after_an_earlier_one(session: _Sess
 
 
 @pytest.mark.virtual_time
+async def test_end_input_final_before_end_speech_closes_the_turn(session: _Session) -> None:
+    """A final that lands before END_SPEECH still gets its END_OF_SPEECH before the close."""
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream()
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+        stream.end_input()
+        assert await session.ws.next_message() == {"type": "flush"}
+        await stream._handle_transcript_data(
+            {"data": {"transcript": "नमस्ते", "language_code": "hi-IN"}}
+        )  # no END_SPEECH before the socket closes
+        events = [event.type async for event in stream]
+
+        assert events[0] == stt.SpeechEventType.START_OF_SPEECH
+        assert stt.SpeechEventType.FINAL_TRANSCRIPT in events
+        assert events[-1] == stt.SpeechEventType.END_OF_SPEECH
+        assert events.count(stt.SpeechEventType.END_OF_SPEECH) == 1
+        assert session.ws.closed
+
+
+@pytest.mark.virtual_time
 async def test_end_input_empty_final_after_end_speech_closes_the_turn(session: _Session) -> None:
     async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
         stream = model.stream()

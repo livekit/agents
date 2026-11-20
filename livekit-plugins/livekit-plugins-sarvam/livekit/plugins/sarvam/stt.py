@@ -1286,7 +1286,7 @@ class SpeechStream(stt.SpeechStream):
             if pending:
                 await utils.aio.cancel_and_wait(*pending)
 
-            if self._pending_eos and not self._eos_emitted_for_utterance:
+            if (self._speaking or self._pending_eos) and not self._eos_emitted_for_utterance:
                 # the socket is closing, so close the turn rather than leave it to the
                 # fallback timer that the cleanup below cancels
                 self._try_commit_utterance()
