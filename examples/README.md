@@ -52,6 +52,10 @@ A free-form companion agent running Expressive Mode. Tell it good news or bad ne
 
 A front desk agent example demonstrating how to build customer service agents with calendar integration and appointment management capabilities.
 
+### 🔏 [Watermark checks](./inference/watermark/)
+
+Check recorded or synthesized audio for a TTS provider's AI-generation signal with `inference.WatermarkDetector`: one file, a batch, and a TTS round trip.
+
 ### 🔧 [Primitives](./primitives/)
 
 Basic building blocks and fundamental examples showing core LiveKit concepts like room connections, participant management, and basic audio/video handling.

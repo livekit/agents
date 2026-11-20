@@ -24,3 +24,7 @@ uv run agent.py dev
 ```
 
 The model list shown in the playground is sourced from `examples/playground.yaml`. To add or remove options, edit the `controls` block on the `inference` example there.
+
+## Watermark checks
+
+[`watermark/`](watermark/) checks audio for a TTS provider's AI-generation signal with `inference.WatermarkDetector`.
