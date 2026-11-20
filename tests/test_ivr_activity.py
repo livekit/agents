@@ -1,6 +1,11 @@
+import asyncio
+from typing import Any
+
 import pytest
 
-from livekit.agents.voice.ivr.ivr_activity import TfidfLoopDetector
+from livekit.agents.utils import EventEmitter
+from livekit.agents.voice.events import AgentStateChangedEvent
+from livekit.agents.voice.ivr.ivr_activity import IVRActivity, TfidfLoopDetector
 
 pytestmark = pytest.mark.unit
 
@@ -70,3 +75,49 @@ def test_tfidf_loop_detection(transcripts: list[str], expected_loops: int) -> No
         detector.add_chunk(transcript)
         loops += detector.check_loop_detection()
     assert loops == expected_loops
+
+
+class _FakeSession(EventEmitter[Any]):
+    def __init__(self, *, agent_state: str, user_state: str) -> None:
+        super().__init__()
+        self.agent_state = agent_state
+        self.user_state = user_state
+        self.replies = 0
+
+    def generate_reply(self, **kwargs: Any) -> None:
+        self.replies += 1
+
+    def set_agent_state(self, state: str) -> None:
+        old, self.agent_state = self.agent_state, state
+        self.emit(
+            "agent_state_changed",
+            AgentStateChangedEvent(old_state=old, new_state=state),  # type: ignore[arg-type]
+        )
+
+
+async def test_silence_check_armed_when_started_while_idle() -> None:
+    # AMD starts IVR detection after the IVR greeting, with both sides already listening:
+    # no state event follows, so the activity has to start from the current states
+    session = _FakeSession(agent_state="listening", user_state="listening")
+    ivr = IVRActivity(session, max_silence_duration=0.05)  # type: ignore[arg-type]
+    await ivr.start()
+    try:
+        await asyncio.sleep(0.3)
+        assert session.replies == 1
+    finally:
+        await ivr.aclose()
+
+
+async def test_silence_check_waits_for_agent_to_go_idle() -> None:
+    session = _FakeSession(agent_state="speaking", user_state="listening")
+    ivr = IVRActivity(session, max_silence_duration=0.05)  # type: ignore[arg-type]
+    await ivr.start()
+    try:
+        await asyncio.sleep(0.2)
+        assert session.replies == 0
+
+        session.set_agent_state("listening")
+        await asyncio.sleep(0.3)
+        assert session.replies == 1
+    finally:
+        await ivr.aclose()
