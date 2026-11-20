@@ -6,7 +6,14 @@ from collections.abc import Callable
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    AgentTask,
+    AgentTaskCancelledError,
+    RunContext,
+    function_tool,
+)
 from livekit.agents.beta.workflows import TaskGroup
 from livekit.agents.llm import ChatMessage, FunctionToolCall, ToolError
 from livekit.agents.voice.events import CloseReason, UserStateChangedEvent
@@ -667,6 +674,51 @@ async def test_aclose_while_on_enter_awaits_agent_task() -> None:
     await asyncio.wait_for(session.aclose(), timeout=10.0)
 
     assert isinstance(agent.task_error, ToolError)
+
+
+class WaitingTask(AgentTask[None]):
+    """Waits for an answer that never comes, so only the close ends it."""
+
+    def __init__(self, entered: asyncio.Event) -> None:
+        super().__init__(instructions="waiting task")
+        self._entered = entered
+
+    async def on_enter(self) -> None:
+        self._entered.set()
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+async def test_close_cancels_a_waiting_task_with_agent_task_cancelled_error(grouped: bool) -> None:
+    """The awaiter of a task the close cancels can tell it from a failure, as a ToolError still."""
+
+    class ParentAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="parent agent")
+            self.entered = asyncio.Event()
+            self.task_error: ToolError | None = None
+
+        async def on_enter(self) -> None:
+            try:
+                if grouped:
+                    # a TaskGroup re-raises what its current task ends with
+                    await TaskGroup(summarize_chat_ctx=False).add(
+                        lambda: WaitingTask(self.entered), id="waiting", description="wait"
+                    )
+                else:
+                    await WaitingTask(self.entered)
+            except ToolError as e:
+                self.task_error = e
+
+    session = AgentSession(llm=FakeLLM())
+    agent = ParentAgent()
+    await session.start(agent)
+    await asyncio.wait_for(agent.entered.wait(), timeout=5.0)
+
+    await asyncio.wait_for(session.aclose(), timeout=10.0)
+
+    assert isinstance(agent.task_error, AgentTaskCancelledError)
+    # the text an LLM sees when a tool awaits the task is unchanged
+    assert agent.task_error.message == "AgentTask waiting_task is cancelled"
 
 
 @pytest.mark.parametrize(

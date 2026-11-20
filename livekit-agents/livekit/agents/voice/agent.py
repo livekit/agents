@@ -887,6 +887,15 @@ class Agent:
 TaskResult_T = TypeVar("TaskResult_T")
 
 
+class AgentTaskCancelledError(ToolError):
+    """Raised to whoever awaits an AgentTask that was cancelled before it completed.
+
+    `AgentTask.cancel()` completes the task with it, for example when the session closes
+    while the task is still running. It is a ToolError, so `except ToolError` still catches
+    it, and a tool awaiting the task still reports the same message to the LLM.
+    """
+
+
 class AgentTask(Agent, Generic[TaskResult_T]):
     def __init__(
         self,
@@ -947,7 +956,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             self._activity.interrupt(force=True)
         if self.__fut.done():
             return
-        self.complete(ToolError(f"AgentTask {self.id} is cancelled"))
+        self.complete(AgentTaskCancelledError(f"AgentTask {self.id} is cancelled"))
 
     def complete(self, result: TaskResult_T | Exception) -> None:
         if self.__fut.done():
