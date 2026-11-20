@@ -40,6 +40,7 @@ from ..llm import (
     Tool,
     Toolset,
 )
+from ..log import logger
 from ..stt import STT
 from ..tts import TTS
 from ..types import (
@@ -365,6 +366,21 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
             else None
         )
         await self._native.start(host.storage, host, job=job)
+        if self.thread is None and ctx is not None and not ctx.is_fake_job():
+            from ..a2a import _RemoteTool
+
+            # a delegate without a token of its own shares the call's thread
+            delegates = [
+                tool.id
+                for tool in [*agent.tools, *self.tools]
+                if isinstance(tool, _RemoteTool) and tool._agent._token is None
+            ]
+            if delegates:
+                logger.warning(
+                    "this call has no thread, so its delegates will refuse it; dispatch the "
+                    "call with thread_id to delegate",
+                    extra={"delegates": delegates},
+                )
         # the session's span is the caller's current span from here: the entrypoint's own spans
         # and the job's RPC handlers nest under it. It stays attached for the rest of the
         # entrypoint, which outlives the session's start; the job's context ends with the job.
