@@ -1417,3 +1417,181 @@ async def test_instance_that_serves_while_its_probe_runs_is_reported_once() -> N
         fallback_adapter.availability_changed_ch(fake).recv_nowait()
 
     await fallback_adapter.aclose()
+
+
+async def _probe_of(fallback_adapter: FallbackAdapter, index: int, *, streamed: bool) -> None:
+    """Wait for the recovery probe the last request started on an instance."""
+    status = fallback_adapter._status[index]
+    probe = status.recovering_stream_task if streamed else status.recovering_synthesize_task
+    assert probe is not None
+    await asyncio.wait_for(probe, 1.0)
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_probe_without_audio_does_not_restore_an_instance(streamed: bool) -> None:
+    # the adapter stays open: the probe a request starts for a skipped instance really runs.
+    # The request text is blank, so the probe makes no provider call (a non-streaming
+    # instance is wrapped in a StreamAdapter) or gets no audio, and shows nothing about the
+    # instance. Only audio restores it
+    fake1 = FakeTTS(fake_exception=APIConnectionError("1 down"))
+    if streamed:
+        _set_non_streaming(fake1)
+    else:
+        fake1.update_options(fake_exception=None)  # the probe gets no audio and no error
+    fake2 = FakeTTS(fake_audio_duration=1.0)
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+    fallback_adapter._status[0].available = False
+
+    await _request(fallback_adapter, streamed=streamed, text=" ")  # fake1 is skipped, fake2 serves
+    await _probe_of(fallback_adapter, 0, streamed=streamed)
+
+    assert not fallback_adapter._status[0].available
+    with pytest.raises(ChanEmpty):
+        fallback_adapter.availability_changed_ch(fake1).recv_nowait()
+
+    # a probe for real text gets audio and restores it
+    fake1.update_options(fake_exception=None, fake_audio_duration=1.0)
+    await _request(fallback_adapter, streamed=streamed)
+    await _probe_of(fallback_adapter, 0, streamed=streamed)
+    assert fallback_adapter._status[0].available
+    assert fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
+
+    await fallback_adapter.aclose()
+
+
+async def test_chunked_request_without_audio_does_not_restore_an_instance() -> None:
+    # a chunked request with blank text gets no audio and no error (non-blank text with no
+    # audio is an error). The instance served nothing, so it stays unavailable
+    fake = FakeTTS()
+    fallback_adapter = FallbackAdapterTester([fake])
+    fallback_adapter._status[0].available = False
+
+    await _request(fallback_adapter, streamed=False, text=" ")
+
+    assert not fallback_adapter._status[0].available
+    with pytest.raises(ChanEmpty):
+        fallback_adapter.availability_changed_ch(fake).recv_nowait()
+
+    fake.update_options(fake_audio_duration=1.0)
+    await _request(fallback_adapter, streamed=False)  # with audio it does
+    assert fallback_adapter._status[0].available
+
+    await fallback_adapter.aclose()
+
+
+class _HookTTS(FakeTTS):
+    """FakeTTS that calls `hook` when a request for a user reaches it."""
+
+    def __init__(self, hook: Any, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._hook = hook
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> FakeChunkedStream:
+        self._hook()
+        return super().synthesize(text, conn_options=conn_options)
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> FakeSynthesizeStream:
+        self._hook()
+        return super().stream(conn_options=conn_options)
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_instance_restored_during_a_request_is_not_probed(streamed: bool) -> None:
+    # fake1 is skipped as unavailable. While fake2 serves, fake1 is restored (by another
+    # request or probe). When the request ends, it must not start a probe for the available fake1
+    fake1 = FakeTTS(fake_audio_duration=1.0)
+    fallback_adapter: FallbackAdapter
+
+    def restore_fake1() -> None:
+        fallback_adapter._set_available(fake1, fallback_adapter._status[0], True)
+
+    fake2 = _HookTTS(restore_fake1, fake_audio_duration=1.0)
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+    fallback_adapter._status[0].available = False
+
+    await _request(fallback_adapter, streamed=streamed)
+
+    status = fallback_adapter._status[0]
+    assert status.available
+    assert status.recovering_stream_task is None
+    assert status.recovering_synthesize_task is None
+    requests1 = fake1.stream_ch if streamed else fake1.synthesize_ch
+    with pytest.raises(ChanEmpty):
+        requests1.recv_nowait()  # fake1 never saw a request, probe or otherwise
+
+    await fallback_adapter.aclose()
+
+
+class _OverlapTTS(FakeTTS):
+    """FakeTTS that counts its requests in flight, probes included, and keeps the most there
+    were at once. Each request takes `hold` seconds."""
+
+    def __init__(self, *, hold: float, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._hold = hold
+        self.active = 0
+        self.max_active = 0
+        self.requests = 0
+
+    async def _hold_request(self) -> None:
+        self.requests += 1
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(self._hold)
+        finally:
+            self.active -= 1
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> FakeChunkedStream:
+        outer = self
+
+        class _Held(FakeChunkedStream):
+            async def _run(self, output_emitter: AudioEmitter) -> None:
+                await outer._hold_request()
+                await super()._run(output_emitter)
+
+        stream = _Held(tts=self, input_text=text, conn_options=conn_options)
+        self._synthesize_ch.send_nowait(stream)
+        return stream
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> FakeSynthesizeStream:
+        outer = self
+
+        class _Held(FakeSynthesizeStream):
+            async def _run(self, output_emitter: AudioEmitter) -> None:
+                await outer._hold_request()
+                await super()._run(output_emitter)
+
+        stream = _Held(tts=self, conn_options=conn_options)
+        self._stream_ch.send_nowait(stream)
+        return stream
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_probe_does_not_run_beside_the_last_resort_request(streamed: bool) -> None:
+    # fake1 is skipped as unavailable and tried last, after fake2 fails. Its probe starts once
+    # the request is over, not at the skip: the probes are not switched off here, so a probe
+    # started at the skip would run while fake2 is still failing and overlap the last-resort
+    # request on fake1
+    fake1 = _OverlapTTS(hold=0.1, fake_exception=APIConnectionError("1 down"))
+    fake2 = FakeTTS(fake_timeout=0.05, fake_exception=APIConnectionError("2 down"))
+    fallback_adapter = FallbackAdapterTester([fake1, fake2], max_retry_per_tts=0)
+    fallback_adapter._status[0].available = False
+
+    with pytest.raises(APIConnectionError):
+        await _request(fallback_adapter, streamed=streamed)
+
+    await _probe_of(fallback_adapter, 0, streamed=streamed)
+
+    assert fake1.requests == 2  # the last-resort request, then the probe
+    assert fake1.max_active == 1  # never both at once
+
+    await fallback_adapter.aclose()

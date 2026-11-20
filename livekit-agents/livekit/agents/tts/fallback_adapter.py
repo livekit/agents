@@ -349,10 +349,13 @@ class FallbackChunkedStream(ChunkedStream):
             async def _recover_tts_task(tts: TTS) -> None:
                 _in_recovery_probe.set(True)
                 try:
+                    # only audio shows the instance works: a request with no speakable text
+                    # makes no provider call, so a probe that gets no audio restores nothing
+                    got_audio = False
                     async for _ in self._try_synthesize(tts=tts, recovering=True):
-                        pass
+                        got_audio = True
 
-                    if adapter._set_available(tts, tts_status, True):
+                    if got_audio and adapter._set_available(tts, tts_status, True):
                         logger.info(f"tts.FallbackAdapter, {tts.label} recovered")
                 except Exception:  # exceptions already logged inside _try_synthesize
                     return
@@ -400,21 +403,19 @@ class FallbackChunkedStream(ChunkedStream):
             return True
         except Exception as e:  # exceptions already logged inside _try_synthesize
             adapter._set_available(tts, tts_status, False)
+            self._try_recovery(tts)
 
             if output_emitter.pushed_duration() > 0.0:
                 logger.warning(f"{tts.label} already synthesized of audio, ignoring fallback")
                 # the caller heard this instance's audio: it served, partially. The utterance
-                # ends here, so say so, and probe the instance at once rather than when a
-                # later request skips it
+                # ends here, so say so
                 self._emit_error(e, recoverable=adapter._has_fallback())
-                self._try_recovery(tts)
                 _record_fallback_served(tts, index, self._tts_request_span, self._caller_span)
                 return True
+
+            return False
         finally:
             tts_status.serving -= 1
-
-        self._try_recovery(tts)
-        return False
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
         adapter = self._fallback_adapter
@@ -660,9 +661,9 @@ class FallbackSynthesizeStream(SynthesizeStream):
                         f"{tts.label} already synthesized of audio, ignoring the current segment for the tts fallback"  # noqa: E501
                     )
                     # the caller heard this instance's audio: it served, partially. The
-                    # utterance ends here, so say so. The probe starts in the finally below,
-                    # once input_task is cancelled, and re-synthesizes the text read so far
-                    # rather than when a later request skips the instance
+                    # utterance ends here, so say so. The instance's probe starts in the
+                    # finally below, once input_task is cancelled, and re-synthesizes the
+                    # text read so far
                     self._emit_error(e, recoverable=adapter._has_fallback())
                     _record_fallback_served(tts, index, self._tts_request_span, self._caller_span)
                     return True
@@ -728,15 +729,19 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
                     input_ch.close()
 
+                    # only audio shows the instance works: text with nothing to speak makes no
+                    # provider call under StreamAdapter, so a probe that gets no audio
+                    # restores nothing
+                    got_audio = False
                     async for _ in self._try_synthesize(
                         tts=tts,
                         input_ch=input_ch,
                         recovering=True,
                         conn_options=dataclasses.replace(self._conn_options, max_retry=0),
                     ):
-                        pass
+                        got_audio = True
 
-                    if adapter._set_available(tts, tts_status, True):
+                    if got_audio and adapter._set_available(tts, tts_status, True):
                         logger.info(f"tts.FallbackAdapter, {tts.label} recovered")
                 except Exception:
                     return
