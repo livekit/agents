@@ -323,3 +323,22 @@ async def test_a_tool_that_speaks_for_itself_gets_no_filler():
 
 def test_digits_do_not_run_across_a_decimal_point():
     assert digits_heard("yes the total is $220.74") == []
+
+
+def test_a_write_runs_again_after_its_undo():
+    contract = Contract({"block": Rule(write=True, undo="unblock"), "unblock": Rule(write=True)})
+    s = CallState()
+    s.record("block", {"card_id": "card_1"}, "{}")
+    assert contract.check("block", {"card_id": "card_1"}, s, []).startswith("ALREADY DONE")
+    s.record("unblock", {"card_id": "card_1"}, "{}")
+    assert contract.check("block", {"card_id": "card_1"}, s, []) is None
+
+
+async def test_a_refusal_log_carries_no_argument_values(caplog):
+    import logging
+
+    ctx = _ctx()
+    ctx.userdata.state.record("accounts", {}, json.dumps({"ids": ["acc_2"]}))
+    with caplog.at_level(logging.INFO, logger="bank-support.contract"):
+        await _call(lookup, ctx, {"account_id": "4155550123"})
+    assert caplog.records and "4155550123" not in caplog.text

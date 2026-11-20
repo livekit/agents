@@ -116,6 +116,8 @@ def _words(n: int) -> str:
 def spoken_dollars(amount: float) -> str:
     """Money as a caller hears it: tool sentences are copied into speech, so they carry
     no decimals ("223.74" -> "two hundred twenty-three dollars and seventy-four cents")."""
+    if amount < 0:
+        return "minus " + spoken_dollars(-amount)
     cents_total = round(amount * 100)
     dollars, cents = divmod(cents_total, 100)
     parts = []
@@ -128,11 +130,18 @@ def spoken_dollars(amount: float) -> str:
 
 def transfer_check(bank: FakeBank, from_account_id: str, amount: float) -> dict[str, Any]:
     """Whether a transfer of ``amount`` can leave ``from_account_id`` today, and what it will cost."""
+    if amount <= 0:
+        return {
+            "allowed": False,
+            "requested_amount": amount,
+            "fee": 0.0,
+            "say": "A transfer amount must be more than zero.",
+        }
     account = bank.account(from_account_id)
     if account is None:
         return {
             "allowed": False,
-            "amount": amount,
+            "requested_amount": amount,
             "fee": 0.0,
             "say": "That account was not found; check the account id with get_accounts.",
         }
@@ -143,7 +152,7 @@ def transfer_check(bank: FakeBank, from_account_id: str, amount: float) -> dict[
     if total > account.balance:
         return {
             "allowed": False,
-            "amount": amount,
+            "requested_amount": amount,
             "fee": fee,
             "available": account.balance,
             "say": f"The available balance on that account is {spoken_dollars(account.balance)}, which does not cover {spoken_dollars(total)}; offer a smaller amount or another account.",
@@ -151,7 +160,7 @@ def transfer_check(bank: FakeBank, from_account_id: str, amount: float) -> dict[
     if amount > remaining_limit:
         return {
             "allowed": False,
-            "amount": amount,
+            "requested_amount": amount,
             "fee": fee,
             "limit_left_today": remaining_limit,
             "say": f"The daily limit leaves {spoken_dollars(remaining_limit)} today, which does not cover {spoken_dollars(amount)}. Offer that amount today. The caller can call again tomorrow for the rest; you cannot schedule a transfer.",
@@ -365,7 +374,15 @@ async def transfer_funds(
         to_account_id: The account the money goes to, from get_accounts.
         amount: The amount in dollars, as confirmed with transfer_check.
     """
-    return json.dumps(_bank(ctx).transfer(from_account_id, to_account_id, amount))
+    # The write enforces its own policy: the contract checks where the amount came from,
+    # not whether the check allowed it.
+    bank = _bank(ctx)
+    if from_account_id == to_account_id:
+        raise ToolError("The two accounts are the same. Ask which account the money goes to.")
+    check = transfer_check(bank, from_account_id, amount)
+    if not check["allowed"]:
+        raise ToolError(check["say"])
+    return json.dumps(bank.transfer(from_account_id, to_account_id, amount, fee=check["fee"]))
 
 
 async def add_travel_notice(

@@ -342,7 +342,8 @@ class Contract:
                         "ask the caller for what is missing, or change the arguments as described."
                     )
                 state.last_refused = (name, arguments)
-                logger.info("%s refused: %s", name, refusal[:120])
+                # The refusal quotes argument values (phone numbers, ids): log only its kind.
+                logger.info("%s refused: %s", name, refusal.split(":", 1)[0])
                 return refusal
             state.last_refused = None
             filler_task = asyncio.create_task(_say_fillers(ctx)) if fillers else None
@@ -378,8 +379,11 @@ def _repeats_a_write(rule: Rule, name: str, arguments: dict[str, Any], state: Ca
     )
     if last is None:
         return False
-    producers = {path.partition(".")[0] for path in rule.needs.values()}
-    return not any(r.ok and r.name in producers for r in state.records[last + 1 :])
+    # A fresh reply from a producer, or the write's own undo, means it may run again.
+    resets = {path.partition(".")[0] for path in rule.needs.values()}
+    if rule.undo:
+        resets.add(rule.undo)
+    return not any(r.ok and r.name in resets for r in state.records[last + 1 :])
 
 
 def _history(ctx: RunContext) -> list[tuple[str, str]]:

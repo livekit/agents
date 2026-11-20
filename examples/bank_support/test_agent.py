@@ -104,7 +104,52 @@ async def test_a_task_can_undo_its_own_write():
     assert "unblock_card" in _names(task.tools)
 
 
-async def test_a_hand_off_says_goodbye_and_closes_the_session():
+async def test_a_hand_off_says_goodbye_and_closes_the_session(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import agent as agent_module
+
+    agent_module.SESSION_DRAIN_S = 0
+    monkeypatch.setattr(agent_module, "get_job_context", MagicMock)
+    ctx = MagicMock()
+    ctx.session.say = AsyncMock()
+    ctx.session.aclose = AsyncMock()
+    bank_agent = BankAgent()
+    await bank_agent._transfer_to_human_impl(ctx, "wants a higher limit", "Connecting you now.")
+    await bank_agent._close_task
+    ctx.session.say.assert_awaited_once_with("Connecting you now.", allow_interruptions=False)
+    ctx.session.aclose.assert_awaited_once()
+
+
+async def test_a_task_annotates_the_callers_digits():
+    from agent import WriteTask as Task
+
+    task = Task(FLOWS["block_card"], CallState())
+    message = ChatMessage(role="user", content=["four four two one"])
+    await task.on_user_turn_completed(None, message)
+    assert message.text_content.endswith("[heard: 4421]")
+
+
+async def test_ending_the_call_deletes_the_room_and_shuts_down_the_job(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import agent as agent_module
+
+    agent_module.SESSION_DRAIN_S = 0
+    job = MagicMock()
+    monkeypatch.setattr(agent_module, "get_job_context", lambda: job)
+    ctx = MagicMock()
+    ctx.session.say = AsyncMock()
+    ctx.session.aclose = AsyncMock()
+    bank_agent = BankAgent()
+    await bank_agent._say_and_close(ctx, "Goodbye.")
+    await bank_agent._close_task
+    job.add_shutdown_callback.assert_called_once_with(job.delete_room)
+    job.shutdown.assert_called_once()
+
+
+async def test_a_hand_off_log_carries_no_caller_request(caplog):
+    import logging
     from unittest.mock import AsyncMock, MagicMock
 
     import agent as agent_module
@@ -114,7 +159,8 @@ async def test_a_hand_off_says_goodbye_and_closes_the_session():
     ctx.session.say = AsyncMock()
     ctx.session.aclose = AsyncMock()
     bank_agent = BankAgent()
-    await bank_agent._transfer_to_human_impl(ctx, "wants a higher limit", "Connecting you now.")
-    await bank_agent._close_task
-    ctx.session.say.assert_awaited_once_with("Connecting you now.", allow_interruptions=False)
-    ctx.session.aclose.assert_awaited_once()
+    with caplog.at_level(logging.INFO, logger="bank-support"):
+        await bank_agent._transfer_to_human_impl(
+            ctx, "wants to move 9000 from savings", "One moment."
+        )
+    assert "9000" not in caplog.text

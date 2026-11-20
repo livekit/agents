@@ -177,3 +177,55 @@ def test_an_allowed_transfer_reports_the_limit_left_after_it():
     assert "remaining_limit" not in ok
     over = transfer_check(bank, checking.id, bank.DAILY_LIMIT + 1)
     assert over["limit_left_today"] == bank.DAILY_LIMIT
+
+
+def test_negative_amounts_are_spoken_as_negative():
+    from flows.bank import spoken_dollars
+
+    assert spoken_dollars(-4.12) == "minus four dollars and twelve cents"
+
+
+def _ctx_for(bank):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(userdata=SimpleNamespace(bank=bank, customer_id="c_1"))
+
+
+def test_a_savings_transfer_deducts_its_fee():
+    import asyncio
+
+    from flows.bank import transfer_funds
+
+    bank = FakeBank.seeded()
+    checking, savings = (
+        next(a for a in bank.accounts("c_1") if a.kind == k) for k in ("checking", "savings")
+    )
+    before = savings.balance
+    asyncio.run(transfer_funds(_ctx_for(bank), savings.id, checking.id, 500.0))
+    assert savings.balance == round(before - 502.0, 2)
+
+
+def test_transfer_funds_refuses_what_transfer_check_refuses():
+    import asyncio
+
+    from flows.bank import transfer_funds
+
+    from livekit.agents import ToolError
+
+    bank = FakeBank.seeded()
+    checking, savings = (
+        next(a for a in bank.accounts("c_1") if a.kind == k) for k in ("checking", "savings")
+    )
+    for amount in (bank.DAILY_LIMIT + 1, -100.0, 0.0):
+        with pytest.raises(ToolError):
+            asyncio.run(transfer_funds(_ctx_for(bank), checking.id, savings.id, amount))
+    with pytest.raises(ToolError):
+        asyncio.run(transfer_funds(_ctx_for(bank), checking.id, checking.id, 10.0))
+    assert bank.transfers == []
+
+
+def test_a_refused_check_offers_no_amount_to_transfer():
+    bank = FakeBank.seeded()
+    checking = next(a for a in bank.accounts("c_1") if a.kind == "checking")
+    over = transfer_check(bank, checking.id, bank.DAILY_LIMIT + 1)
+    assert "amount" not in over and over["requested_amount"] == bank.DAILY_LIMIT + 1

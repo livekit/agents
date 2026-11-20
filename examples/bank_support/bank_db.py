@@ -193,16 +193,17 @@ class FakeBank:
         return dispute
 
     def transfer(
-        self, from_account_id: str, to_account_id: str, amount: float
+        self, from_account_id: str, to_account_id: str, amount: float, fee: float = 0.0
     ) -> dict[str, object]:
         src, dst = self._accounts[from_account_id], self._accounts[to_account_id]
-        src.balance = round(src.balance - amount, 2)
+        src.balance = round(src.balance - amount - fee, 2)
         dst.balance = round(dst.balance + amount, 2)
         done = {
             "transfer_id": f"trf_{next(self._ids)}",
             "from_account_id": from_account_id,
             "to_account_id": to_account_id,
             "amount": amount,
+            "fee": fee,
         }
         self.transfers.append(done)
         return done

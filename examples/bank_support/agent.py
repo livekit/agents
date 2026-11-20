@@ -34,6 +34,7 @@ from livekit.agents import (
     SimulationContext,
     cli,
     function_tool,
+    get_job_context,
     inference,
 )
 from livekit.agents.llm import ChatContext, ChatMessage, FunctionTool
@@ -145,6 +146,10 @@ class WriteTask(AgentTask[dict[str, Any]]):
         self._first_record = len(self._state.records)
         self.session.generate_reply()
 
+    async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
+        # Only the active agent's hook runs, so a task annotates its own caller turns.
+        annotate_user_turn(self._state, new_message)
+
     async def finish_request_reply(self, summary: str) -> str | None:
         """None when the task finished; otherwise the reply the model gets instead."""
         done = [
@@ -232,7 +237,8 @@ class BankAgent(Agent):
             summary: What the caller needs, in one or two sentences, for the colleague.
             closing_message: What to tell the caller before the hand-off.
         """
-        logger.info("transfer to human: %s", summary)
+        # The summary holds the caller's request: keep it out of logs, which are not redacted.
+        logger.info("transfer to human requested")
         # A real deployment transfers the SIP call here; the example ends the session.
         await self._say_and_close(ctx, closing_message)
         return "Transferred to a colleague."
@@ -257,7 +263,12 @@ class BankAgent(Agent):
 
         async def close_after_drain() -> None:
             await asyncio.sleep(SESSION_DRAIN_S)
+            # Closing the session alone leaves the caller connected to silence: delete the
+            # room, which disconnects SIP callers too, and end the job.
+            job = get_job_context()
+            job.add_shutdown_callback(job.delete_room)
             await session.aclose()
+            job.shutdown(reason="agent ended the call")
 
         self._close_task = asyncio.create_task(close_after_drain())
 
