@@ -645,6 +645,41 @@ async def test_reconnect_without_an_earlier_final_waits_past_the_eos_fallback(
 
 
 @pytest.mark.virtual_time
+async def test_reconnect_after_the_eos_fallback_waits_for_the_late_final(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reconnect between the fallback's END_OF_SPEECH and a late final keeps the final."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+    await asyncio.sleep(sarvam_stt.EOS_FALLBACK_TIMEOUT + 0.1)  # the fallback fires
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    old = session.sockets[0]
+    await _wait_until(lambda: {"type": "flush"} in old.sent)
+    assert not old.closed  # waiting on the late final
+    await stream._handle_transcript_data({"data": {"transcript": "नमस्ते", "language_code": "hi-IN"}})
+
+    await _wait_until(lambda: len(session.sockets) == 2)
+    events = [e.type for e in await _next_events(stream, 4)]
+    assert events == [
+        sarvam_stt.stt.SpeechEventType.START_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.END_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.RECOGNITION_USAGE,
+        sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+
+    # the utterance is settled, so another reconnect doesn't flush it again
+    stream.update_options(language="en-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 3)
+    assert {"type": "flush"} not in session.sockets[1].sent
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
 async def test_update_options_after_end_input_does_not_reconnect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
