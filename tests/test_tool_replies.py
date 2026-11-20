@@ -722,3 +722,31 @@ async def test_session_scoped_reply_is_dropped_on_close() -> None:
     assert not toolset._executor._reply_task.done()
 
     await asyncio.wait_for(sess.aclose(), timeout=5.0)
+
+
+async def test_deferred_result_is_announced_like_an_inline_one() -> None:
+    """Every tool pair that lands in history after the first update reaches
+    function_tools_executed, so a listener rebuilding history from events sees it."""
+    calls = [FunctionToolCall(name="send_link", arguments="{}", call_id="call_send_link")]
+    fake_llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="go", content="one moment", ttft=0.1, duration=0.1, tool_calls=calls
+            ),
+        ]
+    )
+    executed: list[FunctionToolsExecutedEvent] = []
+    async with AgentSession(llm=fake_llm) as sess:
+        sess.on("function_tools_executed", executed.append)
+        await sess.start(_First(with_send_link=True))
+        await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
+        await asyncio.sleep(TOOL_WORK * 2)
+
+        announced = [(call.call_id, out.output) for ev in executed for call, out in ev.zipped()]
+        in_history = [
+            (item.call_id, item.output)
+            for item in sess.history.items
+            if item.type == "function_call_output"
+        ]
+        assert announced == in_history
+        assert ("call_send_link_final", "link sent") in announced
