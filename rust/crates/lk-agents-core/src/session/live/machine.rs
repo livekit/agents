@@ -1,7 +1,7 @@
 use super::*;
 use crate::tool_calls::RunningToolExecution;
 use lk_agents_abi::errors::{HostError, HostErrorKind};
-use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::storage::{StorageError, Unapplied};
 
 impl Live {
     pub(in crate::session) fn new(origin: LiveTurnOrigin) -> Self {
@@ -32,7 +32,9 @@ impl Live {
             return Err(StorageError::Invalid("the live conversation owner has ended".into()));
         }
         if self.queue.len() >= MAX_QUEUED_TURNS {
-            return Err(StorageError::Unavailable("the live conversation inbox is full".into()));
+            return Err(StorageError::Unavailable(Unapplied::local(
+                "the live conversation inbox is full",
+            )));
         }
         if origin.task_ids.iter().any(|task| self.cancelled.contains(task)) {
             return Err(StorageError::Cancelled("the source business task was canceled".into()));

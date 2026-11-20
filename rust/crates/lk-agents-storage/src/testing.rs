@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use livekit_protocol::agent::agent_thread::CreateRequest;
 
-use crate::StorageError;
+use crate::telemetry::StorageRetryReason::{self, Transport};
+use crate::{StorageError, Unapplied};
 use lk_agents_abi::storage::Storage as _;
 use lk_agents_abi::storage::Unacknowledged;
 use lk_agents_abi::{Clock, Ts};
@@ -325,7 +326,9 @@ impl Faults {
     fn reachable(&self) -> Result<(), StorageError> {
         let now = self.clock.now();
         match *self.unreachable_until.lock() {
-            Some(until) if now < until => Err(StorageError::Unavailable("unreachable".into())),
+            Some(until) if now < until => {
+                Err(StorageError::Unavailable(Unapplied::new(Transport, "unreachable")))
+            }
             _ => Ok(()),
         }
     }
@@ -354,7 +357,7 @@ impl ThreadDbConnection for Faulty {
         if has(StatementKind::FenceRead)
             && self.probes_until.lock().is_some_and(|until| self.clock.now() < until)
         {
-            return Err(StorageError::Unavailable("probe unreachable".into()));
+            return Err(StorageError::Unavailable(Unapplied::new(Transport, "probe unreachable")));
         }
         let takes = has(StatementKind::LeaseTake);
         let fault = match *self.commit.lock() {
@@ -396,7 +399,8 @@ impl ThreadDbConnection for Faulty {
                 Err(StorageError::TooLarge { what: "the commit".into(), limit: 0 })
             }
             Some(WriteFault::EvictIdle) => {
-                Err(StorageError::Unavailable("agentdb retry: evicted while idle".into()))
+                let why = "agentdb retry: evicted while idle";
+                Err(StorageError::Unavailable(Unapplied::new(StorageRetryReason::Moved, why)))
             }
         };
         if let Some(gate) = gate {

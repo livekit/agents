@@ -17,7 +17,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use super::{ApiError, HttpError, ThreadService};
-use crate::{Storage, StorageError};
+use crate::{Storage, StorageError, Unapplied};
 
 const BODY_LIMIT: usize = 64 * 1024;
 const CONNECTION_LIMIT: usize = 64;
@@ -48,9 +48,13 @@ impl ThreadServer {
         }
         let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
             .await
-            .map_err(|error| StorageError::Unavailable(format!("thread API listener: {error}")))?;
-        let port =
-            listener.local_addr().map_err(|e| StorageError::Unavailable(e.to_string()))?.port();
+            .map_err(|error| {
+                StorageError::Unavailable(Unapplied::local(format!("thread API listener: {error}")))
+            })?;
+        let port = listener
+            .local_addr()
+            .map_err(|e| StorageError::Unavailable(Unapplied::local(e)))?
+            .port();
         let background = storage.background().clone();
         let service = Arc::new(ThreadService::new(storage, project_id, api_key, api_secret));
         let stop = CancellationToken::new();

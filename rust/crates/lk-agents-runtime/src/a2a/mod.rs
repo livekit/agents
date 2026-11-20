@@ -26,7 +26,7 @@ use lk_agents_storage::{
     CommitOptions, Lease, LeaseAfterCommit, Partition, PartitionAccess, Run, RunOptions, Thread,
     WhenHeld, shortuuid,
 };
-use lk_agents_storage::{Holder, StorageError};
+use lk_agents_storage::{Holder, StorageError, Unapplied};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -294,8 +294,9 @@ impl Turn {
                 .with_endpoint(self.endpoint.clone());
         let partition_key = self.thread.partition(&self.partition_key);
         let holder = Holder::new(&self.holder);
-        let spawner = (self.spawner)()
-            .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
+        let spawner = (self.spawner)().map_err(|error| {
+            StorageError::Unavailable(Unapplied::local(format!("A2A runtime: {error}")))
+        })?;
         let (checkpoint, checkpoints) = checkpoint::channel();
         let mut call = Call {
             partition_key,
@@ -523,10 +524,9 @@ impl Turn {
         let Some(publisher) = &self.publisher else {
             return Ok(Completion::Done);
         };
-        let task = partition_key
-            .task(task_id)
-            .await?
-            .ok_or_else(|| StorageError::Unavailable("an accepted task was not durable".into()))?;
+        let task = partition_key.task(task_id).await?.ok_or_else(|| {
+            StorageError::Unavailable(Unapplied::local("an accepted task was not durable"))
+        })?;
         publisher.accepted(&task).await;
         Ok(Completion::Done)
     }

@@ -737,6 +737,18 @@ endpoint, not Cloud.
 | `lk.agents.teardown.overrun` | `stage`: `session_close`, `lease_release` | a teardown ran past its bound | any |
 | `lk.agents.storage.write_uncertain` | `write`: `acquire`, `commit`, `release`, ... | a write's outcome was still unknown when its resends ran out | more than 5 in 10 min |
 
+### Storage client metrics
+
+agent-db as the framework sees it, beside agent-store's server-side `db_requests_total{op,class}`
+(`telemetry/storage.rs`). Recorded in `lk-agents-storage` where the connection and the one retry
+owner (`thread::Retry`) already decide; no log of their own.
+
+| Metric | Labels | Means |
+| --- | --- | --- |
+| `lk.agents.storage.request_duration` (s) | `op`: `exec`, `batch`, `query`, `hello`, `thread_create`, `thread_get`, `thread_list`, `thread_update`, `thread_delete`, `thread_items`, `thread_tasks`; `class`: `ok`, `client`, `redirect`, `capacity`, `server`, `unknown` | one request from its call to its last answer: its wait for a socket and the connection's resend to a moved database included, a retry owner's later attempt not (that is a request of its own). `class` is agent-store's class of the answer's code; `unknown` is no answer (lost, timed out) or an unknown code |
+| `lk.agents.storage.retries` | `reason`: `moved`, `unavailable`, `snapshot_expired`, `capacity`, `drained`, `transport`, `local` | a request sent again: by the connection after a drain, or by the retry owner after a refusal that applied nothing |
+| `lk.agents.storage.redials` | `reason` | a socket dialed again, under why the last one ended or why the last dial failed |
+
 ## Report records
 
 Records Cloud reads as OTLP logs are typed:

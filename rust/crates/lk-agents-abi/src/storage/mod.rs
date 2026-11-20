@@ -43,7 +43,7 @@ pub enum StorageError {
     /// an answer that did not decode.
     #[error("storage unavailable: {0}")]
     #[host(kind = "livekit.agents.storage.StorageUnavailable")]
-    Unavailable(String),
+    Unavailable(Unapplied),
     /// An unknown, deleted or expired thread, or a stream, task or database that is not there.
     #[error("not found: {0}")]
     #[host(kind = "livekit.agents.storage.ThreadNotFound")]
@@ -95,6 +95,34 @@ impl Unacknowledged {
 impl std::fmt::Display for Unacknowledged {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+/// Why a request was refused before it applied: what its retry owner counts a resend under, and
+/// what to say of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unapplied {
+    pub reason: crate::telemetry::storage::StorageRetryReason,
+    pub message: String,
+}
+
+impl Unapplied {
+    pub fn new(
+        reason: crate::telemetry::storage::StorageRetryReason,
+        message: impl std::fmt::Display,
+    ) -> Self {
+        Self { reason, message: message.to_string() }
+    }
+
+    /// Refused in this process: a local database busy or closed, a task that ended.
+    pub fn local(message: impl std::fmt::Display) -> Self {
+        Self::new(crate::telemetry::storage::StorageRetryReason::Local, message)
+    }
+}
+
+impl std::fmt::Display for Unapplied {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
     }
 }
 

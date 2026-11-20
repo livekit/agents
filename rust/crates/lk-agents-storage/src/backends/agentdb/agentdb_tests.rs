@@ -27,7 +27,7 @@ async fn unavailable_after_sending_a_commit_is_uncertain_and_is_not_resent() {
     let pooled = Pooled {
         conn,
         schema: SchemaCell::default(),
-        pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()))),
+        pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()), Cx::NONE)),
         closed: AtomicBool::new(false),
     };
     let result =
@@ -85,7 +85,7 @@ async fn retryable_codes_refuse_a_sent_write_and_commit_unknown_result_leaves_it
         let pooled = Pooled {
             conn,
             schema: SchemaCell::default(),
-            pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()))),
+            pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()), Cx::NONE)),
             closed: AtomicBool::new(false),
         };
         let result = pooled.batch(vec![Statement::raw("UPDATE partitions SET version = 2")]).await;
@@ -94,7 +94,7 @@ async fn retryable_codes_refuse_a_sent_write_and_commit_unknown_result_leaves_it
                 assert!(matches!(result, Err(StorageError::Uncertain(_))), "{result:?}")
             }
             _ => assert!(
-                matches!(result, Err(StorageError::Unavailable(ref e)) if e.starts_with(code)),
+                matches!(result, Err(StorageError::Unavailable(ref e)) if e.message.starts_with(code)),
                 "{code}: {result:?}"
             ),
         }
@@ -145,7 +145,7 @@ async fn a_socket_closed_after_a_write_was_sent_leaves_it_uncertain() {
         opts.reconnect.min_backoff = Duration::from_millis(10);
         let minter = TokenMinter::new("devkey", "secret").unwrap();
         let background = crate::testing::background();
-        Conn::dial(opts, minter, background.spawner, background.clock)
+        Conn::dial(opts, minter, background.spawner, background.clock, crate::telemetry::Cx::NONE)
     };
     let conn = dial().await.unwrap();
     let exec = conn.exec(&Statement::raw("UPDATE t SET n = 1"), conn.deadline()).await;
@@ -154,7 +154,7 @@ async fn a_socket_closed_after_a_write_was_sent_leaves_it_uncertain() {
     let pooled = Pooled {
         conn: dial().await.unwrap(),
         schema: SchemaCell::default(),
-        pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()))),
+        pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()), Cx::NONE)),
         closed: AtomicBool::new(false),
     };
     let batch = pooled.batch(vec![Statement::raw("UPDATE t SET n = 2")]).await;
@@ -304,7 +304,7 @@ async fn pooled(
 ) -> (Pooled, connection::tests::Served) {
     let (url, seen) = connection::tests::serve(script, false).await;
     let conn = connection::tests::dial(&url, "DB_1").await.unwrap();
-    let pool = Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new())));
+    let pool = Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()), Cx::NONE));
     let pooled =
         Pooled { conn, schema: SchemaCell::default(), pool, closed: AtomicBool::new(false) };
     (pooled, seen)
@@ -631,8 +631,16 @@ async fn a_request_refused_on_every_attempt_backs_off_until_its_deadline() {
             let background = crate::testing::background();
             let opts = connection::Options::new(url, "DB_1");
             let minter = TokenMinter::new("devkey", "secret").unwrap();
-            let conn = Conn::dial(opts, minter, background.spawner, clock.clone()).await.unwrap();
-            let pool = Arc::new(DbPool::new(clock.clone()));
+            let conn = Conn::dial(
+                opts,
+                minter,
+                background.spawner,
+                clock.clone(),
+                crate::telemetry::Cx::NONE,
+            )
+            .await
+            .unwrap();
+            let pool = Arc::new(DbPool::new(clock.clone(), Cx::NONE));
             let pooled = Pooled {
                 conn,
                 schema: SchemaCell::default(),

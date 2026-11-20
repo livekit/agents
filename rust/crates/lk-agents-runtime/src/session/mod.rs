@@ -9,7 +9,7 @@ use std::sync::{Arc, Weak};
 use lk_agents_abi::a2a::remote::{RemoteCallAdmission, RemoteTaskDriver};
 use lk_agents_abi::delegation::routing::{CallRoute, CallRoutingRequest};
 use lk_agents_abi::session::InputCandidate;
-use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::storage::{StorageError, Unapplied};
 use lk_agents_net::signal;
 use tokio::sync::mpsc;
 
@@ -177,9 +177,9 @@ impl CommandPort {
     ) -> Result<(), StorageError> {
         self.sender.try_send(SessionCommand::LiveInput(Box::new(input))).map_err(
             |error| match error {
-                mpsc::error::TrySendError::Full(_) => {
-                    StorageError::Unavailable("the live conversation inbox is full".into())
-                }
+                mpsc::error::TrySendError::Full(_) => StorageError::Unavailable(Unapplied::local(
+                    "the live conversation inbox is full",
+                )),
                 mpsc::error::TrySendError::Closed(_) => {
                     StorageError::Invalid("the live conversation owner ended".into())
                 }

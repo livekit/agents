@@ -19,7 +19,7 @@ use super::TokenMinter;
 use super::rows::{Results, statement};
 use crate::deadline::REQUEST_WAIT;
 use crate::sql::{BatchResult, Row, Statement, StatementResult};
-use crate::telemetry::log_keys;
+use crate::telemetry::{self, Cx, StorageOp, StorageOutcome, StorageRetryReason, log_keys};
 use lk_agents_abi::storage::agentdb_error::ErrorCode;
 use lk_agents_abi::storage::thread::{RETRY_MAX_BACKOFF, RETRY_MIN_BACKOFF};
 
@@ -262,6 +262,8 @@ struct Inner {
     /// The supervisor, heartbeat, retiring readers and socket writers; closing the connection
     /// cancels them.
     tasks: Arc<TaskSet>,
+    /// Where its requests, resends and redials are measured.
+    cx: Cx,
 }
 
 /// One authenticated connection to one database; cheap to clone, closed by [`Conn::close`] or
@@ -398,12 +400,13 @@ impl Drop for Waiting<'_> {
 
 impl Conn {
     /// Dials, says `Hello`, and starts the supervisor on `spawner`; every wait reads `clock`. The
-    /// attempt is bounded by the caller's deadline, else the default one.
+    /// attempt is bounded by the caller's deadline, else the default one. Measured under `cx`.
     pub async fn dial(
         opts: Options,
         minter: TokenMinter,
         spawner: Arc<dyn Spawner>,
         clock: Arc<dyn Clock>,
+        cx: Cx,
     ) -> Result<Conn, WsdbError> {
         let (ready, ready_cell) = signal::signal(false);
         let inner = Arc::new(Inner {
@@ -425,6 +428,7 @@ impl Conn {
             spawner,
             clock,
             tasks: Arc::default(),
+            cx,
         });
         let guard = Arc::new(CloseOnDrop(Arc::downgrade(&inner)));
         let conn = Conn(inner, Some(guard));
@@ -464,6 +468,30 @@ impl Conn {
     /// Dial, `Hello`, publish the writer, within the dial timeout and by `deadline`, the latest
     /// deadline of the requests it dials for.
     async fn connect(&self, deadline: Option<Ts>) -> Result<Socket, WsdbError> {
+        let started = self.0.clock.now();
+        let socket = self.hello(deadline).await;
+        self.measure(StorageOp::Hello, started, socket.as_ref().err());
+        socket
+    }
+
+    /// A request's outcome, `error` when it failed, measured from `started`.
+    fn measure(&self, op: StorageOp, started: Ts, error: Option<&WsdbError>) {
+        let took = self.0.clock.now().saturating_duration_since(started);
+        let class = error.map_or(StorageOutcome::Ok, WsdbError::class);
+        telemetry::request(&self.0.cx, op, class, took);
+    }
+
+    /// Whether a request its socket drained goes out again on the next socket: at once, the first
+    /// time (its database moved), counted; never after: its retry owner backs off a later one.
+    fn again(&self, moved: &mut bool) -> bool {
+        let again = !std::mem::replace(moved, true);
+        if again {
+            telemetry::retried(&self.0.cx, StorageRetryReason::Moved);
+        }
+        again
+    }
+
+    async fn hello(&self, deadline: Option<Ts>) -> Result<Socket, WsdbError> {
         let clock = &*self.0.clock;
         let attempt = clock.now().saturating_add(self.0.opts.dial_timeout);
         let deadline = Some(deadline.map_or(attempt, |deadline| deadline.min(attempt)));
@@ -883,7 +911,7 @@ impl Conn {
                     req.deadline = self.0.clock.now().saturating_add(REQUEST_WAIT);
                     return Ok(req);
                 }
-                Err(WsdbError::Drained) if again(moved) => {}
+                Err(WsdbError::Drained) if self.again(moved) => {}
                 Err(error) => return Err(error),
             }
         }
@@ -1013,15 +1041,21 @@ impl Conn {
         let exec = pb::client_message::Message::Exec(statement(s));
         let (mut frame, mut moved) =
             (pb::ClientMessage { request_id: 0, message: Some(exec) }, false);
-        loop {
+        let started = self.0.clock.now();
+        let out = loop {
             // its result, or an error
             let sent = self.send(&mut frame, deadline, 1, &mut moved).await;
-            let mut req = sent.map_err(WriteError::NotSent)?;
+            let mut req = match sent {
+                Ok(req) => req,
+                Err(error) => break Err(WriteError::NotSent(error)),
+            };
             match self.exec_answer(&mut req).await {
-                Err(WsdbError::Drained) if again(&mut moved) => {}
-                answer => return answer.map_err(WriteError::Sent),
+                Err(WsdbError::Drained) if self.again(&mut moved) => {}
+                answer => break answer.map_err(WriteError::Sent),
             }
-        }
+        };
+        self.measure(StorageOp::Exec, started, out.as_ref().err().map(WriteError::error));
+        out
     }
 
     async fn exec_answer(&self, req: &mut Request<'_>) -> Result<ExecResult, WsdbError> {
@@ -1052,13 +1086,19 @@ impl Conn {
         let query = pb::client_message::Message::Query(statement(s));
         let (mut frame, mut moved) =
             (pb::ClientMessage { request_id: 0, message: Some(query) }, false);
-        loop {
-            let mut req = self.send(&mut frame, deadline, self.window(), &mut moved).await?;
+        let started = self.0.clock.now();
+        let out = loop {
+            let mut req = match self.send(&mut frame, deadline, self.window(), &mut moved).await {
+                Ok(req) => req,
+                Err(error) => break Err(error),
+            };
             match self.query_answer(&mut req).await {
-                Err(WsdbError::Drained) if again(&mut moved) => {}
-                answer => return answer,
+                Err(WsdbError::Drained) if self.again(&mut moved) => {}
+                answer => break answer,
             }
-        }
+        };
+        self.measure(StorageOp::Query, started, out.as_ref().err());
+        out
     }
 
     async fn query_answer(&self, req: &mut Request<'_>) -> Result<Vec<Row>, WsdbError> {
@@ -1102,14 +1142,19 @@ impl Conn {
             (pb::ClientMessage { request_id: 0, message: Some(batch) }, false);
         // its window, past one `Columns` or `ExecResult` per statement
         let answers = self.window() + n.saturating_sub(1);
-        loop {
-            let sent = self.send(&mut frame, deadline, answers, &mut moved).await;
-            let mut req = sent.map_err(WriteError::NotSent)?;
+        let started = self.0.clock.now();
+        let out = loop {
+            let mut req = match self.send(&mut frame, deadline, answers, &mut moved).await {
+                Ok(req) => req,
+                Err(error) => break Err(WriteError::NotSent(error)),
+            };
             match self.batch_answer(&mut req, n).await {
-                Err(WsdbError::Drained) if again(&mut moved) => {}
-                answer => return answer.map_err(WriteError::Sent),
+                Err(WsdbError::Drained) if self.again(&mut moved) => {}
+                answer => break answer.map_err(WriteError::Sent),
             }
-        }
+        };
+        self.measure(StorageOp::Batch, started, out.as_ref().err().map(WriteError::error));
+        out
     }
 
     /// The server grants the batch its initial window, as it does a query: a credit is sent back
@@ -1143,12 +1188,6 @@ impl Conn {
             }
         }
     }
-}
-
-/// Whether a request its socket drained goes out again on the next socket: at once, the first
-/// time (its database moved), never after: its retry owner backs off a later one.
-fn again(moved: &mut bool) -> bool {
-    !std::mem::replace(moved, true)
 }
 
 /// One request in flight. Dropped before its answer (an error, or the caller's future dropped),

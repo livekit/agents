@@ -3,6 +3,7 @@
 use super::*;
 use crate::a2a::{DebounceSpec, PolicySpec};
 use lk_agents_abi::storage::TaskInternal;
+use lk_agents_abi::storage::Unapplied;
 
 fn machine(policy: Policy) -> TaskMachine {
     continuing(policy, None)
@@ -152,8 +153,11 @@ fn storage_failure_in_the_turn_fails_the_receipt_before_releasing_the_lane() {
     m.phase = Phase::Run { path: Path::Main, step: RunStep::Recover };
     m.pending = Some(4);
     assert_eq!(step(&mut m, Completion::Done), Operation::ReadPending(None));
-    let pickup =
-        operation(at(&mut m, Duration::ZERO, Err(StorageError::Unavailable("offline".into()))));
+    let pickup = operation(at(
+        &mut m,
+        Duration::ZERO,
+        Err(StorageError::Unavailable(Unapplied::local("offline"))),
+    ));
     assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{pickup:?}");
     assert!(matches!(
         step(&mut m, Completion::Picked(Some(TaskState::Working))),
@@ -210,7 +214,7 @@ fn a_task_failure_the_database_could_not_store_answers_its_error() {
     m.phase = Phase::Run { path: Path::Main, step: RunStep::Recover };
     m.pending = Some(4);
     step(&mut m, Completion::Done);
-    let unavailable = || Err(StorageError::Unavailable("unreachable".into()));
+    let unavailable = || Err(StorageError::Unavailable(Unapplied::local("unreachable")));
     let pickup = operation(at(&mut m, Duration::ZERO, unavailable()));
     assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{pickup:?}");
     let effects = at(&mut m, Duration::ZERO, unavailable());
@@ -265,7 +269,8 @@ fn a_commit_uncertain_at_its_deadline_is_dropped_and_never_answered_failed() {
     assert_eq!(resolve, Operation::DropUncertain);
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(_)));
     // the database is still unreachable: the task as this worker left it, still working
-    let effects = at(&mut m, Duration::ZERO, Err(StorageError::Unavailable("down".into())));
+    let effects =
+        at(&mut m, Duration::ZERO, Err(StorageError::Unavailable(Unapplied::local("down"))));
     let [A2aTaskEffect::Finished(Ok(answer))] = effects.as_slice() else { panic!("{effects:?}") };
     assert_eq!((answer.task.as_ref(), answer.reason), (None, None), "never a failure");
 }
@@ -299,7 +304,7 @@ fn every_typed_storage_error_on_the_partition_claim_has_its_outcome() {
     ));
     // anything else ends the request with its typed error
     for error in [
-        StorageError::Unavailable("down".into()),
+        StorageError::Unavailable(Unapplied::local("down")),
         StorageError::NotFound("AT_x".into()),
         StorageError::LeaseLost("taken".into()),
         StorageError::VersionConflict { partition_key: "partition_key".into(), expected: 1 },
@@ -407,7 +412,8 @@ fn a_watcher_keeps_watching_through_a_transient_read_failure() {
     let mut m = machine(Policy::Batch);
     m.phase = Phase::Observe;
     m.pending = Some(1);
-    let effects = at(&mut m, Duration::ZERO, Err(StorageError::Unavailable("down".into())));
+    let effects =
+        at(&mut m, Duration::ZERO, Err(StorageError::Unavailable(Unapplied::local("down"))));
     assert!(effects.is_empty(), "{effects:?}");
     let at_ = m.wake_at().expect("polls again");
     assert!(matches!(operation(m.handle(A2aTaskEvent::Wake, at_)), Operation::ReadTask(_)));
@@ -485,7 +491,7 @@ fn row_of(status: TaskState) -> TaskRow {
 fn a_rejected_continuation_fails_its_own_task_and_leaves_the_question_pending() {
     for error in [
         StorageError::VersionConflict { partition_key: "partition_key".into(), expected: 1 },
-        StorageError::Unavailable("sqlite: disk I/O error".into()),
+        StorageError::Unavailable(Unapplied::local("sqlite: disk I/O error")),
         StorageError::TooLarge { what: "the partition_key state".into(), limit: 1 },
         StorageError::Invalid("sqlite: constraint failed".into()),
         StorageError::Unauthorized("token expired".into()),
@@ -519,7 +525,7 @@ fn a_refused_drain_commit_fails_the_rows_it_picked_up() {
     m.phase = Phase::Run { path: Path::Drain, step: RunStep::Commit };
     m.pending = Some(1);
     m.task_ids = vec!["drained".into(), "receipt".into()];
-    let refused = StorageError::Unavailable("sqlite: disk I/O error".into());
+    let refused = StorageError::Unavailable(Unapplied::local("sqlite: disk I/O error"));
     let fail = operation(at(&mut m, Duration::ZERO, Err(refused)));
     assert!(
         matches!(&fail, Operation::FailOrphans { reason: TaskReason::StorageUnavailable, failed }
@@ -538,7 +544,7 @@ fn a_refused_close_fails_the_task_storage_unavailable() {
     m.phase = Phase::Run { path: Path::Main, step: RunStep::Open };
     m.pending = Some(1);
     assert!(matches!(step(&mut m, opened(true, false)), Operation::CloseRun));
-    let refused = StorageError::Unavailable("sqlite: disk I/O error".into());
+    let refused = StorageError::Unavailable(Unapplied::local("sqlite: disk I/O error"));
     let pickup = operation(at(&mut m, Duration::ZERO, Err(refused)));
     assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{pickup:?}");
     assert!(matches!(
@@ -560,7 +566,7 @@ fn a_refused_commit_of_an_unwritten_receipt_answers_the_error() {
     m.phase = Phase::Run { path: Path::Main, step: RunStep::Open };
     m.pending = Some(1);
     assert!(matches!(step(&mut m, opened(true, false)), Operation::CloseRun));
-    let refused = StorageError::Unavailable("sqlite: disk I/O error".into());
+    let refused = StorageError::Unavailable(Unapplied::local("sqlite: disk I/O error"));
     let pickup = operation(at(&mut m, Duration::ZERO, Err(refused)));
     assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{pickup:?}");
     assert!(

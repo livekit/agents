@@ -277,7 +277,7 @@ fn output_error_with_no_raise() -> Recording {
 
 fn storage_failure_record(speech: u64) -> Recording {
     let unavailable =
-        lk_agents_abi::storage::StorageError::Unavailable("sqlite: disk I/O error".into());
+        lk_agents_abi::storage::StorageError::Unavailable(lk_agents_abi::storage::Unapplied::local("sqlite: disk I/O error"));
     Authored::new()
         .storage(StorageStep::Answered {
             speech,

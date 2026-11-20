@@ -10,6 +10,8 @@ use lk_agents_abi::telemetry::health::{
 };
 pub(crate) use lk_agents_abi::telemetry::health::{PartitionKind, StorageWrite, TeardownStage};
 pub(crate) use lk_agents_abi::telemetry::spans::common::log_keys;
+pub(crate) use lk_agents_abi::telemetry::storage::{StorageOp, StorageOutcome, StorageRetryReason};
+use lk_agents_abi::telemetry::storage::{StorageRedials, StorageRequestDuration, StorageRetries};
 use lk_agents_abi::{Clock, LOG_TARGET};
 use parking_lot::Mutex;
 
@@ -99,9 +101,24 @@ pub(crate) fn write_uncertain(cx: &Cx, clock: &dyn Clock, write: StorageWrite) {
     }
 }
 
+/// A request ended, its outcome owned by `class`, `took` after its call.
+pub(crate) fn request(cx: &Cx, op: StorageOp, class: StorageOutcome, took: Duration) {
+    lk_agents_telemetry::measure(cx, &StorageRequestDuration { op, class }, took.as_secs_f64());
+}
+
+/// A request is sent again.
+pub(crate) fn retried(cx: &Cx, reason: StorageRetryReason) {
+    lk_agents_telemetry::measure(cx, &StorageRetries { reason }, 1u64);
+}
+
+/// A connection dials its database again.
+pub(crate) fn redialed(cx: &Cx, reason: StorageRetryReason) {
+    lk_agents_telemetry::measure(cx, &StorageRedials { reason }, 1u64);
+}
+
 #[cfg(test)]
 #[path = "telemetry_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 /// A cleanup after a failure the caller is already returned: the first failure is the one
 /// returned, the cleanup's own is logged.

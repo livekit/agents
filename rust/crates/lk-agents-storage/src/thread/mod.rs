@@ -22,11 +22,11 @@ use lk_agents_net::owned::Background;
 use lk_agents_net::task::{Leave, TaskSet};
 use parking_lot::Mutex;
 
-use crate::StorageError;
 use crate::sql::{Bind, SqlValue, Statement, Table};
 use crate::telemetry::{self, Cx, StorageWrite};
 use crate::thread::db::{ItemPage, TaskPage, TaskQuery};
 use crate::thread::schema::*;
+use crate::{StorageError, Unapplied};
 use lk_agents_abi::storage::Unacknowledged;
 use lk_agents_abi::storage::context::ContextScope;
 use lk_agents_abi::storage::thread::{Backoff, RETRY_MAX_BACKOFF, RETRY_MIN_BACKOFF};
@@ -76,6 +76,8 @@ impl Default for LeaseTiming {
 /// and a whole request fit before that deadline.
 pub(crate) struct Retry {
     clock: Arc<dyn Clock>,
+    /// Where each resend is counted, under its reason.
+    cx: Cx,
     epoch: Ts,
     deadline: Ts,
     backoff: Backoff,
@@ -85,18 +87,18 @@ pub(crate) struct Retry {
 impl Retry {
     /// Until the caller's deadline, else [`crate::deadline::REQUEST_WAIT`] from now; its backoff
     /// waits on `clock`.
-    pub(crate) fn new(clock: Arc<dyn Clock>) -> Self {
+    pub(crate) fn new(clock: Arc<dyn Clock>, cx: &Cx) -> Self {
         let deadline = crate::deadline::or_default(&*clock);
-        Self::until(clock, deadline)
+        Self::until(clock, deadline, cx)
     }
 
     /// Until `deadline`, never past the caller's.
-    pub(crate) fn until(clock: Arc<dyn Clock>, deadline: Ts) -> Self {
+    pub(crate) fn until(clock: Arc<dyn Clock>, deadline: Ts, cx: &Cx) -> Self {
         let deadline = crate::deadline::current().map_or(deadline, |outer| outer.min(deadline));
         let epoch = clock.now();
         let backoff = Backoff::jittered(RETRY_MIN_BACKOFF, RETRY_MAX_BACKOFF, rand::random())
             .until(Duration::ZERO, deadline.saturating_duration_since(epoch));
-        Self { clock, epoch, deadline, backoff, attempts: 1 }
+        Self { clock, cx: cx.clone(), epoch, deadline, backoff, attempts: 1 }
     }
 
     /// `attempt` under the deadline: what its requests' waits inherit.
@@ -110,8 +112,9 @@ impl Retry {
     /// A resend starts only if the server's whole request timeout fits between its backoff and
     /// the deadline: one the deadline could cut would turn a refusal that applied nothing into an
     /// unknown outcome. A caller too short for another whole attempt gets the refusal itself.
-    /// Logged at debug: the caller hears the outcome.
-    pub(crate) async fn wait(&mut self, why: &str) -> bool {
+    /// Logged at debug: the caller hears the outcome. Each resend is counted under why the last
+    /// attempt was refused.
+    pub(crate) async fn wait(&mut self, why: &Unapplied) -> bool {
         let now = self.clock.now();
         let elapsed = now.saturating_duration_since(self.epoch);
         let Some(at) = self.backoff.next(elapsed).map(|after| self.epoch.saturating_add(after))
@@ -128,8 +131,9 @@ impl Retry {
             subject,
             self.attempts,
             delay,
-            &why,
+            why,
         );
+        telemetry::retried(&self.cx, why.reason);
         self.attempts = self.attempts.saturating_add(1);
         self.clock.wait_until(at).await;
         true
@@ -159,9 +163,8 @@ impl Retry {
 /// unknown (`Uncertain`) is never sent again: its probe reads back once whether it applied, else
 /// it reaches the caller `Uncertain`.
 pub(crate) struct Resend {
+    /// Also where a write left unresolved is counted, under its kind.
     retry: Retry,
-    /// Where a write left unresolved is counted, under its kind.
-    cx: Cx,
     write: StorageWrite,
 }
 
@@ -169,12 +172,12 @@ impl Resend {
     /// Until the caller's deadline, else [`crate::deadline::REQUEST_WAIT`] from now; its backoff
     /// waits on `clock`.
     pub(crate) fn new(clock: Arc<dyn Clock>, cx: &Cx, write: StorageWrite) -> Self {
-        Self { retry: Retry::new(clock), cx: cx.clone(), write }
+        Self { retry: Retry::new(clock, cx), write }
     }
 
     /// Until `deadline`, never past the caller's.
     pub(crate) fn until(clock: Arc<dyn Clock>, deadline: Ts, cx: &Cx, write: StorageWrite) -> Self {
-        Self { retry: Retry::until(clock, deadline), cx: cx.clone(), write }
+        Self { retry: Retry::until(clock, deadline, cx), write }
     }
 
     /// `attempt` under this write's deadline: what its requests' waits inherit.
@@ -198,7 +201,7 @@ impl Resend {
     }
 
     fn uncertain(&self, lost: Unacknowledged) -> StorageError {
-        telemetry::write_uncertain(&self.cx, &*self.retry.clock, self.write);
+        telemetry::write_uncertain(&self.retry.cx, &*self.retry.clock, self.write);
         StorageError::Uncertain(lost)
     }
 

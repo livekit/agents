@@ -14,7 +14,7 @@ use lk_agents_abi::storage::voice::{
     StorageWork, VoiceHistory, VoiceStorage, VoiceStorageCommand, VoiceStorageEvent,
     VoiceStore as _,
 };
-use lk_agents_abi::storage::{StorageError, Unacknowledged};
+use lk_agents_abi::storage::{StorageError, Unacknowledged, Unapplied};
 use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::{ChatItem, ChatMessage, Clock, Role, StreamInput, Ts};
 use lk_agents_runtime::net::owned::Background;
@@ -192,7 +192,9 @@ impl FakeStore {
             state.authored_history
         };
         let thread = self.database.thread().await.ok_or_else(|| {
-            StorageError::Unavailable("the authored foreign thread could not open".into())
+            StorageError::Unavailable(Unapplied::local(
+                "the authored foreign thread could not open",
+            ))
         })?;
         let result = async {
             let mut options = RunOptions::new(format!("authored_foreign_{serial}"), "");
@@ -395,7 +397,8 @@ impl FakeDatabase {
         plan.answer_lost |= write && within(self.setup.lost_answers);
         let scheduled = within(self.setup.outage);
         if scheduled || now < state.down_until {
-            plan.refused = Some(StorageError::Unavailable("the database is unreachable".into()));
+            plan.refused =
+                Some(StorageError::Unavailable(Unapplied::local("the database is unreachable")));
         }
         state.faulted |= plan.refused.is_some();
         plan
@@ -581,7 +584,9 @@ impl FakeConnection {
         let plan = db.plan(false, false, None);
         let layer = db.layer(false, false);
         if !db.wait(plan.before).await {
-            return Err(StorageError::Unavailable("the operation's deadline passed".into()));
+            return Err(StorageError::Unavailable(Unapplied::local(
+                "the operation's deadline passed",
+            )));
         }
         if let Some(error) = plan.refused.or(layer.refused) {
             return Err(error);
@@ -605,7 +610,9 @@ impl FakeConnection {
             && let Some(ms) = db.setup.session_read_answer_ms
             && !db.wait(Duration::from_millis(ms)).await
         {
-            return Err(StorageError::Unavailable("the session read's deadline passed".into()));
+            return Err(StorageError::Unavailable(Unapplied::local(
+                "the session read's deadline passed",
+            )));
         }
         if !db.wait(plan.after).await {
             return Err(StorageError::Uncertain(Unacknowledged::sent("the deadline passed")));
@@ -644,7 +651,9 @@ impl FakeConnection {
             db.registry.world.spawn_detached(db.clone().intrude(steal));
         }
         if !db.wait(plan.before).await {
-            return Err(StorageError::Unavailable("the operation's deadline passed".into()));
+            return Err(StorageError::Unavailable(Unapplied::local(
+                "the operation's deadline passed",
+            )));
         }
         if let Some(error) = plan.refused.or(layer.refused) {
             return Err(error);

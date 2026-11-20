@@ -4,6 +4,7 @@ use crate::agent_session::tests::driver;
 use crate::events::SessionEvent;
 use crate::speech_handle::SpeechState;
 use crate::trace::{SpeechStep, Step};
+use lk_agents_abi::storage::Unapplied;
 use lk_agents_abi::{ChatMessage, Role};
 use lk_agents_core::agent_run::RequestId;
 
@@ -101,7 +102,7 @@ fn saves(effects: &[VoiceEffect]) -> usize {
 }
 
 fn unavailable() -> StorageError {
-    StorageError::Unavailable("database is unreachable".into())
+    StorageError::Unavailable(Unapplied::local("database is unreachable"))
 }
 
 // Catches (seeds 8, 150, 375): a request a speech's turn waited on failed (its commit, the

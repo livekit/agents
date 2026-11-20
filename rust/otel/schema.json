@@ -4950,6 +4950,113 @@
       ]
     },
     {
+      "name": "lk.agents.storage.redials",
+      "brief": "Sockets dialed again for a connection whose socket ended or whose last dial failed.",
+      "kind": "counter",
+      "unit": "{redial}",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "reason",
+          "type": "string",
+          "required": true,
+          "members": [
+            "moved",
+            "unavailable",
+            "snapshot_expired",
+            "capacity",
+            "drained",
+            "transport",
+            "local"
+          ],
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.agents.storage.request_duration",
+      "brief": "Time one request took as its client saw it, from its call to its last answer: its wait for a socket and the connection's own resend to a moved database included, a retry owner's later attempt not.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "op",
+          "type": "string",
+          "required": true,
+          "members": [
+            "exec",
+            "batch",
+            "query",
+            "hello",
+            "thread_create",
+            "thread_get",
+            "thread_list",
+            "thread_update",
+            "thread_delete",
+            "thread_items",
+            "thread_tasks"
+          ],
+          "label": true
+        },
+        {
+          "key": "class",
+          "type": "string",
+          "required": true,
+          "members": [
+            "ok",
+            "client",
+            "redirect",
+            "capacity",
+            "server",
+            "unknown"
+          ],
+          "label": true
+        }
+      ],
+      "bounds": [
+        0.001,
+        0.002,
+        0.004,
+        0.008,
+        0.016,
+        0.032,
+        0.064,
+        0.128,
+        0.256,
+        0.512,
+        1.024,
+        2.048,
+        4.096,
+        8.192,
+        16.384
+      ]
+    },
+    {
+      "name": "lk.agents.storage.retries",
+      "brief": "Requests sent again: by the connection to a database that moved, or by the retry owner after a refusal that applied nothing.",
+      "kind": "counter",
+      "unit": "{retry}",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "reason",
+          "type": "string",
+          "required": true,
+          "members": [
+            "moved",
+            "unavailable",
+            "snapshot_expired",
+            "capacity",
+            "drained",
+            "transport",
+            "local"
+          ],
+          "label": true
+        }
+      ]
+    },
+    {
       "name": "lk.agents.storage.write_uncertain",
       "brief": "Writes whose outcome was still unknown when their resends ran out.",
       "kind": "counter",

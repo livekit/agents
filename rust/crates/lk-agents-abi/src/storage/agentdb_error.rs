@@ -1,5 +1,5 @@
 //! agent-db's error codes. The wire carries a code's number, its name and a description; a
-//! client branches on the number alone, through [`ErrorCode::retryable`] and
+//! client branches on the number alone, through [`ErrorCode::retry`] and
 //! [`ErrorCode::maybe_applied`], never on the text. A code this build does not know may have
 //! applied and is never retried. The numbers group by kind: 1xxx the service could not serve
 //! the request now, 2xxx the request itself is refused, 4xxx a broken invariant, 6xxx the
@@ -9,22 +9,27 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ErrorCode(pub u32);
 
-/// A known code: its name, whether the same request sent again may succeed, and whether a
-/// request answered with it may have taken effect, whole.
+use crate::telemetry::storage::{StorageOutcome, StorageRetryReason};
+
+/// A known code: its name, why the same request sent again may succeed (`None`: it may not),
+/// whether a request answered with it may have taken effect, whole, and who owns that outcome,
+/// as agent-db classes it.
 struct Declared {
     code: ErrorCode,
     name: &'static str,
-    retryable: bool,
+    retry: Option<StorageRetryReason>,
     maybe_applied: bool,
+    class: StorageOutcome,
 }
 
 const fn declared(
     code: ErrorCode,
     name: &'static str,
-    retryable: bool,
+    retry: Option<StorageRetryReason>,
     maybe_applied: bool,
+    class: StorageOutcome,
 ) -> Declared {
-    Declared { code, name, retryable, maybe_applied }
+    Declared { code, name, retry, maybe_applied, class }
 }
 
 impl ErrorCode {
@@ -59,23 +64,39 @@ impl ErrorCode {
     pub const PERMISSION_DENIED: Self = Self(6000);
     pub const UNAUTHENTICATED: Self = Self(6001);
 
-    const TABLE: [Declared; 15] = [
-        declared(Self::WRONG_SHARD_SERVER, "wrong_shard_server", true, false),
-        declared(Self::IDLE_EVICTED, "idle_evicted", true, false),
-        declared(Self::RETRY, "retry", true, false),
-        declared(Self::UNAVAILABLE, "unavailable", true, false),
-        declared(Self::SNAPSHOT_EXPIRED, "snapshot_expired", true, false),
-        declared(Self::COMMIT_UNKNOWN_RESULT, "commit_unknown_result", true, true),
-        declared(Self::CANCELLED, "cancelled", false, false),
-        declared(Self::TIMED_OUT, "timed_out", false, false),
-        declared(Self::INVALID_ARGUMENT, "invalid_argument", false, false),
-        declared(Self::SQL_ERROR, "sql_error", false, false),
-        declared(Self::TOO_LARGE, "too_large", false, false),
-        declared(Self::NOT_FOUND, "not_found", false, false),
-        declared(Self::INTERNAL, "internal", false, true),
-        declared(Self::PERMISSION_DENIED, "permission_denied", false, false),
-        declared(Self::UNAUTHENTICATED, "unauthenticated", false, false),
-    ];
+    const TABLE: [Declared; 15] = {
+        use StorageOutcome::{Client, Redirect, Server};
+        use StorageRetryReason::{Capacity, Moved, SnapshotExpired, Unavailable};
+        [
+            declared(Self::WRONG_SHARD_SERVER, "wrong_shard_server", Some(Moved), false, Redirect),
+            declared(Self::IDLE_EVICTED, "idle_evicted", Some(Moved), false, Redirect),
+            declared(Self::RETRY, "retry", Some(Capacity), false, StorageOutcome::Capacity),
+            declared(Self::UNAVAILABLE, "unavailable", Some(Unavailable), false, Server),
+            declared(
+                Self::SNAPSHOT_EXPIRED,
+                "snapshot_expired",
+                Some(SnapshotExpired),
+                false,
+                Server,
+            ),
+            declared(
+                Self::COMMIT_UNKNOWN_RESULT,
+                "commit_unknown_result",
+                Some(Unavailable),
+                true,
+                Server,
+            ),
+            declared(Self::CANCELLED, "cancelled", None, false, Client),
+            declared(Self::TIMED_OUT, "timed_out", None, false, Server),
+            declared(Self::INVALID_ARGUMENT, "invalid_argument", None, false, Client),
+            declared(Self::SQL_ERROR, "sql_error", None, false, Client),
+            declared(Self::TOO_LARGE, "too_large", None, false, Client),
+            declared(Self::NOT_FOUND, "not_found", None, false, Client),
+            declared(Self::INTERNAL, "internal", None, true, Server),
+            declared(Self::PERMISSION_DENIED, "permission_denied", None, false, Client),
+            declared(Self::UNAUTHENTICATED, "unauthenticated", None, false, Client),
+        ]
+    };
 
     fn declared(self) -> Option<&'static Declared> {
         Self::TABLE.iter().find(|d| d.code == self)
@@ -89,7 +110,19 @@ impl ErrorCode {
     /// Whether the same request, sent again, may succeed; false for a code this build does not
     /// know.
     pub fn retryable(self) -> bool {
-        self.declared().is_some_and(|d| d.retryable)
+        self.retry().is_some()
+    }
+
+    /// Why the same request, sent again, may succeed; `None` when it may not, or for a code this
+    /// build does not know.
+    pub fn retry(self) -> Option<StorageRetryReason> {
+        self.declared().and_then(|d| d.retry)
+    }
+
+    /// Who owns a request's outcome answered with this code; `Unknown` for a code this build does
+    /// not know.
+    pub fn class(self) -> StorageOutcome {
+        self.declared().map_or(StorageOutcome::Unknown, |d| d.class)
     }
 
     /// Whether a request answered with this code may have taken effect; true for a code this

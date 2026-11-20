@@ -2,7 +2,8 @@ pub mod agentdb;
 pub mod sqlite;
 
 use crate::sql::{BatchResult, Row, Statement};
-use crate::{StorageError, Thread};
+use crate::telemetry::StorageRetryReason;
+use crate::{StorageError, Thread, Unapplied};
 use async_trait::async_trait;
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
@@ -26,7 +27,9 @@ pub trait ThreadDbConnection: Send + Sync {
     /// Reads sent as one batch: they change nothing, so a lost answer is only retryable.
     async fn read_batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         self.batch(statements).await.map_err(|error| match error {
-            StorageError::Uncertain(why) => StorageError::Unavailable(why.to_string()),
+            StorageError::Uncertain(why) => {
+                StorageError::Unavailable(Unapplied::new(StorageRetryReason::Transport, why))
+            }
             error => error,
         })
     }

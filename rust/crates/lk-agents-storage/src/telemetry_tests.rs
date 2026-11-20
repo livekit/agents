@@ -13,8 +13,9 @@ use crate::thread::tests::PARTITION_KEY;
 use crate::thread::{LeaseTiming, SchemaCell};
 use crate::{CommitOptions, Holder, PartitionAccess, RunOptions, StorageError, Thread, WhenHeld};
 
+/// The measurements recorded under [`recording`]'s context.
 #[derive(Default)]
-struct Collect(Mutex<Vec<Measurement>>);
+pub(crate) struct Collect(Mutex<Vec<Measurement>>);
 
 impl RecordSink for Collect {
     fn record(&self, record: Record) {
@@ -27,17 +28,32 @@ impl RecordSink for Collect {
 impl Collect {
     /// Each measurement of `instrument`: its value and its one label.
     fn of(&self, instrument: &str) -> Vec<(f64, Value)> {
-        let value = |n: &Number| match n {
-            Number::Int(i) => *i as f64,
-            Number::Double(d) => *d,
-        };
         let measurements = self.0.lock();
         let of = measurements.iter().filter(|m| m.instrument == instrument);
         of.map(|m| (value(&m.value), m.labels[0].1.clone())).collect()
     }
+
+    /// Each measurement of `instrument`: its value and its labels' values, in declaration order.
+    pub(crate) fn labeled(&self, instrument: &str) -> Vec<(f64, Vec<String>)> {
+        let label = |v: &Value| match v {
+            Value::String(s) => s.to_string(),
+            other => panic!("a label is a string: {other:?}"),
+        };
+        let measurements = self.0.lock();
+        let of = measurements.iter().filter(|m| m.instrument == instrument);
+        let labels = |m: &Measurement| m.labels.iter().map(|(_, v)| label(v)).collect();
+        of.map(|m| (value(&m.value), labels(m))).collect()
+    }
 }
 
-fn recording() -> (Cx, Arc<Collect>) {
+fn value(n: &Number) -> f64 {
+    match n {
+        Number::Int(i) => *i as f64,
+        Number::Double(d) => *d,
+    }
+}
+
+pub(crate) fn recording() -> (Cx, Arc<Collect>) {
     let sink = Arc::new(Collect::default());
     let tracer = Tracer::new(sink.clone(), Arc::new(VirtualClock::new()), 7);
     (tracer.root(), sink)

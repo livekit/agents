@@ -25,7 +25,7 @@ use crate::context::store::ContextStore;
 use crate::thread::LeaseTiming;
 use crate::thread::db::{ItemPage, TaskPage, TaskQuery};
 use crate::voice::VoiceStore;
-use crate::{CommitOptions, ItemRow, Run, RunOptions, RunOutcome, Storage, Thread};
+use crate::{CommitOptions, ItemRow, Run, RunOptions, RunOutcome, Storage, Thread, Unapplied};
 use lk_agents_abi::storage::context::ContextScope;
 use lk_agents_abi::storage::context::ContextScopeWrite;
 use serde_json::Map;
@@ -166,7 +166,8 @@ impl Namespace {
                 Ok(match &self.config {
                     Config::Local { directory, lease, .. } => {
                         let spawner = (self.env.spawner)().map_err(|e| {
-                            StorageError::Unavailable(format!("storage runtime: {e}"))
+                            let why = format!("storage runtime: {e}");
+                            StorageError::Unavailable(Unapplied::local(why))
                         })?;
                         let clock = self.env.clock.clone();
                         let workers = Workers::threads(Background::new(Arc::default(), spawner, clock));
@@ -178,7 +179,8 @@ impl Namespace {
                     Config::Cloud { opts, minter } => {
                         let (opts, minter, env) = (opts.clone(), minter.clone(), self.env.clone());
                         let runtime = (env.runtime)().map_err(|e| {
-                            StorageError::Unavailable(format!("storage runtime: {e}"))
+                            let why = format!("storage runtime: {e}");
+                            StorageError::Unavailable(Unapplied::local(why))
                         })?;
                         // The API client loads the system trust store. Keep that blocking
                         // work off the request executor as well as the module import path.

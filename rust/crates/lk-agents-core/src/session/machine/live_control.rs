@@ -1,6 +1,6 @@
 use super::*;
 use crate::session::live::Observation;
-use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::storage::{StorageError, Unapplied};
 
 impl Session {
     pub fn unowned_live_tasks(&self, tasks: &[String]) -> Vec<String> {
@@ -70,7 +70,9 @@ impl Session {
             if pending.source == source && pending.messages == messages {
                 return Ok(preview);
             }
-            return Err(StorageError::Unavailable("another dialogue write is pending".into()));
+            return Err(StorageError::Unavailable(Unapplied::local(
+                "another dialogue write is pending",
+            )));
         }
         live.observation = Some(Observation { source, frame, messages });
         Ok(preview)

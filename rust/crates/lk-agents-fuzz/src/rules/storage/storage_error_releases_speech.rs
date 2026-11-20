@@ -3,7 +3,7 @@ use crate::{
     check::{Check, Contract, Rule, Subject},
     record::{Recording, StorageOperation, StorageStep},
 };
-use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::storage::{StorageError, Unapplied};
 use lk_agents_voice::{
     agent_session::machine::activity::scheduling::SpeechId,
     events::SpeechOutcome,
@@ -58,7 +58,7 @@ fn failed(operation: StorageOperation) -> StorageStep {
         operation,
         delivered: true,
         result: Err(match operation {
-            StorageOperation::Settle => StorageError::Unavailable("outage".into()),
+            StorageOperation::Settle => StorageError::Unavailable(Unapplied::local("outage")),
             _ => StorageError::VersionConflict { partition_key: "voice".into(), expected: 1 },
         }),
     }
@@ -97,7 +97,7 @@ fn released_after_watchdog() -> Recording {
             speech: 2,
             operation: StorageOperation::Abandon,
             delivered: true,
-            result: Err(StorageError::Unavailable("outage".into())),
+            result: Err(StorageError::Unavailable(Unapplied::local("outage"))),
         })
         .done()
 }

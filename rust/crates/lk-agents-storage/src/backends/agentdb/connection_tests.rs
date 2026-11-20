@@ -178,7 +178,8 @@ pub(crate) async fn dial(url: &str, db: &str) -> Result<Conn, WsdbError> {
     let mut opts = Options::new(url, db);
     opts.reconnect.min_backoff = Duration::from_millis(10);
     let background = crate::testing::background();
-    Conn::dial(opts, minter(), background.spawner, background.clock).await
+    Conn::dial(opts, minter(), background.spawner, background.clock, crate::telemetry::Cx::NONE)
+        .await
 }
 
 #[tokio::test]
@@ -524,7 +525,8 @@ async fn dropping_the_last_handle_closes_the_connection() {
     assert!(inner.upgrade().is_none(), "its tasks no longer hold it");
 }
 
-/// Real time until armed; then whichever task reads the time panics (waits still work).
+/// Real time until armed; then a spawned task that reads the time panics (waits still work),
+/// while the test's own body, outside any task, still times its requests.
 #[derive(Default)]
 struct Failing {
     real: lk_agents_net::clock::RealClock,
@@ -533,7 +535,8 @@ struct Failing {
 
 impl Failing {
     fn check(&self) {
-        assert!(!self.armed.load(Ordering::Acquire), "the clock failed");
+        let in_task = tokio::task::try_id().is_some();
+        assert!(!(self.armed.load(Ordering::Acquire) && in_task), "the clock failed");
     }
 }
 
@@ -558,7 +561,9 @@ async fn a_supervisor_that_dies_mid_redial_fails_later_requests() {
     let opts = Options::new(&url, "DB_1");
     let clock = Arc::new(Failing::default());
     let spawner = crate::testing::background().spawner;
-    let conn = Conn::dial(opts, minter(), spawner, clock.clone()).await.unwrap();
+    let conn = Conn::dial(opts, minter(), spawner, clock.clone(), crate::telemetry::Cx::NONE)
+        .await
+        .unwrap();
     assert!(conn.exec(&st("drop", vec![]), conn.deadline()).await.is_err());
     // The next request wakes the redial, whose dial deadline panics the supervisor.
     let (insert, deadline) = (st("INSERT", vec![]), conn.deadline());
@@ -683,6 +688,9 @@ mod notices;
 
 #[path = "connection_deadlines_tests.rs"]
 mod deadlines;
+
+#[path = "connection_metrics_tests.rs"]
+mod metrics;
 
 /// Catches: a connection reference read from text that only looks like agent-db's suffix, or
 /// from one naming another request. Only `(conn <ref>, request <id>)` ending the description and

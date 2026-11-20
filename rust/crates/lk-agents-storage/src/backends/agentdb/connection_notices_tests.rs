@@ -4,7 +4,7 @@ use super::*;
 /// server ends its socket with `notice` on request id 0, once. A `Hello` it picks is answered
 /// first, so the notice follows it before any request. `answered`: the notice is that request's
 /// answer instead, and the server keeps the socket open.
-async fn serve_draining(
+pub(super) async fn serve_draining(
     notice: ErrorCode,
     drains: fn(&pb::ClientMessage) -> bool,
     answered: bool,
@@ -435,7 +435,10 @@ async fn a_database_that_moves_on_every_request_is_resent_once_and_redialed_afte
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let background = crate::testing::background();
     let opts = Options::new(&url, "DB_1");
-    let conn = Conn::dial(opts, minter(), background.spawner, clock.clone()).await.unwrap();
+    let conn =
+        Conn::dial(opts, minter(), background.spawner, clock.clone(), crate::telemetry::Cx::NONE)
+            .await
+            .unwrap();
     let deadline = clock.now().saturating_add(Duration::from_secs(60));
     let exec = conn.exec(&st("UPDATE t SET n = 1", vec![]), deadline).await;
     assert!(matches!(exec, Err(WriteError::Sent(WsdbError::Drained))), "{exec:?}");

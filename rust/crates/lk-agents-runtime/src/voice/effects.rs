@@ -215,7 +215,7 @@ impl VoiceRuntime {
                             speech,
                             request: StorageRequest::Checkpoint(checkpoint),
                             result: Err(lk_agents_abi::storage::StorageError::Unavailable(
-                                "checkpoint task ended".into(),
+                                lk_agents_abi::storage::Unapplied::local("checkpoint task ended"),
                             )),
                         });
                     },

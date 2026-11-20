@@ -21,6 +21,7 @@ pub mod host;
 pub mod instruments;
 pub mod record;
 pub mod report;
+pub mod storage;
 
 /// Keys and names owned by the registries the agents registry depends on. A declaration names
 /// these constants; it never redeclares their keys as literals (`lk-agents-codegen --check`).

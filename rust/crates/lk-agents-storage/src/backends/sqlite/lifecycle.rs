@@ -2,7 +2,7 @@ use std::fs::{File, OpenOptions};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::StorageError;
+use crate::{StorageError, Unapplied};
 
 use crate::sql::{Bind, SqlValue, first_cell};
 use lk_agents_abi::Clock;
@@ -33,7 +33,7 @@ fn lock_file(directory: &Path) -> Result<File, StorageError> {
 fn io_error(error: std::io::Error) -> StorageError {
     match error.kind() {
         std::io::ErrorKind::PermissionDenied => StorageError::Unauthorized(error.to_string()),
-        _ => StorageError::Unavailable(format!("storage lifecycle: {error}")),
+        _ => StorageError::Unavailable(Unapplied::local(format!("storage lifecycle: {error}"))),
     }
 }
 

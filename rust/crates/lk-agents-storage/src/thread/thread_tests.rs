@@ -16,7 +16,7 @@ use crate::thread::run::{ItemRow, TaskState};
 use crate::thread::schema::TaskData;
 use crate::thread::{LeaseTiming, SchemaCell};
 use crate::{CommitOptions, RunOptions, TaskWrite, Thread, ThreadDbConnection};
-use crate::{RunOutcome, StorageError};
+use crate::{RunOutcome, StorageError, Unapplied};
 
 pub(crate) const PARTITION_KEY: &str = "front-desk";
 
@@ -66,7 +66,7 @@ impl Diagnostics {
 impl ThreadDbConnection for Diagnostics {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         if self.unreachable.load(Ordering::Relaxed) {
-            return Err(StorageError::Unavailable("database unreachable".into()));
+            return Err(StorageError::Unavailable(Unapplied::local("database unreachable")));
         }
         self.primary.query(statement).await.map_err(|error| self.error(error))
     }
@@ -128,9 +128,9 @@ async fn initialize(reword_initial: bool, install_race: bool, version: Option<i6
             .open(RunOptions::new("schema-read", "AST_read"), &crate::Holder::new("test"))
             .await?;
         if restored.state() != Some(&json!({"saved": true})) {
-            return Err(StorageError::Unavailable(
-                "the initialized schema lost the committed state".into(),
-            ));
+            return Err(StorageError::Unavailable(Unapplied::local(
+                "the initialized schema lost the committed state",
+            )));
         }
         restored.abandon(RunOutcome::Completed, "verified").await?;
         thread.close().await;
@@ -329,10 +329,10 @@ async fn a_refused_request_is_resent_after_a_jittered_doubling_backoff_within_it
     let (start, ms) = (clock.now(), Duration::from_millis);
     let deadline = start.saturating_add(Duration::from_secs(40));
     let attempts = parking_lot::Mutex::new(Vec::new());
-    let refused = super::Retry::until(clock.clone(), deadline)
+    let refused = super::Retry::until(clock.clone(), deadline, &crate::telemetry::Cx::NONE)
         .send(|| async {
             attempts.lock().push(clock.now().saturating_duration_since(start));
-            Err::<(), _>(StorageError::Unavailable("retry: snapshot too old".into()))
+            Err::<(), _>(StorageError::Unavailable(Unapplied::local("retry: snapshot too old")))
         })
         .await;
     assert!(matches!(refused, Err(StorageError::Unavailable(_))), "{refused:?}");
