@@ -42,6 +42,7 @@ from ._utils import (
     _resolve_provider,
     create_access_token,
     extract_quota_usage,
+    gateway_allows_retry,
     get_default_inference_url,
     get_inference_headers,
     resolve_credentials,
@@ -751,7 +752,7 @@ class LLMStream(llm.LLMStream):
                 status_code=e.status_code,
                 request_id=e.request_id,
                 body=e.body,
-                retryable=retryable,
+                retryable=retryable and gateway_allows_retry(e.response.headers),
             ) from None
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
