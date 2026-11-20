@@ -786,6 +786,28 @@ async def test_pending_text_is_finalized_when_the_server_closes_instead_of_reply
     assert [ev.alternatives[0].text for ev in finals] == ["hello world"]
 
 
+async def test_error_frame_keeps_the_words_already_transcribed():
+    """An error frame after end_input() still delivers the buffered words."""
+    error = {"type": "error", "message": "Worker failure", "code": 1011}
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1)], after_eos=[error, "close"])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    events: list[Any] = []
+    try:
+        with pytest.raises(APIStatusError, match="Worker failure"):
+            async for ev in stream:
+                events.append(ev)
+    finally:
+        await stream.aclose()
+
+    finals = [
+        ev.alternatives[0].text for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert finals == ["hello"]
+
+
 async def test_server_ending_the_session_mid_input_finalizes_then_reconnects():
     """The server's end_of_stream while audio still flows: keep the words, and raise so
     the base class reconnects rather than the next audio write failing raw."""

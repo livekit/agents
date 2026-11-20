@@ -473,6 +473,8 @@ class SpeechStream(stt.SpeechStream):
 
                 type_ = data.get("type", "")
                 if type_ == "error":
+                    # the words the model already produced are still valid
+                    _finalize()
                     raise _api_error(data)
                 if type_ == "end_of_stream":
                     # The model has consumed all the audio: whatever is still buffered
