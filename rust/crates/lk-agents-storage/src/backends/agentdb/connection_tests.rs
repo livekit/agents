@@ -683,3 +683,15 @@ mod notices;
 
 #[path = "connection_deadlines_tests.rs"]
 mod deadlines;
+
+/// Catches: a connection reference read from text that only looks like agent-db's suffix, or
+/// from one naming another request. Only `(conn <ref>, request <id>)` ending the description and
+/// naming this request's id is taken.
+#[test]
+fn the_conn_ref_is_read_only_from_the_suffix_naming_this_request() {
+    assert_eq!(conn_ref("no such table: t (conn k3x9, request 7)", 7), Some("k3x9"));
+    assert_eq!(conn_ref("no such table: t (conn k3x9, request 7)", 8), None);
+    assert_eq!(conn_ref("no such table: t (conn k3x9, request 7) trailing", 7), None);
+    assert_eq!(conn_ref("x (conn a b, request 7)", 7), None);
+    assert_eq!(conn_ref("no such table: t", 7), None);
+}
