@@ -2160,8 +2160,10 @@ async def test_preemptive_generation(
         "speaking",
         "listening",
     ]
+    t_user_stop_speaking = user_state_events[1].speech_timestamp
+    assert t_user_stop_speaking is not None
     check_timestamp(
-        agent_state_events[2].created_at - user_state_events[1].created_at,
+        agent_state_events[2].created_at - t_user_stop_speaking,
         expected_latency,
         max_abs_diff=0.2,
     )
@@ -2407,7 +2409,7 @@ class _TestRecognitionHooks:
     def on_vad_inference_done(self, ev: object) -> None:
         pass
 
-    def on_end_of_speech(self, ev: object) -> None:
+    def on_end_of_speech(self, ev: object, *, speech_end_time: float) -> None:
         pass
 
     def on_interim_transcript(self, ev: SpeechEvent, *, speaking: bool | None) -> None:

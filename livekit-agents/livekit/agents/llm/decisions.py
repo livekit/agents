@@ -20,7 +20,8 @@ from .._exceptions import APIError, APITimeoutError
 from ..metrics import DecisionMetrics
 from ..metrics.base import Metadata
 from ..telemetry import gen_ai, trace_types, tracer
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..utils import is_given
 from .chat_context import ChatContext
 
 DecisionKind = Literal["probability", "choice", "score"]
@@ -239,6 +240,7 @@ class DecisionModel(
         input: str | ChatContext,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        extra_headers: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
     ) -> DecisionResponse:
         """Evaluate a batch of decisions.
 
@@ -247,6 +249,7 @@ class DecisionModel(
                 transcript of user and assistant text.
             decisions: Decisions keyed by name.
             conn_options: Retry and per-attempt timeout settings.
+            extra_headers: Headers sent with every attempt.
 
         Each requested name appears in either ``results`` or ``errors``. Request failures
         and malformed responses raise.
@@ -262,6 +265,7 @@ class DecisionModel(
         definitions = copy.deepcopy(dict(decisions))
         _validate_decisions(definitions, capabilities=self.capabilities)
         text = input if isinstance(input, str) else _format_transcript(input)
+        headers = dict(extra_headers) if is_given(extra_headers) else {}
         if not definitions:
             return DecisionResponse(results={}, model=self.model, provider=self.provider)
 
@@ -270,7 +274,10 @@ class DecisionModel(
             try:
                 response = await asyncio.wait_for(
                     self._evaluate_impl(
-                        input=text, decisions=definitions, conn_options=conn_options
+                        input=text,
+                        decisions=definitions,
+                        conn_options=conn_options,
+                        extra_headers=headers,
                     ),
                     timeout=conn_options.timeout,
                 )
@@ -321,6 +328,7 @@ class DecisionModel(
         input: str,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse: ...
 
     async def aclose(self) -> None:
