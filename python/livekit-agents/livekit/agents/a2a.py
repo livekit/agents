@@ -23,12 +23,21 @@ from ._generated.a2a_remote import (
     RemoteEventInputRequired,
     RemoteEventOutcome,
 )
+from ._generated.api_errors import APIStatusError
 from ._generated.public_a2a import *  # noqa: F403
 from ._generated.session_input import InputRequestRef
 from ._generated.storage_options import TurnOptions, TurnOptionsKwargs
 from ._generated.tool_report import ToolOutcomeInputRequired, ToolOutcomeUpdate, ToolReport
 from .job import _server_credentials
-from .llm.tool_context import InputRequired, RawFunctionTool, Tool, Toolset, function_tool
+from .llm.tool_context import (
+    InputRequired,
+    RawFunctionTool,
+    Tool,
+    ToolError,
+    Toolset,
+    function_tool,
+)
+from .log import logger
 from .storage import DEFAULT_PARTITION_KEY, Storage, Thread
 from .storage.session import A2ASessionContext, _Handler, _TurnHost
 from .storage.session_state import ToolCallRef
@@ -204,6 +213,16 @@ class _RemoteTool(Toolset):
                 if ctx._run is not None and ctx._run.frame_id is not None
                 else None,
             )
+        except APIStatusError as e:
+            if e.status_code != 403 or agent._token is not None or thread is not None:
+                raise
+            # a call without a thread holds no grant the expert can start its work under
+            logger.error(
+                f"{agent._card.name} refused this call because it has no thread: dispatch the "
+                "call with thread_id, or give RemoteAgent a token=",
+                extra={"endpoint": url, "error": str(e)},
+            )
+            raise ToolError(f"{agent._card.name} is not available") from e
         except asyncio.CancelledError:
             # Stop local observation and join its cleanup; remote business work continues.
             interaction.cancelled()
