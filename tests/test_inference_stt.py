@@ -386,6 +386,16 @@ async def test_live_assemblyai_stream_keeps_manual_flush_after_model_switch() ->
         await live.aclose()
 
 
+async def test_assemblyai_stream_keeps_a_manual_flush_opt_out() -> None:
+    stt = _make_stt("assemblyai/universal-3-6-pro", external_endpointing=True)
+    stt.capabilities.manual_flush = False
+    stream = stt.stream(conn_options=_no_retry())
+    try:
+        assert not stream.manual_flush
+    finally:
+        await stream.aclose()
+
+
 def test_switching_model_re_resolves_vad_and_default_rate() -> None:
     stt = _make_stt()
     stt.update_options(model="openai/gpt-live-transcribe")

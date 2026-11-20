@@ -1102,12 +1102,9 @@ class SpeechStream(stt.SpeechStream):
             opts, extra_kwargs={**opts.extra_kwargs, **self._keyterm_payload()}
         )
         self._connection: _STTConnection | None = None
-        # fixed at creation: this stream keeps its model when the parent STT switches
-        self._manual_flush = (
-            opts.external_endpointing
-            and _provider_for_model(opts.model) == "assemblyai"
-            and vad_instance is None
-        )
+        # fixed at creation: this stream keeps its model when the parent STT switches. The
+        # capability matches these options unless the caller opted out of framework flushes.
+        self._manual_flush = stt.capabilities.manual_flush
 
     @property
     def manual_flush(self) -> bool:
