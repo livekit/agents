@@ -29,6 +29,8 @@ jobs:
         with:
           cache-key: rust-rules
       - run: rustup component add rustfmt clippy
+      # Clippy builds lk-agents-py, whose pyo3 build script runs the repository venv's interpreter.
+      - run: uv sync --only-dev
       - run: make -C rust check test-checks
 
   tests:
@@ -38,6 +40,8 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           cache-key: rust-tests
+      # The codegen drift test formats the generated sources with rustfmt.
+      - run: rustup component add rustfmt
       # The MCP lifecycle tests run tests/host/mcp_peer.py on the venv's MCP SDK.
       - run: uv sync --only-dev
       - run: make -C rust test
