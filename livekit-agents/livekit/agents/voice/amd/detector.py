@@ -168,7 +168,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
     and never execute actions.
     AMD enables interruptions on the session and current Agent, then restores
     their settings when detection finishes. Direct speech generation during AMD
-    is not supported.
+    is not supported. To let the agent speak first, set opening_text or
+    opening_instructions.
 
     Example:
         async with AMD(session) as amd:
@@ -208,6 +209,21 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         human_instructions: Temporary instructions for the first human turn after
             a machine stage. Skipped if no machine stage preceded the human. None
             keeps the Agent's own instructions.
+        opening_text: Fixed text that the agent says first, when AMD starts listening.
+            With ``wait_until_answered``, that is after the SIP answer. Requires a TTS
+            model or a realtime model that supports ``say()``. Set at most one of
+            opening_text and opening_instructions. None (the default) lets the
+            participant speak first. The opening is skipped if the participant is
+            already speaking, and cancelled, without a retry, if the participant starts
+            speaking before it plays. Once it plays, participant speech
+            interrupts it as usual. Do not also start speech before AMD, such as a reply
+            in ``on_enter``: AMD holds that speech, and the opening waits behind it.
+            With a realtime model, a cancelled opening can stay in the model's
+            server-side history.
+        opening_instructions: Instructions for a reply that the agent generates and
+            says first, when AMD starts listening. The reply cannot call tools. Set
+            at most one of opening_text and opening_instructions. The opening follows
+            the same rules as opening_text.
         idle_timeout: Silent, inactive time before AMD completes outside voicemail.
         voicemail_idle_timeout: Silent, inactive time in voicemail. Starts after
             playback finishes, to allow a delayed post-message menu to arrive.
@@ -243,6 +259,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         voicemail_instructions: str | None = _DEFAULT_VOICEMAIL_INSTRUCTIONS,
         ivr_instructions: str | None = _DEFAULT_IVR_INSTRUCTIONS,
         human_instructions: str | None = _DEFAULT_HUMAN_INSTRUCTIONS,
+        opening_text: str | None = None,
+        opening_instructions: str | None = None,
         idle_timeout: float = 10.0,
         voicemail_idle_timeout: float = 10.0,
         timeout: float = 60.0,
@@ -261,6 +279,12 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             raise ValueError("max_inference_timeouts must be positive")
         if machine_silence_threshold < 0:
             raise ValueError("machine_silence_threshold must be non-negative")
+        if opening_text is not None and opening_instructions is not None:
+            raise ValueError("set either opening_text or opening_instructions, not both")
+        if opening_text is not None and not opening_text.strip():
+            raise ValueError("opening_text must not be empty")
+        if opening_instructions is not None and not opening_instructions.strip():
+            raise ValueError("opening_instructions must not be empty")
         llm_source = "custom" if llm is not None else "session"
         stt_source = "custom" if stt is not None else "session"
         if not is_given(llm) or not is_given(stt):
@@ -297,6 +321,11 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             AMDCategory.MACHINE_IVR: ivr_instructions,
             AMDCategory.HUMAN: human_instructions,
         }
+        self._opening_text = opening_text
+        self._opening_instructions = opening_instructions
+        self._opening: SpeechHandle | None = None
+        self._opening_played = False
+        self._starting_opening = False
         self._options = AMDOptions(
             idle_timeout=idle_timeout,
             voicemail_idle_timeout=voicemail_idle_timeout,
@@ -399,6 +428,19 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             and "choice" not in model.capabilities.decision_kinds
         ):
             raise ValueError("amd requires a decision model that supports choice decisions")
+        if (
+            self._opening_text is not None
+            and activity.tts is None
+            and not (
+                isinstance(activity.llm, llm.RealtimeModel)
+                and activity.llm.capabilities.supports_say
+            )
+        ):
+            raise ValueError(
+                "amd opening_text requires a TTS model or a realtime model that supports say()"
+            )
+        if self._opening_instructions is not None and activity.llm is None:
+            raise ValueError("amd opening_instructions requires an LLM on the session")
 
         if self.lifecycle is not AMDLifecycle.INITIALIZED:
             raise RuntimeError("use a new AMD instance for each run")
@@ -514,6 +556,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 self._speech_since_commit = True
             self._update_idle()
             logger.info("amd started listening", extra={"session_id": self._session_id})
+            self._start_opening()
 
         try:
             if not self._session._room_io:
@@ -611,6 +654,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             self._speech_started_at = now - delay
             self._speech_ended_at = None
             self._speech_since_commit = True
+            if self._opening is not None and not self._opening_played:
+                # the participant spoke first: their turn gets a normal reply instead
+                self._opening._cancel()
+                self._opening = None
         elif event.old_state == "speaking":
             if self._speech_started_at is not None:
                 self._speech_duration += max(0.0, now - delay - self._speech_started_at)
@@ -726,6 +773,15 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             self._session._conversation_item_added(message)
 
     def _on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
+        if (
+            event.new_state == "speaking"
+            and self._opening is not None
+            and (activity := self._session._activity) is not None
+            and activity.current_speech is self._opening
+        ):
+            # from here on, participant speech interrupts the opening as usual
+            self._opening_played = True
+
         self._update_idle()
 
     def _on_false_interruption(self, event: AgentFalseInterruptionEvent) -> None:
@@ -1067,6 +1123,42 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
 
     # endregion
 
+    # region: opening
+
+    def _start_opening(self) -> None:
+        """Let the agent speak first, before AMD allows any other reply."""
+        if self._opening_text is None and self._opening_instructions is None:
+            return
+        if self._session.user_state == "speaking":
+            logger.debug("amd opening skipped: the participant spoke first")
+            return
+        # _on_speech_created marks the handle before its speech task starts, so the reply
+        # hold does not apply to it, even with an eager task factory
+        self._starting_opening = True
+        try:
+            if self._opening_text is not None:
+                handle = self._session._say(self._opening_text, allow_interruptions=True)
+            else:
+                assert self._opening_instructions is not None
+                handle = self._session._generate_reply(
+                    instructions=self._opening_instructions,
+                    tool_choice="none",
+                    allow_interruptions=True,
+                )
+        except Exception as exc:
+            logger.warning("amd opening failed", extra={"error_type": type(exc).__name__})
+            return
+        finally:
+            self._starting_opening = False
+        self._opening = handle
+        handle.add_done_callback(self._on_opening_done)
+
+    def _on_opening_done(self, handle: SpeechHandle) -> None:
+        if handle is self._opening:
+            self._opening = None
+
+    # endregion
+
     # region: track voicemail speech handle
 
     def _track_voicemail(self, turn_id: int, handle: SpeechHandle) -> None:
@@ -1106,6 +1198,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
     def _on_speech_created(self, event: SpeechCreatedEvent) -> None:
         if self.lifecycle is AMDLifecycle.FINISHED:
             return
+        if self._starting_opening:
+            event.speech_handle._bypass_authorization_pause = True
         self._speeches.add(event.speech_handle)
         event.speech_handle.add_done_callback(self._on_speech_done)
         self._update_idle()

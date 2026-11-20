@@ -11,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
-from unittest.mock import AsyncMock, MagicMock, Mock, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, Mock, PropertyMock, patch
 
 import aiohttp
 import httpx2 as httpx
@@ -2355,6 +2355,240 @@ async def test_direct_replies_are_rejected_while_amd_runs(call: str) -> None:
 
         handle = session.say("Hello there.") if call == "say" else session.generate_reply()
         await asyncio.wait_for(handle, 2)
+
+
+def opening_messages(session: AgentSession) -> list[str]:
+    return [
+        item.text_content or ""
+        for item in session.current_agent.chat_ctx.items
+        if item.type == "message" and item.role == "assistant"
+    ]
+
+
+def test_opening_takes_text_or_instructions_but_not_both() -> None:
+    with pytest.raises(ValueError, match="either opening_text or opening_instructions"):
+        AMD(AgentSession(), llm=None, stt=None, opening_text="Hi.", opening_instructions="Greet.")
+    with pytest.raises(ValueError, match="opening_text must not be empty"):
+        AMD(AgentSession(), llm=None, stt=None, opening_text=" ")
+    with pytest.raises(ValueError, match="opening_instructions must not be empty"):
+        AMD(AgentSession(), llm=None, stt=None, opening_instructions="")
+
+
+@pytest.mark.asyncio
+async def test_opening_text_plays_while_other_replies_stay_held() -> None:
+    opening = "Hi, this is Alex from Acme Dental."
+    async with running(opening_text=opening) as (detector, session, classifier, model):
+        await eventually(lambda: opening_messages(session) == [opening])
+        # the opening skips the reply hold; every other reply still waits for a prediction
+        assert not playback_allowed(session)
+        assert model.calls.empty()
+
+        commit_turn(detector, end_of_turn("Hello?"))
+        request = await classifier.request()
+        history = [(m.role, m.text_content) for m in request.chat_ctx.messages()[2:]]
+        assert history == [("assistant", AGENT_REPLY), ("user", "Hello?")]
+
+
+@pytest.mark.asyncio
+async def test_opening_instructions_generate_a_reply_without_tools() -> None:
+    model = RecordingLLM()
+    model.fake_response_map["Greet Sam."] = FakeLLMResponse(
+        input="Greet Sam.", content="Hi Sam, it's Alex.", ttft=0, duration=0
+    )
+    async with running(opening_instructions="Greet Sam.", session_options={"llm": model}) as (
+        _,
+        session,
+        _,
+        _,
+    ):
+        call = await asyncio.wait_for(model.calls.get(), 2)
+        assert call["tool_choice"] == "none"
+        await eventually(lambda: opening_messages(session) == ["Hi Sam, it's Alex."])
+        assert not playback_allowed(session)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spoke", ["before_listening", "before_playout"])
+async def test_participant_speech_before_the_opening_plays_cancels_it(spoke: str) -> None:
+    session = AgentSession(
+        llm=RecordingLLM(),
+        # the opening's audio arrives after the participant starts speaking
+        tts=FakeTTS(fake_timeout=0.5, fake_audio_duration=0.05),
+        turn_handling={"turn_detection": "manual"},
+        aec_warmup_duration=None,
+    )
+    session.output.audio = FakeAudioOutput()
+    await session.start(CustomerAgent())
+    created: list[SpeechCreatedEvent] = []
+    session.on("speech_created", created.append)
+    try:
+        if spoke == "before_listening":
+            session._update_user_state("speaking")
+        async with AMD(session, llm=ClassifierLLM(), stt=None, opening_text="Hi.") as detector:
+            await eventually(lambda: detector.lifecycle is AMDLifecycle.ACTIVE)
+            if spoke == "before_listening":
+                assert not created
+            else:
+                opening = detector._opening
+                assert opening is not None and created
+                speech_started(detector)
+                await asyncio.wait_for(opening, 2)
+                assert opening.interrupted
+            assert detector._opening is None
+            assert opening_messages(session) == []
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_participant_speech_after_the_opening_starts_is_a_normal_interruption() -> None:
+    async with running(
+        opening_text="Hi, this is Alex.",
+        session_options={"tts": FakeTTS(fake_audio_duration=1.0)},
+    ) as (detector, _, _, _):
+        await eventually(lambda: detector._opening_played)
+        opening = detector._opening
+        assert opening is not None
+        speech_started(detector)
+        await asyncio.sleep(0.01)
+        # AMD leaves a playing opening to the session's interruption handling
+        assert not opening.interrupted
+        assert detector._opening is opening
+
+
+@pytest.mark.asyncio
+async def test_opening_is_exempt_from_the_reply_hold_before_its_task_starts() -> None:
+    session = AgentSession(
+        llm=RecordingLLM(),
+        tts=FakeTTS(fake_audio_duration=0.05),
+        turn_handling={"turn_detection": "manual"},
+        aec_warmup_duration=None,
+    )
+    session.output.audio = FakeAudioOutput()
+    await session.start(CustomerAgent())
+    exempt: list[bool] = []
+    try:
+        async with AMD(session, llm=ClassifierLLM(), stt=None, opening_text="Hi.") as detector:
+            # speech_created fires before the speech task exists, which an eager task
+            # factory would start at once; AMD's handler runs before this one
+            session.on(
+                "speech_created",
+                lambda ev: exempt.append(ev.speech_handle._bypass_authorization_pause),
+            )
+            await eventually(lambda: detector.lifecycle is AMDLifecycle.ACTIVE)
+            await eventually(lambda: bool(exempt))
+            assert exempt == [True]
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_failed_opening_keeps_amd_listening(caplog: pytest.LogCaptureFixture) -> None:
+    session = AgentSession(
+        llm=RecordingLLM(),
+        tts=FakeTTS(fake_audio_duration=0.05),
+        turn_handling={"turn_detection": "manual"},
+        aec_warmup_duration=None,
+    )
+    session.output.audio = FakeAudioOutput()
+    await session.start(CustomerAgent())
+    try:
+        with patch.object(session, "_say", side_effect=RuntimeError("closing")):
+            async with AMD(session, llm=ClassifierLLM(), stt=None, opening_text="Hi.") as detector:
+                await eventually(lambda: detector.lifecycle is AMDLifecycle.ACTIVE)
+                assert detector._opening is None
+                assert "amd opening failed" in caplog.text
+                assert detector.lifecycle is AMDLifecycle.ACTIVE
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_during_the_opening_waits_for_its_prediction() -> None:
+    async with running(
+        opening_text="Hi, this is Alex.",
+        session_options={"tts": FakeTTS(fake_audio_duration=1.0)},
+    ) as (detector, session, classifier, model):
+        await eventually(lambda: detector._opening_played)
+        assert session._activity is not None
+        session._activity.on_end_of_turn(end_of_turn())
+        request = await classifier.request()
+        # the opening's exemption does not reach the reply to the turn
+        await asyncio.sleep(0.05)
+        assert model.calls.empty()
+        assert not playback_allowed(session)
+        classifier.prediction(request.current_turn.extra["turn_id"], AMDCategory.HUMAN)
+        await asyncio.wait_for(model.calls.get(), 2)
+
+
+@pytest.mark.asyncio
+async def test_a_result_without_a_reply_cancels_an_unplayed_opening() -> None:
+    async with running(
+        opening_text="Hi.",
+        session_options={"tts": FakeTTS(fake_timeout=0.5, fake_audio_duration=0.05)},
+    ) as (detector, session, classifier, _):
+        opening = detector._opening
+        assert opening is not None
+        # a commit without a speech edge, so only completion can stop the opening
+        commit_turn(detector, end_of_turn("The number you dialed is not in service."))
+        request = await classifier.request()
+        classifier.prediction(
+            request.current_turn.extra["turn_id"], AMDCategory.MACHINE_UNAVAILABLE
+        )
+        await asyncio.wait_for(detector.execute(), 2)
+        await asyncio.wait_for(opening, 2)
+        assert opening.interrupted
+        assert opening_messages(session) == []
+
+
+@pytest.mark.asyncio
+async def test_opening_instructions_generate_with_a_realtime_model() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            can_disable_turn_detection=True, auto_tool_reply_generation=False
+        )
+    )
+    async with AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        turn_handling={"turn_detection": "manual"},
+        aec_warmup_duration=None,
+    ) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(Agent(instructions="Call about an appointment."))
+        async with AMD(
+            session, llm=ClassifierLLM(), stt=None, opening_instructions="Greet Sam."
+        ) as detector:
+            await eventually(lambda: detector.lifecycle is AMDLifecycle.ACTIVE)
+            rt = model.active_session
+            await eventually(lambda: rt.generate_reply_calls == 1)
+            assert "Greet Sam." in str(rt.reply_instructions[0])
+            # the opening skips the reply hold; every other reply still waits
+            assert detector._opening is not None
+            assert not playback_allowed(session)
+
+
+@pytest.mark.asyncio
+async def test_opening_text_needs_a_tts_or_a_realtime_model_that_can_say() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            can_disable_turn_detection=True,
+            auto_tool_reply_generation=False,
+            supports_say=False,
+        )
+    )
+    async with AgentSession(
+        llm=model,
+        stt=FakeSTT(),
+        turn_handling={"turn_detection": "manual"},
+        aec_warmup_duration=None,
+    ) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(Agent(instructions="Call about an appointment."))
+        detector = AMD(session, llm=ClassifierLLM(), stt=None, opening_text="Hi.")
+        with pytest.raises(ValueError, match="opening_text requires a TTS model"):
+            await detector.__aenter__()
+        assert session.amd is None
 
 
 @pytest.mark.asyncio

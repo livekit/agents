@@ -96,6 +96,8 @@ async with detector:
 | `voicemail_instructions` | built in | Instructions for the voicemail message. `None` makes `machine-vm` a customer-handled stage (section 9.5). |
 | `ivr_instructions` | built in | Reply instructions in `machine-ivr`. `None` makes it a customer-handled stage (section 9.5). |
 | `human_instructions` | built in | Instructions for the reply to the turn whose `human` prediction completes AMD after a machine stage (section 10.2). `None` keeps the Agent's own instructions. |
+| `opening_text` | `None` | Fixed text that the agent says first (section 10.6). `None` lets the participant speak first. |
+| `opening_instructions` | `None` | Instructions for a reply that the agent generates and says first (section 10.6). |
 | `idle_timeout` | 10 s | Silent, inactive time before completion outside `machine-vm`. |
 | `voicemail_idle_timeout` | 10 s | Silent, inactive time in `machine-vm`. |
 | `timeout` | 60 s | Overall limit from the start of listening (section 5.2). Lower it when the agent need not answer machines; raise it to get through screeners, IVR menus, or hold queues. |
@@ -106,7 +108,9 @@ async with detector:
 
 The constructor raises `ValueError` when a timeout is not positive,
 `max_uncertain_turns` or `max_inference_timeouts` is below 1,
-`machine_silence_threshold` is negative, or a supplied STT does not stream.
+`machine_silence_threshold` is negative, a supplied STT does not stream, both
+`opening_text` and `opening_instructions` are set, or either one is empty or only
+whitespace.
 
 Model rules:
 
@@ -193,7 +197,9 @@ Entry checks these conditions in order. A failed check raises the error shown.
 3. No other AMD runs on the session (`RuntimeError`).
 4. Session-level `ivr_detection` is off (`ValueError`).
 5. A classifier LLM is available (section 4.1) (`ValueError`).
-6. This instance has not run before (`RuntimeError`).
+6. With `opening_text`, the session has a TTS model or a realtime model that supports
+   `say()`. With `opening_instructions`, the session has an LLM (`ValueError`).
+7. This instance has not run before (`RuntimeError`).
 
 Then entry runs these steps. If step 3, 4, or 5 fails, entry calls `aclose()` and
 raises.
@@ -220,7 +226,8 @@ Without room I/O, AMD starts listening at once. With room I/O:
    waits for `sip.callStatus` to be `active`. This wait has no timeout. If the
    participant leaves, AMD completes with `participant_disconnected`.
 3. AMD sets the lifecycle to `ACTIVE`, starts the overall `timeout`, and starts the
-   idle timer. So `timeout` starts only after the call is answered.
+   idle timer. So `timeout` starts only after the call is answered. Then it starts the
+   opening, if one is set (section 10.6).
 
 While the lifecycle is `PENDING`, AgentSession discards participant audio. Early media
 is audio that the SIP provider sends before the callee answers. With
@@ -255,6 +262,8 @@ calls. `examples/telephony/amd_twilio_connector.py` shows both.
   current Agent changes anyway, the next committed turn's `should_reply` hook
   completes AMD with `agent_changed` (section 10.1).
 - `session.say()` and `session.generate_reply()` raise `RuntimeError` while AMD runs.
+  To let the agent speak first, use `opening_text` or `opening_instructions`
+  (section 10.6).
   AMD would hold the speech, which keeps the idle timer off, and play it after AMD
   completes. While AMD runs, a few paths that would call them skip their reply
   instead: a realtime fallback swap does not regenerate the interrupted reply, a
@@ -401,7 +410,9 @@ AMD keeps its own chat context. It never copies the Agent's history. It contains
   `(the agent spoke)`. While the likely-human mark is set, the content is the reply's
   words (section 9.4). The session adds a reply when its speech ends, so a turn
   committed during that speech can arrive first. AMD inserts the reply at its start
-  time to keep the speaking order.
+  time to keep the speaking order. An opening (section 10.6) is a reply like any
+  other, so the history shows that the agent spoke before the participant's first
+  turn.
 - successful `send_dtmf_events` calls and their results (section 11.1)
 
 ### 8.3 Prompt contract
@@ -604,6 +615,33 @@ and setup failure. A committed turn interrupts the current speech before AMD
 decides. So a turn that AMD later predicts as `wait` still cuts off a playing
 voicemail message. Interruption does not allow a reply. AMD still classifies the turn.
 
+### 10.6 Opening
+
+By default, the participant speaks first. With `opening_text` or
+`opening_instructions`, the agent speaks first:
+
+- AMD starts the opening when it starts listening (section 5.2). With
+  `wait_until_answered=True` and a SIP participant, that is after the answer. With
+  `wait_until_answered=False`, it can be during early media.
+- `opening_text` plays through `say()`. `opening_instructions` plays through
+  `generate_reply()` with `tool_choice="none"`, so the opening cannot call tools.
+- The opening is the only speech that skips the paused reply authorization
+  (section 10.1). Every other reply still waits for its turn's prediction.
+- If the participant is already speaking when listening starts, AMD skips the
+  opening. If the participant starts speaking before the opening plays, AMD cancels
+  it. The participant's first turn then gets a normal reply. Once the opening plays,
+  participant speech interrupts it like any other speech (section 10.5). AMD does not
+  retry a cancelled opening.
+- If AMD completes before the opening plays, for example at `aclose()`, the opening
+  still plays, unless the result forbids a reply (section 12.3).
+- Do not start speech before AMD when an opening is set, such as a reply in
+  `on_enter`. AMD holds that speech, and the opening waits behind it in the speech
+  queue.
+- With a realtime model, a cancelled opening can stay in the model's server-side
+  history, because AgentSession does not remove an unplayed realtime reply.
+- The opening is not a voicemail message and never sets `voicemail_message_played`.
+- If AMD cannot create the opening, it logs a warning and keeps listening.
+
 ## 11. DTMF and menus
 
 ### 11.1 DTMF
@@ -699,6 +737,7 @@ deadlines, and cleanup. They do not prove model accuracy.
 | 12 | `execute()` returns exactly one `AMDCompletedEvent`. | 12.3 | `test_terminal_result_completes_once_and_releases_turn_hooks` |
 | 13 | A prediction that enters a customer-handled stage completes AMD and never allows a reply to its turn. | 9.5, 10.1 | `test_stage_without_instructions_completes_without_a_reply` |
 | 14 | A decision model classifies with one `choice` over the seven categories and never starts menu extraction. | 8.1, 11.2 | `test_decision_model_classifies_with_one_choice_and_skips_menus` |
+| 15 | Only the opening plays before a prediction allows a reply, and participant speech before its playout cancels it. | 10.6 | `test_opening_text_plays_while_other_replies_stay_held`, `test_participant_speech_before_the_opening_plays_cancels_it` |
 
 ## 15. Example
 

@@ -1620,7 +1620,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._amd is not None:
             # AMD would hold the speech and play it after detection
             raise RuntimeError("say() is not supported while AMD is running")
+        return self._say(
+            text,
+            audio=audio,
+            allow_interruptions=allow_interruptions,
+            add_to_chat_ctx=add_to_chat_ctx,
+        )
 
+    def _say(
+        self,
+        text: str | AsyncIterable[str],
+        *,
+        audio: NotGivenOr[AsyncIterable[rtc.AudioFrame]] = NOT_GIVEN,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        add_to_chat_ctx: bool = True,
+    ) -> SpeechHandle:
+        """say() without the AMD check, for a speech that AMD starts itself."""
+        assert self._activity is not None
         run_state = self._global_run_state
         activity = self._next_activity if self._activity.scheduling_paused else self._activity
 
@@ -1684,7 +1700,29 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._amd is not None:
             # AMD would hold the reply and play it after detection
             raise RuntimeError("generate_reply() is not supported while AMD is running")
+        return self._generate_reply(
+            user_input=user_input,
+            instructions=instructions,
+            tool_choice=tool_choice,
+            tools=tools,
+            allow_interruptions=allow_interruptions,
+            chat_ctx=chat_ctx,
+            input_modality=input_modality,
+        )
 
+    def _generate_reply(
+        self,
+        *,
+        user_input: NotGivenOr[str | llm.ChatMessage] = NOT_GIVEN,
+        instructions: NotGivenOr[str | Instructions] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[str]] = NOT_GIVEN,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        input_modality: Literal["text", "audio"] = "text",
+    ) -> SpeechHandle:
+        """generate_reply() without the AMD check, for a speech that AMD starts itself."""
+        assert self._activity is not None
         user_message = (
             llm.ChatMessage(role="user", content=[user_input])
             if isinstance(user_input, str)

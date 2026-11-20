@@ -1975,6 +1975,10 @@ class AgentActivity(RecognitionHooks):
     def _resume_authorization(self) -> None:
         self._authorization_allowed.set()
 
+    async def _wait_authorization_allowed(self, speech_handle: SpeechHandle) -> None:
+        if not speech_handle._bypass_authorization_pause:
+            await self._authorization_allowed.wait()
+
     def _interrupt_background_speeches(
         self, force: bool = False, source: InterruptionSource = "programmatic"
     ) -> list[SpeechHandle]:
@@ -3452,7 +3456,7 @@ class AgentActivity(RecognitionHooks):
         # See discussion in https://github.com/livekit/agents/issues/4432
         authorization_tasks: list[asyncio.Future[Any]] = [
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
-            asyncio.ensure_future(self._authorization_allowed.wait()),
+            asyncio.ensure_future(self._wait_authorization_allowed(speech_handle)),
         ]
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
@@ -3988,7 +3992,7 @@ class AgentActivity(RecognitionHooks):
 
         authorization_tasks: list[asyncio.Future[Any]] = [
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
-            asyncio.ensure_future(self._authorization_allowed.wait()),
+            asyncio.ensure_future(self._wait_authorization_allowed(speech_handle)),
         ]
         if speech_handle.allow_interruptions:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
@@ -4423,7 +4427,7 @@ class AgentActivity(RecognitionHooks):
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
         authorization_tasks: list[asyncio.Future[Any]] = [
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
-            asyncio.ensure_future(self._authorization_allowed.wait()),
+            asyncio.ensure_future(self._wait_authorization_allowed(speech_handle)),
         ]
         if speech_handle.allow_interruptions and not self._rt_overlapping_speech_enabled:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
@@ -4663,7 +4667,7 @@ class AgentActivity(RecognitionHooks):
 
         authorization_tasks: list[asyncio.Future[Any]] = [
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
-            asyncio.ensure_future(self._authorization_allowed.wait()),
+            asyncio.ensure_future(self._wait_authorization_allowed(speech_handle)),
         ]
         if speech_handle.allow_interruptions and not self._rt_overlapping_speech_enabled:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
