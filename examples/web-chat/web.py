@@ -57,14 +57,13 @@ async def token(request: Request) -> Response:
 
 
 async def list_threads(request: Request) -> Response:
-    """The browser's threads, newest first; the store lists in no particular order."""
+    """A page of the browser's threads, in the store's (unspecified) order."""
     scope = scope_of(request)
     if scope is None:
         return Response(status_code=400)
 
     page = await storage.threads.list_threads(scope=scope, limit=50)
-    threads = sorted(page.threads, key=lambda t: t.created_at, reverse=True)
-    return JSONResponse([{"id": t.thread_id, "created_at": t.created_at} for t in threads])
+    return JSONResponse([{"id": t.thread_id, "created_at": t.created_at} for t in page.threads])
 
 
 async def thread_messages(request: Request) -> Response:
