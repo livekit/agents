@@ -67,3 +67,43 @@ fn edge_covers_the_resamplers_ringing() {
         );
     }
 }
+
+/// A 24 kHz frame whose audio steps from 481 to 512 at `step` of its 1200 samples.
+fn stepped(step: usize) -> AudioFrame {
+    let samples: Vec<i16> = (0..1200).map(|i| if i < step { 481 } else { 512 }).collect();
+    let data: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+    AudioFrame::new(data, 24_000, 1, 1200)
+}
+
+/// The resampler rings around a step inside a heard frame as it does at a frame's edge: the
+/// check spares the step, and still rejects the step recorded at the wrong place (seed 2456).
+#[tokio::test]
+async fn the_speaker_oracle_spares_a_step_inside_a_frame_and_rejects_it_moved() {
+    let (rtc, clock) = super::super::room::FakeRtc::with_virtual_clock(RoomEventBus::port);
+    let room = rtc.room("recording-step");
+    room.local()
+        .publish_audio_track(
+            &lk_agents_abi::telemetry::Cx::NONE,
+            TrackPublishOptions { sample_rate: RATE, ..Default::default() },
+        )
+        .await
+        .unwrap();
+    let source = room.local_participant().sources()[0].clone();
+    source.capture(&lk_agents_abi::telemetry::Cx::NONE, &stepped(600)).await.unwrap();
+    clock.advance(Duration::from_millis(50));
+    let speaker = RoomSpeaker { room, anchor: (0.0, Ts::ZERO) };
+
+    for (step, matches) in [(600, true), (840, false)] {
+        let mut recording = Recording::default();
+        for command in [
+            RecordingCommand::Capture(0.0, stepped(step)),
+            RecordingCommand::PlaybackStarted(0.0),
+            RecordingCommand::Progress(0.0, 0.0, 0.05),
+            RecordingCommand::PlaybackFinished(0.05, 0.05),
+            RecordingCommand::Flush(2.0),
+        ] {
+            recording.file.apply(command, &mut || Ok(())).unwrap();
+        }
+        assert_eq!(speaker.check(&recording).is_none(), matches, "step recorded at {step}");
+    }
+}

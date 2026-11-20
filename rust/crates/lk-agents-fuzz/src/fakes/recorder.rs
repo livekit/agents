@@ -16,10 +16,10 @@ use crate::record::{RecorderCall, Sink};
 
 /// The recording's rate, as the session's.
 const RATE: u32 = 48_000;
-/// A played stretch's first and last samples ramp through the resampler's filter: only its inside
-/// is held to be sound. The fakes' audio is a constant tag per chunk, never near zero. The
-/// recording's medium-quality resampler rings past one unit for up to 2.6 ms around a full-scale
-/// step, on both sides: 3 ms covers it.
+/// A played stretch's first and last samples, and those around a step of its sound, ramp through
+/// the resampler's filter: only the steady inside is held to the speaker's samples. The fakes'
+/// audio is a constant tag per chunk, never near zero. The recording's medium-quality resampler
+/// rings past one unit for up to 2.6 ms around a full-scale step, on both sides: 3 ms covers it.
 const EDGE: i64 = (RATE / 1000 * 3) as i64;
 
 /// Keeps the timeline's interleaved PCM as written: the recording.
@@ -159,7 +159,8 @@ impl Default for Recording {
 
 impl RoomSpeaker {
     /// Compare identity, placement and silence against the source's own PCM, rather than the
-    /// callbacks the recorder received. Ignore only `EDGE` at frame boundaries for resampling.
+    /// callbacks the recorder received. Ignore only `EDGE` around frame boundaries and steps of the
+    /// sound, where the resampler rings.
     fn check(&self, recording: &Recording) -> Option<RecorderCall> {
         let summary = recording.file.summary();
         let t0 = summary.started_at?;
@@ -186,7 +187,12 @@ impl RoomSpeaker {
                 let hi = lo + (frame.duration() * f64::from(RATE)).round() as i64;
                 let samples = lk_agents_media::pcm_samples(&frame.data);
                 let mono = lk_agents_media::downmix_mono(&samples, frame.num_channels);
-                for edge in [lo, hi] {
+                // The resampler rings around every step of the sound, a frame's edges and a
+                // change of the audio inside one (the source reframes chunks) alike.
+                let steps = (1..mono.len()).filter(|&k| mono[k] != mono[k - 1]).map(|k| {
+                    lo + (k as u64 * u64::from(RATE) / u64::from(frame.sample_rate)) as i64
+                });
+                for edge in [lo, hi].into_iter().chain(steps) {
                     for i in (edge - EDGE).max(checked as i64)..(edge + EDGE).min(end as i64) {
                         edges[i as usize - checked] = true;
                     }
