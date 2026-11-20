@@ -52,7 +52,6 @@ def agent_session(monkeypatch: pytest.MonkeyPatch) -> _FakeAgentSession:
     ("socket", "reason"),
     [
         (_FakeSocket(message_type="assistant_ended_conversation"), "assistant_ended_conversation"),
-        (_FakeSocket(close_code=4600), "assistant_ended_conversation"),
         (_FakeSocket(close_code=4505), "time_limit_reached"),
     ],
 )

@@ -57,6 +57,7 @@ CONVERSATION_HISTORY_PREFIX = (
 PHONIC_INPUT_FRAME_MS = 20
 WS_CLOSE_NORMAL = 1000
 WS_CLOSE_NO_INPUT_TIMEOUT = 4500
+WS_CLOSE_TIME_LIMIT_REACHED = 4505
 # Emitted with a PhonicConversationEndedEvent when the conversation ends normally.
 CONVERSATION_ENDED_EVENT: typing.Any = "phonic_conversation_ended"
 TOOL_CALL_OUTPUT_TIMEOUT_MS = 60000
@@ -83,13 +84,6 @@ ConversationEndedReason = Literal["assistant_ended_conversation", "time_limit_re
 @dataclass
 class PhonicConversationEndedEvent:
     reason: ConversationEndedReason
-
-
-# Close codes for conversations Phonic ended normally.
-_CONVERSATION_ENDED_CLOSE_CODES: dict[int, ConversationEndedReason] = {
-    4505: "time_limit_reached",
-    4600: "assistant_ended_conversation",
-}
 
 
 class PhonicToolConfig(TypedDict, total=False):
@@ -1381,8 +1375,8 @@ class RealtimeSession(llm.RealtimeSession):
             if rcvd is not None and rcvd.code == WS_CLOSE_NO_INPUT_TIMEOUT:
                 self._emit_error(PhonicNoInputTimeoutError(rcvd.reason), recoverable=False)
                 return
-            if rcvd is not None and rcvd.code in _CONVERSATION_ENDED_CLOSE_CODES:
-                self._end_conversation(_CONVERSATION_ENDED_CLOSE_CODES[rcvd.code])
+            if rcvd is not None and rcvd.code == WS_CLOSE_TIME_LIMIT_REACHED:
+                self._end_conversation("time_limit_reached")
                 return
             logger.error(f"Error in Phonic receive loop: {e}", exc_info=e)
             self._emit_error(e, recoverable=True)
