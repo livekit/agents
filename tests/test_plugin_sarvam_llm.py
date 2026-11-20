@@ -129,11 +129,22 @@ async def test_sarvam_105b_keeps_an_explicit_reasoning_effort(
         {"model": "gemma4"},
         {"model": "glm5.2"},
         {"model": "sarvam-105b", "base_url": "https://api.sarvam.ai/v1"},
+        {"model": "sarvam-105b", "base_url": "https://proxy.example/sarvam/v1/"},
     ],
 )
 async def test_no_reasoning_default_otherwise(kwargs: dict[str, Any]) -> None:
     stream = _llm(**kwargs).chat(chat_ctx=_chat_ctx())
     assert "reasoning_effort" not in stream._extra_kwargs
+    await stream.aclose()
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["https://api.sarvam.ai/v2", "https://proxy.example/sarvam/v2", "https://proxy.example"],
+)
+async def test_reasoning_default_with_a_pinned_non_v1_base_url(base_url: str) -> None:
+    stream = _llm(model="sarvam-105b", base_url=base_url).chat(chat_ctx=_chat_ctx())
+    assert stream._extra_kwargs["reasoning_effort"] == "none"
     await stream.aclose()
 
 

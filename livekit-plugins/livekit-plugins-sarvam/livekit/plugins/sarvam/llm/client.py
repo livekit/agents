@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import platform
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx2 as httpx
 import openai
@@ -102,6 +103,11 @@ _ALLOWED_EXTRA_BODY_PARAMS: set[str] = {
 }
 
 
+def _is_v1_url(url: str) -> bool:
+    """Whether ``url`` points at a ``/v1`` API root, like ``https://api.sarvam.ai/v1``."""
+    return urlparse(url).path.rstrip("/").endswith("/v1")
+
+
 def _resolve_base_url(model: str) -> str:
     """Return the Sarvam API base URL for *model*.
 
@@ -157,8 +163,9 @@ class LLM(OpenAILLM):
     * ``gemma4`` — vision-capable, ``/v2`` endpoint
     * ``sarvam-105b`` — text-only, ``/v2`` endpoint. It reasons before every answer
       unless ``reasoning_effort="none"``, which adds seconds to the first token, so the
-      plugin sends ``"none"`` unless you set ``reasoning_effort`` (or an explicit
-      ``base_url``) yourself; pass a level such as ``"low"`` to turn reasoning back on
+      plugin sends ``"none"`` unless you set ``reasoning_effort`` yourself or pin a
+      ``/v1`` ``base_url`` (``/v1`` rejects ``"none"``); pass a level such as ``"low"``
+      to turn reasoning back on
     * ``glm5.2`` — text-only, ``/v2`` endpoint
     * ``sarvam-105b-conversations`` — multi-turn optimized, ``/v1`` endpoint
 
@@ -200,9 +207,11 @@ class LLM(OpenAILLM):
 
         # Resolve base URL: explicit > model-derived
         resolved_base_url = base_url if is_given(base_url) else _resolve_base_url(validated_model)
-        # an explicit base_url pins the endpoint: model changes never move it, and since
-        # /v1 rejects "none" the reasoning default in chat() is left to the caller
+        # an explicit base_url pins the endpoint: model changes never move it
         self._sarvam_endpoint_pinned = is_given(base_url)
+        # /v1 rejects reasoning_effort="none", so a pinned /v1 URL gets no reasoning
+        # default in chat(); a pinned /v2 URL or proxy still does
+        self._sarvam_pinned_to_v1 = is_given(base_url) and _is_v1_url(base_url)
 
         # ---- Merge auth / telemetry headers (always enforced) ----
         merged_headers: dict[str, str] = {}
@@ -367,7 +376,7 @@ class LLM(OpenAILLM):
             merged_extra.pop("reasoning_effort", None)
         elif (
             model in _REASONING_BY_DEFAULT_MODELS
-            and not self._sarvam_endpoint_pinned
+            and not self._sarvam_pinned_to_v1
             and not is_given(self._opts.reasoning_effort)
             and "reasoning_effort" not in merged_extra
         ):
