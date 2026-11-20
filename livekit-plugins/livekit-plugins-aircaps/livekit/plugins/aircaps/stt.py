@@ -32,6 +32,7 @@ from typing import Any
 
 import aiohttp
 
+from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -220,6 +221,18 @@ class STT(stt.STT):
         )
         self._streams.add(stream)
         return stream
+
+    async def aclose(self) -> None:
+        """Close every stream opened by :meth:`stream`.
+
+        The HTTP session is left open: it is either supplied by the caller or owned by the
+        job's HTTP context.
+        """
+        streams = list(self._streams)
+        self._streams.clear()
+        # one stream failing to close must not leave the others open
+        await asyncio.gather(*(stream.aclose() for stream in streams), return_exceptions=True)
+        await super().aclose()
 
     def update_options(
         self,
@@ -496,17 +509,29 @@ class SpeechStream(stt.SpeechStream):
         queued: list[Any] = []
         while not self._input_ch.empty():
             queued.append(self._input_ch.recv_nowait())
-        audio_s = sum(item.duration for item in queued if not isinstance(item, self._FlushSentinel))
+        # walk back from the newest audio; a frame across the cutoff keeps its newest samples
+        budget = round(_MAX_BACKLOG_S * SAMPLE_RATE)
         dropped_s = 0.0
         kept: list[Any] = []
-        for item in queued:
-            if (
-                not isinstance(item, self._FlushSentinel)
-                and audio_s - dropped_s > _MAX_BACKLOG_S + 1e-6
-            ):
-                dropped_s += item.duration
+        for item in reversed(queued):
+            if isinstance(item, self._FlushSentinel):
+                kept.append(item)
                 continue
+            samples = item.samples_per_channel
+            if samples > budget:
+                dropped_s += (samples - budget) / item.sample_rate
+                if budget == 0:
+                    continue
+                item = rtc.AudioFrame(
+                    data=item.data[(samples - budget) * item.num_channels :].tobytes(),
+                    sample_rate=item.sample_rate,
+                    num_channels=item.num_channels,
+                    samples_per_channel=budget,
+                )
+                samples = budget
+            budget -= samples
             kept.append(item)
+        kept.reverse()
         if dropped_s:
             logger.warning(
                 "dropped %.1f s of audio that queued while connecting to AirCaps", dropped_s

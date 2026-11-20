@@ -378,6 +378,53 @@ async def test_audio_queued_while_connecting_keeps_its_newest_1_25_s() -> None:
     assert len(server.audio) == 40000  # 1.25 s
 
 
+def _audio_of(seconds: float, value: int) -> rtc.AudioFrame:
+    samples = int(16000 * seconds)
+    return rtc.AudioFrame(
+        data=value.to_bytes(2, "little") * samples,
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=samples,
+    )
+
+
+async def test_audio_queued_while_connecting_keeps_the_newest_part_of_a_long_frame() -> None:
+    server = _FakeServer()
+    stream = _stt(_FakeHttp(server)).stream(conn_options=_OPTIONS)
+    # one 2 s frame: its first 0.75 s is too old to send, its last 1.25 s is kept
+    frame = _audio_of(0.75, 1).data.tobytes() + _audio_of(1.25, 2).data.tobytes()
+    stream.push_frame(
+        rtc.AudioFrame(data=frame, sample_rate=16000, num_channels=1, samples_per_channel=32000)
+    )
+    stream.end_input()
+    await _events(stream)
+    assert bytes(server.audio) == _audio_of(1.25, 2).data.tobytes()
+    assert server.sent("finalize")
+
+
+async def test_audio_queued_while_connecting_is_cut_inside_a_frame() -> None:
+    server = _FakeServer()
+    stream = _stt(_FakeHttp(server)).stream(conn_options=_OPTIONS)
+    for value in (1, 2, 3):  # 1.5 s queued: the oldest 0.25 s goes
+        stream.push_frame(_audio_of(0.5, value))
+    stream.end_input()
+    await _events(stream)
+    assert bytes(server.audio) == b"".join(
+        _audio_of(seconds, value).data.tobytes()
+        for seconds, value in ((0.25, 1), (0.5, 2), (0.5, 3))
+    )
+
+
+async def test_closing_the_provider_closes_its_open_streams() -> None:
+    server = _FakeServer()
+    provider = _stt(_FakeHttp(server))
+    stream = provider.stream(conn_options=_OPTIONS)
+    await _wait_for(lambda: server.ready)
+    await provider.aclose()
+    assert server.closed
+    assert stream._task.done()
+
+
 async def test_audio_is_paced_to_real_time() -> None:
     server = _FakeServer()
     stream = _stt(_FakeHttp(server)).stream(conn_options=_OPTIONS)
