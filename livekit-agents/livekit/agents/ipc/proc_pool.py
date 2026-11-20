@@ -89,14 +89,14 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             None,
         )
 
-    async def start(self) -> None:
+    async def start(self, *, wait_for_idle: bool = True) -> None:
         if self._started:
             return
 
         self._started = True
         self._main_atask = asyncio.create_task(self._main_task())
 
-        if self._default_num_idle_processes > 0:
+        if wait_for_idle and self._default_num_idle_processes > 0:
             # wait for the idle processes to be warmed up (by the main task)
             # use a timeout so start() doesn't block forever if initialization fails
             try:
