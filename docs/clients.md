@@ -32,7 +32,7 @@ await storage.aclose()
 |---|---|---|
 | `CreateThread` | optional `scope`, `attributes`, `idle_ttl` | the thread, with its database created |
 | `GetThread` | `thread_id` | the thread |
-| `ListThreads` | `scope`, optional `before`, `limit` | the scope's threads, newest first, and the `before` cursor of the next page, empty at the end |
+| `ListThreads` | optional `scope`, `sort_order`, `page_token`, `limit` (50 by default, 100 at most) | one page of threads by creation, newest first unless `sort_order` is `SORT_ORDER_ASC`, and the `next_page_token` of the next page, empty at the end |
 | `UpdateThread` | `thread_id`, `attributes` (an empty value deletes the entry), `idle_ttl` | the thread; counts as activity |
 | `DeleteThread` | `thread_id` | nothing; its content goes with it |
 | `GetThreadItems` | `thread_id`, optional `agent`, `after`, `limit` | the history in order, one page: each item's `agent`, `seq`, `message_id` and chat item, and the `after` cursor of the next page |
@@ -41,16 +41,25 @@ await storage.aclose()
 A thread is a `ThreadInfo`: `thread_id`, `scope`, `attributes`,
 `created_at`, `last_active`, `expires_at` (0: never) and `idle_ttl_seconds`; its
 database has its id. Times are timestamps and TTLs durations on the wire; the
-Python client reads and writes them as seconds. `list_threads` returns a
-`ThreadPage`, `threads` and the `before` cursor, empty on the last page. A
+Python client reads and writes them as seconds. A listed thread carries
+`thread_id`, `scope`, `attributes`, `created_at` and `idle_ttl_seconds`, not
+`last_active` or `expires_at`: those come from `GetThread`. `list_threads`
+returns a `ThreadPage`, `threads` and the `before` cursor of the next page
+(the wire's `next_page_token`), empty on the last page. A
 thread lives in the project's data region and belongs to the project, not
 to one agent: any agent of the project continues it.
 
 A thread's `scope` is its subject: an opaque identifier the application
 sets for the person or account the thread is about, hashed if it is
-personal. It is the one dimension threads are listed by: newest first,
-paginated, each row with the attributes the application set, a title or a
-preview. A thread per chat with the user as scope is how a sidebar works.
+personal. It is the one dimension threads are listed by, beside the
+project-wide list: by creation, newest or oldest first, paginated, each row
+with the attributes the application set, a title or a preview. A thread per
+chat with the user as scope is how a sidebar works.
+
+Who lists what follows the grant ([auth](auth.md#listing-threads)): an
+`all` grant lists every thread of the project with no `scope`, or one
+scope's; a `scope` grant lists its own scope, by default and nothing else;
+a `threadIds` grant cannot list.
 
 ## A thread handle
 
@@ -65,7 +74,7 @@ lk = api.LiveKitAPI()
 
 thread = lk.threads.get(thread_id)                                       # a handle; nothing fetched yet
 thread = await lk.threads.create(scope=user_id)                          # a new thread for a subject
-threads = await lk.threads.list(scope=user_id, limit=30)                 # newest first, with info loaded
+threads = await lk.threads.list(scope=user_id, limit=30)                 # newest first; no activity or expiry
 
 thread.id
 info = await thread.info()                                                 # scope, attributes, created, last active

@@ -44,19 +44,28 @@ adds both. `Credentials.project_token()` carries `agentEndpoint` alone.
 
 | Field       | Meaning                                                                |
 | ----------- | ---------------------------------------------------------------------- |
-| `scope`     | every thread of one subject; the only form that can `create` or `list` |
+| `scope`     | every thread of one subject; the only form that can `create`           |
 | `threadIds` | the listed threads only                                                |
 | `all`       | every thread of the project; enables no flag by itself                 |
-| `list`      | the threads service's listing of the scope                             |
+| `list`      | `ListThreads`: see [listing](#listing-threads)                         |
 | `create`    | a first message with no `contextId`: a new thread in the scope         |
 | `write`     | a message, `tasks/cancel`                                              |
 | `read`      | `tasks/get`, `tasks/list`, `GetThreadItems`, `GetThreadTasks`          |
 | `delete`    | deleting a thread                                                      |
 | `sql`       | the thread's database on the data plane; never in a browser's grant    |
 
-A grant with no subject (`scope`, `threadIds` or `all`) is refused. A thread belongs to the
-project, not to an agent or a deployment: a thread grant names neither and works on every
-door of the project.
+A grant with no subject (`scope`, `threadIds` or `all`) is refused.
+
+#### Listing threads
+
+`ListThreads` needs the `list` flag, and lists by the grant's subject:
+
+- `all`: every thread of the project with no `scope`, or the `scope` it names.
+- `scope`: its own scope, with or without naming it; another scope is `403`.
+- `threadIds`: nothing; a list is `403`.
+
+A thread belongs to the project, not to an agent or a deployment: a thread grant names
+neither and works on every door of the project.
 
 ### Threads and databases
 
@@ -111,7 +120,8 @@ browser ──(thread grant, contextId)──▶ LiveKit node ──(verified pr
 ```
 
 1. The application's backend mints a thread grant for its user: `scope=<user>` to let the
-   browser start and list threads, `threadIds=[...]` to pin it to some.
+   browser start and list that user's threads, `threadIds=[...]` to pin it to some, which
+   cannot list.
 2. The browser sends `message/send` with `Authorization: Bearer <grant>` and the thread
    as `contextId`; with no `contextId`, `create` makes a new thread in the grant's scope.
 3. The node verifies the signature against the project's keys and the `agentEndpoint`
