@@ -117,9 +117,9 @@ class _TTSOptions:
     language: LanguageCode | None
     speech_endpoint: str | None
     deployment_id: str | None
-    prosody: NotGivenOr[ProsodyConfig]
-    style: NotGivenOr[StyleConfig]
-    lexicon_uri: NotGivenOr[str]
+    prosody: NotGivenOr[ProsodyConfig | None]
+    style: NotGivenOr[StyleConfig | None]
+    lexicon_uri: NotGivenOr[str | None]
     auth_token: str | None = None
 
     def get_endpoint_url(self) -> str:
@@ -139,9 +139,9 @@ class TTS(tts.TTS):
         voice: str = "en-US-JennyNeural",
         language: str | None = None,
         sample_rate: int = 24000,
-        prosody: NotGivenOr[ProsodyConfig] = NOT_GIVEN,
-        style: NotGivenOr[StyleConfig] = NOT_GIVEN,
-        lexicon_uri: NotGivenOr[str] = NOT_GIVEN,
+        prosody: NotGivenOr[ProsodyConfig | None] = NOT_GIVEN,
+        style: NotGivenOr[StyleConfig | None] = NOT_GIVEN,
+        lexicon_uri: NotGivenOr[str | None] = NOT_GIVEN,
         speech_key: str | None = None,
         speech_region: str | None = None,
         speech_endpoint: str | None = None,
@@ -178,9 +178,9 @@ class TTS(tts.TTS):
                 "or speech_auth_token & speech_region."
             )
 
-        if is_given(prosody):
+        if is_given(prosody) and prosody is not None:
             prosody.validate()
-        if is_given(style):
+        if is_given(style) and style is not None:
             style.validate()
 
         self._session = http_session
@@ -221,23 +221,28 @@ class TTS(tts.TTS):
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        language: NotGivenOr[str] = NOT_GIVEN,
-        prosody: NotGivenOr[ProsodyConfig] = NOT_GIVEN,
-        style: NotGivenOr[StyleConfig] = NOT_GIVEN,
-        lexicon_uri: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
+        prosody: NotGivenOr[ProsodyConfig | None] = NOT_GIVEN,
+        style: NotGivenOr[StyleConfig | None] = NOT_GIVEN,
+        lexicon_uri: NotGivenOr[str | None] = NOT_GIVEN,
     ) -> None:
+        opts = replace(self._opts)
         if is_given(voice):
-            self._opts.voice = voice
+            opts.voice = voice
         if is_given(language):
-            self._opts.language = LanguageCode(language)
+            opts.language = LanguageCode(language) if language else None
         if is_given(prosody):
-            prosody.validate()
-            self._opts.prosody = prosody
+            if prosody is not None:
+                prosody.validate()
+            opts.prosody = prosody
         if is_given(style):
-            style.validate()
-            self._opts.style = style
+            if style is not None:
+                style.validate()
+            opts.style = style
         if is_given(lexicon_uri):
-            self._opts.lexicon_uri = lexicon_uri
+            opts.lexicon_uri = lexicon_uri
+
+        self._opts = opts
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -269,14 +274,14 @@ class ChunkedStream(tts.ChunkedStream):
         )
         ssml += f'<voice name="{self._opts.voice}">'
 
-        if is_given(self._opts.lexicon_uri):
+        if is_given(self._opts.lexicon_uri) and self._opts.lexicon_uri:
             ssml += f'<lexicon uri="{self._opts.lexicon_uri}"/>'
 
-        if is_given(self._opts.style):
+        if is_given(self._opts.style) and self._opts.style is not None:
             degree = f' styledegree="{self._opts.style.degree}"' if self._opts.style.degree else ""
             ssml += f'<mstts:express-as style="{self._opts.style.style}"{degree}>'
 
-        if is_given(self._opts.prosody):
+        if is_given(self._opts.prosody) and self._opts.prosody is not None:
             p = self._opts.prosody
 
             rate_attr = f' rate="{p.rate}"' if p.rate is not None else ""
@@ -286,7 +291,7 @@ class ChunkedStream(tts.ChunkedStream):
         else:
             ssml += self.input_text
 
-        if is_given(self._opts.style):
+        if is_given(self._opts.style) and self._opts.style is not None:
             ssml += "</mstts:express-as>"
 
         ssml += "</voice></speak>"
