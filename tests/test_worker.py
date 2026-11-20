@@ -851,6 +851,29 @@ async def test_hot_reload_asks_for_a_fresh_token_without_video_agent() -> None:
     assert launched.token == "job-token-for-AJ_reload"
 
 
+async def test_hot_reload_skips_a_job_the_server_has_no_token_for(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A self-hosted server does not keep the job across the restart of its worker."""
+    server = _token_mode_server()
+    await _answer_job_tokens(server, [], error="job is not running on this worker")
+    server._proc_pool = MagicMock(launch_job=AsyncMock())
+
+    running = RunningJobInfo(
+        accept_arguments=JobAcceptArguments(name="", identity="agent-identity", metadata=""),
+        job=agent.Job(id="AJ_reload", room=models.Room(name="reload-room")),
+        url="ws://localhost",
+        token=api.AccessToken("devkey", "secret" * 6).with_identity("agent-identity").to_jwt(),
+        worker_id="AW_test",
+        fake_job=False,
+    )
+    with patch.dict(os.environ, _NO_KEY_ENV), caplog.at_level("WARNING"):
+        await server._reload_jobs([running])
+
+    server._proc_pool.launch_job.assert_not_called()
+    assert "job ended on reload" in caplog.text
+
+
 async def _token_mode_api_entrypoint(ctx: JobContext) -> None:
     await ctx.api.room.list_participants(api.ListParticipantsRequest(room=ctx.job.room.name))
     ctx.shutdown()

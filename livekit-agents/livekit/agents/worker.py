@@ -1454,7 +1454,18 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if isinstance(video := claims.get("video"), dict):
                 video.pop("agent", None)
 
-            resp = await self._create_job_token(aj.job.id, json.dumps(claims))
+            try:
+                resp = await self._create_job_token(aj.job.id, json.dumps(claims))
+            except RuntimeError as e:
+                # a self-hosted LiveKit server does not keep a job across a restart of its
+                # worker, so it has no token for it
+                logger.warning(
+                    "job ended on reload. reload is only supported when LiveKit API key "
+                    "and secret are defined",
+                    extra={"job_id": aj.job.id, "error": str(e)},
+                )
+                continue
+
             running_info = RunningJobInfo(
                 accept_arguments=aj.accept_arguments,
                 job=aj.job,
