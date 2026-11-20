@@ -86,22 +86,25 @@ class _STTOptions:
 def _resolve_lang_tags(language: str, lang_tags: NotGivenOr[list[str] | None]) -> list[str] | None:
     """Work out which `lang_tags` to send, validating against the server's set.
 
-    An explicit ``lang_tags`` wins and is validated strictly. Otherwise the tag is
-    derived from ``language``, and only when that language is one Akshara accepts as
-    a tag — an unrecognized ``language`` sends no hint rather than a request the
-    server would reject outright.
+    Tags are normalized to their base language first, so ``"hi-IN"``, ``"hi_IN"``
+    and ``"Hindi"`` all become ``"hi"``. An explicit ``lang_tags`` wins and is
+    validated strictly. Otherwise the tag is derived from ``language``, and only
+    when that language is one Akshara accepts as a tag — an unrecognized
+    ``language`` sends no hint rather than a request the server would reject
+    outright.
     """
     if is_given(lang_tags):
         if lang_tags is None:
             return None
-        invalid = set(lang_tags) - STT_LANGUAGES
+        invalid = [t for t in lang_tags if LanguageCode(t).language not in STT_LANGUAGES]
         if invalid:
             raise ValueError(
                 f"invalid lang_tags: {sorted(invalid)}. valid tags: {sorted(STT_LANGUAGES)}"
             )
-        return list(lang_tags)
+        return list(dict.fromkeys(LanguageCode(t).language for t in lang_tags))
 
-    return [language] if language in STT_LANGUAGES else None
+    base = LanguageCode(language).language
+    return [base] if base in STT_LANGUAGES else None
 
 
 class STT(stt.STT):
@@ -128,6 +131,8 @@ class STT(stt.STT):
         Args:
             language: Language of the audio, reported back on every transcript. Also
                 supplies the default ``lang_tags`` hint when it is one Akshara accepts.
+                Region tags and names are accepted: ``"hi-IN"`` and ``"Hindi"`` both
+                hint ``"hi"``.
             model: ``"akshara-pro"`` (default) or the base ``"akshara"``.
             lang_tags: Explicit language hints, e.g. ``["hi", "en"]`` for Hindi/English
                 code-mixing. Overrides the tag derived from ``language``; pass ``None``

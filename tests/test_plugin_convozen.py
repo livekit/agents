@@ -178,6 +178,20 @@ def test_stt_lang_tags_derived_from_language() -> None:
     assert STT(api_key="k", language="hi")._opts.lang_tags == ["hi"]
 
 
+def test_stt_region_tagged_language_is_normalized() -> None:
+    """`hi-IN`, `ta_IN` and names like `Hindi` hint the base language."""
+    from livekit.plugins.convozen import STT
+
+    assert STT(api_key="k", language="hi-IN")._opts.lang_tags == ["hi"]
+    assert STT(api_key="k", language="ta_IN")._opts.lang_tags == ["ta"]
+    assert STT(api_key="k", language="Hindi")._opts.lang_tags == ["hi"]
+    assert STT(api_key="k", lang_tags=["hi-IN", "en-IN"])._opts.lang_tags == ["hi", "en"]
+
+    stt = STT(api_key="k", language="en")
+    stt.update_options(language="kn-IN")
+    assert stt._opts.lang_tags == ["kn"]
+
+
 def test_stt_lang_tags_omitted_for_unknown_language() -> None:
     """An unrecognized language sends no hint rather than one the server rejects."""
     from livekit.plugins.convozen import STT
@@ -482,6 +496,36 @@ def test_tts_rejects_unknown_language() -> None:
 
     with pytest.raises(ValueError, match="unsupported language"):
         TTS(api_key="k", language="fr")
+    with pytest.raises(ValueError, match="unsupported language"):
+        TTS(api_key="k", language="mr-IN")
+
+
+def test_tts_region_tagged_language_is_normalized() -> None:
+    """`hi-IN` and `Hindi` are sent to Ragini as `hi`, with that group's voice."""
+    from livekit.plugins.convozen import TTS
+
+    tts = TTS(api_key="k", language="hi-IN")
+    assert tts._opts.to_form("x")["language"] == "hi"
+    assert tts._opts.voice == "shrajay"
+    assert TTS(api_key="k", language="Hindi")._opts.language == "hi"
+
+    tts.update_options(language="ta_IN")
+    assert tts._opts.language == "ta"
+    assert tts._opts.voice == "amaya"
+
+
+def test_language_sets_match_literals() -> None:
+    from typing import get_args
+
+    from livekit.plugins.convozen.models import (
+        STT_LANGUAGES,
+        TTS_LANGUAGES,
+        STTLanguages,
+        TTSLanguages,
+    )
+
+    assert STT_LANGUAGES == set(get_args(STTLanguages))
+    assert TTS_LANGUAGES == set(get_args(TTSLanguages))
 
 
 def test_tts_rejects_empty_voice() -> None:

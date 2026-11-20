@@ -34,6 +34,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    LanguageCode,
     tts,
     utils,
 )
@@ -99,6 +100,18 @@ class _TTSOptions:
         }
 
 
+def _resolve_language(language: str) -> str:
+    """Normalize ``language`` to the base code Ragini expects, e.g. ``"hi-IN"`` → ``"hi"``.
+
+    Raises:
+        ValueError: If the language is not one ragini-v2 serves.
+    """
+    base = LanguageCode(language).language
+    if base not in TTS_LANGUAGES:
+        raise ValueError(f"unsupported language: {language!r}. supported: {sorted(TTS_LANGUAGES)}")
+    return base
+
+
 class TTS(tts.TTS):
     """ConvoZen Ragini text-to-speech.
 
@@ -128,7 +141,8 @@ class TTS(tts.TTS):
                 not reject a voice from the wrong group — it returns an arbitrary one.
             model: Ragini model id. ``"ragini-v2"`` (default) is the only model
                 currently served.
-            language: Language of the text to synthesize.
+            language: Language of the text to synthesize. Region tags and names are
+                accepted and normalized: ``"hi-IN"`` and ``"Hindi"`` both mean ``"hi"``.
             sample_rate: Output rate in Hz. Defaults to 48000, the rate ``ragini-v2``
                 always returns; any other rate is resampled on the client.
             speed: Speaking rate multiplier; 1.0 is the natural pace. Currently
@@ -147,10 +161,7 @@ class TTS(tts.TTS):
             ValueError: If no API key is available, or ``language``/``voice`` is not
                 a value Ragini accepts.
         """
-        if language not in TTS_LANGUAGES:
-            raise ValueError(
-                f"unsupported language: {language!r}. supported: {sorted(TTS_LANGUAGES)}"
-            )
+        language = _resolve_language(language)
         if is_given(voice) and not str(voice).strip():
             raise ValueError("voice cannot be empty")
 
@@ -228,13 +239,9 @@ class TTS(tts.TTS):
         if is_given(model):
             opts.model = model
         if is_given(language):
-            if language not in TTS_LANGUAGES:
-                raise ValueError(
-                    f"unsupported language: {language!r}. supported: {sorted(TTS_LANGUAGES)}"
-                )
-            opts.language = language
+            opts.language = _resolve_language(language)
             if not opts.voice_explicit:
-                opts.voice = TTS_DEFAULT_VOICES[language]
+                opts.voice = TTS_DEFAULT_VOICES[opts.language]
         if is_given(speed):
             opts.speed = speed
         self._opts = opts

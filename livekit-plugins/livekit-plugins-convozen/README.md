@@ -11,6 +11,8 @@ ConvoZen's research write-ups describe the models themselves:
 [Akshara](https://convozen.ai/research/article/akshara) for recognition and
 [Ragini](https://convozen.ai/research/article/ragini) for synthesis.
 
+LiveKit docs: [speech-to-text](https://docs.livekit.io/agents/models/stt/convozen/) and [text-to-speech](https://docs.livekit.io/agents/models/tts/convozen/) (live with the next release).
+
 ## Installation
 
 ```bash
@@ -84,7 +86,7 @@ not.
 convozen.TTS(
     voice="sherin",  # defaults to the language group's default voice
     model="ragini-v2",
-    language="hi",  # en, hi, kn, ta or te
+    language="hi",  # en, hi, kn, ta or te; "hi-IN" or "Hindi" also work
     # sample_rate defaults to 48000, the rate ragini-v2 returns
 )
 ```

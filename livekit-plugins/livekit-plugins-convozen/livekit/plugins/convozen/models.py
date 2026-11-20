@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 # The public ConvoZen developer API. Override with `base_url=` or the
 # CONVOZEN_BASE_URL environment variable when pointing at another deployment.
@@ -41,14 +41,14 @@ TTS_FALLBACK_SAMPLE_RATE = 48000
 
 # Language hints accepted by Akshara's `lang_tags`. The server rejects anything
 # outside this set, so `STT` only forwards a tag that appears here.
-STT_LANGUAGES = frozenset({"bn", "en", "gu", "hi", "kn", "ml", "mr", "ta", "te"})
-
 STTLanguages = Literal["bn", "en", "gu", "hi", "kn", "ml", "mr", "ta", "te"]
+
+STT_LANGUAGES: frozenset[str] = frozenset(get_args(STTLanguages))
 
 # ragini-v2 is deployed for these languages only; anything else is a 400.
 TTSLanguages = Literal["en", "hi", "kn", "ta", "te"]
 
-TTS_LANGUAGES = frozenset({"en", "hi", "kn", "ta", "te"})
+TTS_LANGUAGES: frozenset[str] = frozenset(get_args(TTSLanguages))
 
 # ragini-v2 runs one checkpoint for en/hi and another for kn/ta/te, each with its
 # own voice set. A voice from the other group is not rejected — the server treats
