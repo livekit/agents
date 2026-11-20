@@ -37,9 +37,11 @@ __all__ = [
 
 # SILMA pronunciation hints, e.g. <STAG_PN>92005455</STAG_PN>. These must survive
 # text splitting intact or the server sees a broken tag and reads it literally.
-_STAG = r"<STAG_[A-Z]+>.*?</STAG_[A-Z]+>"
+# A hint is an opening tag, untagged content and the closing tag of the same
+# name. Any other tag (unclosed, mismatched or nested) is stray.
+_STAG = r"<STAG_(?P<stag>[A-Z]+)>(?P<body>(?:(?!</?STAG_).)*?)</STAG_(?P=stag)>"
 _STAG_BLOCK = re.compile(_STAG, re.DOTALL)
-_STAG_INNER = re.compile(r"<STAG_[A-Z]+>(.*?)</STAG_[A-Z]+>", re.DOTALL)
+_MARKUP = re.compile(rf"{_STAG}|</?STAG_[A-Z]+>", re.DOTALL)
 
 # A run of text with no whitespace to break on. Whitespace inside a tag does not
 # count, so a tag and any punctuation touching it stay in one unit.
@@ -121,20 +123,19 @@ class Float32Decoder:
         return b""
 
 
-def _unwrap_oversized_tags(text: str, max_characters: int) -> str:
-    """Drop the markup of any ``<STAG_*>`` block too long for one request.
+def _clean_markup(text: str, max_characters: int) -> str:
+    """Drop stray tags, and the tags of any hint too long for one request.
 
-    Cutting such a block would leave a dangling ``<STAG_...>`` that the model
-    reads out literally, so the hint is dropped and its content kept.
+    Splitting would leave either one as a dangling ``<STAG_...>`` that the
+    model reads out literally. The text inside a dropped hint is kept.
     """
 
-    def unwrap(match: re.Match[str]) -> str:
-        block = match.group(0)
-        if len(block) <= max_characters:
-            return block
-        return _STAG_INNER.sub(r"\1", block)
+    def clean(match: re.Match[str]) -> str:
+        if match["stag"] is None:
+            return ""
+        return match[0] if len(match[0]) <= max_characters else match["body"]
 
-    return _STAG_BLOCK.sub(unwrap, text)
+    return _MARKUP.sub(clean, text)
 
 
 def _split_unit(text: str, start: int, end: int, max_characters: int) -> list[tuple[int, int]]:
@@ -175,9 +176,9 @@ def split_text(text: str, *, max_characters: int = MAX_TEXT_CHARACTERS) -> list[
     is never cut, and a run of text longer than ``max_characters`` with no
     whitespace in it (a very long URL, say) is hard-split as a last resort.
 
-    The one case where the text itself changes is a ``<STAG_*>`` block that is
-    longer than ``max_characters`` on its own: its markup is dropped and its
-    content kept, since half a tag would be read out literally.
+    Text that has to be split loses any stray ``<STAG_*>`` tag, and the tags
+    of any hint longer than ``max_characters``, since half a tag would be
+    read out literally. The text they wrap is kept.
 
     Args:
         text: The text to split.
@@ -192,8 +193,12 @@ def split_text(text: str, *, max_characters: int = MAX_TEXT_CHARACTERS) -> list[
 
     if not text.strip():
         return []
+    if len(text) <= max_characters:
+        return [text]
 
-    text = _unwrap_oversized_tags(text, max_characters)
+    text = _clean_markup(text, max_characters)
+    if not text.strip():
+        return []
     if len(text) <= max_characters:
         return [text]
 

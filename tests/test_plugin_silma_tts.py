@@ -374,6 +374,47 @@ def test_split_text_unwraps_tag_that_cannot_fit() -> None:
     assert not any("STAG" in chunk for chunk in chunks)
 
 
+@pytest.mark.parametrize(
+    ("text", "kept"),
+    [
+        # Nested: the inner hint fits and survives, the outer tags are stray.
+        (
+            "<STAG_URL><STAG_PN>1</STAG_PN>" + "9" * 30 + "</STAG_URL>",
+            "<STAG_PN>1</STAG_PN>" + "9" * 30,
+        ),
+        # Unclosed, with nothing to break on.
+        ("call <STAG_PN>" + "9" * 40 + " now", "call " + "9" * 40 + " now"),
+        # Unclosed, short enough to fit a chunk on its own.
+        ("call <STAG_PN>123 now, " + "please " * 3, "call 123 now, " + "please " * 3),
+        # Mismatched names.
+        ("ring <STAG_PN>920</STAG_EMAIL> " + "soon " * 4, "ring 920 " + "soon " * 4),
+    ],
+)
+def test_split_text_drops_stray_tags(text: str, kept: str) -> None:
+    from livekit.plugins.silma._utils import split_text
+
+    chunks = split_text(text, max_characters=20)
+
+    assert all(chunk.strip() and len(chunk) <= 20 for chunk in chunks)
+    for chunk in chunks:
+        assert chunk.count("<STAG_") == chunk.count("</STAG_")
+    # Only the tags and the whitespace at cuts go missing.
+    assert "".join("".join(chunks).split()) == "".join(kept.split())
+
+
+def test_split_text_keeps_stray_tags_in_text_that_fits() -> None:
+    from livekit.plugins.silma._utils import split_text
+
+    text = "call <STAG_PN>123 now"
+    assert split_text(text, max_characters=250) == [text]
+
+
+def test_split_text_on_markup_only_input() -> None:
+    from livekit.plugins.silma._utils import split_text
+
+    assert split_text("<STAG_PN>" + " " * 30 + "</STAG_EMAIL>", max_characters=20) == []
+
+
 def test_split_text_hard_splits_an_oversized_word() -> None:
     from livekit.plugins.silma._utils import split_text
 
