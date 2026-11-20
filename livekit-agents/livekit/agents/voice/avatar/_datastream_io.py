@@ -31,13 +31,34 @@ class _PlaybackStartedEvent:
     pass
 
 
+class _PlaybackRpcRoutes:
+    """A room's playback RPC handler, routing by caller since avatars can share a room.
+
+    Kept per room: jobs sharing a process can stream to avatars with the same identity.
+    """
+
+    def __init__(self, event: str) -> None:
+        self._event = event
+        self.handlers: dict[str, Callable[[rtc.RpcInvocationData], str]] = {}
+
+    def __call__(self, data: rtc.RpcInvocationData) -> str:
+        if handler := self.handlers.get(data.caller_identity):
+            return handler(data)
+
+        logger.warning(
+            f"{self._event} event received from unexpected participant",
+            extra={
+                "caller_identity": data.caller_identity,
+                "expected_identities": list(self.handlers.keys()),
+            },
+        )
+        return "reject"
+
+
 class DataStreamAudioOutput(AudioOutput):
     """
     AudioOutput implementation that streams audio to a remote avatar worker using LiveKit DataStream.
     """  # noqa: E501
-
-    _playback_finished_handlers: dict[str, Callable[[rtc.RpcInvocationData], str]] = {}
-    _playback_started_handlers: dict[str, Callable[[rtc.RpcInvocationData], str]] = {}
 
     def __init__(
         self,
@@ -300,30 +321,11 @@ class DataStreamAudioOutput(AudioOutput):
         caller_identity: str,
         handler: Callable[[rtc.RpcInvocationData], str],
     ) -> None:
-        cls._playback_finished_handlers[caller_identity] = handler
-
-        if (
-            rpc_handler := room.local_participant._rpc_handlers.get(RPC_PLAYBACK_FINISHED)
-        ) and rpc_handler == cls._playback_finished_rpc_handler:
-            return
-
-        room.local_participant.register_rpc_method(
-            RPC_PLAYBACK_FINISHED, cls._playback_finished_rpc_handler
-        )
-
-    @classmethod
-    def _playback_finished_rpc_handler(cls, data: rtc.RpcInvocationData) -> str:
-        if handler := cls._playback_finished_handlers.get(data.caller_identity):
-            return handler(data)
-        else:
-            logger.warning(
-                "playback finished event received from unexpected participant",
-                extra={
-                    "caller_identity": data.caller_identity,
-                    "expected_identities": list(cls._playback_finished_handlers.keys()),
-                },
-            )
-            return "reject"
+        routes = room.local_participant._rpc_handlers.get(RPC_PLAYBACK_FINISHED)
+        if not isinstance(routes, _PlaybackRpcRoutes):
+            routes = _PlaybackRpcRoutes("playback finished")
+            room.local_participant.register_rpc_method(RPC_PLAYBACK_FINISHED, routes)
+        routes.handlers[caller_identity] = handler
 
     @classmethod
     def _register_playback_started_rpc(
@@ -333,30 +335,11 @@ class DataStreamAudioOutput(AudioOutput):
         caller_identity: str,
         handler: Callable[[rtc.RpcInvocationData], str],
     ) -> None:
-        cls._playback_started_handlers[caller_identity] = handler
-
-        if (
-            rpc_handler := room.local_participant._rpc_handlers.get(RPC_PLAYBACK_STARTED)
-        ) and rpc_handler == cls._playback_started_rpc_handler:
-            return
-
-        room.local_participant.register_rpc_method(
-            RPC_PLAYBACK_STARTED, cls._playback_started_rpc_handler
-        )
-
-    @classmethod
-    def _playback_started_rpc_handler(cls, data: rtc.RpcInvocationData) -> str:
-        if handler := cls._playback_started_handlers.get(data.caller_identity):
-            return handler(data)
-        else:
-            logger.warning(
-                "playback started event received from unexpected participant",
-                extra={
-                    "caller_identity": data.caller_identity,
-                    "expected_identities": list(cls._playback_started_handlers.keys()),
-                },
-            )
-            return "reject"
+        routes = room.local_participant._rpc_handlers.get(RPC_PLAYBACK_STARTED)
+        if not isinstance(routes, _PlaybackRpcRoutes):
+            routes = _PlaybackRpcRoutes("playback started")
+            room.local_participant.register_rpc_method(RPC_PLAYBACK_STARTED, routes)
+        routes.handlers[caller_identity] = handler
 
 
 class DataStreamAudioReceiver(AudioReceiver):
