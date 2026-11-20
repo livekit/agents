@@ -58,7 +58,6 @@ async def sink(
         yield output, room
     finally:
         await asyncio.gather(*output._tasks)
-        ds.DataStreamAudioOutput._playback_finished_handlers.pop("avatar", None)
 
 
 @pytest.mark.parametrize("clear_buffer_timeout", [None])
@@ -543,6 +542,45 @@ async def test_clear_fallback_releases_waiter_and_preserves_next_reply(
     _finish(output)
     event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
     assert not event.interrupted
+
+
+@pytest.mark.parametrize("method", [ds.RPC_PLAYBACK_FINISHED, ds.RPC_PLAYBACK_STARTED])
+async def test_playback_rpc_reaches_the_output_in_its_own_room(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    monkeypatch.setattr(ds.utils, "wait_for_participant", AsyncMock())
+    outputs, rpc_methods, started = [], [], []
+    for _ in range(2):
+        room = MagicMock()
+        room.isconnected.return_value = True
+        room.local_participant._rpc_handlers = methods = {}
+        room.local_participant.register_rpc_method.side_effect = methods.__setitem__
+        room.local_participant.stream_bytes = AsyncMock(
+            return_value=MagicMock(spec=rtc.ByteStreamWriter, write=AsyncMock(), aclose=AsyncMock())
+        )
+        output = ds.DataStreamAudioOutput(
+            room, destination_identity="avatar", wait_playback_start=True
+        )
+        await output._start_task()
+        events: list = []
+        output.on("playback_started", events.append)
+        await output.capture_frame(_frame())
+        output.flush()
+        outputs.append(output)
+        rpc_methods.append(methods)
+        started.append(events)
+
+    data = MagicMock(spec=rtc.RpcInvocationData)
+    data.caller_identity = "avatar"
+    data.payload = json.dumps({"playback_position": 0.01, "interrupted": False})
+    for methods in rpc_methods:
+        assert methods[method](data) == "ok"
+
+    if method == ds.RPC_PLAYBACK_FINISHED:
+        assert [o._pending_playback_count for o in outputs] == [0, 0]
+    else:
+        assert [len(e) for e in started] == [1, 1]
+    await asyncio.gather(*outputs[0]._tasks, *outputs[1]._tasks)
 
 
 # -- DataStreamAudioReceiver: a lost stream trailer must not wedge later segments; a new stream
