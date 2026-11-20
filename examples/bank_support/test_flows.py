@@ -167,3 +167,13 @@ def test_tool_sentences_say_money_in_words():
 def test_every_change_is_confirmed_first():
     writes = [name for name, rule in CONTRACT.rules.items() if rule.write]
     assert writes and all(CONTRACT.rules[name].confirm for name in writes)
+
+
+def test_an_allowed_transfer_reports_the_limit_left_after_it():
+    bank = FakeBank.seeded()
+    checking = next(a for a in bank.accounts("c_1") if a.kind == "checking")
+    ok = transfer_check(bank, checking.id, 500.0)
+    assert ok["limit_left_after_transfer"] == bank.DAILY_LIMIT - 500.0
+    assert "remaining_limit" not in ok
+    over = transfer_check(bank, checking.id, bank.DAILY_LIMIT + 1)
+    assert over["limit_left_today"] == bank.DAILY_LIMIT
