@@ -309,15 +309,18 @@ class LLM(llm.LLM):
             cached_content=cached_content,
             media_resolution=media_resolution,
         )
-        # genai only reads the transport from client-level options (#7987): force httpx so the
-        # timeout bounds chunk silence, not the whole request.
+        # use httpx, whose timeout limits each read and not the total request time like aiohttp's;
+        # a client without an explicit transport keeps HTTPS_PROXY/NO_PROXY from the environment
         client_http_options = (
             http_options.model_copy() if is_given(http_options) else types.HttpOptions()
         )
-        client_async_args = dict(client_http_options.async_client_args or {})
-        if "transport" not in client_async_args:
-            client_async_args["transport"] = httpx.AsyncHTTPTransport()
-            client_http_options.async_client_args = client_async_args
+        self._httpx_client: httpx.AsyncClient | None = None
+        if (
+            "transport" not in (client_http_options.async_client_args or {})
+            and client_http_options.httpx_async_client is None
+        ):
+            self._httpx_client = httpx.AsyncClient()
+            client_http_options.httpx_async_client = self._httpx_client
         self._client = Client(
             api_key=gemini_api_key,
             vertexai=use_vertexai,
@@ -549,6 +552,9 @@ class LLM(llm.LLM):
 
         try:
             await self._client.aio.aclose()
+            # genai leaves a caller-supplied httpx client open
+            if self._httpx_client is not None:
+                await self._httpx_client.aclose()
         except Exception:
             logger.warning("failed to close the genai client", exc_info=True)
 

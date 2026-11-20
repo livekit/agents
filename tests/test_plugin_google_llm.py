@@ -17,7 +17,7 @@ _llms: list[LLM] = []
 
 @pytest.fixture(autouse=True)
 async def _close_llms(monkeypatch: pytest.MonkeyPatch):
-    # PR #7994: forced httpx transport makes genai's httpx client close nondeterministically at GC; close here.
+    # PR #7994: forced httpx client makes genai's httpx client close nondeterministically at GC; close here.
     orig = LLM.__init__
 
     def _tracking_init(self: LLM, *args: object, **kwargs: object) -> None:
@@ -345,8 +345,8 @@ class TestCachedContentRequestSuppression:
         a healthy Gemini answer streaming for longer than the read timeout is killed
         mid-sentence with a 504 or a CancelledError. The other plugins pass
         conn_options.timeout to httpx, where it bounds the silence between chunks. The
-        client must (a) force the httpx transport at CLIENT level (genai reads
-        async_client_args from client options only, see google.genai._api_client._use_aiohttp)
+        client must (a) force httpx at CLIENT level (genai reads
+        the transport choice from client options only, see google.genai._api_client._use_aiohttp)
         so the timeout keeps read-timeout semantics, and (b) preset X-Server-Timeout with
         the long-decode ceiling so the header does not re-introduce a server-side deadline
         derived from the read timeout."""
