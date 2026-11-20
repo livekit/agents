@@ -35,6 +35,7 @@ class _FakeSocket:
 class _FakeAgentSession:
     def __init__(self) -> None:
         self.shutdown_drain: list[bool] = []
+        self.current_agent = SimpleNamespace(realtime_llm_session=None)
 
     def shutdown(self, *, drain: bool = True) -> None:
         self.shutdown_drain.append(drain)
@@ -59,6 +60,7 @@ async def test_normal_end_shuts_down_the_agent_session_without_an_error(
     agent_session: _FakeAgentSession, socket: _FakeSocket, reason: str
 ) -> None:
     session = RealtimeModel(api_key="test").session()
+    agent_session.current_agent.realtime_llm_session = session
     errors: list[llm.RealtimeModelError] = []
     ended: list[PhonicConversationEndedEvent] = []
     session.on("error", errors.append)
@@ -71,6 +73,24 @@ async def test_normal_end_shuts_down_the_agent_session_without_an_error(
         assert agent_session.shutdown_drain == [True]
     finally:
         await session.aclose()
+
+
+async def test_end_of_another_sessions_conversation_leaves_the_primary_session_running(
+    agent_session: _FakeAgentSession,
+) -> None:
+    primary_rt_session = RealtimeModel(api_key="test").session()
+    other_rt_session = RealtimeModel(api_key="test").session()
+    agent_session.current_agent.realtime_llm_session = primary_rt_session
+    ended: list[PhonicConversationEndedEvent] = []
+    other_rt_session.on("phonic_conversation_ended", ended.append)
+    try:
+        await other_rt_session._recv_task(_FakeSocket(close_code=4505))  # type: ignore[arg-type]
+
+        assert [ev.reason for ev in ended] == ["time_limit_reached"]
+        assert agent_session.shutdown_drain == []
+    finally:
+        await primary_rt_session.aclose()
+        await other_rt_session.aclose()
 
 
 async def test_no_input_timeout_is_one_typed_unrecoverable_error(

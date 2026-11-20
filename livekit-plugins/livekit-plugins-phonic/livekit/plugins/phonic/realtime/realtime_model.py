@@ -1592,14 +1592,18 @@ class RealtimeSession(llm.RealtimeSession):
 
         # End the agent session the same way an app-initiated shutdown would, letting the
         # final reply play out. Whether the room is deleted is left to the room options.
+        # Only the primary session is reachable, so another session in the job (such as a
+        # warm transfer's) is left to the app via the event.
         job_ctx = get_job_context(required=False)
         if job_ctx is None:
             return
         try:
             agent_session = job_ctx.primary_session
+            owns_conversation = agent_session.current_agent.realtime_llm_session is self
         except RuntimeError:
             return
-        agent_session.shutdown(drain=True)
+        if owns_conversation:
+            agent_session.shutdown(drain=True)
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:
         self.emit(
