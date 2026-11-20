@@ -182,4 +182,12 @@ pub mod log_keys {
     pub const RETRY_ATTEMPT: &str = "lk.retry.attempt";
     /// The seconds until the retry.
     pub const RETRY_DELAY: &str = "lk.retry.delay";
+    /// The agent-db database a storage connection serves.
+    pub const AGENTDB_DATABASE_ID: &str = "lk.agentdb.database_id";
+    /// The connection an agent-db error answer names, as agent-db's own log lines carry it.
+    pub const AGENTDB_CONN_REF: &str = "lk.agentdb.conn_ref";
+    /// The request's id on its agent-db connection, as agent-db's own log lines carry it.
+    pub const AGENTDB_REQUEST_ID: &str = "lk.agentdb.request_id";
+    /// An agent-db error answer's code, by name.
+    pub const AGENTDB_CODE: &str = "lk.agentdb.code";
 }

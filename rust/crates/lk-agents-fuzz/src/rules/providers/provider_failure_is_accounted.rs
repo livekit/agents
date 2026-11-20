@@ -23,8 +23,17 @@ impl Rule for ProviderFailureIsAccounted {
     const CONTRACT: Contract = Contract {
         id: "provider_failure_is_accounted",
         guarantee: "Every injected model failure is retried, surfaced on its speech or as an error event naming it, or followed by the session closing.",
-        examples: &[failure_then_retry, failure_then_failed_speech, failure_behind_a_hung_read],
-        counterexamples: &[failure_swallowed, failure_beside_another_streams_hung_read],
+        examples: &[
+            failure_then_retry,
+            failure_then_failed_speech,
+            failure_behind_a_hung_read,
+            failure_queued_behind_the_next_read,
+        ],
+        counterexamples: &[
+            failure_swallowed,
+            failure_beside_another_streams_hung_read,
+            failure_read_before_a_later_hang,
+        ],
         probe: None,
     };
 
@@ -68,8 +77,9 @@ impl Rule for ProviderFailureIsAccounted {
             // Only the driver's own error close counts as closing over the failure: the host closing
             // the session at the end of every run says nothing about what the driver did with it.
             let closing = internal.error_close_requested_after(sent.at);
-            // Its stream's read hung before the failure came: nothing reads it (seed 5055).
-            let unread = r.read_hung(Kind::Chat, chat.nth).is_some_and(|hung| hung <= sent.at);
+            // Its stream's read hung before the failure was read: before it came (seed 5055), or
+            // in the turn that would have read it, queued behind the hung read (seed 2169).
+            let unread = r.read_hung(Kind::Chat, chat.nth).is_some_and(|hung| hung <= end);
 
             check.expect(
                 speech,
@@ -119,6 +129,26 @@ fn failure_behind_a_hung_read() -> Recording {
 /// Another stream's read hung; this one's failure was read and swallowed.
 fn failure_beside_another_streams_hung_read() -> Recording {
     failure_after_a_hung_read(1)
+}
+
+/// The failure was queued; the read in the driver's turn after it hung, the failure behind it.
+fn failure_queued_behind_the_next_read() -> Recording {
+    failure_then_a_hang(|turn_ended| turn_ended - 1)
+}
+
+/// The driver had its turn to read the failure and swallowed it; the stream hung only later.
+fn failure_read_before_a_later_hang() -> Recording {
+    failure_then_a_hang(|turn_ended| turn_ended + 10)
+}
+
+/// A failed request whose driver turn after the failure ends with the next input, and a hang of
+/// its stream's read at the sequence `hung` picks from that end.
+fn failure_then_a_hang(hung: fn(u64) -> u64) -> Recording {
+    let next = Input::Advance { ms: crate::input::Millis(1) };
+    let mut r = failed_request(4).sent(next).speech(4, Handle::finished()).done();
+    let turn_ended = r.inputs_view().sent().last().expect("the turn's end was sent").at.seq;
+    r.record_read_hung(Observed::at(hung(turn_ended), 0), Kind::Chat, 0);
+    r
 }
 
 fn failure_after_a_hung_read(hung: u32) -> Recording {

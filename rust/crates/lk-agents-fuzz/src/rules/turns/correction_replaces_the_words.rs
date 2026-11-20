@@ -1,5 +1,6 @@
 use lk_agents_abi::{ChatItem, Role, SpeechEvent, SpeechEventType};
 use lk_agents_voice::agent_session::machine::activity::scheduling::{SpeechId, SpeechKind};
+use lk_agents_voice::agent::Source;
 use lk_agents_voice::events::{SessionEvent, SpeechOutcome, UserTranscriptEvent};
 use lk_agents_voice::trace::{
     GenerationStep, InputStep, InterruptCause, InterruptStep, SpeechStep, Step, TurnStep,
@@ -18,7 +19,11 @@ impl Rule for CorrectionReplacesTheWords {
     const CONTRACT: Contract = Contract {
         id: "correction_replaces_the_words",
         guarantee: "The final of an utterance whose interim a committed turn took replaces those words in that turn's user message, as no turn of its own, and an empty final changes nothing; a reply none of which was heard is made again from the corrected record, and one partly heard plays on.",
-        examples: &[corrected_before_the_reply_played, corrected_while_the_reply_plays],
+        examples: &[
+            corrected_before_the_reply_played,
+            corrected_while_the_reply_plays,
+            corrected_beside_a_generate_reply,
+        ],
         counterexamples: &[
             correction_dropped,
             empty_final_corrected,
@@ -51,15 +56,15 @@ impl Rule for CorrectionReplacesTheWords {
 fn corrected(
     r: &Recording,
     check: &mut Check,
-    messages: &[(Observed, String, String)],
+    messages: &[UserMessage],
     held: &str,
     at: Observed,
     text: &str,
 ) {
-    let last = messages.iter().rev().find(|(_, id, _)| id == held);
+    let last = messages.iter().rev().find(|m| m.id == held);
     check.expect(
         Subject::Session,
-        last.is_some_and(|(_, _, said)| said.contains(text)),
+        last.is_some_and(|m| m.text.contains(text)),
         format!("the correction {text:?} never reached {held}"),
     );
     // A turn saved after the correction saves the whole conversation: its thread holds the same
@@ -73,11 +78,13 @@ fn corrected(
             format!("the thread saved {held} as {saved:?}, not with {text:?}"),
         );
     }
+    // Only a user turn's message can be the correction's own: one a host command added in the same
+    // instant (`generate_reply(user_input=)`) is that command's.
     let within = |o: &Observed| o.seq >= at.seq && o.at_ms == at.at_ms;
-    let first_seen = |id: &str| messages.iter().find(|(_, m, _)| m == id).map(|(o, ..)| *o);
+    let first_seen = |id: &str| messages.iter().find(|m| m.id == id).map(|m| m.at);
     check.expect(
         Subject::Session,
-        !messages.iter().any(|(o, id, _)| within(o) && first_seen(id) == Some(*o)),
+        !messages.iter().any(|m| m.turn && within(&m.at) && first_seen(&m.id) == Some(m.at)),
         format!("the correction {text:?} added a user message of its own"),
     );
     reply_after(r, check, messages, held, at, text);
@@ -188,17 +195,31 @@ fn saved_text(r: &Recording, id: &str) -> Option<String> {
     })
 }
 
-/// Every version of every user message the host was shown: when, its id and its text.
-fn user_messages(r: &Recording) -> Vec<(Observed, String, String)> {
+/// One version of a user message the host was shown.
+struct UserMessage {
+    at: Observed,
+    id: String,
+    text: String,
+    /// A user turn made it, not a host command.
+    turn: bool,
+}
+
+/// Every version of every user message the host was shown.
+fn user_messages(r: &Recording) -> Vec<UserMessage> {
     r.journal()
         .iter()
         .filter_map(|(o, step)| match step {
-            Step::Emitted(SessionEvent::ConversationItemAdded { item, .. }) => match &**item {
-                ChatItem::Message(m) if m.role == Role::User => {
-                    Some((*o, m.id.clone(), m.raw_text_content().unwrap_or_default()))
+            Step::Emitted(SessionEvent::ConversationItemAdded { item, source, .. }) => {
+                match &**item {
+                    ChatItem::Message(m) if m.role == Role::User => Some(UserMessage {
+                        at: *o,
+                        id: m.id.clone(),
+                        text: m.raw_text_content().unwrap_or_default(),
+                        turn: matches!(source, Source::UserTurn { .. }),
+                    }),
+                    _ => None,
                 }
-                _ => None,
-            },
+            }
             _ => None,
         })
         .collect()
@@ -209,15 +230,15 @@ fn user_messages(r: &Recording) -> Vec<(Observed, String, String)> {
 fn reply_after(
     r: &Recording,
     check: &mut Check,
-    messages: &[(Observed, String, String)],
+    messages: &[UserMessage],
     held: &str,
     at: Observed,
     text: &str,
 ) {
     let within = |o: &Observed| o.seq >= at.seq && o.at_ms == at.at_ms;
-    let Some((committed, ..)) = messages.iter().find(|(_, id, _)| id == held) else { return };
+    let Some(committed) = messages.iter().find(|m| m.id == held).map(|m| m.at) else { return };
     // A newer turn since: the reply being made is that one's.
-    if messages.iter().any(|(o, id, _)| o.seq > committed.seq && o.seq < at.seq && id != held) {
+    if messages.iter().any(|m| m.at.seq > committed.seq && m.at.seq < at.seq && m.id != held) {
         return;
     }
     let journal = r.journal();
@@ -283,16 +304,21 @@ fn reply_after(
         }
         _ => None,
     }) {
-        let read = messages.iter().rev().find(|(o, id, _)| id == held && o.seq <= asked.seq);
+        let read = messages.iter().rev().find(|m| m.id == held && m.at.seq <= asked.seq);
         check.expect(
             Subject::Speech(again.0),
-            ids.iter().any(|id| id == held) && read.is_some_and(|(_, _, said)| said.contains(text)),
+            ids.iter().any(|id| id == held) && read.is_some_and(|m| m.text.contains(text)),
             format!("the reply made again did not read {text:?}"),
         );
     }
 }
 
 fn user(id: &str, text: &str) -> Step {
+    let turn = Source::UserTurn { turn: lk_agents_voice::audio_recognition::TurnId(1) };
+    user_from(id, text, turn)
+}
+
+fn user_from(id: &str, text: &str, source: Source) -> Step {
     Step::Emitted(SessionEvent::ConversationItemAdded {
         item: Box::new(ChatItem::Message(lk_agents_abi::ChatMessage::text(
             id,
@@ -301,9 +327,7 @@ fn user(id: &str, text: &str) -> Step {
             std::time::UNIX_EPOCH,
         ))),
         agent: "agent".into(),
-        source: lk_agents_voice::agent::Source::UserTurn {
-            turn: lk_agents_voice::audio_recognition::TurnId(1),
-        },
+        source,
         visibility: lk_agents_voice::agent::Visibility::Both,
     })
 }
@@ -378,12 +402,31 @@ fn committed() -> Authored {
 
 /// The late final rewrites the message and the reply is made again from it.
 fn corrected_before_the_reply_played() -> Recording {
+    corrected_and_made_again().journal(requested(2, &["item_1"])).done()
+}
+
+fn corrected_and_made_again() -> Authored {
     committed()
         .sent(said("hello there", true))
         .journal(corrected_event("hello there"))
         .journal_at_once(user("item_1", "hello there"))
         .journal_at_once(interrupted(1))
         .journal_at_once(created(2))
+}
+
+/// A `generate_reply(user_input=)` lands in the instant of the correction: its message is the
+/// command's, not one the correction added (seed 1729).
+fn corrected_beside_a_generate_reply() -> Recording {
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
+    corrected_and_made_again()
+        .journal_at_once(Step::Emitted(SessionEvent::SpeechCreated {
+            speech: SpeechId(3),
+            kind: SpeechKind::GenerateReply,
+            user_initiated: true,
+        }))
+        .journal_at_once(user_from("item_2", "my number is 555", Source::UserInput {
+            speech: SpeechId(3),
+        }))
         .journal(requested(2, &["item_1"]))
         .done()
 }

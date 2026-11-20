@@ -19,6 +19,7 @@ use super::TokenMinter;
 use super::rows::{Results, statement};
 use crate::deadline::REQUEST_WAIT;
 use crate::sql::{BatchResult, Row, Statement, StatementResult};
+use crate::telemetry::log_keys;
 use lk_agents_abi::storage::agentdb_error::ErrorCode;
 use lk_agents_abi::storage::thread::{RETRY_MAX_BACKOFF, RETRY_MIN_BACKOFF};
 
@@ -121,6 +122,16 @@ impl WsdbError {
             _ => None,
         }
     }
+}
+
+/// The connection an agent-db error description names in the `(conn <ref>, request <id>)` that
+/// ends it, the one place that text is read: only when it names `request`, the id this client
+/// gave the request, and only for logs, never for a decision.
+fn conn_ref(description: &str, request: u32) -> Option<&str> {
+    let (_, named) = description.rsplit_once(" (conn ")?;
+    let (conn, id) = named.strip_suffix(')')?.split_once(", request ")?;
+    let names_it = id.parse() == Ok(request) && !conn.is_empty() && !conn.contains([' ', ',']);
+    names_it.then_some(conn)
 }
 
 /// The largest frame either way, as the protocol fixes it.
@@ -522,6 +533,7 @@ impl Conn {
         let ok = match resp.message {
             Some(pb::server_message::Message::HelloOk(ok)) => ok,
             Some(pb::server_message::Message::Error(e)) => {
+                self.log_answer(&e, resp.request_id);
                 return Err(WsdbError::server(e));
             }
             other => {
@@ -661,6 +673,7 @@ impl Conn {
             (Some(pb::server_message::Message::Error(e)), id)
                 if ErrorCode(e.code) == ErrorCode::WRONG_SHARD_SERVER =>
             {
+                self.log_answer(e, id);
                 if let Some(ready) = ready {
                     ready.set(false);
                 }
@@ -689,7 +702,7 @@ impl Conn {
             }
             return;
         }
-        log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb request {id} answered past its window: cancelled");
+        log::warn!(target: lk_agents_abi::LOG_TARGET, (log_keys::AGENTDB_DATABASE_ID) = self.0.opts.database_id.as_str(); "agentdb request {id} answered past its window: cancelled");
         if let Some(pending) = st.pending.remove(&id)
             && pending.answers.try_send(Answer::Overrun).is_err()
         {
@@ -733,7 +746,7 @@ impl Conn {
                 .map(|p| p.answers.clone())
                 .collect()
         };
-        log::info!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb database deleted: connection closed");
+        log::info!(target: lk_agents_abi::LOG_TARGET, (log_keys::AGENTDB_DATABASE_ID) = self.0.opts.database_id.as_str(); "agentdb database deleted: connection closed");
         // closed first, so a drained request's resend finds the notice
         self.close();
         for answers in unanswered {
@@ -764,7 +777,7 @@ impl Conn {
         drop(st);
         self.0.settled.modify(|settled| settled.remove(&generation));
         if let Some(cause) = cause {
-            log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb connection lost: {cause}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, (log_keys::AGENTDB_DATABASE_ID) = self.0.opts.database_id.as_str(); "agentdb connection lost: {cause}");
         }
     }
 
@@ -959,11 +972,35 @@ impl Conn {
             Some(Answer::Drained) => Err(WsdbError::Drained),
             Some(Answer::Overrun) => Err(WsdbError::Overrun),
             Some(Answer::Frame(pb::ServerMessage {
+                request_id,
                 message: Some(pb::server_message::Message::Error(e)),
-                ..
-            })) => Err(WsdbError::server(e)),
+            })) => {
+                self.log_answer(&e, request_id);
+                Err(WsdbError::server(e))
+            }
             Some(Answer::Frame(resp)) => Ok(resp),
         }
+    }
+
+    /// Logs request `request`'s error answer with the connection and request agent-db's own line
+    /// for it names, so the description its caller reports maps to that line: an answer that may
+    /// have applied at warn, a refusal sent again at info, one its caller hears at debug.
+    fn log_answer(&self, error: &pb::Error, request: u32) {
+        let code = ErrorCode(error.code);
+        let level = match code {
+            _ if code.maybe_applied() => log::Level::Warn,
+            _ if code.retryable() => log::Level::Info,
+            _ => log::Level::Debug,
+        };
+        log::log!(
+            target: lk_agents_abi::LOG_TARGET,
+            level,
+            (log_keys::AGENTDB_DATABASE_ID) = self.0.opts.database_id.as_str(),
+            (log_keys::AGENTDB_CONN_REF) = conn_ref(&error.description, request),
+            (log_keys::AGENTDB_REQUEST_ID) = request,
+            (log_keys::AGENTDB_CODE) = code.to_string().as_str();
+            "agentdb request {request} answered {code}"
+        );
     }
 
     fn observe_tip(&self, tip: i64) {

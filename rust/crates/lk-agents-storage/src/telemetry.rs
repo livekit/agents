@@ -9,6 +9,7 @@ use lk_agents_abi::telemetry::health::{
     STUCK_PARTITION_WAIT, StorageWriteUncertain, TeardownOverrun,
 };
 pub(crate) use lk_agents_abi::telemetry::health::{PartitionKind, StorageWrite, TeardownStage};
+pub(crate) use lk_agents_abi::telemetry::spans::common::log_keys;
 use lk_agents_abi::{Clock, LOG_TARGET};
 use parking_lot::Mutex;
 

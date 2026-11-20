@@ -736,3 +736,90 @@ async fn cloud_thread_listing_caps_pages_and_refuses_oldest_first() {
     assert!(heads[0].contains("page.pageSize=50") && !heads[0].contains("scope="), "{}", heads[0]);
     assert!(heads[1].contains("page.pageSize=100"), "{}", heads[1]);
 }
+
+/// Catches: an agent-db error answer's `(conn <ref>, request <id>)` lost on the caller's error or
+/// missing from the client's log line, so a customer's error text maps to no agent-db line. A
+/// refused read keeps it on its error, and its line names the connection and the request id the
+/// client sent.
+#[tokio::test]
+async fn an_error_answer_names_its_connection_and_request_on_the_error_and_the_log() {
+    use crate::telemetry::log_keys;
+    fn refused(m: &connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage> {
+        if is_query(m) {
+            let description = format!("no such table: t (conn k3x9, request {})", m.request_id);
+            return vec![connection::tests::error(ErrorCode::SQL_ERROR, &description)];
+        }
+        connection::tests::script(m)
+    }
+    logs::capture();
+    let (pooled, seen) = pooled(refused).await;
+    let error = pooled.query(Statement::raw("SELECT * FROM t")).await.unwrap_err();
+    let request = seen.lock().iter().find(|m| is_query(m)).unwrap().request_id;
+    let named = format!("(conn k3x9, request {request})");
+    assert!(matches!(&error, StorageError::Invalid(m) if m.ends_with(&named)), "{error:?}");
+    let line = logs::naming("k3x9").expect("the answer's log line");
+    assert_eq!(line.field(log_keys::AGENTDB_REQUEST_ID), Some(request.to_string().as_str()));
+    assert_eq!(line.field(log_keys::AGENTDB_DATABASE_ID), Some("DB_1"));
+    assert_eq!(line.field(log_keys::AGENTDB_CODE), Some("sql_error"));
+    pooled.conn.aclose().await;
+}
+
+/// The `log` lines naming an agent-db connection, with their key-values as text.
+mod logs {
+    use crate::telemetry::log_keys;
+    use parking_lot::Mutex;
+
+    pub(super) struct Line(Vec<(String, String)>);
+
+    impl Line {
+        pub(super) fn field(&self, key: &str) -> Option<&str> {
+            self.0.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+        }
+    }
+
+    static LINES: Mutex<Vec<Line>> = Mutex::new(Vec::new());
+
+    struct Fields(Vec<(String, String)>);
+
+    impl<'kvs> log::kv::VisitSource<'kvs> for Fields {
+        fn visit_pair(
+            &mut self,
+            key: log::kv::Key<'kvs>,
+            value: log::kv::Value<'kvs>,
+        ) -> Result<(), log::kv::Error> {
+            self.0.push((key.to_string(), value.to_string()));
+            Ok(())
+        }
+    }
+
+    struct Capture;
+
+    impl log::Log for Capture {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record<'_>) {
+            let mut fields = Fields(Vec::new());
+            if record.key_values().visit(&mut fields).is_ok()
+                && fields.0.iter().any(|(k, _)| k == log_keys::AGENTDB_CONN_REF)
+            {
+                LINES.lock().push(Line(fields.0));
+            }
+        }
+        fn flush(&self) {}
+    }
+
+    /// Makes the capture the test process's logger.
+    pub(super) fn capture() {
+        if log::set_logger(&Capture).is_ok() {
+            log::set_max_level(log::LevelFilter::Trace);
+        }
+    }
+
+    /// The line naming connection `conn_ref`, taken out.
+    pub(super) fn naming(conn_ref: &str) -> Option<Line> {
+        let mut lines = LINES.lock();
+        let i = lines.iter().position(|l| l.field(log_keys::AGENTDB_CONN_REF) == Some(conn_ref))?;
+        Some(lines.remove(i))
+    }
+}
