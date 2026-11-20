@@ -24,6 +24,7 @@ from . import responses  # isort: skip  # must follow .llm
 from .stt import STT, STTModels
 from .tts import TTS, FallbackActivatedEvent, TTSModels
 from .vad import VAD, VADModels
+from .watermark import WatermarkCheck, WatermarkDetector, WatermarkProvider, WatermarkResult
 
 if TYPE_CHECKING:
     from .avatar import AvatarSession, LemonSliceOptions
@@ -63,6 +64,10 @@ __all__ = [
     "LLMModels",
     "InferenceClass",
     "VADModels",
+    "WatermarkCheck",
+    "WatermarkDetector",
+    "WatermarkProvider",
+    "WatermarkResult",
     "AdaptiveInterruptionDetector",
     "InterruptionDetectionError",
     "OverlappingSpeechEvent",
