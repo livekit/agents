@@ -23,8 +23,14 @@ pytestmark = pytest.mark.unit
 def bare_stream() -> rtzr_stt.SpeechStream:
     stream = object.__new__(rtzr_stt.SpeechStream)
     stream._input_ch = SimpleNamespace(start_time_offset=7.0)
-    stream._rtzr_stt = SimpleNamespace(_params=SimpleNamespace(language=LanguageCode("ko")))
+    stream._language = LanguageCode("ko")
     return stream
+
+
+@pytest.fixture
+def rtzr_env(monkeypatch) -> None:
+    monkeypatch.setenv("RTZR_CLIENT_ID", "id")
+    monkeypatch.setenv("RTZR_CLIENT_SECRET", "secret")
 
 
 @pytest.fixture
@@ -37,6 +43,72 @@ def clock(monkeypatch) -> ReconnectClock:
     )
     monkeypatch.setattr(rtzr_stt, "RTZROpenAPIClient", lambda **kwargs: client)
     return clock
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "model", "language"),
+    [
+        ({}, "sommers_ko", "ko"),
+        ({"model": "sommers_ja"}, "sommers_ja", "ja"),
+        ({"language": "ja"}, "sommers_ja", "ja"),
+        ({"language": "ja-JP"}, "sommers_ja", "ja"),
+        ({"model": "sommers_ja", "language": "ko"}, "sommers_ja", "ja"),
+        ({"model": "custom_model", "language": "en"}, "custom_model", "en"),
+    ],
+)
+async def test_transcript_language_follows_model(rtzr_env, kwargs, model, language):
+    provider = rtzr_stt.STT(**kwargs)
+    stream = provider.stream()
+    await stream.aclose()
+
+    assert provider.model == model
+    assert stream._model_name == model
+    assert stream._language == LanguageCode(language)
+
+
+@pytest.mark.parametrize(
+    ("stt_kwargs", "stream_language", "model", "language"),
+    [
+        ({}, "ja", "sommers_ja", "ja"),
+        ({"model": "sommers_ja"}, "ko-KR", "sommers_ko", "ko"),
+        ({"model": "sommers_ja"}, "fr", "sommers_ja", "ja"),
+    ],
+)
+async def test_stream_language_selects_model(
+    rtzr_env, stt_kwargs, stream_language, model, language
+):
+    provider = rtzr_stt.STT(**stt_kwargs)
+    stream = provider.stream(language=stream_language)
+    await stream.aclose()
+
+    assert stream._model_name == model
+    assert stream._language == LanguageCode(language)
+
+
+async def test_stream_language_is_sent_and_labeled(rtzr_env, monkeypatch):
+    configs: list[dict] = []
+
+    def build_config(**kwargs):
+        configs.append(kwargs)
+        return kwargs
+
+    provider = rtzr_stt.STT()
+    monkeypatch.setattr(provider._client, "build_config", build_config)
+    monkeypatch.setattr(
+        provider._client, "connect_websocket", AsyncMock(return_value=SimpleNamespace())
+    )
+    stream = provider.stream(language="ja")
+    try:
+        await stream._connect_ws()
+        events, _, _ = stream._process_transcript_event(
+            {"final": True, "alternatives": [{"text": "こんにちは"}]}, False, None
+        )
+    finally:
+        await stream.aclose()
+
+    assert configs[0]["model_name"] == "sommers_ja"
+    transcript = next(e for e in events if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT)
+    assert transcript.alternatives[0].language == LanguageCode("ja")
 
 
 @pytest.mark.parametrize("duration", [300, 0, None])
