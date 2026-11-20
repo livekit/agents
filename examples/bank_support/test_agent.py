@@ -144,8 +144,16 @@ async def test_ending_the_call_deletes_the_room_and_shuts_down_the_job(monkeypat
     bank_agent = BankAgent()
     await bank_agent._say_and_close(ctx, "Goodbye.")
     await bank_agent._close_task
-    job.add_shutdown_callback.assert_called_once_with(job.delete_room)
     job.shutdown.assert_called_once()
+    # Run the callback the way JobContext does: a callback that takes an argument gets the
+    # shutdown reason, so the room to delete must not come from that argument.
+    (callback,), _ = job.add_shutdown_callback.call_args
+    job.delete_room = AsyncMock()
+    if callback.__code__.co_argcount >= 1:
+        await callback("agent ended the call")
+    else:
+        await callback()
+    job.delete_room.assert_awaited_once_with()
 
 
 async def test_a_hand_off_log_carries_no_caller_request(caplog):

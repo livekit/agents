@@ -266,7 +266,13 @@ class BankAgent(Agent):
             # Closing the session alone leaves the caller connected to silence: delete the
             # room, which disconnects SIP callers too, and end the job.
             job = get_job_context()
-            job.add_shutdown_callback(job.delete_room)
+
+            async def delete_room() -> None:
+                # Takes no argument: JobContext passes the shutdown reason to a callback
+                # that accepts one, and delete_room would read it as the room name.
+                await job.delete_room()
+
+            job.add_shutdown_callback(delete_room)
             await session.aclose()
             job.shutdown(reason="agent ended the call")
 
