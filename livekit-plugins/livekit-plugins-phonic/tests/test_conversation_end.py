@@ -75,22 +75,27 @@ async def test_normal_end_shuts_down_the_agent_session_without_an_error(
         await session.aclose()
 
 
-async def test_end_of_another_sessions_conversation_leaves_the_primary_session_running(
+async def test_end_without_a_reachable_owner_falls_back_to_an_error(
     agent_session: _FakeAgentSession,
 ) -> None:
-    primary_rt_session = RealtimeModel(api_key="test").session()
-    other_rt_session = RealtimeModel(api_key="test").session()
-    agent_session.current_agent.realtime_llm_session = primary_rt_session
+    # The primary session runs a different realtime session: a second session in the job, or a
+    # fallback adapter wrapping this one.
+    agent_session.current_agent.realtime_llm_session = SimpleNamespace()
+    session = RealtimeModel(api_key="test").session()
+    errors: list[llm.RealtimeModelError] = []
     ended: list[PhonicConversationEndedEvent] = []
-    other_rt_session.on("phonic_conversation_ended", ended.append)
+    session.on("error", errors.append)
+    session.on("phonic_conversation_ended", ended.append)
     try:
-        await other_rt_session._recv_task(_FakeSocket(close_code=4505))  # type: ignore[arg-type]
+        await session._recv_task(_FakeSocket(close_code=4505))  # type: ignore[arg-type]
 
         assert [ev.reason for ev in ended] == ["time_limit_reached"]
         assert agent_session.shutdown_drain == []
+        assert len(errors) == 1
+        assert not errors[0].recoverable
+        assert not isinstance(errors[0].error, PhonicNoInputTimeoutError)
     finally:
-        await primary_rt_session.aclose()
-        await other_rt_session.aclose()
+        await session.aclose()
 
 
 async def test_no_input_timeout_is_one_typed_unrecoverable_error(
