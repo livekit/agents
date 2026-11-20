@@ -54,8 +54,8 @@ session = AgentSession(
 silma.TTS(
     model="silma-tts-v2-msa",
     voice="maryam",
-    speech_rate=1.1,
-    enable_cache=True,
+    speech_rate=1.0,
+    enable_cache=False,
 )
 ```
 
