@@ -122,6 +122,26 @@ async def test_text_reply_returns_to_listening(audio_output: str) -> None:
         assert states == ["listening", "speaking", "listening"]
 
 
+async def test_interrupted_queued_reply_returns_to_listening() -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+    async with AgentSession(llm=model, min_consecutive_speech_delay=1.0) as session:
+        session.output.transcription = FakeTextOutput()
+        states: list[str] = []
+        session.on("agent_state_changed", lambda ev: states.append(ev.new_state))
+        await session.start(Agent(instructions="test"))
+
+        first = session.generate_reply()
+        second = session.generate_reply()
+        (await _reply_future(model.active_session)).set_result(_generation("Hello"))
+        await first.wait_for_playout()
+        # the scheduler is still waiting out the delay before the second reply
+        second.interrupt()
+        await second
+
+        await _wait_for_agent_state(session, "listening")
+        assert states == ["listening", "speaking", "thinking", "listening"]
+
+
 class _SpeechStartVAD(vad.VAD):
     """Report speech as soon as the test supplies audio, without a wall-clock schedule."""
 

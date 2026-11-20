@@ -2123,20 +2123,18 @@ class AgentActivity(RecognitionHooks):
 
             while self._speech_q:
                 _, _, speech = heapq.heappop(self._speech_q)
-                if speech.done():
-                    # skip done speech (interrupted when it's in the queue)
-                    self._current_speech = None
-                    continue
-                self._current_speech = speech
-                if self.min_consecutive_speech_delay > 0.0:
+                if not speech.done():
+                    self._current_speech = speech
                     delay = self.min_consecutive_speech_delay - (time.time() - last_playout_ts)
-                    if delay > 0:
+                    if self.min_consecutive_speech_delay > 0.0 and delay > 0:
                         await asyncio.sleep(delay)
-                    # check again if speech is done after sleep delay
-                    if speech.done():
-                        # skip done speech (interrupted during delay)
-                        self._current_speech = None
-                        continue
+
+                if speech.done():
+                    # interrupted while queued: the speech before it ended on "thinking" for it
+                    self._current_speech = None
+                    if self._session.agent_state == "thinking" and not self._has_followup_work:
+                        self._session._update_agent_state("listening")
+                    continue
                 speech._authorize_generation()
                 await speech._wait_for_generation()
 
@@ -3333,7 +3331,7 @@ class AgentActivity(RecognitionHooks):
     @property
     def _has_followup_work(self) -> bool:
         """Whether another speech is already committed to follow the current one."""
-        if self._background_speeches:
+        if self._background_speeches or any(not s.done() for _, _, s in self._speech_q):
             return True
 
         executors = [self._tool_executor] + [

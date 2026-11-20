@@ -2819,3 +2819,42 @@ async def test_pipeline_multi_segment_interrupted() -> None:
     assert len(assistant_msgs) == 1
     assert assistant_msgs[0].interrupted is True
     assert "How are you?" not in (assistant_msgs[0].text_content or "")
+
+
+async def test_queued_say_keeps_thinking_between_speeches() -> None:
+    class TwoSaysAgent(MyAgent):
+        async def on_enter(self) -> None:
+            self.session.say("Hello.")
+            self.session.say("Again.")
+
+    actions = FakeActions()
+    actions.add_tts(1.0, input="Hello.")
+    actions.add_tts(1.0, input="Again.")
+    session = create_session(actions, with_stt=False)
+    states: list[AgentState] = []
+    session.on("agent_state_changed", lambda ev: states.append(ev.new_state))
+
+    await asyncio.wait_for(run_session(session, TwoSaysAgent()), timeout=SESSION_TIMEOUT)
+
+    assert states == ["listening", "speaking", "thinking", "speaking", "listening"]
+
+
+async def test_interrupted_queued_say_ends_on_listening() -> None:
+    class TwoSaysAgent(MyAgent):
+        async def on_enter(self) -> None:
+            self.session.say("Hello.")
+            second = self.session.say("Again.")
+            # interrupt it while the scheduler waits out the consecutive-speech delay
+            asyncio.get_running_loop().call_later(1.5, second.interrupt)
+
+    actions = FakeActions()
+    actions.add_tts(1.0, input="Hello.")
+    session = create_session(
+        actions, with_stt=False, extra_kwargs={"min_consecutive_speech_delay": 2.0}
+    )
+    states: list[AgentState] = []
+    session.on("agent_state_changed", lambda ev: states.append(ev.new_state))
+
+    await asyncio.wait_for(run_session(session, TwoSaysAgent()), timeout=SESSION_TIMEOUT)
+
+    assert states == ["listening", "speaking", "thinking", "listening"]
