@@ -53,8 +53,9 @@ INSTRUCTIONS = (
     "card and order a replacement, dispute transactions they do not recognise, move money between "
     "their own accounts, and add travel notices. Your words are spoken aloud: keep each turn short, "
     "no lists, no symbols. Read phone and card numbers back digit by digit, and say money as you would aloud, for example two hundred twenty-three dollars and seventy-four cents. Verify the caller "
-    "first with the phone number and date of birth on file. Before any change, say exactly what you "
-    "are about to do and wait for the caller's yes. When a tool replies with a note that starts with "
+    "first with the phone number and date of birth on file. Change tools ask you to confirm with the "
+    "caller first: when one does, say exactly what will change and wait for a yes. After end_call or "
+    "transfer_to_human, say nothing more. When a tool replies with a note that starts with "
     "NOT DONE, ALREADY DONE or NOT ENDED, follow that note. Before ending, ask whether there is "
     "anything else you can help with. If the caller asks for something you have no tool for, or asks "
     "for a person, use transfer_to_human."
@@ -168,7 +169,9 @@ class WriteTask(AgentTask[dict[str, Any]]):
             Args:
                 summary: What was done, in one sentence.
             """
-            return await self.finish_request_reply(summary) or "Request finished."
+            return await self.finish_request_reply(summary) or (
+                "Request finished. Do not say goodbye: the main assistant continues the call."
+            )
 
         return function_tool(finish_request)
 
@@ -195,15 +198,19 @@ class BankAgent(Agent):
         tools = _guarded_tools(["verify_identity", "get_accounts", "get_card", "get_transactions"])
         for flow in FLOWS.values():
             tools.append(self._start_tool(flow))
-        tools.append(function_tool(CONTRACT.guarded(self._transfer_to_human_impl)))
-        tools.append(function_tool(CONTRACT.guarded(self._end_call_impl)))
+        tools.append(function_tool(CONTRACT.guarded(self._transfer_to_human_impl, fillers=False)))
+        tools.append(function_tool(CONTRACT.guarded(self._end_call_impl, fillers=False)))
         return tools
 
     def _start_tool(self, flow: Flow) -> FunctionTool:
         async def start(ctx: RunContext[Userdata]) -> str:
             result = await WriteTask(flow, ctx.userdata.state, chat_ctx=self.chat_ctx)
             if result.get("done"):
-                return f"The {flow.name} request is complete: {result.get('summary', '')}"
+                return (
+                    f"The {flow.name} request is complete: {result.get('summary', '')}. If the caller "
+                    "already said there is nothing else, call end_call with their words now; do not "
+                    "ask again."
+                )
             return (
                 f"The {flow.name} request was closed without a change: {result.get('reason', '')}"
             )

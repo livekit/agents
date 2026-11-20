@@ -46,9 +46,10 @@ scenarios:
       the last month: one from "Unknown merchant" for about two hundred dollars and one from
       Blue Fern Cafe. Ask to dispute both, confirm the total when it is read back, and say
       no to anything else.
-    agent_expectations: The agent lists recent transactions, confirms the two the caller
-      named with their total, opens one dispute covering both after a yes, and ends after
-      asking whether there is anything else.
+    agent_expectations: The agent looks up the account's recent transactions and finds the
+      two the caller described. It reads them back with their total, opens one dispute
+      covering both after a yes, and ends after asking whether there is anything else. It
+      does not need to read out transactions the caller did not mention.
     tags:
       flow: dispute
     userdata:

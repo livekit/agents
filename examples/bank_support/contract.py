@@ -57,6 +57,9 @@ class Rule:
             the caller declined the work the agent offered).
         formats: argument name -> (regex, description read to the caller).
         undo: the tool that takes this write back.
+        confirm: the first call of this write with given arguments is refused with an
+            instruction to state the change and ask; the same call runs after the
+            caller's next turn. The confirmation is a protocol, not a prompt line.
         requires_closing_question: the agent's last turn before the caller's
             last turn was a question, and the call quotes the caller's answer in
             ``caller_reply``. The model judges the answer; the hook checks that
@@ -70,6 +73,7 @@ class Rule:
     formats: dict[str, tuple[str, str]] = field(default_factory=dict)
     undo: str | None = None
     requires_closing_question: bool = False
+    confirm: bool = False
 
 
 @dataclass
@@ -89,6 +93,7 @@ class CallState:
     user_turns: list[str] = field(default_factory=list)
     declined: bool = False
     last_refused: tuple[str, dict[str, Any]] | None = None
+    awaiting_confirmation: dict[str, int] = field(default_factory=dict)
 
     def record(self, name: str, arguments: dict[str, Any], result: str, ok: bool = True) -> None:
         self.records.append(ToolRecord(name, dict(arguments), result, ok))
@@ -179,6 +184,8 @@ def digits_heard(text: str) -> list[str]:
     Runs of digit words, with "double"/"triple" expanded, pauses and commas
     ignored; runs shorter than four digits are dropped (ages, counts).
     """
+    # An amount ("$220.74") is not a number to look up: drop it before reading digits.
+    text = re.sub(r"\$?\d[\d,]*\.\d+", " ", text)
     tokens = re.findall(r"[a-z]+|\d", text.lower())
     runs: list[str] = []
     current = ""
@@ -260,6 +267,19 @@ class Contract:
                 f"ALREADY DONE: {name} with these exact arguments succeeded earlier in this call. "
                 "Do not repeat it; tell the caller it is done."
             )
+        if rule.confirm:
+            key = f"{name} {json.dumps(arguments, sort_keys=True, default=str)}"
+            caller_turns = sum(1 for role, _ in history if role == "user")
+            asked_at = state.awaiting_confirmation.get(key)
+            if asked_at is not None and caller_turns > asked_at:
+                del state.awaiting_confirmation[key]
+            else:
+                state.awaiting_confirmation[key] = caller_turns
+                return (
+                    f"NOT DONE yet: tell the caller exactly what {name} will change, with these "
+                    f"details, and ask whether to go ahead. Call {name} again with the same arguments "
+                    "only after they say yes."
+                )
         if rule.requires_closing_question:
             return closing_question_problem(history, arguments.get("caller_reply"))
         return None
@@ -292,11 +312,12 @@ class Contract:
 
     # --- the hook ------------------------------------------------------------------------
 
-    def guarded(self, fn: Callable[..., Any]) -> Callable[..., Any]:
+    def guarded(self, fn: Callable[..., Any], *, fillers: bool = True) -> Callable[..., Any]:
         """Wrap a tool function (before ``@function_tool``): check, fillers, record, narrate.
 
         The wrapped function keeps its signature, so ``function_tool`` builds the
-        same schema the model would have seen without the hook.
+        same schema the model would have seen without the hook. A tool that speaks for
+        itself (a goodbye, a hand-off) passes ``fillers=False``.
         """
         name = fn.__name__
         contract = self
@@ -324,14 +345,15 @@ class Contract:
                 logger.info("%s refused: %s", name, refusal[:120])
                 return refusal
             state.last_refused = None
-            fillers = asyncio.create_task(_say_fillers(ctx))
+            filler_task = asyncio.create_task(_say_fillers(ctx)) if fillers else None
             try:
                 result = await fn(*args, **kwargs)
             except ToolError as exc:
                 state.record(name, arguments, str(exc), ok=False)
                 raise
             finally:
-                fillers.cancel()
+                if filler_task is not None:
+                    filler_task.cancel()
             text = result if isinstance(result, str) else json.dumps(result)
             state.record(name, arguments, text)
             return contract.narrate(name, arguments, text)

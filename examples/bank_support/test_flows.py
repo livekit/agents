@@ -82,15 +82,9 @@ def test_a_transfer_argument_must_match_the_advisors_figure():
         {"from_account_id": "acc_1", "amount": 500.0},
         json.dumps({"allowed": True, "amount": 500.0}),
     )
-    assert (
-        CONTRACT.check(
-            "transfer_funds",
-            {"from_account_id": "acc_1", "to_account_id": "acc_2", "amount": 500.0},
-            s,
-            [],
-        )
-        is None
-    )
+    ok = {"from_account_id": "acc_1", "to_account_id": "acc_2", "amount": 500.0}
+    assert CONTRACT.check("transfer_funds", ok, s, []).startswith("NOT DONE yet")  # confirm first
+    assert CONTRACT.check("transfer_funds", ok, s, [("user", "Yes, go ahead.")]) is None
     why = CONTRACT.check(
         "transfer_funds",
         {"from_account_id": "acc_1", "to_account_id": "acc_2", "amount": 600.0},
@@ -155,3 +149,21 @@ def test_a_dispute_needs_only_the_transactions():
     ctx = SimpleNamespace(userdata=SimpleNamespace(bank=bank, customer_id="c_1"))
     asyncio.run(open_dispute(ctx, ids, "I do not recognise these"))
     assert len(bank.disputes) == 1 and bank.disputes[0]["transaction_ids"] == ids
+
+
+def test_tool_sentences_say_money_in_words():
+    from flows.bank import spoken_dollars
+
+    assert spoken_dollars(223.74) == "two hundred twenty-three dollars and seventy-four cents"
+    assert spoken_dollars(1500.0) == "one thousand five hundred dollars"
+    assert spoken_dollars(0.0) == "zero dollars"
+    assert spoken_dollars(0.05) == "five cents"
+    bank = FakeBank.seeded()
+    checking = next(a for a in bank.accounts("c_1") if a.kind == "checking")
+    say = transfer_check(bank, checking.id, 500.0)["say"]
+    assert "five hundred dollars" in say and "500.00" not in say
+
+
+def test_every_change_is_confirmed_first():
+    writes = [name for name, rule in CONTRACT.rules.items() if rule.write]
+    assert writes and all(CONTRACT.rules[name].confirm for name in writes)

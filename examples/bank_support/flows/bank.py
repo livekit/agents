@@ -38,21 +38,24 @@ CONTRACT = Contract(
         ),
         "block_card": Rule(
             write=True,
+            confirm=True,
             after=["verify_identity"],
             needs={"card_id": "get_card.card_id"},
             undo="unblock_card",
         ),
         # Card state, not call history, decides whether these can run: the tools refuse
         # an active card, so a card blocked on an earlier call can be unblocked or replaced.
-        "unblock_card": Rule(write=True, needs={"card_id": "get_card.card_id"}),
-        "order_replacement": Rule(write=True, needs={"card_id": "get_card.card_id"}),
+        "unblock_card": Rule(write=True, confirm=True, needs={"card_id": "get_card.card_id"}),
+        "order_replacement": Rule(write=True, confirm=True, needs={"card_id": "get_card.card_id"}),
         "open_dispute": Rule(
             write=True,
+            confirm=True,
             after=["get_transactions"],
             needs={"transaction_ids": "get_transactions.transactions[].id"},
         ),
         "transfer_funds": Rule(
             write=True,
+            confirm=True,
             after=["get_accounts", "transfer_check"],
             needs={
                 "from_account_id": "get_accounts.accounts[].id",
@@ -62,6 +65,7 @@ CONTRACT = Contract(
         ),
         "add_travel_notice": Rule(
             write=True,
+            confirm=True,
             after=["get_card"],
             needs={"card_id": "get_card.card_id"},
             formats={"start_date": ISO_DATE, "end_date": ISO_DATE},
@@ -91,6 +95,36 @@ CONTRACT = Contract(
 
 # --- the arithmetic ---------------------------------------------------------------------
 
+_ONES = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split()
+_TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
+
+
+def _words(n: int) -> str:
+    if n < 20:
+        return _ONES[n]
+    if n < 100:
+        return _TENS[n // 10] + ("-" + _ONES[n % 10] if n % 10 else "")
+    if n < 1000:
+        return _ONES[n // 100] + " hundred" + (" " + _words(n % 100) if n % 100 else "")
+    if n < 1_000_000:
+        return _words(n // 1000) + " thousand" + (" " + _words(n % 1000) if n % 1000 else "")
+    return (
+        _words(n // 1_000_000) + " million" + (" " + _words(n % 1_000_000) if n % 1_000_000 else "")
+    )
+
+
+def spoken_dollars(amount: float) -> str:
+    """Money as a caller hears it: tool sentences are copied into speech, so they carry
+    no decimals ("223.74" -> "two hundred twenty-three dollars and seventy-four cents")."""
+    cents_total = round(amount * 100)
+    dollars, cents = divmod(cents_total, 100)
+    parts = []
+    if dollars or not cents:
+        parts.append(f"{_words(dollars)} dollar{'s' if dollars != 1 else ''}")
+    if cents:
+        parts.append(f"{_words(cents)} cent{'s' if cents != 1 else ''}")
+    return " and ".join(parts)
+
 
 def transfer_check(bank: FakeBank, from_account_id: str, amount: float) -> dict[str, Any]:
     """Whether a transfer of ``amount`` can leave ``from_account_id`` today, and what it will cost."""
@@ -112,7 +146,7 @@ def transfer_check(bank: FakeBank, from_account_id: str, amount: float) -> dict[
             "amount": amount,
             "fee": fee,
             "available": account.balance,
-            "say": f"The available balance on that account is {account.balance:.2f} dollars, which does not cover {total:.2f}; offer a smaller amount or another account.",
+            "say": f"The available balance on that account is {spoken_dollars(account.balance)}, which does not cover {spoken_dollars(total)}; offer a smaller amount or another account.",
         }
     if amount > remaining_limit:
         return {
@@ -120,12 +154,12 @@ def transfer_check(bank: FakeBank, from_account_id: str, amount: float) -> dict[
             "amount": amount,
             "fee": fee,
             "remaining_limit": remaining_limit,
-            "say": f"The daily limit leaves {remaining_limit:.2f} dollars today, which does not cover {amount:.2f}. Offer that amount today. The caller can call again tomorrow for the rest; you cannot schedule a transfer.",
+            "say": f"The daily limit leaves {spoken_dollars(remaining_limit)} today, which does not cover {spoken_dollars(amount)}. Offer that amount today. The caller can call again tomorrow for the rest; you cannot schedule a transfer.",
         }
     say = (
-        f"A transfer of {amount:.2f} dollars is allowed"
-        + (f" with a {fee:.2f} dollar fee from savings" if fee else " with no fee")
-        + f"; {remaining_limit - amount:.2f} dollars of today's limit would remain. Confirm the amount with the caller before transfer_funds."
+        f"A transfer of {spoken_dollars(amount)} is allowed"
+        + (f" with a fee of {spoken_dollars(fee)} from savings" if fee else " with no fee")
+        + f"; {spoken_dollars(remaining_limit - amount)} of today's limit would remain."
     )
     return {
         "allowed": True,
@@ -141,11 +175,13 @@ def dispute_total(bank: FakeBank, transaction_ids: list[str]) -> dict[str, Any]:
     known = [bank.transaction(t) for t in transaction_ids]
     unknown = [t for t, tx in zip(transaction_ids, known, strict=False) if tx is None]
     total = round(sum(tx.amount for tx in known if tx is not None), 2)
-    lines = [f"{tx.merchant} on {tx.date} for {tx.amount:.2f}" for tx in known if tx is not None]
+    lines = [
+        f"{tx.merchant} on {tx.date} for {spoken_dollars(tx.amount)}"
+        for tx in known
+        if tx is not None
+    ]
     say = (
-        f"{len(lines)} transaction(s) totalling {total:.2f} dollars: "
-        + "; ".join(lines)
-        + ". Read these back and confirm before open_dispute."
+        f"{len(lines)} transaction(s) totalling {spoken_dollars(total)}: " + "; ".join(lines) + "."
     )
     if unknown:
         say += f" Not on this account: {', '.join(unknown)}."
@@ -222,7 +258,8 @@ async def get_transactions(ctx: RunContext, account_id: str, days: int = 30) -> 
     """Recent transactions on an account, newest first.
 
     Args:
-        account_id: An account id from get_accounts.
+        account_id: An account id from get_accounts. If the caller has not said which
+            account, ask them.
         days: How many days back to list, 30 by default.
     """
     txs = _bank(ctx).transactions(account_id, days)
@@ -389,9 +426,8 @@ FLOWS = {
         description="Block a lost, stolen or compromised card, and order a replacement if the caller wants one.",
         instructions=(
             "You are handling exactly one request: block the caller's card, and order a replacement only if they ask. "
-            "Ask for the last four digits of the card, read them back digit by digit, then get_card. State what you are "
-            "about to do and wait for the caller's yes before block_card. Say what was done and how to take it back, "
-            "then offer a replacement."
+            "Ask for the last four digits of the card, read them back digit by digit, then get_card, then block_card."
+            " The change tool asks you to confirm with the caller when it is time. Say what was done and how to take it back, then offer a replacement."
         ),
         tools=["get_card", "block_card", "order_replacement"],
     ),
@@ -400,7 +436,7 @@ FLOWS = {
         description="Take a block back when the caller found the card.",
         instructions=(
             "You are handling exactly one request: lift the block on a card. Get the card by its last four "
-            "digits, confirm it with the caller, then unblock_card after their yes."
+            "digits, then unblock_card. The change tool asks you to confirm with the caller when it is time."
         ),
         tools=["get_card", "unblock_card"],
     ),
@@ -408,9 +444,9 @@ FLOWS = {
         name="dispute",
         description="Dispute transactions the caller does not recognise.",
         instructions=(
-            "You are handling exactly one request: a dispute. List the recent transactions on the account with "
-            "get_transactions, let the caller pick the ones they do not recognise, confirm them with dispute_total and "
-            "read its sentence back, then open_dispute after the caller's yes."
+            "You are handling exactly one request: a dispute. Find the transactions the caller describes with "
+            "get_transactions; if it is unclear which ones they mean, read the recent ones and let them pick. "
+            "Total them with dispute_total, then open_dispute. The change tool asks you to confirm with the caller when it is time."
         ),
         tools=["get_accounts", "get_transactions", "dispute_total", "open_dispute"],
     ),
@@ -420,7 +456,7 @@ FLOWS = {
         instructions=(
             "You are handling exactly one request: a transfer between the caller's accounts. Get the accounts, confirm "
             "which is the source and which the destination, run transfer_check with the amount and repeat its sentence, "
-            "then transfer_funds after the caller's yes, with the exact amount transfer_check allowed."
+            "then transfer_funds with the exact amount transfer_check allowed. The change tool asks you to confirm with the caller when it is time."
         ),
         tools=["get_accounts", "transfer_check", "transfer_funds"],
     ),
@@ -429,7 +465,7 @@ FLOWS = {
         description="Add a travel notice to a card.",
         instructions=(
             "You are handling exactly one request: a travel notice. Get the card by its last four digits, confirm the "
-            "dates as year-month-day and the countries, then add_travel_notice after the caller's yes."
+            "dates as year-month-day and the countries, then add_travel_notice. The change tool asks you to confirm with the caller when it is time."
         ),
         tools=["get_card", "add_travel_notice"],
     ),

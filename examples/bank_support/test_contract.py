@@ -278,3 +278,48 @@ async def test_the_same_refused_call_twice_tells_the_model_to_ask_the_caller():
     second = await _call(lookup, ctx, {"account_id": "unknown"})
     assert "ask the caller" not in first.lower()
     assert second.startswith("NOT DONE") and "ask the caller" in second.lower()
+
+
+def test_a_confirmed_write_asks_first_and_runs_after_the_callers_next_turn():
+    contract = Contract({"freeze": Rule(write=True, confirm=True)})
+    s = CallState()
+    args = {"card_id": "card_1"}
+    first = contract.check("freeze", args, s, [("user", "Please freeze my card.")])
+    assert first.startswith("NOT DONE") and "ask" in first.lower() and "freeze" in first
+    same_turn = contract.check("freeze", args, s, [("user", "Please freeze my card.")])
+    assert same_turn.startswith("NOT DONE")
+    after_yes = [
+        ("user", "Please freeze my card."),
+        ("assistant", "I will freeze the card ending 4421. Go ahead?"),
+        ("user", "Yes."),
+    ]
+    assert contract.check("freeze", args, s, after_yes) is None
+    other = contract.check("freeze", {"card_id": "card_2"}, s, after_yes)
+    assert other.startswith("NOT DONE")
+
+
+async def test_a_tool_that_speaks_for_itself_gets_no_filler():
+    import asyncio as aio
+
+    import contract as contract_module
+
+    contract_module.FILLER_DELAY_S = 0.01
+    said: list[str] = []
+    ctx = _ctx()
+    ctx.session.say = lambda text, **_: said.append(text)
+
+    async def slow(ctx: RunContext, caller_reply: str) -> str:
+        await aio.sleep(0.05)
+        return "Ending the call."
+
+    quiet = function_tool(BOUND.guarded(slow, fillers=False))
+    args, kwargs = prepare_function_arguments(
+        fnc=quiet, json_arguments='{"caller_reply": "x"}', call_ctx=ctx
+    )
+    await quiet(*args, **kwargs)
+    assert said == []
+    contract_module.FILLER_DELAY_S = 2.0
+
+
+def test_digits_do_not_run_across_a_decimal_point():
+    assert digits_heard("yes the total is $220.74") == []
