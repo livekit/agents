@@ -44,10 +44,11 @@ pub struct CpuMonitor {
     source: Source,
 }
 
-/// A cgroup usage counter differenced against the previous call, or `sysinfo`'s per-CPU counters.
+/// A cgroup usage counter differenced against the previous call, or `sysinfo`'s per-CPU counters
+/// (boxed: on Linux they outweigh the cgroup variant six times over).
 enum Source {
     Cgroup { path: std::path::PathBuf, unit_per_sec: f64, last: Option<(i128, Instant)> },
-    Host { system: sysinfo::System, last: Option<Instant> },
+    Host { system: Box<sysinfo::System>, last: Option<Instant> },
 }
 
 /// `utils/hw/cpu.py`'s three monitors as one. Starts no threads, so it is safe before core init.
@@ -65,7 +66,7 @@ impl CpuMonitor {
                 unit_per_sec: if kind == CpuMonitorKind::CgroupV2 { 1e6 } else { 1e9 },
                 last: None,
             },
-            None => Source::Host { system: sysinfo::System::new(), last: None },
+            None => Source::Host { system: Box::new(sysinfo::System::new()), last: None },
         };
         CpuMonitor { cpus, source }
     }
@@ -152,7 +153,7 @@ mod tests {
         let mut monitor = CpuMonitor {
             cpus: 1.0,
             source: Source::Host {
-                system: sysinfo::System::new(),
+                system: Box::new(sysinfo::System::new()),
                 last: Some(Instant::now() - Duration::from_secs(1)),
             },
         };

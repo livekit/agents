@@ -550,7 +550,12 @@ impl Server {
         // arriving before then, a tool output or a commit, comes before it, as on the real server.
         let mut t = later(at, self.rng.u64(210..=730));
         let kind = OutputItemKind::Message;
-        self.put(t, Some(r), Incoming::OutputItemAdded { item_id: item.clone(), kind });
+        let response_id = Some(self.responses[r as usize].id.clone());
+        self.put(
+            t,
+            Some(r),
+            Incoming::OutputItemAdded { item_id: item.clone(), kind, response_id },
+        );
         let assistant = message(&item, Role::Assistant);
         self.put(t, Some(r), Incoming::ItemAdded { previous_item_id: None, item: assistant });
         // The first audio, after the item as measured; the content part and the
@@ -615,7 +620,12 @@ impl Server {
             self.responses[r as usize].function_call = Some((fc.clone(), name.clone()));
             t = later(t, 30);
             let kind = OutputItemKind::FunctionCall;
-            self.put(t, Some(r), Incoming::OutputItemAdded { item_id: fc.clone(), kind });
+            let response_id = Some(self.responses[r as usize].id.clone());
+            self.put(
+                t,
+                Some(r),
+                Incoming::OutputItemAdded { item_id: fc.clone(), kind, response_id },
+            );
             let call = function_call(&fc, &name, "");
             self.put(t, Some(r), Incoming::ItemAdded { previous_item_id: Some(item), item: call });
             self.put(t, Some(r), unhandled("response.function_call_arguments.delta"));
