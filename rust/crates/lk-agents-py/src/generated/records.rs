@@ -20201,21 +20201,6 @@ pub mod storage_class {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
-
-    pub fn sort_order_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::storage::SortOrder> {
-        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
-        match &*value {
-            "newest_first" => Ok(::lk_agents_abi::storage::SortOrder::NewestFirst),
-            "oldest_first" => Ok(::lk_agents_abi::storage::SortOrder::OldestFirst),
-            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
-                "SortOrder: {other:?} is not one of 'newest_first', 'oldest_first'"
-            ))),
-        }
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
     static THREAD_ITEM: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 

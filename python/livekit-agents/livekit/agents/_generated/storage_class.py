@@ -61,10 +61,6 @@ class ThreadPage:
     """The next page's `page_token`; empty at the end."""
 
 
-SortOrder: TypeAlias = Literal["newest_first", "oldest_first"]
-"""The order `list_threads` pages threads in, by creation."""
-
-
 @dataclass(kw_only=True, slots=True)
 class ThreadItem:
     """One chat item of a thread."""

@@ -17,8 +17,8 @@ use livekit_protocol::agent::agent_task::{GetTasksRequest, Status as TaskStatus}
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
+use lk_agents_abi::storage::Unacknowledged;
 use lk_agents_abi::storage::agentdb_error::ErrorCode;
-use lk_agents_abi::storage::{SortOrder, Unacknowledged};
 use lk_agents_abi::{Clock, Ts};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::owned::Background;
@@ -373,18 +373,7 @@ impl Storage for AgentDbStorage {
         self.read(StorageOp::ThreadGet, || self.threads().get(thread_id)).await
     }
 
-    /// Newest first only, until the protocol's `ListRequest` carries `sort_order`.
-    async fn list_threads(
-        &self,
-        request: ListRequest,
-        order: SortOrder,
-    ) -> Result<ListResponse, StorageError> {
-        if order == SortOrder::OldestFirst {
-            return Err(StorageError::Invalid(
-                "agent-db lists threads newest first only; oldest_first is not supported yet"
-                    .into(),
-            ));
-        }
+    async fn list_threads(&self, request: ListRequest) -> Result<ListResponse, StorageError> {
         let request = ListRequest { limit: thread_page_limit(request.limit), ..request };
         let mut page =
             self.read(StorageOp::ThreadList, || self.threads().list(request.clone())).await?;

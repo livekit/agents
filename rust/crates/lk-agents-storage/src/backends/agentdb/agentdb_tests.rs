@@ -679,11 +679,10 @@ async fn a_request_refused_on_every_attempt_backs_off_until_its_deadline() {
     }
 }
 
-/// agent-db lists newest first with pages of 50 by default and 100 at most, project-wide with no
-/// scope; a row it answers with activity and expiry reaches the host without them. Oldest first
-/// is refused before anything is sent, until the protocol's `ListRequest` carries the order.
+/// agent-db lists with pages of 50 by default and 100 at most, project-wide with no scope and no
+/// sort order; a row it answers with activity and expiry reaches the host without them.
 #[tokio::test]
-async fn cloud_thread_listing_caps_pages_and_refuses_oldest_first() {
+async fn cloud_thread_listing_caps_pages() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let heads = Arc::new(Mutex::new(Vec::new()));
@@ -727,21 +726,20 @@ async fn cloud_thread_listing_caps_pages_and_refuses_oldest_first() {
         None,
     )
     .unwrap();
-    let page = storage.list_threads(None, SortOrder::NewestFirst, None, None).await.unwrap();
+    let page = storage.list_threads(None, None, None).await.unwrap();
     assert_eq!(page.next_page_token, "next");
     let row = &page.threads[0];
     assert_eq!(
         (row.thread_id.as_str(), row.created_at, row.idle_ttl_seconds),
         ("AT_1", 1767225600, 86400)
     );
-    storage.list_threads(None, SortOrder::NewestFirst, None, Some(500)).await.unwrap();
-    let refused = storage.list_threads(None, SortOrder::OldestFirst, None, None).await;
-    assert!(matches!(refused, Err(StorageError::Invalid(_))), "{refused:?}");
+    storage.list_threads(None, None, Some(500)).await.unwrap();
     peer.await.unwrap();
     storage.aclose().await;
     let heads = heads.lock();
     assert!(heads[0].starts_with("GET /v0/projects/p_/threads?"), "{}", heads[0]);
     assert!(heads[0].contains("page.pageSize=50") && !heads[0].contains("scope="), "{}", heads[0]);
+    assert!(!heads[0].contains("sortOrder"), "{}", heads[0]);
     assert!(heads[1].contains("page.pageSize=100"), "{}", heads[1]);
 }
 

@@ -113,12 +113,7 @@ async fn probe() {
     )
     .unwrap();
     assert!(
-        storage
-            .list_threads(Some("scope".into()), Default::default(), None, None)
-            .await
-            .unwrap()
-            .threads
-            .is_empty()
+        storage.list_threads(Some("scope".into()), None, None).await.unwrap().threads.is_empty()
     );
     server.await.unwrap();
     storage.aclose().await;
@@ -195,7 +190,7 @@ async fn reject_certificate(cert: CertificateDer<'static>, key: &[u8]) {
                 assert!(
                     lk_agents_storage::deadline::within(
                         deadline,
-                        storage.list_threads(Some("scope".into()), Default::default(), None, None)
+                        storage.list_threads(Some("scope".into()), None, None)
                     )
                     .await
                     .is_err()

@@ -9,7 +9,6 @@ use crate::{CommitOptions, RunOptions, Storage};
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, Thread as ThreadRecord, UpdateRequest,
 };
-use lk_agents_abi::storage::SortOrder;
 
 fn ttl(seconds: i64) -> Option<pbjson_types::Duration> {
     Some(pbjson_types::Duration { seconds, nanos: 0 })
@@ -23,16 +22,15 @@ fn not_found<T: std::fmt::Debug>(r: Result<T, StorageError>) -> bool {
     matches!(r, Err(StorageError::NotFound(_)))
 }
 
-const NEWEST: SortOrder = SortOrder::NewestFirst;
-const OLDEST: SortOrder = SortOrder::OldestFirst;
-
-/// Every page of `scope`'s listing in `order`, `limit` rows a page, following each page's token.
-async fn pages(s: &dyn Storage, scope: &str, order: SortOrder, limit: i32) -> Vec<ThreadRecord> {
+/// Every page of `scope`'s listing, `limit` rows a page, following each page's token; no page
+/// holds more than the page size.
+async fn pages(s: &dyn Storage, scope: &str, limit: i32) -> Vec<ThreadRecord> {
     let mut threads = Vec::new();
     let mut page_token = String::new();
     loop {
         let request = ListRequest { scope: scope.into(), page_token, limit };
-        let page = s.list_threads(request, order).await.unwrap();
+        let page = s.list_threads(request).await.unwrap();
+        assert!(page.threads.len() <= crate::backends::thread_page_limit(limit) as usize);
         threads.extend(page.threads);
         if page.next_page_token.is_empty() {
             return threads;
@@ -43,11 +41,6 @@ async fn pages(s: &dyn Storage, scope: &str, order: SortOrder, limit: i32) -> Ve
 
 fn ids(threads: &[ThreadRecord]) -> Vec<String> {
     threads.iter().map(|t| t.thread_id.clone()).collect()
-}
-
-/// Created at, in milliseconds.
-fn created(t: &ThreadRecord) -> i64 {
-    t.created_at.as_ref().map_or(0, |c| c.seconds * 1000 + i64::from(c.nanos) / 1_000_000)
 }
 
 async fn a_thread_is_created_read_listed_and_updated(backend: Backend) {
@@ -67,7 +60,7 @@ async fn a_thread_is_created_read_listed_and_updated(backend: Backend) {
         attributes(&[("topic", "billing")])
     );
 
-    let mut listed = ids(&pages(&**s, &scope, NEWEST, 1).await);
+    let mut listed = ids(&pages(&**s, &scope, 1).await);
     listed.sort();
     let mut created = vec![first.thread_id.clone(), second.thread_id.clone()];
     created.sort();
@@ -113,7 +106,7 @@ async fn an_expired_thread_reads_as_not_found(backend: Backend) {
     let t = s.create_thread(req).await.unwrap();
     tokio::time::sleep(Duration::from_millis(2100)).await;
     assert!(not_found(s.get_thread(&t.thread_id).await));
-    assert!(pages(&**s, &scope, NEWEST, 0).await.is_empty());
+    assert!(pages(&**s, &scope, 0).await.is_empty());
     store.close().await;
 }
 
@@ -138,9 +131,9 @@ async fn a_commit_does_not_extend_expiry(backend: Backend) {
     store.close().await;
 }
 
-/// Newest first pages by creation without gap or duplicate; no scope lists the project's threads,
-/// every scope's; a listed row leaves activity and expiry to `get_thread`.
-async fn threads_list_newest_first_by_scope_or_project(backend: Backend) {
+/// A paged walk lists every thread of the scope exactly once; no scope lists the project's
+/// threads, every scope's; a listed row leaves activity and expiry to `get_thread`.
+async fn threads_list_every_thread_once_by_scope_or_project(backend: Backend) {
     let store = backend.store(LeaseTiming::default()).await;
     let s = &store.storage;
     let (scope, other) = (crate::shortuuid("user-"), crate::shortuuid("user-"));
@@ -151,19 +144,18 @@ async fn threads_list_newest_first_by_scope_or_project(backend: Backend) {
         made.push(s.create_thread(request).await.unwrap());
     }
 
-    let newest = pages(&**s, &scope, NEWEST, 2).await;
+    let listed = pages(&**s, &scope, 2).await;
     let mut expected = ids(&made[..3]);
-    let mut listed = ids(&newest);
+    let mut listed_ids = ids(&listed);
     expected.sort();
-    listed.sort();
-    assert_eq!(listed, expected, "two pages of the scope, no gap or duplicate");
-    assert!(newest.windows(2).all(|w| created(&w[0]) >= created(&w[1])), "newest first");
-    for t in &newest {
+    listed_ids.sort();
+    assert_eq!(listed_ids, expected, "two pages of the scope, no gap or duplicate");
+    for t in &listed {
         assert_eq!((t.last_active, t.expires_at), (None, None), "{}: live fields", t.thread_id);
         assert_eq!(t.idle_ttl.map(|d| d.seconds), Some(3600));
     }
 
-    let project = ids(&pages(&**s, "", NEWEST, 0).await);
+    let project = ids(&pages(&**s, "", 0).await);
     for t in &made {
         assert!(project.contains(&t.thread_id), "{} missing from the project's list", t.thread_id);
     }
@@ -175,54 +167,57 @@ async fn threads_list_newest_first_by_scope_or_project(backend: Backend) {
 }
 
 crate::contract!(
-    threads_list_newest_first_by_scope_or_project,
+    threads_list_every_thread_once_by_scope_or_project,
     a_thread_is_created_read_listed_and_updated,
     a_deleted_thread_is_gone_and_deleting_again_is_safe,
     an_expired_thread_reads_as_not_found,
     a_commit_does_not_extend_expiry,
 );
 
-/// Oldest first is newest first reversed, across pages; a page token continues only the order
-/// that issued it.
+/// Pages hold 50 threads when no limit is given and 100 at most; a full walk of pages of 7 lists
+/// every thread exactly once, each page full until the last; a token continues only the scope
+/// that issued it, and a malformed one is refused.
 #[tokio::test]
-async fn sqlite_threads_list_oldest_first_and_tokens_keep_their_order() {
+async fn sqlite_thread_pages_walk_every_thread_once() {
     let store = Backend::Sqlite.store(LeaseTiming::default()).await;
     let s = &*store.storage;
     let scope = crate::shortuuid("user-");
-    for _ in 0..5 {
-        let request = CreateRequest { scope: scope.clone(), ..Default::default() };
-        s.create_thread(request).await.unwrap();
-    }
-    let newest = ids(&pages(s, &scope, NEWEST, 2).await);
-    let mut oldest = ids(&pages(s, &scope, OLDEST, 2).await);
-    oldest.reverse();
-    assert_eq!(newest.len(), 5);
-    assert_eq!(oldest, newest);
-    assert_eq!(ids(&pages(s, "", OLDEST, 3).await).len(), 5, "the project's list, oldest first");
-
-    let first = ListRequest { scope: scope.clone(), limit: 2, ..Default::default() };
-    let token = s.list_threads(first, NEWEST).await.unwrap().next_page_token;
-    let reused = ListRequest { scope: scope.clone(), page_token: token, limit: 2 };
-    assert!(matches!(s.list_threads(reused, OLDEST).await, Err(StorageError::Invalid(_))));
-    store.close().await;
-}
-
-/// A page is 50 threads when no limit is given and 100 at most.
-#[tokio::test]
-async fn sqlite_thread_pages_hold_fifty_by_default_and_a_hundred_at_most() {
-    let store = Backend::Sqlite.store(LeaseTiming::default()).await;
-    let s = &*store.storage;
-    let scope = crate::shortuuid("user-");
+    let mut made = Vec::new();
     for _ in 0..101 {
         let request = CreateRequest { scope: scope.clone(), ..Default::default() };
-        s.create_thread(request).await.unwrap();
+        made.push(s.create_thread(request).await.unwrap().thread_id);
     }
     for (limit, rows) in [(0, 50), (1000, 100)] {
         let request = ListRequest { scope: scope.clone(), limit, ..Default::default() };
-        let page = s.list_threads(request, NEWEST).await.unwrap();
+        let page = s.list_threads(request).await.unwrap();
         assert_eq!(page.threads.len(), rows, "limit {limit}");
         assert!(!page.next_page_token.is_empty());
     }
+
+    let mut sizes = Vec::new();
+    let mut listed = Vec::new();
+    let mut page_token = String::new();
+    loop {
+        let request = ListRequest { scope: scope.clone(), page_token, limit: 7 };
+        let page = s.list_threads(request).await.unwrap();
+        sizes.push(page.threads.len());
+        listed.extend(ids(&page.threads));
+        if page.next_page_token.is_empty() {
+            break;
+        }
+        page_token = page.next_page_token;
+    }
+    assert_eq!(sizes, [vec![7; 14], vec![3]].concat());
+    made.sort();
+    listed.sort();
+    assert_eq!(listed, made, "no gap or duplicate");
+
+    let first = ListRequest { scope: scope.clone(), limit: 2, ..Default::default() };
+    let token = s.list_threads(first).await.unwrap().next_page_token;
+    let elsewhere = ListRequest { scope: "other".into(), page_token: token, limit: 2 };
+    assert!(matches!(s.list_threads(elsewhere).await, Err(StorageError::Invalid(_))));
+    let broken = ListRequest { scope, page_token: "broken".into(), limit: 2 };
+    assert!(matches!(s.list_threads(broken).await, Err(StorageError::Invalid(_))));
     store.close().await;
 }
 

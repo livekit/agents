@@ -111,8 +111,7 @@ service speaks, on both backends.
 pub trait Storage: Send + Sync {
     async fn create_thread(&self, request: CreateRequest) -> Result<ThreadRecord, StorageError>;
     async fn get_thread(&self, thread_id: &str) -> Result<ThreadRecord, StorageError>;
-    async fn list_threads(&self, request: ListRequest, order: SortOrder)
-        -> Result<ListResponse, StorageError>;
+    async fn list_threads(&self, request: ListRequest) -> Result<ListResponse, StorageError>;
     async fn update_thread(&self, request: UpdateRequest) -> Result<ThreadRecord, StorageError>;
     async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError>;
     async fn open(&self, thread_id: &str) -> Result<Thread, StorageError>;
@@ -128,7 +127,7 @@ pub trait Storage: Send + Sync {
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `create_thread`                        | Accept optional scope, attributes and idle TTL; mint an `AT_` id and return only after its metadata and database exist. A partially created thread must not become usable. |
 | `get_thread`                           | Return thread metadata; unknown, deleted or expired threads fail with `NotFound` (Python `ThreadNotFound`).                                                                |
-| `list_threads`                         | Page live threads by creation, newest or oldest first, of one scope or (empty scope) the project; 50 a page by default, 100 at most; rows leave activity and expiry unset. |
+| `list_threads`                         | Page live threads, in an unspecified order stable across pages, of one scope or (empty scope) the project; 50 a page by default, 100 at most; rows leave activity and expiry unset. |
 | `update_thread`                        | Merge attributes (an empty value deletes the key) and apply an idle-TTL update, returning the updated metadata. This is the activity boundary that moves expiry.           |
 | `delete_thread`                        | Make the thread unavailable, coordinate with active handles, and reclaim its metadata and database; repeating deletion is safe.                                            |
 | `open`                                 | Resolve an existing thread and return the shared engine's `Thread` handle. Opening alone does not acquire a partition lease; each lease names the owner that takes it.          |

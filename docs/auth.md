@@ -64,6 +64,8 @@ A grant with no subject (`scope`, `threadIds` or `all`) is refused.
 - `scope`: its own scope, with or without naming it; another scope is `403`.
 - `threadIds`: nothing; a list is `403`.
 
+The order of a list is unspecified, stable across its pages.
+
 A thread belongs to the project, not to an agent or a deployment: a thread grant names
 neither and works on every door of the project.
 

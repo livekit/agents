@@ -18,9 +18,9 @@ threads = storage.threads
 
 info = await threads.create_thread(scope=user_id, attributes={"title": "New chat"})
 thread_id = info.thread_id
-page = await threads.list_threads(user_id, limit=30)                    # the scope, newest first
-older = await threads.list_threads(user_id, page_token=page.next_page_token, limit=30)
-first = await threads.list_threads(sort_order="oldest_first")           # the project's, oldest first
+page = await threads.list_threads(user_id, limit=30)                    # one page of the scope
+more = await threads.list_threads(user_id, page_token=page.next_page_token, limit=30)
+everything = await threads.list_threads()                               # the project's
 
 info = await threads.get_thread(thread_id)                             # raises ThreadNotFound
 await threads.update_thread(thread_id, attributes={"title": "Renewal"})   # idle_ttl_seconds=
@@ -33,7 +33,7 @@ await storage.aclose()
 |---|---|---|
 | `CreateThread` | optional `scope`, `attributes`, `idle_ttl` | the thread, with its database created |
 | `GetThread` | `thread_id` | the thread |
-| `ListThreads` | optional `scope`, `sort_order`, `page_token`, `limit` (50 by default, 100 at most) | one page of threads by creation, newest first unless `sort_order` is `SORT_ORDER_ASC`, and the `next_page_token` of the next page, empty at the end |
+| `ListThreads` | optional `scope`, `page_token`, `limit` (50 by default, 100 at most) | one page of threads, in an unspecified order stable across pages, and the `next_page_token` of the next page, empty at the end |
 | `UpdateThread` | `thread_id`, `attributes` (an empty value deletes the entry), `idle_ttl` | the thread; counts as activity |
 | `DeleteThread` | `thread_id` | nothing; its content goes with it |
 | `GetThreadItems` | `thread_id`, optional `agent`, `after`, `limit` | the history in order, one page: each item's `agent`, `seq`, `message_id` and chat item, and the `after` cursor of the next page |
@@ -46,17 +46,17 @@ Python client reads and writes them as seconds. A listed thread carries
 `thread_id`, `scope`, `attributes`, `created_at` and `idle_ttl_seconds`, not
 `last_active` or `expires_at`: those come from `GetThread`. `list_threads`
 returns a `ThreadPage`: `threads`, each a `ThreadSummary` of those fields, and
-the `next_page_token` to pass as the next call's `page_token`, empty on the
-last page; a token continues only the `sort_order` that issued it. `sort_order`
-is `"newest_first"` (the default) or `"oldest_first"`, and `scope=None` lists
-what the grant covers: the project's threads under the project credential. A
+the `next_page_token`: pass it back as `page_token` to get the next page; an
+empty one means the end, and a page may be short while a token is set. The
+order is unspecified, stable across pages. `scope=None` lists what the grant
+covers: the project's threads under the project credential. A
 thread lives in the project's data region and belongs to the project, not
 to one agent: any agent of the project continues it.
 
 A thread's `scope` is its subject: an opaque identifier the application
 sets for the person or account the thread is about, hashed if it is
 personal. It is the one dimension threads are listed by, beside the
-project-wide list: by creation, newest or oldest first, paginated, each row
+project-wide list: paginated, in no particular order, each row
 with the attributes the application set, a title or a preview. A thread per
 chat with the user as scope is how a sidebar works.
 
@@ -78,7 +78,7 @@ lk = api.LiveKitAPI()
 
 thread = lk.threads.get(thread_id)                                       # a handle; nothing fetched yet
 thread = await lk.threads.create(scope=user_id)                          # a new thread for a subject
-threads = await lk.threads.list(scope=user_id, limit=30)                 # newest first; no activity or expiry
+threads = await lk.threads.list(scope=user_id, limit=30)                 # one page; no activity or expiry
 
 thread.id
 info = await thread.info()                                                 # scope, attributes, created, last active

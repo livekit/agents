@@ -563,9 +563,8 @@ where
     async fn list_threads(
         &self,
         request: livekit_protocol::agent::agent_thread::ListRequest,
-        order: lk_agents_abi::storage::SortOrder,
     ) -> Result<livekit_protocol::agent::agent_thread::ListResponse, StorageError> {
-        self.storage.list_threads(request, order).await
+        self.storage.list_threads(request).await
     }
 
     async fn update_thread(

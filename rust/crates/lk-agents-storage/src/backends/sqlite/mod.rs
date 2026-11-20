@@ -14,7 +14,6 @@ use crate::sql::{Bind, Cells, Row, SqlValue, Statement, statement};
 use crate::thread::db;
 use crate::thread::{LeaseTiming, SchemaCell, Thread};
 use crate::{Storage, ThreadDbConnection, shortuuid};
-use lk_agents_abi::storage::SortOrder;
 use lk_agents_abi::telemetry::Cx;
 use lk_agents_net::owned::Background;
 
@@ -47,11 +46,9 @@ const REGISTRY_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS threads (
   expires_at INTEGER NOT NULL
 )";
 
-// A listing seeks one of these in either direction: a scope's threads, or the project's.
+// A scope's listing seeks this index; the project's seeks the primary key.
 const REGISTRY_SCOPE_INDEX: &str =
-    "CREATE INDEX IF NOT EXISTS threads_scope_created ON threads (scope, created_at, thread_id)";
-const REGISTRY_CREATED_INDEX: &str =
-    "CREATE INDEX IF NOT EXISTS threads_created ON threads (created_at, thread_id)";
+    "CREATE INDEX IF NOT EXISTS threads_scope ON threads (scope, thread_id)";
 
 // One current registry format; unreleased layouts are not migrated.
 const REGISTRY_METADATA: &str = "CREATE TABLE IF NOT EXISTS registry_schema (
@@ -91,43 +88,21 @@ VALUES (:thread_id, :scope, :attributes, :now, :now, :idle_ttl, :expires_at)
 "#
 }
 
-// One page of live threads by creation, past the previous page's last row `(at_ms, at_id)`: a
-// scope's or the project's, newest or oldest first.
+// One page of live threads by id, past the previous page's last id: a scope's or the project's.
 statement! {
-    SelectScopeNewest<'a> { scope: &'a str, now: i64, at_ms: i64, at_id: &'a str, limit: i64 } => r#"
+    SelectScopeThreads<'a> { scope: &'a str, now: i64, after: &'a str, limit: i64 } => r#"
 SELECT thread_id, scope, attributes, created_at, last_active, idle_ttl, expires_at
-FROM threads WHERE scope = :scope
+FROM threads WHERE scope = :scope AND thread_id > :after
   AND (expires_at = 0 OR expires_at > :now)
-  AND (created_at < :at_ms OR (created_at = :at_ms AND thread_id < :at_id))
-ORDER BY created_at DESC, thread_id DESC LIMIT :limit
+ORDER BY thread_id LIMIT :limit
 "#
 }
 
 statement! {
-    SelectScopeOldest<'a> { scope: &'a str, now: i64, at_ms: i64, at_id: &'a str, limit: i64 } => r#"
+    SelectAllThreads<'a> { now: i64, after: &'a str, limit: i64 } => r#"
 SELECT thread_id, scope, attributes, created_at, last_active, idle_ttl, expires_at
-FROM threads WHERE scope = :scope
-  AND (expires_at = 0 OR expires_at > :now)
-  AND (created_at > :at_ms OR (created_at = :at_ms AND thread_id > :at_id))
-ORDER BY created_at, thread_id LIMIT :limit
-"#
-}
-
-statement! {
-    SelectAllNewest<'a> { now: i64, at_ms: i64, at_id: &'a str, limit: i64 } => r#"
-SELECT thread_id, scope, attributes, created_at, last_active, idle_ttl, expires_at
-FROM threads WHERE (expires_at = 0 OR expires_at > :now)
-  AND (created_at < :at_ms OR (created_at = :at_ms AND thread_id < :at_id))
-ORDER BY created_at DESC, thread_id DESC LIMIT :limit
-"#
-}
-
-statement! {
-    SelectAllOldest<'a> { now: i64, at_ms: i64, at_id: &'a str, limit: i64 } => r#"
-SELECT thread_id, scope, attributes, created_at, last_active, idle_ttl, expires_at
-FROM threads WHERE (expires_at = 0 OR expires_at > :now)
-  AND (created_at > :at_ms OR (created_at = :at_ms AND thread_id > :at_id))
-ORDER BY created_at, thread_id LIMIT :limit
+FROM threads WHERE thread_id > :after AND (expires_at = 0 OR expires_at > :now)
+ORDER BY thread_id LIMIT :limit
 "#
 }
 
@@ -197,7 +172,6 @@ impl SqliteStorage {
             .batch(vec![
                 Statement::ddl(REGISTRY_SCHEMA),
                 Statement::ddl(REGISTRY_SCOPE_INDEX),
-                Statement::ddl(REGISTRY_CREATED_INDEX),
                 Statement::ddl(REGISTRY_METADATA),
                 SetRegistryVersion {}.bind(),
             ])
@@ -327,49 +301,26 @@ impl Storage for SqliteStorage {
         self.live(thread_id).await
     }
 
-    async fn list_threads(
-        &self,
-        request: ListRequest,
-        order: SortOrder,
-    ) -> Result<ListResponse, StorageError> {
+    async fn list_threads(&self, request: ListRequest) -> Result<ListResponse, StorageError> {
         let limit = thread_page_limit(request.limit);
         let scope = request.scope.as_str();
-        let listing = ("threads", scope, order.as_str());
-        let start = match order {
-            SortOrder::NewestFirst => (i64::MAX, String::new()),
-            SortOrder::OldestFirst => (i64::MIN, String::new()),
-        };
-        let (at_ms, at_id) = Cursor::position(Some(&request.page_token), listing, start)?;
-        let (now, at_id, limit_plus_one) = (self.now_ms(), at_id.as_str(), i64::from(limit) + 1);
-        let select = match (scope.is_empty(), order) {
-            (false, SortOrder::NewestFirst) => {
-                SelectScopeNewest { scope, now, at_ms, at_id, limit: limit_plus_one }.bind()
-            }
-            (false, SortOrder::OldestFirst) => {
-                SelectScopeOldest { scope, now, at_ms, at_id, limit: limit_plus_one }.bind()
-            }
-            (true, SortOrder::NewestFirst) => {
-                SelectAllNewest { now, at_ms, at_id, limit: limit_plus_one }.bind()
-            }
-            (true, SortOrder::OldestFirst) => {
-                SelectAllOldest { now, at_ms, at_id, limit: limit_plus_one }.bind()
-            }
+        let listing = ("threads", scope);
+        let after = Cursor::position(Some(&request.page_token), listing, String::new())?;
+        let (now, after, limit_plus_one) = (self.now_ms(), after.as_str(), i64::from(limit) + 1);
+        let select = if scope.is_empty() {
+            SelectAllThreads { now, after, limit: limit_plus_one }.bind()
+        } else {
+            SelectScopeThreads { scope, now, after, limit: limit_plus_one }.bind()
         };
         let rows = self.registry.query(select).await?;
         let mut threads = Vec::with_capacity(rows.len());
-        let mut last = None;
         for row in rows.iter().take(limit as usize) {
             let (mut thread, _) = thread_record(row)?;
-            let created_ms = thread
-                .created_at
-                .as_ref()
-                .map_or(0, |c| c.seconds * 1000 + i64::from(c.nanos) / 1_000_000);
-            last = Some((created_ms, thread.thread_id.clone()));
             (thread.last_active, thread.expires_at) = (None, None);
             threads.push(thread);
         }
-        let next_page_token = match last {
-            Some(position) if rows.len() > limit as usize => Cursor::encode(listing, position),
+        let next_page_token = match threads.last() {
+            Some(last) if rows.len() > limit as usize => Cursor::encode(listing, &last.thread_id),
             _ => String::new(),
         };
         Ok(ListResponse { threads, next_page_token })
@@ -430,14 +381,13 @@ impl Storage for SqliteStorage {
 mod tests {
     use super::*;
 
-    /// Each listing seeks an index in its order: a page reads its rows, never sorts the
-    /// registry, whichever scope or order it lists.
+    /// Each listing seeks an index: a page reads its rows, never sorts the registry, whichever
+    /// scope it lists.
     #[test]
     fn registry_pages_seek_without_sorting() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute(REGISTRY_SCHEMA, []).unwrap();
         conn.execute(REGISTRY_SCOPE_INDEX, []).unwrap();
-        conn.execute(REGISTRY_CREATED_INDEX, []).unwrap();
         conn.execute_batch(
             "WITH RECURSIVE numbers(n) AS (
                SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 10000
@@ -448,16 +398,12 @@ mod tests {
         conn.execute("INSERT INTO threads VALUES ('AT_wanted', 'wanted', '{}', 1, 1, 0, 0)", [])
             .unwrap();
         type Params<'a> = &'a [(&'a str, &'a dyn rusqlite::ToSql)];
-        let cases: [(&str, i64, Params); 4] = [
-            (SelectScopeNewest::SQL, i64::MAX, &[(":scope", &"wanted")]),
-            (SelectScopeOldest::SQL, i64::MIN, &[(":scope", &"wanted")]),
-            (SelectAllNewest::SQL, i64::MAX, &[]),
-            (SelectAllOldest::SQL, i64::MIN, &[]),
-        ];
-        for (sql, at_ms, scope) in cases {
+        let cases: [(&str, Params); 2] =
+            [(SelectScopeThreads::SQL, &[(":scope", &"wanted")]), (SelectAllThreads::SQL, &[])];
+        for (sql, scope) in cases {
             let mut statement = conn.prepare(sql).unwrap();
             let mut params: Vec<(&str, &dyn rusqlite::ToSql)> =
-                vec![(":now", &0), (":at_ms", &at_ms), (":at_id", &""), (":limit", &10)];
+                vec![(":now", &0), (":after", &""), (":limit", &10)];
             params.extend_from_slice(scope);
             let ids = statement
                 .query_map(params.as_slice(), |row| row.get::<_, String>(0))
@@ -475,13 +421,7 @@ mod tests {
     fn registry_reads_return_thread_record_columns() {
         let columns = "thread_id, scope, attributes, created_at, last_active, idle_ttl, expires_at";
         let one_line = |sql: &str| sql.split_whitespace().collect::<Vec<_>>().join(" ");
-        for sql in [
-            SelectRegistryThread::SQL,
-            SelectScopeNewest::SQL,
-            SelectScopeOldest::SQL,
-            SelectAllNewest::SQL,
-            SelectAllOldest::SQL,
-        ] {
+        for sql in [SelectRegistryThread::SQL, SelectScopeThreads::SQL, SelectAllThreads::SQL] {
             assert!(one_line(sql).starts_with(&format!("SELECT {columns} FROM")), "{sql}");
         }
         let update = one_line(UpdateRegistryThread::SQL);

@@ -39,31 +39,41 @@ async def test_default_local_directory_is_project_isolated_and_survives_pickle(
         await storage.aclose()
 
 
-async def test_list_threads_pages_summaries_in_either_order(tmp_path: Path) -> None:
-    """Rows carry no activity or expiry; no scope lists the project's threads; a page token
-    continues its own order; an unknown order is refused."""
+async def test_list_threads_walks_every_thread_once_in_pages(tmp_path: Path) -> None:
+    """Rows carry no activity or expiry; a paged walk lists each of the scope's threads exactly
+    once in pages of the requested size; pages are 50 by default and 100 at most; no scope lists
+    the project's threads; a malformed page token is refused."""
     storage = SQLiteStorage(directory=tmp_path)
     try:
-        made = [await storage.threads.create_thread(scope=s) for s in ("a", "a", "a", "b")]
-        page = await storage.threads.list_threads("a", limit=2)
-        assert len(page.threads) == 2 and page.next_page_token
+        made = [await storage.threads.create_thread(scope="a") for _ in range(101)]
+        other = await storage.threads.create_thread(scope="b")
+        sizes: list[int] = []
+        listed: list[str] = []
+        token: str | None = None
+        while True:
+            page = await storage.threads.list_threads("a", page_token=token, limit=40)
+            sizes.append(len(page.threads))
+            listed += [t.thread_id for t in page.threads]
+            if not page.next_page_token:
+                break
+            token = page.next_page_token
+        assert sizes == [40, 40, 21]
+        assert sorted(listed) == sorted(t.thread_id for t in made)
         assert not hasattr(page.threads[0], "last_active")
         assert not hasattr(page.threads[0], "expires_at")
-        rest = await storage.threads.list_threads("a", page_token=page.next_page_token, limit=2)
-        newest = [t.thread_id for t in page.threads + rest.threads]
-        assert rest.next_page_token == "" and sorted(newest) == sorted(
-            t.thread_id for t in made[:3]
-        )
-        oldest = await storage.threads.list_threads("a", sort_order="oldest_first")
-        assert [t.thread_id for t in oldest.threads] == newest[::-1]
-        project = await storage.threads.list_threads()
-        assert sorted(t.thread_id for t in project.threads) == sorted(t.thread_id for t in made)
+        assert len((await storage.threads.list_threads("a")).threads) == 50
+        assert len((await storage.threads.list_threads("a", limit=1000)).threads) == 100
+        project: list[str] = []
+        token = None
+        while True:
+            page = await storage.threads.list_threads(page_token=token)
+            project += [t.thread_id for t in page.threads]
+            if not page.next_page_token:
+                break
+            token = page.next_page_token
+        assert sorted(project) == sorted([t.thread_id for t in made] + [other.thread_id])
         with pytest.raises(ValueError):
-            await storage.threads.list_threads(
-                "a", sort_order="oldest_first", page_token=page.next_page_token
-            )
-        with pytest.raises(ValueError):
-            await storage.threads.list_threads(sort_order="sideways")  # type: ignore[arg-type]
+            await storage.threads.list_threads("a", page_token="broken")
     finally:
         await storage.aclose()
 

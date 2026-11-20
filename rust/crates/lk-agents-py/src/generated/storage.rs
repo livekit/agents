@@ -198,29 +198,23 @@ impl Storage {
         })
     }
 
-    /// One page of threads by creation: one `scope`'s, or the project's with none.
-    /// `page_token` is the previous page's `next_page_token`, bound to its `sort_order`; `limit`
-    /// is 50 when omitted and at most 100.
-    #[pyo3(signature = (scope = None, *, sort_order = None, page_token = None, limit = None))]
+    /// One page of threads: one `scope`'s, or the project's with none. Pass `next_page_token`
+    /// back as `page_token` to get the next page; an empty one means the end, and a page may be
+    /// short while a token is set. The order is unspecified, stable across pages. `limit` is 50
+    /// when omitted and at most 100.
+    #[pyo3(signature = (scope = None, page_token = None, limit = None))]
     fn list_threads<'py>(
         &self,
         py: Python<'py>,
         scope: ::std::option::Option<::std::string::String>,
-        sort_order: Option<Bound<'_, PyAny>>,
         page_token: ::std::option::Option<::std::string::String>,
         #[pyo3(from_py_with = _extract_storage_list_threads_limit)]
         limit: StorageListThreadsLimitInput,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let sort_order = match sort_order {
-            Some(v) => crate::generated::records::storage_class::sort_order_from_py(v.as_any())?,
-            None => "newest_first".parse::<::lk_agents_abi::storage::SortOrder>().map_err(|e| {
-                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(&e))
-            })?,
-        };
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::list_threads(&this, scope, sort_order, page_token, limit)
+            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::list_threads(&this, scope, page_token, limit)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(

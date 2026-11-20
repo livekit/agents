@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
-use lk_agents_abi::storage::{DEFAULT_THREAD_PAGE, MAX_THREAD_PAGE, SortOrder};
+use lk_agents_abi::storage::{DEFAULT_THREAD_PAGE, MAX_THREAD_PAGE};
 use lk_agents_net::owned::Background;
 
 /// A `ListThreads` page size: unset (or not positive) is the default, larger is clamped.
@@ -44,14 +44,11 @@ pub trait Storage: Send + Sync {
     async fn create_thread(&self, request: CreateRequest) -> Result<ThreadRecord, StorageError>;
     /// Unknown, deleted or expired threads fail [`StorageError::NotFound`].
     async fn get_thread(&self, thread_id: &str) -> Result<ThreadRecord, StorageError>;
-    /// One page of threads by creation in `order`: `request.scope`'s, or the project's when it
-    /// is empty. Rows leave `last_active` and `expires_at` unset; `limit` goes through
-    /// [`thread_page_limit`] and a page token is bound to its scope and order.
-    async fn list_threads(
-        &self,
-        request: ListRequest,
-        order: SortOrder,
-    ) -> Result<ListResponse, StorageError>;
+    /// One page of threads: `request.scope`'s, or the project's when it is empty. The order is
+    /// unspecified, stable across pages; the opaque page token continues the listing that issued
+    /// it and nothing else. Rows leave `last_active` and `expires_at` unset; `limit` goes
+    /// through [`thread_page_limit`].
+    async fn list_threads(&self, request: ListRequest) -> Result<ListResponse, StorageError>;
     /// Merges attributes (an empty value deletes the key) and moves expiry: the activity
     /// boundary.
     async fn update_thread(&self, request: UpdateRequest) -> Result<ThreadRecord, StorageError>;

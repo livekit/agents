@@ -9,8 +9,8 @@ use livekit_protocol::agent::agent_thread::{
 use lk_agents_abi::storage as host;
 use lk_agents_abi::storage::handles::Thread as Reads;
 use lk_agents_abi::storage::{
-    SortOrder, Storage as HostStorageClass, StorageError, TaskState, ThreadInfo, ThreadItem,
-    ThreadItemPage, ThreadPage, ThreadSummary, ThreadTask,
+    Storage as HostStorageClass, StorageError, TaskState, ThreadInfo, ThreadItem, ThreadItemPage,
+    ThreadPage, ThreadSummary, ThreadTask,
 };
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::owned::Background;
@@ -445,7 +445,6 @@ impl HostStorageClass for Namespace {
     async fn list_threads(
         &self,
         scope: Option<String>,
-        sort_order: SortOrder,
         page_token: Option<String>,
         limit: Option<u32>,
     ) -> Result<ThreadPage, StorageError> {
@@ -455,7 +454,7 @@ impl HostStorageClass for Namespace {
             // `0` is the backend's default page; anything above the cap is clamped there.
             limit: limit.map_or(0, |l| i32::try_from(l).unwrap_or(i32::MAX)),
         };
-        Ok(thread_page(self.storage().await?.list_threads(request, sort_order).await?))
+        Ok(thread_page(self.storage().await?.list_threads(request).await?))
     }
 
     async fn update_thread(

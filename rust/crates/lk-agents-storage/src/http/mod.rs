@@ -249,14 +249,11 @@ impl generated::ThreadService for ThreadService {
         }
         let page = self
             .storage
-            .list_threads(
-                agent_thread::ListRequest {
-                    scope,
-                    page_token: request.page_cursor,
-                    limit: request.page_page_size,
-                },
-                lk_agents_abi::storage::SortOrder::NewestFirst,
-            )
+            .list_threads(agent_thread::ListRequest {
+                scope,
+                page_token: request.page_cursor,
+                limit: request.page_page_size,
+            })
             .await?;
         Ok(ListThreadsResponse { items: page.threads, page_info: page_info(page.next_page_token) })
     }

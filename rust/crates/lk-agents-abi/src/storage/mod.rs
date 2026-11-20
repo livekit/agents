@@ -247,14 +247,14 @@ pub trait Storage: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn get_thread(&self, thread_id: String) -> Result<ThreadInfo, StorageError>;
 
-    /// One page of threads by creation: one `scope`'s, or the project's with none.
-    /// `page_token` is the previous page's `next_page_token`, bound to its `sort_order`; `limit`
-    /// is 50 when omitted and at most 100.
+    /// One page of threads: one `scope`'s, or the project's with none. Pass `next_page_token`
+    /// back as `page_token` to get the next page; an empty one means the end, and a page may be
+    /// short while a token is set. The order is unspecified, stable across pages. `limit` is 50
+    /// when omitted and at most 100.
     #[host(await)]
     async fn list_threads(
         &self,
         #[host(default = None)] scope: Option<String>,
-        #[host(kw, default = "newest_first")] sort_order: SortOrder,
         #[host(default = None)] page_token: Option<String>,
         #[host(default = None)] limit: Option<u32>,
     ) -> Result<ThreadPage, StorageError>;
@@ -361,18 +361,6 @@ pub struct ThreadPage {
     pub threads: Vec<ThreadSummary>,
     /// The next page's `page_token`; empty at the end.
     pub next_page_token: String,
-}
-
-/// The order `list_threads` pages threads in, by creation.
-#[crate::host(record(module = "storage_class", extract))]
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum SortOrder {
-    #[default]
-    #[host(rename = "newest_first")]
-    NewestFirst,
-    #[host(rename = "oldest_first")]
-    OldestFirst,
 }
 
 /// The default `list_threads` page.
