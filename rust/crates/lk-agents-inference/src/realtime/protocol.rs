@@ -30,9 +30,11 @@ pub enum Incoming {
         response_id: String,
         client_event_id: Option<String>,
     },
+    /// `response_id`: the response the item is an output of, when the server names it.
     OutputItemAdded {
         item_id: String,
         kind: OutputItemKind,
+        response_id: Option<String>,
     },
     /// The part's modalities: a text part is text-only, any other carries audio.
     ContentPartAdded {

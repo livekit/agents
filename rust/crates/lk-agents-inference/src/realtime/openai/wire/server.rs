@@ -23,7 +23,11 @@ enum ServerEvent {
     #[serde(rename = "response.created")]
     ResponseCreated { response: ResponseRef },
     #[serde(rename = "response.output_item.added")]
-    OutputItemAdded { item: ItemHead },
+    OutputItemAdded {
+        item: ItemHead,
+        #[serde(default)]
+        response_id: Option<String>,
+    },
     #[serde(rename = "response.content_part.added")]
     ContentPartAdded { item_id: String, part: PartHead },
     #[serde(rename = "conversation.item.added")]
@@ -396,13 +400,17 @@ impl ServerEvent {
                     .metadata
                     .and_then(|mut metadata| metadata.remove("client_event_id")),
             },
-            OutputItemAdded { item } => match item {
-                ItemHead::Message { id } => {
-                    Incoming::OutputItemAdded { item_id: id, kind: OutputItemKind::Message }
-                }
-                ItemHead::FunctionCall { id } => {
-                    Incoming::OutputItemAdded { item_id: id, kind: OutputItemKind::FunctionCall }
-                }
+            OutputItemAdded { item, response_id } => match item {
+                ItemHead::Message { id } => Incoming::OutputItemAdded {
+                    item_id: id,
+                    kind: OutputItemKind::Message,
+                    response_id,
+                },
+                ItemHead::FunctionCall { id } => Incoming::OutputItemAdded {
+                    item_id: id,
+                    kind: OutputItemKind::FunctionCall,
+                    response_id,
+                },
                 ItemHead::Other => unhandled(),
             },
             ContentPartAdded { item_id, part } => Incoming::ContentPartAdded {

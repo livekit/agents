@@ -34,7 +34,15 @@ impl RealtimeMachine {
                 }
                 step
             }
-            Incoming::OutputItemAdded { item_id, kind: OutputItemKind::Message } => {
+            // An output of a response other than the open one: the tail of a cancelled response,
+            // whose item the server may still announce after the next response was created.
+            Incoming::OutputItemAdded { item_id, response_id: Some(of), .. }
+                if self.response_id().as_ref() != Some(&of) =>
+            {
+                self.closed_messages.insert(item_id);
+                Step::default()
+            }
+            Incoming::OutputItemAdded { item_id, kind: OutputItemKind::Message, .. } => {
                 self.on_message_added(item_id)
             }
             Incoming::OutputItemAdded { .. } => Step::default(),
@@ -438,6 +446,10 @@ impl RealtimeMachine {
     }
 
     fn on_output_item_done(&mut self, item: ChatItem) -> Step {
+        // The cancelled response's tail ends as it streamed: nobody's.
+        if self.stale(item.id()) {
+            return Step::default();
+        }
         if let ChatItem::FunctionCall(call) = &item
             && let Some(ChatItem::FunctionCall(remote)) = self.remote.get_mut(&call.id)
         {
