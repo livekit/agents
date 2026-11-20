@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-hume"
 dynamic = ["version"]
-description = "Hume TTS plugin for LiveKit agents"
+description = "Hume TTS and audio decisions plugin for LiveKit agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
