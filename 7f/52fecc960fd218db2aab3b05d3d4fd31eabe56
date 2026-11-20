@@ -1,0 +1,31 @@
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_614c0386580ba1::t_686db559b826db 1978-1981,3459,3995,4430,4670
+livekit-agents/livekit/agents/voice/agent_session.py
+  s_614c0386580ba1::t_2d9147e1d2519b 1623-1628,1630-1639,1703-1711,1713-1725
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_614c0386580ba1::t_9a716312994a7c 171-172,212-226,262-263,282-287,324-328,431-443,559,657-660,776-784,1126-1161,1201-1202
+livekit-agents/livekit/agents/voice/speech_handle.py
+  s_614c0386580ba1::t_3981949c693791 54-55
+spec/amd.md
+  s_614c0386580ba1::t_192f4cd0770566 99-100,111-113,200-202,229-230,265-266,413-415,618-644,740
+tests/test_amd.py
+  s_614c0386580ba1::t_8d93865c0218ac 14,2360-2593
+tests/test_realtime_turns.py
+  s_614c0386580ba1::t_6178a070b45d92 628
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7f52fecc960fd218db2aab3b05d3d4fd31eabe56",
+  "prompts": {},
+  "sessions": {
+    "s_614c0386580ba1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_614c0386580ba1",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
