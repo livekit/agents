@@ -209,15 +209,26 @@ def create_client_access_token(api_key: str | None, api_secret: str | None) -> s
     return create_access_token(api_key, api_secret)
 
 
+def _job_inference_token() -> str | None:
+    from ..job import get_job_context
+
+    try:
+        return get_job_context()._job_token(INFERENCE_CLAIMS)
+    except RuntimeError:
+        return None
+
+
+def access_token_available(api_key: str | None, api_secret: str | None) -> bool:
+    """False in token mode outside a running job, where ``create_access_token`` raises."""
+    if (not api_key or not api_secret) and token_mode_token() is not None:
+        return _job_inference_token() is not None
+    return True
+
+
 def create_access_token(api_key: str | None, api_secret: str | None, ttl: float = 600) -> str:
     if (not api_key or not api_secret) and token_mode_token() is not None:
         # token mode: no secret to sign with, the job keeps a token from the server current
-        from ..job import get_job_context
-
-        try:
-            token = get_job_context()._job_token(INFERENCE_CLAIMS)
-        except RuntimeError:
-            token = None
+        token = _job_inference_token()
         if token is None:
             raise RuntimeError(
                 "LiveKit Inference in token mode (LIVEKIT_TOKEN without an API key and secret) "

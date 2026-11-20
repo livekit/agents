@@ -283,6 +283,10 @@ async def test_inference_llm_is_constructed_before_the_job_in_token_mode() -> No
         )
         with pytest.raises(RuntimeError, match="needs a running job"):
             await llm._prewarm_impl()
+        # prewarm runs once, so it must stay available for the job
+        llm.prewarm()
+        http_llm.prewarm()
+        assert llm._prewarm_task is None and http_llm._prewarm_task is None
     finally:
         await llm.aclose()
         await http_llm.aclose()

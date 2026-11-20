@@ -47,6 +47,7 @@ from ._utils import (
     InferenceClass,
     _resolve_provider,
     _terminal_denial,
+    access_token_available,
     create_access_token,
     create_api_error_from_response,
     create_client_access_token,
@@ -229,6 +230,12 @@ class LLM(llm.LLM):
                 ),
             ),
         )
+
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        # prewarm runs once: without a token yet (token mode, before the job) leave it
+        # for the call that the job makes
+        if access_token_available(self._opts.api_key, self._opts.api_secret):
+            super().prewarm(loop=loop)
 
     async def _prewarm_impl(self) -> None:
         if self._ws is not None:

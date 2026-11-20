@@ -263,7 +263,8 @@ class _JobTokenClient:
                 logger.warning("failed to get a job token, retrying", extra={"error": str(res)})
                 return _JOB_TOKEN_RETRY_DELAY
 
-        return max(min(self._tokens[c][1] for c in claims) - time.time(), 0.0)
+        # the floor keeps a bad expiry from the server from making this a busy loop
+        return max(min(self._tokens[c][1] for c in claims) - time.time(), _JOB_TOKEN_RETRY_DELAY)
 
     async def keep_current(self, delay: float, *claims: str) -> None:
         """Renews the tokens with ``claims`` until cancelled, first after ``delay``."""
