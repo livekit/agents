@@ -1,0 +1,24 @@
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/_turn_detection.py
+  s_d91964e7ee0b88::t_ee67df42a2e521 109-110
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/stt.py
+  s_d91964e7ee0b88::t_ee67df42a2e521 205-206
+tests/test_plugin_elevenlabs_stt.py
+  s_d91964e7ee0b88::t_7c80c59a156531 1359-1401
+  s_d91964e7ee0b88::t_9143179a842a2b 1358
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ea7afa79af9085edc6b25eb35fca949387b97c0f",
+  "prompts": {},
+  "sessions": {
+    "s_d91964e7ee0b88": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1f8d6-4d55-79b1-ba2e-ea45adb22d80",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
