@@ -418,6 +418,23 @@ def fallback(
     return adapter, events
 
 
+async def test_fallback_sends_extra_headers_to_every_model_and_recovery_check() -> None:
+    primary = SwitchModel("primary", APIConnectionError("down"))
+    secondary = SwitchModel("secondary")
+    adapter, _ = fallback(primary, secondary)
+
+    response = await evaluate(adapter, decisions=CHECK, extra_headers={"X-Feature": "test"})
+    assert response.model == "secondary"
+    assert secondary.headers == [{"X-Feature": "test"}]
+    await asyncio.sleep(0.1)  # the failed primary's background check has run
+    # the request, then the recovery check
+    assert primary.headers == [{"X-Feature": "test"}, {"X-Feature": "test"}]
+
+    assert (await evaluate(adapter, decisions=CHECK)).model == "secondary"
+    assert secondary.headers[-1] == {}
+    await adapter.aclose()
+
+
 async def test_fallback_skips_a_failed_model_until_it_answers_again() -> None:
     primary = SwitchModel("primary", APIConnectionError("down"))
     adapter, events = fallback(primary, SwitchModel("secondary"))
