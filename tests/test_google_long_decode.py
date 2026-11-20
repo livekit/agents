@@ -36,7 +36,7 @@ _llms: list[LLM] = []
 
 @pytest.fixture(autouse=True)
 async def _close_llms():
-    # PR #7994: forced httpx client makes genai's httpx client close nondeterministically at GC; close here.
+    # PR #7994: forced httpx transport makes genai's httpx client close nondeterministically at GC; close here.
     yield
     for model in _llms:
         await model.aclose()

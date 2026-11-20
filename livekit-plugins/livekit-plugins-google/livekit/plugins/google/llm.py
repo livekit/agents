@@ -311,24 +311,20 @@ class LLM(llm.LLM):
             media_resolution=media_resolution,
         )
         # use httpx, whose timeout limits each read and not the total request time like aiohttp's;
-        # a client without an explicit transport keeps HTTPS_PROXY/NO_PROXY from the environment.
-        # genai presents a Vertex client certificate only through its own transport, so leave
-        # the transport to genai when one is configured.
+        # a custom transport bypasses genai's SSL context, so it gets the Vertex client cert here
         client_http_options = (
             http_options.model_copy() if is_given(http_options) else types.HttpOptions()
         )
-        self._httpx_client: httpx.AsyncClient | None = None
-        if (
-            "transport" not in (client_http_options.async_client_args or {})
-            and client_http_options.httpx_async_client is None
-            and not (
-                use_vertexai
-                and mtls.should_use_client_cert()  # type: ignore[no-untyped-call]
-                and mtls.has_default_client_cert_source()  # type: ignore[no-untyped-call]
-            )
-        ):
-            self._httpx_client = httpx.AsyncClient()
-            client_http_options.httpx_async_client = self._httpx_client
+        client_async_args = dict(client_http_options.async_client_args or {})
+        if "transport" not in client_async_args and client_http_options.httpx_async_client is None:
+            ssl_ctx = None
+            if use_vertexai:
+                try:
+                    ssl_ctx = mtls.get_default_ssl_context()
+                except Exception:
+                    logger.warning("failed to load the default client certificate", exc_info=True)
+            client_async_args["transport"] = httpx.AsyncHTTPTransport(verify=ssl_ctx or True)
+            client_http_options.async_client_args = client_async_args
         self._client = Client(
             api_key=gemini_api_key,
             vertexai=use_vertexai,
@@ -560,9 +556,6 @@ class LLM(llm.LLM):
 
         try:
             await self._client.aio.aclose()
-            # genai leaves a caller-supplied httpx client open
-            if self._httpx_client is not None:
-                await self._httpx_client.aclose()
         except Exception:
             logger.warning("failed to close the genai client", exc_info=True)
 

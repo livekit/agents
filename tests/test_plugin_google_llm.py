@@ -17,7 +17,7 @@ _llms: list[LLM] = []
 
 @pytest.fixture(autouse=True)
 async def _close_llms(monkeypatch: pytest.MonkeyPatch):
-    # PR #7994: forced httpx client makes genai's httpx client close nondeterministically at GC; close here.
+    # PR #7994: forced httpx transport makes genai's httpx client close nondeterministically at GC; close here.
     orig = LLM.__init__
 
     def _tracking_init(self: LLM, *args: object, **kwargs: object) -> None:
