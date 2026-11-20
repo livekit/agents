@@ -8,10 +8,11 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Generic, Literal
 
 from opentelemetry import trace
 from pydantic import BaseModel, Field
+from typing_extensions import Never, TypeVar
 
 from livekit import rtc
 
@@ -196,7 +197,15 @@ def _validate_result(result: DecisionResult, decision: Decision) -> None:
             raise APIError("score is outside the defined scale", retryable=False)
 
 
-class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
+# an adapter names its extra events here; a model that names none keeps strict event names
+TEvent = TypeVar("TEvent", contravariant=True, default=Never)
+
+
+class DecisionModel(
+    ABC,
+    rtc.EventEmitter[Literal["metrics_collected"] | TEvent],
+    Generic[TEvent],
+):
     """Provider-neutral batched decisions over a text input or conversation.
 
     A ChatContext is converted to a ``role: text`` transcript, so every provider receives
