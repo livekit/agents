@@ -20,6 +20,7 @@ from livekit.agents.tts import (
     TTSCapabilities,
     TTSError,
 )
+from livekit.agents.tts.fallback_adapter import FallbackSynthesizeStream, _in_recovery_probe
 from livekit.agents.tts.tts import SynthesizedAudio, SynthesizeStream
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TTS_STARTED_TIME
 from livekit.agents.utils.aio.channel import ChanEmpty
@@ -921,53 +922,123 @@ class _OutageStream(SynthesizeStream):
         self._tts.received.append(text)
 
 
+async def _speak_reply_on(stream: SynthesizeStream) -> None:
+    # like Agent.default.tts_node: the LLM tokens still arrive while the TTS is down
+    async def _push_reply() -> None:
+        for token in _REPLY_TOKENS:
+            await asyncio.sleep(0.2)
+            stream.push_text(token)
+        stream.end_input()
+
+    push_task = asyncio.create_task(_push_reply())
+    try:
+        async with stream:
+            async for _ in stream:
+                pass
+    finally:
+        await utils.aio.cancel_and_wait(push_task)
+
+
 async def _speak_reply(fallback_adapter: FallbackAdapter) -> None:
-    # like Agent.default.tts_node: AgentSession's default tts_conn_options (max_retry=3),
-    # with the LLM tokens still arriving while the TTS is down
-    async with fallback_adapter.stream(conn_options=DEFAULT_API_CONNECT_OPTIONS) as stream:
-
-        async def _push_reply() -> None:
-            for token in _REPLY_TOKENS:
-                await asyncio.sleep(0.2)
-                stream.push_text(token)
-            stream.end_input()
-
-        push_task = asyncio.create_task(_push_reply())
-        async for _ in stream:
-            pass
-        await push_task
+    # AgentSession's default tts_conn_options (max_retry=3)
+    await _speak_reply_on(fallback_adapter.stream(conn_options=DEFAULT_API_CONNECT_OPTIONS))
 
 
-async def test_stream_retry_sends_text_once() -> None:
-    # the TTS is down for 3s, longer than the adapter's retries of it (max_retry_per_tts=2,
-    # ~2.2s), so the adapter's stream fails and is retried, and the TTS is back during that retry
-    tts_impl = _OutageTTS(outage=3.0)
-    fallback_adapter = FallbackAdapter([tts_impl])
-    errors: list[TTSError] = []
-    fallback_adapter.on("error", errors.append)
-
-    await _speak_reply(fallback_adapter)
-    await fallback_adapter.aclose()
-
-    assert [e.recoverable for e in errors] == [True]  # the adapter's stream was retried once
-    assert tts_impl.received == [_REPLY]
-
-
-async def test_stream_retry_sends_text_once_to_secondary() -> None:
-    # the primary is down for the whole call and the secondary for 3s: both fail the first
-    # attempt, and the secondary serves the retry
+async def test_outage_longer_than_the_instance_retries_is_not_retried_by_the_adapter() -> None:
+    # the primary is down for the whole call and the secondary for 3s from its first connection
+    # attempt, longer than its own retries (max_retry_per_tts=2, ~2.2s). The adapter does not
+    # retry the request itself, so it fails once, with one unrecoverable error. Before, the
+    # session's max_retry=3 made it rerun both instances' retries and the secondary then served
     primary = _OutageTTS(outage=float("inf"))
     secondary = _OutageTTS(outage=3.0)
     fallback_adapter = FallbackAdapter([primary, secondary])
     errors: list[TTSError] = []
     fallback_adapter.on("error", errors.append)
 
-    await _speak_reply(fallback_adapter)
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    with pytest.raises(APIConnectionError):
+        await _speak_reply(fallback_adapter)
+    elapsed = loop.time() - start
     await fallback_adapter.aclose()
 
-    assert [e.recoverable for e in errors] == [True]  # the adapter's stream was retried once
-    assert primary.received == []
-    assert secondary.received == [_REPLY]
+    assert [e.recoverable for e in errors] == [False]
+    assert primary.received == [] and secondary.received == []
+    assert elapsed < 6.0, "the adapter reran the instances' retries"
+
+
+class _ReadThenFailTTS(TTS):
+    """Streaming TTS whose first stream reads two tokens and then fails, before any audio. Later
+    streams record the text they are given and speak it. Recovery probes are not counted."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            capabilities=TTSCapabilities(streaming=True), sample_rate=24000, num_channels=1
+        )
+        self.streams = 0
+        self.received: list[str] = []
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> ChunkedStream:
+        raise NotImplementedError
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
+        probe = _in_recovery_probe.get()
+        if not probe:
+            self.streams += 1
+        stream = _ReadThenFailStream(tts=self, conn_options=conn_options)
+        stream.probe = probe
+        return stream
+
+
+class _ReadThenFailStream(SynthesizeStream):
+    probe = False
+
+    async def _run(self, output_emitter: AudioEmitter) -> None:
+        assert isinstance(self._tts, _ReadThenFailTTS)
+        first = not self.probe and self._tts.streams == 1
+        text = ""
+        tokens = 0
+        if first:
+            async for data in self._input_ch:
+                if isinstance(data, str):
+                    tokens += 1
+                    if tokens == 2:
+                        raise APIConnectionError("connection dropped")
+
+        output_emitter.initialize(
+            request_id=utils.shortuuid(),
+            sample_rate=24000,
+            num_channels=1,
+            mime_type="audio/pcm",
+            stream=True,
+        )
+        output_emitter.start_segment(segment_id=utils.shortuuid())
+        async for data in self._input_ch:
+            if isinstance(data, str):
+                text += data
+                output_emitter.push(b"\x00\x00" * int(24000 * _SECONDS_PER_CHAR * len(data)))
+        output_emitter.end_segment()
+        if not self.probe:
+            self._tts.received.append(text)
+
+
+async def test_retried_stream_sends_text_once() -> None:
+    # FallbackAdapter.stream() never retries, but FallbackSynthesizeStream is exported and
+    # SynthesizeStream retries _run when it is built with max_retry > 0. The retry replays the
+    # whole input, so the text the first attempt recorded must not be sent again
+    tts_impl = _ReadThenFailTTS()
+    fallback_adapter = FallbackAdapter([tts_impl], max_retry_per_tts=0)
+    options = APIConnectOptions(max_retry=1, timeout=10.0, retry_interval=1.5)
+
+    await _speak_reply_on(FallbackSynthesizeStream(tts=fallback_adapter, conn_options=options))
+    await fallback_adapter.aclose()
+
+    assert tts_impl.streams == 2  # the first attempt, then the retry
+    assert tts_impl.received == [_REPLY]
 
 
 async def test_session_speaks_reply_once_after_tts_outage() -> None:
@@ -975,9 +1046,9 @@ async def test_session_speaks_reply_once_after_tts_outage() -> None:
     actions.add_user_speech(0.5, 2.5, "Where is my order?")
     actions.add_llm(_REPLY)
 
-    # the outage starts with the reply and outlasts the adapter's retries of the TTS, as
+    # the outage starts with the reply and ends within the adapter's retries of the TTS, as
     # above; the session keeps its default conn_options
-    fallback_adapter = FallbackAdapter([_OutageTTS(outage=3.0)])
+    fallback_adapter = FallbackAdapter([_OutageTTS(outage=1.0)])
     errors: list[TTSError] = []
     fallback_adapter.on("error", errors.append)
 
@@ -989,6 +1060,360 @@ async def test_session_speaks_reply_once_after_tts_outage() -> None:
     await asyncio.wait_for(run_session(session, agent), timeout=60)
     await fallback_adapter.aclose()
 
-    assert [e.recoverable for e in errors] == [True]  # the adapter's stream was retried once
+    assert errors == []
     played = [ev.playback_position for ev in playback_finished_events]
     assert played == pytest.approx([len(_REPLY) * _SECONDS_PER_CHAR], abs=0.1)
+
+
+class _CountingTTS(FakeTTS):
+    """FakeTTS that keeps the requests made for users, leaving out recovery probes. Each
+    request also appends the instance's `name` to `calls`, if given, to show the order."""
+
+    def __init__(self, *, name: str = "", calls: list[str] | None = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.user_requests: list[FakeChunkedStream | FakeSynthesizeStream] = []
+        self._name = name
+        self._calls = calls
+
+    @property
+    def user_attempts(self) -> int:
+        return sum(request.attempt for request in self.user_requests)
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> FakeChunkedStream:
+        stream = super().synthesize(text, conn_options=conn_options)
+        self._record(stream)
+        return stream
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> FakeSynthesizeStream:
+        stream = super().stream(conn_options=conn_options)
+        self._record(stream)
+        return stream
+
+    def _record(self, request: FakeChunkedStream | FakeSynthesizeStream) -> None:
+        if not _in_recovery_probe.get():
+            self.user_requests.append(request)
+            if self._calls is not None:
+                self._calls.append(self._name)
+
+
+async def _request(
+    fallback_adapter: FallbackAdapter, *, streamed: bool, text: str = "hello test", **kwargs: Any
+) -> None:
+    if streamed:
+        async with fallback_adapter.stream(**kwargs) as stream:
+            if text:
+                stream.push_text(text)
+            stream.end_input()
+            async for _ in stream:
+                pass
+    else:
+        async with fallback_adapter.synthesize(text, **kwargs) as chunked:
+            async for _ in chunked:
+                pass
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_caller_max_retry_is_ignored(streamed: bool) -> None:
+    # AgentSession passes max_retry=3 on every request. Applied to the adapter, it reruns every
+    # instance's retries once more per attempt (4 x 3 = 12 attempts per instance here)
+    fake1 = _CountingTTS(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = _CountingTTS(fake_exception=APIConnectionError("fake2 failed"))
+    fallback_adapter = FallbackAdapter([fake1, fake2], max_retry_per_tts=2)
+    errors: list[TTSError] = []
+    fallback_adapter.on("error", errors.append)
+
+    caller_options = APIConnectOptions(max_retry=3, timeout=0.5, retry_interval=0.1)
+    with pytest.raises(APIConnectionError):
+        await _request(fallback_adapter, streamed=streamed, conn_options=caller_options)
+
+    for fake in (fake1, fake2):
+        assert fake.user_attempts == 3  # the instance's own retries, once
+        for request in fake.user_requests:
+            assert request._conn_options.max_retry == 2
+            # the caller's timeout and retry interval still reach the instances
+            assert request._conn_options.timeout == 0.5
+            assert request._conn_options.retry_interval == 0.1
+
+    await fallback_adapter.aclose()
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_all_instances_failing_emits_one_unrecoverable_error(streamed: bool) -> None:
+    fake1 = _CountingTTS(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = _CountingTTS(fake_exception=APIConnectionError("fake2 failed"))
+    fallback_adapter = FallbackAdapter([fake1, fake2], max_retry_per_tts=1)
+    errors: list[TTSError] = []
+    fallback_adapter.on("error", errors.append)
+
+    # the options AgentSession passes: max_retry=3
+    with pytest.raises(APIConnectionError):
+        await _request(
+            fallback_adapter, streamed=streamed, conn_options=DEFAULT_API_CONNECT_OPTIONS
+        )
+
+    assert [e.recoverable for e in errors] == [False]
+    assert isinstance(errors[0].error, APIConnectionError)
+    assert [fake1.user_attempts, fake2.user_attempts] == [2, 2]  # each tried once: 1 + 1 retry
+
+    await fallback_adapter.aclose()
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+@pytest.mark.parametrize("unavailable", [[], [1], [0, 1]])
+async def test_every_instance_is_tried_once_before_a_request_fails(
+    streamed: bool, unavailable: list[int]
+) -> None:
+    # instances marked unavailable are tried last, not skipped: a request does not fail while
+    # one is left untried
+    calls: list[str] = []
+    fake1 = _CountingTTS(name="fake1", calls=calls, fake_exception=APIConnectionError("1 failed"))
+    fake2 = _CountingTTS(name="fake2", calls=calls, fake_exception=APIConnectionError("2 failed"))
+    fallback_adapter = FallbackAdapter([fake1, fake2], max_retry_per_tts=0)
+    for index in unavailable:
+        fallback_adapter._status[index].available = False
+    errors: list[TTSError] = []
+    fallback_adapter.on("error", errors.append)
+
+    with pytest.raises(APIConnectionError):
+        await _request(fallback_adapter, streamed=streamed)
+
+    assert calls == ["fake1", "fake2"]
+    assert [e.recoverable for e in errors] == [False]
+    assert [fake1.user_attempts, fake2.user_attempts] == [1, 1]
+
+    await fallback_adapter.aclose()
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_failure_after_audio_emits_recoverable_error_and_probes(streamed: bool) -> None:
+    # fake1 fails once its audio has started; the utterance ends there, it is not replayed on fake2
+    fake1 = FakeTTS(fake_audio_duration=1.0, fake_exception=APIConnectionError("connection lost"))
+    fake2 = FakeTTS(fake_audio_duration=1.0)
+    fallback_adapter = FallbackAdapterTester([fake1, fake2])
+    errors: list[TTSError] = []
+    fallback_adapter.on("error", errors.append)
+    requests1 = fake1.stream_ch if streamed else fake1.synthesize_ch
+    requests2 = fake2.stream_ch if streamed else fake2.synthesize_ch
+
+    await _request(fallback_adapter, streamed=streamed)
+
+    assert [e.recoverable for e in errors] == [True]
+    assert isinstance(errors[0].error, APIConnectionError)
+    assert not fallback_adapter.availability_changed_ch(fake1).recv_nowait().available
+    with pytest.raises(ChanEmpty):
+        requests2.recv_nowait()  # no replay on fake2
+
+    # the probe starts now, not when a later request skips fake1
+    assert await asyncio.wait_for(requests1.recv(), 1.0)  # the request fake1 failed
+    assert await asyncio.wait_for(requests1.recv(), 1.0)  # its recovery probe
+    status = fallback_adapter._status[0]
+    assert status.recovering_stream_task if streamed else status.recovering_synthesize_task
+
+    await fallback_adapter.aclose()
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_failure_after_audio_ends_the_session_reply_without_closing(streamed: bool) -> None:
+    # the primary fails after its audio started: apps see one recoverable error, and it does
+    # not count toward closing the session. One sentence, so a non-streaming instance (wrapped
+    # sentence by sentence) makes one request
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Where is my order?")
+    actions.add_llm("Your order has shipped.")
+
+    fake = FakeTTS(fake_audio_duration=1.0, fake_exception=APIConnectionError("connection lost"))
+    backup = FakeTTS(fake_audio_duration=1.0)
+    if not streamed:
+        _set_non_streaming(fake)
+        _set_non_streaming(backup)
+    fallback_adapter = FallbackAdapter([fake, backup])
+
+    session = create_session(actions)
+    session_errors: list[Any] = []
+    session.on("error", session_errors.append)
+    closes: list[Any] = []
+    session.on("close", closes.append)
+
+    agent = Agent(instructions="You are a helpful assistant.", tts=fallback_adapter)
+    await asyncio.wait_for(run_session(session, agent), timeout=60)
+    await fallback_adapter.aclose()
+
+    assert [(e.error.type, e.error.recoverable) for e in session_errors] == [("tts_error", True)]
+    assert [c.error for c in closes] == [None]  # only the close that run_session asks for
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_failure_after_audio_is_unrecoverable_without_another_instance(
+    streamed: bool,
+) -> None:
+    # nothing can serve the next utterance but the instance that just failed, as for a
+    # realtime model with no fallback left
+    fake = FakeTTS(fake_audio_duration=1.0, fake_exception=APIConnectionError("connection lost"))
+    fallback_adapter = FallbackAdapterTester([fake])
+    errors: list[TTSError] = []
+    fallback_adapter.on("error", errors.append)
+
+    await _request(fallback_adapter, streamed=streamed)
+
+    assert [e.recoverable for e in errors] == [False]
+    assert isinstance(errors[0].error, APIConnectionError)
+
+    await fallback_adapter.aclose()
+
+
+async def _all_instances_failed(*fakes: FakeTTS, streamed: bool) -> FallbackAdapterTester:
+    # every instance is marked unavailable by a request that none of them can serve; probes are
+    # then switched off (aclose) so only requests change what is available
+    fallback_adapter = FallbackAdapterTester(list(fakes))
+    with pytest.raises(APIConnectionError):
+        await _request(fallback_adapter, streamed=streamed)
+    for fake in fakes:
+        assert not fallback_adapter.availability_changed_ch(fake).recv_nowait().available
+    await fallback_adapter.aclose()
+    return fallback_adapter
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_secondary_that_serves_is_marked_available(streamed: bool) -> None:
+    fake1 = _CountingTTS(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = _CountingTTS(fake_exception=APIConnectionError("fake2 failed"))
+    fallback_adapter = await _all_instances_failed(fake1, fake2, streamed=streamed)
+    fake2.update_options(fake_exception=None, fake_audio_duration=1.0)
+
+    # every instance is tried again, fake1 first, and fake2 serves
+    await _request(fallback_adapter, streamed=streamed)
+
+    ev = fallback_adapter.availability_changed_ch(fake2).recv_nowait()
+    assert ev.tts is fake2 and ev.available
+    assert [status.available for status in fallback_adapter._status] == [False, True]
+
+    # fake1 is skipped and fake2, which works, is tried first
+    attempts1 = fake1.user_attempts
+    await _request(fallback_adapter, streamed=streamed)
+    assert fake1.user_attempts == attempts1
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_primary_that_serves_is_marked_available(streamed: bool) -> None:
+    fake1 = _CountingTTS(fake_exception=APIConnectionError("fake1 failed"))
+    fake2 = _CountingTTS(fake_exception=APIConnectionError("fake2 failed"))
+    fallback_adapter = await _all_instances_failed(fake1, fake2, streamed=streamed)
+    fake1.update_options(fake_exception=None, fake_audio_duration=1.0)
+
+    await _request(fallback_adapter, streamed=streamed)
+
+    ev = fallback_adapter.availability_changed_ch(fake1).recv_nowait()
+    assert ev.tts is fake1 and ev.available
+    assert [status.available for status in fallback_adapter._status] == [True, False]
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_unavailable_secondary_serves_when_the_primary_alone_fails(streamed: bool) -> None:
+    # after a total outage the primary serves first and is marked available, which leaves the
+    # secondary unavailable although nothing is wrong with it. When the primary then fails
+    # alone, the request goes to the secondary as a last resort instead of failing
+    calls: list[str] = []
+    fake1 = _CountingTTS(name="fake1", calls=calls, fake_exception=APIConnectionError("1 down"))
+    fake2 = _CountingTTS(name="fake2", calls=calls, fake_exception=APIConnectionError("2 down"))
+    fallback_adapter = await _all_instances_failed(fake1, fake2, streamed=streamed)
+    fake1.update_options(fake_exception=None, fake_audio_duration=1.0)
+    fake2.update_options(fake_exception=None, fake_audio_duration=1.0)
+    await _request(fallback_adapter, streamed=streamed)  # fake1 serves
+    assert [status.available for status in fallback_adapter._status] == [True, False]
+
+    fake1.update_options(
+        fake_exception=APIConnectionError("1 down again"), fake_audio_duration=None
+    )
+    errors: list[TTSError] = []
+    fallback_adapter.on("error", errors.append)
+    calls.clear()
+
+    await _request(fallback_adapter, streamed=streamed)
+
+    assert calls == ["fake1", "fake2"]  # fake2 is tried after fake1 failed, and serves
+    assert errors == []
+    assert [status.available for status in fallback_adapter._status] == [False, True]
+    ev = fallback_adapter.availability_changed_ch(fake2).recv_nowait()
+    assert ev.tts is fake2 and ev.available
+
+
+@pytest.mark.parametrize("text", ["", " "])
+async def test_request_without_speakable_text_does_not_restore_an_instance(text: str) -> None:
+    # a non-streaming instance is wrapped in a StreamAdapter, which makes no provider call for
+    # a request with no text: nothing shows the instance works
+    fake1 = _set_non_streaming(_CountingTTS(fake_exception=APIConnectionError("1 down")))
+    fake2 = _CountingTTS(fake_exception=APIConnectionError("2 down"))
+    fallback_adapter = await _all_instances_failed(fake1, fake2, streamed=True)
+    fake2.update_options(fake_exception=None, fake_audio_duration=1.0)
+    attempts = fake1.user_attempts
+
+    await _request(fallback_adapter, streamed=True, text=text)
+
+    assert fake1.user_attempts == attempts  # no provider call
+    assert [status.available for status in fallback_adapter._status] == [False, False]
+    for fake in (fake1, fake2):
+        with pytest.raises(ChanEmpty):
+            fallback_adapter.availability_changed_ch(fake).recv_nowait()
+
+    # a request with text still reaches fake2 after fake1 fails, and restores fake2 only
+    await _request(fallback_adapter, streamed=True)
+    assert [status.available for status in fallback_adapter._status] == [False, True]
+
+
+class _GatedProbeTTS(FakeTTS):
+    """FakeTTS whose recovery probes block until `gate` is set, so a probe stays in flight for
+    exactly as long as the test needs. Requests for users are not gated."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.gate = asyncio.Event()
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> FakeSynthesizeStream:
+        if not _in_recovery_probe.get():
+            return super().stream(conn_options=conn_options)
+
+        gate = self.gate
+
+        class _Blocking(FakeSynthesizeStream):
+            async def _run(self, output_emitter: AudioEmitter) -> None:
+                await gate.wait()
+                await super()._run(output_emitter)
+
+        stream = _Blocking(tts=self, conn_options=conn_options)
+        self._stream_ch.send_nowait(stream)
+        return stream
+
+
+async def test_instance_that_serves_while_its_probe_runs_is_reported_once() -> None:
+    # unlike the tests above, the adapter is open: the probe the failed request started is still
+    # running when the instance serves, then finishes
+    fake = _GatedProbeTTS(fake_exception=APIConnectionError("down"))
+    fallback_adapter = FallbackAdapterTester([fake], max_retry_per_tts=0)
+    with pytest.raises(APIConnectionError):
+        await _request(fallback_adapter, streamed=True)
+    assert not fallback_adapter.availability_changed_ch(fake).recv_nowait().available
+    assert await asyncio.wait_for(fake.stream_ch.recv(), 1.0)  # the failed request
+    assert await asyncio.wait_for(fake.stream_ch.recv(), 1.0)  # the probe, parked on the gate
+    status = fallback_adapter._status[0]
+    probe = status.recovering_stream_task
+    assert probe is not None and not probe.done()
+
+    fake.update_options(fake_exception=None, fake_audio_duration=1.0)
+    await _request(fallback_adapter, streamed=True)  # the instance serves while marked unavailable
+
+    assert status.available
+    assert fallback_adapter.availability_changed_ch(fake).recv_nowait().available
+    assert not probe.done()
+
+    fake.gate.set()
+    await asyncio.wait_for(probe, 1.0)  # the probe succeeds, and finds nothing to change
+    with pytest.raises(ChanEmpty):
+        fallback_adapter.availability_changed_ch(fake).recv_nowait()
+
+    await fallback_adapter.aclose()
