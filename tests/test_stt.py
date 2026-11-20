@@ -54,7 +54,7 @@ TRAILING_SILENCE_DURATION_MS = 2000
 SPEECH_END_TIME = 44.4
 
 UNTIMED_EOS_REASONS = {
-    "livekit.plugins.aircaps": "AirCaps Live sends no speech-end timestamp",
+    "livekit.plugins.aircaps": "AirCaps Live 1 sends no speech-end timestamp",
     "livekit.plugins.aws": "AWS EOS timing is deferred until live validation",
     "livekit.plugins.cartesia": "Cartesia turns does not provide speech-end timestamps",
     "livekit.plugins.fireworksai": "Fireworks emits an untimed EOS during connection cleanup",

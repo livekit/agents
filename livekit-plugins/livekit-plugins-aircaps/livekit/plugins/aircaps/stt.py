@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""AirCaps Live speech-to-text.
+"""AirCaps Live 1 speech-to-text.
 
-Each stream is one AirCaps session: the plugin asks the AirCaps API where to
+Each stream is one AirCaps Live 1 session: the plugin asks the AirCaps AI API where to
 connect, opens a WebSocket there, sends 16 kHz mono PCM16 and turns the
 session's transcript events into LiveKit speech events.
 """
@@ -128,7 +128,7 @@ class STT(stt.STT):
         base_url: str = _DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
-        """Create a new instance of AirCaps Live STT.
+        """Create a new instance of AirCaps Live 1 STT.
 
         Turns end in one of two ways. By default the session's turn handling decides:
         LiveKit flushes the stream when its VAD or turn detector says the user stopped
@@ -137,7 +137,7 @@ class STT(stt.STT):
         ``turn_detection="stt"`` on the ``AgentSession``.
 
         Args:
-            model: The AirCaps model. Defaults to ``"aircaps-live-1"``.
+            model: The AirCaps AI model. Defaults to ``"aircaps-live-1"``.
             end_of_turn: Let the model detect the end of each turn. Defaults to False.
             end_of_turn_mode: With ``end_of_turn``, how the model trades speed for
                 certainty: ``"min_latency"``, ``"balanced"`` (default) or ``"max_accuracy"``.
@@ -149,9 +149,9 @@ class STT(stt.STT):
                 or 0 for no limit.
             vad_threshold: How sure the model's voice detector must be that a sound is
                 speech, 0.3 to 0.9.
-            api_key: AirCaps API key. Defaults to the ``AIRCAPS_API_KEY`` environment
+            api_key: AirCaps AI API key. Defaults to the ``AIRCAPS_API_KEY`` environment
                 variable.
-            base_url: The AirCaps API address. Defaults to ``"https://api.aircaps.com"``.
+            base_url: The AirCaps AI API address. Defaults to ``"https://api.aircaps.com"``.
             http_session: Optional aiohttp session to use for requests.
         """
         super().__init__(
@@ -165,7 +165,7 @@ class STT(stt.STT):
         aircaps_api_key = api_key if is_given(api_key) else os.environ.get("AIRCAPS_API_KEY")
         if not aircaps_api_key:
             raise ValueError(
-                "AirCaps API key is required, either as argument or set "
+                "AirCaps AI API key is required, either as argument or set "
                 "AIRCAPS_API_KEY environment variable"
             )
         self._api_key = aircaps_api_key
@@ -188,7 +188,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "AirCaps"
+        return "AirCaps AI"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -202,7 +202,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
-        raise NotImplementedError("AirCaps Live STT supports streaming recognition only")
+        raise NotImplementedError("AirCaps Live 1 STT supports streaming recognition only")
 
     def stream(
         self,
@@ -350,7 +350,7 @@ class SpeechStream(stt.SpeechStream):
                 closing = True
                 await ws.send_str(json.dumps({"type": "finish"}))
             except (aiohttp.ClientError, ConnectionError) as e:
-                raise APIConnectionError("AirCaps connection closed unexpectedly") from e
+                raise APIConnectionError("AirCaps AI connection closed unexpectedly") from e
 
         # a failed send of these ends nothing: the receive side reports the closed connection
         async def control_task() -> None:
@@ -377,7 +377,7 @@ class SpeechStream(stt.SpeechStream):
                     if closing:
                         return
                     raise APIStatusError(
-                        "AirCaps connection closed unexpectedly",
+                        "AirCaps AI connection closed unexpectedly",
                         status_code=ws.close_code or -1,
                         body=f"{msg.data=} {msg.extra=}",
                         retryable=True,
@@ -387,7 +387,7 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     data = json.loads(msg.data)
                 except ValueError:
-                    logger.warning("AirCaps sent a message that is not JSON")
+                    logger.warning("AirCaps AI sent a message that is not JSON")
                     continue
                 kind = data.get("type")
                 if kind == "transcript":
@@ -399,7 +399,7 @@ class SpeechStream(stt.SpeechStream):
                     raise _session_error(data, ws.close_code)
                 elif kind == "session_limit":
                     # the server ends the session next; the stream then opens a new one
-                    logger.warning("AirCaps session limit: %s", data.get("message"))
+                    logger.warning("AirCaps AI session limit: %s", data.get("message"))
 
         tasks = [
             asyncio.create_task(send_task(), name="AirCaps.send"),
@@ -415,7 +415,7 @@ class SpeechStream(stt.SpeechStream):
             if tasks[1] not in done:
                 await tasks[1]
             elif not closing:
-                raise APIConnectionError("AirCaps ended the session")
+                raise APIConnectionError("AirCaps AI ended the session")
         finally:
             await utils.aio.gracefully_cancel(*tasks)
             await ws.close()
@@ -445,7 +445,7 @@ class SpeechStream(stt.SpeechStream):
                     body = text
                 if resp.status != 200:
                     raise APIStatusError(
-                        f"AirCaps endpoint lookup failed: {_error_message(body)}",
+                        f"AirCaps AI endpoint lookup failed: {_error_message(body)}",
                         status_code=resp.status,
                         body=body,
                     )
@@ -456,12 +456,12 @@ class SpeechStream(stt.SpeechStream):
             )
         except aiohttp.WSServerHandshakeError as e:
             raise APIStatusError(
-                "AirCaps refused the connection", status_code=e.status, body=e.message
+                "AirCaps AI refused the connection", status_code=e.status, body=e.message
             ) from e
         except asyncio.TimeoutError as e:
-            raise APITimeoutError("AirCaps connection timed out") from e
+            raise APITimeoutError("AirCaps AI connection timed out") from e
         except (aiohttp.ClientError, KeyError, TypeError) as e:
-            raise APIConnectionError("failed to connect to AirCaps") from e
+            raise APIConnectionError("failed to connect to AirCaps AI") from e
 
         start = {
             "type": "start",
@@ -482,7 +482,7 @@ class SpeechStream(stt.SpeechStream):
                 msg = await monitor.receive()
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     raise APIStatusError(
-                        "AirCaps closed the session before it was ready",
+                        "AirCaps AI closed the session before it was ready",
                         status_code=ws.close_code or -1,
                         retryable=True,
                     )
@@ -498,9 +498,9 @@ class SpeechStream(stt.SpeechStream):
         except BaseException as e:
             await ws.close()
             if isinstance(e, asyncio.TimeoutError):
-                raise APITimeoutError("AirCaps session was not ready in time") from e
+                raise APITimeoutError("AirCaps AI session was not ready in time") from e
             if isinstance(e, (aiohttp.ClientError, ConnectionError, ValueError)):
-                raise APIConnectionError("AirCaps session failed to start") from e
+                raise APIConnectionError("AirCaps AI session failed to start") from e
             raise
         return ws, monitor
 
@@ -534,7 +534,7 @@ class SpeechStream(stt.SpeechStream):
         kept.reverse()
         if dropped_s:
             logger.warning(
-                "dropped %.1f s of audio that queued while connecting to AirCaps", dropped_s
+                "dropped %.1f s of audio that queued while connecting to AirCaps AI", dropped_s
             )
         return kept
 
@@ -610,7 +610,7 @@ def _error_message(body: Any) -> str:
 def _session_error(data: dict[str, Any], close_code: int | None) -> APIStatusError:
     code = str(data.get("code") or "error")
     return APIStatusError(
-        f"AirCaps error {code}: {data.get('message', '')}",
+        f"AirCaps AI error {code}: {data.get('message', '')}",
         status_code=close_code or -1,
         body=data,
         retryable=code not in _PERMANENT_ERRORS,

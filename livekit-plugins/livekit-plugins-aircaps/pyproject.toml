@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-aircaps"
 dynamic = ["version"]
-description = "Agent Framework plugin for AirCaps speech-to-text."
+description = "Agent Framework plugin for AirCaps AI speech-to-text."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"

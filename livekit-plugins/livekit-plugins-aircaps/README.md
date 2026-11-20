@@ -1,9 +1,9 @@
-# AirCaps plugin for LiveKit Agents
+# AirCaps AI plugin for LiveKit Agents
 
-Support for streaming speech-to-text with [AirCaps](https://aircaps.ai) Live 1, a low-latency real-time English
-speech-to-text model for voice agents.
+Support for streaming speech-to-text with AirCaps Live 1, a low-latency real-time English speech-to-text model for
+voice agents from [AirCaps AI](https://aircaps.ai).
 
-See the [AirCaps integration docs](https://docs.livekit.io/agents/models/stt/aircaps/) for more information, and the
+See the [AirCaps AI integration docs](https://docs.livekit.io/agents/models/stt/aircaps/) for more information, and the
 [AirCaps Live 1 guide](https://aircaps.ai/docs/guides/live-1) for the API.
 
 ## Installation
@@ -14,7 +14,7 @@ pip install livekit-plugins-aircaps
 
 ## Pre-requisites
 
-You'll need an AirCaps API key, created in the [AirCaps console](https://console.aircaps.ai). It can be set as the
+You'll need an AirCaps AI API key, created in the [AirCaps AI Console](https://console.aircaps.ai). It can be set as the
 environment variable `AIRCAPS_API_KEY`.
 
 ## Usage
@@ -33,7 +33,7 @@ session = AgentSession(
 )
 ```
 
-To let AirCaps detect the end of each turn instead, turn on `end_of_turn` and use the STT's turn detection. The
+To let the model detect the end of each turn instead, turn on `end_of_turn` and use the STT's turn detection. The
 model's end of turn has already waited out the user's pause, so set LiveKit's own endpointing delay to 0 (its
 default adds 0.5 s to every turn):
 

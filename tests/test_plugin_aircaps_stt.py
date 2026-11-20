@@ -172,7 +172,7 @@ def test_construction(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = aircaps.STT()
     assert provider._api_key == "env-key"
     assert provider.model == "aircaps-live-1"
-    assert provider.provider == "AirCaps"
+    assert provider.provider == "AirCaps AI"
     assert provider.capabilities == stt.STTCapabilities(
         streaming=True, interim_results=True, offline_recognize=False, manual_flush=True
     )

@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""AirCaps plugin for LiveKit Agents
+"""AirCaps AI plugin for LiveKit Agents
 
-Streaming speech-to-text with AirCaps Live.
+Streaming speech-to-text with AirCaps Live 1.
 """
 
 from .models import EndOfTurnMode, STTModels
