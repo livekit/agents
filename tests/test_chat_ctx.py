@@ -900,3 +900,67 @@ def test_compute_chat_ctx_diff_on_a_long_context_does_not_build_an_n_by_m_table(
     assert diff.to_update == []
     # the O(n*m) table for 2000 x 2001 items takes about 32 MB
     assert peak < 1_000_000
+
+
+def test_to_dict_encodes_bytes_in_extra_and_hash() -> None:
+    """extra (provider-specific data) may hold non-UTF-8 bytes (e.g. a Google
+    thought signature); to_dict() must not crash and must JSON-encode them."""
+    import json
+
+    ctx = ChatContext(
+        [
+            ChatMessage(
+                role="assistant",
+                content=["ok"],
+                extra={"google": {"thought_signature": b"\x00\x01\xff"}},
+                hash=b"\x00\x01",
+            )
+        ]
+    )
+    data = ctx.to_dict()
+    assert data["items"][0]["extra"]["google"]["thought_signature"] == base64.b64encode(
+        b"\x00\x01\xff"
+    ).decode("ascii")
+    assert data["items"][0]["hash"] == (
+        "data:application/octet-stream;base64," + base64.b64encode(b"\x00\x01").decode("ascii")
+    )
+    # The whole dict must be JSON-serializable (no bytes remain).
+    json.dumps(data)
+
+
+def test_to_dict_encodes_bytes_in_function_call_extra() -> None:
+    """FunctionCall.extra bytes must also be base64-encoded, not crash."""
+    import json
+
+    ctx = ChatContext(
+        [FunctionCall(call_id="c1", arguments="{}", name="tool", extra={"sig": b"\xff\xfe"})]
+    )
+    data = ctx.to_dict()
+    assert data["items"][0]["extra"]["sig"] == base64.b64encode(b"\xff\xfe").decode("ascii")
+    json.dumps(data)
+
+
+def test_hash_survives_repeated_to_dict_from_dict_round_trips() -> None:
+    """from_dict() must restore the original hash bytes, not the base64 text.
+
+    Without the data-URI marker, pydantic turns the serialized string back into
+    its own ASCII bytes, so every save/restore cycle changes the hash.
+    """
+    for original in (b"abc", b"\x00\x01\xff\xfe"):
+        ctx = ChatContext([ChatMessage(role="assistant", content=["ok"], hash=original)])
+        wire = ctx.to_dict()
+
+        for _ in range(3):
+            restored = ChatContext.from_dict(wire)
+            item = restored.items[0]
+            assert isinstance(item, ChatMessage)
+            assert item.hash == original
+            assert restored.to_dict()["items"][0]["hash"] == wire["items"][0]["hash"]
+
+    # Legacy payloads without the marker keep pydantic's default UTF-8 conversion.
+    legacy = {
+        "items": [{"type": "message", "role": "assistant", "content": ["ok"], "hash": "YWJj"}]
+    }
+    legacy_item = ChatContext.from_dict(legacy).items[0]
+    assert isinstance(legacy_item, ChatMessage)
+    assert legacy_item.hash == b"YWJj"
