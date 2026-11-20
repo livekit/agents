@@ -776,6 +776,8 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             try:
+                # A replacement socket cannot deliver the previous connection's pending final.
+                self._emit_end_of_speech()
                 ws = await self._connect_ws()
                 self._input_ch.restart_provider_clock()
                 await self._turn_detection.start()
@@ -932,7 +934,7 @@ class SpeechStream(stt.SpeechStream):
             )
         if message_type == "partial_transcript":
             text_changed = self._turn_detection.on_partial_transcript(
-                data.get("turn_probability"), text=text
+                data.get("turn_probability"), text=text, starts_turn=not self._speaking
             )
             logger.debug("Received message type partial_transcript", extra={"lk.pii.data": data})
 
