@@ -1893,3 +1893,115 @@ async def test_language_confidence_coexists_with_end_of_turn_confidence():
         "end_of_turn_confidence": 1.0,
         "language_confidence": 0.92,
     }
+
+
+# ---------------------------------------------------------------------------
+# session_heartbeat and Heartbeat message handling
+# ---------------------------------------------------------------------------
+
+
+async def test_session_heartbeat_default():
+    """session_heartbeat is NOT_GIVEN by default and omitted from connect config."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key")
+    assert stt._opts.session_heartbeat is NOT_GIVEN
+
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert "session_heartbeat" not in query
+
+
+async def test_session_heartbeat_true_in_connect_config():
+    """session_heartbeat=True is serialized as session_heartbeat=true in connect config."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", session_heartbeat=True)
+    assert stt._opts.session_heartbeat is True
+
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query["session_heartbeat"] == ["true"]
+
+
+async def test_session_heartbeat_false_in_connect_config():
+    """session_heartbeat=False is serialized as session_heartbeat=false in connect config."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", session_heartbeat=False)
+    assert stt._opts.session_heartbeat is False
+
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query["session_heartbeat"] == ["false"]
+
+
+async def test_session_heartbeat_update_options():
+    """session_heartbeat can be updated mid-session via UpdateConfiguration."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+    assert stt._opts.session_heartbeat is NOT_GIVEN
+
+    stream = _make_stream_for_unit_test(stt)
+    stt._streams.add(stream)
+
+    stt.update_options(session_heartbeat=True)
+    assert stt._opts.session_heartbeat is True
+    assert stream._opts.session_heartbeat is True
+
+    config_msg = stream._config_update_queue.get_nowait()
+    assert config_msg == {
+        "type": "UpdateConfiguration",
+        "session_heartbeat": True,
+    }
+
+
+async def test_process_stream_event_heartbeat():
+    """Heartbeat event is processed cleanly without emitting spurious speech events."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(
+        {
+            "type": "Heartbeat",
+            "total_audio_received_ms": 5000,
+            "total_duration_ms": 5000,
+            "realtime_factor": 1.0,
+            "max_speech_probability": 0.85,
+        }
+    )
+
+    events = _drain_events(stream)
+    assert events == []
