@@ -74,6 +74,11 @@ class AvatarRunner:
     def av_sync(self) -> rtc.AVSynchronizer:
         return self._av_sync
 
+    @property
+    def audio_queued_duration(self) -> float:
+        """Seconds of audio pushed to the room's audio source and not yet played out."""
+        return self._audio_source.queued_duration
+
     async def start(self) -> None:
         """Start the worker"""
 
