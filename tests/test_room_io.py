@@ -886,6 +886,130 @@ async def test_stream_creation_retry_installs_the_replacement_stream() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_creation_retry_is_bounded() -> None:
+    """A permanently failing track is retried only the configured number of times."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=RuntimeError("native creation failed"),
+    ) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.sleep(2.0)
+
+    assert create_stream.call_count == 3
+    assert audio_input._track is None
+    assert audio_input._publication is None
+    assert not audio_input._create_tasks
+    assert not audio_input._retry_tasks
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_creation_retry_is_cancelled_on_unsubscribe() -> None:
+    """A pending retry must not create a stream after the subscription is gone."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[RuntimeError("transient native failure")],
+    ) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        await audio_input._create_task
+        assert audio_input._retry_tasks
+
+        publication.subscribed = False
+        publication.track = None
+        audio_input._on_track_unsubscribed(track, publication, participant)
+
+        await asyncio.sleep(1.0)
+
+    assert create_stream.call_count == 1
+    assert audio_input._stream is None
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_creation_retry_closes_the_failed_processor_once() -> None:
+    """A selector processor from a failed attempt is released; the retry owns the next one."""
+    room = _FakeRoom()
+    processors: list[_MockFrameProcessor] = []
+
+    def selector(_params: NoiseCancellationParams) -> _MockFrameProcessor:
+        processor = _MockFrameProcessor()
+        processors.append(processor)
+        return processor
+
+    audio_input = _make_audio_input_stream(room, noise_cancellation=selector)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    retry_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[RuntimeError("transient native failure"), retry_stream],
+    ):
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.sleep(1.0)
+        await audio_input._create_task
+
+    assert len(processors) == 2
+    assert processors[0].close_calls == 1
+    assert processors[1].close_calls == 0
+    assert audio_input._processor is processors[1]
+    assert audio_input._stream is retry_stream
+
+    await audio_input.aclose()
+    assert processors[1].close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.real_time
+async def test_cancelled_aclose_completes_blocked_stream_teardown() -> None:
+    """Cancellation after creator settling cannot leave stream cleanup half done."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    release = threading.Event()
+
+    class _BlockingCloseStream(_MockAudioStream):
+        async def aclose(self) -> None:
+            await asyncio.to_thread(release.wait, timeout=5)
+            await super().aclose()
+
+    stream = _BlockingCloseStream()
+
+    with patch("livekit.rtc.AudioStream.from_track", return_value=stream):
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(stream.started.wait(), timeout=5)
+
+        aclose_task = asyncio.create_task(audio_input.aclose())
+        await asyncio.sleep(0.02)
+        assert not aclose_task.done()
+        aclose_task.cancel()
+        await asyncio.sleep(0.01)
+        aclose_task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await aclose_task
+
+    assert stream.ended.is_set()
+    assert room.listener_count("track_subscribed") == 0
+    assert room.listener_count("track_unsubscribed") == 0
+    assert room.listener_count("track_unpublished") == 0
+    await audio_input.aclose()
+    assert room.listener_count("track_subscribed") == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.real_time
 async def test_failed_superseded_creation_closes_its_owned_processor() -> None:
     """A processor installed before a failed creation is released even if the track vanished."""
