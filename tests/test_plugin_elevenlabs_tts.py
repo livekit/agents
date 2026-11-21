@@ -1137,6 +1137,114 @@ async def test_dialogue_recv_loop_offsets_opus_alignment_by_ogg_granule() -> Non
 
 
 @pytest.mark.asyncio
+async def test_dialogue_alignment_uses_generation_clock() -> None:
+    """Align messages inside a generation, then reset to the audio clock (#8711)."""
+    context_id = "ctx_123"
+
+    def alignment(text: str, starts: list[int], dur: int) -> dict[str, object]:
+        return {
+            "chars": list(text),
+            "char_start_times_ms": starts,
+            "char_durations_ms": [dur] * len(starts),
+        }
+
+    connection = _FakeConnection(
+        context_id,
+        [
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    # pcm_24000: 48 bytes per millisecond
+                    "audio": base64.b64encode(bytes(300 * 48)).decode("ascii"),
+                    # 400 ms of alignment for 300 ms of audio
+                    "alignment": alignment("one ", [0, 100, 200, 300], 100),
+                }
+            ),
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "audio": base64.b64encode(bytes(150 * 48)).decode("ascii"),
+                    # next alignment restarts at 0; place it after the first span
+                    "alignment": alignment("two ", [0, 12, 25, 37], 12),
+                }
+            ),
+            _websocket_text_message({"context_id": context_id, "is_final_audio_for_turn": True}),
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "audio": base64.b64encode(bytes(250 * 48)).decode("ascii"),
+                    "alignment": alignment("four ", [0, 50, 100, 150, 200], 50),
+                }
+            ),
+            _websocket_text_message({"context_id": context_id, "is_final": True}),
+        ],
+    )
+
+    await elevenlabs_tts._DialogueConnection._recv_loop(  # pyright: ignore[reportPrivateUsage]
+        connection
+    )
+
+    assert [(w, w.start_time, w.end_time) for w in connection.emitter.timed_words] == [
+        ("one ", 0.0, 0.4),
+        ("two ", 0.4, 0.45),
+        ("four ", 0.45, 0.7),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dialogue_generation_clock_never_moves_backwards() -> None:
+    """Alignment can lead the audio clock; the next generation must not move back."""
+    context_id = "ctx_123"
+
+    def alignment(text: str, starts: list[int], dur: int) -> dict[str, object]:
+        return {
+            "chars": list(text),
+            "char_start_times_ms": starts,
+            "char_durations_ms": [dur] * len(starts),
+        }
+
+    connection = _FakeConnection(
+        context_id,
+        [
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "audio": base64.b64encode(bytes(300 * 48)).decode("ascii"),
+                    "alignment": alignment("one ", [0, 100, 200, 300], 100),
+                }
+            ),
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    # audio clock reaches 350 ms, alignment reaches 450 ms
+                    "audio": base64.b64encode(bytes(50 * 48)).decode("ascii"),
+                    "alignment": alignment("two ", [0, 12, 25, 37], 12),
+                }
+            ),
+            _websocket_text_message({"context_id": context_id, "is_final_audio_for_turn": True}),
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "audio": base64.b64encode(bytes(250 * 48)).decode("ascii"),
+                    "alignment": alignment("four ", [0, 50, 100, 150, 200], 50),
+                }
+            ),
+            _websocket_text_message({"context_id": context_id, "is_final": True}),
+        ],
+    )
+
+    await elevenlabs_tts._DialogueConnection._recv_loop(  # pyright: ignore[reportPrivateUsage]
+        connection
+    )
+
+    assert [(w, w.start_time, w.end_time) for w in connection.emitter.timed_words] == [
+        ("one ", 0.0, 0.4),
+        ("two ", 0.4, 0.449),
+        ("four ", 0.449, 0.699),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_dialogue_recv_loop_turn_boundary_does_not_resolve_waiter() -> None:
     context_id = "ctx_123"
     audio_chunk = b"hello-audio"

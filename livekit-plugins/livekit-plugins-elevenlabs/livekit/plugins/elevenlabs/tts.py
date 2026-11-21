@@ -786,6 +786,10 @@ class _StreamData:
     # text-to-dialogue alignment restarts at 0 on every message; this is where the
     # next message's audio starts within the context
     audio_offset_ms: float = 0.0
+    # audio clock at the start of the current generation (None until its first alignment)
+    generation_audio_start_ms: float | None = None
+    # alignment span already received in the current generation
+    generation_alignment_end_ms: float = 0.0
     # trailing bytes of an incomplete Ogg page (opus output)
     ogg_tail: bytes = b""
 
@@ -1353,16 +1357,45 @@ class _DialogueConnection(_Connection):
                 audio = base64.b64decode(data["audio"]) if data.get("audio") else b""
                 alignment = data.get("alignment")
                 if alignment:
-                    # times restart at 0 on every message: shift them onto the context's clock
-                    starts = alignment.get("char_start_times_ms")
-                    _accumulate_alignment(
-                        stream,
-                        emitter,
-                        alignment.get("chars"),
-                        [round(ctx.audio_offset_ms + s) for s in starts] if starts else None,
-                        alignment.get("char_durations_ms"),
-                    )
+                    # Times restart at 0 on every message, and a message's alignment
+                    # span does not match its audio (#8711). Place the message on the
+                    # generation's audio start plus the alignment already received in
+                    # this generation instead of the context's audio offset.
+                    chars = alignment.get("chars")
+                    starts = alignment.get("char_start_times_ms") or []
+                    durs = alignment.get("char_durations_ms") or []
+                    if starts:
+                        if ctx.generation_audio_start_ms is None:
+                            ctx.generation_audio_start_ms = ctx.audio_offset_ms
+                        elif ctx.generation_alignment_end_ms == 0:
+                            # First aligned message of a generation: account for any
+                            # audio-only lead-in, but never move back if the alignment
+                            # already led the audio clock.
+                            ctx.generation_audio_start_ms = max(
+                                ctx.generation_audio_start_ms, ctx.audio_offset_ms
+                            )
+                        base_ms = ctx.generation_audio_start_ms + ctx.generation_alignment_end_ms
+                        _accumulate_alignment(
+                            stream,
+                            emitter,
+                            chars,
+                            [round(base_ms + s) for s in starts],
+                            durs or None,
+                        )
+                        if durs and len(durs) == len(starts):
+                            ctx.generation_alignment_end_ms += starts[-1] + durs[-1]
                 _advance_dialogue_clock(ctx, self._opts, audio, alignment)
+                if data.get("is_final_audio_for_turn"):
+                    # Start the next generation at the later of the audio clock and the
+                    # alignment already emitted: alignment can lead audio by a few tens
+                    # of ms, and moving back would invert the last buffered word.
+                    alignment_end_ms = (
+                        ctx.generation_audio_start_ms + ctx.generation_alignment_end_ms
+                        if ctx.generation_audio_start_ms is not None
+                        else 0.0
+                    )
+                    ctx.generation_audio_start_ms = max(ctx.audio_offset_ms, alignment_end_ms)
+                    ctx.generation_alignment_end_ms = 0.0
 
                 if audio:
                     emitter.push(audio)
