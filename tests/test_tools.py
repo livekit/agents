@@ -617,6 +617,33 @@ class TestToolExecution:
         assert args == ("test", 5)
         assert kwargs == {}
 
+    async def test_null_uses_none_default_for_non_optional_param(self):
+        # `str = None` without Optional: the strict schema still offers null as
+        # "use the default", so a null must resolve to None instead of failing
+        @function_tool
+        async def get_weather(location: str, unit: str = None) -> str:  # type: ignore[assignment]
+            """Tool with a None default on a non-optional parameter"""
+            return location
+
+        args, kwargs = prepare_function_arguments(
+            fnc=get_weather, json_arguments='{"location": "Paris", "unit": null}'
+        )
+        assert args == ("Paris", None)
+        assert kwargs == {}
+
+        class Preferences(BaseModel):
+            color: str = None  # type: ignore[assignment]
+
+        @function_tool
+        async def set_prefs(prefs: Preferences) -> str:
+            """Tool with a nested None default"""
+            return "ok"
+
+        args, kwargs = prepare_function_arguments(
+            fnc=set_prefs, json_arguments='{"prefs": {"color": null}}'
+        )
+        assert args == (Preferences(),)
+
     async def test_null_uses_default_in_nested_model_arg(self):
         class Preferences(BaseModel):
             color: str = "red"
