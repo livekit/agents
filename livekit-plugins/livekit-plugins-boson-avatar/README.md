@@ -20,17 +20,19 @@ Set the credentials used by your LiveKit Agent Worker:
 
 ```shell
 export BOSON_API_KEY="..."
-export BOSON_AVATAR_API_URL="https://your-avatar-session-service.example/v1"
+export BOSON_AVATAR_API_URL="https://api.boson.ai/v1"
 export LIVEKIT_URL="wss://..."
 export LIVEKIT_API_KEY="..."
 export LIVEKIT_API_SECRET="..."
 ```
 
-The plugin deliberately has no hard-coded provider endpoint. Your application
-or deployment environment supplies the base URL exposed by its Boson Avatar
-deployment/operator. The plugin appends `POST /sessions` when starting an
-Avatar and `DELETE /sessions/{id}` during cleanup, so do not include
-`/sessions` itself in `BOSON_AVATAR_API_URL`.
+The plugin has no hard-coded provider endpoint: your application or
+deployment environment supplies the root of the Boson API (`.../v1`, the
+public one being `https://api.boson.ai/v1`), so a private deployment works
+the same way. The plugin appends `POST /avatar/sessions` when starting an
+Avatar, `DELETE /avatar/sessions/{id}` during cleanup and `GET /avatars` for
+the catalog, so `BOSON_AVATAR_API_URL` ends at `/v1`. The API is documented
+at https://docs.boson.ai/api-reference/avatar-realtime/overview.
 
 Load the project-scoped Avatar catalog on your application server and use it
 to populate the face picker. The returned `avatar_id` is passed unchanged to
@@ -82,13 +84,17 @@ optional `width`, `height`, `max_duration_seconds`,
 `avatar_participant_identity`, `idempotency_key`, and `APIConnectOptions`.
 `max_duration_seconds` must be an integer from 1 through 14400.
 
-Inside a LiveKit Agent job, provider-session creation automatically derives a
-stable UUID idempotency key from the LiveKit job ID and Avatar session binding.
-If LiveKit redelivers that job after a worker crash, the plugin recovers the
-existing provider session instead of allocating another one. The standard
-model is one Avatar lifecycle per LiveKit job. If one job intentionally starts
-another Avatar after closing the first, pass a new explicit UUID
-`idempotency_key` for that lifecycle.
+Inside a LiveKit Agent job, provider-session creation derives a stable UUID
+idempotency key from the LiveKit job ID and Avatar session binding and sends
+it as `Idempotency-Key`, so the retries of one create carry one key. The
+public Boson API does not deduplicate on it yet: a job redelivered after a
+worker crash starts a new session, and the server ends the previous one when
+its room empties or its `max_duration_seconds` elapses. If your application
+can observe the room, check for an existing Avatar participant before starting
+another, and release duplicates. The standard model is
+one Avatar lifecycle per LiveKit job. If one job intentionally starts another
+Avatar after closing the first, pass a new explicit UUID `idempotency_key` for
+that lifecycle.
 
 The `avatar_id` is the value returned by `list_avatars()` behind the Avatar
 selected in your application; end users do not need to type or remember it.
