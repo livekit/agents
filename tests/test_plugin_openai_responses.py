@@ -10,7 +10,11 @@ import aiohttp
 import httpx2 as httpx
 import pytest
 from openai.types import Reasoning
-from openai.types.responses import ResponseCreatedEvent, ResponseIncompleteEvent
+from openai.types.responses import (
+    ResponseCreatedEvent,
+    ResponseIncompleteEvent,
+    ResponseOutputItemDoneEvent,
+)
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, llm as agents_llm
 from livekit.plugins.openai.responses.llm import (
@@ -21,6 +25,48 @@ from livekit.plugins.openai.responses.llm import (
 )
 
 pytestmark = pytest.mark.plugin("openai")
+
+
+@pytest.mark.parametrize("phase", [None, "final_answer"])
+def test_output_message_preserves_url_citations(phase: str | None) -> None:
+    event = ResponseOutputItemDoneEvent.model_validate(
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "sequence_number": 3,
+            "item": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "phase": phase,
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "A sourced answer.",
+                        "annotations": [
+                            {
+                                "type": "url_citation",
+                                "url": "https://example.org/source",
+                                "title": "Source",
+                                "start_index": 0,
+                                "end_index": 16,
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+    stream = object.__new__(LLMStream)
+    stream._response_id = "resp_1"
+    chunk = stream._handle_output_items_done(event)
+    assert chunk is not None and chunk.delta is not None
+    assert chunk.delta.content is None
+    expected: dict = {"annotations": [event.item.content[0].annotations[0].model_dump()]}
+    if phase is not None:
+        expected["phase"] = phase
+    assert chunk.delta.extra == {"openai": expected}
 
 
 class _FakeWSMsg:
