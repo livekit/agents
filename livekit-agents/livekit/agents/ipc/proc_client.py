@@ -47,7 +47,10 @@ class _ProcClient:
                 self._initialize_fnc(self._init_req, self)
                 send_message(cch, InitializeResponse())
             except Exception as e:
-                send_message(cch, InitializeResponse(error=str(e)))
+                # str(e) is empty for bare exceptions like AssertionError(); the parent only
+                # checks whether error is non-empty, so it would read that as a success.
+                error = str(e) or repr(e) or type(e).__name__
+                send_message(cch, InitializeResponse(error=error))
                 raise
 
             self._initialized = True
