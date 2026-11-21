@@ -22,12 +22,3 @@ def token_mode_token() -> str | None:
         return None
 
     return os.environ.get("LIVEKIT_TOKEN") or None
-
-
-def require_api_secret(feature: str) -> None:
-    """Raises when ``feature``, which signs tokens with the API secret, runs in token mode."""
-    if token_mode_token() is not None:
-        raise RuntimeError(
-            f"{feature} signs tokens with LIVEKIT_API_KEY and LIVEKIT_API_SECRET, and is not "
-            "supported in token mode (LIVEKIT_TOKEN without an API key and secret)"
-        )
