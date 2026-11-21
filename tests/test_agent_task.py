@@ -399,6 +399,146 @@ class AskNameTask(AgentTask):
         return "recorded"
 
 
+async def test_update_agent_keeps_learned_dynamic_endpointing() -> None:
+    """The pause learned by dynamic endpointing survives update_agent instead of resetting."""
+    seen: dict[str, float] = {}
+
+    class SecondAgent(Agent):
+        async def on_enter(self) -> None:
+            activity = self.session._activity
+            assert activity is not None and activity._audio_recognition is not None
+            seen["after"] = activity._audio_recognition._endpointing.min_delay
+
+    class FirstAgent(Agent):
+        async def on_enter(self) -> None:
+            activity = self.session._activity
+            assert activity is not None and activity._audio_recognition is not None
+            endpointing = activity._audio_recognition._endpointing
+            # the user pauses 1.2 s between two utterances of the same turn
+            endpointing.on_end_of_speech(ended_at=100.0)
+            endpointing.on_start_of_speech(started_at=101.2)
+            endpointing.on_end_of_speech(ended_at=102.0)
+            seen["before"] = endpointing.min_delay
+
+            async def _handoff() -> None:
+                await asyncio.sleep(0.2)  # once the session has started
+                self.session.update_agent(SecondAgent(instructions="second agent"))
+
+            self._handoff_task = asyncio.create_task(_handoff())
+
+    session = create_session(
+        FakeActions(),
+        turn_handling={"endpointing": {"mode": "dynamic", "alpha": 0.01}},
+        with_stt=False,
+    )
+    await asyncio.wait_for(
+        run_session(session, FirstAgent(instructions="first agent"), drain_delay=1.0),
+        timeout=10.0,
+    )
+
+    assert seen["before"] > 1.0
+    assert seen["after"] == pytest.approx(seen["before"])
+
+
+def _learn_pause(agent: Agent) -> float:
+    """Feed a 1.2 s pause between two utterances of the same user turn."""
+    activity = agent.session._activity
+    assert activity is not None and activity._audio_recognition is not None
+    endpointing = activity._audio_recognition._endpointing
+    endpointing.on_end_of_speech(ended_at=100.0)
+    endpointing.on_start_of_speech(started_at=101.2)
+    endpointing.on_end_of_speech(ended_at=102.0)
+    return endpointing.min_delay
+
+
+def _current_endpointing_min_delay(agent: Agent) -> float:
+    activity = agent.session._activity
+    assert activity is not None and activity._audio_recognition is not None
+    return activity._audio_recognition._endpointing.min_delay
+
+
+async def test_learned_endpointing_survives_fixed_agent_in_between() -> None:
+    """dynamic -> fixed -> dynamic: the last agent starts from what the first one learned."""
+    seen: dict[str, float] = {}
+
+    class Billing(Agent):
+        async def on_enter(self) -> None:
+            seen["billing"] = _current_endpointing_min_delay(self)
+
+    class Verification(Agent):
+        async def on_enter(self) -> None:
+            seen["verification"] = _current_endpointing_min_delay(self)
+
+            async def _handoff() -> None:
+                await asyncio.sleep(0.2)
+                self.session.update_agent(Billing(instructions="billing"))
+
+            self._handoff_task = asyncio.create_task(_handoff())
+
+    class Reception(Agent):
+        async def on_enter(self) -> None:
+            seen["reception"] = _learn_pause(self)
+
+            async def _handoff() -> None:
+                await asyncio.sleep(0.2)
+                self.session.update_agent(
+                    Verification(
+                        instructions="verification",
+                        turn_handling={"endpointing": {"mode": "fixed"}},
+                    )
+                )
+
+            self._handoff_task = asyncio.create_task(_handoff())
+
+    session = create_session(
+        FakeActions(),
+        turn_handling={"endpointing": {"mode": "dynamic", "alpha": 0.01}},
+        with_stt=False,
+    )
+    await asyncio.wait_for(
+        run_session(session, Reception(instructions="reception"), drain_delay=1.5),
+        timeout=10.0,
+    )
+
+    assert seen["reception"] > 1.0
+    assert seen["verification"] == pytest.approx(0.5)  # fixed endpointing uses its own floor
+    assert seen["billing"] == pytest.approx(seen["reception"])
+
+
+async def test_learned_endpointing_survives_fixed_agent_task() -> None:
+    """A parent resumed after an AgentTask with fixed endpointing keeps what it learned."""
+    seen: dict[str, float] = {}
+
+    class DigitsTask(AgentTask[None]):
+        def __init__(self) -> None:
+            super().__init__(
+                instructions="collect digits",
+                turn_handling={"endpointing": {"mode": "fixed"}},
+            )
+
+        async def on_enter(self) -> None:
+            self.complete(None)
+
+    class Parent(Agent):
+        async def on_enter(self) -> None:
+            seen["before"] = _learn_pause(self)
+            await DigitsTask()
+            seen["after"] = _current_endpointing_min_delay(self)
+
+    session = create_session(
+        FakeActions(),
+        turn_handling={"endpointing": {"mode": "dynamic", "alpha": 0.01}},
+        with_stt=False,
+    )
+    await asyncio.wait_for(
+        run_session(session, Parent(instructions="parent"), drain_delay=1.5),
+        timeout=10.0,
+    )
+
+    assert seen["before"] > 1.0
+    assert seen["after"] == pytest.approx(seen["before"])
+
+
 async def test_update_agent_on_enter_output_captured() -> None:
     """run() waits for the new agent's delayed on_enter greeting."""
 
