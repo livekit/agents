@@ -22,7 +22,7 @@ from aiohttp.test_utils import TestServer
 
 from livekit import rtc
 from livekit.agents import APIConnectOptions, APIStatusError, llm
-from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics import RealtimeModelMetrics, STTMetrics
 from livekit.plugins import zoom_ai
 from livekit.plugins.zoom_ai.realtime import RealtimeSession, realtime_model
 
@@ -50,11 +50,15 @@ class Conn:
     # the last conversation item, which the next one is placed after
     last_item: str | None = None
     _outputs: int = 0
+    _sent: int = 0
 
     def of_type(self, event_type: str) -> list[dict[str, Any]]:
         return [e for e in self.events if e["type"] == event_type]
 
     async def emit(self, event_type: str, **payload: Any) -> None:
+        # like Zoom, every server event carries its own event_id
+        self._sent += 1
+        payload = {"event_id": f"event_{self._sent}", **payload}
         await self.ws.send_json({"type": event_type, "payload": {"type": event_type, **payload}})
 
     async def add_item(
@@ -629,9 +633,31 @@ async def test_generate_reply_streams_audio_and_transcript(
     assert metrics[0].request_id == "resp_1"
     assert metrics[0].output_tokens == 5
     assert metrics[0].metadata and metrics[0].metadata.model_provider == "Zoom"
+    # the conversation model Zoom runs
+    assert metrics[0].metadata.model_name == "gemma-4"
     (item,) = session.chat_ctx.items
     assert isinstance(item, llm.ChatMessage)
     assert item.role == "assistant" and item.text_content == "Hello there."
+    await session.aclose()
+
+
+async def test_transcription_usage_is_labeled_apart_from_the_llm(
+    server: tuple[FakeVoiceAgent, str], http: aiohttp.ClientSession
+) -> None:
+    fake, url = server
+    session = await start(make_model(url, http))
+    metrics: list[STTMetrics] = []
+    session.on(
+        "metrics_collected", lambda m: metrics.append(m) if isinstance(m, STTMetrics) else None
+    )
+    conn = await fake.conn()
+    await wait_for(lambda: conn.of_type("session.update"))
+    await user_turn(conn)
+    await wait_for(lambda: metrics)
+    assert metrics[0].audio_duration == 0.9
+    # Zoom doesn't name its transcription model, and it isn't the LLM
+    assert metrics[0].metadata and metrics[0].metadata.model_name == "voice-agent"
+    assert metrics[0].metadata.model_provider == "Zoom"
     await session.aclose()
 
 

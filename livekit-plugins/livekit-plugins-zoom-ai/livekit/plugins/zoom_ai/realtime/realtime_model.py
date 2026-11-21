@@ -78,6 +78,10 @@ from ..version import __version__
 DEFAULT_URL = "wss://api.zoom.us/v2/ws/aiservices/voice-agent/live"
 SUBPROTOCOL = "voice-agent.zoom.v2"
 DEFAULT_MODEL = "gemma-4"
+# Zoom names the conversation model (think.provider.model) but not its transcription
+# model: listen.transcription carries only the language. Transcription usage is labeled
+# with the product instead.
+TRANSCRIPTION_MODEL_NAME = "voice-agent"
 DEFAULT_VOICE = "jenna"
 SAMPLE_RATE = 16000  # speak.format.rate supports 16 kHz only; listen is set to match
 NUM_CHANNELS = 1
@@ -910,7 +914,9 @@ class RealtimeSession(_engine.RealtimeSession):
                 label=self._zoom_model.label,
                 audio_duration=float(seconds),
                 streamed=True,
-                metadata=Metadata(model_name=None, model_provider=self._zoom_model.provider),
+                metadata=Metadata(
+                    model_name=TRANSCRIPTION_MODEL_NAME, model_provider=self._zoom_model.provider
+                ),
             ),
         )
 
