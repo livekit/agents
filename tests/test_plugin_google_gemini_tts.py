@@ -503,3 +503,14 @@ async def test_lowered_markup_travels_even_without_a_style(
 
     # no style to carry, so no speech_metadata -- but the lowered words still travel
     assert _request_body(mock_stream)["contents"] == [{"parts": [{"text": spoken}]}]
+
+
+def test_speaker_without_speakers_is_rejected() -> None:
+    """A single-voice TTS has no speaker table, so `speaker` alone cannot name one.
+
+    Left unchecked, every part would carry a speaker the voice config never declares,
+    while `update_options(speaker=...)` already refuses the same setup.
+    """
+    with patch("livekit.plugins.google.beta.gemini_tts.Client"):
+        with pytest.raises(ValueError, match="`speaker` needs `speakers`"):
+            TTS(api_key="k", model="gemini-3.8-flash-tts", speaker="Sienna")
