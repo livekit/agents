@@ -65,11 +65,15 @@ def _api_error(msg_data: dict[str, Any]) -> APIStatusError:
 
     The server sends it right before closing the socket, so the message is the only
     place the actual failure reason (unsupported language, no credits, ...) shows up.
-    Its `code` is the websocket close code that follows; client errors are not retried.
+    Its `code` is the websocket close code that follows; client errors and account
+    failures (API key, subscription, credits) are not retried.
     """
     message = msg_data.get("message") or "unknown error"
     return _close_error(
-        f"Gradium returned error: {message}", code=msg_data.get("code"), body=msg_data
+        f"Gradium returned error: {message}",
+        code=msg_data.get("code"),
+        body=msg_data,
+        server_message=msg_data.get("message"),
     )
 
 
