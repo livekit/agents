@@ -1367,6 +1367,13 @@ class _DialogueConnection(_Connection):
                     if starts:
                         if ctx.generation_audio_start_ms is None:
                             ctx.generation_audio_start_ms = ctx.audio_offset_ms
+                        elif ctx.generation_alignment_end_ms == 0:
+                            # First aligned message of a generation: account for any
+                            # audio-only lead-in, but never move back if the alignment
+                            # already led the audio clock.
+                            ctx.generation_audio_start_ms = max(
+                                ctx.generation_audio_start_ms, ctx.audio_offset_ms
+                            )
                         base_ms = ctx.generation_audio_start_ms + ctx.generation_alignment_end_ms
                         _accumulate_alignment(
                             stream,
@@ -1379,9 +1386,15 @@ class _DialogueConnection(_Connection):
                             ctx.generation_alignment_end_ms += starts[-1] + durs[-1]
                 _advance_dialogue_clock(ctx, self._opts, audio, alignment)
                 if data.get("is_final_audio_for_turn"):
-                    # The next generation starts at the audio clock; alignment spans
-                    # are only reliable within one generation.
-                    ctx.generation_audio_start_ms = None
+                    # Start the next generation at the later of the audio clock and the
+                    # alignment already emitted: alignment can lead audio by a few tens
+                    # of ms, and moving back would invert the last buffered word.
+                    alignment_end_ms = (
+                        ctx.generation_audio_start_ms + ctx.generation_alignment_end_ms
+                        if ctx.generation_audio_start_ms is not None
+                        else 0.0
+                    )
+                    ctx.generation_audio_start_ms = max(ctx.audio_offset_ms, alignment_end_ms)
                     ctx.generation_alignment_end_ms = 0.0
 
                 if audio:
