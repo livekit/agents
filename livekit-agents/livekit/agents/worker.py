@@ -317,6 +317,10 @@ class _TokenModeUnsupportedError(RuntimeError):
     """The server cannot create job tokens, which token mode needs."""
 
 
+class _JobTokenRefusedError(RuntimeError):
+    """The server answered a job token request with an error."""
+
+
 class AgentServer(utils.EventEmitter[EventTypes]):
     _default_num_idle_processes = ServerEnvOption(
         dev_default=0, prod_default=math.ceil(get_cpu_monitor().cpu_count())
@@ -1421,7 +1425,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._job_token_requests.pop(request_id, None)
 
         if resp.error:
-            raise RuntimeError(f"the LiveKit server refused the job token: {resp.error}")
+            raise _JobTokenRefusedError(f"the LiveKit server refused the job token: {resp.error}")
 
         return resp
 
@@ -1456,7 +1460,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             try:
                 resp = await self._create_job_token(aj.job.id, json.dumps(claims))
-            except RuntimeError as e:
+            except _JobTokenRefusedError as e:
                 # a self-hosted LiveKit server does not keep a job across a restart of its
                 # worker, so it has no token for it
                 logger.warning(
@@ -1464,6 +1468,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     "and secret are defined",
                     extra={"job_id": aj.job.id, "error": str(e)},
                 )
+                continue
+            except RuntimeError as e:
+                logger.warning(f"job ended on reload: {e}", extra={"job_id": aj.job.id})
                 continue
 
             running_info = RunningJobInfo(

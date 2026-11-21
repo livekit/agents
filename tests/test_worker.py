@@ -871,7 +871,35 @@ async def test_hot_reload_skips_a_job_the_server_has_no_token_for(
         await server._reload_jobs([running])
 
     server._proc_pool.launch_job.assert_not_called()
-    assert "job ended on reload" in caplog.text
+    assert "reload is only supported when LiveKit API key and secret are defined" in caplog.text
+
+
+async def test_hot_reload_reports_a_job_token_request_that_timed_out(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A request the server did not answer is not a server without reload support."""
+    server = _token_mode_server()
+    server._queue_msg = AsyncMock()  # type: ignore[method-assign]  # the server never answers
+    server._proc_pool = MagicMock(launch_job=AsyncMock())
+
+    running = RunningJobInfo(
+        accept_arguments=JobAcceptArguments(name="", identity="agent-identity", metadata=""),
+        job=agent.Job(id="AJ_reload", room=models.Room(name="reload-room")),
+        url="ws://localhost",
+        token=api.AccessToken("devkey", "secret" * 6).with_identity("agent-identity").to_jwt(),
+        worker_id="AW_test",
+        fake_job=False,
+    )
+    with (
+        patch.dict(os.environ, _NO_KEY_ENV),
+        patch("livekit.agents.worker.CREATE_JOB_TOKEN_TIMEOUT", 0.01),
+        caplog.at_level("WARNING"),
+    ):
+        await server._reload_jobs([running])
+
+    server._proc_pool.launch_job.assert_not_called()
+    assert "job ended on reload: the LiveKit server did not answer" in caplog.text
+    assert "reload is only supported" not in caplog.text
 
 
 async def _token_mode_api_entrypoint(ctx: JobContext) -> None:

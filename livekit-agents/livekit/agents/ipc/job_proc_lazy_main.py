@@ -34,7 +34,7 @@ from .._token_mode import INFERENCE_CLAIMS, OBSERVABILITY_CLAIMS, token_mode_tok
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
 from ..log import _add_global_log_fields, logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
-from ..telemetry.traces import _resource
+from ..telemetry.traces import _end_job_token_source, _resource
 from ..types import ATTRIBUTE_SIMULATOR
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from ..voice.events import CloseReason
@@ -587,6 +587,7 @@ class _JobProc:
         await self._job_ctx._on_cleanup()
         if self._job_tokens_task is not None:
             await aio.cancel_and_wait(self._job_tokens_task)
+            _end_job_token_source(self._job_ctx.job.id)
         await http_context._close_http_ctx()
         _JobContextVar.reset(job_ctx_token)
 

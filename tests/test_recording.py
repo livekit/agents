@@ -1939,6 +1939,7 @@ def test_telemetry_token_comes_from_a_job_that_still_has_one(
     from livekit.agents.telemetry import traces
 
     monkeypatch.setattr(traces, "_job_token_sources", {})
+    monkeypatch.setattr(traces, "_ended_token_jobs", set())
     tokens: dict[str, str | None] = {"AJ_a": "token-a", "AJ_b": "token-b"}
     traces._set_job_token_source("AJ_a", lambda: tokens["AJ_a"])
     traces._set_job_token_source("AJ_b", lambda: tokens["AJ_b"])
@@ -1946,12 +1947,33 @@ def test_telemetry_token_comes_from_a_job_that_still_has_one(
     assert traces._job_observability_token() == "token-b"
     assert traces._job_observability_token("AJ_a") == "token-a"  # a job's own upload
 
+    traces._end_job_token_source("AJ_b")
     tokens["AJ_b"] = None  # the job ended and its last token expired
     assert traces._job_observability_token() == "token-a"
     assert traces._job_observability_token("AJ_b") == "token-a"
 
     traces._set_job_token_source("AJ_c", lambda: "token-c")
     assert list(traces._job_token_sources) == ["AJ_a", "AJ_c"]
+
+
+def test_telemetry_token_source_of_a_running_job_is_kept_while_it_has_no_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A job that still runs can be without a token for a moment, while it waits to ask
+    again: another job that starts then must not drop its source."""
+    from livekit.agents.telemetry import traces
+
+    monkeypatch.setattr(traces, "_job_token_sources", {})
+    monkeypatch.setattr(traces, "_ended_token_jobs", set())
+    tokens: dict[str, str | None] = {"AJ_a": None, "AJ_b": "token-b"}
+    traces._set_job_token_source("AJ_a", lambda: tokens["AJ_a"])
+    traces._set_job_token_source("AJ_b", lambda: tokens["AJ_b"])
+    assert list(traces._job_token_sources) == ["AJ_a", "AJ_b"]
+
+    tokens["AJ_a"] = "token-a"  # the retry got it
+    traces._end_job_token_source("AJ_b")
+    tokens["AJ_b"] = None
+    assert traces._job_observability_token() == "token-a"
 
 
 def test_telemetry_token_source_is_set_while_another_job_sets_its_own(
@@ -1962,11 +1984,13 @@ def test_telemetry_token_source_is_set_while_another_job_sets_its_own(
     from livekit.agents.telemetry import traces
 
     monkeypatch.setattr(traces, "_job_token_sources", {})
+    monkeypatch.setattr(traces, "_ended_token_jobs", set())
 
     def _source_a() -> str:
         traces._job_token_sources.setdefault("AJ_c", lambda: "token-c")  # the other thread
         return "token-a"
 
     traces._set_job_token_source("AJ_a", _source_a)
+    traces._end_job_token_source("AJ_a")  # its source is read when the next job starts
     traces._set_job_token_source("AJ_b", lambda: "token-b")
     assert list(traces._job_token_sources) == ["AJ_a", "AJ_c", "AJ_b"]

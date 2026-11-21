@@ -704,19 +704,30 @@ def set_tracer_provider(
 _TOKEN_TTL = timedelta(hours=6)
 _TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 
-# token mode: job id -> its observability token, None once it has expired. The pipeline is
-# one per process, and so is the job, but for jobs that run in threads: those share it.
+# token mode: job id -> its observability token, None when it has none (not fetched yet,
+# or expired). The pipeline is one per process, and so is the job, but for jobs that run
+# in threads: those share it.
 _job_token_sources: dict[str, Callable[[], str | None]] = {}
+_ended_token_jobs: set[str] = set()
 
 
 def _set_job_token_source(job_id: str, source: Callable[[], str | None]) -> None:
-    # a job that ended is not removed: its token serves the last exports. Drop it here,
-    # once the token has expired
+    # a job that ended is not removed at once: its token serves the last exports. Drop it
+    # here, once the token has expired. A job that still runs is kept: it can be without
+    # a token for a moment, while it waits to ask again
     # jobs in threads call this at the same time: iterate a copy
-    for ended, ended_source in list(_job_token_sources.items()):
-        if ended_source() is None:
+    for ended in list(_ended_token_jobs):
+        ended_source = _job_token_sources.get(ended)
+        if ended_source is None or ended_source() is None:
             _job_token_sources.pop(ended, None)
+            _ended_token_jobs.discard(ended)
     _job_token_sources[job_id] = source
+
+
+def _end_job_token_source(job_id: str) -> None:
+    """The job ``job_id`` ended: its token is used until it expires, and no longer renewed."""
+    if job_id in _job_token_sources:
+        _ended_token_jobs.add(job_id)
 
 
 def _job_observability_token(job_id: str | None = None) -> str:
