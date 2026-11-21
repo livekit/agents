@@ -9,13 +9,14 @@ _CJK_CLAUSE_PUNCTUATION = frozenset("，。！？；：、")
 _CJK_SCRIPTS = r"\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff"
 # split_character makes each of these characters a word
 _CHAR_BASED_CODES = re.compile(rf"[{_CJK_SCRIPTS}\u0e00-\u0e7f]")  # + thai
-# such a mark only ends a word after CJK text, so it never splits markup that a TTS
+# such a mark only ends a word after CJK (or Thai) text, so it never splits markup that a TTS
 # rejoins with spaces, e.g. an SSML attribute like ph="..."
 _CJK_TEXT = re.compile(
     rf"[{_CJK_SCRIPTS}"
     r"\u3000-\u303f"  # cjk symbols and punctuation, e.g. 」
     r"\uf900-\ufaff"  # cjk compatibility ideographs
     r"\uac00-\ud7af"  # hangul syllables
+    r"\u0e00-\u0e7f"  # thai, which split_character also emits one character at a time
     r"\uff00-\uffef]"  # halfwidth and fullwidth forms
 )
 
@@ -74,11 +75,13 @@ def split_words(
         elif (
             split_cjk_clauses
             and char in _CJK_CLAUSE_PUNCTUATION
-            and pos > 0
-            and _CJK_TEXT.match(text[pos - 1])
+            # a mark at the start of the text also ends a word: a word stream tokenizes
+            # the text left after the words it already emitted, so the CJK text this
+            # mark follows is usually in an earlier chunk (see BufferedTokenStream)
+            and (pos == 0 or _CJK_TEXT.match(text[pos - 1]))
             # a "，" or "：" inside a full-width number like １，０００ or １０：３０, which a
             # TTS would stop reading as one number once the words are joined with a space
-            and not (char in "，：" and text[pos - 1].isdigit())
+            and not (char in "，：" and pos > 0 and text[pos - 1].isdigit())
         ):
             # commit the word with its punctuation, otherwise a CJK reply is a single
             # word and a word stream (e.g. a TTS input) holds it until the end
