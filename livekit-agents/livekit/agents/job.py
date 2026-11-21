@@ -28,7 +28,7 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 from urllib.parse import urlparse
 
 import aiohttp
@@ -71,6 +71,8 @@ from .utils.deprecation import deprecate_params
 from .utils.misc import is_cloud
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
+
+_T = TypeVar("_T")
 
 
 def _observability_url(livekit_url: str) -> str | None:
@@ -241,6 +243,9 @@ class JobContext:
             tuple[str, JobContext._PARTICIPANT_ENTRYPOINT_CALLBACK], asyncio.Task[None]
         ]()
         self._pending_tasks = list[asyncio.Task[Any]]()
+        # kept apart from _pending_tasks: these stop early in the shutdown, while the
+        # framework's own requests (delete_room, SIP transfers) must be allowed to finish
+        self._user_tasks = set[asyncio.Task[Any]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
 
@@ -773,6 +778,52 @@ class JobContext:
                 logger.error(f"error in {name}", exc_info=exc)
 
         task.add_done_callback(_on_done)
+
+    def create_task(
+        self, coro: Coroutine[Any, Any, _T], *, name: str | None = None
+    ) -> asyncio.Task[_T]:
+        """Run a coroutine in the background for as long as the job runs.
+
+        The job keeps a reference to the task, logs its exception if it fails, and cancels
+        it if it is still running when the job shuts down. The cancel happens once the
+        entrypoint has returned and before the `AgentSession` is closed, so these tasks are
+        stopped before ``on_session_end`` and the shutdown callbacks run.
+
+        Work that has to finish after the call ends, such as uploading a transcript,
+        belongs in :meth:`add_shutdown_callback` instead.
+
+        Args:
+            coro: The coroutine to run.
+            name: Name of the task, used in logs.
+
+        Returns:
+            The ``asyncio.Task``. It can still be awaited or cancelled directly.
+        """
+        task = asyncio.create_task(coro, name=name)
+        self._user_tasks.add(task)
+        task.add_done_callback(self._on_user_task_done)
+        return task
+
+    def _on_user_task_done(self, task: asyncio.Task[Any]) -> None:
+        self._user_tasks.discard(task)
+        if not task.cancelled() and (exc := task.exception()) is not None:
+            logger.error(f"error in {task.get_name()}", exc_info=exc)
+
+    async def _cancel_user_tasks(self, *, timeout: float) -> None:
+        if not (tasks := list(self._user_tasks)):
+            return
+
+        for task in tasks:
+            task.cancel()
+
+        _, pending = await asyncio.wait(tasks, timeout=timeout)
+        if pending:
+            # a task that swallows the cancel must not hold up the rest of the shutdown
+            logger.warning(
+                "background tasks did not stop within %.1fs of being cancelled",
+                timeout,
+                extra={"tasks": sorted(t.get_name() for t in pending)},
+            )
 
     def delete_room(self, room_name: str | None = None) -> asyncio.Future[api.DeleteRoomResponse]:  # type: ignore
         """Deletes the room and disconnects all participants."""
