@@ -54,6 +54,10 @@ class VAD(vad.VAD):
     pybind11 ``.so`` constructor); each stream allocates its own per-instance
     LSTM/context state. Each stream uses a dedicated one-worker executor by default.
     When an executor is provided, the caller remains responsible for shutting it down.
+
+    ``execution_mode="inline"`` avoids executor dispatch for short native calls, but each
+    prediction blocks the event loop until it returns. Buffered input yields between
+    predictions after 2 ms of work. Benchmark event-loop latency before opting in.
     """
 
     def __init__(
@@ -67,12 +71,18 @@ class VAD(vad.VAD):
         activation_threshold: float = 0.5,
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
         executor: Executor | None = None,
+        execution_mode: Literal["thread", "inline"] = "thread",
     ) -> None:
         super().__init__(capabilities=vad.VADCapabilities(update_interval=0.032))
         if model != "silero":
             raise ValueError(f"Unknown VAD model: {model!r}. Supported: 'silero'.")
         if is_given(deactivation_threshold) and deactivation_threshold <= 0:
             raise ValueError("deactivation_threshold must be greater than 0")
+        if execution_mode not in ("thread", "inline"):
+            raise ValueError("execution_mode must be 'thread' or 'inline'")
+        if execution_mode == "inline" and executor is not None:
+            raise ValueError("executor cannot be used with inline execution")
+        self._execution_mode = execution_mode
         self._model = model
         self._executor = executor
         self._opts = _VADOptions(
@@ -147,8 +157,9 @@ class _VADStream(vad.VADStream):
     def __init__(self, parent: VAD, opts: _VADOptions, *, executor: Executor | None) -> None:
         super().__init__(parent)
         self._opts = opts
-        self._owns_executor = executor is None
-        if executor is None:
+        self._inline = parent._execution_mode == "inline"
+        self._owns_executor = executor is None and not self._inline
+        if self._owns_executor:
             executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="inference.vad")
         self._executor = executor
         self._native_vad = _NativeVAD()
@@ -164,6 +175,7 @@ class _VADStream(vad.VADStream):
             await super().aclose()
         finally:
             if self._owns_executor:
+                assert self._executor is not None
                 self._executor.shutdown(wait=False, cancel_futures=True)
 
     def update_options(
@@ -237,6 +249,7 @@ class _VADStream(vad.VADStream):
         input_copy_remaining_fract = 0.0
 
         extra_inference_time = 0.0
+        inline_work = 0.0
 
         def _reset_state() -> None:
             nonlocal pub_speaking, pub_speech_duration, pub_silence_duration
@@ -337,9 +350,12 @@ class _VADStream(vad.VADStream):
                 )
 
                 # run the inference
-                p = await asyncio.get_running_loop().run_in_executor(
-                    self._executor, self._native_vad.predict, inference_window
-                )
+                if self._inline:
+                    p = self._native_vad.predict(inference_window)
+                else:
+                    p = await asyncio.get_running_loop().run_in_executor(
+                        self._executor, self._native_vad.predict, inference_window
+                    )
 
                 window_duration = VAD_WINDOW_SAMPLES / _MODEL_SAMPLE_RATE
 
@@ -514,3 +530,9 @@ class _VADStream(vad.VADStream):
                             samples_per_channel=len(data) // 2,
                         )
                     )
+
+                if self._inline:
+                    inline_work += time.perf_counter() - start_time
+                    if inline_work >= 0.002:
+                        await asyncio.sleep(0)
+                        inline_work = 0.0
