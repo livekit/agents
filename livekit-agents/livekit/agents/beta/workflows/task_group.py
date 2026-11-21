@@ -164,12 +164,13 @@ class TaskGroup(AgentTask[TaskGroupResult]):
         self.complete(TaskGroupResult(task_results=task_results))
 
     def _build_out_of_scope_tool(self, *, active_task_id: str) -> FunctionTool | None:
-        if not self._visited_tasks:
-            return None
-
         # Only allow to regress to already visited tasks
         task_ids = self._visited_tasks.copy()
         task_ids.discard(active_task_id)
+        if not task_ids:
+            # nothing to regress to; providers reject an empty enum (e.g. Anthropic)
+            return None
+
         task_repr = {
             f.id: f.description for f in self._registered_factories.values() if f.id in task_ids
         }
