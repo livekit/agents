@@ -15,9 +15,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import time
+import weakref
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Any, Literal, NamedTuple
 
@@ -35,10 +38,22 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.stt import SpeechEventType
+from livekit.agents.tts._provider_format import drop_bracket_cues
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     NotGivenOr,
+    TimedString,
+)
+from livekit.agents.utils import is_given
+from livekit.agents.voice.events import ConversationItemAddedEvent
+from livekit.agents.voice.io import (
+    AudioOutput,
+    AudioOutputCapabilities,
+    PlaybackFinishedEvent,
+    PlaybackProgressedEvent,
+    PlaybackStartedEvent,
+    TextOutput,
 )
 
 from .log import logger
@@ -50,6 +65,9 @@ BASE_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
 KEEPALIVE_MESSAGE = '{"type": "keepalive"}'
 END_TOKEN = "<end>"
 FINALIZED_TOKEN = "<fin>"
+
+# Soniox closes the stream on an agent_text message longer than this.
+AGENT_TEXT_MAX_BYTES = 1000
 
 
 def is_end_token(token: dict) -> bool:
@@ -109,7 +127,7 @@ class TranslationConfig:
 class STTOptions:
     """Configuration options for Soniox Speech-to-Text service."""
 
-    model: str = "stt-rt-v5"
+    model: str = "stt-rt-v6"
 
     language_hints: list[str] | None = None
     language_hints_strict: bool = False
@@ -141,9 +159,30 @@ class STTOptions:
     client_reference_id: str | None = None
     translation: TranslationConfig | None = None
 
+    enable_agent_text_input: bool = False
+    """Send each agent reply added to the conversation to Soniox as agent text, so words
+    the agent says (e.g. a corrected product name) are recognized when the user says them.
+    The model must support it."""
+
+    enable_echo_cancellation: bool = False
+    """Send the agent's speech to Soniox as agent text while it plays, which also lets Soniox
+    cancel the agent's echo in the user's audio. Implies ``enable_agent_text_input``. Put
+    ``STT.agent_text_output()`` in front of the session's transcription output so it receives
+    the agent's words with their Text-to-Speech timestamps, and its ``audio_output`` in front
+    of the session's audio output."""
+
+    agent_text_lead_ms: int = 700
+    """How far ahead of playback each of the agent's words is sent, in milliseconds.
+
+    Soniox places agent text where it sits among the audio frames and recognizes the caller's
+    reply better when the words arrive a little before the caller hears them; 500 to 1000 is
+    the documented range. Only used with ``enable_echo_cancellation``."""
+
     def __post_init__(self) -> None:
         if not (500 <= self.max_endpoint_delay_ms <= 3000):
             raise ValueError("max_endpoint_delay_ms must be between 500 and 3000")
+        if self.agent_text_lead_ms < 0:
+            raise ValueError("agent_text_lead_ms cannot be negative")
         if self.endpoint_sensitivity is not None and not (-1.0 <= self.endpoint_sensitivity <= 1.0):
             raise ValueError("endpoint_sensitivity must be between -1.0 and 1.0")
         if self.endpoint_latency_adjustment_level is not None and not (
@@ -188,6 +227,8 @@ class STT(stt.STT):
                 aligned_transcript="chunk",
                 offline_recognize=False,
                 diarization=params.enable_speaker_diarization,
+                # with echo cancellation each reply is already sent while it plays
+                chat_context=params.enable_agent_text_input and not params.enable_echo_cancellation,
             )
         )
 
@@ -197,6 +238,7 @@ class STT(stt.STT):
         self._base_url = base_url
         self._http_session = http_session
         self._params = params
+        self._streams = weakref.WeakSet[SpeechStream]()
 
     @property
     def model(self) -> str:
@@ -226,10 +268,81 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         """Return a new LiveKit streaming speech-to-text session."""
-        return SpeechStream(
+        stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
             language=language,
+        )
+        self._streams.add(stream)
+        return stream
+
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        # With echo cancellation each reply is already sent while it plays.
+        if not self._params.enable_agent_text_input or self._params.enable_echo_cancellation:
+            return
+        if (
+            (item := ev.item).type == "message"
+            and item.role == "assistant"
+            and (text := item.text_content)
+        ):
+            for stream in self._streams:
+                stream._push_agent_text(text, end_of_segment=True)
+
+    def agent_text_output(
+        self,
+        audio_output: AudioOutput,
+        next_in_chain: TextOutput | None = None,
+        transform: Callable[..., list[TimedString]] = drop_bracket_cues,
+    ) -> _AgentTextOutput:
+        """Return a text output that sends the agent's speech to Soniox as it is spoken.
+
+        It paces the agent's words against playback itself, sending each one
+        ``agent_text_lead_ms`` before the caller hears it, so it goes *ahead* of the
+        transcript synchronizer rather than after it - that is where the words still
+        carry the Text-to-Speech timestamps - and forwards everything on unchanged.
+        Its ``audio_output`` goes in front of the session's audio, so it can see the
+        session pause the voice while the caller may be interrupting::
+
+            agent_text = stt.agent_text_output(
+                session.output.audio, next_in_chain=session.output.transcription
+            )
+            session.output.audio = agent_text.audio_output
+            session.output.transcription = agent_text
+
+        Requires ``STTOptions.enable_echo_cancellation``, and, for the pacing to have
+        anything to work from, ``use_tts_aligned_transcript=True`` on the session with a
+        TTS that reports word timestamps (Soniox TTS does with ``word_timestamps=True``).
+
+        One service per session: the agent's words go to every recognition stream the
+        service has open, so a service shared between sessions would send each session
+        the other's speech.
+
+        Soniox cancels the echo in the transcript only. A VAD still hears the agent's
+        voice in the microphone and interrupts it, so without acoustic echo
+        cancellation on the audio, turn detection and interruptions need to come
+        from the STT (``turn_detection="stt"`` and no VAD).
+
+        Args:
+            audio_output: The session's audio output, whose playback reports say how much
+                of the reply the caller has heard.
+            next_in_chain: Text output that receives the transcript after this one,
+                normally whatever was on the session already.
+            transform: Decides which of the Text-to-Speech's words are sent to Soniox,
+                called as ``transform(words, held, final=False)`` with the words that
+                arrived and a list it keeps between calls for words it holds back,
+                such as the start of a tag that has not closed yet. It returns the
+                words to send, each keeping its timestamps; ``final=True`` at the end
+                of the reply releases what it held. Defaults to dropping bracket
+                cues such as ``[laughs]``, which the voice performs rather than says.
+
+        Returns:
+            The text output to put in front of the transcript synchronizer. Its
+            ``audio_output`` goes in front of the session's audio output; without it
+            a pause is not seen, and the agent's words are sent on while the voice is
+            stopped.
+        """
+        return _AgentTextOutput(
+            self, audio_output=audio_output, next_in_chain=next_in_chain, transform=transform
         )
 
 
@@ -247,7 +360,9 @@ class SpeechStream(stt.SpeechStream):
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reconnect_event = asyncio.Event()
 
-        self.audio_queue: asyncio.Queue[bytes | str] = asyncio.Queue()
+        self.audio_queue: asyncio.Queue[bytes | _AgentText] = asyncio.Queue()
+        # Whether this connection has been sent agent text whose segment is still open.
+        self._agent_segment_open = False
 
         self._reported_duration_ms = 0
         self._num_output_tokens = 0
@@ -291,6 +406,8 @@ class SpeechStream(stt.SpeechStream):
             config["endpoint_latency_adjustment_level"] = (
                 self._stt._params.endpoint_latency_adjustment_level
             )
+        if self._stt._params.enable_agent_text_input or self._stt._params.enable_echo_cancellation:
+            config["enable_agent_text_input"] = True
         if self._stt._params.translation is not None:
             tr = self._stt._params.translation
             translation_dict: dict[str, Any] = {"type": tr.type}
@@ -316,8 +433,28 @@ class SpeechStream(stt.SpeechStream):
         self._reported_duration_ms = 0
         self._num_output_tokens = 0
         self._reported_output_tokens = 0
+        self._agent_segment_open = False
+        # Audio queued for the old connection is stale, but agent text still has to
+        # reach Soniox: it may have been queued before the first connection opened.
+        stale = self.audio_queue
         self.audio_queue = asyncio.Queue()
+        while not stale.empty():
+            if isinstance(item := stale.get_nowait(), _AgentText):
+                self.audio_queue.put_nowait(item)
         return ws
+
+    def _push_agent_text(self, text: str, *, end_of_segment: bool) -> None:
+        # rides the audio queue: Soniox places agent text by its position among the audio
+        pieces = _split_utf8(text, AGENT_TEXT_MAX_BYTES)
+        if len(pieces) > 1:
+            logger.warning(
+                "Soniox agent text is over %d bytes; sending it as %d messages",
+                AGENT_TEXT_MAX_BYTES,
+                len(pieces),
+            )
+        for piece in pieces[:-1]:
+            self.audio_queue.put_nowait(_AgentText(piece, False))
+        self.audio_queue.put_nowait(_AgentText(pieces[-1], end_of_segment))
 
     def _report_processed_audio_duration(self, total_audio_proc_ms: float) -> None:
         """Report the audio duration and output tokens processed by the STT engine."""
@@ -450,8 +587,11 @@ class SpeechStream(stt.SpeechStream):
 
                 if isinstance(data, bytes):
                     await self._ws.send_bytes(data)
-                else:
-                    await self._ws.send_str(data)
+                elif data.text or self._agent_segment_open:
+                    # A bare end_of_segment closes a segment that began before a
+                    # reconnect, which this connection never saw, so it is not sent.
+                    self._agent_segment_open = not data.end_of_segment
+                    await self._ws.send_str(json.dumps({"type": "agent_text", **data._asdict()}))
             except asyncio.CancelledError:
                 raise
             except (aiohttp.ClientError, ConnectionError) as e:
@@ -725,6 +865,381 @@ def _lang_segments_to_fields(
         [LanguageCode(lang) for lang, _ in segments],
         [t for _, t in segments],
     )
+
+
+def _split_utf8(text: str, limit: int) -> list[str]:
+    """Split text into pieces of at most `limit` UTF-8 bytes, never inside a character."""
+    pieces: list[str] = []
+    start = size = 0
+    for i, ch in enumerate(text):
+        # An unpaired surrogate (valid in JSON-decoded text) must not raise here.
+        n = len(ch.encode(errors="surrogatepass"))
+        if size + n > limit:
+            pieces.append(text[start:i])
+            start, size = i, 0
+        size += n
+    pieces.append(text[start:])
+    return pieces
+
+
+class _AgentText(NamedTuple):
+    text: str
+    end_of_segment: bool
+
+
+@dataclass
+class _Playback:
+    """How much of the reply being spoken the caller has heard.
+
+    Counts from the last point known: the start of playback, or the end of the
+    last stretch the audio output reported played. A stretch is reported when it
+    ends, so after an underrun the report comes as the audio resumes, and the
+    count goes on from there. A pause is reported too, but the audio stays
+    stopped, so the count is frozen from `pause()` to `resume()`, which only an
+    `_AgentTextAudioOutput` in the session's audio chain can see.
+    """
+
+    # When counting from `offset` began, 0.0 while the count is stopped.
+    began_at: float = 0.0
+    offset: float = 0.0
+    # Where the last stretch the audio output reported played ended.
+    reported: float | None = None
+    playing: bool = False
+    paused: bool = False
+
+    def reset(self) -> None:
+        """Forget the last reply, so the next one is not paced against where it ended."""
+        self.began_at = self.offset = 0.0
+        self.reported = None
+        self.playing = False
+
+    def on_started(self, ev: PlaybackStartedEvent) -> None:
+        self.playing = True
+        self.offset = 0.0
+        self.reported = None
+        self._count_on()
+
+    def on_progressed(self, ev: PlaybackProgressedEvent) -> None:
+        self.playing = True
+        self.reported = self.offset = ev.offset + ev.duration
+        self._count_on()
+
+    def pause(self) -> None:
+        if not self.paused:
+            self.offset = self.seconds()
+            self.paused = True
+            self.began_at = 0.0
+
+    def resume(self) -> None:
+        # The session resumes the audio before every segment, paused or not.
+        if self.paused:
+            self.paused = False
+            self._count_on()
+
+    def _count_on(self) -> None:
+        self.began_at = time.time() if self.playing and not self.paused else 0.0
+
+    def seconds(self) -> float:
+        if not self.began_at:
+            return self.offset
+        return self.offset + time.time() - self.began_at
+
+
+class _AgentTextAudioOutput(AudioOutput):
+    """Passes the agent's audio through, and tells the pacing when playback pauses.
+
+    The session pauses the audio output while the caller may be interrupting,
+    and no playback report says when it resumes, so this sits in the audio chain
+    as the framework's own `TranscriptSynchronizer` does.
+    """
+
+    def __init__(self, text_output: _AgentTextOutput, *, next_in_chain: AudioOutput) -> None:
+        super().__init__(
+            label="SonioxAgentText",
+            next_in_chain=next_in_chain,
+            capabilities=AudioOutputCapabilities(pause=True),
+        )
+        self._text_output = text_output
+        # Whether the session's audio passes through here, so its pauses are seen.
+        self.captured = False
+
+    @property
+    def sample_rate(self) -> int | None:
+        if self._sample_rate is not None:
+            return self._sample_rate
+        return self.next_in_chain.sample_rate if self.next_in_chain else None
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        self.captured = True
+        if self.next_in_chain:
+            await self.next_in_chain.capture_frame(frame)
+        await super().capture_frame(frame)
+
+    def flush(self) -> None:
+        super().flush()
+        if self.next_in_chain:
+            self.next_in_chain.flush()
+
+    def clear_buffer(self) -> None:
+        if self.next_in_chain:
+            self.next_in_chain.clear_buffer()
+
+    def pause(self) -> None:
+        self._text_output._on_pause()
+        super().pause()
+
+    def resume(self) -> None:
+        super().resume()
+        self._text_output._on_resume()
+
+
+class _AgentTextOutput(TextOutput):
+    """Sends the agent's words to Soniox a little before the caller hears them.
+
+    Soniox places agent text where it sits among the audio frames and recognizes
+    the caller's reply better when the words arrive early, so this sits ahead of
+    the transcript synchronizer, where the words still carry the timestamps the
+    Text-to-Speech gave them, and paces them itself against playback. Everything
+    is forwarded on unchanged, so the transcript the caller sees is untouched.
+
+    The text of a reply is complete (``flush``) as soon as the Text-to-Speech has
+    finished with it, which is usually well before the caller has heard it, so
+    the reply ends with its playback instead: every word is sent when playback
+    finishes, or only the words the caller heard when it was interrupted, and
+    then ``end_of_segment``. A reply that never plays is closed, unsent, when
+    the next one begins.
+    """
+
+    def __init__(
+        self,
+        stt: STT,
+        *,
+        audio_output: AudioOutput,
+        next_in_chain: TextOutput | None,
+        transform: Callable[..., list[TimedString]],
+    ) -> None:
+        super().__init__(label="SonioxAgentText", next_in_chain=next_in_chain)
+        self._stt = stt
+        self._audio_output = audio_output
+        self._pause_output: _AgentTextAudioOutput | None = None
+        self._segment_open = False
+        # The reply's text is all here and only its playback is left.
+        self._text_complete = False
+        self._transform = transform
+        # Words the transform holds back until it can tell what they are.
+        self._held: list[TimedString] = []
+        self._playback = _Playback()
+        # Words still to send, in the order the Text-to-Speech reported them,
+        # each with the second of the reply it is heard at.
+        self._pending: list[tuple[float, str]] = []
+        self._last_start = 0.0
+        # Whitespace left on its own, such as the space a dropped tag leaves,
+        # waits for the next word; Soniox cancels the echo more reliably
+        # without whitespace-only messages.
+        self._space = ""
+        self._pacing: asyncio.Task[None] | None = None
+        self._warned_untimed = False
+        self._warned_no_pause_output = False
+        # Set when the audio output revises the playback position, so a word
+        # waiting on the old estimate is reconsidered against the new one.
+        self._revised = asyncio.Event()
+        self._attached = True
+        # A reply keeps the output it started with, so the rest of one cut off by
+        # a detach still arrives here, and its playback can no longer be followed.
+        self._skipping_reply = False
+        self._listen_to_playback()
+
+    def _listen_to_playback(self) -> None:
+        # The emitter keys listeners by callback, so registering twice is a no-op.
+        self._audio_output.on("playback_started", self._on_playback_started)
+        self._audio_output.on("playback_progressed", self._on_playback_progressed)
+        self._audio_output.on("playback_finished", self._on_playback_finished)
+
+    def on_attached(self) -> None:
+        # Toggling transcription detaches and reattaches this output.
+        self._attached = True
+        self._listen_to_playback()
+        super().on_attached()
+
+    def on_detached(self) -> None:
+        self._audio_output.off("playback_started", self._on_playback_started)
+        self._audio_output.off("playback_progressed", self._on_playback_progressed)
+        self._audio_output.off("playback_finished", self._on_playback_finished)
+        self._attached = False
+        self._skipping_reply = self._segment_open and not self._text_complete
+        self._end_segment()
+        super().on_detached()
+
+    async def capture_text(self, text: str) -> None:
+        if (
+            self._stt._params.enable_echo_cancellation
+            and self._attached
+            and not self._skipping_reply
+        ):
+            if self._text_complete:
+                # The last reply's playback never finished, so nothing says how
+                # much of it was heard.
+                self._end_segment()
+            # The segment is open from the first text of it, not from the first
+            # text the transform lets through: a chunk ending mid-tag is held
+            # back, and its segment still has to be closed.
+            self._segment_open = True
+            words = [text if isinstance(text, TimedString) else TimedString(text)]
+            self._queue(self._transform(words, self._held))
+        if self.next_in_chain:
+            await self.next_in_chain.capture_text(text)
+
+    def flush(self) -> None:
+        self._skipping_reply = False
+        if self._segment_open:
+            self._text_complete = True
+        if self.next_in_chain:
+            self.next_in_chain.flush()
+
+    @property
+    def audio_output(self) -> AudioOutput:
+        """The audio output to put in front of the session's, so pauses are seen."""
+        if self._pause_output is None:
+            self._pause_output = _AgentTextAudioOutput(self, next_in_chain=self._audio_output)
+        return self._pause_output
+
+    def _on_pause(self) -> None:
+        self._playback.pause()
+
+    def _on_resume(self) -> None:
+        # No wake-up needed: a paused count only makes the pacing's wait too short.
+        self._playback.resume()
+
+    def _on_playback_started(self, ev: PlaybackStartedEvent) -> None:
+        if not self._warned_no_pause_output and (
+            self._pause_output is None or not self._pause_output.captured
+        ):
+            self._warned_no_pause_output = True
+            logger.warning(
+                "Soniox agent text cannot see the session pause the agent's voice, so "
+                "it sends the agent's words on while the voice is paused; set "
+                "session.output.audio to the agent text output's audio_output"
+            )
+        self._playback.on_started(ev)
+
+    def _on_playback_progressed(self, ev: PlaybackProgressedEvent) -> None:
+        """Take the revised position, and let a word waiting on the old one go."""
+        self._playback.on_progressed(ev)
+        self._revised.set()
+
+    def _on_playback_finished(self, ev: PlaybackFinishedEvent) -> None:
+        if self._segment_open:
+            if ev.interrupted:
+                # The words the caller heard are sent. The rest of the reply is
+                # dropped, and so is what the transform still holds back, such
+                # as a tag that was cut off. After a pause `playback_position`
+                # is the time played rather than the position in the reply, so
+                # the stretch reported just before it is trusted first.
+                reported = self._playback.reported
+                self._send_until(ev.playback_position if reported is None else reported)
+            else:
+                self._queue(self._transform([], self._held, final=True))
+                self._send_until(float("inf"))
+            self._end_segment()
+        # A reply can play with no segment open, and its count must not run on.
+        self._playback.reset()
+
+    def _end_segment(self) -> None:
+        """Close the open segment, dropping whatever of it is still unsent."""
+        self._pending.clear()
+        self._held.clear()
+        self._last_start = 0.0
+        self._space = ""
+        self._stop_pacing()
+        self._playback.reset()
+        self._text_complete = False
+        if self._segment_open:
+            self._segment_open = False
+            for stream in self._stt._streams:
+                stream._push_agent_text("", end_of_segment=True)
+
+    def _start_of(self, text: TimedString) -> float:
+        """The second of the reply this text is heard at."""
+        if is_given(text.start_time):
+            return text.start_time
+
+        if not self._warned_untimed:
+            self._warned_untimed = True
+            logger.warning(
+                "Soniox agent text has no word timestamps to pace against; set "
+                "use_tts_aligned_transcript=True on the session and word timestamps "
+                "on the TTS, or the agent's words are sent as they are generated"
+            )
+        # Nothing to pace against, so this is as late as it gets: a word whose
+        # time is unknown is due now.
+        return self._playback.seconds()
+
+    def _queue(self, words: list[TimedString]) -> None:
+        """Hold spoken words until the caller is about to hear them."""
+        for word in words:
+            if not word.strip():
+                self._space += word
+                continue
+            start = self._start_of(word)
+            if is_given(word.start_time):
+                if start < self._last_start:
+                    logger.warning(
+                        "the Text-to-Speech reported a word timestamp earlier than the "
+                        "previous one; Soniox agent text keeps the order the words arrived in"
+                    )
+                self._last_start = start
+            self._pending.append((start, self._space + word))
+            self._space = ""
+        if not self._pending:
+            return
+        self._send_due()
+        if self._pending and self._pacing is None:
+            self._pacing = asyncio.create_task(self._pace())
+
+    def _send_due(self) -> None:
+        """Send every word the caller is about to hear."""
+        self._send_until(self._horizon())
+
+    def _horizon(self) -> float:
+        """How far into the reply the words sent by now have to reach."""
+        return self._playback.seconds() + self._stt._params.agent_text_lead_ms / 1000
+
+    def _send_until(self, horizon: float) -> None:
+        """Send every word heard by `horizon`, and nothing beyond them."""
+        while self._pending and self._pending[0][0] <= horizon:
+            _, text = self._pending.pop(0)
+            for stream in self._stt._streams:
+                stream._push_agent_text(text, end_of_segment=False)
+
+    @utils.log_exceptions(logger=logger)
+    async def _pace(self) -> None:
+        """Send each word when its moment comes, until none are left.
+
+        The wait is computed from the playback position each time round, as the
+        framework's own `TranscriptSynchronizer` recomputes its delay per word.
+        A revision of that position cuts the wait short rather than waiting it
+        out: when the audio output reports a run, the position it reports can be
+        ahead of the estimate, and a word that is due by then has to go now or
+        the caller hears it first.
+        """
+        try:
+            while self._pending:
+                self._revised.clear()
+                due = self._pending[0][0] - self._horizon()
+                if due > 0:
+                    with contextlib.suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(self._revised.wait(), due)
+                self._send_due()
+        finally:
+            # A reply that ends while this one is cancelled has already started
+            # the next pacing task.
+            if self._pacing is asyncio.current_task():
+                self._pacing = None
+
+    def _stop_pacing(self) -> None:
+        if self._pacing is not None:
+            self._pacing.cancel()
+            self._pacing = None
 
 
 class _LangStats(NamedTuple):
