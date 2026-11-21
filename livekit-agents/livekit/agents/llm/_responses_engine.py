@@ -17,6 +17,7 @@ from openai.types.responses import (
     ResponseFunctionToolCall,
     ResponseIncompleteEvent,
     ResponseInputParam,
+    ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
     ResponseOutputMessage,
     ResponseTextDeltaEvent,
@@ -262,6 +263,9 @@ class ResponsesLLMStream(llm.LLMStream):
         self._strict_tool_schema = strict_tool_schema
         self._response_id: str = ""
         self._response_completed: bool = False
+        self._commentary_ids: set[str] = set()
+        self._held_commentary: list[str] = []
+        self._answer_started = False
         self._prev_resp = prev_resp
         self._input_items: list[dict[str, Any]] = []
 
@@ -293,6 +297,9 @@ class ResponsesLLMStream(llm.LLMStream):
 
     async def _run_impl(self) -> None:
         self._response_completed = False
+        self._commentary_ids = set()
+        self._held_commentary = []
+        self._answer_started = False
         chat_ctx, _ = self._chat_ctx.to_provider_format(
             format="openai.responses", prompt_cache_breakpoints=self._prompt_cache_breakpoints
         )
@@ -373,6 +380,10 @@ class ResponsesLLMStream(llm.LLMStream):
                         if chunk is not None and chunk.has_response():
                             retryable = False
 
+                if not self._response_completed:
+                    # the body ended without response.completed/failed/incomplete
+                    raise APIConnectionError(retryable=True)
+
             except openai.APITimeoutError:
                 raise APITimeoutError(retryable=retryable)  # noqa: B904
             except openai.APIStatusError as e:
@@ -417,6 +428,8 @@ class ResponsesLLMStream(llm.LLMStream):
             return ResponseErrorEvent.model_validate(merged)
         elif event_type == "response.created":
             return ResponseCreatedEvent.model_validate(event)
+        elif event_type == "response.output_item.added":
+            return ResponseOutputItemAddedEvent.model_validate(event)
         elif event_type == "response.output_item.done":
             return ResponseOutputItemDoneEvent.model_validate(event)
         elif event_type == "response.output_text.delta":
@@ -438,12 +451,27 @@ class ResponsesLLMStream(llm.LLMStream):
             self._handle_error(event)
         if isinstance(event, ResponseCreatedEvent):
             self._handle_response_created(event)
+        if (
+            isinstance(event, ResponseOutputItemAddedEvent)
+            and isinstance(event.item, ResponseOutputMessage)
+            and event.item.phase == "commentary"
+        ):
+            self._commentary_ids.add(event.item.id)
         if isinstance(event, ResponseOutputItemDoneEvent):
             chunk = self._handle_output_items_done(event)
         if isinstance(event, ResponseTextDeltaEvent):
             chunk = self._handle_response_output_text_delta(event)
         if isinstance(event, ResponseCompletedEvent):
             chunk = self._handle_response_completed(event)
+            if self._held_commentary:
+                # no final answer text came, so the commentary is the reply; it is returned
+                # with the usage so the caller sees text was sent and never retries it
+                chunk = llm.ChatChunk(
+                    id=self._response_id,
+                    delta=llm.ChoiceDelta(content="".join(self._held_commentary), role="assistant"),
+                    usage=chunk.usage if chunk else None,
+                )
+                self._held_commentary = []
         if isinstance(event, ResponseFailedEvent):
             self._handle_response_failed(event)
         if isinstance(event, ResponseIncompleteEvent):
@@ -499,16 +527,21 @@ class ResponsesLLMStream(llm.LLMStream):
         self._response_completed = True
 
         def _output_wire_items() -> list[dict[str, Any]]:
-            # the output as the agent stores it: all text as one assistant message, then the
-            # function calls; reasoning and provider tools stay server-side
+            # the output as the agent stores it: the spoken text as one assistant message,
+            # then the function calls; reasoning and provider tools stay server-side
             output = event.response.output
-            text = "".join(
-                part.text
-                for item in output
-                if isinstance(item, ResponseOutputMessage)
-                for part in item.content
-                if part.type == "output_text"
-            )
+
+            def _join(commentary: bool) -> str:
+                return "".join(
+                    part.text
+                    for item in output
+                    if isinstance(item, ResponseOutputMessage)
+                    and (item.phase == "commentary") == commentary
+                    for part in item.content
+                    if part.type == "output_text"
+                )
+
+            text = _join(commentary=False) or _join(commentary=True)
             items: list[dict[str, Any]] = [{"role": "assistant", "content": text}] if text else []
             items.extend(
                 {
@@ -580,6 +613,15 @@ class ResponsesLLMStream(llm.LLMStream):
     def _handle_response_output_text_delta(
         self, event: ResponseTextDeltaEvent
     ) -> llm.ChatChunk | None:
+        # a response can hold a `commentary` message and then a `final_answer`, often with
+        # the same text, so commentary is held and spoken only if no final answer text comes
+        if event.item_id in self._commentary_ids:
+            if not self._answer_started:
+                self._held_commentary.append(event.delta)
+            return None
+        if event.delta:
+            self._answer_started = True
+            self._held_commentary = []
         return llm.ChatChunk(
             id=self._response_id,
             delta=llm.ChoiceDelta(content=event.delta, role="assistant"),

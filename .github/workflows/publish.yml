@@ -283,7 +283,8 @@ jobs:
   release:
     name: Create GitHub release
     needs: [tag, publish]
-    if: always() && needs.tag.result == 'success' && needs.publish.result == 'success'
+    # the tag is pushed, so one failed plugin upload must not leave it without its release notes
+    if: always() && needs.tag.result == 'success' && needs.publish.result != 'cancelled'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7

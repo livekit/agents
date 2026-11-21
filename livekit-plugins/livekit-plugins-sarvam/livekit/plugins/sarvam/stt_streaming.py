@@ -21,7 +21,7 @@ import platform
 import time
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, get_args
 from urllib.parse import urlencode
 
 import aiohttp
@@ -52,11 +52,13 @@ USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 SARVAM_STT_REALTIME_URL = "wss://api.sarvam.ai/speech-to-text-realtime/ws"
 REALTIME_MODEL = "saaras:v3-realtime"
 
+RealtimeModel = Literal["saaras:v3-realtime", "saaras:v4"]
 RealtimeStreamType = Literal["fast", "balanced", "simulated"]
 RealtimeEndpointing = Literal["vad", "manual"]
 RealtimeEncoding = Literal["linear16", "linear32", "mulaw", "alaw"]
 RealtimeMode = Literal["transcribe", "translate", "verbatim", "translit", "codemix"]
 
+SUPPORTED_MODELS = set(get_args(RealtimeModel))
 SUPPORTED_SAMPLE_RATES = {8000, 16000}
 SUPPORTED_STREAM_TYPES = {"fast", "balanced", "simulated"}
 SUPPORTED_ENDPOINTING = {"vad", "manual"}
@@ -67,6 +69,12 @@ SUPPORTED_MODES = {"transcribe", "translate", "verbatim", "translit", "codemix"}
 # not a send cadence, and the contract sets no client chunk size. Matches the
 # non-realtime Sarvam websocket plugin so audio reaches server VAD promptly.
 AUDIO_CHUNK_MS = 50
+# Sarvam closes a stream that receives no audio for 60 s (`inactivity_timeout`), and this
+# stream never reconnects. When the caller stops pushing audio (muted or gated input), a
+# short chunk of silence is sent after this many idle seconds to keep the session open.
+# In manual endpointing it goes out between utterances, outside a speech_start/speech_end
+# pair: Sarvam accepts that, opens no utterance for it, and counts it on its audio clock.
+KEEPALIVE_INTERVAL_S = 30.0
 
 
 def _encode_pcm_for_wire(encoding: RealtimeEncoding | str, pcm: bytes) -> bytes:
@@ -150,7 +158,7 @@ class RealtimeSTTOptions:
     endpointing: RealtimeEndpointing | str = "vad"
     encoding: RealtimeEncoding | str = "linear16"
     sample_rate: int = 16000
-    model: str = REALTIME_MODEL
+    model: RealtimeModel | str = REALTIME_MODEL
     base_url: str = SARVAM_STT_REALTIME_URL
     prompt: str | None = None
     return_timestamps: bool = False
@@ -160,8 +168,8 @@ class RealtimeSTTOptions:
     vad_prefix_padding_ms: int | None = None
 
     def __post_init__(self) -> None:
-        if self.model != REALTIME_MODEL:
-            raise ValueError(f"model must be {REALTIME_MODEL}")
+        if self.model not in SUPPORTED_MODELS:
+            raise ValueError(f"model must be one of {', '.join(sorted(SUPPORTED_MODELS))}")
         if self.language not in SUPPORTED_LANGUAGES:
             raise ValueError(f"language {self.language} is not supported")
         if self.stream_type not in SUPPORTED_STREAM_TYPES:
@@ -219,7 +227,9 @@ def _build_realtime_ws_url(base_url: str, opts: RealtimeSTTOptions) -> str:
 
 
 class STTRealtime(stt.STT):
-    """Speech-to-text using Sarvam's realtime WebSocket endpoint (``saaras:v3-realtime``).
+    """Speech-to-text using Sarvam's realtime WebSocket endpoint.
+
+    The endpoint serves ``saaras:v3-realtime`` (the default) and ``saaras:v4``.
 
     This endpoint streams interim and final transcripts over a single
     WebSocket connection and supports either server-side VAD or
@@ -230,6 +240,7 @@ class STTRealtime(stt.STT):
         self,
         *,
         language: str = "en-IN",
+        model: RealtimeModel | str = REALTIME_MODEL,
         stream_type: RealtimeStreamType | str = "balanced",
         mode: RealtimeMode | str = "transcribe",
         endpointing: RealtimeEndpointing | str = "vad",
@@ -249,6 +260,8 @@ class STTRealtime(stt.STT):
 
         Args:
             language: BCP-47 language code, or ``auto`` for adaptive language identification.
+            model: Realtime model: ``saaras:v3-realtime`` or ``saaras:v4``. Fixed for the
+                lifetime of each connection.
             stream_type: Latency profile: ``fast``, ``balanced``, or ``simulated``.
             mode: Task applied to finals: ``transcribe``, ``translate``, ``verbatim``,
                 ``translit``, or ``codemix``.
@@ -290,6 +303,7 @@ class STTRealtime(stt.STT):
         self._opts = RealtimeSTTOptions(
             language=language,
             api_key=api_key,
+            model=model,
             stream_type=stream_type,
             mode=mode,
             endpointing=endpointing,
@@ -310,7 +324,7 @@ class STTRealtime(stt.STT):
     @property
     def model(self) -> str:
         """Name of the Sarvam realtime model backing this instance."""
-        return REALTIME_MODEL
+        return self._opts.model
 
     @property
     def provider(self) -> str:
@@ -341,6 +355,7 @@ class STTRealtime(stt.STT):
         self,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
+        model: NotGivenOr[RealtimeModel | str] = NOT_GIVEN,
         stream_type: NotGivenOr[RealtimeStreamType | str] = NOT_GIVEN,
         mode: NotGivenOr[RealtimeMode | str] = NOT_GIVEN,
         endpointing: NotGivenOr[RealtimeEndpointing | str] = NOT_GIVEN,
@@ -354,7 +369,7 @@ class STTRealtime(stt.STT):
     ) -> None:
         """Update options for this instance and every stream it created.
 
-        Options that Sarvam only accepts at connection time (``sample_rate``,
+        Options that Sarvam only accepts at connection time (``model``, ``sample_rate``,
         ``return_timestamps``, and ``vad_prefix_padding_ms``) take effect on
         newly created streams only.
         The remaining options are sent to active streams as an in-band
@@ -363,6 +378,7 @@ class STTRealtime(stt.STT):
 
         Args:
             language: BCP-47 language code, or ``auto`` for adaptive language identification.
+            model: ``saaras:v3-realtime`` or ``saaras:v4``; applies to new streams only.
             stream_type: Latency profile: ``fast``, ``balanced``, or ``simulated``.
             mode: Task applied to finals.
             endpointing: ``vad`` for server-side turn detection, or ``manual``.
@@ -380,6 +396,7 @@ class STTRealtime(stt.STT):
         opts = RealtimeSTTOptions(
             language=language if is_given(language) else self._opts.language,
             api_key=self._opts.api_key,
+            model=model if is_given(model) else self._opts.model,
             stream_type=stream_type if is_given(stream_type) else self._opts.stream_type,
             mode=mode if is_given(mode) else self._opts.mode,
             endpointing=endpointing if is_given(endpointing) else self._opts.endpointing,
@@ -431,8 +448,10 @@ class STTRealtime(stt.STT):
 
         Args:
             language: Overrides the instance language for this stream only.
-            conn_options: Connection options. ``max_retry`` is forced to ``0`` because this
-                endpoint bills per connection and must not silently reconnect.
+            conn_options: Connection options. ``max_retry`` is forced to ``0``: a retry
+                would open a new Sarvam session and lose the open utterance and the audio
+                already sent, so a failure is raised to the caller (for example a
+                ``FallbackAdapter``) instead.
 
         Returns:
             A stream that accepts audio frames and yields speech events.
@@ -441,6 +460,7 @@ class STTRealtime(stt.STT):
         opts = RealtimeSTTOptions(
             language=language if is_given(language) else self._opts.language,
             api_key=self._opts.api_key,
+            model=self._opts.model,
             stream_type=self._opts.stream_type,
             mode=self._opts.mode,
             endpointing=self._opts.endpointing,
@@ -529,6 +549,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
             callback=self._on_audio_duration_report,
             duration=5.0,
         )
+        self._last_audio_sent_at = time.monotonic()
         self._logger = logger
 
     @property
@@ -779,12 +800,14 @@ class RealtimeSpeechStream(stt.SpeechStream):
             await super().aclose()
 
     async def _run(self) -> None:
-        # A single connection attempt: this endpoint bills per connection, so the
-        # stream never reconnects on its own (`stream()` also forces max_retry=0).
+        # A single connection attempt: a new connection is a new Sarvam session, which
+        # would lose the open utterance and the audio already sent, so the stream never
+        # reconnects on its own (`stream()` also forces max_retry=0).
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
             ws = await self._connect_ws()
             self._ws = ws
+            self._last_audio_sent_at = time.monotonic()
             tasks = [
                 asyncio.create_task(self._process_audio(ws)),
                 asyncio.create_task(self._process_messages(ws)),
@@ -869,6 +892,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
         if ws.closed:
             return
 
+        self._last_audio_sent_at = time.monotonic()
+
         try:
             await ws.send_bytes(payload)
         except (aiohttp.ClientConnectionResetError, ConnectionError):
@@ -931,6 +956,25 @@ class RealtimeSpeechStream(stt.SpeechStream):
         )
         return ws
 
+    async def _send_keepalive_silence(
+        self, ws: aiohttp.ClientWebSocketResponse, samples_per_channel: int
+    ) -> None:
+        """Send a chunk of silence so Sarvam's inactivity timeout doesn't close the stream.
+
+        That timeout counts audio only, so pings alone don't keep the stream open. The
+        silence is real audio on Sarvam's clock: it advances the audio position and is
+        metered like any other audio.
+        """
+        self._logger.debug(
+            "No audio for a while, sending silence to keep the Sarvam stream open",
+            extra=self._build_log_context(),
+        )
+        chunk = np.zeros(samples_per_channel, dtype=np.int16).tobytes()
+        duration = samples_per_channel / self._opts.sample_rate
+        self._audio_duration_collector.push(duration)
+        self._audio_position += duration
+        await self._safe_send_bytes(ws, _encode_pcm_for_wire(self._opts.encoding, chunk))
+
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         samples_per_channel = max(int(self._opts.sample_rate * AUDIO_CHUNK_MS / 1000), 1)
@@ -940,7 +984,38 @@ class RealtimeSpeechStream(stt.SpeechStream):
             samples_per_channel=samples_per_channel,
         )
 
-        async for data in self._input_ch:
+        async def send_frames(frames: list[rtc.AudioFrame]) -> None:
+            for frame in frames:
+                if self._active_endpointing == "manual" and not self._manual_speech_started:
+                    await self._safe_send_str(ws, {"event": "speech_start"})
+                    self._manual_speech_started = True
+                    self._begin_manual_utterance()
+
+                self._audio_duration_collector.push(frame.duration)
+                self._audio_position += frame.duration
+                await self._safe_send_bytes(
+                    ws, _encode_pcm_for_wire(self._opts.encoding, frame.data.tobytes())
+                )
+
+        input_frames = aiter(self._input_ch)
+        while True:
+            idle = time.monotonic() - self._last_audio_sent_at
+            try:
+                # wake up for the keepalive too, so this stays the only audio writer
+                data = await asyncio.wait_for(
+                    anext(input_frames), timeout=max(KEEPALIVE_INTERVAL_S - idle, 0.0)
+                )
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                if self._session_ended or ws.closed:
+                    break
+                # what's pending goes out first, so the silence follows the last audio
+                await self._send_pending_config_update(ws)
+                await send_frames(audio_bstream.flush())
+                await self._send_keepalive_silence(ws, samples_per_channel)
+                continue
+
             # The server is done reading, so stop the pump instead of writing into a
             # socket whose reset would fail the whole stream (max_retry is forced to 0).
             if self._session_ended or ws.closed:
@@ -954,17 +1029,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 self._flush_observed = True
                 frames.extend(audio_bstream.flush())
 
-            for frame in frames:
-                if self._active_endpointing == "manual" and not self._manual_speech_started:
-                    await self._safe_send_str(ws, {"event": "speech_start"})
-                    self._manual_speech_started = True
-                    self._begin_manual_utterance()
-
-                self._audio_duration_collector.push(frame.duration)
-                self._audio_position += frame.duration
-                await self._safe_send_bytes(
-                    ws, _encode_pcm_for_wire(self._opts.encoding, frame.data.tobytes())
-                )
+            await send_frames(frames)
 
             if isinstance(data, self._FlushSentinel):
                 self._audio_duration_collector.flush()

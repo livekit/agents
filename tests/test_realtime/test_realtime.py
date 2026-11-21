@@ -416,6 +416,7 @@ async def test_function_tool_reply(rt_session: llm.RealtimeSession):
         return "Paris"
 
     await rt_session.update_tools([get_capital])
+    rt_session.update_options(tool_choice="required")
     gen_ev = await asyncio.wait_for(
         rt_session.generate_reply(instructions="What is the capital of France? Use the tool."),
         timeout=15,
@@ -437,6 +438,7 @@ async def test_function_tool_reply(rt_session: llm.RealtimeSession):
     )
     await asyncio.wait_for(rt_session.update_chat_ctx(chat_ctx), timeout=10)
 
+    rt_session.update_options(tool_choice="auto")
     gen_ev2 = await asyncio.wait_for(rt_session.generate_reply(), timeout=15)
     text = await asyncio.wait_for(_collect_text(gen_ev2), timeout=15)
     assert "paris" in text.lower()

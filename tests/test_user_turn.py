@@ -21,7 +21,7 @@ from livekit.agents import (
     llm,
     vad,
 )
-from livekit.agents.llm import LLM, ChatChunk, ChatContext, ChoiceDelta, LLMStream
+from livekit.agents.llm import LLM, ChatChunk, ChatContext, ChatMessage, ChoiceDelta, LLMStream
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
 from livekit.agents.types import (
@@ -862,5 +862,42 @@ async def test_interim_without_new_words_keeps_the_preemptive_reply(interim: str
         assert activity._preemptive_generation is not None
         assert activity._preemptive_generation.speech_handle is handle
         assert not handle.interrupted
+    finally:
+        await asyncio.gather(session.aclose(), return_exceptions=True)
+
+
+async def test_reused_preemptive_reply_keeps_extra_set_in_on_user_turn_completed() -> None:
+    llm, session = await _start_preemptive_session()
+    agent = session.current_agent
+    activity = session._activity
+    assert activity is not None and activity._audio_recognition is not None
+    recognition = activity._audio_recognition
+
+    async def on_turn(chat_ctx: ChatContext, new_message: ChatMessage) -> None:
+        new_message.extra["source"] = "voice"
+
+    agent.on_user_turn_completed = on_turn  # type: ignore[method-assign]
+    added: asyncio.Queue[ChatMessage] = asyncio.Queue()
+    session.on(
+        "conversation_item_added",
+        lambda ev: added.put_nowait(ev.item) if ev.item.type == "message" else None,
+    )
+
+    try:
+        await recognition._on_stt_event(
+            _stt_event(SpeechEventType.PREFLIGHT_TRANSCRIPT, "Hello, how are you?")
+        )
+        assert activity._preemptive_generation is not None
+        handle = activity._preemptive_generation.speech_handle
+        await asyncio.wait_for(llm.started.wait(), 2.0)
+
+        await recognition._on_stt_event(_final_transcript("Hello, how are you?"))
+        await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
+        await _await_delivery(session)
+
+        # the preemptive reply was adopted, not regenerated
+        assert not handle.interrupted
+        item = await asyncio.wait_for(added.get(), 2.0)
+        assert item.role == "user" and item.extra.get("source") == "voice"
     finally:
         await asyncio.gather(session.aclose(), return_exceptions=True)

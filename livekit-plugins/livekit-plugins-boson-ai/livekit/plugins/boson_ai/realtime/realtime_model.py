@@ -166,11 +166,11 @@ class RealtimeModel(openai_rt.RealtimeModel):
     Example:
         ```python
         from livekit.agents import Agent, AgentSession
-        from livekit.plugins import boson
+        from livekit.plugins import boson_ai
 
         # Reads BOSON_API_KEY from the environment and connects to the hosted API.
         session = AgentSession(
-            llm=boson.realtime.RealtimeModel(
+            llm=boson_ai.realtime.RealtimeModel(
                 input_audio_transcription_model="higgs-stt-3.1",
             )
         )
