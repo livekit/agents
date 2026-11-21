@@ -476,6 +476,7 @@ class TTS(tts.TTS[Literal["fallback_activated"]]):
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[AssemblyaiOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        disable_system_default_fallback: bool = False,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
         pass
@@ -713,6 +714,11 @@ class TTS(tts.TTS[Literal["fallback_activated"]]):
                     if not connection.in_use:
                         await self._retire(connection)
                     continue
+                if data.get("type") == "error" and not connection.in_use:
+                    # an error with no turn in flight belongs to no stream: drop the
+                    # connection rather than fail the next turn that reuses it
+                    self._pool.remove(connection)
+                    return
             connection.inbox.put_nowait(msg)
             if msg.type in (
                 aiohttp.WSMsgType.CLOSE,
@@ -960,7 +966,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                     output_emitter.end_input()
                     break
                 elif msg_type == "error":
-                    raise APIError(f"LiveKit Inference TTS returned error: {msg.data}")
+                    code = data.get("code")
+                    detail = data.get("data")
+                    text = f"{code}: {detail}" if code and detail else (detail or code or msg.data)
+                    raise APIError(
+                        f"LiveKit Inference TTS returned error: {text}",
+                        body=data,
+                        # absent means "unknown": keep the default of retrying
+                        retryable=data.get("retryable") is not False,
+                    )
 
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as connection:
