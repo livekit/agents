@@ -67,7 +67,19 @@ _ASK_BARE = f"Reply to the caller now. {_SPEAK_NOW}"
 
 # session.closed carries the final usage; the service drains first
 _SESSION_CLOSE_TIMEOUT = 5.0
+# a final close is off the caller's path, so it can wait longer for the closing usage
+_FINAL_SESSION_CLOSE_TIMEOUT = 30.0
 _CLOSING_EVENTS = frozenset({"session.usage.updated", "session.closed", "decision.event"})
+
+
+def _is_closing_event(event: dict[str, Any]) -> bool:
+    # a response that completes during the close still carries backend tokens to report
+    return event.get("type") in _CLOSING_EVENTS or (
+        event.get("type") == "response.event"
+        and (event.get("event") or {}).get("type") == "response.completed"
+    )
+
+
 _FATAL_ERROR_CODES = frozenset(
     {
         "insufficient_quota",
@@ -769,9 +781,14 @@ class GPTLiveSession(
                     with contextlib.suppress(Exception):
                         await self._ws_send(ws_conn, types.SessionCloseEvent())
             if self._session_started_fut.done() and not self._session_started_fut.cancelled():
-                with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(
-                        asyncio.shield(self._session_closed_fut), _SESSION_CLOSE_TIMEOUT
+                # recycling opens the next connection only after this returns, so keep it short
+                timeout = _FINAL_SESSION_CLOSE_TIMEOUT if self._closing else _SESSION_CLOSE_TIMEOUT
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._session_closed_fut), timeout)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "gpt-live session.closed not received, final usage may be partial",
+                        extra={"timeout": timeout},
                     )
             await ws_conn.close()
 
@@ -828,7 +845,7 @@ class GPTLiveSession(
                 event = json.loads(msg.data)
                 self.emit("openai_server_event_received", event)
                 # while closing only the shutdown events matter; the framework has torn down
-                if self._closing and event.get("type") not in _CLOSING_EVENTS:
+                if self._closing and not _is_closing_event(event):
                     continue
                 try:
                     self._handle_event(event)
@@ -1201,6 +1218,9 @@ class GPTLiveSession(
                         ),
                     ),
                 )
+            if self._closing:
+                # only the accounting is wanted; a closing session runs no continuation
+                return
             if (calls := self._backend_running_responses.pop(d_id, None)) is not None:
                 self._backend_open_calls |= calls
             self._maybe_continue_response()
