@@ -421,17 +421,16 @@ class AudioStreamDecoder:
                 options={
                     "probesize": "32",
                     "analyzeduration": "0",
-                    "fflags": "nobuffer+flush_packets",
+                    # no "nobuffer": with it, the packets read while probing the
+                    # stream are discarded, which cuts the start of the audio
+                    "fflags": "flush_packets",
                     "flags": "low_delay",
                     "reorder_queue_size": "0",
                     "max_delay": "0",
                     "avioflags": "direct",
                 },
             )
-            # explicitly disable internal buffering flags on the FFmpeg container
-            container.flags |= cast(
-                int, av.container.Flags.no_buffer.value | av.container.Flags.flush_packets.value
-            )
+            container.flags |= cast(int, av.container.Flags.flush_packets.value)
 
             if len(container.streams.audio) == 0:
                 raise ValueError("no audio stream found")
