@@ -101,7 +101,7 @@ async def test_vad_threshold_partial_update():
 # ---------------------------------------------------------------------------
 
 
-def _make_stream_for_unit_test(stt=None):
+def _make_stream_for_unit_test(stt=None, conn_options=None):
     """Construct a SpeechStream without triggering the _main_task WebSocket
     loop. Patches asyncio.create_task during __init__ so the stream doesn't
     try to open a real connection; also closes the coroutines that would
@@ -112,6 +112,9 @@ def _make_stream_for_unit_test(stt=None):
 
     if stt is None:
         stt = STT(api_key="test-key")
+
+    if conn_options is None:
+        conn_options = DEFAULT_API_CONNECT_OPTIONS
 
     def _fake_create_task(coro, *args, **kwargs):
         # Close the coroutine so we don't get RuntimeWarning about it never
@@ -125,7 +128,7 @@ def _make_stream_for_unit_test(stt=None):
         stream = SpeechStream(
             stt=stt,
             opts=stt._opts,
-            conn_options=DEFAULT_API_CONNECT_OPTIONS,
+            conn_options=conn_options,
             api_key="test-key",
             http_session=MagicMock(),
             base_url="wss://streaming.assemblyai.com",
@@ -1893,3 +1896,67 @@ async def test_language_confidence_coexists_with_end_of_turn_confidence():
         "end_of_turn_confidence": 1.0,
         "language_confidence": 0.92,
     }
+
+
+async def test_connect_ws_timeout_raises_api_connection_error():
+    import asyncio
+
+    from livekit.agents import APIConnectionError, APIConnectOptions
+    from livekit.plugins.assemblyai import STT
+
+    async def _slow_ws_connect(*args, **kwargs):
+        await asyncio.sleep(10)
+
+    stt = STT(api_key="test-key")
+    stream = _make_stream_for_unit_test(stt, conn_options=APIConnectOptions(timeout=0.01))
+    stream._session.ws_connect = _slow_ws_connect
+
+    with pytest.raises(APIConnectionError, match="timed out connecting to AssemblyAI STT"):
+        await stream._connect_ws()
+
+
+async def test_connect_ws_client_response_error_sanitizes_credentials():
+    from aiohttp import ClientResponseError, RequestInfo
+    from yarl import URL
+
+    from livekit.agents import APIStatusError
+    from livekit.plugins.assemblyai import STT
+
+    async def _failing_ws_connect(*args, **kwargs):
+        raise ClientResponseError(
+            request_info=RequestInfo(
+                url=URL("wss://streaming.assemblyai.com/v3/ws"),
+                method="GET",
+                headers={"Authorization": "super-secret-key"},
+                real_url=URL("wss://streaming.assemblyai.com/v3/ws"),
+            ),
+            history=(),
+            status=401,
+            message="Unauthorized",
+        )
+
+    stt = STT(api_key="super-secret-key")
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _failing_ws_connect
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await stream._connect_ws()
+
+    assert exc_info.value.status_code == 401
+    assert "super-secret-key" not in repr(exc_info.value)
+    assert exc_info.value.__cause__ is None
+
+
+async def test_connect_ws_generic_error_raises_api_connection_error():
+    from livekit.agents import APIConnectionError
+    from livekit.plugins.assemblyai import STT
+
+    async def _failing_ws_connect(*args, **kwargs):
+        raise OSError("Connection refused")
+
+    stt = STT(api_key="test-key")
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _failing_ws_connect
+
+    with pytest.raises(APIConnectionError, match="failed to connect to AssemblyAI STT"):
+        await stream._connect_ws()

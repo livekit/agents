@@ -919,7 +919,22 @@ class SpeechStream(stt.SpeechStream):
             self._opts.speech_model,
             self._base_url,
         )
-        ws = await self._session.ws_connect(url, headers=headers, autoping=False)
+        try:
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(url, headers=headers, autoping=False),
+                self._conn_options.timeout,
+            )
+        except asyncio.TimeoutError:
+            raise APIConnectionError("timed out connecting to AssemblyAI STT") from None
+        except aiohttp.ClientResponseError as e:
+            # RequestInfo carries the request headers, including the Authorization
+            # header containing the API key. Strip it to prevent credential leakage.
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            raise APIConnectionError(f"failed to connect to AssemblyAI STT: {e}") from e
+
         logger.debug(
             "AssemblyAI WebSocket connected status=%s",
             ws._response.status if ws._response is not None else None,
