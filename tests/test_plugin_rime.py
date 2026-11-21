@@ -78,6 +78,7 @@ if HAS_REALTIME_SDK:
         PrismModelError,
         realtime_model,
     )
+    from livekit.plugins.rime.realtime._history import PrismHistory
     from livekit.plugins.rime.realtime._playback import Playback
 
 
@@ -6110,6 +6111,51 @@ class TestRealtime:
                 assert [i["text"] for i in peer.server_items] == ["one!", "two"]
                 await model._clear_chat_ctx(agent)
                 assert not peer.server_items
+
+    async def test_shared_history_accepts_core_reply_order_and_appends_new_items(self):
+        history = PrismHistory(cast(Any, object()))
+        call = llm.FunctionCall(
+            id="call-item",
+            call_id="call-id",
+            name="lookup",
+            arguments="{}",
+        )
+        message = llm.ChatMessage(
+            id="message-item",
+            role="assistant",
+            content=["Checking that now."],
+        )
+        history._chat = llm.ChatContext([call, message])
+        result = llm.FunctionCallOutput(
+            id="result-item",
+            call_id="call-id",
+            name="lookup",
+            output="checked",
+            is_error=False,
+        )
+
+        projected = history._shared_target(
+            llm.ChatContext([message.model_copy(deep=True), call.model_copy(deep=True), result])
+        )
+
+        assert [item.id for item in projected.items] == ["call-item", "message-item", "result-item"]
+
+    @pytest.mark.parametrize("role", ["user", "system"])
+    async def test_shared_history_rejects_non_assistant_message_reorders(self, role):
+        history = PrismHistory(cast(Any, object()))
+        call = llm.FunctionCall(
+            id="call-item",
+            call_id="call-id",
+            name="lookup",
+            arguments="{}",
+        )
+        message = llm.ChatMessage(id="message-item", role=role, content=["text"])
+        history._chat = llm.ChatContext([call, message])
+
+        with pytest.raises(PrismHistoryUpdateError, match="append order"):
+            history._shared_target(
+                llm.ChatContext([message.model_copy(deep=True), call.model_copy(deep=True)])
+            )
 
     @pytest.mark.parametrize("operation", ["replace", "clear", "reconcile"])
     async def test_inactive_agent_cannot_claim_helper_success(self, operation):
