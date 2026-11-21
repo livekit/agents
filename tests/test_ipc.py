@@ -1027,11 +1027,12 @@ async def test_job_task_ignoring_cancel_does_not_block_shutdown(
 
     async def _entrypoint(job_ctx: JobContext) -> None:
         async def _stubborn() -> None:
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                # swallowed on purpose; ends only once the test is done checking
-                await release.wait()
+            # swallows every cancel on purpose; ends only once the test is done checking
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    pass
 
         async def _on_shutdown() -> None:
             events.append("shutdown_callback")
@@ -1049,8 +1050,64 @@ async def test_job_task_ignoring_cancel_does_not_block_shutdown(
         await asyncio.sleep(0)
 
     assert events == ["shutdown_callback"]
+    # one warning: once given up on, the task is not waited for again at cleanup
     warnings = [r for r in caplog.records if "did not stop within" in r.getMessage()]
-    assert warnings and warnings[0].tasks == ["stubborn"]  # type: ignore[attr-defined]
+    assert len(warnings) == 1
+    assert warnings[0].tasks == ["stubborn"]  # type: ignore[attr-defined]
+
+
+_stubborn_release = threading.Event()
+
+
+async def _job_entrypoint_stubborn_task(job_ctx: JobContext) -> None:
+    start_args: _StartArgs = job_ctx.proc.user_arguments
+
+    async def _stubborn() -> None:
+        while not _stubborn_release.is_set():
+            try:
+                await asyncio.sleep(0.01)
+            except asyncio.CancelledError:
+                pass  # swallows every cancel, including the one at loop teardown
+
+    async def _job_shutdown() -> None:
+        with start_args.shutdown_counter.get_lock():
+            start_args.shutdown_counter.value += 1
+
+    job_ctx.add_shutdown_callback(_job_shutdown)
+    job_ctx.create_task(_stubborn(), name="stubborn")
+
+    with start_args.entrypoint_counter.get_lock():
+        start_args.entrypoint_counter.value += 1
+
+    job_ctx.shutdown("done")
+
+
+@pytest.mark.no_concurrent  # patches a module-level timeout
+async def test_thread_job_joins_with_a_job_task_ignoring_cancel(monkeypatch: pytest.MonkeyPatch):
+    """The runner's final drain of the job loop must not wait for a task the job already gave
+    up on, or the thread never joins and the executor's aclose() never returns."""
+    from livekit.agents.ipc import job_proc_lazy_main
+
+    monkeypatch.setattr(job_proc_lazy_main, "_USER_TASKS_CANCEL_TIMEOUT", 0.0)
+    _stubborn_release.clear()
+    proc, start_args = _create_thread_proc(
+        close_timeout=10.0, job_entrypoint_fnc=_job_entrypoint_stubborn_task
+    )
+    await proc.start()
+    await proc.initialize()
+
+    try:
+        await proc.launch_job(_generate_fake_job())
+        await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+        await asyncio.wait_for(proc.aclose(), timeout=5.0)
+
+        assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+        assert start_args.shutdown_counter.value == 1
+    finally:
+        # on failure the thread is still in the drain: let the task end so the run can finish
+        _stubborn_release.set()
+        if proc._thread is not None and proc._thread.is_alive():
+            await asyncio.wait_for(proc.aclose(), timeout=10.0)
 
 
 async def test_job_task_started_during_shutdown_is_cancelled_at_cleanup():
