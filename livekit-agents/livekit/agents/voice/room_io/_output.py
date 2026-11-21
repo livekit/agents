@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 
+import numpy as np
 from google.protobuf.json_format import MessageToDict
 from opentelemetry import context as otel_context
 
@@ -86,6 +88,11 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._forwarding_idle.set()
         # playback_started fires once per segment; a mid-segment pause/resume does not re-arm this
         self._first_frame_event = asyncio.Event()
+
+        # applied to each frame handed to the audio source, see set_volume
+        self._volume = 1.0
+        self._target_volume = 1.0
+        self._volume_step = 0.0  # per sample, while ramping toward the target
 
     async def _publish_track(self) -> None:
         async with self._lock:
@@ -196,6 +203,52 @@ class _ParticipantAudioOutput(io.AudioOutput):
         super().resume()
         self._playback_enabled.set()
         self._arm_bstream_flush()
+
+    def set_volume(self, volume: float, *, ramp_duration: float = 0.02) -> None:
+        """Set the volume of the published track.
+
+        It applies to frames as they enter the audio source, so the audio already queued
+        there (up to 200 ms) still plays at the previous volume.
+        """
+        if not math.isfinite(volume) or volume < 0:
+            raise ValueError("volume must be a finite number >= 0")
+
+        self._target_volume = volume
+        ramp_samples = int(ramp_duration * (self.sample_rate or 0))
+        if ramp_samples <= 0:
+            self._volume = volume
+            self._volume_step = 0.0
+        else:
+            self._volume_step = (volume - self._volume) / ramp_samples
+
+    def _apply_volume(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+        """Return ``frame`` scaled by the current volume.
+
+        While a ramp is in progress, the gain moves by ``_volume_step`` per sample toward
+        ``_target_volume`` and stops there; ``_volume`` keeps the gain reached at the end of
+        the frame. At unity gain the frame is returned as is; otherwise a new frame is built
+        and samples are clipped to the int16 range.
+        """
+        start, target = self._volume, self._target_volume
+        gain: float | np.ndarray
+        if start == target:
+            if target == 1.0:
+                return frame
+            gain = target
+        else:
+            ramp = start + self._volume_step * np.arange(1, frame.samples_per_channel + 1)
+            ramp = np.minimum(ramp, target) if target > start else np.maximum(ramp, target)
+            self._volume = float(ramp[-1])
+            gain = ramp[:, np.newaxis]
+
+        data = np.frombuffer(frame.data, dtype=np.int16).reshape(-1, frame.num_channels) * gain
+        np.clip(data, -32768, 32767, out=data)
+        return rtc.AudioFrame(
+            data=data.astype(np.int16).tobytes(),
+            sample_rate=frame.sample_rate,
+            num_channels=frame.num_channels,
+            samples_per_channel=frame.samples_per_channel,
+        )
 
     def _arm_bstream_flush(self, *, margin: float = 0.02) -> None:
         # audio short of a frame waits for more, and the timer flushes it `margin` seconds before
@@ -338,7 +391,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 # dated at submission: the source plays on through the await, so a stalled
                 # event loop can return from it after the source has drained
                 dry_at = time.time() + self._audio_source.queued_duration + frame.duration
-                await self._audio_source.capture_frame(frame)
+                await self._audio_source.capture_frame(self._apply_volume(frame))
                 self._dry_at = dry_at
             finally:
                 self._forwarding_idle.set()
