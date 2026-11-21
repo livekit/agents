@@ -306,9 +306,10 @@ class ChunkedStream(ABC):
         self._output_tokens = 0
         self._acquire_time: float = 0.0
         self._connection_reused: bool = False
-        self._metrics_metadata = Metadata(
+        self._primary_metrics_metadata = Metadata(
             model_name=self._tts.model, model_provider=self._tts.provider
         )
+        self._metrics_metadata = self._primary_metrics_metadata.model_copy()
 
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee
@@ -350,6 +351,10 @@ class ChunkedStream(ABC):
             model_name=model_name,
             model_provider=model_provider,
         )
+
+    def _reset_metrics_metadata(self) -> None:
+        """Restore the primary model attribution before a new synthesis attempt."""
+        self._metrics_metadata = self._primary_metrics_metadata.model_copy()
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         """Task used to collect metrics"""
@@ -418,6 +423,7 @@ class ChunkedStream(ABC):
         )
 
         for i in range(self._conn_options.max_retry + 1):
+            self._reset_metrics_metadata()
             output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
             try:
                 with _attempt_span(self._tts_attempt_span_name, self._tts) as attempt_span:
@@ -604,9 +610,10 @@ class SynthesizeStream(ABC):
         self._output_tokens = 0
         self._acquire_time: float = 0.0
         self._connection_reused: bool = False
-        self._metrics_metadata = Metadata(
+        self._primary_metrics_metadata = Metadata(
             model_name=self._tts.model, model_provider=self._tts.provider
         )
+        self._metrics_metadata = self._primary_metrics_metadata.model_copy()
 
         self._tts_request_span: trace.Span | None = None
 
@@ -620,6 +627,10 @@ class SynthesizeStream(ABC):
             model_name=model_name,
             model_provider=model_provider,
         )
+
+    def _reset_metrics_metadata(self) -> None:
+        """Restore the primary model attribution before a new synthesis attempt."""
+        self._metrics_metadata = self._primary_metrics_metadata.model_copy()
 
     @abstractmethod
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
@@ -638,6 +649,7 @@ class SynthesizeStream(ABC):
         )
 
         for i in range(self._conn_options.max_retry + 1):
+            self._reset_metrics_metadata()
             output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
             try:
                 with _attempt_span(self._tts_attempt_span_name, self._tts) as attempt_span:
