@@ -26,6 +26,7 @@ COMMON = "You are the Riverside Clinic voice agent. Follow the clinic rules."
 AUDIO = "Keep it short."
 DYNAMIC = "Current time: 09:01. Caller number: +15551234567."
 BREAKPOINT = {"mode": "explicit"}
+USER = {"user": {"name": "Alex", "account": {"plan": "pro"}, "support-tier": "gold"}}
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +60,12 @@ BREAKPOINT = {"mode": "explicit"}
         (Instructions("Hello {name}, item {0}"), {"data": {"name": "Alex"}}, "Hello Alex, item "),
         (Instructions("Hi {name}, {price:.2f}"), {"data": {"name": "Alex"}}, "Hi Alex, "),
         (Instructions("Hi {name}, {caller!s}"), {"data": {"name": "Alex"}}, "Hi Alex, "),
+        (Instructions("Hello {user[name]}"), {"data": USER}, "Hello Alex"),
+        (Instructions("Hello {user.name}"), {"data": USER}, "Hello Alex"),
+        (Instructions("Plan {user[account][plan]}"), {"data": USER}, "Plan pro"),
+        (Instructions("Plan {user.account[plan]}"), {"data": USER}, "Plan pro"),
+        (Instructions("Tier {user[support-tier]}"), {"data": USER}, "Tier gold"),
+        (Instructions("Account {user.account}"), {"data": USER}, "Account namespace(plan='pro')"),
     ],
     ids=[
         "modality-then-dynamic",
@@ -72,6 +79,12 @@ BREAKPOINT = {"mode": "explicit"}
         "missing-index-placeholder",
         "missing-format-spec-placeholder",
         "missing-conversion-placeholder",
+        "nested-dict-item-access",
+        "nested-dict-attribute-access",
+        "nested-dict-item-access-twice",
+        "nested-dict-attribute-then-item",
+        "nested-dict-key-not-an-identifier",
+        "nested-dict-renders-as-namespace",
     ],
 )
 def test_render(instr: Instructions, kwargs: dict, expected: str) -> None:
