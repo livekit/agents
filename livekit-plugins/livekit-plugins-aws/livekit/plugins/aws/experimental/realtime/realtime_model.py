@@ -593,6 +593,8 @@ class RealtimeSession(  # noqa: F811
         self._instructions = DEFAULT_SYSTEM_PROMPT
         self._audio_input_chan = utils.aio.Chan[bytes]()
         self._current_generation: _ResponseGeneration | None = None
+        # Restart attempts while no generation exists yet (e.g. before the first reply).
+        self._restart_attempts = 0
         # Session recycling: proactively restart before credential expiry or 8-min limit
         self._session_start_time: float | None = None
         self._session_recycle_task: asyncio.Task[None] | None = None
@@ -1136,26 +1138,20 @@ class RealtimeSession(  # noqa: F811
     def emit_generation_event(self) -> None:
         """Publish a llm.GenerationCreatedEvent to external subscribers.
 
-        This can be called multiple times for the same generation:
-        - Once from _create_response_generation() when a NEW generation is created
-        - Once from TurnTracker when TOOL_OUTPUT_CONTENT_START or ASSISTANT_SPEC_START arrives
-
-        The TurnTracker emission is critical for tool calls - it happens at the right moment
-        for the framework to start listening before the tool call is emitted.
+        Called from _create_response_generation() when a NEW generation is created, and from
+        TurnTracker when TOOL_OUTPUT_CONTENT_START or ASSISTANT_SPEC_START arrives. Emits once
+        per generation: AgentActivity schedules a new speech for every event it receives.
         """
         if self._current_generation is None:
             logger.debug("[GEN] emit_generation_event called but no generation exists - ignoring")
             return
 
-        # Log whether this is first or re-emission for tool call
         if self._current_generation._emitted:
-            logger.debug(
-                f"[GEN] EMITTING generation_created (re-emit for tool call) for response_id={self._current_generation.response_id}"
-            )
-        else:
-            logger.debug(
-                f"[GEN] EMITTING generation_created for response_id={self._current_generation.response_id}"
-            )
+            return
+
+        logger.debug(
+            f"[GEN] EMITTING generation_created for response_id={self._current_generation.response_id}"
+        )
 
         self._current_generation._emitted = True
         generation_ev = llm.GenerationCreatedEvent(
@@ -1183,9 +1179,8 @@ class RealtimeSession(  # noqa: F811
             logger.warning(f"No event handler found for event type: {event_type}")
 
     async def _handle_completion_start_event(self, event_data: dict) -> None:
-        """Handle completionStart - create new generation for this completion cycle."""
+        """Handle completionStart (no generation: it precedes the first user turn, see #8260)."""
         log_event_data(event_data)
-        self._create_response_generation()
 
     def _create_response_generation(self) -> None:
         """Instantiate _ResponseGeneration and emit the GenerationCreated event.
@@ -1207,6 +1202,7 @@ class RealtimeSession(  # noqa: F811
                 _done_fut=asyncio.get_running_loop().create_future(),
             )
             generation_created = True
+            self._restart_attempts = 0
         else:
             logger.debug(
                 f"[GEN] Generation already exists: response_id={self._current_generation.response_id}, emitted={self._current_generation._emitted}"
@@ -1766,9 +1762,10 @@ class RealtimeSession(  # noqa: F811
                 self._is_sess_active.clear()
 
     async def _restart_session(self, ex: Exception) -> None:
-        # Get restart attempts from current generation, or 0 if no generation
         restart_attempts = (
-            self._current_generation._restart_attempts if self._current_generation else 0
+            self._current_generation._restart_attempts
+            if self._current_generation
+            else self._restart_attempts
         )
 
         if restart_attempts >= DEFAULT_MAX_SESSION_RESTART_ATTEMPTS:
@@ -1802,7 +1799,8 @@ class RealtimeSession(  # noqa: F811
             self._current_generation._restart_attempts += 1
             restart_attempts = self._current_generation._restart_attempts
         else:
-            restart_attempts = 1
+            self._restart_attempts += 1
+            restart_attempts = self._restart_attempts
 
         self._is_sess_active.clear()
         delay = 2 ** (restart_attempts - 1) - 1
