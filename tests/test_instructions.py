@@ -78,6 +78,32 @@ def test_render(instr: Instructions, kwargs: dict, expected: str) -> None:
     assert instr.render(**kwargs) == expected
 
 
+@pytest.mark.parametrize(
+    ("modality", "expected"),
+    [
+        (None, "Clinic: .\nCaller: ."),
+        ("audio", "Clinic: .\n\nVolume: .\nCaller: ."),
+        ("text", "Clinic: .\n\nChannel: .\nCaller: ."),
+    ],
+)
+def test_render_with_empty_template_data(modality: str | None, expected: str) -> None:
+    instructions = Instructions(
+        "Clinic: {clinic}.",
+        audio="Volume: {volume:.1f}.",
+        text="Channel: {channel}.",
+        dynamic="Caller: {caller!s}.",
+    )
+
+    assert instructions.render(modality=modality, data={}) == expected  # type: ignore[arg-type]
+
+
+def test_render_without_template_data_preserves_placeholders() -> None:
+    instructions = Instructions("Clinic: {clinic}.", dynamic="Caller: {caller!s}.")
+
+    assert instructions.render() == "Clinic: {clinic}.\nCaller: {caller!s}."
+    assert instructions.render(data=None) == "Clinic: {clinic}.\nCaller: {caller!s}."
+
+
 def test_resolve_template_renders_each_modality_once() -> None:
     instr = Instructions.resolve_template(
         "{persona}\n\n{modality_specific}",
