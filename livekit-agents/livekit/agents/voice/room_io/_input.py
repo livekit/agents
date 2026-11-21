@@ -63,6 +63,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         # so _close_stream knows a creation is in flight and aclose can wait for it.
         self._create_tasks: set[asyncio.Task[None]] = set()
         self._create_task: asyncio.Task[None] | None = None
+        self._retry_tasks: set[asyncio.Task[None]] = set()
         # one at a time: keeps processor ownership consistent across replacements
         self._create_lock = asyncio.Lock()
         # bumped by _close_stream; a creation that settles with a stale generation
@@ -182,8 +183,16 @@ class _ParticipantInputStream(Generic[T], ABC):
         # discards that stream itself once self._closed is set, so shield until every
         # creator is done — even across repeated cancellations — then propagate.
         cancelled = False
-        if self._create_tasks:
-            settle = asyncio.gather(*list(self._create_tasks), return_exceptions=True)
+        retry_tasks = list(self._retry_tasks)
+        for retry_task in retry_tasks:
+            retry_task.cancel()
+
+        if self._create_tasks or retry_tasks:
+            settle = asyncio.gather(
+                *list(self._create_tasks),
+                *retry_tasks,
+                return_exceptions=True,
+            )
             try:
                 await asyncio.shield(settle)
             except asyncio.CancelledError:
@@ -305,6 +314,8 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._track = None
         self._publication = None
         self._stream_gen += 1
+        for retry_task in tuple(self._retry_tasks):
+            retry_task.cancel()
         if stream is not None:
             task = asyncio.create_task(stream.aclose())
             task.add_done_callback(self._tasks.discard)
@@ -346,13 +357,23 @@ class _ParticipantInputStream(Generic[T], ABC):
                 },
             )
         gen = self._stream_gen
+        self._schedule_stream_creation(gen, track, publication, participant)
+        return True
+
+    def _schedule_stream_creation(
+        self,
+        gen: int,
+        track: rtc.RemoteTrack,
+        publication: rtc.RemoteTrackPublication,
+        participant: rtc.RemoteParticipant,
+    ) -> None:
+        """Schedule creation for the current subscription generation."""
         task = asyncio.create_task(
             self._create_and_forward_stream(gen, track, publication, participant)
         )
         self._create_task = task
         self._create_tasks.add(task)
         task.add_done_callback(self._create_tasks.discard)
-        return True
 
     async def _create_and_forward_stream(
         self,
@@ -377,6 +398,12 @@ class _ParticipantInputStream(Generic[T], ABC):
                 try:
                     stream = await self._create_stream(track, participant)
                 except Exception:
+                    # A selector may have installed an owned processor before the
+                    # native stream creation failed. Release it for both current and
+                    # superseded attempts; the creation lock ensures no newer
+                    # generation can replace it concurrently.
+                    self._update_processor(None)
+
                     if gen == self._stream_gen and not self._closed:
                         logger.exception(
                             "failed to create stream",
@@ -385,12 +412,14 @@ class _ParticipantInputStream(Generic[T], ABC):
                                 "source": rtc.TrackSource.Name(publication.source),
                             },
                         )
-                        # Increment generation to allow a retry. Don't clear track/publication
-                        # because the track is still subscribed and won't emit a new
-                        # track_subscribed event. Schedule a retry after a short delay.
-                        self._stream_gen += 1
-                        self._update_processor(None)
-                        asyncio.create_task(self._retry_stream_creation(track, publication, participant))
+                        # Keep the current track/publication and retry directly.
+                        # Routing the retry through _on_track_available would reject
+                        # it as a duplicate subscription before creation is attempted.
+                        retry_task = asyncio.create_task(
+                            self._retry_stream_creation(gen, track, publication, participant)
+                        )
+                        self._retry_tasks.add(retry_task)
+                        retry_task.add_done_callback(self._retry_tasks.discard)
                     return
 
                 if gen != self._stream_gen or self._closed:
@@ -415,17 +444,22 @@ class _ParticipantInputStream(Generic[T], ABC):
 
     async def _retry_stream_creation(
         self,
+        gen: int,
         track: rtc.RemoteTrack,
         publication: rtc.RemoteTrackPublication,
         participant: rtc.RemoteParticipant,
     ) -> None:
-        """Retry stream creation after a failure."""
+        """Retry stream creation after a failure while the subscription is current."""
         await asyncio.sleep(0.5)  # brief delay before retry
-        if self._closed:
+        if (
+            self._closed
+            or gen != self._stream_gen
+            or self._track is not track
+            or self._publication is not publication
+        ):
             return
-        # Only retry if the track is still the same one
-        if self._track is track and self._publication is publication:
-            self._on_track_available(track, publication, participant)
+
+        self._schedule_stream_creation(gen, track, publication, participant)
 
     def _on_track_unsubscribed(
         self,

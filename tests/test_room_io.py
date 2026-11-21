@@ -853,6 +853,79 @@ async def test_audio_input_ignores_duplicate_event_for_active_track() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_creation_retry_installs_the_replacement_stream() -> None:
+    """A transient creation failure retries the current subscription and starts it."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    retry_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[RuntimeError("transient native failure"), retry_stream],
+    ) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        failed_task = audio_input._create_task
+        assert failed_task is not None
+
+        await asyncio.sleep(1.0)
+
+        retry_task = audio_input._create_task
+        assert retry_task is not None
+        assert retry_task is not failed_task
+        await asyncio.wait_for(retry_task, timeout=1)
+
+    assert create_stream.call_count == 2
+    assert audio_input._stream is retry_stream
+    assert retry_stream.started.is_set()
+    assert audio_input._track is track
+    assert audio_input._publication is publication
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.real_time
+async def test_failed_superseded_creation_closes_its_owned_processor() -> None:
+    """A processor installed before a failed creation is released even if the track vanished."""
+    room = _FakeRoom()
+    processor = _MockFrameProcessor()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=lambda _params: processor)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    creation_started = threading.Event()
+
+    def fail_from_track(**_kwargs: object) -> _MockAudioStream:
+        creation_started.set()
+        time.sleep(0.05)
+        raise RuntimeError("native creation failed")
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=fail_from_track):
+        assert audio_input._on_track_available(track, publication, participant)
+        create_task = audio_input._create_task
+        assert create_task is not None
+
+        for _ in range(500):
+            if creation_started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert creation_started.is_set()
+
+        # The subscription disappears while native creation is still pending.
+        publication.track = None
+        audio_input._on_track_unavailable(publication, participant)
+        await asyncio.wait_for(create_task, timeout=5)
+
+    assert processor.close_calls == 1
+    assert audio_input._processor is None
+    assert audio_input._stream is None
+
+    await audio_input.aclose()
+    assert processor.close_calls == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.real_time
 async def test_audio_stream_created_off_event_loop_and_bound_to_it() -> None:
     """Regression test for #7441: FFI stream creation must not block the event loop,
