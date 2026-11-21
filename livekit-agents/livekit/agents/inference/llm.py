@@ -181,6 +181,7 @@ _MIN_REASONING_EFFORT: dict[str, ReasoningEffort] = {
     "gpt-6-luna": "none",
     "gpt-6-sol": "none",
     "gpt-6.1-sol": "low",
+    "gpt-6.1-terra": "none",
     "gpt-5": "minimal",
     "gpt-5-mini": "minimal",
     "gpt-5-nano": "minimal",
