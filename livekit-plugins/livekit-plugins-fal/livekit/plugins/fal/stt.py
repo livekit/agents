@@ -6,7 +6,13 @@ from dataclasses import dataclass
 import fal_client
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, LanguageCode, stt
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    LanguageCode,
+    create_api_error_from_http,
+    stt,
+)
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -82,6 +88,11 @@ class WizperSTT(stt.STT):
             text = response.get("text", "")
             return self._transcription_to_speech_event(text=text, language=language_code)
         except fal_client.client.FalClientError as e:
+            # fal_client < 0.8.0 raises HTTP errors without a status_code
+            status_code = getattr(e, "status_code", None)
+            if status_code is not None:
+                # fal's error detail can echo the request input (the audio)
+                raise create_api_error_from_http(status=status_code) from e
             raise APIConnectionError() from e
 
     def _transcription_to_speech_event(self, text: str, language: LanguageCode) -> stt.SpeechEvent:
