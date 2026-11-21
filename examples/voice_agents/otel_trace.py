@@ -2,6 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 from opentelemetry.context import Context
+from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import Span, SpanProcessor, TracerProvider
 from opentelemetry.util.types import AttributeValue
 
@@ -29,7 +30,7 @@ load_dotenv()
 
 # This example shows how to trace the agent session with OpenTelemetry.
 # It exports spans over OTLP/HTTP, so it works with any OTLP-compatible backend
-# (Langfuse, Jaeger, Grafana Tempo, Honeycomb, etc.). Set up the provider once at
+# (Arize AX, Langfuse, Jaeger, Grafana Tempo, Honeycomb, etc.). Set up the provider once at
 # module scope so jobs in THREAD mode share its exporters and background threads.
 #
 # Configure the destination either by passing `endpoint`/`headers` to `setup_otel`, or
@@ -46,6 +47,15 @@ load_dotenv()
 #       headers={"Authorization": f"Basic {auth}", "x-langfuse-ingestion-version": "4"},
 #   )
 # Refer to their docs for latest instructions: https://langfuse.com/integrations/native/opentelemetry#opentelemetry-endpoint
+#
+# Worked example — Arize AX: the endpoint is `https://otlp.arize.com/v1/traces`.
+# Pass your Space ID and API key as OTLP headers, and set the project name as a resource attribute:
+#   setup_otel(
+#       endpoint="https://otlp.arize.com/v1/traces",
+#       headers={"space_id": space_id, "api_key": api_key},
+#       resource_attributes={"openinference.project.name": "livekit-agent"},
+#   )
+# Refer to the Arize guide for the full LiveKit setup: https://arize.com/docs/ax/integrations/python-agent-frameworks/livekit/livekit-agents-tracing
 
 
 def get_context_data() -> dict[str, AttributeValue]:
@@ -67,13 +77,14 @@ def setup_otel(
     *,
     endpoint: str | None = None,
     headers: dict[str, str] | None = None,
+    resource_attributes: dict[str, AttributeValue] | None = None,
 ) -> TracerProvider:
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
     # When endpoint/headers are None, the exporter falls back to the standard
     # OTEL_EXPORTER_OTLP_* environment variables.
-    trace_provider = TracerProvider()
+    trace_provider = TracerProvider(resource=Resource.create(resource_attributes or {}))
     trace_provider.add_span_processor(SessionSpanProcessor())
     trace_provider.add_span_processor(
         BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, headers=headers))
