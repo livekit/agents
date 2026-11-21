@@ -32,3 +32,25 @@ async def test_session_reconnects_on_abnormal_disconnect() -> None:
         assert session._client._client_wrapper._reconnect_conversation_on_abnormal_disconnect
     finally:
         await session.aclose()
+
+
+def test_update_options_validates_configs_for_tools_without_a_session() -> None:
+    """Invalid per-tool combinations must be rejected even when no session is live."""
+    model = RealtimeModel(api_key="test")
+    with pytest.raises(ValueError, match="wait_for_response requires execution_mode='async'"):
+        model.update_options(
+            configs_for_tools=[{"name": "check_order_status", "wait_for_response": True}]
+        )
+
+
+def test_update_options_accepts_valid_async_wait_for_response_without_a_session() -> None:
+    model = RealtimeModel(api_key="test")
+    model.update_options(
+        configs_for_tools=[
+            {
+                "name": "check_order_status",
+                "execution_mode": "async",
+                "wait_for_response": True,
+            }
+        ]
+    )

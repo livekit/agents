@@ -486,6 +486,9 @@ class RealtimeModel(llm.RealtimeModel):
         When ``default_language`` changes and ``additional_languages`` isn't passed, the previous
         default is rotated into ``additional_languages`` (and the new default removed) so the
         language set stays intact — the API rejects a default that also appears there."""
+        # Validate before fan-out so a rejected combination raises even when no
+        # session is live, and cannot leave only some sessions updated.
+        _check_tool_configs(configs_for_tools)
         for sess in self._sessions:
             sess.update_options(
                 phonic_agent=phonic_agent,
