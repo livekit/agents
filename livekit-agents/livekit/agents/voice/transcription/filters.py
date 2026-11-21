@@ -183,6 +183,13 @@ EMOJI_PATTERN = re.compile(
     r"|[\U00002600-\U000026FF]"  # Miscellaneous Symbols
     r"|[\U00002700-\U000027BF]"  # Dingbats
     r"|[\U00002B00-\U00002BFF]"  # Miscellaneous Symbols and Arrows
+    # emoji outside those blocks (Extended_Pictographic). ©, ® and ™ are kept: they
+    # are ordinary text symbols that a TTS reads out, like the digit of a keycap.
+    r"|[\u203C\u2049\u2139\u24C2\u3030\u303D\u3297\u3299]"  # ‼ ⁉ ℹ Ⓜ 〰 〽 ㊗ ㊙
+    r"|[\u2194-\u2199\u21A9\u21AA\u2934\u2935]"  # arrows: ↔ ↕ ↖ ↗ ↘ ↙ ↩ ↪ ⤴ ⤵
+    r"|[\u231A\u231B\u2328\u23CF\u23E9-\u23F3\u23F8-\u23FA]"  # ⌚ ⌛ ⌨ ⏏ ⏩-⏳ ⏸-⏺
+    r"|[\u25AA\u25AB\u25B6\u25C0\u25FB-\u25FE]"  # geometric shapes: ▪ ▫ ▶ ◀ ◻ ◼ ◽ ◾
+    r"|[\U000E0020-\U000E007F]"  # tag characters of subdivision flags (England, Scotland, Wales)
     r"|[\U0000FE00-\U0000FE0F]"  # Variation selectors
     r"|\U0000200D"  # Zero width joiner
     r"|\U000020E3"  # Combining enclosing keycap
