@@ -55,6 +55,8 @@ from livekit.agents.voice.io import AudioOutput, AudioOutputCapabilities, Playba
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 from livekit.agents.voice.turn import _StreamingTurnDetector
 
+from . import fake_session
+from .fake_io import FakeAudioOutput
 from .fake_llm import FakeLLM
 from .fake_session import FakeActions, create_session, run_session
 from .fake_vad import FakeVAD
@@ -622,6 +624,50 @@ async def test_interrupted_say_uses_speech_start_timestamp() -> None:
     assert messages[1].created_at == messages[1].metrics["started_speaking_at"]
     assert messages[2].text_content == "Who is this?"
     assert messages[3].text_content == "This is John."
+
+
+class _LateFinishOutput(FakeAudioOutput):
+    """Reports the run it played, then finishes a while after: its flush trails its playout."""
+
+    LAG = 2.0
+
+    def _schedule_flush_completion(self) -> None:
+        pushed, started_at = self._pushed_duration, self._started_at
+        assert started_at is not None
+        delay = max(pushed - self._played_duration(), 0.0)
+
+        def _finish() -> None:
+            self._reset_playout()
+            self.on_playback_progressed(started_at=started_at, offset=0.0, duration=pushed)
+            self.on_playback_finished(playback_position=pushed, interrupted=False)
+
+        self._flush_handle = asyncio.get_running_loop().call_later(delay + self.LAG, _finish)
+
+
+async def test_speech_ends_with_its_audio_not_the_late_finish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SayOnEnterAgent(MyAgent):
+        async def on_enter(self) -> None:
+            self.session.say("Hi there")
+
+    actions = FakeActions()
+    actions.add_tts(1.0, input="Hi there")
+    actions.add_user_speech(4.0, 5.0, "Hello")
+    actions.add_llm("How can I help?")
+    actions.add_tts(1.5)
+
+    monkeypatch.setattr(fake_session, "FakeAudioOutput", _LateFinishOutput)
+    session = create_session(actions)
+    agent = SayOnEnterAgent()
+    await asyncio.wait_for(run_session(session, agent, drain_delay=8), timeout=SESSION_TIMEOUT)
+
+    said, reply = (
+        item for item in agent.chat_ctx.items if item.type == "message" and item.role == "assistant"
+    )
+    for msg, audio in ((said, 1.0), (reply, 1.5)):
+        played = msg.metrics["stopped_speaking_at"] - msg.metrics["started_speaking_at"]
+        assert played == pytest.approx(audio, abs=0.05)
 
 
 async def test_interruption_options() -> None:

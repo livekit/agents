@@ -246,6 +246,36 @@ async def test_a_flush_after_the_source_drained_ends_the_run_when_it_ran_dry() -
     assert ev.started_at == pytest.approx(dry_at - played)
 
 
+async def test_a_finished_segment_ended_when_its_audio_did() -> None:
+    """The finish trails a late flush; the segment still ended when the source ran dry."""
+    async with _Harness() as h:
+        await h.push(0.1)
+        dry_at = h.sink._dry_at
+        assert dry_at is not None
+
+        h.source.queued_duration = 0.0
+        h.now = dry_at + 0.7
+        h.sink.flush()
+        ev = await h.sink.wait_for_playout()
+
+    assert ev.playback_position == pytest.approx(0.1)
+    assert h.sink._last_played_until == pytest.approx(dry_at)
+
+
+async def test_a_sink_that_reports_no_runs_leaves_the_end_to_the_finish() -> None:
+    out = FakeAudioOutput()
+    out.on_playback_progressed(started_at=1.0, offset=0.0, duration=0.5)  # an earlier segment's
+    await out.capture_frame(_frame(0.1))
+    out.flush()
+    await out.wait_for_playout()
+    assert out._last_played_until == pytest.approx(1.5)
+
+    await out.capture_frame(_frame(0.1))
+    out.flush()
+    await out.wait_for_playout()
+    assert out._last_played_until is None
+
+
 async def test_a_cleared_buffer_reports_the_playhead_without_waiting() -> None:
     """A swap detaches the sink before its playout wait runs, so the clear is its last word."""
     async with _Harness() as h:
