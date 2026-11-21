@@ -58,6 +58,9 @@ https://github.com/livekit/agents/blob/8283a5a5c9863a07bcf030ee90e8ab780e1e569b/
 lk agent simulate text examples/drive_thru/agent.py --scenarios examples/drive_thru/scenarios.yaml
 ```
 
+Set `DRIVE_THRU_LLM_MODEL` to select the inference model. It defaults to
+`google/gemma-4-31b-it`; CI uses `openai/gpt-4.1`, matching the frontdesk evaluations.
+
 All simulation glue lives in `simulation.py`. Each scenario's `userdata` can set:
 
 - `expected_order`: the items the order must hold when the run ends (order ids are ignored). `on_simulation_end` fails the run on a mismatch, even if the simulator passed it.
