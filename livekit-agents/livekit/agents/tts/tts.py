@@ -445,11 +445,19 @@ class ChunkedStream(ABC):
 
                 retry_interval = self._conn_options._interval_for_retry(i)
                 self._emit_error(e, recoverable=True)
+                # the error message can quote the synthesized text (see the APIError raised
+                # above): a log body cannot be redacted, so keep it out of the message
                 logger.warning(
-                    "failed to synthesize speech: %s, retrying in %ss",
-                    e,
-                    retry_interval,
-                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
+                    "failed to synthesize speech, retrying",
+                    extra={
+                        "tts": self._tts._label,
+                        "attempt": i + 1,
+                        "streamed": False,
+                        "retry_interval": retry_interval,
+                        # the class name is safe and survives redaction, unlike the message
+                        "error_type": type(e).__name__,
+                        "lk.pii.error": str(e),
+                    },
                 )
 
                 await asyncio.sleep(retry_interval)
@@ -661,11 +669,19 @@ class SynthesizeStream(ABC):
 
                 retry_interval = self._conn_options._interval_for_retry(i)
                 self._emit_error(e, recoverable=True)
+                # the error message can quote the synthesized text (see the APIError raised
+                # above): a log body cannot be redacted, so keep it out of the message
                 logger.warning(
-                    "failed to synthesize speech: %s, retrying in %ss",
-                    e,
-                    retry_interval,
-                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": True},
+                    "failed to synthesize speech, retrying",
+                    extra={
+                        "tts": self._tts._label,
+                        "attempt": i + 1,
+                        "streamed": True,
+                        "retry_interval": retry_interval,
+                        # the class name is safe and survives redaction, unlike the message
+                        "error_type": type(e).__name__,
+                        "lk.pii.error": str(e),
+                    },
                 )
 
                 await asyncio.sleep(retry_interval)
