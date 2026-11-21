@@ -170,6 +170,7 @@ class _WavInlineDecoder:
         self._need = 12  # bytes needed for current header state
         self._skip_remaining = 0
         self._chunk_size = 0
+        self._data_remaining: int | None = None
 
         # set after fmt is parsed
         self._bstream: AudioByteStream | None = None
@@ -227,6 +228,7 @@ class _WavInlineDecoder:
         self._need = 12
         self._skip_remaining = 0
         self._chunk_size = 0
+        self._data_remaining = None
         self._bstream = None
         self._resampler = None
         self._wave_channels = 0
@@ -263,6 +265,8 @@ class _WavInlineDecoder:
             self._need = chunk_size
             self._state = _WavState.FMT_DATA
         elif chunk_id == b"data":
+            # Zero and UINT32_MAX are used for streams without a known data length.
+            self._data_remaining = chunk_size if 0 < chunk_size < 0xFFFFFFFF else None
             self._init_streaming()
             self._state = _WavState.STREAMING
         else:
@@ -324,6 +328,9 @@ class _WavInlineDecoder:
 
     def _push_pcm(self, data: bytes) -> None:
         assert self._bstream is not None
+        if self._data_remaining is not None:
+            data = data[: self._data_remaining]
+            self._data_remaining -= len(data)
         if self._resampler is not None:
             for frame in self._bstream.push(data):
                 for resampled in self._resampler.push(frame):
