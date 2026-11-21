@@ -892,3 +892,274 @@ def test_inference_executor_is_alive_after_proc_closed() -> None:
     executor._proc = proc
 
     assert executor.is_alive() is False
+
+
+class _NullClient:
+    async def send(self, msg: object) -> None:
+        pass
+
+
+async def _run_job_in_process(entrypoint: Callable[[JobContext], object]) -> None:
+    """Run one job through _JobProc on the test loop, from StartJobRequest to cleanup."""
+    from livekit.agents.ipc import job_proc_lazy_main, proto
+
+    job_proc = job_proc_lazy_main._JobProc(
+        _initialize_proc,
+        entrypoint,
+        None,
+        session_end_timeout=5.0,
+        executor_type=job.JobExecutorType.THREAD,
+    )
+    job_proc._client = _NullClient()  # type: ignore[assignment]
+    job_proc._inf_client = job_proc_lazy_main._InfClient(job_proc._client)
+    job_proc._job_proc = JobProcess(
+        executor_type=job.JobExecutorType.THREAD, user_arguments=None, http_proxy=None
+    )
+
+    start_req = proto.StartJobRequest()
+    start_req.running_job = _generate_fake_job()
+    cch = utils.aio.Chan[ipc.channel.Message]()
+    cch.send_nowait(start_req)
+    await asyncio.wait_for(job_proc.entrypoint(cch), timeout=5.0)
+
+
+def _record_session_close(job_ctx: JobContext, events: list[str]) -> None:
+    class _Session:
+        async def _aclose_impl(self, *, reason: CloseReason) -> None:
+            events.append("session_close")
+
+    job_ctx._primary_agent_session = _Session()  # type: ignore[assignment]
+
+    async def _noop_session_end() -> None:
+        return None
+
+    job_ctx._on_session_end = _noop_session_end  # type: ignore[method-assign]
+
+
+async def test_job_task_is_cancelled_before_session_close_and_shutdown_callbacks():
+    events: list[str] = []
+
+    async def _entrypoint(job_ctx: JobContext) -> None:
+        _record_session_close(job_ctx, events)
+
+        async def _watchdog() -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                events.append("task_cancelled")
+                raise
+
+        async def _on_shutdown() -> None:
+            events.append("shutdown_callback")
+
+        job_ctx.add_shutdown_callback(_on_shutdown)
+        job_ctx.create_task(_watchdog(), name="watchdog")
+        await asyncio.sleep(0)
+        job_ctx.shutdown("done")
+
+    await _run_job_in_process(_entrypoint)
+    assert events == ["task_cancelled", "session_close", "shutdown_callback"]
+
+
+async def test_job_task_waits_for_the_entrypoint_to_return():
+    """A task the entrypoint is still awaiting keeps running during the entrypoint's grace."""
+    results: list[str] = []
+
+    async def _entrypoint(job_ctx: JobContext) -> None:
+        async def _prefetch() -> str:
+            # yield a few times so the shutdown request is seen before the task finishes
+            for _ in range(3):
+                await asyncio.sleep(0)
+            return "fetched"
+
+        task = job_ctx.create_task(_prefetch(), name="prefetch")
+        job_ctx.shutdown("early shutdown")
+        results.append(await task)
+
+    await _run_job_in_process(_entrypoint)
+    assert results == ["fetched"]
+
+
+async def test_job_task_exception_is_logged(caplog: pytest.LogCaptureFixture):
+    async def _entrypoint(job_ctx: JobContext) -> None:
+        async def _save_stats() -> None:
+            raise RuntimeError("stats backend down")
+
+        task = job_ctx.create_task(_save_stats(), name="save_stats")
+        await asyncio.wait([task])
+        job_ctx.shutdown("done")
+
+    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
+        await _run_job_in_process(_entrypoint)
+
+    records = [r for r in caplog.records if r.getMessage() == "error in save_stats"]
+    assert len(records) == 1
+    assert records[0].exc_info is not None
+    assert str(records[0].exc_info[1]) == "stats backend down"
+
+
+async def test_finished_job_task_is_no_longer_tracked():
+    tracked: list[int] = []
+
+    async def _entrypoint(job_ctx: JobContext) -> None:
+        async def _noop() -> None:
+            return None
+
+        task = job_ctx.create_task(_noop())
+        tracked.append(len(job_ctx._user_tasks))
+        await task
+        tracked.append(len(job_ctx._user_tasks))
+        job_ctx.shutdown("done")
+
+    await _run_job_in_process(_entrypoint)
+    assert tracked == [1, 0]
+
+
+@pytest.mark.no_concurrent  # patches a module-level timeout
+async def test_job_task_ignoring_cancel_does_not_block_shutdown(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    from livekit.agents.ipc import job_proc_lazy_main
+
+    monkeypatch.setattr(job_proc_lazy_main, "_USER_TASKS_CANCEL_TIMEOUT", 0.0)
+    events: list[str] = []
+    release = asyncio.Event()
+
+    async def _entrypoint(job_ctx: JobContext) -> None:
+        async def _stubborn() -> None:
+            # swallows every cancel on purpose; ends only once the test is done checking
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    pass
+
+        async def _on_shutdown() -> None:
+            events.append("shutdown_callback")
+
+        job_ctx.add_shutdown_callback(_on_shutdown)
+        job_ctx.create_task(_stubborn(), name="stubborn")
+        await asyncio.sleep(0)
+        job_ctx.shutdown("done")
+
+    try:
+        with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+            await _run_job_in_process(_entrypoint)
+    finally:
+        release.set()
+        await asyncio.sleep(0)
+
+    assert events == ["shutdown_callback"]
+    # one warning: once given up on, the task is not waited for again at cleanup
+    warnings = [r for r in caplog.records if "did not stop within" in r.getMessage()]
+    assert len(warnings) == 1
+    assert warnings[0].tasks == ["stubborn"]  # type: ignore[attr-defined]
+
+
+_stubborn_release = threading.Event()
+
+
+async def _job_entrypoint_stubborn_task(job_ctx: JobContext) -> None:
+    start_args: _StartArgs = job_ctx.proc.user_arguments
+
+    async def _stubborn() -> None:
+        while not _stubborn_release.is_set():
+            try:
+                await asyncio.sleep(0.01)
+            except asyncio.CancelledError:
+                pass  # swallows every cancel, including the one at loop teardown
+
+    async def _job_shutdown() -> None:
+        with start_args.shutdown_counter.get_lock():
+            start_args.shutdown_counter.value += 1
+
+    job_ctx.add_shutdown_callback(_job_shutdown)
+    job_ctx.create_task(_stubborn(), name="stubborn")
+
+    with start_args.entrypoint_counter.get_lock():
+        start_args.entrypoint_counter.value += 1
+
+    job_ctx.shutdown("done")
+
+
+@pytest.mark.no_concurrent  # patches a module-level timeout
+async def test_thread_job_joins_with_a_job_task_ignoring_cancel(monkeypatch: pytest.MonkeyPatch):
+    """The runner's final drain of the job loop must not wait for a task the job already gave
+    up on, or the thread never joins and the executor's aclose() never returns."""
+    from livekit.agents.ipc import job_proc_lazy_main
+
+    monkeypatch.setattr(job_proc_lazy_main, "_USER_TASKS_CANCEL_TIMEOUT", 0.0)
+    _stubborn_release.clear()
+    proc, start_args = _create_thread_proc(
+        close_timeout=10.0, job_entrypoint_fnc=_job_entrypoint_stubborn_task
+    )
+    await proc.start()
+    await proc.initialize()
+
+    try:
+        await proc.launch_job(_generate_fake_job())
+        await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+        await asyncio.wait_for(proc.aclose(), timeout=5.0)
+
+        assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+        assert start_args.shutdown_counter.value == 1
+    finally:
+        # on failure the thread is still in the drain: let the task end so the run can finish
+        _stubborn_release.set()
+        if proc._thread is not None and proc._thread.is_alive():
+            await asyncio.wait_for(proc.aclose(), timeout=10.0)
+
+
+async def test_job_task_started_during_shutdown_is_cancelled_at_cleanup():
+    events: list[str] = []
+
+    async def _entrypoint(job_ctx: JobContext) -> None:
+        async def _late() -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                events.append("late_task_cancelled")
+                raise
+
+        async def _on_shutdown() -> None:
+            job_ctx.create_task(_late(), name="late")
+            await asyncio.sleep(0)
+            events.append("shutdown_callback")
+
+        job_ctx.add_shutdown_callback(_on_shutdown)
+        job_ctx.shutdown("done")
+
+    await _run_job_in_process(_entrypoint)
+    assert events == ["shutdown_callback", "late_task_cancelled"]
+
+
+async def test_framework_tasks_are_not_cancelled_with_job_tasks():
+    """delete_room() and friends go through _pending_tasks and must outlive the early cancel."""
+    events: list[str] = []
+
+    shutdown_started = asyncio.Event()
+    framework_done = asyncio.Event()
+
+    async def _entrypoint(job_ctx: JobContext) -> None:
+        async def _framework_request() -> None:
+            # still running when the shutdown callbacks start, i.e. after job tasks are cancelled
+            await shutdown_started.wait()
+            events.append("framework_task_finished")
+            framework_done.set()
+
+        async def _user_task() -> None:
+            await asyncio.Event().wait()
+
+        async def _on_shutdown() -> None:
+            shutdown_started.set()
+            await framework_done.wait()
+            events.append("shutdown_callback")
+
+        job_ctx.add_shutdown_callback(_on_shutdown)
+        job_ctx._track_pending_task(asyncio.create_task(_framework_request()), name="framework")
+        job_ctx.create_task(_user_task(), name="user")
+        await asyncio.sleep(0)
+        job_ctx.shutdown("done")
+
+    await _run_job_in_process(_entrypoint)
+    assert events == ["framework_task_finished", "shutdown_callback"]

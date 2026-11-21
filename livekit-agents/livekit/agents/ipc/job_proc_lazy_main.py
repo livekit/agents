@@ -61,6 +61,10 @@ if TYPE_CHECKING:
 # registered shutdown callbacks are not silently dropped.
 _SESSION_ACLOSE_TIMEOUT = 60.0
 
+# How long the shutdown waits for JobContext.create_task() tasks to stop once cancelled.
+# Only a task that catches CancelledError and keeps going can hit it.
+_USER_TASKS_CANCEL_TIMEOUT = 5.0
+
 
 @dataclass
 class ProcStartArgs:
@@ -100,7 +104,13 @@ def proc_main(args: ProcStartArgs) -> None:
         simulation_end_fnc=args.simulation_end_fnc,
     )
 
-    client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc.entrypoint)
+    client = _ProcClient(
+        args.mp_cch,
+        args.log_cch,
+        job_proc.initialize,
+        job_proc.entrypoint,
+        abandoned_tasks_fnc=job_proc.abandoned_tasks,
+    )
     try:
         client.initialize()
     except Exception:
@@ -228,6 +238,11 @@ class _JobProc:
     @property
     def has_running_job(self) -> bool:
         return self._job_task is not None
+
+    def abandoned_tasks(self) -> set[asyncio.Task[Any]]:
+        """JobContext.create_task() tasks that ignored their cancel during the shutdown."""
+        job_ctx: JobContext | None = getattr(self, "_job_ctx", None)
+        return job_ctx._abandoned_tasks if job_ctx is not None else set()
 
     def initialize(self, init_req: InitializeRequest, client: _ProcClient) -> None:
         self._client = client
@@ -464,6 +479,9 @@ class _JobProc:
             await self._cleanup_job(job_ctx_token)
 
     async def _cleanup_job(self, job_ctx_token: contextvars.Token[JobContext]) -> None:
+        # tasks started during the shutdown, or all of them when _shutdown_job did not run
+        await self._job_ctx._cancel_user_tasks(timeout=_USER_TASKS_CANCEL_TIMEOUT)
+
         if tasks := self._job_ctx._pending_tasks:
             await aio.cancel_and_wait(*tasks)
 
@@ -485,6 +503,10 @@ class _JobProc:
                 # entrypoint raised; already logged via _on_entry_done.
                 # swallow so shutdown callbacks still run.
                 pass
+
+        # before the session closes: a task that drives the session (a silence watchdog
+        # calling say()) would otherwise race the close and fail with "isn't running"
+        await self._job_ctx._cancel_user_tasks(timeout=_USER_TASKS_CANCEL_TIMEOUT)
 
         if session := self._job_ctx._primary_agent_session:
             try:
@@ -749,7 +771,13 @@ def thread_main(
             simulation_end_fnc=args.simulation_end_fnc,
         )
 
-        client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)
+        client = _ProcClient(
+            args.mp_cch,
+            None,
+            job_proc.initialize,
+            job_proc.entrypoint,
+            abandoned_tasks_fnc=job_proc.abandoned_tasks,
+        )
         client.initialize()
         client.run()
         exitcode = int(job_proc.failed)
