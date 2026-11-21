@@ -738,3 +738,26 @@ def test_default_model_is_not_a_retired_one():
     retired = {"gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-001"}
 
     assert LLM(api_key="test-key").model not in retired
+
+
+@pytest.mark.parametrize(
+    ("schema", "expected_type"),
+    [
+        ({"type": "object", "properties": {"answer": {"type": "string"}}}, types.Type.OBJECT),
+        (
+            types.Schema(
+                type=types.Type.OBJECT, properties={"answer": types.Schema(type=types.Type.STRING)}
+            ),
+            types.Type.OBJECT,
+        ),
+        (list[str], types.Type.ARRAY),
+    ],
+)
+async def test_declared_response_schema_forms_reach_the_provider(
+    schema: object, expected_type: types.Type
+) -> None:
+    config = await TestMixedToolsRequestConstruction._capture_config(
+        LLM(api_key="test"), response_format=schema
+    )
+
+    assert types.Schema.model_validate(config.response_schema).type == expected_type
