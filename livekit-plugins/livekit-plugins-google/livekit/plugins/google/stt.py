@@ -361,21 +361,33 @@ class STT(stt.STT):
             return f"projects/{self._project_id}/locations/{self._location}/recognizers/_"
 
         # TODO(theomonnom): find a better way to access the project_id
+        adc_error: DefaultCredentialsError | None = None
         try:
             project_id = client.transport._credentials.project_id  # type: ignore
         except AttributeError:
-            from google.auth import default as ga_default
+            project_id = None
+            if not is_given(self._credentials):
+                # Only consult ADC when the caller did not supply credentials.
+                # Credentials passed directly (Workload Identity Federation,
+                # impersonated credentials) commonly carry no project, and ADC
+                # would silently resolve whatever unrelated project the host
+                # happens to have configured.
+                from google.auth import default as ga_default
 
-            try:
-                _, project_id = ga_default()
-            except DefaultCredentialsError as e:
-                raise APIConnectionError(
-                    "google stt: could not determine the GCP project id: the supplied "
-                    "credentials expose no project_id/quota_project_id and Application "
-                    "Default Credentials are unavailable. Pass credentials that carry a "
-                    "project (e.g. with a quota_project_id) or use credentials_info / "
-                    "credentials_file."
-                ) from e
+                try:
+                    _, project_id = ga_default()
+                except DefaultCredentialsError as e:
+                    adc_error = e
+
+        if project_id is None:
+            # ADC also returns (credentials, None) when no project is configured,
+            # which would otherwise emit a literal "projects/None/..." path.
+            raise APIConnectionError(
+                "google stt: could not determine the GCP project id: the credentials in "
+                "use expose no project_id/quota_project_id and no project could be "
+                "resolved. Pass `project=`, or credentials that carry a project (e.g. "
+                "with a quota_project_id), or use credentials_info / credentials_file."
+            ) from adc_error
         return f"projects/{project_id}/locations/{self._location}/recognizers/_"
 
     def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> STTOptions:
