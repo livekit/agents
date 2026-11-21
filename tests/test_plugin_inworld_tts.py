@@ -76,6 +76,33 @@ async def test_delivery_mode_update_options():
         tts.update_options(delivery_mode="LOUD")
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"encoding": "MP4"},
+        {"timestamp_type": "PHONEME"},
+        {"text_normalization": "MAYBE"},
+        {"delivery_mode": "LOUD"},
+        {"timestamp_transport_strategy": "EVENTUALLY"},
+    ],
+)
+async def test_rejected_update_options_changes_nothing(bad):
+    """A rejected value leaves every option as it was, including those passed with it."""
+    from livekit.plugins.inworld import TTS
+
+    tts = TTS(api_key="test-key", model="inworld-tts-2")
+    snapshot = dict(vars(tts._opts))
+    sample_rate = tts.sample_rate
+
+    with pytest.raises(ValueError):
+        tts.update_options(
+            voice="Dennis", model="inworld-tts-1", sample_rate=16000, speaking_rate=1.5, **bad
+        )
+
+    assert vars(tts._opts) == snapshot
+    assert tts.sample_rate == sample_rate
+
+
 async def _capture_first_ws_create_packet(opts) -> dict:
     """Drive `_InworldConnection._send_loop` against a fake websocket and
     return the first `create` packet it sends, as a parsed dict.

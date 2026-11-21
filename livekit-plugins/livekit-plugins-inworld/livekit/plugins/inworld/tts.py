@@ -805,12 +805,28 @@ class TTS(tts.TTS):
             buffer_char_threshold (int, optional): For streaming, min characters before triggering.
             max_buffer_delay_ms (int, optional): For streaming, max time to buffer.
         """
+        # check every value before changing any, so a rejected update leaves the
+        # current options as they were
+        if is_given(encoding):
+            _validate_str_param(encoding, "encoding", Encoding)
+        if is_given(timestamp_type):
+            _validate_str_param(timestamp_type, "timestamp_type", TimestampType)
+        if is_given(text_normalization):
+            text_normalization = _resolve_text_normalization(text_normalization)
+        if is_given(delivery_mode):
+            _validate_str_param(delivery_mode, "delivery_mode", DeliveryMode)
+        if is_given(timestamp_transport_strategy):
+            _validate_str_param(
+                timestamp_transport_strategy,
+                "timestamp_transport_strategy",
+                TimestampTransportStrategy,
+            )
+
         if is_given(voice):
             self._opts.voice = voice
         if is_given(model):
             self._opts.model = model
         if is_given(encoding):
-            _validate_str_param(encoding, "encoding", Encoding)
             self._opts.encoding = encoding
         if is_given(bit_rate):
             self._opts.bit_rate = bit_rate
@@ -825,19 +841,12 @@ class TTS(tts.TTS):
         if is_given(language):
             self._opts.language = language
         if is_given(timestamp_type):
-            _validate_str_param(timestamp_type, "timestamp_type", TimestampType)
             self._opts.timestamp_type = timestamp_type
         if is_given(text_normalization):
-            self._opts.text_normalization = _resolve_text_normalization(text_normalization)
+            self._opts.text_normalization = text_normalization
         if is_given(delivery_mode):
-            _validate_str_param(delivery_mode, "delivery_mode", DeliveryMode)
             self._opts.delivery_mode = delivery_mode
         if is_given(timestamp_transport_strategy):
-            _validate_str_param(
-                timestamp_transport_strategy,
-                "timestamp_transport_strategy",
-                TimestampTransportStrategy,
-            )
             self._opts.timestamp_transport_strategy = timestamp_transport_strategy
         if is_given(buffer_char_threshold):
             self._opts.buffer_char_threshold = buffer_char_threshold
