@@ -161,9 +161,11 @@ class _WavInlineDecoder:
         self,
         output_ch: aio.Chan[rtc.AudioFrame],
         sample_rate: int | None,
+        num_channels: int | None,
     ) -> None:
         self._output_ch = output_ch
         self._sample_rate = sample_rate
+        self._num_channels = num_channels
 
         self._state = _WavState.RIFF_HEADER
         self._hdr_buf = bytearray()
@@ -174,6 +176,7 @@ class _WavInlineDecoder:
         # set after fmt is parsed
         self._bstream: AudioByteStream | None = None
         self._resampler: rtc.AudioResampler | None = None
+        self._remixer: av.AudioResampler | None = None
         self._wave_channels = 0
         self._wave_rate = 0
 
@@ -208,17 +211,16 @@ class _WavInlineDecoder:
     def _flush_current(self) -> None:
         """Flush AudioByteStream and resampler for the current WAV segment."""
         if self._bstream is not None:
-            remaining = self._bstream.flush()
-            if self._resampler is not None:
-                for frame in remaining:
-                    for resampled in self._resampler.push(frame):
-                        self._output_ch.send_nowait(resampled)
-                for frame in self._resampler.flush():
-                    if frame.samples_per_channel > 0:
-                        self._output_ch.send_nowait(frame)
-            else:
-                for frame in remaining:
+            for frame in self._bstream.flush():
+                self._push_frame(frame)
+        if self._resampler is not None:
+            for frame in self._resampler.flush():
+                if frame.samples_per_channel > 0:
                     self._output_ch.send_nowait(frame)
+        if self._remixer is not None:
+            for remixed in self._remixer.resample(None):
+                self._emit_remixed(remixed)
+            self._remixer = None
 
     def _reset_state(self) -> None:
         """Reset the state machine to parse a new WAV file."""
@@ -229,6 +231,7 @@ class _WavInlineDecoder:
         self._chunk_size = 0
         self._bstream = None
         self._resampler = None
+        self._remixer = None
         self._wave_channels = 0
         self._wave_rate = 0
 
@@ -315,7 +318,15 @@ class _WavInlineDecoder:
         self._bstream = AudioByteStream(
             sample_rate=self._wave_rate, num_channels=self._wave_channels
         )
-        if self._sample_rate is not None and self._sample_rate != self._wave_rate:
+        if self._num_channels is not None and self._num_channels != self._wave_channels:
+            # Use the same channel mixing as the non-WAV decoder, while keeping
+            # the existing inline fast path when no channel conversion is needed.
+            self._remixer = av.AudioResampler(
+                format="s16",
+                layout=f"{self._num_channels}c",
+                rate=self._sample_rate or self._wave_rate,
+            )
+        elif self._sample_rate is not None and self._sample_rate != self._wave_rate:
             self._resampler = rtc.AudioResampler(
                 input_rate=self._wave_rate,
                 output_rate=self._sample_rate,
@@ -324,13 +335,35 @@ class _WavInlineDecoder:
 
     def _push_pcm(self, data: bytes) -> None:
         assert self._bstream is not None
-        if self._resampler is not None:
-            for frame in self._bstream.push(data):
-                for resampled in self._resampler.push(frame):
-                    self._output_ch.send_nowait(resampled)
+        for frame in self._bstream.push(data):
+            self._push_frame(frame)
+
+    def _push_frame(self, frame: rtc.AudioFrame) -> None:
+        """Convert a source frame to the requested output format and emit it."""
+        if self._remixer is not None:
+            av_frame = av.AudioFrame(
+                format="s16", layout=f"{frame.num_channels}c", samples=frame.samples_per_channel
+            )
+            av_frame.sample_rate = frame.sample_rate
+            av_frame.planes[0].update(bytes(frame.data))
+            for remixed in self._remixer.resample(av_frame):
+                self._emit_remixed(remixed)
+        elif self._resampler is not None:
+            for resampled in self._resampler.push(frame):
+                self._output_ch.send_nowait(resampled)
         else:
-            for frame in self._bstream.push(data):
-                self._output_ch.send_nowait(frame)
+            self._output_ch.send_nowait(frame)
+
+    def _emit_remixed(self, frame: av.AudioFrame) -> None:
+        """Emit a packed PCM16 frame after channel conversion."""
+        self._output_ch.send_nowait(
+            rtc.AudioFrame(
+                data=frame.to_ndarray().tobytes(),
+                sample_rate=frame.sample_rate,
+                num_channels=len(frame.layout.channels),
+                samples_per_channel=frame.samples,
+            )
+        )
 
 
 class AudioStreamDecoder:
@@ -348,6 +381,7 @@ class AudioStreamDecoder:
         format: str | None = None,
     ):
         self._sample_rate = sample_rate
+        self._num_channels = num_channels
 
         self._layout = "mono"
         if num_channels == 2:
@@ -372,7 +406,9 @@ class AudioStreamDecoder:
     def push(self, chunk: bytes) -> None:
         if self._is_wav:
             if self._wav_decoder is None:
-                self._wav_decoder = _WavInlineDecoder(self._output_ch, self._sample_rate)
+                self._wav_decoder = _WavInlineDecoder(
+                    self._output_ch, self._sample_rate, self._num_channels
+                )
             try:
                 self._wav_decoder.push(chunk)
             except Exception:
