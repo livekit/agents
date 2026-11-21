@@ -214,11 +214,14 @@ async def run_realtime_tool_turn(
     *,
     tool_executed: asyncio.Event,
     interrupt: bool = False,
+    speak: bool = True,
     on_session: Callable[[AgentSession], None] | None = None,
 ) -> tuple[AgentSession, FakeRealtimeModel]:
-    """Drive one realtime turn that speaks a second of audio and calls the agent's first tool.
+    """Drive one realtime turn that calls the agent's first tool.
 
-    With ``interrupt`` the turn is cut short as soon as the tool returns; otherwise it plays out.
+    With ``speak`` (default) the turn also speaks a second of audio before/with the
+    tool call. With ``interrupt`` the turn is cut short as soon as the tool returns;
+    otherwise it plays out.
     """
     model = FakeRealtimeModel(capabilities=fake_capabilities())
 
@@ -237,22 +240,23 @@ async def run_realtime_tool_turn(
         text_ch = utils.aio.Chan[str]()
         audio_ch = utils.aio.Chan[rtc.AudioFrame]()
         modalities = asyncio.Future[list[str]]()
-        modalities.set_result(["audio", "text"])
+        modalities.set_result(["audio", "text"] if speak else ["text"])
 
-        message_ch.send_nowait(
-            MessageGeneration(
-                message_id="message-id",
-                text_stream=text_ch,
-                audio_stream=audio_ch,
-                modalities=modalities,
+        if speak:
+            message_ch.send_nowait(
+                MessageGeneration(
+                    message_id="message-id",
+                    text_stream=text_ch,
+                    audio_stream=audio_ch,
+                    modalities=modalities,
+                )
             )
-        )
+            text_ch.send_nowait("let me check")
+            text_ch.close()
+            # a full second of audio, so the turn is still playing when the tool returns
+            audio_ch.send_nowait(_audio_frame(1.0))
+            audio_ch.close()
         message_ch.close()
-        text_ch.send_nowait("let me check")
-        text_ch.close()
-        # a full second of audio, so the turn is still playing when the tool returns
-        audio_ch.send_nowait(_audio_frame(1.0))
-        audio_ch.close()
         function_ch.send_nowait(
             FunctionCall(call_id="1", name=agent.tools[0].info.name, arguments="{}")
         )
