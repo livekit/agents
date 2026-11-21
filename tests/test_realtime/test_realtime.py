@@ -23,7 +23,7 @@ SAMPLE_RATE = 24000
 
 @pytest.fixture(scope="session", autouse=True)
 def load_env():
-    load_dotenv(override=True)
+    load_dotenv()
 
 
 def _openai_model() -> openai.realtime.RealtimeModel:
