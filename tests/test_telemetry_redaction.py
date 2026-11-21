@@ -418,6 +418,8 @@ SAFE_KEYS = frozenset(
         "lk.fallback.label",
         "lk.fallback.index",
         "lk.fallback.recovery",
+        "lk.fallback.type",
+        "lk.fallback.cause",
         # rpc (semconv names, ids, sizes, codes; identities and payload are tagged)
         "rpc.method",
         "lk.rpc.request_id",

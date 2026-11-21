@@ -454,6 +454,12 @@ ATTR_FALLBACK_INDEX = "lk.fallback.index"
 ATTR_FALLBACK_RECOVERY = "lk.fallback.recovery"
 """True on a background check that a failed provider is back; its response is discarded."""
 
+# Server-side model fallback
+ATTR_FALLBACK_TYPE = "lk.fallback.type"
+"""Type of fallback activation, such as ``fallback`` or ``system_default``."""
+ATTR_FALLBACK_CAUSE = "lk.fallback.cause"
+"""Cause of fallback activation, such as ``provider_error`` or ``timeout``."""
+
 # Adaptive Interruption attributes
 ATTR_IS_INTERRUPTION = "lk.is_interruption"
 ATTR_INTERRUPTION_PROBABILITY = "lk.interruption.probability"
