@@ -1,12 +1,16 @@
 from ..llm.chat_context import Instructions
-from . import translation, workflows
+from . import transcription, translation, workflows
 from .tools.end_call import EndCallTool
+from .transcription import ParticipantTranscribedEvent, TranscriptionSession
 from .translation import TranslationModel, TranslationSession
 
 __all__ = [
     "Instructions",
     "workflows",
     "EndCallTool",
+    "transcription",
+    "TranscriptionSession",
+    "ParticipantTranscribedEvent",
     "translation",
     "TranslationModel",
     "TranslationSession",
