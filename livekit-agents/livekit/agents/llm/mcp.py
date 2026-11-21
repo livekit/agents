@@ -94,7 +94,7 @@ class MCPToolResultContext:
 MCPToolResultResolver = Callable[[MCPToolResultContext], Any | Awaitable[Any]]
 
 
-def _default_tool_result_resolver(ctx: MCPToolResultContext) -> str:
+def _default_tool_result_resolver(ctx: MCPToolResultContext) -> str | None:
     # TODO(theomonnom): handle images & binary messages
     if len(ctx.result.content) == 1:
         return str(ctx.result.content[0].model_dump_json(by_alias=True))
@@ -103,10 +103,15 @@ def _default_tool_result_resolver(ctx: MCPToolResultContext) -> str:
             [item.model_dump(by_alias=True) for item in ctx.result.content], ensure_ascii=False
         )
 
-    raise ToolError(
-        f"Tool '{ctx.tool_name}' completed without producing a result. "
-        "This might indicate an issue with internal processing."
-    )
+    # A successful call with no content blocks is not a failure: the tool already ran,
+    # and reporting an error here invites the model to call it again. MCP 2 servers
+    # send a tool that returns nothing as content=[] with
+    # structured_content={"result": None}.
+    if ctx.result.structured_content is not None:
+        return json.dumps(ctx.result.structured_content, ensure_ascii=False)
+
+    # Nothing at all to report: same as a function tool that returns None.
+    return None
 
 
 class MCPServer(ABC):
