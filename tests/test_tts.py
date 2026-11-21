@@ -45,6 +45,7 @@ from livekit.plugins import (
     rime,
     speechify,
     spitch,
+    yoob,
 )
 
 from .fake_tts import FakeTTS
@@ -273,6 +274,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.mistral.ai:443",
         },
         id="mistralai",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": yoob.TTS(),
+            "proxy-upstream": "tts-api.yoob.com:443",
+        },
+        id="yoob",
     ),
 ]
 
@@ -549,6 +557,13 @@ STREAM_TTS = [
             "proxy-upstream": "coda.api.rime.ai:443",
         },
         id="rime-v1",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": yoob.TTS(),
+            "proxy-upstream": "tts-api.yoob.com:443",
+        },
+        id="yoob",
     ),
 ]
 
